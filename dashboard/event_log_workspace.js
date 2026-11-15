@@ -845,6 +845,7 @@
     const rules=(rows||[]).map(r=>{
       const from=String(r.from||''),to=String(r.to||'');const mode=FOLLOW_MODES[r.mode];
       if(!from||!to)throw new Error('Choose both activities for every rule.');
+      if(Array.from(from).length>200||Array.from(to).length>200)throw new Error('Activity labels must have at most 200 characters.');
       if(!mode)throw new Error('Choose how the activities follow each other.');
       return {from,to,mode:mode[0],negate:mode[1]};
     });
@@ -892,6 +893,7 @@
   function caseFilterSection(activityNames){
     const box=section('Case filter');box.id='owgCaseFilter';
     box.appendChild(el('div','Keep only cases where one activity is (or is never) followed by another, directly or later. Every rule must hold. The filter applies to the overview, variants, activities, KPIs, process map and playback, dotted chart, waiting time, drift, discovery and organization; other sections use every case. Matching describes recorded order only.','muted'));
+    box.appendChild(el('div','Suggestions show up to 500 frequent activities. For another activity, enter its exact label; matching is literal and an unknown label may match no cases.','muted'));
     const draft=state.follows.map(followRow);
     const rows=el('div');rows.id='owgCaseFilterRules';
     const add=button('Add rule','secondary');add.id='owgCaseFilterAdd';
@@ -904,16 +906,26 @@
       rows.replaceChildren(...draft.map((rule,i)=>{
         const n=i+1;
         const from=select('owgCaseFilterFrom'+n,names),mode=select('owgCaseFilterMode'+n,[['eventual','is eventually followed by'],['direct','is directly followed by'],['not-eventual','is never eventually followed by'],['not-direct','is never directly followed by']]),to=select('owgCaseFilterTo'+n,names);
-        from.value=rule.from;mode.value=rule.mode;to.value=rule.to;
-        from.onchange=()=>{rule.from=from.value;};mode.onchange=()=>{rule.mode=mode.value;};to.onchange=()=>{rule.to=to.value;};
+        const exactFrom=input('owgCaseFilterFromExact'+n,'text','Exact label (optional)'),exactTo=input('owgCaseFilterToExact'+n,'text','Exact label (optional)');
+        // 400 UTF-16 units allow 200 supplementary Unicode characters; the
+        // literal rule validator enforces 200 Unicode code points.
+        exactFrom.maxLength=exactTo.maxLength=400;
+        const has=value=>names.some(option=>option[0]===value);
+        from.value=has(rule.from)?rule.from:(names[0]?.[0]||'');
+        to.value=has(rule.to)?rule.to:(names[0]?.[0]||'');mode.value=rule.mode;
+        exactFrom.value=has(rule.from)?'':rule.from;exactTo.value=has(rule.to)?'':rule.to;
+        from.onchange=()=>{exactFrom.value='';rule.from=from.value;};
+        to.onchange=()=>{exactTo.value='';rule.to=to.value;};
+        exactFrom.oninput=()=>{rule.from=exactFrom.value||from.value;};
+        exactTo.oninput=()=>{rule.to=exactTo.value||to.value;};mode.onchange=()=>{rule.mode=mode.value;};
         const remove=button('Remove','secondary');remove.setAttribute('aria-label','Remove rule '+n);remove.onclick=()=>{draft.splice(i,1);render();};
         const row=el('div',null,'row');row.style.alignItems='end';
-        row.append(field('Rule '+n+': activity',from),field('Rule '+n+': order',mode),field('Rule '+n+': later activity',to),remove);
+        row.append(field('Rule '+n+': activity',from),field('Rule '+n+': exact activity',exactFrom),field('Rule '+n+': order',mode),field('Rule '+n+': later activity',to),field('Rule '+n+': exact later activity',exactTo),remove);
         return row;
       }));
-      add.disabled=draft.length>=5||!names.length;
+      add.disabled=draft.length>=5;
     }
-    add.onclick=()=>{draft.push({from:names[0][0],to:(names[1]||names[0])[0],mode:'eventual'});render();const focus=document.getElementById('owgCaseFilterFrom'+draft.length);if(focus)focus.focus();};
+    add.onclick=()=>{draft.push({from:names[0]?.[0]||'',to:(names[1]||names[0])?.[0]||'',mode:'eventual'});render();const focus=document.getElementById('owgCaseFilterFrom'+draft.length);if(focus)focus.focus();};
     apply.onclick=()=>{try{state.follows=followSpec(draft);analyse().catch(error=>status(error.message));}catch(error){message.textContent=error.message;}};
     clear.onclick=()=>{state.follows=[];analyse().catch(error=>status(error.message));};
     render();
