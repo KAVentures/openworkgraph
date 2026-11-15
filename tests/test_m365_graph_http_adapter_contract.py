@@ -287,3 +287,64 @@ def test_delta_private_artifact_reader_accepts_single_link(tmp_path):
     artifact.write_bytes(b"owned delta evidence")
     os.chmod(artifact, 0o600)
     assert delta._private_read(artifact, 8192) == b"owned delta evidence"
+
+
+@pytest.mark.parametrize("failure", ["expired", "revoked_during_page"])
+def test_real_delta_grant_expiry_and_mid_round_revocation_fail_closed(
+        tmp_path, failure):
+    """Use the real private grant parser and Graph delta adapter together.
+
+    No cursor or CSV may be published after expiry or revocation, even if
+    Graph has already returned a valid first page with a continuation.
+    """
+    import os
+    from server import m365_outlook_delta as delta
+
+    grant_file = tmp_path / "grant.json"
+    grant = {
+        "version": 1, "enabled": True, "consented": True,
+        "tenant_scope": "tenant", "mailbox_scope": "mailbox",
+        "folder_id": "folder",
+    }
+    if failure == "expired":
+        grant["expires_at"] = "2020-01-01T00:00:00Z"
+
+    def write_grant():
+        grant_file.write_text(json.dumps(grant))
+        os.chmod(grant_file, 0o600)
+
+    write_grant()
+    initial = delta._initial("folder")
+    continuation = ("https://graph.microsoft.com/v1.0/me/mailFolders/folder/"
+                    "messages/delta?%24skiptoken=page2")
+    terminal = ("https://graph.microsoft.com/v1.0/me/mailFolders/folder/"
+                "messages/delta?%24deltatoken=done")
+
+    class RevokingTransport:
+        def __init__(self):
+            self.requests = []
+
+        def open(self, req, timeout):
+            self.requests.append(req.full_url)
+            assert req.get_header("Authorization") == "Bearer test-token"
+            assert timeout == 15
+            if len(self.requests) == 1:
+                assert req.full_url == initial
+                grant["enabled"] = False
+                write_grant()
+                page = {"value": [], "@odata.nextLink": continuation}
+            else:
+                assert req.full_url == continuation
+                page = {"value": [], "@odata.deltaLink": terminal}
+            return Response(req.full_url, json.dumps(page).encode())
+
+    transport = RevokingTransport()
+    with pytest.raises(delta.DeltaError):
+        delta.export_delta(
+            tenant="tenant", mailbox="mailbox", folder_id="folder",
+            grant_file=grant_file, output=tmp_path / "events.csv",
+            candidate=tmp_path / "candidate.json", token="test-token",
+            consent_read=True, consent_export=True, opener=transport)
+    assert len(transport.requests) == (0 if failure == "expired" else 1)
+    assert not (tmp_path / "events.csv").exists()
+    assert not (tmp_path / "candidate.json").exists()
