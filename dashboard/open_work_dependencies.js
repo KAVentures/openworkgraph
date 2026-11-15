@@ -61,6 +61,7 @@
     dossierForm.append(dossierLabel, scanLabel, dossierButton);
     card.append(dossierForm, dossierStatus, dossierResults);
     let dossierRequest = null;
+    let dossierApprovalConsumed = false;
     // Withdrawal is effective immediately in this view, including while the
     // declaration lookup or source scan is pending. Server-side grants remain
     // independently enforced by the authenticated route.
@@ -74,11 +75,12 @@
     // Revocation also clears completed source evidence, not only pending reads.
     // Changing the selected case invalidates any previously displayed evidence.
     scanConsent.addEventListener('change', () => {
-      if (!scanConsent.checked) clearDossier(
-        'Source read approval withdrawn; no result displayed.');
+      if (scanConsent.checked) dossierApprovalConsumed = false;
+      else clearDossier('Source read approval withdrawn; no result displayed.');
     });
     dossierRef.addEventListener('input', () => {
       scanConsent.checked = false;
+      dossierApprovalConsumed = false;
       clearDossier('Case changed; explicitly approve a new source read.');
     });
     dossierForm.addEventListener('submit', async event => {
@@ -86,7 +88,7 @@
       if (dossierRequest) dossierRequest.abort();
       const ref = dossierRef.value.trim();
       dossierResults.replaceChildren();
-      if (!/^owg:w:[0-9a-f]{32}$/.test(ref) || !scanConsent.checked) {
+      if (!/^owg:w:[0-9a-f]{32}$/.test(ref) || !scanConsent.checked || dossierApprovalConsumed) {
         dossierRequest = null;
         dossierButton.disabled = false;
         dossierStatus.textContent = 'Select a valid opaque case and explicitly approve the source read.';
@@ -125,6 +127,9 @@
         }
         if (!scanConsent.checked || !current()) return;
         dossierStatus.textContent = 'Reading explicitly approved source evidence…';
+        // One approval permits one source scan; keep the checkbox visibly
+        // checked while its evidence is displayed so withdrawal is possible.
+        dossierApprovalConsumed = true;
         const scanned = await fetch('/v1/open-work/declarations/dossier', {
           ...opts, method:'POST',
           headers:{...opts.headers, 'Content-Type':'application/json'},
@@ -222,7 +227,9 @@
         if (dossierRequest === controller) {
           dossierRequest = null;
           dossierButton.disabled = false;
-          scanConsent.checked = false;
+          // Do not silently uncheck while source evidence remains visible.
+          // On an unsuccessful review, require a fresh explicit approval.
+          if (!dossierResults.children.length) scanConsent.checked = false;
         }
       }
     });

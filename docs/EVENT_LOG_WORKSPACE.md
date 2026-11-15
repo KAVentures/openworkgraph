@@ -45,6 +45,7 @@ sample rather than adding a copy. It is deleted like any other log.
 | Format | Import | Export | Notes |
 | --- | --- | --- | --- |
 | CSV | yes | yes | You map the case, activity, timestamp and (optional) resource columns. |
+| Excel (.xlsx) | yes | no | One worksheet is converted to CSV on this computer, then mapped and imported like any CSV (below). |
 | XES (IEEE 1849) | yes | yes | `concept:name`, `time:timestamp` and `org:resource`; other string-like attributes are kept (32 max, 500 chars each). |
 | OCEL 2.0 JSON | yes | yes | Objects, object types, events, event-to-object links and supplied directed object-to-object relationships with qualifiers. Object attribute values keep their times (below). |
 | OCEL 2.0 XML | yes | yes | The same retained content in the OCEL 2.0 worked-example XML layout (`.xmlocel`). Objects must precede events as in the original 2.0 printed root schema. See the relationship contract for schema/example errata and format limits. |
@@ -55,8 +56,77 @@ object type, `case`. For an OCEL log you choose the case notion (`order`,
 events.
 
 Timestamps must carry a timezone (`Z` or an offset). Rows without one, or with
-an unparseable time, are counted as rejected and never guessed. XML with a
-`DOCTYPE` or entity declaration is refused before parsing.
+an unparseable time, are counted as rejected and never guessed, unless you
+state the offset such times use ("Offset for times without one" in the CSV
+mapping, `naive_timestamp_offset=+01:00` in the API). That choice is recorded
+with the import. XML with a `DOCTYPE` or entity declaration is refused before
+parsing.
+
+### Timestamp formats
+
+ISO 8601 times (`2024-03-04T14:05:00Z`, `2024-03-04 14:05:00+01:00`) need no
+setting. For other layouts, such as `13/03/2024 14:05`, `04.03.2024 14:05:00`
+or `04-MAR-24 02.05.00 PM`, declare the format of the timestamp column as a
+strptime pattern ("Timestamp format" in the CSV mapping, `timestamp_format=` in
+the API). Patterns may use `%d %m %Y %y %H %I %M %S %f %p %b %B %z`, with
+spaces and `/ . - : , T` between them. They need a year, a month and a day,
+and `%I` needs `%p`.
+
+Every value must match the pattern exactly. A value with trailing text, an
+impossible date such as 31/02, or a value in another layout is rejected as
+unparseable, not guessed. A pattern without `%z` describes times without an
+offset, so the import also needs the offset decision, or it is refused before
+anything is read. The pattern is recorded in the import's transform and its
+digest.
+
+After you choose a file, the dashboard sends the first 256 KB of the file to
+this computer's server (`POST /v1/event-logs/timestamp-formats?column=...`;
+nothing is stored). The server tries the known layouts on up to 500 values of
+the timestamp column and preselects a format that reads them all. When every
+day in the sample is 12 or less, day-first and month-first both fit; the
+dashboard then lists both with how the first value would read, and you choose.
+Quarantined rows are released with ISO parsing only, so re-import a file that
+needs a format.
+
+### Reusing an earlier mapping
+
+When a CSV file's header has every column an earlier import mapped (case,
+activity, timestamp and, if one was mapped, resource), with the same
+delimiter, the dashboard offers "Use the mapping from <log>". Choosing it
+fills in those columns, the extra attribute columns this file also has, the
+timestamp format and the offset decision. It never applies the mapping on its
+own, and it asks for consent again. When a log is selected and its own mapping
+fits, that one is offered. Only the newest mapping of each log counts.
+Columns are matched by name only, so check they still mean the same thing.
+Source event identity settings are not reused.
+
+`POST /v1/event-logs/mapping-matches` with `{"columns": [...], "delimiter": ";"}`
+returns up to five matching mappings, newest first, each with its
+`missing_attribute_columns`. Nothing is stored.
+
+### Excel workbooks
+
+Choosing an `.xlsx` file in the dashboard converts its first worksheet to CSV
+on this computer (a workbook with several sheets shows a "Worksheet" choice;
+picking another sheet converts that one from the same workbook) (`POST /v1/event-logs/xlsx-to-csv`, with `?sheet=` for another
+sheet). The response holds the CSV and is not stored. The dashboard then puts
+the CSV in place of the workbook, and you map columns, consent and import as
+usual. The first non-empty row is the header. Cells become text: strings as
+written, TRUE/FALSE, numbers without a trailing `.0`, and cells formatted as
+dates or times become ISO 8601 times to the millisecond (1900 and 1904 date
+systems).
+
+Excel stores no time zone, so when the sheet has date cells the dashboard
+fills in your browser's current offset under "Offset for times without one".
+Change it if the export came from another zone. A single fixed offset is
+applied, so an export spanning a daylight-saving change is off by an hour on
+one side: fix the source column or import the two periods separately.
+
+Refused: files that are not a zip with `xl/workbook.xml` (including Excel
+97-2003 `.xls`), macro-enabled workbooks, XML parts with a `DOCTYPE`, uploads
+over 64 MB, parts over 256 MB or a workbook over 512 MB uncompressed, and
+sheets over 2,000,000 rows or 500 columns. Formulas are read as their last
+calculated value, as Excel saved it.
 
 ## Object-centric maps
 
@@ -183,6 +253,8 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | --- | --- |
 | `GET /v1/event-logs` | List stored logs. |
 | `POST /v1/event-logs/import?format=csv\|xes\|ocel\|ocelxml&name=...` | Import the request body. Requires `X-OWG-Local-Storage-Confirmed: true`. CSV also takes `case_column`, `activity_column`, `timestamp_column`, `resource_column`, `delimiter` (`t` for tab) and repeated `attribute_column` for up to 32 extra columns to keep as event attributes (nothing else is stored). |
+| `POST /v1/event-logs/timestamp-formats?column=...&delimiter=...` | Suggest a timestamp format from the start of a CSV file (body, at most 256 KB): `candidates` (each with `pattern`, `order`, `has_offset` and how the first value reads), `ambiguous`, `suggested`. Nothing is stored. Imports and appends take `timestamp_format=`. |
+| `POST /v1/event-logs/xlsx-to-csv?sheet=...` | Convert one worksheet of the `.xlsx` request body to CSV (`csv`, `sheet`, `sheets`, `rows`, `columns`, `date_columns`, `dates_have_no_offset`). Nothing is stored. |
 | `POST /v1/event-logs/{log_id}/delete` | Delete the log and every row that belongs to it. |
 | `POST /v1/event-logs/{log_id}/derive` | Save the cases matching a filter as a new log (below). |
 | `GET /v1/event-logs/{log_id}/quality` | Stored quality and mapping reports per import and append, plus current whole-log diagnostics (below). |
@@ -507,6 +579,23 @@ contains an activity, or case ends with an activity. Every case feature
 - a 95% Newcombe hybrid-score interval for that difference;
 - whether the interval still excludes zero after a Bonferroni correction for
   the number of features tested.
+
+A numeric case attribute rarely repeats one value in 5 cases. Amounts,
+quantities and scores therefore get a second test, when at least 90% of a
+case attribute's values are numbers and it has more than 10 distinct values.
+Its quartile ranges in this log (`amount < 460.75`, `460.75 ≤ amount < 821.5`,
+...) are tested as features of kind `attribute_range`. The edges describe this
+log; they are not thresholds anyone set.
+
+Each association carries `cohort`, the case filter that selects exactly its
+cases: `{"activity": ...}`, `{"resource": ...}`, `{"attribute": "k=v"}` or
+`{"attribute_range": {"name": "amount", "min": 821.5, "max": 1182.25}}` (exact
+edges, not the rounded label). Any view that takes a case filter can open
+those cases. Range filters are also accepted directly, as `attribute_range`
+in cohorts and as a JSON query parameter
+(`?attribute_range={"name":"amount","min":1000}`). `min` is inclusive, `max`
+is exclusive, and either can be left out. Values that are not numbers never
+match a range.
 
 These are associations in the imported log. They are not causes: a feature
 can be a consequence of the outcome (a fix step in slow cases, for example),
@@ -901,6 +990,36 @@ text formatting would change a label or routing probability. Small observed
 weights retain their precision; a zero-weight route may be disabled when
 another route has positive weight. Activity labels are data keys, including
 names that also occur on JavaScript object prototypes.
+
+## Case attributes from a separate table
+
+Event exports rarely carry everything known about a case. Region, customer
+segment, contract value or channel usually sit in a separate table keyed by
+case ID. "Case attributes from a table" joins the columns you choose from such
+a CSV onto the log's cases. They then work like OCEL object attributes: in case
+filters (`attribute=Region=EU`), root-cause associations and attribute
+profiles.
+
+- Ids are matched exactly against the cases (for OCEL logs, the objects of the
+  current case notion). Rows whose id is not a case are counted and ignored.
+  Cases without a row are counted and keep their attributes.
+- A table that lists an id more than once is refused, because it would be
+  ambiguous.
+- Empty cells add nothing. Values are kept as text, trimmed, and at most as
+  long as other attribute values.
+- A column that cases already have is refused unless you choose to overwrite.
+- Every case keeps at most 32 attribute names, stored and timed, so the log
+  still exports as OCEL.
+- Events and the log's content digests do not change. Each upload is recorded
+  with its columns, counts and the SHA-256 of the file. Removing an upload
+  deletes those attribute names from every case of that object type. It
+  cannot restore values that an overwrite replaced.
+
+| Route | Purpose |
+| --- | --- |
+| `POST /v1/event-logs/{log_id}/case-attributes?id_column=...&column=...&delimiter=;&object_type=...&replace=true` | Join the CSV body. Requires `X-OWG-Local-Storage-Confirmed: true`. |
+| `GET /v1/event-logs/{log_id}/case-attributes` | Recorded uploads. |
+| `POST /v1/event-logs/{log_id}/case-attributes/remove` | `{"upload_id": "...", "columns": [...]}` (columns optional). |
 
 ## Case tags
 
@@ -1600,7 +1719,8 @@ and are deleted with the log.
 
 | Route | Purpose |
 | --- | --- |
-| `GET /v1/event-logs/{log_id}/quarantine?batch=&after=&limit=` | Kept rows by batch and reason, a page of rows, and every decision taken. |
+| `GET /v1/event-logs/{log_id}/quarantine?batch=&after=&limit=` | Kept rows by batch and reason, a page of rows, and the first 100 decisions with paging metadata. |
+| `GET /v1/event-logs/{log_id}/quarantine/decisions?offset=&limit=` | A page of up to 100 recorded decisions; history can change between pages. |
 | `POST /v1/event-logs/{log_id}/quarantine/release` | `{"naive_timestamp_offset": "+01:00", "batch": 0}` (batch optional). |
 | `POST /v1/event-logs/{log_id}/quarantine/discard` | `{"batch": 0}` (batch optional) deletes kept rows. |
 

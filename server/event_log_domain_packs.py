@@ -35,6 +35,7 @@ from . import event_log_object_process_model as object_model
 from . import event_log_query as query
 from . import event_log_workspace as workspace
 from .event_log_domain_packs_returns import RETURNS_REFUNDS_1_0_0
+from .event_log_domain_packs_claims import INSURANCE_CLAIMS_1_0_0
 
 FORMAT = "openworkgraph.domain-pack.v1"
 INSTALL_FORMAT = "openworkgraph.domain-pack-install.v1"
@@ -764,7 +765,8 @@ PACKS: dict[str, dict[str, dict[str, Any]]] = {"returns_refunds": {"1.0.0": RETU
                                               "customer_onboarding": {"1.0.0": CUSTOMER_ONBOARDING_1_0_0},
                                               "employee_offboarding": {"1.0.0": EMPLOYEE_OFFBOARDING_1_0_0},
                                               "employee_onboarding": {"1.0.0": EMPLOYEE_ONBOARDING_1_0_0},
-                                              "expense_reimbursement": {"1.0.0": EXPENSE_REIMBURSEMENT_1_0_0}}
+                                              "expense_reimbursement": {"1.0.0": EXPENSE_REIMBURSEMENT_1_0_0},
+                                              "insurance_claims": {"1.0.0": INSURANCE_CLAIMS_1_0_0}}
 
 
 class _Strict(BaseModel):
@@ -916,6 +918,15 @@ def resolve(pack: dict[str, Any], mapping: dict[str, dict[str, str]], params: di
             continue
         if resolved["object_type"] in modelled:
             arcs.append(resolved)
+    # The claims pack explicitly discloses every unmapped optional intake/receipt
+    # activity. Preserve the existing per-definition not_applicable contract
+    # for previously shipped packs, whose consumers expect only omitted rules.
+    if pack["pack_id"] == "insurance_claims":
+        reported_missing = {row["unmapped_role"] for row in out["not_applicable"]}
+        for index, activity in enumerate(pack["activities"]):
+            role = activity["role"]
+            if not activity["required"] and role not in mapping["activities"] and role not in reported_missing:
+                out["not_applicable"].append({"section": "activities", "index": index, "unmapped_role": role})
     out["reference_model"] = {"version": object_model.VERSION, "types": types, "arcs": arcs}
     return out
 
@@ -925,6 +936,27 @@ def _digest(definitions: dict[str, Any]) -> str:
 
 
 # --- install -------------------------------------------------------------------
+
+def find_mapping_labels(log_id: str, kind: str, search: str, after: str = "") -> dict[str, Any]:
+    """Page literal labels from this log only, without returning source events."""
+    if kind not in ("activities", "object_types") or not isinstance(search, str) or not 1 <= len(search) <= 200:
+        raise workspace.EventLogWorkspaceError("choose a label kind and enter 1 to 200 search characters")
+    if not isinstance(after, str) or len(after) > 200:
+        raise workspace.EventLogWorkspaceError("invalid label cursor")
+    table, column = (("events", "activity") if kind == "activities" else ("objects", "object_type"))
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            rows = conn.execute(
+                f"SELECT DISTINCT {column} FROM {table} WHERE log_id = ? AND strpos({column}, ?) > 0 "
+                f"AND length({column}) BETWEEN 1 AND 200 AND {column} > ? ORDER BY {column} LIMIT 101", [log_id, search, after]).fetchall()
+        finally:
+            conn.close()
+    labels = [r[0] for r in rows[:100]]
+    return {"labels": labels, "next_after": labels[-1] if len(rows) > 100 else None,
+            "match": "case_sensitive_literal", "limit": 100}
+
 
 def _parse_install(pack_id: str, spec: Any) -> tuple[dict[str, Any], InstallSpec, dict[str, float]]:
     try:
