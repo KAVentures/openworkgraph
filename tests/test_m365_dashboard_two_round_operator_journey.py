@@ -622,3 +622,29 @@ def test_candidate_digest_not_disclosed_if_session_revoked_during_review(monkeyp
     assert valid.call_count == 2
     review.assert_called_once()
     commit.assert_not_called()
+
+
+
+def test_next_round_revoked_after_adapter_refuses_candidate_disclosure(monkeypatch):
+    """A successful Graph extraction must not expose its digest after session revocation."""
+    configure(monkeypatch)
+    with (
+        patch("server.m365_operator_audit_routes.dashboard_session_valid",
+              side_effect=[True, False]) as session_valid,
+        patch("server.m365_next_round_review.prepare", return_value={
+            "status": "operator_review_required",
+            "reviewed_csv_sha256": SECOND,
+            "proposed_generation": 2,
+            "event_snapshots": 2,
+            "removal_markers_for_review": 0,
+        }) as prepare,
+        patch("server.m365_outlook_reviewed_transaction.execute") as commit,
+    ):
+        with pytest.raises(HTTPException) as error:
+            operator_next_round_prepare(request(), 1, FIRST, **EXTRACT_APPROVALS)
+        assert error.value.status_code == 409
+        assert SECOND not in str(error.value.detail)
+        assert "Do not retry" in str(error.value.detail)
+        assert session_valid.call_count == 2
+        prepare.assert_called_once()
+        commit.assert_not_called()
