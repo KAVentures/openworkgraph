@@ -122,3 +122,22 @@ def test_review_digest_rejects_replay_across_changed_group_membership_or_truncat
     ):
         with pytest.raises(ValueError, match="digest mismatch"):
             score_bound_review_annotations(changed, bound)
+
+
+def test_review_digest_rejects_replay_when_source_pair_metadata_changes():
+    """A pair's event rows can be unchanged while its underlying evidence changes."""
+    import copy
+    import pytest
+    from server.reconstruction_review_cli import score_bound_review_annotations
+
+    source = _response("event-1")
+    source["observed_pair_event_assignments"][0]["evidence_context"] = {
+        "interruption_reason": "tab_switch",
+        "confidence": "low",
+    }
+    bound = _envelope(source)
+    changed = copy.deepcopy(source)
+    changed["observed_pair_event_assignments"][0]["evidence_context"]["confidence"] = "high"
+    assert build_review_queue(changed)["event_reviews"] == build_review_queue(source)["event_reviews"]
+    with pytest.raises(ValueError, match="digest mismatch"):
+        score_bound_review_annotations(changed, bound)
