@@ -246,7 +246,10 @@ def operator_candidate_review(request: Request, consent_local_read: bool = False
             raise ValueError("Candidate not reviewable")
     except (OSError, ValueError, TypeError, KeyError, RecursionError):
         raise HTTPException(409, "Candidate or current grant unavailable; manual review required") from None
-    # The local review may take time; never disclose its digest after session revocation.\n    if not dashboard_session_valid(authorization[len("owg-session "):].strip()):\n        raise HTTPException(409, "Dashboard session expired during candidate review; reauthenticate and review again")\n    return JSONResponse({
+    # The local review may take time; never disclose its digest after session revocation.
+    if not dashboard_session_valid(authorization[len("owg-session "):].strip()):
+        raise HTTPException(409, "Dashboard session expired during candidate review; reauthenticate and review again")
+    return JSONResponse({
         "format": "openworkgraph.m365-dashboard-candidate-review.v1",
         "configured": True, "review_ready": True,
         "event_snapshots": result["event_snapshots"],
