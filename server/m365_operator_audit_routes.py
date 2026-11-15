@@ -525,8 +525,8 @@ def operator_recovery_triage(
                          if os.environ.get("OWG_M365_JOURNAL_DIR") and os.environ.get("OWG_M365_HANDOFF_DIR") else None),
             consent_local_read=True, confirm_removals_reviewed=True,
         )
-        if result.get("status") not in (
-                "receipt_verified", "handoff_verified", "manual_reconciliation_required"):
+        if (type(result) is not dict or result.get("status") not in (
+                "receipt_verified", "handoff_verified", "manual_reconciliation_required")):
             raise ReceiptError("Unrecognized recovery result")
     except (ReceiptError, OSError, ValueError, TypeError, KeyError, RecursionError):
         raise HTTPException(409, "Recovery unavailable; inspect local grant, receipt and OWG inventory manually. Do not retry.") from None
@@ -578,7 +578,8 @@ def operator_identity_folder_preflight(
             output=Path(values[5]), token=token,
             consent_graph_read=True, consent_private_report=True,
         )
-        if (identity.get("status") != "mailbox_identity_observed"
+        if (type(identity) is not dict
+                or identity.get("status") != "mailbox_identity_observed"
                 or identity.get("mailbox_identifier_matched") is not True
                 or identity.get("tenant_id_verified") is not False):
             raise ValueError("Identity preflight refused")
@@ -587,7 +588,8 @@ def operator_identity_folder_preflight(
             grant_file=Path(values[4]), output=Path(values[6]),
             token=token, consent_graph_read=True, consent_private_report=True,
         )
-        if (folder.get("status") != "folder_metadata_observed"
+        if (type(folder) is not dict
+                or folder.get("status") != "folder_metadata_observed"
                 or folder.get("folder_id_matched") is not True):
             raise ValueError("Folder preflight refused")
     except (OSError, ValueError, TypeError, KeyError, RecursionError):
