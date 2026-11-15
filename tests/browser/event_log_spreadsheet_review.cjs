@@ -1,0 +1,41 @@
+const {chromium}=require('playwright');
+const assert=require('node:assert/strict');
+const fs=require('node:fs/promises');
+const {spawn}=require('node:child_process');
+const {tmpdir}=require('node:os');
+const path=require('node:path');
+(async()=>{
+ const scratch=await fs.mkdtemp(path.join(tmpdir(),'owg-review-export-'));
+ const base='http://127.0.0.1:8787',python=process.env.OWG_BROWSER_PYTHON||'python';
+ const server=spawn(python,['-m','uvicorn','process_logs_app:app','--app-dir','tests/browser','--host','127.0.0.1','--port','8787'],{env:{...process.env,OWG_BROWSER_TEST_DIR:scratch},stdio:['ignore','pipe','pipe']});
+ let logs='',browser,spawnError;server.on('error',e=>{spawnError=e;});for(const stream of [server.stdout,server.stderr])stream.on('data',c=>{logs=(logs+c).slice(-10000);});
+ try{
+  let ready=false;for(let i=0;i<100;i++){if(spawnError)throw spawnError;if(server.exitCode!==null)throw Error(logs);try{await fs.access(path.join(scratch,'session.txt'));if((await fetch(base+'/')).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,200));}assert.ok(ready,logs);
+  browser=await chromium.launch({...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE}:{}),headless:true,args:['--no-sandbox']});
+  const page=await browser.newPage({acceptDownloads:true}),errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.goto(base+'/#session='+(await fs.readFile(path.join(scratch,'session.txt'),'utf8')).trim());
+  await page.locator('[role=tab][data-tab=evidence]').click();await page.locator('#owgEventLogCard').waitFor();
+  const csv='event,case,activity,time,who\n=event,=case, =1+1,2026-01-01T00:00:00Z,@name\n';
+  await page.locator('#owgEventLogFile').setInputFiles({name:'synthetic.csv',mimeType:'text/csv',buffer:Buffer.from(csv)});
+  await page.locator('#owgEventLogStatus').filter({hasText:'File mapping ready.'}).waitFor();
+  await page.locator('#owgEventLogUseIdentity').check();await page.locator('#owgEventLogActivity').selectOption('activity');
+  await page.locator('#owgEventLogEventId').selectOption('event');await page.locator('#owgEventLogSourceNamespace').fill('crm');
+  await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
+  await page.locator('#owgEventLogStatus').filter({hasText:'Imported 1 events'}).waitFor();
+  await page.waitForFunction(()=>document.querySelector('#owgEventLogCaseType').value==='source_case');
+  await page.locator('#owgEventLogExportFormat').selectOption('sourcecsv-review');
+  await page.locator('#owgEventLogStatus').filter({hasText:'use the regular export for re-import'}).waitFor();
+  const [review]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogExport').click()]);
+  const reviewText=await fs.readFile(await review.path(),'utf8');
+  assert.match(review.suggestedFilename(),/\.review\.csv$/);assert.match(reviewText,/source_event_id_review/);
+  assert.match(reviewText,/'=event/);assert.match(reviewText,/' =1\+1/);assert.match(reviewText,/'@name/);
+  await page.locator('#owgEventLogExportFormat').selectOption('sourcecsv');
+  const [exact]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogExport').click()]);
+  const exactText=await fs.readFile(await exact.path(),'utf8');assert.match(exactText,/crm,=event,crm,=case, =1\+1/);
+  await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
+  const axe=await page.evaluate(()=>axe.run(document.querySelector('#owgEventLogCard'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
+  assert.deepEqual(axe.violations.map(v=>v.id),[]);await page.setViewportSize({width:390,height:844});
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));assert.deepEqual(errors,[]);
+  console.log('Review CSV browser passed: text projection, unchanged exact IDs, accessible/mobile.');
+ }finally{if(browser)await browser.close();server.kill('SIGTERM');await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);if(server.exitCode===null)server.kill('SIGKILL');await fs.rm(scratch,{recursive:true,force:true});}
+})().catch(e=>{console.error(e);process.exit(1);});
