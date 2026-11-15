@@ -70,7 +70,38 @@
       if(!graph.graph){focusButton.disabled=true;return;}
       const data=graph.graph;options(focusPicker,data.nodes.map(n=>[n.workflow_id,(n.available?n.title:n.workflow_id)+' · '+(n.dependencies_assessed?'assessed':'unassessed')]));if(focus)focusPicker.value=focus;focusButton.disabled=!data.nodes.length;
       output.append(el('p',data.nodes.length+' declared processes · '+data.edges.length+' saved relationships. '+(graph.current_basis?'Every pin matches an active reviewed model and every node has a declaration.':'Source pins/reviews or unassessed dependencies need review. Relationships remain human assertions.')));
-      if(graph.impact){const groups=[['Prerequisites',graph.impact.prerequisites],['Potential consumers to review after a change',graph.impact.potential_consumers]];for(const [title,rows] of groups){const section=el('section');section.append(el('h4',title));const ul=el('ul');for(const row of rows){const n=data.nodes.find(n=>n.workflow_id===row.workflow_id);ul.append(el('li',(n?.available?n.title:row.workflow_id)+' · distance '+row.distance));}if(!rows.length)ul.append(el('li','None found in saved declarations. This does not establish absence in the business.'));section.append(ul);output.append(section);}}
+      if(graph.impact){
+        const groups=[
+          ['Prerequisites',graph.impact.prerequisites,'prerequisites',' → '],
+          ['Potential consumers to review after a change',graph.impact.potential_consumers,'potential_consumers',' ← '],
+        ];
+        for(const [title,rows,key,separator] of groups){
+          const section=el('section');section.append(el('h4',title));
+          const details=graph.impact.declared_paths?.[key];
+          const explanations=new Map((details?.paths||[]).map(path=>[path.workflow_id,path]));
+          const ul=el('ul');
+          for(const row of rows){
+            const n=data.nodes.find(n=>n.workflow_id===row.workflow_id);
+            const item=el('li',(n?.available?n.title:row.workflow_id)+' · distance '+row.distance);
+            const path=explanations.get(row.workflow_id);
+            if(path){
+              item.append(el('span',' · Declared path: '+path.nodes_from_focus.join(separator)));
+              item.append(el('span',' · declared links: '+path.declared_links_from_focus.map(link=>
+                link.consumer+' → '+link.prerequisite+' ('+link.relationship+', '+link.link_id+')').join('; ')));
+            }else if(details){
+              item.append(el('span',' · Explanation withheld by path length/count limits; this process remains in the complete reachability list.'));
+            }
+            ul.append(item);
+          }
+          if(!rows.length)ul.append(el('li','None found in saved declarations. This does not establish absence in the business.'));
+          section.append(ul);
+          if(details&&!details.complete)section.append(el('p','Showing '+details.explained_processes+' of '+details.matched_processes+
+            ' declared paths. '+details.withheld_for_path_limit+' over the display count limit; '+
+            details.withheld_for_hop_limit+' over the hop limit. The affected-process list above is complete.'));
+          output.append(section);
+        }
+        output.append(el('p','Paths show saved human-declared dependencies only. They do not verify current causality, obligations, permission or complete business coverage.'));
+      }
       drawMap(data);
       const details=el('details');details.append(el('summary','Inspect every saved process and relationship'));const list=el('ul');
       for(const node of data.nodes){const row=el('li',(node.available?node.title:node.workflow_id)+' · '+node.state+' · '+(node.all_pins_match_latest?'pins match latest':'pins need reassessment')+' · '+(node.dependencies_assessed?'declaration r'+node.declaration_revision:'dependencies unassessed')+' · model review '+(node.independent_model_review||'unavailable'));

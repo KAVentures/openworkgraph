@@ -176,3 +176,38 @@ dependency-aware builds and review lifecycles, fine-grained visibility if introd
 elsewhere, richer relationship contracts, larger measured workspaces and full BPMN
 interchange. Existing R15/R16 business-value and real-provider/company/reconstruction/
 pilot acceptance gaps remain open. Full competitor parity is not established.
+
+
+## Why a process appears in change-impact results (declared paths)
+
+For a selected process, the existing **Prerequisites** and **Potential consumers**
+lists remain complete for the bounded 200-process declared graph. Each list
+now includes an optional shortest *declared* path explaining why a particular
+process is reachable. The UI shows the ordered workflow IDs and the exact
+saved `consumer → prerequisite` link IDs/relationship kinds involved.
+For potential consumers, the visual chain is drawn backward from the selected
+process (selected ← consumer); each link still reports its original
+consumer-to-prerequisite direction. Equal shortest paths use stable ID
+ordering for reproducible explanations.
+
+Path details are **not** evidence of cause, contract, company policy,
+completeness or execution permission. They are sourced from the same
+human-authored dependency graph and may be stale when pinned source revisions
+change. Owner-entered free-text reasons remain in the separately permitted
+per-process manifest, not copied into these path summaries. The existing
+read permission, tenant boundary, exact graph fingerprint/export preflight,
+revocation checks and withheld-on-corruption behavior apply unchanged.
+
+To bound response and browser work, the response explains at most **30 paths
+per direction**, each of at most **12 links**, with explicit counters for
+unexplained paths due to the count or hop limit. The full reachability lists
+and minimum-distance counts are never silently truncated. Only a complete
+valid source graph can produce a path; an unreadable or over-limit scan still
+withholds the entire graph and impact result.
+
+`tests/test_process_dependency_paths.py` verifies deterministic diamonds,
+provenance and link direction, exclusions of human reason text, path-cap
+disclosure, deep chains and complete reachable populations.
+`tests/browser/process_dependencies.cjs` checks user-visible path displays,
+the downloaded report and HTML-safe rendering. These are structural checks,
+not customer validation of true business dependency semantics.
