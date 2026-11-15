@@ -228,6 +228,9 @@ def get_reconstruction_review() -> Response:
         # for the fingerprint. Connected navigation groups are not cases.
         "observed_pair_event_assignments": result.get("observed_pair_event_assignments", [])[:24],
         "observed_group_continuity": result.get("observed_group_continuity", [])[:24],
+        # Components are navigational hypotheses, never confirmed cases.
+        "observed_case_groups": result.get("observed_case_groups", [])[:24],
+        "observed_case_groups_truncated": result.get("observed_case_groups_truncated", False),
         "observed_pair_event_assignments_truncated": result.get("observed_pair_event_assignments_truncated", False),
         "observed_group_continuity_truncated": result.get("observed_group_continuity_truncated", False),
         "notice": result.get("notice"),
