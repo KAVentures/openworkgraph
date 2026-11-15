@@ -587,11 +587,13 @@ Its quartile ranges in this log (`amount < 460.75`, `460.75 ≤ amount < 821.5`,
 ...) are tested as features of kind `attribute_range`. The edges describe this
 log; they are not thresholds anyone set.
 
-Each association carries `cohort`, the case filter that selects exactly its
-cases: `{"activity": ...}`, `{"resource": ...}`, `{"attribute": "k=v"}` or
+An association carries `cohort` when an exact case filter can represent it:
+`{"activity": ...}`, `{"resource": ...}`, `{"attribute": "k=v"}` or
 `{"attribute_range": {"name": "amount", "min": 821.5, "max": 1182.25}}` (exact
-edges, not the rounded label). Any view that takes a case filter can open
-those cases. Range filters are also accepted directly, as `attribute_range`
+edges). Labels use enough precision to distinguish nearby range boundaries.
+No exact attribute filter is offered for shortened values or names containing
+`=`, which the `k=v` filter syntax cannot represent. Any view that takes a
+case filter can open the cases when a filter is present. Range filters are also accepted directly, as `attribute_range`
 in cohorts and as a JSON query parameter
 (`?attribute_range={"name":"amount","min":1000}`). `min` is inclusive, `max`
 is exclusive, and either can be left out. Values that are not numbers never
