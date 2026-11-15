@@ -160,3 +160,17 @@ def test_review_digest_rejects_replay_when_visible_identity_timeline_changes():
     assert build_review_queue(changed)["event_reviews"] == build_review_queue(source)["event_reviews"]
     with pytest.raises(ValueError, match="digest mismatch"):
         score_bound_review_annotations(changed, bound)
+
+
+def test_review_digest_fails_closed_on_malformed_or_unbounded_visible_context():
+    """Live inspection metadata must not crash digesting or exhaust the API."""
+    import pytest
+    for context, error in (
+        ({"scan_truncated": False, "unexpected": float("nan")}, "invalid review evidence context"),
+        ({"scan_truncated": False, "unexpected": object()}, "invalid review evidence context"),
+        ({"scan_truncated": False, "unexpected": "x" * 1048577}, "unbounded review evidence context"),
+    ):
+        response = _response("event-1")
+        response["coverage"] = context
+        with pytest.raises(ValueError, match=error):
+            build_review_queue(response)
