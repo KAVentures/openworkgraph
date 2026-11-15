@@ -34,10 +34,13 @@ for i in range(6):
     for k, step in enumerate(['Receive order', 'Check stock', 'Ship']):
         sheet.write(row, 0, f'o{i}'); sheet.write(row, 1, step)
         sheet.write_datetime(row, 2, datetime.datetime(2024, 3, 1 + i, 9 + k, 30, 15), fmt); sheet.write(row, 3, 'ana' if k else 'bot'); row += 1
-book.add_worksheet('Notes').write(0, 0, 'ignored')
+returns = book.add_worksheet('Returns'); returns.write_row(0, 0, ['Ticket', 'Action', 'At'])
+for i in range(2):
+    for k, step in enumerate(['Return requested', 'Refund']):
+        returns.write_row(1 + 2 * i + k, 0, [f'r{i}', step]); returns.write_datetime(1 + 2 * i + k, 2, datetime.datetime(2024, 4, 1 + i, 10 + k), fmt)
 book.close()`,xlsxPath]);
    await page.locator('#owgEventLogFile').setInputFiles(xlsxPath);
-   await page.locator('#owgEventLogStatus').filter({hasText:'Read worksheet “Orders” (first of 2): 18 rows.'}).waitFor();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Read worksheet “Orders” (1 of 2; choose another under Worksheet): 18 rows.'}).waitFor();
    // The workbook was swapped for its CSV and the mapping was read from it.
    assert.equal(await page.locator('#owgEventLogFile').evaluate(f=>f.files[0].name),'orders.csv');
    assert.equal(await page.locator('#owgEventLogFormat').inputValue(),'csv');
@@ -45,6 +48,14 @@ book.close()`,xlsxPath]);
    assert.equal(await page.locator('#owgEventLogTime').inputValue(),'When');
    assert.equal(await page.locator('#owgEventLogNaiveOffset').inputValue(),'+05:30','prefilled with the browser offset (no daylight saving in this zone)');
    assert.equal(await page.locator('#owgEventLogName').inputValue(),'orders');
+   assert.deepEqual(await page.locator('#owgEventLogSheet option').allInnerTexts(),['Orders','Returns']);
+   // Another sheet is converted from the same workbook on request.
+   await page.locator('#owgEventLogSheet').selectOption('Returns');
+   await page.locator('#owgEventLogStatus').filter({hasText:'Read worksheet “Returns” (2 of 2; choose another under Worksheet): 4 rows.'}).waitFor();
+   assert.equal(await page.locator('#owgEventLogCase').inputValue(),'Ticket');
+   await page.locator('#owgEventLogSheet').selectOption('Orders');
+   await page.locator('#owgEventLogStatus').filter({hasText:'Read worksheet “Orders” (1 of 2'}).waitFor();
+   assert.equal(await page.locator('#owgEventLogCase').inputValue(),'Order');
    await page.locator('#owgEventLogNaiveOffset').fill('+01:00');
    await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Imported 18 events'}).waitFor();
@@ -59,6 +70,10 @@ book.close()`,xlsxPath]);
    await page.locator('#owgEventLogFile').setInputFiles({name:'broken.xlsx',mimeType:'application/octet-stream',buffer:Buffer.from('not a zip')});
    await page.locator('#owgEventLogStatus').filter({hasText:'not an .xlsx workbook'}).waitFor();
    assert.equal(await page.locator('#owgEventLogFile').evaluate(f=>f.files.length),0);
+   // A CSV file hides the worksheet choice.
+   await page.locator('#owgEventLogFile').setInputFiles({name:'plain.csv',mimeType:'text/csv',buffer:Buffer.from('case,activity,time\nx,A,2024-03-04T08:00:00Z\n')});
+   await page.locator('#owgEventLogStatus').filter({hasText:'File mapping ready'}).waitFor();
+   assert.equal(await page.locator('#owgEventLogSheet').isVisible(),false);
    assert.equal(await page.locator('#owgEventLogImport').isDisabled(),true);
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run({include:[['#owgEventLogFile']]},{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
