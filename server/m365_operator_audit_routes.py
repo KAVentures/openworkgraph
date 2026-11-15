@@ -541,6 +541,10 @@ def operator_recovery_triage(
             raise ReceiptError("Unrecognized recovery result")
     except (ReceiptError, OSError, ValueError, TypeError, KeyError, RecursionError):
         raise HTTPException(409, "Recovery unavailable; inspect local grant, receipt and OWG inventory manually. Do not retry.") from None
+    # A session revoked during local inventory reconciliation must not receive
+    # a private recovery decision or permission to proceed to another phase.
+    if not dashboard_session_valid(authorization[len("owg-session "):].strip()):
+        raise HTTPException(409, "Dashboard session expired during recovery inspection; reconcile manually. Do not retry.")
     return JSONResponse({
         "format": "openworkgraph.m365-dashboard-recovery-triage.v1",
         "status": result["status"],
