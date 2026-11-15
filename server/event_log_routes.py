@@ -383,6 +383,38 @@ async def append_event_log(
         return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.get("/v1/event-logs/{log_id}/feeds")
+def list_event_log_feeds(request: Request, log_id: str):
+    from . import event_log_folder_feeds as folder_feeds
+    _require_dashboard(request)
+    return _respond(folder_feeds.feeds, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/feeds")
+async def create_event_log_feed(request: Request, log_id: str):
+    """Point the log at a local folder whose new CSV exports are appended with the log's mapping."""
+    from . import event_log_folder_feeds as folder_feeds
+    _require_dashboard(request)
+    spec = await _json_body(request, "folder feed settings", strict=True, limit=8192)
+    return await run_in_threadpool(_respond, folder_feeds.create, log_id, spec)
+
+
+@router.post("/v1/event-logs/feeds/{feed_id}/run")
+async def run_event_log_feed(request: Request, feed_id: str):
+    from . import event_log_folder_feeds as folder_feeds
+    _require_dashboard(request)
+    if request.headers.get("x-owg-local-storage-confirmed") != "true":
+        raise HTTPException(403, "Explicit confirmation to store these events on this computer is required")
+    return await run_in_threadpool(_respond, folder_feeds.run, feed_id)
+
+
+@router.post("/v1/event-logs/feeds/{feed_id}/delete")
+async def delete_event_log_feed(request: Request, feed_id: str):
+    from . import event_log_folder_feeds as folder_feeds
+    _require_dashboard(request)
+    return await run_in_threadpool(_respond, folder_feeds.delete, feed_id)
+
+
 @router.post("/v1/event-logs/{log_id}/case-attributes")
 async def add_case_attributes(
     request: Request, log_id: str,
