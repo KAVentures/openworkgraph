@@ -35,6 +35,9 @@ def test_binding_ledger_refuses_permissive_file(private_auth):
 def test_binding_ledger_refuses_persistent_sidecars(private_auth, suffix):
     path = _ledger(private_auth)
     sqlite3.connect(path).close()
+    # Admit the main ledger first so this test exercises the sidecar guard,
+    # not the earlier POSIX file-permission guard.
+    path.chmod(0o600)
     path.with_name(path.name + suffix).write_bytes(b"untrusted")
     with pytest.raises(CaseDeclarationError, match="sidecar"):
         with binding._database(False):
@@ -44,6 +47,8 @@ def test_binding_ledger_refuses_persistent_sidecars(private_auth, suffix):
 def test_binding_ledger_refuses_unsafe_rollback_journal(private_auth):
     path = _ledger(private_auth)
     sqlite3.connect(path).close()
+    # Keep the main ledger private so the unsafe journal is the failure cause.
+    path.chmod(0o600)
     journal = path.with_name(path.name + "-journal")
     journal.symlink_to(private_auth / "missing")
     with pytest.raises(CaseDeclarationError, match="rollback journal"):
