@@ -287,8 +287,18 @@ def quality(log_id: str) -> dict[str, Any]:
         conn = workspace._connect()
         try:
             info = workspace._check_log(conn, log_id)
-            reports = [json.loads(r[0]) for r in conn.execute(
-                "SELECT report FROM log_quality WHERE log_id = ? ORDER BY batch", [log_id]).fetchall()]
+            # A damaged JSON payload is not evidence of a valid quality report.
+            # Ignore it for metrics and mark its batch as missing instead of
+            # failing the entire authenticated quality review with HTTP 500.
+            reports = []
+            for (raw,) in conn.execute(
+                "SELECT report FROM log_quality WHERE log_id = ? ORDER BY batch", [log_id]).fetchall():
+                try:
+                    parsed = json.loads(raw)
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(parsed, dict) and isinstance(parsed.get("batch"), int) and not isinstance(parsed["batch"], bool):
+                    reports.append(parsed)
             batches = [0] + [r[0] for r in conn.execute(
                 "SELECT batch FROM log_appends WHERE log_id = ? ORDER BY batch", [log_id]).fetchall()]
             current = diagnostics(conn, log_id)
