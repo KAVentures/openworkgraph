@@ -430,6 +430,29 @@ const path=require('node:path');
 
    await page.locator('#owgEventLogSimLoad').click();
    await page.locator('#owgEventLogSimRun').waitFor();
+   // R14 shared-calibration portfolio: several staffing levels are tested
+   // against one static local calibration, not independently refitted logs.
+   await page.locator('#owgEventLogSimPortfolio').waitFor();
+   await page.locator('#owgEventLogSimPortfolioCases').fill('150');
+   await page.locator('#owgEventLogSimPortfolioActivity1').selectOption('Check');
+   await page.locator('#owgEventLogSimPortfolioStaff1').fill('1');
+   await page.locator('#owgEventLogSimPortfolioActivity2').selectOption('Check');
+   await page.locator('#owgEventLogSimPortfolioStaff2').fill('4');
+   const [portfolioResponse]=await Promise.all([
+     page.waitForResponse(r=>r.url().includes('/simulation/portfolio')&&r.request().method()==='POST'),
+     page.locator('#owgEventLogSimPortfolioRun').click()
+   ]);
+   assert.equal(portfolioResponse.status(),200,await portfolioResponse.text());
+   const portfolio=await portfolioResponse.json();
+   assert.equal(portfolio.single_calibration_used,true);
+   assert.equal(portfolio.identical_case_count_and_seed,true);
+   assert.equal(portfolio.baseline.cases_simulated,150);
+   assert.deepEqual(portfolio.alternatives.map(x=>x.label),['Alternative 1','Alternative 2']);
+   assert.equal(portfolio.execution_authorized,false);
+   assert.equal(portfolio.auto_selected_recommended_alternative,false);
+   await page.locator('#owgEventLogSimPortfolioResults table').waitFor();
+   assert.equal(await page.locator('#owgEventLogSimPortfolioResults tbody tr').count(),3);
+   assert.match(await page.locator('#owgEventLogSimPortfolioResults').textContent(),/no winning option|No winning option/i);
    assert.match(await page.locator('#owgEventLogSimForm').textContent(),/Calibrated 60 of 60 complete cases/);
    const measuredPaths=await page.evaluate(()=>window.__owgEventLogModel.parseWeightedPaths(document.querySelector('#owgEventLogSimPaths').value));
    assert.deepEqual(measuredPaths[0],{activities:['Receive','Check','Approve','Close'],weight:0.6});
