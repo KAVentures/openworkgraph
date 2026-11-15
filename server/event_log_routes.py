@@ -377,6 +377,54 @@ async def append_event_log(
         return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/case-attributes")
+async def add_case_attributes(
+    request: Request, log_id: str,
+    id_column: str = Query(min_length=1, max_length=200),
+    column: list[str] = Query(default=[], max_length=200),
+    delimiter: str = Query(default=",", max_length=1),
+    object_type: str | None = Query(default=None, max_length=200),
+    replace: bool = Query(default=False),
+):
+    """Join columns of a CSV case table onto the log's cases (body: the CSV)."""
+    from . import event_log_case_attributes as case_attributes
+    _require_dashboard(request)
+    if request.headers.get("x-owg-local-storage-confirmed") != "true":
+        raise HTTPException(403, "Explicit confirmation to store these values on this computer is required")
+    # A closed file in a private folder: Windows does not let DuckDB open a file this process holds open.
+    with tempfile.TemporaryDirectory(dir=str(DATA_DIR), prefix="owg-case-table-") as folder:
+        table = Path(folder) / "case-table.csv"
+        size = 0
+        with table.open("wb") as spool:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > workspace.MAX_IMPORT_BYTES:
+                    raise HTTPException(413, "the case table is larger than the supported limit")
+                spool.write(chunk)
+        try:
+            result = await run_in_threadpool(case_attributes.add, log_id, table, id_column=id_column,
+                                             columns=column[:64], delimiter="\t" if delimiter == "t" else delimiter,
+                                             object_type=object_type, replace=replace)
+        except workspace.EventLogWorkspaceError as exc:
+            raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/v1/event-logs/{log_id}/case-attributes")
+def list_case_attribute_uploads(request: Request, log_id: str):
+    from . import event_log_case_attributes as case_attributes
+    _require_dashboard(request)
+    return _respond(case_attributes.uploads, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/case-attributes/remove")
+async def remove_case_attributes(request: Request, log_id: str):
+    from . import event_log_case_attributes as case_attributes
+    _require_dashboard(request)
+    spec = await _json_body(request, "case attribute removal", strict=True, limit=16384)
+    return await run_in_threadpool(_respond, case_attributes.remove, log_id, spec)
+
+
 @router.get("/v1/event-logs/{log_id}/quality")
 def event_log_quality(request: Request, log_id: str):
     _require_dashboard(request)
