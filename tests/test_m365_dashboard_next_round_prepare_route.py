@@ -180,3 +180,21 @@ def test_recovery_dashboard_requires_fresh_independent_approvals():
     assert "recoveryRead.checked = false;" in page
     assert "recoveryRemoval.checked = false;" in page
     assert "No automatic retry." in page
+
+@pytest.mark.parametrize("malformed_receipt", [
+    None, [], "receipt_verified", 1, {},
+    {"status": "unknown", "secret": "secret-token"},
+])
+def test_recovery_refuses_malformed_adapter_receipt_without_retry(
+        monkeypatch, malformed_receipt):
+    from server.m365_operator_audit_routes import operator_recovery_triage
+    configure(monkeypatch)
+    with (patch("server.m365_operator_audit_routes.dashboard_session_valid", return_value=True),
+          patch("server.m365_outlook_recovery_triage.triage",
+                return_value=malformed_receipt) as triage):
+        with pytest.raises(HTTPException) as exc:
+            operator_recovery_triage(request(), True, True)
+    assert exc.value.status_code == 409
+    assert "Do not retry" in str(exc.value.detail)
+    assert "secret-token" not in str(exc.value.detail)
+    triage.assert_called_once()
