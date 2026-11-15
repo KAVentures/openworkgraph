@@ -302,8 +302,22 @@ def quality(log_id: str) -> dict[str, Any]:
     from . import event_log_quality_trends as quality_trends
     present = {r["batch"] for r in reports}
     missing_reports = [b for b in batches if b not in present]
+    # A single-batch report can be verified against the entire saved log. For
+    # appended logs, batch digests describe historical batch scopes and must
+    # not be compared to the current whole-log digest: doing so would produce
+    # false corruption warnings. Missing or legacy digests are not verified.
+    integrity = {"status": "not_verifiable", "reason": "historical_batches_or_missing_report"}
+    if len(batches) == 1 and not missing_reports and len(reports) == 1:
+        expected = reports[0].get("content_sha256_v2")
+        if isinstance(expected, str) and len(expected) == 64 and all(c in "0123456789abcdef" for c in expected):
+            integrity = {"status": "verified" if expected == digest_v2 else "mismatch",
+                         "algorithm": "content_sha256_v2",
+                         "reason": "current_saved_content_matches_import_report" if expected == digest_v2
+                                   else "current_saved_content_differs_from_import_report"}
+        else:
+            integrity = {"status": "not_verifiable", "reason": "legacy_or_invalid_digest"}
     # Logs imported before reports existed, or whose report could not be written, have none.
-    return {"log": info, "reports": reports, "batches_without_report": missing_reports,
+    return {"log": info, "reports": reports, "batches_without_report": missing_reports,\n            "integrity": integrity,
             "batch_trends": quality_trends.build(reports, missing_reports),
             "current": {"content_sha256": digest, "content_sha256_v2": digest_v2,
                         "diagnostics": current, **identity_digest, **relationship_metadata,
