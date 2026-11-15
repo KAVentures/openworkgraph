@@ -54,6 +54,14 @@ def _session_window(value: Any) -> str:
         raise ValueError("invalid earlier session timestamp") from exc
 
 
+def _truncation_flag(container: dict[str, Any], name: str) -> bool:
+    """Fail closed on malformed completeness metadata instead of truthiness coercion."""
+    value = container.get(name, False)
+    if type(value) is not bool:
+        raise ValueError(f"invalid {name} completeness flag")
+    return value
+
+
 def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
     """Create deterministic event-level review decisions, never confirmed cases.
 
@@ -82,10 +90,10 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         if previous != window:
             raise ValueError("event ID reused across session windows")
         indexed[(window, event_id)].add(pair_key)
-    incomplete = bool(response.get("observed_pair_event_assignments_truncated") or
-                      response.get("observed_group_continuity_truncated") or
-                      response.get("observed_case_groups_truncated") or
-                      coverage.get("scan_truncated"))
+    incomplete = (_truncation_flag(response, "observed_pair_event_assignments_truncated") or
+                  _truncation_flag(response, "observed_group_continuity_truncated") or
+                  _truncation_flag(response, "observed_case_groups_truncated") or
+                  _truncation_flag(coverage, "scan_truncated"))
     seen_pair_keys: set[str] = set()
     for pair in pairs:
         if not isinstance(pair, dict) or pair.get("assignment_status") != "observed_same_event_pair" or pair.get("proves_same_case") is not False:
@@ -124,8 +132,9 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
             seen_earlier_windows.add(window)
             for event_id in _event_ids(session.get("evidence_event_ids")):
                 add_evidence(window, event_id, pair_key)
-            incomplete |= bool(session.get("evidence_truncated"))
-        incomplete |= bool(pair.get("current_evidence_truncated") or pair.get("earlier_sessions_truncated"))
+            incomplete |= _truncation_flag(session, "evidence_truncated")
+        incomplete |= (_truncation_flag(pair, "current_evidence_truncated") or
+                       _truncation_flag(pair, "earlier_sessions_truncated"))
     rows = []
     # Chronological: earlier sessions by their start, then the current window.
     def _order(item):
