@@ -372,3 +372,65 @@ def test_reviewer_disagreement_navigation_uses_exact_event_and_window():
     assert "button.textContent='Inspect '+String(item.window)+' · '+String(item.event_id)" in source
     assert "navigation.setAttribute('aria-label','Review event-level disagreements')" in source
     assert "metrics.appendChild(navigation)" in source
+
+
+def test_save_route_validates_live_evidence_before_persisting(monkeypatch):
+    _setup(monkeypatch)
+    from server import work_resumption
+    called = []
+
+    def score(connection, envelope, *, lease, authorize_review):
+        assert authorize_review()
+        called.append("score")
+        return {"f1": 0.0}
+
+    monkeypatch.setattr(work_resumption, "score_live_reconstruction_review", score)
+    monkeypatch.setattr(history_routes, "save_reconstruction_review",
+                        lambda grant, generation, envelope: (
+                            called.append("save") or {"status": "saved_locally"}))
+    response = history_routes.save_reconstruction_review_submission(_request())
+    assert response.headers["cache-control"] == "no-store"
+    assert called == ["score", "save"]
+
+
+def test_save_route_denies_revocation_before_write(monkeypatch):
+    state = _setup(monkeypatch)
+    from server import work_resumption
+
+    def score(connection, envelope, *, lease, authorize_review):
+        state["generation"] += 1
+        return {"f1": None}
+
+    monkeypatch.setattr(work_resumption, "score_live_reconstruction_review", score)
+    monkeypatch.setattr(history_routes, "save_reconstruction_review",
+                        lambda *args: pytest.fail("write after revocation"))
+    with pytest.raises(HTTPException) as error:
+        history_routes.save_reconstruction_review_submission(_request())
+    assert error.value.status_code == 403
+
+
+def test_save_route_revocation_after_write_purges_snapshot(monkeypatch):
+    state = _setup(monkeypatch)
+    from server import work_resumption
+    monkeypatch.setattr(work_resumption, "score_live_reconstruction_review",
+                        lambda *args, **kwargs: {"f1": None})
+    called = []
+    def save(grant, generation, envelope):
+        called.append("save")
+        state["generation"] += 1
+        return {"status": "saved_locally"}
+    monkeypatch.setattr(history_routes, "save_reconstruction_review", save)
+    monkeypatch.setattr(history_routes, "clear_saved_reconstruction_review",
+                        lambda: called.append("purge"))
+    with pytest.raises(HTTPException) as error:
+        history_routes.save_reconstruction_review_submission(_request())
+    assert error.value.status_code == 403
+    assert called == ["save", "purge"]
+
+
+def test_saved_read_denies_without_grant_before_history_query(monkeypatch):
+    _setup(monkeypatch, grant={"mode": "off"})
+    monkeypatch.setattr(history_routes, "connect", lambda: pytest.fail("history query"))
+    with pytest.raises(HTTPException) as error:
+        history_routes.get_saved_reconstruction_review()
+    assert error.value.status_code == 403
