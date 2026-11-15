@@ -5,7 +5,7 @@
   const state={logs:[],logId:'',caseType:'',generation:0,refresh:0,follows:[],objectTypes:[]};
   let activityLookupBusy=false;
   // Views that honour the workspace case filter; every other section uses all cases.
-  const FILTERED=new Set(['summary','variants','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','waiting-time','drift','model-discovery','organization','report.html']);
+  const FILTERED=new Set(['summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','waiting-time','drift','model-discovery','organization','report.html']);
 
   const el=(tag,text,cls)=>{
     const node=document.createElement(tag);
@@ -653,7 +653,7 @@
     const generation=++state.generation;
     const results=document.getElementById('owgEventLogResults');results.replaceChildren();
     status('Analysing…');
-    const [summary,variants,activities]=await Promise.all([getJSON(logPath('summary')),getJSON(logPath('variants',{limit:10})),getJSON(logPath('activities'))]);
+    const [summary,variants,activities]=await Promise.all([getJSON(logPath('summary')),getJSON(logPath('variants/preview',{limit:10})),getJSON(logPath('activities'))]);
     if(generation!==state.generation)return;
     const names=(activities.activities||[]).map(a=>a.activity);
     const inspection=caseInspector(names);
@@ -671,7 +671,11 @@
     results.appendChild(cohortMetricSection(names));
 
     const variantBox=section('Most common variants');
-    variantBox.appendChild(table(['Path','Cases','Share','Median time','Evidence'],(variants.variants||[]).map(v=>{const open=button('Inspect cases','secondary');open.onclick=()=>inspection.path(v.path);return [v.path.join(' → '),Number(v.cases).toLocaleString(),pct(v.share),duration(v.median_duration_seconds),open];})));
+    variantBox.appendChild(table(['Path','Cases','Share','Median time','Evidence'],(variants.variants||[]).map(v=>{
+      const open=button('Inspect cases','secondary');open.disabled=!!v.path_truncated;
+      if(v.path_truncated)open.title='This path is shortened; browse cases by activity instead.';
+      else open.onclick=()=>inspection.path(v.path);
+      return [v.path.join(' → ')+(v.path_truncated?' … ('+Number(v.path_activity_count).toLocaleString()+' activities; shortened)':''),Number(v.cases).toLocaleString(),pct(v.share),duration(v.median_duration_seconds),open];})));
     variantBox.appendChild(el('div',Number(variants.distinct_variants).toLocaleString()+' distinct variants.','muted'));
     results.appendChild(variantBox);
     results.appendChild(variantCoverageSection(names));
@@ -696,6 +700,7 @@
     results.appendChild(conformanceSection((variants.variants||[])[0]));
     results.appendChild(clusterSection());
     results.appendChild(caseTagSection(names));
+    results.appendChild(caseAttributeSection());
     results.appendChild(caseExplainSection());
     results.appendChild(discoverySection());
     results.appendChild(driftSection());
@@ -1206,6 +1211,64 @@
         b.onclick=()=>{caseId.value=c.case_id;explainCase(c.case_id);};wrap.appendChild(b);});
       slowList.replaceChildren(wrap);
     }).catch(()=>{});
+    return box;
+  }
+
+  // Columns from a separate case table (customer, region, amount...) joined onto the cases by id.
+  function caseAttributeSection(){
+    const box=section('Case attributes from a table');box.id='owgCaseAttributes';
+    box.appendChild(el('div','Add columns such as region, segment or contract value from a separate CSV keyed by case ID. They become case attributes for filters, root cause and attribute profiles. Events are not changed, and an upload can be removed again.','muted'));
+    const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/case-attributes';
+    const list=el('div');list.id='owgCaseAttributeUploads';list.setAttribute('role','status');
+    const file=input('owgCaseAttributeFile','file');file.accept='.csv,.tsv,.txt';
+    const delimiter=select('owgCaseAttributeDelimiter',[[',','Comma'],[';','Semicolon'],['t','Tab'],['|','Pipe']]);
+    const idColumn=select('owgCaseAttributeId',[]);
+    const columns=select('owgCaseAttributeColumns',[]);columns.multiple=true;columns.size=4;
+    const replace=input('owgCaseAttributeReplace','checkbox');
+    const consent=input('owgCaseAttributeConsent','checkbox');
+    const add=button('Add to cases','secondary');add.id='owgCaseAttributeAdd';add.disabled=true;
+    const out=el('div');out.id='owgCaseAttributeResult';out.setAttribute('role','status');
+    const row=el('div',null,'row');row.style.alignItems='end';
+    row.append(field('Case table (CSV)',file),field('Delimiter',delimiter),field('Case ID column',idColumn),field('Columns to add',columns));
+    const checks=el('div',null,'row');
+    const replaceLabel=el('label',' Overwrite values the cases already have');replaceLabel.prepend(replace);
+    const consentLabel=el('label',' Store these values with the log on this computer');consentLabel.prepend(consent);
+    checks.append(replaceLabel,consentLabel);
+    box.append(list,row,checks,add,out);
+    const ready=()=>{add.disabled=!(file.files&&file.files[0]&&idColumn.value&&columns.selectedOptions.length&&consent.checked);};
+    const readHeader=async()=>{
+      const chosen=file.files&&file.files[0];setOptions(idColumn,[]);setOptions(columns,[]);ready();if(!chosen)return;
+      const header=csvHeader(await chosen.slice(0,65536).text(),delimiter.value==='t'?'\t':delimiter.value);
+      setOptions(idColumn,header.map(c=>[c,c]));
+      idColumn.value=header.find(c=>/case|order|ticket|^id$/i.test(c))||header[0]||'';
+      const others=()=>setOptions(columns,header.filter(c=>c!==idColumn.value).map(c=>[c,c]));
+      others();idColumn.onchange=()=>{others();ready();};ready();
+    };
+    file.onchange=()=>{consent.checked=false;readHeader();};delimiter.onchange=readHeader;
+    for(const control of [columns,consent])control.addEventListener('change',ready);
+    const generation=state.generation;
+    const render=r=>{
+      if(!r.uploads.length){list.replaceChildren(el('div','No case attributes added yet.','muted'));return;}
+      list.replaceChildren(table(['Added','Columns','Cases updated','Rows not in this log','Cases without a row',''],r.uploads.map(u=>{
+        const remove=button('Remove','secondary');remove.setAttribute('aria-label','Remove '+u.columns.join(', '));
+        remove.onclick=async()=>{if(!window.confirm('Remove '+u.columns.join(', ')+' from every case?'))return;
+          try{const r2=await (await api(base()+'/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({upload_id:u.upload_id})})).json();
+            out.replaceChildren(el('div','Removed '+r2.removed_columns.join(', ')+' from '+Number(r2.cases_changed).toLocaleString()+' cases.'));render(await getJSON(base()));}
+          catch(error){out.replaceChildren(el('div',error.message,'muted'));}};
+        return [String(u.added_at).slice(0,16).replace('T',' '),u.columns.join(', '),Number(u.cases_updated).toLocaleString(),Number(u.rows_not_in_log).toLocaleString(),Number(u.cases_without_row).toLocaleString(),remove];})));
+    };
+    add.onclick=async()=>{
+      const q=new URLSearchParams({id_column:idColumn.value,delimiter:delimiter.value});
+      [...columns.selectedOptions].forEach(o=>q.append('column',o.value));
+      if(state.caseType)q.set('object_type',state.caseType);if(replace.checked)q.set('replace','true');
+      add.disabled=true;out.replaceChildren(el('div','Adding…','muted'));
+      try{
+        const r=await (await api(base()+'?'+q,{method:'POST',body:file.files[0],headers:{'Content-Type':'text/csv','X-OWG-Local-Storage-Confirmed':'true'}})).json();
+        out.replaceChildren(el('div','Added '+r.columns.join(', ')+' to '+Number(r.cases_updated).toLocaleString()+' cases. '+Number(r.rows_not_in_log).toLocaleString()+' rows matched no case; '+Number(r.cases_without_row).toLocaleString()+' cases had no row.'));
+        consent.checked=false;render(await getJSON(base()));
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));ready();}
+    };
+    getJSON(base()).then(r=>{if(generation===state.generation)render(r);}).catch(error=>list.replaceChildren(el('div',error.message,'muted')));
     return box;
   }
 
@@ -2726,7 +2789,7 @@
     const box=section('Compare with a reference process');
     const model=document.createElement('textarea');model.id='owgEventLogModel';model.rows=3;model.style.width='100%';
     model.placeholder='One accepted path per line, e.g. Receive > Review > Close, or reference-model JSON for exact labels';
-    if(topVariant&&topVariant.path.length<=100)model.value=JSON.stringify({format:MODEL_FORMAT,paths:[topVariant.path]});
+    if(topVariant&&!topVariant.path_truncated&&topVariant.path.length<=100)model.value=JSON.stringify({format:MODEL_FORMAT,paths:[topVariant.path]});
     const run=button('Check conformance','secondary');run.id='owgEventLogConformanceRun';
     const out=el('div');box.append(field('Reference paths or exact-label JSON',model),run,out);
     run.onclick=async()=>{
@@ -3160,14 +3223,34 @@
       };
       firstPage.onclick=()=>loadPage(0);nextPage.onclick=()=>{if(nextCursor!==null&&nextCursor!==undefined)loadPage(nextCursor);};
       renderPage(r);
+      const decisionHost=el('div'),decisionStatus=el('div',null,'muted');
+      const decisionFirst=button('First decisions'),decisionNext=button('Next decisions');
+      decisionFirst.id='owgQuarantineDecisionsFirst';decisionNext.id='owgQuarantineDecisionsNext';
+      let decisionTurn=0,decisionNextOffset=r.decisions_next_offset??null;
+      const renderDecisions=(page)=>{
+        const decisions=page.decisions||[],total=Number(page.total??r.decisions_total??decisions.length),start=Number(page.offset||0);
+        decisionNextOffset=page.next_offset??null;
+        decisionHost.replaceChildren(...(decisions.length?[table(['Decision','When','Result'],decisions.map(d=>[d.kind==='release'?'Released with offset '+d.naive_timestamp_offset:'Discarded',d.decided_at.slice(0,16).replace('T',' ')+' UTC',
+          d.kind==='release'?d.rows_released+' of '+d.rows_considered+' rows released, '+(d.events_added||0)+' events added, '+(d.duplicates_skipped||0)+' already in the log':d.rows_discarded+' rows discarded']))]:[]));
+        decisionStatus.textContent=total?(decisions.length?'Showing '+(start+1).toLocaleString()+'–'+(start+decisions.length).toLocaleString()+' of '+total.toLocaleString()+' decisions':'No decisions on this page; '+total.toLocaleString()+' in total')+'. History can change between pages.':'';
+        show(decisionFirst,total>100);show(decisionNext,total>100);
+        decisionFirst.disabled=start===0;decisionNext.disabled=decisionNextOffset===null;
+      };
+      const loadDecisions=async offset=>{
+        const request=++decisionTurn;decisionFirst.disabled=true;decisionNext.disabled=true;
+        try{const page=await getJSON(base+'/decisions?offset='+offset+'&limit=100');
+          if(generation===state.generation&&request===decisionTurn)renderDecisions(page);
+        }catch(error){if(generation===state.generation&&request===decisionTurn){decisionStatus.textContent=error.message;decisionFirst.disabled=false;decisionNext.disabled=decisionNextOffset===null;}}
+      };
+      decisionFirst.onclick=()=>loadDecisions(0);decisionNext.onclick=()=>{if(decisionNextOffset!==null)loadDecisions(decisionNextOffset);};
+      renderDecisions({decisions:r.decisions,total:r.decisions_total??r.decisions.length,offset:0,next_offset:r.decisions_next_offset??null});
       const row=el('div',null,'row');row.style.alignItems='end';
       row.append(field('UTC offset to assume for times written without one',offset),field('Batch (blank for all)',batch),field('First row (optional)',rowStart),field('Last row (optional)',rowEnd),preview,release,discard);
       wrap.append(el('h4','Rejected rows kept for review'),
         el('div',Number(r.rows_kept).toLocaleString()+' rows kept ('+reasonText(r.reasons)+'). '+r.note,'muted'),
         pageHost,firstPage,nextPage,
         el('div','Batch and row range limit preview and release. Discard removes all kept rows.','muted'),row,message,
-        ...(r.decisions.length?[table(['Decision','When','Result'],r.decisions.map(d=>[d.kind==='release'?'Released with offset '+d.naive_timestamp_offset:'Discarded',d.decided_at.slice(0,16).replace('T',' ')+' UTC',
-          d.kind==='release'?d.rows_released+' of '+d.rows_considered+' rows released, '+(d.events_added||0)+' events added, '+(d.duplicates_skipped||0)+' already in the log':d.rows_discarded+' rows discarded']))]:[]));
+        decisionStatus,decisionHost,decisionFirst,decisionNext);
       for(const control of [offset,batch,rowStart,rowEnd])control.addEventListener('input',()=>{
         previewGeneration++;reviewed=null;release.disabled=true;
         message.textContent='Selection changed. Preview again before releasing.';
