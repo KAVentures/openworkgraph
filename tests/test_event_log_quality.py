@@ -637,3 +637,20 @@ def test_streamed_set_digest_matches_legacy_bucket_contract():
             assert quality._set_digest(conn, sql, []) == expected.hexdigest()
     finally:
         conn.close()
+
+
+def test_corrupt_saved_quality_json_is_missing_not_verified():
+    """A damaged report must not crash the review or count as provenance."""
+    made = _import()
+    log_id = made["log_id"]
+    conn = workspace._connect()
+    try:
+        conn.execute("UPDATE log_quality SET report = ? WHERE log_id = ? AND batch = 0",
+                     ["{invalid json", log_id])
+    finally:
+        conn.close()
+    result = quality.quality(log_id)
+    assert result["reports"] == []
+    assert result["batches_without_report"] == [0]
+    assert result["integrity"]["status"] == "not_verifiable"
+    assert result["batch_trends"]["review_queue"][0]["status"] == "missing_report"
