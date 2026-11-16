@@ -39,9 +39,14 @@ async function scenario(name,options={}){
  const refresh=async()=>true;
  vm.runInNewContext(handler,{window,document,api,show,refresh,detail,status});
  assert.ok(listener);
- listener({detail:{...handoff,...options.handoff}});
+ listener({detail:options.discovery?{idea_id:'idea-1'}:{...handoff,...options.handoff}});
  for(let i=0;i<30;i++)await Promise.resolve();
- if(options.invalid){
+ if(options.discovery){
+   assert.equal(shown,1,name+' must open the saved opportunity');
+   assert.equal(journeyOpened,1,name+' must open its evidence journey');
+   assert.equal(calls.length,0,name+' must not invoke reviewed-project approval APIs');
+   assert.match(status.textContent,/No project or execution was authorized/);
+ }else if(options.invalid){
    assert.equal(shown,0,name+' must not show a decision surface');
    assert.equal(journeyOpened,0,name+' must not open a journey');
    assert.equal(calls.length,0,name+' must not fetch even the journey');
@@ -60,6 +65,7 @@ async function scenario(name,options={}){
  console.log('PASS '+name);
 }
 (async()=>{
+ await scenario('saved process opens evidence journey without approval',{discovery:true});
  await scenario('approved destination rechecks authenticated saved review');
  await scenario('revoked approval denied at destination',{denied:true});
  await scenario('stale saved revision denied',{approved:{review_revision:3}});
