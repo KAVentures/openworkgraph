@@ -25,7 +25,7 @@ const reply=(data,status=200)=>({ok:status===200,status,json:async()=>data});
 async function scenario(name,options={}){
  let listener,shown=0,journeyOpened=0,calls=[],status={textContent:''},children=[];
  const detail={replaceChildren(...x){children=x;}};
- const button={onclick:async()=>{journeyOpened++;}};
+ const button={onclick:async()=>{journeyOpened++;if(options.journeyError)status.textContent=options.journeyError;}};
  const document={getElementById:id=>id==='owgPipelineJourney'?button:null};
  const window={addEventListener:(name,fn)=>{assert.equal(name,'owg-pipeline-open');listener=fn;}};
  const api=async(url,request)=>{
@@ -45,7 +45,8 @@ async function scenario(name,options={}){
    assert.equal(shown,1,name+' must open the saved opportunity');
    assert.equal(journeyOpened,1,name+' must open its evidence journey');
    assert.equal(calls.length,0,name+' must not invoke reviewed-project approval APIs');
-   assert.match(status.textContent,/No project or execution was authorized/);
+   if(options.journeyError)assert.equal(status.textContent,options.journeyError,name+' must preserve authenticated journey refusal');
+   else assert.match(status.textContent,/No project or execution was authorized/);
  }else if(options.invalid){
    assert.equal(shown,0,name+' must not show a decision surface');
    assert.equal(journeyOpened,0,name+' must not open a journey');
@@ -66,6 +67,8 @@ async function scenario(name,options={}){
 }
 (async()=>{
  await scenario('saved process opens evidence journey without approval',{discovery:true});
+ await scenario('discovery journey preserves denied access',{discovery:true,journeyError:'Authenticated journey refused (403).'});
+ await scenario('discovery journey preserves stale-source refusal',{discovery:true,journeyError:'Saved process source changed. Inspect again.'});
  await scenario('approved destination rechecks authenticated saved review');
  await scenario('revoked approval denied at destination',{denied:true});
  await scenario('stale saved revision denied',{approved:{review_revision:3}});
