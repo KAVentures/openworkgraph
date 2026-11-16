@@ -167,7 +167,7 @@ class ReviewedTransactionTests(unittest.TestCase):
              patch.object(tx.cycle, "checkpoint_commit", side_effect=step("checkpoint", {"status": "checkpoint_committed", "generation": 2})):
             result = tx.execute(**inputs())
         self.assertEqual(order, ["review", "append", "handoff", "checkpoint"])
-        self.assertEqual(result["generation"], 2)
+        self.assertEqual(result["generation"], 1)
         self.assertFalse(result["automatic_retry_allowed"])
 
     def test_malformed_post_append_receipts_never_advance_checkpoint(self):
@@ -187,6 +187,24 @@ class ReviewedTransactionTests(unittest.TestCase):
                     checkpoint.assert_not_called()
                     if phase == "append":
                         handoff.assert_not_called()
+
+    def test_malformed_checkpoint_receipt_is_uncertain_not_success(self):
+        reviewed = {"status": "review_ready", "csv_sha256": DIGEST,
+                    "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}
+        for receipt in (None, {}, {"status": "checkpoint_committed"},
+                        {"status": "checkpoint_committed", "generation": True},
+                        {"status": "checkpoint_committed", "generation": 2},
+                        {"status": "checkpoint_committed", "generation": 1,
+                         "idempotent_replay": "false"}):
+            with self.subTest(receipt=receipt), \\
+                 patch.object(tx, "inspect_checkpoint", return_value=None), \\
+                 patch.object(tx.cycle, "review", return_value=reviewed), \\
+                 patch.object(tx.cycle, "append", return_value={"status": "receipt_persisted"}), \\
+                 patch.object(tx.cycle, "handoff", return_value={"status": "next_round_handoff_prepared"}), \\
+                 patch.object(tx.cycle, "checkpoint_commit", return_value=receipt) as checkpoint:
+                with self.assertRaises(UncertainReceipt):
+                    tx.execute(**inputs())
+                checkpoint.assert_called_once()
 
     def test_uncertain_append_never_handoffs_or_commits(self):
         with patch.object(tx, "inspect_checkpoint", return_value=None), \
@@ -238,7 +256,7 @@ class ReviewedTransactionTests(unittest.TestCase):
     def test_matching_predecessor_allows_transaction(self):
         with patch.object(tx.cycle, "review", return_value={"status": "review_ready", "csv_sha256": DIGEST, "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}), \
              patch.object(tx, "inspect_checkpoint", return_value={
-                 "candidate_sha256": "b" * 64, "log_id": "log"}), \
+                 "candidate_sha256": "b" * 64, "log_id": "log", "generation": 1}), \
              patch.object(tx.cycle, "append", return_value={"status": "receipt_persisted"}), \
              patch.object(tx.cycle, "handoff", return_value={"status": "next_round_handoff_prepared"}), \
              patch.object(tx.cycle, "checkpoint_commit", return_value={
