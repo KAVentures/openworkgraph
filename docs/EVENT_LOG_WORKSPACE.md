@@ -373,6 +373,7 @@ case time they involve. The same list comes from
 | `slow_transition` | One step-to-step gap accounts for at least 15% of all recorded case time. |
 | `repeated_activity` | An activity recurs within at least 5% of cases. It shows the median duration with and without the repeat. |
 | `costly_detour` | Cases with a minority activity take at least 1.5× as long as the rest. |
+| `attribute_segment` | Cases with a case-attribute value take at least 1.5× as long as the rest (median). The value can come from the import or a joined case table. Numeric attributes with more than 10 distinct values are grouped by this log's quartiles. At most the 3 largest are listed. The finding's `cohort` (`attribute` or `attribute_range`) selects exactly its cases. In the dashboard it offers "Slowest cases" and "Save as log". |
 | `long_tail` | Always shown: the slowest tenth of cases and their share of case time. |
 | `variant_spread` | Always shown: how many paths cover 80% of cases. |
 | `slowing_down` | The newer half of cases (by start) has a median at least 1.25× the older half's. |

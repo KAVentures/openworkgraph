@@ -1047,6 +1047,21 @@
             item.appendChild(go);
           }else if(f.cohort&&f.cohort.activity){
             item.appendChild(el('div','To see these cases, choose “'+f.cohort.activity+'” under Contains activity in any filter.','muted'));
+          }else if(f.cohort&&(f.cohort.attribute||f.cohort.attribute_range)){
+            // Case-attribute groups: list the slowest of exactly these cases, or save them as a log.
+            const casesOut=el('div');casesOut.setAttribute('role','status');
+            const base='/v1/event-logs/'+encodeURIComponent(state.logId);
+            const post=(path,body)=>{if(state.caseType)body.case_type=state.caseType;return api(base+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(x=>x.json());};
+            const slowest=button('Slowest cases','secondary');slowest.setAttribute('aria-label','Slowest cases: '+f.title);
+            const save=button('Save as log','secondary');save.setAttribute('aria-label','Save these cases as a new log: '+f.title);
+            slowest.onclick=async()=>{try{const r2=await post('/cases/slowest',{cohort:f.cohort,limit:10});if(generation!==state.generation)return;
+              const row=el('div',null,'row');r2.cases.forEach(c=>{const b=button(c.case_id+' ('+duration(c.duration_seconds)+')','secondary');b.setAttribute('aria-label','Explain case '+c.case_id);
+                b.onclick=()=>{const id=document.getElementById('owgCaseExplainId'),run=document.getElementById('owgCaseExplainRun');if(!id||!run)return;id.value=c.case_id;run.click();document.getElementById('owgCaseExplain').scrollIntoView({block:'start'});};row.appendChild(b);});
+              casesOut.replaceChildren(row);}catch(error){casesOut.replaceChildren(el('div',error.message,'muted'));}};
+            save.onclick=async()=>{const name=(window.prompt('Name for a new log with these '+f.cases+' cases',(f.numbers.segment||'segment').slice(0,120))||'').trim();if(!name)return;
+              try{const r2=await post('/derive',{name:name.slice(0,120),cohort:f.cohort});casesOut.replaceChildren(el('div','Saved '+Number(r2.copied.events).toLocaleString()+' events of '+Number(r2.derived_from.cases_matched).toLocaleString()+' cases as “'+r2.log.name+'”. This log is unchanged.'));}
+              catch(error){casesOut.replaceChildren(el('div',error.message,'muted'));}};
+            const row=el('div',null,'row');row.append(slowest,save);item.append(row,casesOut);
           }
           list.appendChild(item);
         });
