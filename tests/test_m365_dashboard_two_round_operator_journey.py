@@ -772,6 +772,7 @@ def test_malformed_review_refused_before_append_or_checkpoint(monkeypatch, inval
     from server.m365_outlook_owg_receipt import ReceiptError
     monkeypatch.delenv("OWG_M365_AUDIT_DIR", raising=False)
     with (
+        patch.object(transaction, "inspect_checkpoint", return_value=None),
         patch.object(transaction.cycle, "review", return_value=invalid),
         patch.object(transaction.cycle, "append") as append,
         patch.object(transaction.cycle, "checkpoint_commit") as checkpoint,
