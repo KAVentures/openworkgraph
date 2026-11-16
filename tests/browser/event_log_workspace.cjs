@@ -53,8 +53,9 @@ const path=require('node:path');
    assert.match(await page.locator('#owgEventLogStatus').textContent(),/1 rejected rows were kept for review/);
 
    const qualityResponsePromise=page.waitForResponse(response=>response.status()===200&&
-     response.url().includes('/v1/event-logs/')&&response.url().split('?')[0].endsWith('/quality'));
+     response.url().includes('/v1/event-logs/')&&response.url().split('?')[0].endsWith('/quality/overview'));
    await page.locator('#owgEventLogAnalyze').click();
+   await page.locator('#owgQuality summary').click();
    const qualityPayload=await (await qualityResponsePromise).json();
    await page.locator('#owgEventLogResults h3',{hasText:'Most common variants'}).waitFor();
    // R9: real browser, authenticated saved-log aggregate, cohort filtering and safe error display.
@@ -92,7 +93,6 @@ const path=require('node:path');
 
 
    assert.match(await page.locator('#owgEventLogResults').textContent(),/Receive → Check → Approve → Close/);
-   await page.locator('#owgQuality summary').click();
    await page.locator('#owgQualityResults table').first().waitFor();
    const qualityText=await page.locator('#owgQualityResults').textContent();
    assert.match(qualityText,/Import\s*csv\s*274\s*1 \(1 time without a UTC offset\)/);
@@ -128,7 +128,7 @@ const path=require('node:path');
 
    // Synthetic response only: exercise the capped-key disclosure without creating
    // a large source log. Backend DuckDB tests separately establish the real 35-key count.
-   const qualityPattern='**/v1/event-logs/*/quality';
+   const qualityPattern='**/v1/event-logs/*/quality/overview';
    await page.route(qualityPattern,async route=>{
      const response=await route.fetch(),payload=await response.json();
      payload.current.diagnostics.attribute_coverage=Array.from({length:32},(_,i)=>({
@@ -139,10 +139,10 @@ const path=require('node:path');
      await route.fulfill({response,json:payload});
    });
    const truncatedQuality=page.waitForResponse(response=>response.status()===200&&
-     response.url().includes('/v1/event-logs/')&&response.url().split('?')[0].endsWith('/quality'));
+     response.url().includes('/v1/event-logs/')&&response.url().split('?')[0].endsWith('/quality/overview'));
    await page.locator('#owgEventLogAnalyze').click();
-   await truncatedQuality;
    await page.locator('#owgQuality summary').click();
+   await truncatedQuality;
    await page.locator('#owgQualityResults').getByText('Showing 32 of 35 attribute keys; omitted keys are not absent.').waitFor();
    assert.match(await page.locator('#owgQualityResults').textContent(),/fixture_31/);
    await page.unroute(qualityPattern);
@@ -430,6 +430,29 @@ const path=require('node:path');
 
    await page.locator('#owgEventLogSimLoad').click();
    await page.locator('#owgEventLogSimRun').waitFor();
+   // R14 shared-calibration portfolio: several staffing levels are tested
+   // against one static local calibration, not independently refitted logs.
+   await page.locator('#owgEventLogSimPortfolio').waitFor();
+   await page.locator('#owgEventLogSimPortfolioCases').fill('150');
+   await page.locator('#owgEventLogSimPortfolioActivity1').selectOption('Check');
+   await page.locator('#owgEventLogSimPortfolioStaff1').fill('1');
+   await page.locator('#owgEventLogSimPortfolioActivity2').selectOption('Check');
+   await page.locator('#owgEventLogSimPortfolioStaff2').fill('4');
+   const [portfolioResponse]=await Promise.all([
+     page.waitForResponse(r=>r.url().includes('/simulation/portfolio')&&r.request().method()==='POST'),
+     page.locator('#owgEventLogSimPortfolioRun').click()
+   ]);
+   assert.equal(portfolioResponse.status(),200,await portfolioResponse.text());
+   const portfolio=await portfolioResponse.json();
+   assert.equal(portfolio.single_calibration_used,true);
+   assert.equal(portfolio.identical_case_count_and_seed,true);
+   assert.equal(portfolio.baseline.cases_simulated,150);
+   assert.deepEqual(portfolio.alternatives.map(x=>x.label),['Alternative 1','Alternative 2']);
+   assert.equal(portfolio.execution_authorized,false);
+   assert.equal(portfolio.auto_selected_recommended_alternative,false);
+   await page.locator('#owgEventLogSimPortfolioResults table').waitFor();
+   assert.equal(await page.locator('#owgEventLogSimPortfolioResults tbody tr').count(),3);
+   assert.match(await page.locator('#owgEventLogSimPortfolioResults').textContent(),/no winning option|No winning option/i);
    assert.match(await page.locator('#owgEventLogSimForm').textContent(),/Calibrated 60 of 60 complete cases/);
    const measuredPaths=await page.evaluate(()=>window.__owgEventLogModel.parseWeightedPaths(document.querySelector('#owgEventLogSimPaths').value));
    assert.deepEqual(measuredPaths[0],{activities:['Receive','Check','Approve','Close'],weight:0.6});
@@ -824,6 +847,44 @@ const path=require('node:path');
    assert.equal(typeof downloadedAggregate.generated_at,'string');
    assert.deepEqual({...downloadedAggregate,generated_at:pair.aggregate_snapshot.generated_at},pair.aggregate_snapshot);
    if(process.env.OWG_SHARED_CASE_PAIR_OUTPUT)await fs.writeFile(process.env.OWG_SHARED_CASE_PAIR_OUTPUT,JSON.stringify(pair));
+   // R4 + R9: one paired file must be reviewed twice and revalidated against
+   // current source, metric definitions and numeric aggregate at download time.
+   const [companyResponse]=await Promise.all([
+     page.waitForResponse(r=>r.url().endsWith('/company-handoff-preview')),
+     page.locator('#owgAnalysisPrepareCompany').click()]);
+   assert.equal(companyResponse.status(),200);
+   const companyPacket=await companyResponse.json();
+   assert.equal(companyPacket.format,'openworkgraph.analysis-handoff-bundle.v1');
+   assert.equal(companyPacket.case_dataset.cases.length,companyPacket.aggregate_snapshot.matching_cases);
+   assert.equal(companyPacket.case_dataset.source_content_sha256,companyPacket.aggregate_snapshot.source_content_sha256);
+   assert.equal(await page.locator('#owgAnalysisBundleDownload').isDisabled(),true);
+   await page.locator('#owgAnalysisSharingConsent').check();
+   assert.equal(await page.locator('#owgAnalysisBundleDownload').isDisabled(),true,'aggregate consent alone cannot release cases');
+   await page.locator('#owgAnalysisCaseConsent').check();
+   assert.equal(await page.locator('#owgAnalysisBundleDownload').isDisabled(),false);
+   await page.route('**/analysis-sharing-freshness',route=>route.fulfill({
+     status:200,contentType:'application/json',
+     body:JSON.stringify({format:'openworkgraph.analysis-snapshot-freshness.v1',
+       lineage_current:true,current_results_match:false})
+   }),{times:1});
+   await page.locator('#owgAnalysisBundleDownload').click();
+   await page.locator('#owgAnalysisFreshnessStatus').filter({hasText:'Paired handoff stale or changed.'}).waitFor();
+   assert.equal(await page.locator('#owgAnalysisBundleDownload').isDisabled(),true);
+   await page.unroute('**/analysis-sharing-freshness');
+   const [reprepared]=await Promise.all([
+     page.waitForResponse(r=>r.url().endsWith('/company-handoff-preview')),
+     page.locator('#owgAnalysisPrepareCompany').click()]);
+   assert.equal(reprepared.status(),200);
+   const reviewedCompany=await reprepared.json();
+   await page.locator('#owgAnalysisSharingConsent').check();
+   await page.locator('#owgAnalysisCaseConsent').check();
+   const [pairedCompanyDownload]=await Promise.all([
+     page.waitForEvent('download'),page.locator('#owgAnalysisBundleDownload').click()]);
+   const downloadedCompany=JSON.parse(await fs.readFile(await pairedCompanyDownload.path(),'utf8'));
+   assert.deepEqual(downloadedCompany,reviewedCompany);
+   assert.equal(await page.locator('#owgAnalysisSharingConsent').isChecked(),false);
+   assert.equal(await page.locator('#owgAnalysisCaseConsent').isChecked(),false);
+   assert.ok(!JSON.stringify(downloadedCompany).includes('"resource"'),'no raw resource content');
    // An older prepare response cannot re-open a sharing preview after a new analysis runs.
    let releaseSharing,sharingHeld;const sharingSeen=new Promise(resolve=>sharingHeld=resolve);
    await page.route('**/analysis-sharing-preview',async route=>{const response=await route.fetch();sharingHeld();await new Promise(resolve=>releaseSharing=resolve);await route.fulfill({response});},{times:1});

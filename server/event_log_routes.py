@@ -45,6 +45,7 @@ from . import event_log_process_map as process_maps
 from . import event_log_predictions as predictions
 from . import event_log_prediction_monitoring as prediction_monitoring
 from . import event_log_quality as quality
+from . import event_log_quality_pages as quality_pages
 from . import event_log_quarantine as quarantine
 from . import event_log_query as analysis
 from . import event_log_linked_attribute_analysis as linked_attribute_analysis
@@ -55,6 +56,7 @@ from . import event_log_signal_transitions as signal_transitions
 from . import event_log_signal_overview as signal_overview
 from . import event_log_signal_timeline as signal_timeline
 from . import event_log_simulation as simulation
+from . import event_log_simulation_portfolio as simulation_portfolio
 from . import event_log_trace_clusters as trace_clusters
 from . import event_log_waiting as waiting
 from . import event_log_workspace as workspace
@@ -62,9 +64,10 @@ from .db import DATA_DIR
 from .local_auth import dashboard_session_valid
 
 router = APIRouter()
+XLSX_MAX_BYTES = 64 * 1024 * 1024
 _SCRIPT = Path(__file__).resolve().parents[1] / "dashboard" / "event_log_workspace.js"
-_TYPES = {"csv": "text/csv", "sourcecsv": "text/csv", "xes": "application/xml", "ocel": "application/json", "ocelxml": "application/xml"}
-_SUFFIX = {"csv": "csv", "sourcecsv": "csv", "xes": "xes", "ocel": "jsonocel", "ocelxml": "xmlocel"}
+_TYPES = {"csv": "text/csv", "sourcecsv": "text/csv", "sourcecsv-review": "text/csv", "csv-review": "text/csv", "xes": "application/xml", "ocel": "application/json", "ocelxml": "application/xml"}
+_SUFFIX = {"csv": "csv", "sourcecsv": "csv", "sourcecsv-review": "review.csv", "csv-review": "review.csv", "xes": "xes", "ocel": "jsonocel", "ocelxml": "xmlocel"}
 
 
 def _source_identity_mapping(
@@ -100,7 +103,8 @@ def _case_filter(started_from: str = Query(default="", max_length=64),
                  attribute: str = Query(default="", max_length=200),
                  event_attribute: str = Query(default="", max_length=200),
                  tag: str = Query(default="", max_length=60),
-                 follows: str = Query(default="", max_length=4000)) -> dict[str, Any]:
+                 follows: str = Query(default="", max_length=4000),
+                 attribute_range: str = Query(default="", max_length=400)) -> dict[str, Any]:
     """The case filter shared by analysis views; ``follows`` is a JSON list of follower rules."""
     cohort: dict[str, Any] = {"started_from": started_from, "started_before": started_before, "resource": resource,
                               "activity": activity, "attribute": attribute, "event_attribute": event_attribute,
@@ -110,6 +114,11 @@ def _case_filter(started_from: str = Query(default="", max_length=64),
             cohort["follows"] = json.loads(follows)
         except ValueError:
             raise HTTPException(422, "follows must be a JSON list of rules") from None
+    if attribute_range:
+        try:
+            cohort["attribute_range"] = json.loads(attribute_range)
+        except ValueError:
+            raise HTTPException(422, "attribute_range must be a JSON object {name, min, max}") from None
     return cohort
 
 
@@ -237,6 +246,53 @@ def event_log_signal_timeline(
     return _respond(signal_timeline.timeline, transition=transition, limit=limit)
 
 
+@router.post("/v1/event-logs/xlsx-to-csv")
+async def convert_xlsx_event_log(request: Request, sheet: str | None = Query(default=None, max_length=200)):
+    """Convert one worksheet of an .xlsx file to CSV for the ordinary CSV import. Nothing is stored."""
+    from . import event_log_xlsx as xlsx
+    _require_dashboard(request)
+    with tempfile.SpooledTemporaryFile(max_size=8 << 20, dir=str(DATA_DIR)) as spool:
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > XLSX_MAX_BYTES:
+                raise HTTPException(413, "the workbook is larger than the supported limit")
+            spool.write(chunk)
+        spool.seek(0)
+        try:
+            result = await run_in_threadpool(xlsx.to_csv, spool, sheet)
+        except xlsx.XlsxError as exc:
+            raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/mapping-matches")
+async def event_log_mapping_matches(request: Request):
+    """Earlier CSV column mappings that fit a file header (by column names only). Nothing is stored."""
+    from . import event_log_mapping_reuse as reuse
+    _require_dashboard(request)
+    spec = await _json_body(request, "mapping match settings", strict=True, limit=262144)
+    return await run_in_threadpool(_respond, reuse.matches, spec)
+
+
+@router.post("/v1/event-logs/timestamp-formats")
+async def detect_timestamp_formats(request: Request, column: str = Query(min_length=1, max_length=200),
+                                   delimiter: str = Query(default=",", max_length=1)):
+    """Which known timestamp formats read every value of one column, from the start of a CSV file (body,
+    at most 256 KB). Nothing is stored."""
+    from . import event_log_timestamp_formats as formats
+    _require_dashboard(request)
+    body = await request.body()
+    if len(body) > 256 * 1024:
+        raise HTTPException(413, "send at most the first 256 KB of the file")
+    try:
+        samples = formats.sample_column(body.decode("utf-8", errors="replace"), "\t" if delimiter == "t" else delimiter, column)
+        result = await run_in_threadpool(formats.detect, samples)
+    except formats.TimestampFormatError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/sample")
 def import_sample_event_log(request: Request):
     """Store the synthetic order-to-cash sample (or return it if it is already saved)."""
@@ -260,6 +316,7 @@ async def import_event_log(
     delimiter: str = Query(default=",", max_length=1),
     keep_rejected: bool = Query(default=False),
     naive_timestamp_offset: str = Query(default="", max_length=6),
+    timestamp_format: str = Query(default="", max_length=64),
     identity: dict = Depends(_source_identity_mapping),
 ):
     _require_dashboard(request)
@@ -279,7 +336,8 @@ async def import_event_log(
                    "attribute_columns": attribute_column[:64],
                    "delimiter": "\t" if delimiter == "t" else delimiter,
                    **({"keep_rejected": True} if keep_rejected else {}),
-                   **({"naive_timestamp_offset": naive_timestamp_offset} if naive_timestamp_offset else {})}
+                   **({"naive_timestamp_offset": naive_timestamp_offset} if naive_timestamp_offset else {}),
+                   **({"timestamp_format": timestamp_format} if timestamp_format else {})}
         mapping.update(identity)
         return _respond(workspace.import_log, spool, name=name, source_format=format, mapping=mapping)
 
@@ -296,6 +354,7 @@ async def append_event_log(
     delimiter: str = Query(default=",", max_length=1),
     keep_rejected: bool = Query(default=False),
     naive_timestamp_offset: str = Query(default="", max_length=6),
+    timestamp_format: str = Query(default="", max_length=64),
     identity: dict = Depends(_source_identity_mapping),
 ):
     _require_dashboard(request)
@@ -314,7 +373,8 @@ async def append_event_log(
                    "attribute_columns": attribute_column[:64],
                    "delimiter": "\t" if delimiter == "t" else delimiter,
                    **({"keep_rejected": True} if keep_rejected else {}),
-                   **({"naive_timestamp_offset": naive_timestamp_offset} if naive_timestamp_offset else {})}
+                   **({"naive_timestamp_offset": naive_timestamp_offset} if naive_timestamp_offset else {}),
+                   **({"timestamp_format": timestamp_format} if timestamp_format else {})}
         mapping.update(identity)
         try:
             result = await run_in_threadpool(workspace.append_log, log_id, spool, source_format=format, mapping=mapping)
@@ -323,10 +383,122 @@ async def append_event_log(
         return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.get("/v1/event-logs/{log_id}/feeds")
+def list_event_log_feeds(request: Request, log_id: str):
+    from . import event_log_folder_feeds as folder_feeds
+    _require_dashboard(request)
+    return _respond(folder_feeds.feeds, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/feeds")
+async def create_event_log_feed(request: Request, log_id: str):
+    """Point the log at a local folder whose new CSV exports are appended with the log's mapping."""
+    from . import event_log_folder_feeds as folder_feeds
+    _require_dashboard(request)
+    spec = await _json_body(request, "folder feed settings", strict=True, limit=8192)
+    return await run_in_threadpool(_respond, folder_feeds.create, log_id, spec)
+
+
+@router.post("/v1/event-logs/feeds/{feed_id}/run")
+async def run_event_log_feed(request: Request, feed_id: str):
+    from . import event_log_folder_feeds as folder_feeds
+    _require_dashboard(request)
+    if request.headers.get("x-owg-local-storage-confirmed") != "true":
+        raise HTTPException(403, "Explicit confirmation to store these events on this computer is required")
+    return await run_in_threadpool(_respond, folder_feeds.run, feed_id)
+
+
+@router.post("/v1/event-logs/feeds/{feed_id}/delete")
+async def delete_event_log_feed(request: Request, feed_id: str):
+    from . import event_log_folder_feeds as folder_feeds
+    _require_dashboard(request)
+    return await run_in_threadpool(_respond, folder_feeds.delete, feed_id)
+
+
+@router.post("/v1/event-logs/{log_id}/case-attributes")
+async def add_case_attributes(
+    request: Request, log_id: str,
+    id_column: str = Query(min_length=1, max_length=200),
+    column: list[str] = Query(default=[], max_length=200),
+    delimiter: str = Query(default=",", max_length=1),
+    object_type: str | None = Query(default=None, max_length=200),
+    replace: bool = Query(default=False),
+):
+    """Join columns of a CSV case table onto the log's cases (body: the CSV)."""
+    from . import event_log_case_attributes as case_attributes
+    _require_dashboard(request)
+    if request.headers.get("x-owg-local-storage-confirmed") != "true":
+        raise HTTPException(403, "Explicit confirmation to store these values on this computer is required")
+    # A closed file in a private folder: Windows does not let DuckDB open a file this process holds open.
+    with tempfile.TemporaryDirectory(dir=str(DATA_DIR), prefix="owg-case-table-") as folder:
+        table = Path(folder) / "case-table.csv"
+        size = 0
+        with table.open("wb") as spool:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > workspace.MAX_IMPORT_BYTES:
+                    raise HTTPException(413, "the case table is larger than the supported limit")
+                spool.write(chunk)
+        try:
+            result = await run_in_threadpool(case_attributes.add, log_id, table, id_column=id_column,
+                                             columns=column[:64], delimiter="\t" if delimiter == "t" else delimiter,
+                                             object_type=object_type, replace=replace)
+        except workspace.EventLogWorkspaceError as exc:
+            raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/v1/event-logs/{log_id}/case-attributes")
+def list_case_attribute_uploads(request: Request, log_id: str):
+    from . import event_log_case_attributes as case_attributes
+    _require_dashboard(request)
+    return _respond(case_attributes.uploads, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/case-attributes/remove")
+async def remove_case_attributes(request: Request, log_id: str):
+    from . import event_log_case_attributes as case_attributes
+    _require_dashboard(request)
+    spec = await _json_body(request, "case attribute removal", strict=True, limit=16384)
+    return await run_in_threadpool(_respond, case_attributes.remove, log_id, spec)
+
+
+@router.post("/v1/event-logs/{log_id}/activity-labels/search")
+async def event_log_activity_label_search(request: Request, log_id: str):
+    """Search activity labels in the current case notion, never source events."""
+    from . import event_log_activity_lookup as activity_lookup
+    _require_dashboard(request)
+    body = await _json_body(request, "activity label search", strict=True, limit=4096)
+    if not isinstance(body, dict) or set(body) - {"search", "after", "case_type"} or "search" not in body:
+        raise HTTPException(422, "activity label search needs search text")
+    return await run_in_threadpool(_respond, activity_lookup.search, log_id, body["search"],
+                                   body.get("after", ""), body.get("case_type"))
+
+
 @router.get("/v1/event-logs/{log_id}/quality")
 def event_log_quality(request: Request, log_id: str):
     _require_dashboard(request)
     return _respond(quality.quality, log_id)
+
+
+@router.get("/v1/event-logs/{log_id}/quality/overview")
+def event_log_quality_overview(request: Request, log_id: str):
+    _require_dashboard(request)
+    return _respond(quality.overview, log_id)
+
+
+@router.get("/v1/event-logs/{log_id}/quality/batch-history")
+def event_log_quality_batch_history(request: Request, log_id: str):
+    _require_dashboard(request)
+    return _respond(quality.batch_history, log_id)
+
+
+@router.get("/v1/event-logs/{log_id}/quality/batch-history/page")
+def event_log_quality_batch_history_page(request: Request, log_id: str,
+        before: int | None = Query(default=None, ge=0, le=2_147_483_647),
+        limit: int = Query(default=100, ge=1, le=100)):
+    _require_dashboard(request)
+    return _respond(quality_pages.page, log_id, before, limit)
 
 
 @router.post("/v1/event-logs/{log_id}/derive")
@@ -347,6 +519,14 @@ def event_log_quarantine(request: Request, log_id: str, batch: int | None = Quer
                          after: int = Query(default=0, ge=0), limit: int = Query(default=50, ge=1, le=100)):
     _require_dashboard(request)
     return _respond(quarantine.quarantine, log_id, batch, after, limit)
+
+
+@router.get("/v1/event-logs/{log_id}/quarantine/decisions")
+def event_log_quarantine_decisions(request: Request, log_id: str,
+        offset: int = Query(default=0, ge=0, le=2_147_483_647),
+        limit: int = Query(default=100, ge=1, le=100)):
+    _require_dashboard(request)
+    return _respond(quarantine.decision_history, log_id, offset, limit)
 
 
 @router.post("/v1/event-logs/{log_id}/quarantine/preview")
@@ -535,6 +715,15 @@ def event_log_variants(request: Request, log_id: str, case_type: str | None = Qu
                        limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):
     _require_dashboard(request)
     return _respond(workspace.variants, log_id, case_type, limit, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/variants/preview")
+def event_log_variant_preview(request: Request, log_id: str,
+        case_type: str | None = Query(default=None, max_length=200),
+        limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_variant_preview as variant_preview
+    _require_dashboard(request)
+    return _respond(variant_preview.preview, log_id, case_type, limit, cohort=cohort)
 
 
 @router.get("/v1/event-logs/{log_id}/duration-distribution")
@@ -815,6 +1004,15 @@ async def event_log_impact(request: Request, log_id: str):
 _PACK_ID = r"^[a-z][a-z0-9_]{0,39}$"
 
 
+@router.post("/v1/event-logs/{log_id}/domain-pack-labels")
+async def event_log_domain_pack_labels(request: Request, log_id: str):
+    _require_dashboard(request)
+    body = await _json_body(request, "domain pack label search", strict=True, limit=4096)
+    if not isinstance(body, dict) or set(body) - {"kind", "search", "after"} or not {"kind", "search"} <= set(body):
+        raise HTTPException(422, "label search needs kind and search")
+    return await run_in_threadpool(_respond, domain_packs.find_mapping_labels, log_id, body["kind"], body["search"], body.get("after", ""))
+
+
 @router.get("/v1/event-log-domain-packs")
 def event_log_domain_pack_catalog(request: Request):
     _require_dashboard(request)
@@ -1030,6 +1228,23 @@ async def event_log_case_sharing_preview(request: Request, log_id: str):
     from .analysis_case_export import prepare
     parsed = await _json_body(request, 'analysis')
     return await run_in_threadpool(_respond, prepare, log_id, parsed)
+
+
+@router.post("/v1/event-logs/{log_id}/company-handoff-preview")
+async def event_log_company_handoff_preview(request: Request, log_id: str):
+    """Explicitly prepare one paired, minimized file for separate human publication."""
+    _require_dashboard(request)
+    if request.headers.get("x-owg-company-handoff-preview") != "true":
+        raise HTTPException(403, "Explicit aggregate and case handoff preview confirmation required")
+    spec = await _json_body(request, "company handoff preview")
+    from .analysis_handoff_bundle import prepare as prepare_handoff
+    try:
+        packet = await run_in_threadpool(prepare_handoff, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    except ValueError:
+        raise HTTPException(422, "Paired handoff exceeds format bounds or has inconsistent evidence") from None
+    return JSONResponse(packet, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/v1/event-logs/{log_id}/analysis-sharing-preview")
@@ -1331,6 +1546,19 @@ async def event_log_simulate(request: Request, log_id: str,
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/simulation/portfolio")
+async def event_log_simulation_portfolio(request: Request, log_id: str,
+                                         case_type: str | None = Query(default=None, max_length=200)):
+    """Review 2–4 changed process simulations against one calibrated baseline."""
+    _require_dashboard(request)
+    spec = await _json_body(request, "simulation portfolio", strict=True, limit=65536)
+    try:
+        result = await run_in_threadpool(simulation_portfolio.compare, log_id, spec, case_type)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/{log_id}/simulation/validation")
 async def event_log_simulation_validation(request: Request, log_id: str,
                                           case_type: str | None = Query(default=None, max_length=200)):
@@ -1344,7 +1572,7 @@ async def event_log_simulation_validation(request: Request, log_id: str,
 
 
 @router.get("/v1/event-logs/{log_id}/export")
-def export_event_log(request: Request, log_id: str, format: str = Query(pattern="^(csv|sourcecsv|xes|ocel|ocelxml)$"),
+def export_event_log(request: Request, log_id: str, format: str = Query(pattern="^(csv|sourcecsv|csv-review|sourcecsv-review|xes|ocel|ocelxml)$"),
                      case_type: str | None = Query(default=None, max_length=200)):
     _require_dashboard(request)
     handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix="." + _SUFFIX[format],
@@ -1413,9 +1641,13 @@ async def event_log_cohort_metric(
     _require_dashboard(request)
     spec = await _json_body(request, "cohort metric", strict=True, limit=8192)
     from . import event_log_cohort_metrics
-    return await run_in_threadpool(
+    response = await run_in_threadpool(
         _respond, event_log_cohort_metrics.summarize, log_id, spec, case_type
     )
+    # A session can be revoked while DuckDB is computing the aggregate.
+    # Check again before releasing even aggregate-only numeric results.
+    _require_dashboard(request)
+    return response
 
 
 @router.get("/v1/event-logs/{log_id}/activity-mappings")

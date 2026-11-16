@@ -6,7 +6,10 @@ authorized response; callers must protect its event IDs under the original grant
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
 import json
+import os
 import sys
 from collections import defaultdict
 from datetime import date, datetime, timezone
@@ -24,7 +27,11 @@ def _event_ids(value: Any) -> list[str]:
         raise ValueError("unbounded evidence list")
     if any(not isinstance(x, str) or not x or len(x) > 120 for x in value):
         raise ValueError("invalid event ID")
-    return sorted(set(value))
+    # Duplicate source labels can hide conflicting provenance in an export.
+    # Never normalize malformed evidence into apparently independent support.
+    if len(set(value)) != len(value):
+        raise ValueError("duplicate evidence event ID")
+    return sorted(value)
 
 
 # History-access modes that may produce a review queue; anything else is denied.
@@ -47,6 +54,14 @@ def _session_window(value: Any) -> str:
         raise ValueError("invalid earlier session timestamp") from exc
 
 
+def _truncation_flag(container: dict[str, Any], name: str) -> bool:
+    """Fail closed on malformed completeness metadata instead of truthiness coercion."""
+    value = container.get(name, False)
+    if type(value) is not bool:
+        raise ValueError(f"invalid {name} completeness flag")
+    return value
+
+
 def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
     """Create deterministic event-level review decisions, never confirmed cases.
 
@@ -57,6 +72,23 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("response must be an object")
     if response.get("derived") is not True or response.get("authoritative") is not False:
         raise ValueError("expected derived non-authoritative resumption response")
+    # Navigation components are inspection aids, never proof of a shared case.
+    # Reject contradictory authority claims instead of scoring a misleading
+    # response whose top-level flag says non-authoritative.
+    groups = response.get("observed_case_groups", [])
+    if not isinstance(groups, list) or len(groups) > MAX_PAIRS:
+        raise ValueError("invalid or unbounded provisional case groups")
+    for group in groups:
+        if not isinstance(group, dict) or group.get("proves_same_case") is not False:
+            raise ValueError("provisional group must not assert case identity")
+        # The digest includes navigation evidence. Bound untrusted records
+        # before hashing so forged metadata cannot exhaust review requests.
+        try:
+            encoded = json.dumps(group, sort_keys=True, allow_nan=False).encode("utf-8")
+        except (TypeError, ValueError, RecursionError) as exc:
+            raise ValueError("invalid provisional group evidence") from exc
+        if len(encoded) > 65536:
+            raise ValueError("unbounded provisional group evidence")
     pairs = response.get("observed_pair_event_assignments")
     if not isinstance(pairs, list) or len(pairs) > MAX_PAIRS:
         raise ValueError("missing or unbounded pair assignments")
@@ -68,8 +100,23 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(coverage, dict):
         raise ValueError("invalid coverage metadata")
     indexed: dict[tuple[str, str], set[str]] = defaultdict(set)
-    incomplete = bool(response.get("observed_pair_event_assignments_truncated") or
-                      coverage.get("scan_truncated"))
+    event_windows: dict[str, str] = {}
+    def add_evidence(window: str, event_id: str, pair_key: str) -> None:
+        # A source event cannot independently corroborate different windows.
+        previous = event_windows.setdefault(event_id, window)
+        if previous != window:
+            raise ValueError("event ID reused across session windows")
+        indexed[(window, event_id)].add(pair_key)
+    # Validate *every* flag before aggregating. Short-circuiting with "or"
+    # otherwise hides malformed later flags whenever an earlier flag is true.
+    completeness_flags = (
+        _truncation_flag(response, "observed_pair_event_assignments_truncated"),
+        _truncation_flag(response, "observed_group_continuity_truncated"),
+        _truncation_flag(response, "observed_case_groups_truncated"),
+        _truncation_flag(coverage, "scan_truncated"),
+    )
+    incomplete = any(completeness_flags)
+    seen_pair_keys: set[str] = set()
     for pair in pairs:
         if not isinstance(pair, dict) or pair.get("assignment_status") != "observed_same_event_pair" or pair.get("proves_same_case") is not False:
             raise ValueError("unsupported pair assignment")
@@ -87,19 +134,32 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         if identities[0] == identities[1]:
             raise ValueError("self-pair is not co-reference")
         pair_key = json.dumps(sorted(identities), separators=(",", ":"))
+        # A repeated pair record can carry conflicting event provenance.
+        # Refuse duplicates instead of silently unioning their evidence.
+        if pair_key in seen_pair_keys:
+            raise ValueError("duplicate resource pair assignment")
+        seen_pair_keys.add(pair_key)
         for event_id in _event_ids(pair.get("current_evidence_event_ids")):
-            indexed[("current", event_id)].add(pair_key)
+            add_evidence("current", event_id, pair_key)
         earlier = pair.get("earlier_corroborations", [])
         if not isinstance(earlier, list) or len(earlier) > MAX_SESSIONS_PER_PAIR:
             raise ValueError("unbounded earlier corroborations")
+        seen_earlier_windows: set[str] = set()
         for session in earlier:
             if not isinstance(session, dict) or "session_started_at" not in session:
                 raise ValueError("invalid earlier session")
             window = _session_window(session["session_started_at"])
+            if window in seen_earlier_windows:
+                raise ValueError("duplicate earlier session window")
+            seen_earlier_windows.add(window)
             for event_id in _event_ids(session.get("evidence_event_ids")):
-                indexed[(window, event_id)].add(pair_key)
-            incomplete |= bool(session.get("evidence_truncated"))
-        incomplete |= bool(pair.get("current_evidence_truncated") or pair.get("earlier_sessions_truncated"))
+                add_evidence(window, event_id, pair_key)
+            incomplete |= _truncation_flag(session, "evidence_truncated")
+        pair_flags = (
+            _truncation_flag(pair, "current_evidence_truncated"),
+            _truncation_flag(pair, "earlier_sessions_truncated"),
+        )
+        incomplete |= any(pair_flags)
     rows = []
     # Chronological: earlier sessions by their start, then the current window.
     def _order(item):
@@ -112,15 +172,205 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
                      "confirmed_case": False})
     # Pair-only evidence does not enumerate every event in the source scan.
     # Even a complete scan cannot establish that absent events were unassigned.
-    return {"event_reviews": rows, "event_reviews_count": len(rows),
+    # Bind the fingerprint to access mode and completeness, not only rows.
+    # The same event list under a changed grant mode or truncated scan must
+    # never be mistaken for the same review basis.
+    fingerprint_basis = {
+        "format": "openworkgraph.reconstruction-review.v2",
+        "saved_history_access": response["saved_history_access"],
+        "coverage_incomplete": incomplete,
+        # Bind the observed scan and current session too: an unchanged set of
+        # surfaced pairs under a different observation boundary is not the
+        # same review basis. This metadata is produced by the live engine.
+        "coverage": coverage,
+        "current_session": response.get("current_session"),
+        "session_gap_minutes": response.get("session_gap_minutes"),
+        # Continuity is part of the reviewer-visible evidence basis. A changed
+        # group linkage must invalidate old labels even when pair rows match.
+        "observed_group_continuity": response.get("observed_group_continuity"),
+        "observed_group_continuity_truncated": response.get("observed_group_continuity_truncated"),
+        # The reviewer also sees the current connected-component navigation
+        # groups. Their membership and truncation are part of the evidence
+        # basis even when direct pair assignments remain unchanged.
+        "observed_case_groups": response.get("observed_case_groups"),
+        "observed_case_groups_truncated": response.get("observed_case_groups_truncated"),
+        # The event-level rows are a projection: they omit source pair metadata
+        # such as confidence, interruption context, and corroboration detail.
+        # A reviewer must not replay a label after that source evidence changes.
+        "observed_pair_event_assignments": pairs,
+        # Identity timelines are shown alongside the review queue by the live
+        # inspection API. Their provenance is part of the reviewer decision
+        # context even when the event/pair projection is unchanged.
+        "identity_timelines": response.get("identity_timelines"),
+        "event_reviews": rows,
+    }
+    # All reviewer-visible context participates in the evidence binding. Reject
+    # malformed or excessive context before digesting; otherwise untrusted scan
+    # metadata can cause an uncaught serialization failure or resource exhaustion.
+    try:
+        evidence_bytes = json.dumps(
+            fingerprint_basis, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+    except (TypeError, ValueError, RecursionError) as exc:
+        raise ValueError("invalid review evidence context") from exc
+    if len(evidence_bytes) > 1048576:
+        raise ValueError("unbounded review evidence context")
+    evidence_digest = hashlib.sha256(evidence_bytes).hexdigest()
+    return {"evidence_sha256": evidence_digest, "event_reviews": rows, "event_reviews_count": len(rows),
+            "ambiguous_event_reviews_count": sum(row["review_status"] == "ambiguous_multiple_pairs" for row in rows),
+            "single_pair_event_reviews_count": sum(row["review_status"] == "observed_pair_needs_review" for row in rows),
             "coverage_incomplete": incomplete,
             "unlisted_events_are_unassigned": False,
             "no_case_identity_inferred": True, "requires_human_review": True}
 
 
+
+def score_review_annotations(response: dict[str, Any], annotations: list[dict[str, Any]]) -> dict[str, Any]:
+    """Score explicit event/pair labels without treating absent events as negatives.
+
+    This is a bounded reviewer-side calculation, NOT a claim of held-out quality.
+    The caller must reauthorize the source response and independently establish
+    annotation provenance, cohort independence, and grant validity.
+    """
+    queue = build_review_queue(response)
+    if queue["coverage_incomplete"]:
+        raise ValueError("incomplete source evidence cannot be scored")
+    if not isinstance(annotations, list) or not annotations or len(annotations) > 192:
+        raise ValueError("annotations must be a nonempty bounded list")
+    observed = {(row["window"], row["event_id"]): row for row in queue["event_reviews"]}
+    if not observed:
+        raise ValueError("no surfaced review events to score")
+    labels: dict[tuple[str, str], set[str]] = {}
+    for annotation in annotations:
+        if not isinstance(annotation, dict):
+            raise ValueError("invalid annotation")
+        key = (annotation.get("window"), annotation.get("event_id"))
+        if key not in observed or key in labels:
+            raise ValueError("unknown or duplicate annotated event")
+        expected = annotation.get("true_resource_pairs")
+        if not isinstance(expected, list) or len(expected) > MAX_PAIRS:
+            raise ValueError("invalid ground truth pairs")
+        canonical: set[str] = set()
+        for identities in expected:
+            if not isinstance(identities, list) or len(identities) != 2:
+                raise ValueError("ground truth pair must have two identities")
+            pair = []
+            for identity in identities:
+                if not isinstance(identity, list) or len(identity) != 3 or any(
+                    not isinstance(part, str) or not part or len(part) > 256 for part in identity
+                ):
+                    raise ValueError("invalid ground truth identity")
+                pair.append(identity)
+            if pair[0] == pair[1]:
+                raise ValueError("self-pair ground truth")
+            canonical.add(json.dumps(sorted(pair), separators=(",", ":")))
+        if len(canonical) != len(expected):
+            raise ValueError("duplicate ground truth pair")
+        labels[key] = canonical
+    # A subset selected by the reviewer can inflate accuracy. Require an
+    # explicit label (including an empty pair list) for every surfaced event.
+    # Even then, unseen events remain outside this pair-only evaluation.
+    if len(labels) != len(observed):
+        raise ValueError("all surfaced review events require explicit labels")
+    tp = fp = fn = ambiguous = 0
+    # Window-level counts reveal regressions hidden by aggregate accuracy.
+    by_window: dict[str, dict[str, int]] = {}
+    by_ambiguity: dict[str, dict[str, int]] = {
+        "ambiguous_multiple_pairs": {"tp": 0, "fp": 0, "fn": 0, "events": 0},
+        "single_pair": {"tp": 0, "fp": 0, "fn": 0, "events": 0},
+    }
+    disagreements: list[dict[str, Any]] = []
+    for key, true_pairs in labels.items():
+        row = observed[key]
+        predicted = {json.dumps(pair, separators=(",", ":")) for pair in row["candidate_resource_pairs"]}
+        correct, extra, missed = len(predicted & true_pairs), len(predicted - true_pairs), len(true_pairs - predicted)
+        tp += correct
+        fp += extra
+        fn += missed
+        ambiguous += row["review_status"] == "ambiguous_multiple_pairs"
+        if extra or missed:
+            # Exact event/window provenance lets an authorized reviewer inspect
+            # a disagreement without inferring a case from transitive groups.
+            # Bounded by the mandatory complete annotation set (<=192 rows).
+            disagreements.append({
+                "window": key[0], "event_id": key[1],
+                "false_positive_resource_pairs": [json.loads(p) for p in sorted(predicted - true_pairs)],
+                "false_negative_resource_pairs": [json.loads(p) for p in sorted(true_pairs - predicted)],
+                "ambiguous_multiple_pairs": row["review_status"] == "ambiguous_multiple_pairs",
+            })
+        counts = by_window.setdefault(key[0], {"tp": 0, "fp": 0, "fn": 0, "events": 0})
+        counts["tp"] += correct
+        counts["fp"] += extra
+        counts["fn"] += missed
+        counts["events"] += 1
+        cohort = by_ambiguity["ambiguous_multiple_pairs" if row["review_status"] == "ambiguous_multiple_pairs" else "single_pair"]
+        cohort["tp"] += correct
+        cohort["fp"] += extra
+        cohort["fn"] += missed
+        cohort["events"] += 1
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    # Report window-level quality as rates as well as counts. Aggregated micro
+    # scores can conceal an entirely failed earlier-session reconstruction.
+    per_window_metrics = {}
+    for window, counts in sorted(by_window.items()):
+        wp = counts["tp"] / (counts["tp"] + counts["fp"]) if counts["tp"] + counts["fp"] else 0.0
+        wr = counts["tp"] / (counts["tp"] + counts["fn"]) if counts["tp"] + counts["fn"] else 0.0
+        per_window_metrics[window] = {
+            **counts, "precision": wp, "recall": wr,
+            "f1": 2 * wp * wr / (wp + wr) if wp + wr else 0.0,
+        }
+    ambiguity_metrics = {}
+    for cohort_name, counts in by_ambiguity.items():
+        cp = counts["tp"] / (counts["tp"] + counts["fp"]) if counts["tp"] + counts["fp"] else 0.0
+        cr = counts["tp"] / (counts["tp"] + counts["fn"]) if counts["tp"] + counts["fn"] else 0.0
+        ambiguity_metrics[cohort_name] = {
+            **counts, "precision": cp, "recall": cr,
+            "f1": 2 * cp * cr / (cp + cr) if cp + cr else 0.0,
+        }
+    return {
+        "evidence_sha256": queue["evidence_sha256"],
+        "annotated_events": len(labels), "source_review_events": len(observed),
+        "unannotated_events": len(observed) - len(labels),
+        "ambiguous_annotated_events": ambiguous,
+        "true_positive_pairs": tp, "false_positive_pairs": fp, "false_negative_pairs": fn,
+        "precision": precision, "recall": recall,
+        "per_window_counts": {window: by_window[window] for window in sorted(by_window)},
+        "per_window_metrics": per_window_metrics,
+        "per_ambiguity_metrics": ambiguity_metrics,
+        "event_disagreements": sorted(disagreements, key=lambda item: (item["window"], item["event_id"])),
+        "event_disagreements_are_review_evidence_not_confirmed_cases": True,
+        "cross_case_contamination_measured": False,
+        "f1": 2 * precision * recall / (precision + recall) if precision + recall else 0.0,
+        "evaluation_scope": "all_surfaced_event_pair_evidence_only",
+        "missed_source_events_measured": False,
+        "complete_case_recall_measured": False,
+        "held_out_verified": False, "independent_annotation_verified": False,
+        "real_work_accuracy_claim": False, "confirmed_case": False,
+    }
+
+
+def score_bound_review_annotations(response: dict[str, Any], envelope: dict[str, Any]) -> dict[str, Any]:
+    """Reject stale/replayed reviewer labels from a different evidence export.
+
+    The digest binds the exact surfaced evidence, not authorization or reviewer
+    identity. Online callers must separately check live grants and provenance.
+    """
+    if not isinstance(envelope, dict) or set(envelope) != {"evidence_sha256", "annotations"}:
+        raise ValueError("annotation envelope requires evidence_sha256 and annotations")
+    digest = envelope["evidence_sha256"]
+    if not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+        raise ValueError("invalid evidence digest")
+    actual = build_review_queue(response)["evidence_sha256"]
+    if not hmac.compare_digest(digest, actual):
+        raise ValueError("annotation evidence digest mismatch")
+    return score_review_annotations(response, envelope["annotations"])
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Review exact observed event-to-resource-pair evidence offline")
     parser.add_argument("input", help="Authorized work-resumption response JSON, or - for stdin")
+    parser.add_argument("--annotations", help="Explicit reviewer labels JSON; scoring remains non-held-out")
     args = parser.parse_args()
     try:
         if args.input == "-":
@@ -128,7 +378,15 @@ def main() -> int:
         else:
             with open(args.input, encoding="utf-8") as stream:
                 payload = json.load(stream)
-        print(json.dumps(build_review_queue(payload), sort_keys=True, separators=(",", ":")))
+        if args.annotations:
+            if args.input != "-" and os.path.samefile(args.annotations, args.input):
+                raise ValueError("source and annotation files must be distinct")
+            with open(args.annotations, encoding="utf-8") as stream:
+                labels = json.load(stream)
+            output = score_bound_review_annotations(payload, labels)
+        else:
+            output = build_review_queue(payload)
+        print(json.dumps(output, sort_keys=True, separators=(",", ":")))
         return 0
     except (ValueError, OSError, json.JSONDecodeError) as exc:
         print(f"reconstruction review refused: {exc}", file=sys.stderr)

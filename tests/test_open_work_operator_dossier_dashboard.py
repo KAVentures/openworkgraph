@@ -32,11 +32,20 @@ const document = {readyState:'complete',createElement:t=>new E(t),
 const ref='owg:w:'+'a'.repeat(32);
 let requests=[];
 let malformed=false;
+let malformedGraph=false;
 const fetch=async (url,opts)=>{
   requests.push({url,opts});
   if (url==='/v1/open-work/declarations') return {ok:true,json:async()=>({
     format:'openworkgraph.local-case-declarations.v1',available:true,
     items:[{work_item_ref:ref,revision:2,edit_token:'b'.repeat(32)}]})};
+  if (url.startsWith('/v1/open-work/declarations/durable-dependencies?')) return {
+    ok:true,json:async()=>({
+      format:'openworkgraph.reviewed-durable-dependencies.v1',
+      agent_execution_authorized:false,customer_outcome:'unknown',
+      context:{direct:['owg:w:'+'c'.repeat(32)],
+        prerequisites:malformedGraph?['customer-secret']:['owg:w:'+'c'.repeat(32)],
+        truncated:false}
+    })};
   if (url==='/v1/open-work/declarations/dossier') return {ok:true,json:async()=>({
     format:'openworkgraph.local-reviewed-case-dossier.v1',work_item_ref:ref,
     source_reported_status:{availability:'unknown',state:'unknown',reason:'source_unavailable',
@@ -69,25 +78,33 @@ const results=card.children[card.children.indexOf(form)+2];
   await form.listeners.submit({preventDefault(){}});
   assert.equal(requests.length,0,'no read without explicit consent');
   consent.checked=true;
+  consent.listeners.change();
   await form.listeners.submit({preventDefault(){}});
-  assert.equal(requests.length,2);
+  assert.equal(requests.length,3);
   const payload=JSON.parse(requests[1].opts.body);
   assert.equal(payload.expected_revision,2);
   assert.equal(payload.expected_edit_token,'b'.repeat(32));
   assert.equal(payload.confirm_source_scan,true);
   assert.equal(payload.max_pages,1);
-  assert.equal(consent.checked,false,'consent is one-shot');
+  assert.equal(consent.checked,true,'source consent remains visibly active while evidence is shown');
   assert.match(status.textContent,/not business success/);
   assert.ok(results.children.some(x=>/Customer outcome: unknown/.test(x.textContent)));
   assert.ok(results.children.some(x=>/Prerequisite owg:w:/.test(x.textContent)));
+  assert.ok(results.children.some(x=>/Durable direct dependencies: 1/.test(x.textContent)));
   assert.ok(results.children.some(x=>/Observed record owg:r:/.test(x.textContent)));
   assert.ok(results.children.some(x=>/Source unavailable/.test(x.textContent)));
+  await form.listeners.submit({preventDefault(){}});
+  assert.equal(requests.length,3,'a single approval cannot silently trigger another scan');
+  assert.match(status.textContent,/explicitly approve the source read/);
+  assert.equal(results.children.length,0,'rejected repeat scan must not retain stale evidence');
   // A completed response must not persist after explicit withdrawal.
+  consent.checked=false;
   consent.listeners.change();
   assert.equal(results.children.length,0,'withdrawal clears completed source evidence');
   assert.match(status.textContent,/withdrawn/);
   // Case selection changes revoke the previous consent and invalidate evidence.
   consent.checked=true;
+  consent.listeners.change();
   refField.value='owg:w:'+'e'.repeat(32);
   refField.listeners.input();
   assert.equal(consent.checked,false);
@@ -96,11 +113,19 @@ const results=card.children[card.children.indexOf(form)+2];
   refField.value=ref;
   malformed=true;
   consent.checked=true;
+  consent.listeners.change();
   await form.listeners.submit({preventDefault(){}});
   assert.match(status.textContent,/Review unavailable/);
   assert.equal(results.children.length,0,'malformed source evidence is not partially disclosed');
   await form.listeners.submit({preventDefault(){}});
-  assert.equal(requests.length,4,'no implicit third scan after two explicitly approved reviews');
+  assert.equal(requests.length,5,'no implicit third scan after two explicitly approved reviews');
+  malformed=false;
+  malformedGraph=true;
+  consent.checked=true;
+  consent.listeners.change();
+  await form.listeners.submit({preventDefault(){}});
+  assert.match(status.textContent,/Review unavailable/);
+  assert.equal(results.children.length,0,'malformed graph must not partially display source evidence');
 })().catch(e=>{console.error(e);process.exitCode=1;});
 """
     result = subprocess.run(["node","-e",js],cwd=ROOT,capture_output=True,text=True,timeout=15)
