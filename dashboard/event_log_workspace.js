@@ -859,22 +859,32 @@
       updateOperation();savedStatus.textContent='Loaded '+item.name+'. Calculate to apply current cohort filters.';
     });
     saveButton.onclick=async()=>{
+      const log=state.logId,generation=state.generation,path=savedPath();
+      const isCurrent=()=>log===state.logId&&generation===state.generation;
       saveButton.disabled=true;
       try{
-        const response=await api(savedPath(),{method:'POST',headers:{'Content-Type':'application/json'},
+        const response=await api(path,{method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify({name:savedName.value,definition:currentDefinition()})});
-        const item=await response.json();await loadSaved();savedPicker.value=item.metric_id;
+        const item=await response.json();
+        if(!isCurrent())return;
+        await loadSaved();
+        if(!isCurrent())return;
+        savedPicker.value=item.metric_id;
         savedStatus.textContent='Saved '+item.name+' for this log.';
-      }catch(error){savedStatus.textContent=error.message;}
+      }catch(error){if(isCurrent())savedStatus.textContent=error.message;}
       finally{saveButton.disabled=false;}
     };
     deleteButton.onclick=async()=>{
       const id=savedPicker.value;if(!id)return;
+      const log=state.logId,generation=state.generation,path=savedPath();
+      const isCurrent=()=>log===state.logId&&generation===state.generation;
       deleteButton.disabled=true;
       try{
-        await api(savedPath()+'/'+encodeURIComponent(id)+'/delete',{method:'POST'});
-        await loadSaved();savedStatus.textContent='Saved expression deleted.';
-      }catch(error){savedStatus.textContent=error.message;}
+        await api(path+'/'+encodeURIComponent(id)+'/delete',{method:'POST'});
+        if(!isCurrent())return;
+        await loadSaved();
+        if(isCurrent())savedStatus.textContent='Saved expression deleted.';
+      }catch(error){if(isCurrent())savedStatus.textContent=error.message;}
       finally{deleteButton.disabled=false;}
     };
     loadSaved().catch(error=>{savedStatus.textContent=error.message;});
