@@ -209,3 +209,13 @@ def test_concurrent_delete_waits_for_atomic_save_and_wins(local_store, monkeypat
     assert not writer.is_alive() and not deleter.is_alive()
     assert not errors
     assert not local_store.exists()
+
+
+def test_retention_revoked_during_saved_review_read_returns_no_labels(local_store, monkeypatch):
+    """Never return previously retained labels after a mid-read revocation."""
+    grant = {"mode": "all_saved"}
+    store.save_reconstruction_review(grant, 1, _envelope())
+    calls = iter([True, False])
+    monkeypatch.setattr(store, "_retention_allowed", lambda: next(calls))
+    assert store.read_saved_reconstruction_review(grant, 1, "a" * 64) is None
+    assert not local_store.exists()
