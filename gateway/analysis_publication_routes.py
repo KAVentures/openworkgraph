@@ -47,6 +47,13 @@ def build_router(store,human):
         return Response(FilePath(__file__).with_name('analysis_snapshot_client.js').read_text(encoding='utf-8'),
                         media_type='application/javascript',headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
 
+    @router.get('/analysis-bundle-client.js',include_in_schema=False)
+    def bundle_script():
+        from pathlib import Path as FilePath
+        return Response(FilePath(__file__).with_name('analysis_bundle_client.js').read_text(encoding='utf-8'),
+                        media_type='application/javascript',
+                        headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
+
     @router.get('/v1/human/analyses')
     def inventory(after: str=Query(default='',max_length=36),limit: int=Query(default=20,ge=1,le=100),p=Depends(human)):
         return response(store.inventory,p,after,limit)

@@ -1,0 +1,61 @@
+name: quality-history-pages
+
+on:
+  pull_request:
+    paths:
+      - "server/event_log_quality_pages.py"
+      - "server/event_log_routes.py"
+      - "tests/browser/quality_pages_app.py"
+      - "dashboard/event_log_quality_trends.js"
+      - "tests/js/event_log_quality_trends.test.mjs"
+      - "docs/EVENT_LOG_QUALITY_PANEL_PROVENANCE.md"
+      - "tests/test_event_log_quality_pages.py"
+      - "tests/browser/event_log_quality_pages.cjs"
+      - ".github/workflows/quality-history-pages.yml"
+  push:
+    branches: ["main"]
+    paths:
+      - "server/event_log_quality_pages.py"
+      - "server/event_log_routes.py"
+      - "tests/browser/quality_pages_app.py"
+      - "dashboard/event_log_quality_trends.js"
+      - "tests/js/event_log_quality_trends.test.mjs"
+      - "docs/EVENT_LOG_QUALITY_PANEL_PROVENANCE.md"
+      - "tests/test_event_log_quality_pages.py"
+      - "tests/browser/event_log_quality_pages.cjs"
+      - ".github/workflows/quality-history-pages.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  quality-history-pages-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install local app and tests
+        run: python -m pip install -e ".[dev,gateway]"
+      - name: Exercise bounded pages and ASGI authorization
+        run: python -m pytest -q tests/test_event_log_quality_pages.py tests/test_event_log_quality_batch_history.py tests/test_event_log_quality_trends.py tests/test_event_log_quality.py
+      - name: Validate comparison and selection behavior
+        run: node --test tests/js/event_log_quality_trends.test.mjs
+      - name: Install isolated Chromium and axe
+        run: |
+          npm install --prefix "$RUNNER_TEMP/owg-browser" playwright@1.64.1 axe-core@4.10.3
+          node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install --with-deps chromium || {
+            # The runner image already has Chromium's libraries; --with-deps only adds fonts and
+            # extras. When the apt mirror is unreachable, install the browser without them.
+            echo "::warning::apt packages unavailable; installing Chromium without --with-deps"
+            node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install chromium
+          }
+      - name: Validate real browser journey syntax
+        run: node --check tests/browser/event_log_quality_pages.cjs
+      - name: Run actual paged quality history journey
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_quality_pages.cjs

@@ -59,6 +59,8 @@ def transform(source_format: str, mapping: dict[str, Any] | None) -> dict[str, A
         if mapping.get("naive_timestamp_offset"):
             # An explicit decision changes what is stored, so it is part of the transform.
             declared["mapping"]["naive_timestamp_offset"] = mapping["naive_timestamp_offset"]
+        if mapping.get("timestamp_format"):
+            declared["mapping"]["timestamp_format"] = mapping["timestamp_format"]
         identity=workspace.source_identity.settings(mapping)
         if identity:
             declared['mapping']['source_identity']={'format':workspace.source_identity.FORMAT,**vars(identity)}
@@ -281,10 +283,32 @@ def record(conn, log_id: str, *, batch: int, kind: str, source_format: str, mapp
     return report
 
 
+# Use TRY_CAST so corrupt stored JSON is excluded without raising in DuckDB.
+_VALID_REPORT_SQL = """json_type(try_cast(report AS JSON)) = 'OBJECT'
+    AND json_type(try_cast(report AS JSON), '$.batch') IN ('BIGINT', 'UBIGINT')
+    AND try_cast(json_extract_string(try_cast(report AS JSON), '$.batch') AS BIGINT) = batch"""
+
+
+def _parse_stored_report(batch: int, raw: Any) -> dict[str, Any] | None:
+    """A damaged or mismatched report is missing evidence, not a valid report."""
+    try:
+        report = json.loads(raw)
+    except (TypeError, ValueError, RecursionError):
+        return None
+    if (type(batch) is not int or batch < 0 or not isinstance(report, dict)
+            or type(report.get("batch")) is not int or report["batch"] != batch):
+        return None
+    return report
+
+
 def _stored_batch_history(conn, log_id: str) -> dict[str, Any]:
     """Read retained batch metadata without recomputing whole-log diagnostics."""
-    reports = [json.loads(row[0]) for row in conn.execute(
-        "SELECT report FROM log_quality WHERE log_id = ? ORDER BY batch", [log_id]).fetchall()]
+    reports = []
+    for batch, raw in conn.execute(
+            "SELECT batch, report FROM log_quality WHERE log_id = ? ORDER BY batch", [log_id]).fetchall():
+        report = _parse_stored_report(batch, raw)
+        if report is not None:
+            reports.append(report)
     batches = [0] + [row[0] for row in conn.execute(
         "SELECT batch FROM log_appends WHERE log_id = ? ORDER BY batch", [log_id]).fetchall()]
     present = {report["batch"] for report in reports}
@@ -310,26 +334,71 @@ def batch_history(log_id: str) -> dict[str, Any]:
     return _with_batch_trends(history)
 
 
+def _current_snapshot(conn, log_id: str, info: dict[str, Any]) -> dict[str, Any]:
+    current = diagnostics(conn, log_id)
+    digest = content_digest(conn, log_id)
+    digest_v2 = content_digest_v2(conn, log_id)
+    relationships = workspace.object_relationships.metadata(conn, log_id, include_digest=True)
+    identity = ({'source_identity_map_sha256': source_identity_digest(conn, log_id)}
+                if info.get('source_identity') else {})
+    return {"content_sha256": digest, "content_sha256_v2": digest_v2,
+            "diagnostics": current, **identity, **relationships,
+            "completeness": {"historical_completeness": "unknown", "note": COMPLETENESS_NOTE}}
+
+
+def _integrity(conn, log_id: str, reports: list[dict[str, Any]], missing: list[int], current: dict[str, Any]) -> dict[str, Any]:
+    """Only compare whole-log content with a single intact import report."""
+    not_verified = {"status": "not_verifiable", "reason": "historical_batches_or_missing_report"}
+    append_count = conn.execute("SELECT count(*) FROM log_appends WHERE log_id = ?", [log_id]).fetchone()[0]
+    report_count = conn.execute("SELECT count(*) FROM log_quality WHERE log_id = ?", [log_id]).fetchone()[0]
+    if append_count or missing or report_count != 1 or len(reports) != 1 or reports[0].get("batch") != 0:
+        return not_verified
+    expected = reports[0].get("content_sha256_v2")
+    if not isinstance(expected, str) or len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
+        return {"status": "not_verifiable", "reason": "legacy_or_invalid_digest"}
+    matches = expected == current["content_sha256_v2"]
+    return {"status": "verified" if matches else "mismatch", "algorithm": "content_sha256_v2",
+            "reason": "current_saved_content_matches_import_report" if matches else "current_saved_content_differs_from_import_report"}
+
+
 def quality(log_id: str) -> dict[str, Any]:
-    """Stored reports, oldest first, and the current whole-log diagnostics and content digest."""
+    """Stored reports, oldest first, and current whole-log diagnostics and content digests."""
     with workspace._LOCK:
         conn = workspace._connect()
         try:
             info = workspace._check_log(conn, log_id)
             history = _stored_batch_history(conn, log_id)
-            current = diagnostics(conn, log_id)
-            digest = content_digest(conn, log_id)
-            digest_v2 = content_digest_v2(conn, log_id)
-            relationship_metadata=workspace.object_relationships.metadata(conn,log_id,include_digest=True)
-            identity_digest = ({'source_identity_map_sha256': source_identity_digest(conn,log_id)}
-                               if info.get('source_identity') else {})
+            current = _current_snapshot(conn, log_id, info)
+            integrity = _integrity(conn, log_id, history["reports"], history["batches_without_report"], current)
         finally:
             conn.close()
-    return {"log": info, **_with_batch_trends(history),
-            "current": {"content_sha256": digest, "content_sha256_v2": digest_v2,
-                        "diagnostics": current, **identity_digest, **relationship_metadata,
-                        "completeness": {"historical_completeness": "unknown", "note": COMPLETENESS_NOTE}},
+    return {"log": info, **_with_batch_trends(history), "current": current, "integrity": integrity,
             **workspace.DESCRIPTIVE_ONLY}
 
 
-__all__ = ["quality", "batch_history", "record", "transform", "content_digest", "content_digest_v2", "diagnostics", "MAPPING_VERSION"]
+def overview(log_id: str) -> dict[str, Any]:
+    """Current snapshot and latest batch page, plus the original mapping report."""
+    from . import event_log_quality_pages as pages
+    # Hold the shared lock across both reads, so local mutations cannot mix a
+    # history page with diagnostics from a different retained log state.
+    with workspace._LOCK:
+        history = pages.page(log_id)
+        conn = workspace._connect()
+        try:
+            info = workspace._check_log(conn, log_id)
+            first_rows = conn.execute(f"SELECT batch, report FROM log_quality WHERE log_id = ? AND {_VALID_REPORT_SQL} "
+                                      "ORDER BY batch LIMIT 2", [log_id]).fetchall()
+            if len(first_rows) > 1 and first_rows[0][0] == first_rows[1][0]:
+                raise workspace.EventLogWorkspaceError('Duplicate batch quality reports; overview unavailable')
+            first = _parse_stored_report(*first_rows[0]) if first_rows else None
+            current = _current_snapshot(conn, log_id, info)
+            integrity = _integrity(conn, log_id, history['reports'], history['batches_without_report'], current)
+        finally:
+            conn.close()
+    return {"log": info, "reports": history['reports'],
+            "batches_without_report": history['batches_without_report'],
+            "window": history['window'], "first_report": first, "current": current, "integrity": integrity,
+            **workspace.DESCRIPTIVE_ONLY}
+
+
+__all__ = ["quality", "overview", "batch_history", "record", "transform", "content_digest", "content_digest_v2", "diagnostics", "MAPPING_VERSION"]

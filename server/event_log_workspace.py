@@ -37,6 +37,7 @@ from shared.event_log_formats import (
 from .db import DATA_DIR
 from . import event_log_source_identity as source_identity
 from . import event_log_object_relationships as object_relationships
+from . import event_log_timestamp_formats as timestamp_formats
 
 MAX_LOGS = 50
 MAX_IMPORT_BYTES = 4 * 1024 * 1024 * 1024
@@ -79,6 +80,10 @@ CREATE TABLE IF NOT EXISTS saved_analyses (
 CREATE TABLE IF NOT EXISTS metric_definitions (
   log_id VARCHAR NOT NULL, metric_id VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL, definition VARCHAR NOT NULL
 );
+CREATE TABLE IF NOT EXISTS cohort_metric_definitions (
+  log_id VARCHAR NOT NULL, metric_id VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL,
+  name VARCHAR NOT NULL, definition VARCHAR NOT NULL
+);
 CREATE TABLE IF NOT EXISTS quarantine (
   log_id VARCHAR NOT NULL, batch INTEGER NOT NULL, row_n BIGINT NOT NULL, reasons VARCHAR NOT NULL, row VARCHAR NOT NULL
 );
@@ -87,6 +92,16 @@ CREATE TABLE IF NOT EXISTS quarantine_decisions (
 );
 CREATE TABLE IF NOT EXISTS filter_sets (
   log_id VARCHAR NOT NULL, set_id VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL, definition VARCHAR NOT NULL
+);
+CREATE TABLE IF NOT EXISTS event_log_feeds (
+  log_id VARCHAR NOT NULL, feed_id VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL, definition VARCHAR NOT NULL
+);
+CREATE TABLE IF NOT EXISTS event_log_feed_files (
+  log_id VARCHAR NOT NULL, feed_id VARCHAR NOT NULL, name VARCHAR NOT NULL, sha256 VARCHAR NOT NULL, bytes BIGINT NOT NULL,
+  processed_at TIMESTAMP NOT NULL, outcome VARCHAR NOT NULL, detail VARCHAR NOT NULL
+);
+CREATE TABLE IF NOT EXISTS case_attribute_uploads (
+  log_id VARCHAR NOT NULL, upload_id VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL, record VARCHAR NOT NULL
 );
 CREATE TABLE IF NOT EXISTS log_quality (
   log_id VARCHAR NOT NULL, batch INTEGER NOT NULL, created_at TIMESTAMP NOT NULL, report VARCHAR NOT NULL
@@ -256,9 +271,23 @@ def naive_offset(mapping: dict[str, Any] | None) -> str:
     return value
 
 
-def timestamp_sql(raw: str, offset: str) -> str:
+def timestamp_format(mapping: dict[str, Any] | None) -> str:
+    """The declared strptime pattern of the CSV timestamp column, or "" (ISO 8601)."""
+    value = (mapping or {}).get("timestamp_format") or ""
+    if not value:
+        return ""
+    try:
+        return timestamp_formats.validate(value)
+    except timestamp_formats.TimestampFormatError as exc:
+        raise EventLogFormatError(str(exc)) from None
+
+
+def timestamp_sql(raw: str, offset: str, pattern: str = "") -> str:
     """SQL for a TIMESTAMPTZ from text ``raw``: times with an explicit offset as written, times without
-    one only under an explicit offset decision (otherwise NULL, which rejects the row)."""
+    one only under an explicit offset decision (otherwise NULL, which rejects the row). With a declared
+    ``pattern`` every value must match it exactly."""
+    if pattern:
+        return timestamp_formats.timestamp_sql(raw, offset, pattern)
     parsed = f"CASE WHEN regexp_matches(trim({raw}), '{_OFFSET_RE}') THEN try_cast(trim({raw}) AS TIMESTAMPTZ)"
     if offset:
         suffix = "+00:00" if offset == "Z" else offset
@@ -274,6 +303,10 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
     With ``keep_rejected`` the mapped fields of up to MAX_QUARANTINED_ROWS rejected rows are left in the
     temporary table ``rejected_rows`` for the caller to store, and the dict receives the counts."""
     offset = naive_offset(mapping)
+    pattern = timestamp_format(mapping)
+    has_offset = timestamp_formats.offset_present_sql("raw_ts", pattern)
+    if pattern and not offset and not timestamp_formats.has_offset(pattern):
+        raise EventLogFormatError("the timestamp format has no offset (%z), so also choose the offset these times use")
     identity_mode=source_identity.settings(mapping)
     delimiter = mapping.get("delimiter") or ","
     if delimiter not in {",", ";", "\t", "|"}:
@@ -316,7 +349,7 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
     identity_columns=', '+identity_mode.expressions(q) if identity_mode else ''
     conn.execute(f"""CREATE TEMP TABLE staged AS SELECT
           {case} AS case_id, {activity} AS activity,
-          {timestamp_sql(stamp, offset)} AS ts,
+          {timestamp_sql(stamp, offset, pattern)} AS ts,
           coalesce({res}, '') AS resource, {attrs} AS attributes, {stamp} AS raw_ts,
           row_number() OVER () AS n {identity_columns}
         FROM {source} AS source_rows""", [str(path),original_header])
@@ -326,13 +359,11 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
         raise EventLogFormatError("event-log identifiers and activity labels exceed their bounds or contain control characters")
     total = conn.execute("SELECT count(*) FROM staged").fetchone()[0]
     if reasons is not None:
-        counts = conn.execute("""SELECT count(*) FILTER (WHERE case_id IS NULL OR trim(case_id) = ''),
+        counts = conn.execute(f"""SELECT count(*) FILTER (WHERE case_id IS NULL OR trim(case_id) = ''),
               count(*) FILTER (WHERE activity IS NULL OR trim(activity) = ''),
               count(*) FILTER (WHERE raw_ts IS NULL OR trim(raw_ts) = ''),
-              count(*) FILTER (WHERE trim(coalesce(raw_ts, '')) <> ''
-                               AND NOT regexp_matches(trim(raw_ts), '(Z|[+-][0-9]{2}:?[0-9]{2})$')),
-              count(*) FILTER (WHERE trim(coalesce(raw_ts, '')) <> '' AND ts IS NULL
-                               AND regexp_matches(trim(raw_ts), '(Z|[+-][0-9]{2}:?[0-9]{2})$'))
+              count(*) FILTER (WHERE trim(coalesce(raw_ts, '')) <> '' AND NOT {has_offset}),
+              count(*) FILTER (WHERE trim(coalesce(raw_ts, '')) <> '' AND ts IS NULL AND {has_offset})
             FROM staged""").fetchone()
         reasons.update(zip(("missing_case", "missing_activity", "missing_timestamp",
                             "timestamp_without_utc_offset", "unparseable_timestamp"), counts))
@@ -340,7 +371,7 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
             # Under an explicit decision, times without an offset are accepted; only unreadable ones are rejected.
             assumed, unreadable = conn.execute(f"""SELECT count(*) FILTER (WHERE ts IS NOT NULL),
                   count(*) FILTER (WHERE ts IS NULL) FROM staged WHERE trim(coalesce(raw_ts, '')) <> ''
-                  AND NOT regexp_matches(trim(raw_ts), '{_OFFSET_RE}')""").fetchone()
+                  AND NOT {has_offset}""").fetchone()
             reasons["timestamp_without_utc_offset"] = 0
             reasons["unparseable_timestamp"] += unreadable
             reasons["timestamps_with_assumed_offset"] = assumed
@@ -352,7 +383,7 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
                 CASE WHEN case_id IS NULL OR trim(case_id) = '' THEN 'missing_case' END,
                 CASE WHEN activity IS NULL OR trim(activity) = '' THEN 'missing_activity' END,
                 CASE WHEN raw_ts IS NULL OR trim(raw_ts) = '' THEN 'missing_timestamp'
-                     WHEN ts IS NULL AND NOT regexp_matches(trim(raw_ts), '{_OFFSET_RE}') AND '{offset}' = ''
+                     WHEN ts IS NULL AND NOT {has_offset} AND '{offset}' = ''
                        THEN 'timestamp_without_utc_offset'
                      WHEN ts IS NULL THEN 'unparseable_timestamp' END], x -> x IS NOT NULL))::VARCHAR AS reasons,
               json_object('case', coalesce(case_id, ''), 'activity', coalesce(activity, ''),
@@ -387,8 +418,10 @@ def _ingest(conn: duckdb.DuckDBPyConnection, log_id: str, upload: Path, folder: 
     if source_format == "csv":
         return _load_csv_fast(conn, log_id, upload, mapping or {}, reasons, keep_rejected)
     if source_identity.settings(mapping):raise EventLogFormatError('Supplied source event identity mode is supported only for CSV')
-    if (mapping or {}).get("keep_rejected") or (mapping or {}).get("naive_timestamp_offset"):
-        raise EventLogWorkspaceError("keeping rejected rows and assuming an offset are available for CSV only")
+    if (mapping or {}).get("keep_rejected") or (mapping or {}).get("naive_timestamp_offset") \
+            or (mapping or {}).get("timestamp_format"):
+        raise EventLogWorkspaceError("keeping rejected rows, assuming an offset and declaring a timestamp format "
+                                     "are available for CSV only")
     stats = ReadStats()
     with upload.open("rb") as raw:
         reader = {"xes": read_xes, "ocel": read_ocel_json, "ocelxml": read_ocel_xml}[source_format](raw, stats=stats)
@@ -702,10 +735,12 @@ def delete_log(log_id: str) -> dict[str, Any]:
             try:
                 from .event_log_activity_mappings import erase as erase_mappings
                 erase_mappings(conn, log_id)
+                from .event_log_folder_feeds import erase_log as erase_feeds
+                feed_ids = erase_feeds(conn, log_id)
                 from .jira_retained_profiles import forget_dataset
                 forget_dataset(conn, log_id)
                 for table in ("object_relationships", "event_source_keys", "event_source_namespaces", "discovery_snapshots", "log_appends", "log_quality", "quarantine", "quarantine_decisions", "filter_sets",
-                              "domain_pack_installs", "metric_definitions", "saved_analyses", "signal_snoozes", "signal_reviews", "signal_transitions", "signal_rules", "case_tags", "cost_models", "event_objects", "events", "objects",
+                              "domain_pack_installs", "cohort_metric_definitions", "metric_definitions", "saved_analyses", "signal_snoozes", "signal_reviews", "signal_transitions", "signal_rules", "case_tags", "case_attribute_uploads", "cost_models", "event_objects", "events", "objects",
                               "object_attribute_values",
                               "logs"):
                     conn.execute(f"DELETE FROM {table} WHERE log_id = ?", [log_id])
@@ -721,6 +756,8 @@ def delete_log(log_id: str) -> dict[str, Any]:
             from .local_scheduler import forget_target
             for kind in ("event_log_signals", "event_log_report"):
                 forget_target(kind, log_id)
+            for feed_id in feed_ids:
+                forget_target("event_log_folder_feed", feed_id)
             # Revocation follows the source log itself. Remove stored webhook
             # credentials, pending notifications and delivered-state hashes.
             from .signal_notification_delivery import remove as remove_signal_delivery

@@ -2282,15 +2282,40 @@
       const generation=++handoffGeneration;
       const current=()=>generation===handoffGeneration;
       const handoff=event.detail||{},id=handoff.idea_id;
-      if(typeof id!=='string')return;
+      // Reject incomplete or synthetic navigation before any authenticated read.
+      // This client guard is not execution authorization; server preflight remains authoritative.
+      detail.replaceChildren();
+      // A saved process emits an opportunity-only navigation event. It is NOT
+      // a reviewed project handoff. Partial approval metadata must not bypass
+      // the authenticated reviewed-handoff destination preflight.
+      const discoveryOnly=Object.keys(handoff).length===1&&
+        Object.prototype.hasOwnProperty.call(handoff,'idea_id');
+      if(typeof id!=='string'||!id||id.length>128||
+         (!discoveryOnly&&(typeof handoff.project_id!=='string'||!handoff.project_id||handoff.project_id.length>128||
+         !Number.isSafeInteger(handoff.review_revision)||handoff.review_revision<1))){
+        status.textContent='Incomplete reviewed handoff. Inspect the approved project again.';
+        return;
+      }
       // Carry the exact inspected export as a navigation hint, never as approval.
       // Recheck it against the authenticated journey before opening the evidence UI.
       // Clear any previous decision surface before an asynchronous verification.
       // A rejected handoff must never leave an unrelated approval visible.
-      detail.replaceChildren();
       refresh().then(async()=>{
         if(!current())return;
-        if(!handoff.project_id){await show(id);return;}
+        if(discoveryOnly){
+          // A newly saved process has an opportunity but no agent project yet.
+          // Open its authenticated evidence journey directly so the person can
+          // inspect source/revision status and decide what review is needed.
+          await show(id);
+          if(!current())return;
+          const journeyButton=document.getElementById('owgPipelineJourney');
+          if(!journeyButton)throw new Error('Evidence journey control unavailable.');
+          // The journey handler owns its authenticated load/error status. Do not
+          // overwrite a denied, revoked, or stale-source response with success.
+          if(current())status.textContent='Inspecting saved process evidence. No project or execution was authorized.';
+          await journeyButton.onclick();
+          return;
+        }
         const journeyResponse=await api('/v1/automation-pipeline/'+encodeURIComponent(id)+'/journey');
         if(!journeyResponse.ok)throw new Error('Authenticated journey refused ('+journeyResponse.status+').');
         const journey=await journeyResponse.json();
