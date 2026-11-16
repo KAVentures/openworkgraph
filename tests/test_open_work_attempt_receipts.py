@@ -170,3 +170,27 @@ def test_source_revocation_purges_all_actors_but_not_other_tenants(tmp_path):
     assert purge_tenant(path, tenant="source_a") == 0
     with pytest.raises(ValueError):
         purge_tenant(path, tenant="../source_b")
+
+
+def test_receipt_journal_refuses_leftover_rollback_data(tmp_path):
+    """A stale rollback file may retain deleted or revoked provider evidence."""
+    path = tmp_path / "receipts.sqlite"
+    path.touch(mode=0o600)
+    rollback = tmp_path / "receipts.sqlite-journal"
+    rollback.write_bytes(b"previously revoked provider evidence")
+    with pytest.raises(ValueError, match="unsupported receipt rollback journal"):
+        list_receipts(str(path), tenant="org", actor="alice", attempt="run")
+    assert rollback.read_bytes() == b"previously revoked provider evidence"
+
+
+def test_receipt_journal_refuses_dangling_rollback_symlink(tmp_path):
+    path = tmp_path / "receipts.sqlite"
+    path.touch(mode=0o600)
+    rollback = tmp_path / "receipts.sqlite-journal"
+    try:
+        rollback.symlink_to(tmp_path / "missing-rollback")
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    with pytest.raises(ValueError, match="unsupported receipt rollback journal"):
+        list_receipts(str(path), tenant="org", actor="alice", attempt="run")
+    assert rollback.is_symlink()

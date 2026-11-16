@@ -3088,7 +3088,15 @@ async def read_local_bound_attempt_receipts(request: Request, response: Response
         raise _safe_error(exc) from None
     await _recheck_source(scope)
     _dashboard_only(request)
-    # Fail closed if this session was revoked during the retained journal read.
+    # The source recheck above can yield while a human revokes the run/case
+    # binding. Revalidate it *after* the final source await, before returning
+    # even untrusted historical receipts to this session.
+    try:
+        if not await asyncio.to_thread(get_binding, **fields):
+            raise HTTPException(403, "current operator run/case binding required")
+        await asyncio.to_thread(require_exclusive_run_case_binding, **fields)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, ValueError) as exc:
+        raise _safe_error(exc) from None
     _dashboard_only(request)
     response.headers["Cache-Control"] = "no-store"
     return {

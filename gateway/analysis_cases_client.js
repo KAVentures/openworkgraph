@@ -58,7 +58,26 @@ function create({root,api,post}){
   if(!after)list.replaceChildren();for(const c of r.cases){const b=button(c.code+' · '+c.events+' events · '+c.duration_seconds+' elapsed seconds',async()=>{const g=generation,attempt=++queryVersion;const d=await api(base()+'/cases/'+c.code+'?revision='+parent.viewing_revision);if(g!==generation||attempt!==queryVersion)return;timeline.replaceChildren(el('h3','Case '+d.case.code));const ol=el('ol');for(const e of d.case.events)ol.append(el('li',e.activity+' · '+e.elapsed_microseconds/1000000+' seconds since case start'));timeline.append(ol);});list.append(b);}next=r.next_after;more.hidden=!next;
  }
  file.onchange=()=>run(async()=>{const chosen=file.files[0];clearFile();if(!chosen)return;if(chosen.size>512*1024)throw new Error('Case file exceeds 512 KiB.');const version=fileVersion,raw=await chosen.text();if(version!==fileVersion)return;const value=validate(JSON.parse(raw));if(value.source_content_sha256!==parent.snapshot.source_content_sha256||value.analysis_spec_sha256!==parent.snapshot.analysis_spec_sha256||value.cases.length!==parent.snapshot.matching_cases)throw new Error('Choose the paired case file for this exact analysis.');packet=value;preview.textContent=value.cases.length+' complete coded cases; '+value.cases.reduce((n,c)=>n+c.events.length,0)+' events; labels and absolute dates omitted. Review the local case timeline before attaching.';sync();});
+ function stagePaired(value){
+  // This is a local browser preview only. The case attachment still requires
+  // a separate checked human confirmation and an authorized POST.
+  if(!parent||!manage||parent.viewing_revision!==parent.revision||upload.hidden)
+    throw new Error('This identity cannot attach case data to the selected current revision.');
+  const checked=validate(value);
+  if(checked.source_content_sha256!==parent.snapshot.source_content_sha256||
+     checked.analysis_spec_sha256!==parent.snapshot.analysis_spec_sha256||
+     checked.cases.length!==parent.snapshot.matching_cases)
+    throw new Error('Paired case data do not match the published aggregate revision.');
+  clearFile();
+  packet=checked;
+  preview.textContent=checked.cases.length+' complete coded cases; '+
+    checked.cases.reduce((n,c)=>n+c.events.length,0)+
+    ' events. File staged in this browser only; review the source file and confirm attachment separately.';
+  confirm.checked=false;
+  sync();
+  return true;
+ }
  activityInput.onchange=()=>run(async()=>{activity=activityInput.value;variant='';await query();});confirm.onchange=grantConfirm.onchange=deleteConfirm.onchange=sync;
- return {open,clear};
+ return {open,clear,stagePaired};
 }
 })();

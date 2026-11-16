@@ -704,6 +704,7 @@
     results.appendChild(caseExplainSection());
     results.appendChild(discoverySection());
     results.appendChild(driftSection());
+    results.appendChild(folderFeedSection());
     results.appendChild(deriveSection(names));
     results.appendChild(dottedSection());
     results.appendChild(waitingSection());
@@ -798,16 +799,90 @@
   // R9: read-only, bounded metrics for selected saved logs.
   function cohortMetricSection(activityNames){
     const box=section('Cohort metrics');box.id='owgCohortMetricSection';
-    box.appendChild(el('p','Calculate descriptive metrics across matching cases. Aggregate results only; maximum 1,000 cases.','muted'));
+    box.appendChild(el('p','Calculate descriptive metrics or combine two approved case metrics across matching cases. Division by zero and missing values are excluded from numeric summaries. Aggregate results only; maximum 1,000 cases.','muted'));
     const metric=select('owgCohortMetricField',[
       ['duration_seconds','Case duration (seconds)'],['event_count','Events per case'],
       ['resource_count','Distinct resources per case'],['duration_hours','Case duration (hours)']
     ]);
+    // Only approved, non-identifying numeric fields can enter these expressions.
+    // The authenticated server independently validates every expression.
+    const operation=select('owgCohortMetricOperation',[
+      ['single','Single metric'],['add','Add'],['subtract','Subtract'],
+      ['multiply','Multiply'],['divide','Divide (zero denominator is missing)']
+    ]);
+    const other=select('owgCohortMetricOther',[
+      ['duration_seconds','Case duration (seconds)'],['event_count','Events per case'],
+      ['resource_count','Distinct resources per case']
+    ]);
+    const otherWrap=field('Second metric',other);
+    const updateOperation=()=>show(otherWrap,operation.value!=='single');
+    operation.addEventListener('change',updateOperation);
+    updateOperation();
+    const savedPicker=select('owgCohortMetricSaved',[['','Choose saved expression']]);
+    const savedName=input('owgCohortMetricSaveName','text','Metric name');savedName.maxLength=120;
+    const saveButton=button('Save expression','secondary');saveButton.id='owgCohortMetricSave';
+    const deleteButton=button('Delete saved expression','secondary');deleteButton.id='owgCohortMetricDelete';
+    const savedStatus=el('div');savedStatus.setAttribute('role','status');
+    let savedEntries=[];
+    const savedPath=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/cohort-metric-definitions';
+    const currentDefinition=()=>{
+      const first=metric.value==='duration_hours'
+        ?{divide:[{field:'duration_seconds'},{literal:3600}]}:{field:metric.value};
+      return {version:1,expression:operation.value==='single'
+        ?first:{[operation.value]:[first,{field:other.value}]}};
+    };
+    const loadSaved=async()=>{
+      const log=state.logId,generation=state.generation;
+      if(!log)return;
+      const response=await api(savedPath());
+      const data=await response.json();
+      if(log!==state.logId||generation!==state.generation)return;
+      savedEntries=data.definitions||[];
+      savedPicker.replaceChildren(new Option('Choose saved expression',''),
+        ...savedEntries.map(item=>new Option(item.name,item.metric_id)));
+    };
+    savedPicker.addEventListener('change',()=>{
+      const item=savedEntries.find(entry=>entry.metric_id===savedPicker.value);
+      if(!item)return;
+      const expression=item.definition.expression;
+      const isHours=JSON.stringify(expression)===JSON.stringify({divide:[{field:'duration_seconds'},{literal:3600}]});
+      if(expression.field||isHours){
+        metric.value=isHours?'duration_hours':expression.field;operation.value='single';
+      }else{
+        const op=Object.keys(expression)[0],parts=expression[op];
+        if(!['add','subtract','multiply','divide'].includes(op)||!Array.isArray(parts)||parts.length!==2)return;
+        const first=parts[0],second=parts[1];
+        const hours=JSON.stringify(first)===JSON.stringify({divide:[{field:'duration_seconds'},{literal:3600}]});
+        if(!second.field||(!first.field&&!hours))return;
+        metric.value=hours?'duration_hours':first.field;other.value=second.field;operation.value=op;
+      }
+      updateOperation();savedStatus.textContent='Loaded '+item.name+'. Calculate to apply current cohort filters.';
+    });
+    saveButton.onclick=async()=>{
+      saveButton.disabled=true;
+      try{
+        const response=await api(savedPath(),{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({name:savedName.value,definition:currentDefinition()})});
+        const item=await response.json();await loadSaved();savedPicker.value=item.metric_id;
+        savedStatus.textContent='Saved '+item.name+' for this log.';
+      }catch(error){savedStatus.textContent=error.message;}
+      finally{saveButton.disabled=false;}
+    };
+    deleteButton.onclick=async()=>{
+      const id=savedPicker.value;if(!id)return;
+      deleteButton.disabled=true;
+      try{
+        await api(savedPath()+'/'+encodeURIComponent(id)+'/delete',{method:'POST'});
+        await loadSaved();savedStatus.textContent='Saved expression deleted.';
+      }catch(error){savedStatus.textContent=error.message;}
+      finally{deleteButton.disabled=false;}
+    };
+    loadSaved().catch(error=>{savedStatus.textContent=error.message;});
     const filters=cohortFields('owgCohortMetricFilter','Choose matching cases',activityNames);
     const run=button('Calculate cohort metric','secondary');run.id='owgCohortMetricRun';
     const out=el('div');out.id='owgCohortMetricResult';out.setAttribute('role','status');out.setAttribute('aria-live','polite');
-    const controls=el('div',null,'row');controls.append(field('Metric',metric),run);
-    box.append(controls,filters.node,out);
+    const controls=el('div',null,'row');controls.append(field('Metric',metric),field('Calculation',operation),otherWrap,run);
+    box.append(controls,field('Saved expression',savedPicker),field('Name to save',savedName),saveButton,deleteButton,savedStatus,filters.node,out);
     let turn=0;
     run.onclick=async()=>{
       const t=++turn,generation=state.generation,logId=state.logId,caseType=state.caseType;
@@ -815,9 +890,11 @@
       try{
         const cohort=filters.read();
         if(state.follows.length)cohort.follows=state.follows;
-        const expression=metric.value==='duration_hours'
+        const first=metric.value==='duration_hours'
           ?{divide:[{field:'duration_seconds'},{literal:3600}]}
           :{field:metric.value};
+        const expression=operation.value==='single'
+          ?first:{[operation.value]:[first,{field:other.value}]};
         const url=new URL('/v1/event-logs/'+encodeURIComponent(logId)+'/cohort-metric',window.location.origin);
         if(caseType)url.searchParams.set('case_type',caseType);
         const response=await api(url.pathname+url.search,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({definition:{version:1,expression},cohort})});
@@ -1189,6 +1266,55 @@
   }
   // Analyst tags on cases: mark cases while investigating, then filter any analysis with "Tagged".
   // Explain one case: compare each of its gaps with the typical gap of the same transition.
+  // A local folder whose new CSV exports are appended to this log with its recorded mapping.
+  function folderFeedSection(){
+    const box=section('Folder feed');box.id='owgFolderFeed';
+    box.appendChild(el('div','Point this log at a folder where a system drops exports. Each run appends new files that match the pattern, using the column mapping of this log\u2019s latest CSV import. Files are read, never changed or deleted. A file is appended once, by its content.','muted'));
+    const list=el('div');list.id='owgFolderFeedList';list.setAttribute('role','status');
+    const folder=input('owgFolderFeedFolder','text','for example /Users/me/Exports/orders');folder.size=40;
+    const pattern=input('owgFolderFeedPattern','text');pattern.value='*.csv';pattern.maxLength=84;
+    const consent=input('owgFolderFeedConsent','checkbox');
+    const consentLabel=el('label',' Read files from this folder and store their events with the log on this computer');consentLabel.prepend(consent);
+    const create=button('Create feed','secondary');create.id='owgFolderFeedCreate';create.disabled=true;
+    const out=el('div');out.id='owgFolderFeedResult';out.setAttribute('role','status');
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Folder',folder),field('File pattern',pattern));
+    box.append(list,row,consentLabel,create,out);
+    const ready=()=>{create.disabled=!(folder.value.trim()&&pattern.value.trim()&&consent.checked);};
+    for(const control of [folder,pattern])control.addEventListener('input',ready);consent.addEventListener('change',ready);
+    const base='/v1/event-logs/'+encodeURIComponent(state.logId)+'/feeds';
+    const generation=state.generation;
+    const describe=r=>r.files_appended+' file(s) appended with '+Number(r.events_added).toLocaleString()+' new events'+(r.files_failed?', '+r.files_failed+' could not be appended':'')+(r.files_already_appended?', '+r.files_already_appended+' already appended':'')+(r.files_still_being_written?', '+r.files_still_being_written+' still being written (next run)':'')+'.';
+    const render=r=>{
+      if(!r.feeds.length){list.replaceChildren(el('div','No folder feed yet.','muted'));return;}
+      list.replaceChildren(table(['Folder','Pattern','Files appended','Failed','Latest file',''],r.feeds.map(f=>{
+        const wrap=el('div',null,'row');
+        const run=button('Run now','secondary');run.setAttribute('aria-label','Run feed for '+f.folder);
+        const schedule=button('Run every day','secondary');schedule.setAttribute('aria-label','Run feed for '+f.folder+' every day');
+        const remove=button('Delete feed','secondary');remove.setAttribute('aria-label','Delete feed for '+f.folder);
+        run.onclick=async()=>{run.disabled=true;out.replaceChildren(el('div','Reading the folder\u2026','muted'));
+          try{const r2=await (await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/run',{method:'POST',headers:{'X-OWG-Local-Storage-Confirmed':'true'}})).json();
+            out.replaceChildren(el('div',describe(r2)+(r2.events_added?' Analyse again to include them.':'')));render(await getJSON(base));}
+          catch(error){out.replaceChildren(el('div',error.message,'muted'));run.disabled=false;}};
+        schedule.onclick=async()=>{if(!window.confirm('Read '+f.folder+' and append new files every day while OpenWorkGraph is running?'))return;
+          try{await api('/v1/schedules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'event_log_folder_feed',target_id:f.feed_id,interval_minutes:1440,confirm_scheduled_runs:true})});
+            out.replaceChildren(el('div','Scheduled daily. Manage it under scheduled jobs.'));}
+          catch(error){out.replaceChildren(el('div',error.message,'muted'));}};
+        remove.onclick=async()=>{if(!window.confirm('Delete this feed? Events already appended stay in the log.'))return;
+          try{await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/delete',{method:'POST'});out.replaceChildren(el('div','Feed deleted.'));render(await getJSON(base));}
+          catch(error){out.replaceChildren(el('div',error.message,'muted'));}};
+        wrap.append(run,schedule,remove);
+        const latest=f.recent_files[0];
+        return [f.folder,f.pattern,Number(f.files_appended).toLocaleString(),Number(f.files_failed).toLocaleString(),
+          latest?latest.name+' \u2014 '+(latest.outcome==='appended'?Number(latest.added_events).toLocaleString()+' events added':'not appended: '+latest.error):'\u2014',wrap];})));
+    };
+    create.onclick=async()=>{create.disabled=true;
+      try{await api(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({folder:folder.value.trim(),pattern:pattern.value.trim(),confirm_folder_reads:true})});
+        consent.checked=false;out.replaceChildren(el('div','Feed created. Run it now or every day.'));render(await getJSON(base));}
+      catch(error){out.replaceChildren(el('div',error.message,'muted'));ready();}};
+    getJSON(base).then(r=>{if(generation===state.generation)render(r);}).catch(error=>list.replaceChildren(el('div',error.message,'muted')));
+    return box;
+  }
+
   function caseExplainSection(){
     const box=section('Explain a case');box.id='owgCaseExplain';
     box.appendChild(el('div','Pick one of the slowest cases or enter a case ID to see which steps took longer than usual in this log.','muted'));
@@ -3121,9 +3247,13 @@
     const details=el('details');details.appendChild(el('summary','Import reports, digests and diagnostics'));details.appendChild(out);
     box.append(el('div','Counts only: no values are shown here, and rejected rows are kept only if you chose to keep them at import. The digests let you check that the same file with the same mapping gives the same stored log.','muted'),details,quarantineBlock());
     const generation=state.generation;
-    getJSON('/v1/event-logs/'+encodeURIComponent(state.logId)+'/quality').then(r=>{
+    let loaded=false,pending=false;
+    const loadQuality=()=>{
+      if(loaded||pending||generation!==state.generation)return;
+      pending=true;out.replaceChildren(el('div','Calculating current quality diagnostics…','muted'));
+      getJSON('/v1/event-logs/'+encodeURIComponent(state.logId)+'/quality/overview').then(r=>{
       if(generation!==state.generation)return;
-      const d=r.current.diagnostics,short=h=>h?h.slice(0,12)+'…':'—';
+      const d=r.current.diagnostics,short=h=>typeof h==='string'&&h?h.slice(0,12)+'…':'—';
       // This is a live snapshot, not the historical import-time report.
       const futureReference=d.future_event_reference||null;
       const futureBasis=futureReference&&futureReference.basis==='report_created'?'report creation':
@@ -3150,7 +3280,8 @@
           rows.duplicates_skipped_on_append===undefined?'—':count(rows.duplicates_skipped_on_append),
           el('code',short(transform.transform_sha256)),el('code',short(report.content_sha256)),el('code',short(report.content_sha256_v2))];
       });
-      const mapping=(r.reports&&r.reports[0]&&r.reports[0].transform&&r.reports[0].transform.mapping)||{};
+      const rawMapping=r.first_report?.transform?.mapping;
+      const mapping=rawMapping&&typeof rawMapping==='object'&&!Array.isArray(rawMapping)?rawMapping:{};
       const integrity=r.integrity&&typeof r.integrity==='object'?r.integrity:{};
       const integrityLabel=integrity.status==='verified'?'Verified: current saved content matches the recorded import digest.':
         integrity.status==='mismatch'?'Mismatch: saved content differs from the recorded import digest. Investigate before relying on this log.':
@@ -3158,13 +3289,14 @@
       const integrityStatus=el('p',integrityLabel,'muted');integrityStatus.id='owgQualityIntegrity';
       integrityStatus.setAttribute('role','status');
       integrityStatus.dataset.status=['verified','mismatch'].includes(integrity.status)?integrity.status:'not_verifiable';
-      const mapRows=mapping.case_column!==undefined?[['Case column',mapping.case_column],['Activity column',mapping.activity_column],['Timestamp column',mapping.timestamp_column],['Resource column',mapping.resource_column||'(none)'],['Extra columns kept',(mapping.attribute_columns||[]).join(', ')||'(none)'],['Mapping version',mapping.mapping_version]]:[['Standard',mapping.standard||'—'],['Mapping version',mapping.mapping_version||'—']];
+      const mapRows=mapping.case_column!==undefined?[['Case column',mapping.case_column],['Activity column',mapping.activity_column],['Timestamp column',mapping.timestamp_column],['Resource column',mapping.resource_column||'(none)'],['Extra columns kept',(Array.isArray(mapping.attribute_columns)?mapping.attribute_columns:[]).join(', ')||'(none)'],['Mapping version',mapping.mapping_version]]:[['Standard',mapping.standard||'—'],['Mapping version',mapping.mapping_version||'—']];
       if(mapping.source_identity)for(const [key,value] of Object.entries(mapping.source_identity))if(value)mapRows.push(['Source identity: '+key,value]);
       out.replaceChildren(
         ...(r.log.source_identity?[el('p','Source-ID deduplication compares declared namespace and supplied event ID. The content-duplicate diagnostic below compares payloads; distinct source IDs with identical payloads remain separate events. Neither establishes verified provider identity or complete history.')]:[]),
+        el('div','Showing '+Number(r.window.batch_count).toLocaleString()+' of '+Number(r.window.total_batches).toLocaleString()+' batches. Use Compare batches below to browse older history.','muted'),
         integrityStatus,
         table(['Batch','Format','Accepted','Rejected','Duplicates skipped','Transform','Content v1','Content v2'],reports),
-        ...(r.batches_without_report.length?[el('div','No report was stored for '+r.batches_without_report.map(b=>b?'append '+b:'the import').join(', ')+' (imported before reports existed, or the report could not be written).','muted')]:[]),
+        ...(r.batches_without_report.length?[el('div','No report was stored on this page for '+r.batches_without_report.map(b=>b?'append '+b:'the import').join(', ')+' (imported before reports existed, or the report could not be written).','muted')]:[]),
         table(['Mapping',''],mapRows),
         table(['Diagnostic (whole log)','Events'],[
           ['Duplicate event payloads (including attributes and qualified links; IDs excluded)',Number(d.duplicate_events).toLocaleString()],
@@ -3180,7 +3312,16 @@
         el('div','Current content digest v1: '+r.current.content_sha256+'. '+
           (r.current.content_sha256_v2?' Current content digest v2 (delimiter-safe): '+r.current.content_sha256_v2+'.':' Content digest v2 not recorded (legacy server).')+
           ' '+r.current.completeness.note,'muted'));
-    }).catch(error=>{if(generation===state.generation)out.replaceChildren(el('div',error.message,'muted'));});
+      const refresh=button('Refresh quality diagnostics','secondary');
+      refresh.onclick=()=>{loaded=false;loadQuality();};out.appendChild(refresh);
+      loaded=true;
+      }).catch(error=>{
+        if(generation!==state.generation)return;
+        const retry=button('Retry quality diagnostics','secondary');retry.onclick=loadQuality;
+        out.replaceChildren(el('div',error.message,'muted'),retry);
+      }).finally(()=>{pending=false;});
+    };
+    details.addEventListener('toggle',()=>{if(details.open)loadQuality();});
     return box;
   }
 
@@ -3851,9 +3992,10 @@
     const out=el('div');out.id='owgAnalysisResults';
     const savedList=el('div');savedList.id='owgAnalysisSaved';
     let last=null,lastSpec=null;
-    let sharingAttempt=0,sharingSnapshot=null,casePacket=null,caseDownloadReady=false;
+    let sharingAttempt=0,sharingSnapshot=null,casePacket=null,caseDownloadReady=false,bundlePacket=null;
     const prepareShare=button('Prepare sharing snapshot','secondary');prepareShare.id='owgAnalysisPrepareShare';prepareShare.disabled=true;
     const prepareCases=button('Prepare case sharing files','secondary');prepareCases.id='owgAnalysisPrepareCases';prepareCases.disabled=true;
+    const prepareCompany=button('Prepare paired company handoff','secondary');prepareCompany.id='owgAnalysisPrepareCompany';prepareCompany.disabled=true;
     const sharing=el('div');sharing.id='owgAnalysisSharingPreview';sharing.hidden=true;
     const sharingTable=el('div');sharingTable.style.overflowX='auto';
     const sharingInfo=el('p',null,'muted');sharingInfo.style.overflowWrap='anywhere';
@@ -3865,25 +4007,36 @@
       freshness,freshnessStatus,field('I reviewed this snapshot and intend to share it with my organization',sharingConsent),sharingDownload);
     const casePane=el('div');casePane.hidden=true;const caseTable=el('div');caseTable.style.overflowX='auto';
     const caseConsent=input('owgAnalysisCaseConsent','checkbox');const caseDownload=button('Download reviewed case dataset','secondary');caseDownload.id='owgAnalysisCaseDownload';caseDownload.disabled=true;
-    casePane.append(el('p','This separate case file contains complete coded cases and within-case elapsed microseconds. Original case/activity/person labels, resources, attributes and absolute dates are omitted. Codes, topology and timings are still sensitive and are not anonymization. Codes apply only to this file; no group-row mapping or cross-case time order is disclosed. Review every timeline below. A separate case-read scope and explicit revision grant are required at the Gateway.'),caseTable,field('I reviewed the complete coded case timelines and intend this case-level disclosure',caseConsent),caseDownload);sharing.append(casePane);
-    function resetSharing(){caseDownloadReady=false;casePacket=null;casePane.hidden=true;caseTable.replaceChildren();caseConsent.checked=false;caseDownload.disabled=true;sharingAttempt++;sharingSnapshot=null;sharing.hidden=true;sharingConsent.checked=false;sharingDownload.disabled=true;freshness.disabled=true;freshnessStatus.textContent='Freshness not checked.';freshnessStatus.dataset.stale='true';}
+    const bundleDownload=button('Download paired company handoff','secondary');bundleDownload.id='owgAnalysisBundleDownload';bundleDownload.disabled=true;bundleDownload.hidden=true;
+    casePane.append(el('p','This separate case file contains complete coded cases and within-case elapsed microseconds. Original case/activity/person labels, resources, attributes and absolute dates are omitted. Codes, topology and timings are still sensitive and are not anonymization. Codes apply only to this file; no group-row mapping or cross-case time order is disclosed. Review every timeline below. A separate case-read scope and explicit revision grant are required at the Gateway.'),caseTable,field('I reviewed the complete coded case timelines and intend this case-level disclosure',caseConsent),caseDownload,bundleDownload,
+      el('p','A paired handoff contains both the minimized aggregate and these coded case timelines. Downloading sends nothing to the company portal. Publishing the aggregate and attaching case data still require distinct confirmations there.','muted'));sharing.append(casePane);
+    function resetSharing(){caseDownloadReady=false;casePacket=null;bundlePacket=null;bundleDownload.hidden=true;bundleDownload.disabled=true;casePane.hidden=true;caseTable.replaceChildren();caseConsent.checked=false;caseDownload.disabled=true;sharingAttempt++;sharingSnapshot=null;sharing.hidden=true;sharingConsent.checked=false;sharingDownload.disabled=true;freshness.disabled=true;freshnessStatus.textContent='Freshness not checked.';freshnessStatus.dataset.stale='true';}
     // A consent withdrawal invalidates an in-flight authorization even if the box is rechecked before HTTP completes.
     let sharingConsentRevision=0;
-    sharingConsent.onchange=()=>{sharingConsentRevision++;sharingDownload.disabled=!sharingConsent.checked||!sharingSnapshot||freshnessStatus.dataset.stale==='true';};
-    async function prepareSharing(withCases=false){
+    function sharingReady(){
+      sharingDownload.disabled=!sharingConsent.checked||!sharingSnapshot||freshnessStatus.dataset.stale==='true';
+      caseDownload.disabled=!caseConsent.checked||!casePacket||!caseDownloadReady;
+      bundleDownload.disabled=!bundlePacket||!sharingConsent.checked||!caseConsent.checked||freshnessStatus.dataset.stale==='true';
+    }
+    sharingConsent.onchange=()=>{sharingConsentRevision++;sharingReady();};
+    async function prepareSharing(withCases=false,company=false){
       if(!lastSpec)return;
-      resetSharing();const attempt=sharingAttempt;prepareShare.disabled=true;prepareCases.disabled=true;
+      resetSharing();const attempt=sharingAttempt;prepareShare.disabled=true;prepareCases.disabled=true;prepareCompany.disabled=true;
       try{
-        const result=await(await api(base()+(withCases?'/case-sharing-preview':'/analysis-sharing-preview'),{method:'POST',headers:{'Content-Type':'application/json',...(withCases?{'X-OWG-Case-Sharing-Preview':'true'}:{'X-OWG-Analysis-Sharing-Preview':'true'})},body:JSON.stringify(lastSpec)})).json();
+        const result=await(await api(base()+(company?'/company-handoff-preview':withCases?'/case-sharing-preview':'/analysis-sharing-preview'),{
+          method:'POST',headers:{'Content-Type':'application/json',
+            ...(company?{'X-OWG-Company-Handoff-Preview':'true'}:withCases?{'X-OWG-Case-Sharing-Preview':'true'}:{'X-OWG-Analysis-Sharing-Preview':'true'})},
+          body:JSON.stringify(lastSpec)})).json();
         const r=withCases?result.aggregate_snapshot:result;
         if(generation!==state.generation||attempt!==sharingAttempt)return;
         sharingSnapshot=r;sharing.hidden=false;freshness.disabled=withCases;freshnessStatus.dataset.stale=String(!withCases);freshnessStatus.textContent=withCases?'Paired preview was recomputed; review both files before download.':'Freshness not checked. Check current source, metric definitions and numeric results before downloading.';
+        if(company){bundlePacket=result;bundleDownload.hidden=false;}
         if(withCases){casePacket=result.case_dataset;caseDownloadReady=true;casePane.hidden=false;caseTable.replaceChildren(...casePacket.cases.map(c=>{const details=el('details'),summary=el('summary',c.code+' · '+c.events.length+' events'),list=el('ol');for(const e of c.events)list.append(el('li',e.activity+' · '+e.elapsed_microseconds/1000000+' seconds since case start'));details.append(summary,list);return details;}));}
         sharingTable.replaceChildren(table(r.columns.map(c=>c.heading+(c.aggregation?' · '+c.aggregation:'')+(c.value_basis?' · '+c.value_basis:'')+(c.metric_slot?' '+c.metric_slot:'')+(c.unit?' ('+c.unit+')':'')),r.rows),
           ...r.metric_coverage.map(c=>el('p','Metric '+c.slot+': '+c.with_value+' cases with a value; '+c.without_value+' without; '+c.missing_operand+' missing operand; '+c.zero_divisor+' zero divisor; '+c.non_finite+' nonfinite.')));
         sharingInfo.textContent=r.matching_cases+' selected cases; '+r.matching_rows+' selected '+r.level+' rows. '+(r.rows_truncated?'Only the bounded result rows are included. ':'')+r.non_finite_results_withheld+' output results withheld as nonfinite. Generated '+r.generated_at+'. Source fingerprint: '+r.source_content_sha256+'. Analysis fingerprint: '+r.analysis_spec_sha256+'. Group codes apply only within this snapshot; source freshness after export is unknown.';
       }catch(error){if(generation===state.generation&&attempt===sharingAttempt)message.textContent=error.message;}
-      finally{if(generation===state.generation&&attempt===sharingAttempt){prepareShare.disabled=!lastSpec;prepareCases.disabled=!lastSpec;}}
+      finally{if(generation===state.generation&&attempt===sharingAttempt){prepareShare.disabled=!lastSpec;prepareCases.disabled=!lastSpec;prepareCompany.disabled=!lastSpec;}}
     };
     freshness.onclick=async()=>{
       if(!sharingSnapshot||!lastSpec||generation!==state.generation)return;
@@ -3900,8 +4053,8 @@
       }catch(error){if(generation===state.generation&&attempt===sharingAttempt){freshnessStatus.textContent=error.message+' Freshness unknown; prepare a new snapshot.';freshnessStatus.dataset.stale='true';sharingDownload.disabled=true;}}
       finally{if(generation===state.generation&&attempt===sharingAttempt)freshness.disabled=false;}
     };
-    prepareShare.onclick=()=>prepareSharing();prepareCases.onclick=()=>prepareSharing(true);
-    caseConsent.onchange=()=>{caseDownload.disabled=!caseConsent.checked||!casePacket||!caseDownloadReady;};
+    prepareShare.onclick=()=>prepareSharing();prepareCases.onclick=()=>prepareSharing(true);prepareCompany.onclick=()=>prepareSharing(true,true);
+    caseConsent.onchange=sharingReady;
     caseDownload.onclick=async()=>{
       if(!caseConsent.checked||!casePacket||!sharingSnapshot||!lastSpec||!caseDownloadReady||generation!==state.generation||caseDownload.disabled)return;
       // The preview is not a download authorization. Recompute both files under
@@ -3941,6 +4094,39 @@
       }finally{
         // A fresh preview and explicit review are required before another download.
         if(attempt===sharingAttempt&&selectedGeneration===state.generation)caseDownload.disabled=true;
+      }
+    };
+    bundleDownload.onclick=async()=>{
+      if(!bundlePacket||!caseConsent.checked||!sharingConsent.checked||!lastSpec||
+         freshnessStatus.dataset.stale==='true'||generation!==state.generation||bundleDownload.disabled)return;
+      const attempt=sharingAttempt,snapshot=sharingSnapshot,cases=casePacket,spec=lastSpec,reviewedBundle=bundlePacket,consentRevision=sharingConsentRevision;
+      if(!snapshot||!cases||reviewedBundle.aggregate_snapshot!==snapshot||reviewedBundle.case_dataset!==cases||
+         snapshot.source_content_sha256!==cases.source_content_sha256||
+         snapshot.analysis_spec_sha256!==cases.analysis_spec_sha256||
+         snapshot.matching_cases!==cases.cases.length)return;
+      bundleDownload.disabled=true;freshnessStatus.dataset.stale='true';
+      freshnessStatus.textContent='Rechecking source, metric lineage and paired snapshot before download…';
+      try{
+        const result=await(await api(base()+'/analysis-sharing-freshness',{method:'POST',
+          headers:{'Content-Type':'application/json','X-OWG-Analysis-Sharing-Preview':'true'},
+          body:JSON.stringify({spec,snapshot})})).json();
+        if(attempt!==sharingAttempt||generation!==state.generation||snapshot!==sharingSnapshot||
+           cases!==casePacket||reviewedBundle!==bundlePacket||!caseConsent.checked||!sharingConsent.checked||
+           consentRevision!==sharingConsentRevision)return;
+        if(result.format!=='openworkgraph.analysis-snapshot-freshness.v1'||
+           result.lineage_current!==true||result.current_results_match!==true){
+          freshnessStatus.textContent='Paired handoff stale or changed. Prepare and review a new handoff.';
+          return;
+        }
+        download('owg-company-analysis-handoff.json',JSON.stringify(reviewedBundle),'application/json');
+        caseConsent.checked=false;sharingConsent.checked=false;
+        freshnessStatus.textContent='Current source and aggregate verified at download. Changes after the check remain possible.';
+      }catch(error){
+        if(attempt===sharingAttempt&&generation===state.generation)
+          freshnessStatus.textContent=error.message+' No handoff downloaded.';
+      }finally{
+        if(attempt===sharingAttempt&&generation===state.generation)
+          sharingReady();
       }
     };
     sharingDownload.onclick=async()=>{
@@ -3989,7 +4175,7 @@
     const exports=exportButtons('owgAnalysis',()=>last,r=>[r.columns,...r.rows]);
     box.append(field('Run as a cancellable local job',background),
       el('p','Local jobs have a two-minute deadline including queue time. They use the log when execution starts; results are static. Results expire after ten minutes or restart. Leaving this view stops polling; work may continue until its deadline. Nothing is uploaded.','muted'),
-      row,metricBox,message,out,exports.node,prepareShare,prepareCases,sharing,saveRow,savedList);
+      row,metricBox,message,out,exports.node,prepareShare,prepareCases,prepareCompany,sharing,saveRow,savedList);
     mAdd.onclick=()=>{try{useMetric(readMetric());message.textContent='Metric added; choose it under Measure.';}catch(error){message.textContent=error.message;}};
     mUpdate.onclick=()=>{
       try{
@@ -4004,7 +4190,7 @@
         measure1.value=draft.measures[0];measure2.value=draft.measures[1];
         // A previous result and its export/share grants belong to the old definition.
         resetSharing();last=null;lastSpec=null;out.replaceChildren();exports.enable(false);
-        save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;
+        save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;prepareCompany.disabled=true;
         message.textContent='Metric updated in this draft; dependent arithmetic and selected measures follow any rename. Run analysis to recalculate before saving or exporting.';
       }catch(error){message.textContent=error.message;}
     };
@@ -4066,7 +4252,7 @@
           const additions=savedMetricBundle(m,r.metrics,metrics);
           metrics.push(...additions);renderMetrics();
           resetSharing();last=null;lastSpec=null;out.replaceChildren();exports.enable(false);
-          save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;
+          save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;prepareCompany.disabled=true;
           message.textContent='Added '+additions.length+' saved metric'+(additions.length===1?'':'s')+
             ' in dependency order. Choose a measure and rerun before saving or exporting.';
         }catch(error){message.textContent=error.message;}};
@@ -4089,7 +4275,7 @@
       const ownAttempt=++attempt,jobBase=base()+'/analysis-jobs';
       const current=()=>generation===state.generation&&box.isConnected&&ownAttempt===attempt;
       running=true;cancelRequested=false;job=null;run.disabled=true;background.disabled=true;cancel.disabled=!background.checked;
-      resetSharing();last=null;lastSpec=null;out.replaceChildren();exports.enable(false);save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;
+      resetSharing();last=null;lastSpec=null;out.replaceChildren();exports.enable(false);save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;prepareCompany.disabled=true;
       if(state.caseType)spec.case_type=state.caseType;
       let r;
       try{
@@ -4123,7 +4309,7 @@
       }
       if(!current())return;
       message.textContent='Analysis complete. Static result; rerun after changing the log.';
-      resetSharing();last=r;lastSpec=spec;exports.enable(true);save.disabled=false;prepareShare.disabled=false;prepareCases.disabled=false;
+      resetSharing();last=r;lastSpec=spec;exports.enable(true);save.disabled=false;prepareShare.disabled=false;prepareCases.disabled=false;prepareCompany.disabled=false;
       const units=r.units||{};
       out.replaceChildren(el('div',Number(r.matching.cases).toLocaleString()+' matching cases'+(r.rows_truncated?'; showing the first '+r.rows.length+' rows.':'.'),'muted'),
         table(r.columns,r.rows.map(row=>row.map((v,i)=>cell(r.columns[i],v,units[r.columns[i]])))),
@@ -4152,7 +4338,7 @@
             hours.value=draft.hours;endsWith.value=draft.endsWith;
             sync();measure1.value=draft.measure1;measure2.value=draft.measure2;
             resetSharing();last=null;lastSpec=null;out.replaceChildren();exports.enable(false);
-            save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;name.value='';
+            save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;prepareCompany.disabled=true;name.value='';
             message.textContent='Loaded '+a.name+' into the builder. Edit and run it, then save under a new name; the original is unchanged.';
           }catch(error){message.textContent=error.message;}
         };
