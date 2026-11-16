@@ -248,3 +248,52 @@ def test_corrupted_saved_review_expiry_fails_closed(local_store, bad_expiry):
     local_store.write_text(json.dumps(record))
     assert store.read_saved_reconstruction_review(grant, 1, "a" * 64) is None
     assert not local_store.exists()
+
+
+def test_cross_process_delete_waits_for_snapshot_lock(local_store, tmp_path, monkeypatch):
+    """A second process must not delete/recreate while the first holds the lock."""
+    import subprocess
+    import sys
+    import threading
+
+    store.save_reconstruction_review({"mode": "all_saved"}, 1, _envelope())
+    script = """
+import sys
+from pathlib import Path
+from server import reconstruction_review_store as store
+store._path = lambda: Path(sys.argv[1])
+with store._store_guard():
+    print("LOCKED", flush=True)
+    sys.stdin.readline()
+"""
+    child = subprocess.Popen(
+        [sys.executable, "-c", script, str(local_store)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert child.stdout.readline().strip() == "LOCKED"
+        finished = threading.Event()
+        errors = []
+
+        def delete():
+            try:
+                store.clear_saved_reconstruction_review()
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                finished.set()
+
+        worker = threading.Thread(target=delete, daemon=True)
+        worker.start()
+        assert not finished.wait(0.2), "deletion bypassed cross-process lock"
+        child.stdin.write("\n")
+        child.stdin.flush()
+        assert finished.wait(5), "deletion remained blocked after lock release"
+        worker.join(timeout=5)
+        assert not errors
+        assert not local_store.exists()
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.communicate(timeout=5)
