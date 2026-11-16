@@ -206,6 +206,23 @@ class ReviewedTransactionTests(unittest.TestCase):
                     tx.execute(**inputs())
                 checkpoint.assert_called_once()
 
+    def test_checkpoint_race_during_review_refuses_before_append(self):
+        reviewed = {"status": "review_ready", "csv_sha256": DIGEST,
+                    "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}
+        old = {"candidate_sha256": "b" * 64, "log_id": "log", "generation": 1}
+        advanced = {"candidate_sha256": "c" * 64, "log_id": "log", "generation": 2}
+        with patch.object(tx, "inspect_checkpoint", side_effect=[old, advanced]) as inspect, \
+             patch.object(tx.cycle, "review", return_value=reviewed), \
+             patch.object(tx.cycle, "append") as append, \
+             patch.object(tx.cycle, "handoff") as handoff, \
+             patch.object(tx.cycle, "checkpoint_commit") as checkpoint:
+            with self.assertRaisesRegex(ReceiptError, "changed during candidate review"):
+                tx.execute(**inputs(expected_previous_candidate_sha256="b" * 64))
+            self.assertEqual(inspect.call_count, 2)
+            append.assert_not_called()
+            handoff.assert_not_called()
+            checkpoint.assert_not_called()
+
     def test_uncertain_append_never_handoffs_or_commits(self):
         with patch.object(tx, "inspect_checkpoint", return_value=None), \
              patch.object(tx.cycle, "review", return_value={"status": "review_ready", "csv_sha256": DIGEST, "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}), \
