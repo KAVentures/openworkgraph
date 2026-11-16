@@ -82,6 +82,8 @@ const path=require('node:path');
    await page.locator('#owgFolderFeedList').getByRole('button',{name:'Delete feed for '+exports}).click();
    await page.locator('#owgFolderFeedList').filter({hasText:'No folder feed yet.'}).waitFor();
    assert.deepEqual(await page.evaluate(async()=>(await (await fetch('/v1/schedules')).json()).schedules),[],'deleting the feed removes its schedule');
+   await page.locator('#tab-privacy').click();
+   await page.waitForFunction(()=>document.querySelector('#pvScheduleList')?.children.length===0);
    assert.deepEqual((await fs.readdir(exports)).sort(),['orders-1.csv','orders-pending.csv','readme.txt'],'files are never removed');
    assert.deepEqual(errors,[]);
    console.log('Scheduled folder-feed browser passed: partial status and correct job label, enabled schedule, deletion and WCAG.');

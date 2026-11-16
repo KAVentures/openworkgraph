@@ -774,3 +774,12 @@ def test_scheduled_feed_reports_unchecked_backlog_at_batch_limit(tmp_path):
     assert workspace.summary(log)['events'] == 22
     assert feeds.run_scheduled(feed['feed_id']) == ('succeeded:1_files_appended', 0.0)
     assert workspace.summary(log)['events'] == 23
+
+
+def test_scheduled_feed_discloses_both_partial_conditions(monkeypatch):
+    monkeypatch.setattr(feeds, 'run', lambda _feed_id: {
+        'files_failed': 0, 'files_unreadable': 0, 'files_previously_failed': 0,
+        'more_files_waiting': True, 'files_still_being_written': 1,
+        'files_appended': 20, 'files': [],
+    })
+    assert feeds.run_scheduled('feed_' + '0'*16) == ('partial:more_files_pending_and_not_ready', 0.0)
