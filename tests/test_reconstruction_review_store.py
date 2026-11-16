@@ -219,3 +219,20 @@ def test_retention_revoked_during_saved_review_read_returns_no_labels(local_stor
     monkeypatch.setattr(store, "_retention_allowed", lambda: next(calls))
     assert store.read_saved_reconstruction_review(grant, 1, "a" * 64) is None
     assert not local_store.exists()
+
+
+def test_retention_revoked_during_atomic_replace_removes_saved_labels(local_store, monkeypatch):
+    """A mid-write revocation must not acknowledge or retain a snapshot."""
+    grant = {"mode": "all_saved"}
+    allowed = {"value": True}
+    monkeypatch.setattr(store, "_retention_allowed", lambda: allowed["value"])
+    original_replace = store.os.replace
+
+    def revoke_during_replace(src, dst):
+        original_replace(src, dst)
+        allowed["value"] = False
+
+    monkeypatch.setattr(store.os, "replace", revoke_during_replace)
+    with pytest.raises(PermissionError, match="revoked during persistence"):
+        store.save_reconstruction_review(grant, 1, _envelope())
+    assert not local_store.exists()
