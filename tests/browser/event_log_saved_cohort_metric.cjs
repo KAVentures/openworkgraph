@@ -43,9 +43,19 @@ const path=require('node:path');
   await page.locator('#owgCohortMetricRun').click();
   await page.locator('#owgCohortMetricResult').filter({hasText:'matching cases'}).waitFor({timeout:60000});
   assert.match(await page.locator('#owgCohortMetricResult').innerText(),/No raw cases returned/);
-  // Re-open the log and confirm that the definition survived the dashboard re-render.
+  // A second saved log must not inherit the first log's private metric definitions.
+  // Switching back must recover the original definition from authenticated storage.
   const picker=page.locator('#owgEventLogPick');
   const logId=await picker.inputValue();
+  await page.locator('#owgEventLogSample').click();
+  await page.waitForFunction(previous => {
+    const selected=document.querySelector('#owgEventLogPick');
+    return selected && selected.value && selected.value!==previous;
+  },logId,{timeout:60000});
+  await page.locator('#owgCohortMetricSection').waitFor({state:'visible',timeout:60000});
+  assert.equal(await page.locator('#owgCohortMetricSaved option').filter({hasText:'Browser acceptance duration'}).count(),0,
+    'saved cohort definitions must remain scoped to their own log');
+  // Re-open the original log and confirm that the definition survived the dashboard re-render.
   // Re-select the existing log through the real picker; an empty option is not guaranteed.
   await picker.selectOption(logId);
   await picker.dispatchEvent('change');
