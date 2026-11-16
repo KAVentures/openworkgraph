@@ -236,3 +236,15 @@ def test_retention_revoked_during_atomic_replace_removes_saved_labels(local_stor
     with pytest.raises(PermissionError, match="revoked during persistence"):
         store.save_reconstruction_review(grant, 1, _envelope())
     assert not local_store.exists()
+
+
+@pytest.mark.parametrize("bad_expiry", [None, [], {}, 999999999999999999999])
+def test_corrupted_saved_review_expiry_fails_closed(local_store, bad_expiry):
+    """Untrusted disk metadata must not crash the authenticated read endpoint."""
+    grant = {"mode": "all_saved"}
+    store.save_reconstruction_review(grant, 1, _envelope())
+    record = json.loads(local_store.read_text())
+    record["expires_at"] = bad_expiry
+    local_store.write_text(json.dumps(record))
+    assert store.read_saved_reconstruction_review(grant, 1, "a" * 64) is None
+    assert not local_store.exists()
