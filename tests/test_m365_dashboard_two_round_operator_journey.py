@@ -752,3 +752,39 @@ def test_reviewed_commit_authorized_after_write_returns_generation(monkeypatch):
         assert result["automatic_retry_allowed"] is False
         commit.assert_called_once()
         assert session_valid.call_count == 2
+
+
+@pytest.mark.parametrize("invalid", [
+    None, {},
+    {"status": "review_ready", "csv_sha256": FIRST,
+     "event_snapshots": True, "removal_markers_for_review": 0, "pages": 1},
+    {"status": "review_ready", "csv_sha256": FIRST,
+     "event_snapshots": 1, "removal_markers_for_review": -1, "pages": 1},
+    {"status": "review_ready", "csv_sha256": FIRST,
+     "event_snapshots": 1, "removal_markers_for_review": 0, "pages": True},
+    {"status": "review_ready", "csv_sha256": FIRST,
+     "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1001},
+    {"status": "not_reviewed", "csv_sha256": FIRST,
+     "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1},
+])
+def test_malformed_review_refused_before_append_or_checkpoint(monkeypatch, invalid):
+    from server import m365_outlook_reviewed_transaction as transaction
+    from server.m365_outlook_owg_receipt import ReceiptError
+    monkeypatch.delenv("OWG_M365_AUDIT_DIR", raising=False)
+    with (
+        patch.object(transaction.cycle, "review", return_value=invalid),
+        patch.object(transaction.cycle, "append") as append,
+        patch.object(transaction.cycle, "checkpoint_commit") as checkpoint,
+        pytest.raises(ReceiptError),
+    ):
+        transaction.execute(
+            tenant="tenant", mailbox="mailbox", folder="folder",
+            log_id="log", confirm_log_id="log", grant_file="/private/grant",
+            candidate="/private/candidate", csv_path="/private/events.csv",
+            receipt_file="/private/receipt", journal_dir="/private/journal",
+            handoff_dir="/private/handoff", ledger_dir="/private/ledger",
+            successor_label="next", expected_review_csv_sha256=FIRST,
+            **COMMIT_APPROVALS,
+        )
+    append.assert_not_called()
+    checkpoint.assert_not_called()
