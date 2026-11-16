@@ -4831,6 +4831,8 @@
     const transitionHeading=el('h4','Signal state changes');
     const transitionNote=el('p','Locally recorded triggered and cleared transitions from explicit or scheduled evaluations. Repeated unchanged results do not create alerts. This is not live source monitoring or a notification feed. Up to 5,000 transitions are retained per log.','muted');
     const transitionRefresh=button('Refresh signal changes','secondary');transitionRefresh.id='owgSignalTransitionRefresh';
+    const transitionPrevious=button('Newer signal changes','secondary');transitionPrevious.id='owgSignalTransitionPrevious';transitionPrevious.disabled=true;
+    const transitionNext=button('Older signal changes','secondary');transitionNext.id='owgSignalTransitionNext';transitionNext.disabled=true;
     const transitionStatus=el('div','Refresh to inspect saved signal changes.','muted');
     transitionStatus.id='owgSignalTransitionStatus';transitionStatus.setAttribute('role','status');transitionStatus.setAttribute('aria-live','polite');
     const transitionResults=el('div');transitionResults.id='owgSignalTransitions';
@@ -4861,7 +4863,7 @@
     const timelineControls=el('div',null,'actions');timelineControls.append(timelineFilter,timelineRefresh,timelinePrevious,timelineNext);
     const allControls=el('div',null,'actions');allControls.append(allFilter,allRefresh,allPrevious,allNext);
     box.append(row,message,rules,evaluate,out,reviewHeading,reviewNote,reviewRefresh,inbox,
-      deliveryPanel,transitionHeading,transitionNote,transitionRefresh,transitionStatus,transitionResults,
+      deliveryPanel,transitionHeading,transitionNote,transitionRefresh,transitionPrevious,transitionNext,transitionStatus,transitionResults,
       allHeading,allNote,allControls,allStatus,allResults,
       timelineHeading,timelineNote,timelineControls,timelineStatus,timelineResults);
     const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/signals';
@@ -4929,32 +4931,37 @@
     deliveryRefresh.onclick=()=>refreshDelivery().catch(error=>{deliveryStatus.textContent=error.message;});
     const transitionBase=()=>'/v1/event-logs/'+encodeURIComponent(selectedLogId)+'/signal-history';
     const generation=state.generation;
-    let transitionRequestId=0;
-    async function refreshHistory(){
+    let transitionRequestId=0,transitionCursor='',transitionHistory=[],transitionNextCursor=null;
+    async function refreshHistory(before='',history=[]){
       const requestId=++transitionRequestId;
-      transitionRefresh.disabled=true;
+      transitionRefresh.disabled=true;transitionPrevious.disabled=true;transitionNext.disabled=true;transitionResults.replaceChildren();
       transitionStatus.textContent='Loading locally recorded signal changes…';
       try{
-        const r=await getJSON(transitionBase()+'?limit=100');
+        const params=new URLSearchParams({limit:'100'});if(before)params.set('before',before);
+        const r=await getJSON(transitionBase()+'?'+params);
         if(generation!==state.generation||requestId!==transitionRequestId)return;
+        transitionCursor=before;transitionHistory=history;transitionNextCursor=r.next_before??null;
         const events=r.items||[];
         transitionStatus.textContent=Number(r.retained_total||0)+' saved transitions in this log; showing '+
-          events.length+(r.truncated?' (limited to recent results)':'')+
-          '. Evaluations only; no notifications or automated actions.';
+          events.length+(before?' (older page)':'')+
+          '. Results can change between pages. Evaluations only; no notifications or automated actions.';
         transitionResults.replaceChildren(events.length
           ?table(['Evaluated (UTC)','Signal','Change'],events.map(x=>[
             x.evaluated_at||'—',x.name,x.transition==='triggered'?'Triggered':'Cleared']))
           :el('div','No triggered/cleared changes recorded for this dataset yet.','muted'));
       }catch(error){
         if(generation===state.generation&&requestId===transitionRequestId){
+          transitionCursor='';transitionHistory=[];transitionNextCursor=null;
           transitionStatus.textContent=error.message||'Signal change history unavailable.';
           transitionResults.replaceChildren();
         }
       }finally{
-        if(generation===state.generation&&requestId===transitionRequestId)transitionRefresh.disabled=false;
+        if(generation===state.generation&&requestId===transitionRequestId){transitionRefresh.disabled=false;transitionPrevious.disabled=!transitionHistory.length;transitionNext.disabled=transitionNextCursor===null;}
       }
     }
     transitionRefresh.onclick=()=>refreshHistory();
+    transitionPrevious.onclick=()=>{if(transitionHistory.length)refreshHistory(transitionHistory[transitionHistory.length-1],transitionHistory.slice(0,-1));};
+    transitionNext.onclick=()=>{if(transitionNextCursor!==null)refreshHistory(transitionNextCursor,[...transitionHistory,transitionCursor]);};
     let inboxRefreshId=0;
     async function refreshInbox(){
       const requestId=++inboxRefreshId;
