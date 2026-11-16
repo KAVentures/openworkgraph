@@ -887,7 +887,10 @@
       }catch(error){if(isCurrent())savedStatus.textContent=error.message;}
       finally{deleteButton.disabled=false;}
     };
-    loadSaved().catch(error=>{savedStatus.textContent=error.message;});
+    const initialLog=state.logId,initialGeneration=state.generation;
+    loadSaved().catch(error=>{
+      if(initialLog===state.logId&&initialGeneration===state.generation)savedStatus.textContent=error.message;
+    });
     const filters=cohortFields('owgCohortMetricFilter','Choose matching cases',activityNames);
     const run=button('Calculate cohort metric','secondary');run.id='owgCohortMetricRun';
     const out=el('div');out.id='owgCohortMetricResult';out.setAttribute('role','status');out.setAttribute('aria-live','polite');
