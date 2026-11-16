@@ -176,3 +176,32 @@ def test_binding_revoked_during_final_source_recheck_denies_receipts(monkeypatch
     assert source_recheck.calls == 2
     assert checks[-1] is False
     assert not list(tmp_path.iterdir())
+
+
+def test_declaration_revoked_during_final_source_recheck_denies_receipts(monkeypatch, tmp_path):
+    """A run binding does not outlive the case declaration edit token."""
+    bindings = setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(bindings, "get_binding",
+                        lambda **_kwargs: {"association": "operator_confirmed"})
+    active = {"value": True}
+    ledger_checks = []
+
+    def ledger_guard(*_args):
+        ledger_checks.append(active["value"])
+        if not active["value"]:
+            from server.open_work_case_declarations import CaseDeclarationError
+            raise CaseDeclarationError("stale declaration edit token")
+
+    async def source_recheck(_scope):
+        source_recheck.calls += 1
+        if source_recheck.calls == 2:
+            active["value"] = False
+    source_recheck.calls = 0
+    monkeypatch.setattr(routes, "_operation_ledger_guard", ledger_guard)
+    monkeypatch.setattr(routes, "_recheck_source", source_recheck)
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(routes.read_local_bound_attempt_receipts(request(), Response()))
+    assert error.value.status_code in (403, 409)
+    assert source_recheck.calls == 2
+    assert ledger_checks[-1] is False
+    assert not list(tmp_path.iterdir())
