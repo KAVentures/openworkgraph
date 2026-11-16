@@ -243,6 +243,7 @@ def get_reconstruction_review() -> Response:
         "review": queue,
         "coverage": result.get("coverage", {}),
         "identity_timelines": result.get("identity_timelines", [])[:12],
+        "identity_timelines_truncated": bool(result.get("identity_timelines_truncated", False) or len(result.get("identity_timelines", [])) > 12),
         # Expose the bounded, directly observed event-to-pair provenance used
         # for the fingerprint. Connected navigation groups are not cases.
         "observed_pair_event_assignments": result.get("observed_pair_event_assignments", [])[:24],
