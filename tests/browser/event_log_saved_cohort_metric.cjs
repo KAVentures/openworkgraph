@@ -47,11 +47,25 @@ const path=require('node:path');
   // Switching back must recover the original definition from authenticated storage.
   const picker=page.locator('#owgEventLogPick');
   const logId=await picker.inputValue();
-  await page.locator('#owgEventLogSample').click();
+  // The sample endpoint is idempotent: clicking it twice reopens the same log.
+  // Import a distinct synthetic CSV through the authenticated dashboard instead.
+  await page.locator('#owgEventLogFile').setInputFiles({
+    name:'second-synthetic-log.csv',mimeType:'text/csv',
+    buffer:Buffer.from('case_id,activity,timestamp\\nCASE-2,Created,2026-01-01T10:00:00Z\\nCASE-2,Completed,2026-01-01T10:05:00Z\\n')
+  });
+  await page.locator('#owgEventLogCase').selectOption('case_id');
+  await page.locator('#owgEventLogActivity').selectOption('activity');
+  await page.locator('#owgEventLogTime').selectOption('timestamp');
+  await page.locator('#owgEventLogName').fill('Second synthetic browser acceptance log');
+  await page.locator('#owgEventLogConsent').check();
+  await page.locator('#owgEventLogImport').click();
   await page.waitForFunction(previous => {
     const selected=document.querySelector('#owgEventLogPick');
     return selected && selected.value && selected.value!==previous;
   },logId,{timeout:60000});
+  const secondLogId=await picker.inputValue();
+  assert.notEqual(secondLogId,logId,'import must create a distinct saved log');
+  await page.locator('#owgEventLogAnalyze').click();
   await page.locator('#owgCohortMetricSection').waitFor({state:'visible',timeout:60000});
   assert.equal(await page.locator('#owgCohortMetricSaved option').filter({hasText:'Browser acceptance duration'}).count(),0,
     'saved cohort definitions must remain scoped to their own log');
