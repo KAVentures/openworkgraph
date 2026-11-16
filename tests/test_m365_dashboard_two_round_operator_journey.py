@@ -171,8 +171,8 @@ def test_real_transaction_orchestrator_never_retries_uncertain_write(
 
     monkeypatch.delenv("OWG_M365_AUDIT_DIR", raising=False)
     events = []
-    reviewed = {"csv_sha256": FIRST, "event_snapshots": 2,
-                "removal_markers_for_review": 1}
+    reviewed = {"status": "review_ready", "csv_sha256": FIRST,
+                "event_snapshots": 2, "removal_markers_for_review": 1, "pages": 1}
 
     def phase(name, result=None, failure=False):
         def run(**kwargs):
