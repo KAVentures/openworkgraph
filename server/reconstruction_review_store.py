@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import hashlib
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -36,8 +37,44 @@ def _lease_key(grant: dict[str, Any], generation: int) -> str:
     ).encode("utf-8")).hexdigest()
 
 
-def clear_saved_reconstruction_review() -> None:
+@contextmanager
+def _store_guard():
+    """Serialize snapshot operations across processes using a persistent lock inode."""
     with _LOCK:
+        lock_path = _path().with_name(_FILENAME + ".lock")
+        flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_BINARY", 0)
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(lock_path, flags, 0o600)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or (os.name == "posix" and info.st_mode & 0o077):
+                raise OSError("unsafe review lock")
+            if os.name == "nt":
+                import msvcrt
+                os.lseek(fd, 0, os.SEEK_SET)
+                if info.st_size == 0:
+                    os.write(fd, bytes([0]))
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+                try:
+                    yield
+                finally:
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+def clear_saved_reconstruction_review() -> None:
+    with _store_guard():
         _path().unlink(missing_ok=True)
 
 
@@ -94,16 +131,16 @@ def _load(grant: dict[str, Any], generation: int, evidence_sha256: str) -> dict[
 def read_saved_reconstruction_review(
     grant: dict[str, Any], generation: int, evidence_sha256: str,
 ) -> dict[str, Any] | None:
-    with _LOCK:
+    with _store_guard():
         if not _retention_allowed() or grant.get("mode") != "all_saved":
-            clear_saved_reconstruction_review()
+            _path().unlink(missing_ok=True)
             return None
         result = _load(grant, generation, evidence_sha256)
         # Loading and decoding evidence may overlap a consent/retention change.
         # Revalidate before returning labels to the authenticated caller.
         if (result is None or grant.get("mode") != "all_saved"
                 or not _retention_allowed()):
-            clear_saved_reconstruction_review()
+            _path().unlink(missing_ok=True)
             return None
         return {
             "evidence_sha256": result["evidence_sha256"],
@@ -134,7 +171,7 @@ def save_reconstruction_review(
     payload = json.dumps(record, separators=(",", ":"), allow_nan=False).encode("utf-8")
     if len(payload) > _MAX_BYTES:
         raise ValueError("review exceeds private storage limit")
-    with _LOCK:
+    with _store_guard():
         # Retention can change while the payload is serialized. Recheck at
         # the atomic persistence boundary under the same store lock.
         if grant.get("mode") != "all_saved" or not _retention_allowed():
