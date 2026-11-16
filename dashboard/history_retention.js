@@ -217,14 +217,18 @@
         coverage:data.coverage||{},
         identity_timelines:Array.isArray(data.identity_timelines)?data.identity_timelines:[],
         identity_timelines_truncated:data.identity_timelines_truncated===true,
+        identity_timelines_returned_count:Number.isInteger(data.identity_timelines_returned_count)?data.identity_timelines_returned_count:null,
         // Direct event-level support and interruption/continuity context are
         // observed provenance only; never infer transitive case membership.
         observed_pair_event_assignments:Array.isArray(data.observed_pair_event_assignments)?data.observed_pair_event_assignments:[],
         observed_group_continuity:Array.isArray(data.observed_group_continuity)?data.observed_group_continuity:[],
         observed_case_groups:Array.isArray(data.observed_case_groups)?data.observed_case_groups:[],
         observed_case_groups_truncated:data.observed_case_groups_truncated===true,
+        observed_case_groups_returned_count:Number.isInteger(data.observed_case_groups_returned_count)?data.observed_case_groups_returned_count:null,
         observed_pair_event_assignments_truncated:data.observed_pair_event_assignments_truncated===true,
+        observed_pair_event_assignments_returned_count:Number.isInteger(data.observed_pair_event_assignments_returned_count)?data.observed_pair_event_assignments_returned_count:null,
         observed_group_continuity_truncated:data.observed_group_continuity_truncated===true,
+        observed_group_continuity_returned_count:Number.isInteger(data.observed_group_continuity_returned_count)?data.observed_group_continuity_returned_count:null,
         notice:data.notice||null,
         derived:data.derived,
         authoritative:data.authoritative
