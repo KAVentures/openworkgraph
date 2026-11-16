@@ -538,3 +538,34 @@ def test_identity_timeline_upstream_truncation_is_preserved(monkeypatch):
     payload = json.loads(history_routes.get_reconstruction_review().body)
     assert len(payload["identity_timelines"]) == 1
     assert payload["identity_timelines_truncated"] is True
+
+
+def test_review_provenance_counts_match_bounded_http_projection(monkeypatch):
+    """Displayed counts describe returned evidence, not unknown upstream totals."""
+    import json
+    _setup(monkeypatch)
+    from server import work_resumption, reconstruction_review_cli
+
+    fields = ("identity_timelines", "observed_pair_event_assignments",
+              "observed_group_continuity", "observed_case_groups")
+    source = {field: [{"event_id": str(i)} for i in range(30)] for field in fields}
+    monkeypatch.setattr(work_resumption, "resumption_candidates",
+                        lambda connection, *, lease: source)
+    monkeypatch.setattr(reconstruction_review_cli, "build_review_queue",
+                        lambda result: {"event_reviews": [], "evidence_sha256": "a" * 64})
+    response = history_routes.get_reconstruction_review()
+    payload = json.loads(response.body)
+    for field in fields:
+        cap = 12 if field == "identity_timelines" else 24
+        assert len(payload[field]) == cap
+        assert payload[field + "_returned_count"] == cap
+        assert payload[field + "_truncated"] is True
+
+
+def test_reviewer_provenance_displays_returned_counts_as_inert_text():
+    from server.main import ROOT
+    source = (ROOT / "dashboard" / "history_retention.js").read_text(encoding="utf-8")
+    for field in ("identity_timelines", "observed_pair_event_assignments",
+                  "observed_group_continuity", "observed_case_groups"):
+        assert field + "_returned_count:Number.isInteger(data." + field + "_returned_count)" in source
+    assert "evidence.textContent=JSON.stringify({" in source
