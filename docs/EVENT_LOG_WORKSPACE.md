@@ -599,6 +599,19 @@ in cohorts and as a JSON query parameter
 is exclusive, and either can be left out. Non-numeric and non-finite values
 (including NaN and infinity) never contribute to the quartiles or match a range.
 
+In the dashboard, the "Its cases" column offers three actions for each
+association that has such a filter:
+
+- **Slowest cases** lists its ten slowest cases. Choosing one explains it in
+  "Explain a case".
+- **Tag cases** tags all of its cases. The note records the association, and
+  the tag then works as a filter everywhere.
+- **Save as log** saves its cases, with their full histories, as a new log.
+  The current log is unchanged.
+
+All three use the association's exact filter, so they act on exactly the
+cases it counted.
+
 These are associations in the imported log. They are not causes: a feature
 can be a consequence of the outcome (a fix step in slow cases, for example),
 and temporal order is not checked.
