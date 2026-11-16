@@ -1817,6 +1817,11 @@ every condition must hold, and they apply to the same views. Values that are not
 match a range. The inputs are validated before anything is sent. Saving the filter keeps the
 values and ranges with it.
 
+The case pickers inside individual sections take the same numeric range, under "Numeric case
+attribute", "From (inclusive)" and "Below (exclusive)". These are KPIs, the cohort benchmark and
+map comparison, the saved-graph comparison, case tags, saving cases as a log, case metrics and
+case evidence. A range is validated in the section before anything is sent.
+
 An automatic insight about a case-attribute group (`attribute_segment`) and a root-cause row for
 an attribute value or range both offer to become this filter in one click: "Filter to these cases"
 and "Filter". They are offered only while no global filter is active, so they never silently
