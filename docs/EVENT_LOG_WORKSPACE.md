@@ -1289,6 +1289,12 @@ hand.
   copy is not appended again; an edited file counts as new.
 - Files modified in the last minute are left for the next run, in case the
   exporter is still writing them.
+- Files that cannot be inspected, read or staged are reported separately;
+  their content is not recorded as processed and they are checked again on a
+  later run. The response counts errors encountered during that run and shows
+  at most 20 filenames; the existing 20-result limit can defer other files. A
+  scheduled run reports failure when any file cannot be read or staged, or
+  when the folder cannot be listed.
 - Each settled file is copied into a temporary snapshot while hashing. The
   snapshot is what gets appended; files whose identity, size or modification
   time changes during the copy are deferred. A successful append and its content receipt commit together;

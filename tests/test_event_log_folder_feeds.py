@@ -507,3 +507,162 @@ def test_selected_retry_reaches_failure_beyond_bulk_run_limit(tmp_path):
     assert result['files_appended'] == 1 and result['files'][0]['name'] == '24.csv'
     assert workspace.summary(log)['events'] == 3
     assert len(feeds.failures(feed['feed_id'])['failures']) == 24
+
+
+def test_unreadable_file_is_reported_without_a_false_receipt_and_can_recover(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    log = _log()
+    folder = tmp_path / 'exports'
+    folder.mkdir()
+    feed = feeds.create(log, {'folder': str(folder), 'confirm_folder_reads': True})
+    _drop(folder, 'blocked.csv', HEADER + 'o2;Create;03/03/2024 10:00\n')
+    _drop(folder, 'readable.csv', HEADER + 'o3;Create;04/03/2024 10:00\n')
+    snapshot = feeds._snapshot
+    @contextmanager
+    def deny_one(path, info):
+        if path.name == 'blocked.csv':
+            raise PermissionError('synthetic read denial')
+        with snapshot(path, info) as captured:
+            yield captured
+    monkeypatch.setattr(feeds, '_snapshot', deny_one)
+    result = feeds.run(feed['feed_id'])
+    assert (result['events_added'], result['files_unreadable'], result['unreadable_files']) == (1, 1, ['blocked.csv'])
+    assert feeds.feeds(log)['feeds'][0]['files_appended'] == 1
+    assert feeds.run_scheduled(feed['feed_id']) == ('failed:files_unreadable', 0.0)
+    monkeypatch.setattr(feeds, '_snapshot', snapshot)
+    recovered = feeds.run(feed['feed_id'])
+    assert (recovered['events_added'], recovered['files_unreadable']) == (1, 0)
+    assert workspace.summary(log)['events'] == 4
+
+
+def test_unreadable_names_are_bounded_but_count_is_complete(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    log = _log()
+    folder = tmp_path / 'exports'
+    folder.mkdir()
+    feed = feeds.create(log, {'folder': str(folder), 'confirm_folder_reads': True})
+    for i in range(25):
+        _drop(folder, f'{i:02}.csv', HEADER + f'o{i+10};Create;03/03/2024 10:00\n')
+    @contextmanager
+    def denied(*args):
+        raise PermissionError('synthetic read denial')
+        yield  # pragma: no cover
+    monkeypatch.setattr(feeds, '_snapshot', denied)
+    result = feeds.run(feed['feed_id'])
+    assert result['files_unreadable'] == 25
+    assert len(result['unreadable_files']) == feeds.MAX_FILES_PER_RUN
+    assert result['files_appended'] == result['files_failed'] == 0
+    assert feeds.run_scheduled(feed['feed_id']) == ('failed:files_unreadable', 0.0)
+    assert workspace.summary(log)['events'] == 2
+
+
+def test_unreadable_folder_fails_instead_of_reporting_success(tmp_path, monkeypatch):
+    log = _log()
+    folder = tmp_path / 'exports'
+    folder.mkdir()
+    feed = feeds.create(log, {'folder': str(folder), 'confirm_folder_reads': True})
+    original = feeds.os.scandir
+    def denied(path):
+        if Path(path) == folder:
+            raise PermissionError('synthetic folder denial')
+        return original(path)
+    monkeypatch.setattr(feeds.os, 'scandir', denied)
+    with pytest.raises(workspace.EventLogWorkspaceError, match='folder cannot be read'):
+        feeds.run(feed['feed_id'])
+    assert feeds.run_scheduled(feed['feed_id']) == ('failed:feed_unavailable', 0.0)
+
+
+def test_uninspectable_matching_entry_is_reported(tmp_path, monkeypatch):
+    log = _log()
+    folder = tmp_path / 'exports'
+    folder.mkdir()
+    feed = feeds.create(log, {'folder': str(folder), 'confirm_folder_reads': True})
+    _drop(folder, 'blocked.csv', HEADER + 'o2;Create;03/03/2024 10:00\n')
+    original = feeds.os.scandir
+    class DeniedEntry:
+        name = 'blocked.csv'
+        def stat(self, **kwargs):
+            raise PermissionError('synthetic metadata denial')
+    class DeniedScan:
+        def __enter__(self):
+            return iter([DeniedEntry()])
+        def __exit__(self, *args):
+            return False
+    def scan(path):
+        return DeniedScan() if Path(path) == folder else original(path)
+    monkeypatch.setattr(feeds.os, 'scandir', scan)
+    result = feeds.run(feed['feed_id'])
+    assert (result['files_unreadable'], result['unreadable_files']) == (1, ['blocked.csv'])
+    assert feeds.run_scheduled(feed['feed_id']) == ('failed:files_unreadable', 0.0)
+    assert workspace.summary(log)['events'] == 2
+
+
+def test_disappeared_entry_is_reported_as_not_ready(tmp_path, monkeypatch):
+    log = _log()
+    folder = tmp_path / 'exports'
+    folder.mkdir()
+    feed = feeds.create(log, {'folder': str(folder), 'confirm_folder_reads': True})
+    original = feeds.os.scandir
+    class GoneEntry:
+        name = 'gone.csv'
+        def stat(self, **kwargs):
+            raise FileNotFoundError('removed during scan')
+    class GoneScan:
+        def __enter__(self):
+            return iter([GoneEntry()])
+        def __exit__(self, *args):
+            return False
+    def scan(path):
+        return GoneScan() if Path(path) == folder else original(path)
+    monkeypatch.setattr(feeds.os, 'scandir', scan)
+    result = feeds.run(feed['feed_id'])
+    assert (result['files_still_being_written'], result['files_unreadable']) == (1, 0)
+    assert result['more_files_waiting'] is False
+
+
+def test_processing_io_error_is_not_reported_as_success(tmp_path, monkeypatch):
+    log = _log()
+    folder = tmp_path / 'exports'
+    folder.mkdir()
+    feed = feeds.create(log, {'folder': str(folder), 'confirm_folder_reads': True})
+    _drop(folder, 'a.csv', HEADER + 'o2;Create;03/03/2024 10:00\n')
+    def fail_append(*args, **kwargs):
+        raise OSError('synthetic append storage failure')
+    monkeypatch.setattr(workspace, 'append_log', fail_append)
+    with pytest.raises(workspace.EventLogWorkspaceError, match='could not finish processing'):
+        feeds.run(feed['feed_id'])
+    assert feeds.run_scheduled(feed['feed_id']) == ('failed:feed_unavailable', 0.0)
+    assert workspace.summary(log)['events'] == 2
+
+
+def test_symlinked_files_remain_excluded(tmp_path):
+    log = _log()
+    folder = tmp_path / 'exports'
+    folder.mkdir()
+    feed = feeds.create(log, {'folder': str(folder), 'confirm_folder_reads': True})
+    external = _drop(tmp_path, 'outside.csv', HEADER + 'o2;Create;03/03/2024 10:00\n')
+    try:
+        (folder / 'link.csv').symlink_to(external)
+    except (OSError, NotImplementedError):
+        pytest.skip('symbolic links unavailable')
+    result = feeds.run(feed['feed_id'])
+    assert result['files_appended'] == result['files_unreadable'] == 0
+    assert workspace.summary(log)['events'] == 2
+
+
+def test_replaced_symlink_is_deferred_without_becoming_a_read_failure(tmp_path, monkeypatch):
+    import errno
+    from contextlib import contextmanager
+    log = _log()
+    folder = tmp_path / 'exports'
+    folder.mkdir()
+    feed = feeds.create(log, {'folder': str(folder), 'confirm_folder_reads': True})
+    _drop(folder, 'a.csv', HEADER + 'o2;Create;03/03/2024 10:00\n')
+    @contextmanager
+    def replaced(path, info):
+        raise OSError(errno.ELOOP, 'replaced', str(path))
+        yield  # pragma: no cover
+    monkeypatch.setattr(feeds, '_snapshot', replaced)
+    result = feeds.run(feed['feed_id'])
+    assert (result['files_still_being_written'], result['files_unreadable']) == (1, 0)
+    assert workspace.summary(log)['events'] == 2

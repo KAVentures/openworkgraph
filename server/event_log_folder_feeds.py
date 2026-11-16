@@ -30,6 +30,8 @@ never modified or deleted.
 from __future__ import annotations
 
 import hashlib
+import errno
+import fnmatch
 import json
 import os
 import re
@@ -237,24 +239,42 @@ def run(feed_id: str, *, now: float | None = None, retry_failed: bool = False, r
     if not folder.is_dir():
         raise EventLogWorkspaceError("the feed folder is no longer available")
     current = time.time() if now is None else now
-    candidates = []
-    for path in folder.glob(feed["pattern"]):
-        try:
-            info = path.lstat()
-        except OSError:
-            continue
-        if stat.S_ISREG(info.st_mode):
-            candidates.append((info.st_mtime, path.name, path, info))
+    candidates, unreadable_names = [], []
+    unreadable, scan_deferred = 0, 0
+    def note_unreadable(name: str) -> None:
+        nonlocal unreadable
+        unreadable += 1
+        if len(unreadable_names) < MAX_FILES_PER_RUN:
+            unreadable_names.append(name[:200])
+    try:
+        with os.scandir(folder) as entries:
+            for entry in entries:
+                if not fnmatch.fnmatch(entry.name, feed["pattern"]):
+                    continue
+                try:
+                    info = entry.stat(follow_symlinks=False)
+                except FileNotFoundError:
+                    scan_deferred += 1
+                    continue  # removed during enumeration
+                except OSError:
+                    note_unreadable(entry.name)
+                    continue
+                if stat.S_ISREG(info.st_mode):
+                    candidates.append((info.st_mtime, entry.name, folder / entry.name, info))
+    except OSError as exc:
+        raise EventLogWorkspaceError("the feed folder cannot be read") from exc
     candidates.sort()
-    waiting, already, previously_failed, skipped_new, duplicate_failed, results, attempted = 0, 0, 0, 0, 0, [], set()
+    waiting, already, previously_failed, skipped_new, duplicate_failed, snapshot_unreadable, results, attempted = scan_deferred, 0, 0, 0, 0, 0, [], set()
     for mtime, name, path, info in candidates:
         if current - mtime < SETTLE_SECONDS:
             waiting += 1
             continue
         if len(results) >= MAX_FILES_PER_RUN:
             break
+        snapshot_ready = False
         try:
             with _snapshot(path, info) as (sha, size, snapshot), workspace._LOCK:
+                snapshot_ready = True
                 if retry_hash is not None and sha != retry_hash:
                     skipped_new += 1
                     continue
@@ -319,7 +339,14 @@ def run(feed_id: str, *, now: float | None = None, retry_failed: bool = False, r
         except _FileChanged:
             waiting += 1
             continue
-        except OSError:
+        except OSError as exc:
+            if snapshot_ready:
+                raise EventLogWorkspaceError("the feed could not finish processing a file") from exc
+            if exc.errno in (errno.ENOENT, errno.ELOOP) and str(exc.filename) == str(path):
+                waiting += 1  # disappeared or was replaced with a symlink
+            else:
+                note_unreadable(name)
+                snapshot_unreadable += 1
             continue
         except EventLogWorkspaceError as exc:
             if retry_failed and str(exc) == "event log is larger than the supported limit":
@@ -335,9 +362,10 @@ def run(feed_id: str, *, now: float | None = None, retry_failed: bool = False, r
             "files_appended": len(appended), "files_failed": len(results) - len(appended),
             "events_added": sum(r["added_events"] for r in appended),
             "files_already_appended": already, "files_previously_failed": previously_failed, "files_still_being_written": waiting,
+            "files_unreadable": unreadable, "unreadable_files": unreadable_names,
             **({"retry_failed_only": True, "new_files_left_for_normal_run": skipped_new,
                 "duplicate_failed_files_skipped": duplicate_failed} if retry_failed else {}),
-            "more_files_waiting": len(candidates) - waiting - already - previously_failed - skipped_new - duplicate_failed - len(results) > 0 and len(results) >= MAX_FILES_PER_RUN,
+            "more_files_waiting": len(candidates) - (waiting - scan_deferred) - already - previously_failed - skipped_new - duplicate_failed - snapshot_unreadable - len(results) > 0 and len(results) >= MAX_FILES_PER_RUN,
             "files": results}
 
 
@@ -349,6 +377,8 @@ def run_scheduled(feed_id: str) -> tuple[str, float]:
         return "failed:feed_unavailable", 0.0
     if result["files_failed"]:
         return f"failed:{result['files_failed']}_files_not_appended", 0.0
+    if result["files_unreadable"]:
+        return "failed:files_unreadable", 0.0
     if any(item.get("warning") for item in result["files"]):
         return "failed:quality_report_unavailable", 0.0
     return f"succeeded:{result['files_appended']}_files_appended", 0.0
