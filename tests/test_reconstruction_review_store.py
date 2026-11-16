@@ -297,3 +297,18 @@ with store._store_guard():
         if child.poll() is None:
             child.kill()
         child.communicate(timeout=5)
+
+
+def test_cross_process_lock_path_symlink_is_rejected(local_store, tmp_path):
+    """Do not follow a substituted lock path, including on Windows."""
+    lock_path = local_store.with_name(store._FILENAME + ".lock")
+    unrelated = tmp_path / "unrelated-lock-target"
+    unrelated.write_text("leave intact")
+    try:
+        lock_path.symlink_to(unrelated)
+    except (OSError, NotImplementedError):
+        pytest.skip("creating symlinks is unavailable on this runner")
+    with pytest.raises(OSError, match="unsafe review lock|symbolic link|symlink|Too many levels"):
+        store.save_reconstruction_review({"mode": "all_saved"}, 1, _envelope())
+    assert unrelated.read_text() == "leave intact"
+    assert not local_store.exists()
