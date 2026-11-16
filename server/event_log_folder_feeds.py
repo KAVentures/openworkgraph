@@ -199,8 +199,10 @@ def _snapshot(path: Path, expected: os.stat_result):
         yield digest.hexdigest(), size, snapshot
 
 
-def run(feed_id: str, *, now: float | None = None) -> dict[str, Any]:
-    """Append the feed folder's new, settled files; returns what happened to each."""
+def run(feed_id: str, *, now: float | None = None, retry_failed: bool = False) -> dict[str, Any]:
+    """Append new files, or explicitly retry only previously failed content."""
+    if type(retry_failed) is not bool:
+        raise EventLogWorkspaceError("retry_failed must be a boolean")
     feed = get(feed_id)
     folder = Path(feed["folder"])
     if not folder.is_dir():
@@ -215,7 +217,7 @@ def run(feed_id: str, *, now: float | None = None) -> dict[str, Any]:
         if stat.S_ISREG(info.st_mode):
             candidates.append((info.st_mtime, path.name, path, info))
     candidates.sort()
-    waiting, already, results = 0, 0, []
+    waiting, already, skipped_new, duplicate_failed, results, attempted = 0, 0, 0, 0, [], set()
     for mtime, name, path, info in candidates:
         if current - mtime < SETTLE_SECONDS:
             waiting += 1
@@ -229,16 +231,26 @@ def run(feed_id: str, *, now: float | None = None) -> dict[str, Any]:
                     # Recheck under the append lock: another run may have won,
                     # or the feed may have been deleted during the snapshot.
                     _feed(conn, feed_id)
-                    prior = conn.execute("SELECT outcome, detail FROM event_log_feed_files WHERE feed_id = ? AND sha256 = ? LIMIT 1", [feed_id, sha]).fetchone()
+                    prior = conn.execute("""SELECT outcome, detail FROM event_log_feed_files WHERE feed_id = ? AND sha256 = ?
+                        ORDER BY (outcome = 'appended') DESC, processed_at DESC LIMIT 1""", [feed_id, sha]).fetchone()
                 finally:
                     conn.close()
-                if prior:
+                if retry_failed and not prior:
+                    skipped_new += 1
+                    continue
+                if prior and (not retry_failed or prior[0] == 'appended'):
                     already += 1
                     continue
+                if retry_failed and sha in attempted:
+                    duplicate_failed += 1
+                    continue
+                if retry_failed:
+                    attempted.add(sha)
                 def record_append(conn, log_id):
                     batch, added, duplicate, rejected = conn.execute("""SELECT batch, added_events, duplicate_events, rejected_events
                         FROM log_appends WHERE log_id = ? ORDER BY batch DESC LIMIT 1""", [log_id]).fetchone()
                     detail = {"added_events": added, "duplicate_events_skipped": duplicate, "rejected_events": rejected, "batch": batch}
+                    conn.execute("DELETE FROM event_log_feed_files WHERE feed_id = ? AND sha256 = ? AND outcome = 'failed'", [feed_id, sha])
                     conn.execute("INSERT INTO event_log_feed_files VALUES (?, ?, ?, ?, ?, now(), ?, ?)",
                                  [log_id, feed_id, name[:200], sha, size, "appended", json.dumps(detail)])
                 try:
@@ -253,13 +265,14 @@ def run(feed_id: str, *, now: float | None = None) -> dict[str, Any]:
                         # A post-commit reporting error must not turn a committed
                         # append into a failed record or a retry.
                         prior = conn.execute("SELECT outcome, detail FROM event_log_feed_files WHERE feed_id = ? AND sha256 = ? LIMIT 1", [feed_id, sha]).fetchone()
-                        if prior:
+                        if prior and prior[0] == 'appended':
                             outcome, detail = prior[0], json.loads(prior[1])
                             detail["warning"] = "The append committed, but its quality report could not be recorded."
                             conn.execute("UPDATE event_log_feed_files SET detail = ? WHERE feed_id = ? AND sha256 = ?",
                                          [json.dumps(detail), feed_id, sha])
                         else:
                             outcome, detail = "failed", {"error": str(exc)[:300]}
+                            conn.execute("DELETE FROM event_log_feed_files WHERE feed_id = ? AND sha256 = ? AND outcome = 'failed'", [feed_id, sha])
                             conn.execute("INSERT INTO event_log_feed_files VALUES (?, ?, ?, ?, ?, now(), ?, ?)",
                                          [feed["log_id"], feed_id, name[:200], sha, size, outcome, json.dumps(detail)])
                     finally:
@@ -270,6 +283,9 @@ def run(feed_id: str, *, now: float | None = None) -> dict[str, Any]:
         except OSError:
             continue
         except EventLogWorkspaceError as exc:
+            if retry_failed and str(exc) == "event log is larger than the supported limit":
+                skipped_new += 1
+                continue
             results.append({"name": name, "outcome": "failed", "error": str(exc)[:300]})
             continue
         results.append({"name": name, "outcome": outcome, **detail})
@@ -278,7 +294,9 @@ def run(feed_id: str, *, now: float | None = None) -> dict[str, Any]:
             "files_appended": len(appended), "files_failed": len(results) - len(appended),
             "events_added": sum(r["added_events"] for r in appended),
             "files_already_appended": already, "files_still_being_written": waiting,
-            "more_files_waiting": len(candidates) - waiting - already - len(results) > 0 and len(results) >= MAX_FILES_PER_RUN,
+            **({"retry_failed_only": True, "new_files_left_for_normal_run": skipped_new,
+                "duplicate_failed_files_skipped": duplicate_failed} if retry_failed else {}),
+            "more_files_waiting": len(candidates) - waiting - already - skipped_new - duplicate_failed - len(results) > 0 and len(results) >= MAX_FILES_PER_RUN,
             "files": results}
 
 

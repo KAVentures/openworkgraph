@@ -1298,11 +1298,16 @@ hand.
 - Events already in the log are skipped by the usual append rules, so
   overlapping exports are safe.
 - A file that cannot be appended (wrong columns, for example) is recorded with
-  the reason and is not retried with the same content. Files too large to
+  the reason and is not automatically retried with the same content. Files too large to
   snapshot are reported on each run until removed or replaced, since no
   content hash is recorded. If an append commits but its later quality report
   fails, the feed records the append and surfaces a warning; it does not replay
   the file.
+- **Retry failed files** explicitly retries unchanged content that has a
+  failed receipt. It does not process new or changed files; use **Run now**
+  for those. A successful retry replaces the failure receipt atomically, and
+  another failed attempt updates its error. Missing or unsettled files wait
+  until they are present and settled. Automatic runs do not retry failures.
 - Each run appends at most 20 files. Files in the folder are never changed or
   deleted.
 - "Run every day" schedules the feed on the local scheduler (job kind
@@ -1313,6 +1318,7 @@ hand.
 | --- | --- |
 | `POST /v1/event-logs/{log_id}/feeds` | `{"folder": "/abs/path", "pattern": "*.csv", "confirm_folder_reads": true}` |
 | `GET /v1/event-logs/{log_id}/feeds` | Feeds with counts and the 20 latest file results. |
+| `POST /v1/event-logs/feeds/{feed_id}/retry-failed` | Retry only previously failed, unchanged settled content; owner session and local-storage confirmation required. |
 | `POST /v1/event-logs/feeds/{feed_id}/run` | Append new files now. Requires `X-OWG-Local-Storage-Confirmed: true`. |
 | `POST /v1/event-logs/feeds/{feed_id}/delete` | Delete the feed and its schedule. Appended events stay. |
 

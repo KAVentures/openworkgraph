@@ -1268,12 +1268,17 @@
       list.replaceChildren(table(['Folder','Pattern','Files appended','Failed','Latest file',''],r.feeds.map(f=>{
         const wrap=el('div',null,'row');
         const run=button('Run now','secondary');run.setAttribute('aria-label','Run feed for '+f.folder);
+        const retry=button('Retry failed files','secondary');retry.setAttribute('aria-label','Retry failed files for '+f.folder);retry.disabled=!f.files_failed;
         const schedule=button('Run every day','secondary');schedule.setAttribute('aria-label','Run feed for '+f.folder+' every day');
         const remove=button('Delete feed','secondary');remove.setAttribute('aria-label','Delete feed for '+f.folder);
         run.onclick=async()=>{run.disabled=true;out.replaceChildren(el('div','Reading the folder\u2026','muted'));
           try{const r2=await (await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/run',{method:'POST',headers:{'X-OWG-Local-Storage-Confirmed':'true'}})).json();
             out.replaceChildren(el('div',describe(r2)+(r2.events_added?' Analyse again to include them.':'')),...(r2.files||[]).filter(file=>file.outcome==='failed').map(file=>el('div',file.name+': '+file.error,'muted')));render(await getJSON(base));}
           catch(error){out.replaceChildren(el('div',error.message,'muted'));run.disabled=false;}};
+        retry.onclick=async()=>{retry.disabled=true;out.replaceChildren(el('div','Retrying unchanged failed files…','muted'));
+          try{const r2=await (await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/retry-failed',{method:'POST',headers:{'X-OWG-Local-Storage-Confirmed':'true'}})).json();
+            out.replaceChildren(el('div',describe(r2)+' Only unchanged failed files were retried; new files are left for Run now.'+(!r2.files_appended&&!r2.files_failed?' No matching failed files were ready; they may have changed, been removed or still be settling.':'')+(r2.events_added?' Analyse again to include them.':'')),...(r2.files||[]).filter(file=>file.outcome==='failed').map(file=>el('div',file.name+': '+file.error,'muted')));render(await getJSON(base));}
+          catch(error){out.replaceChildren(el('div',error.message,'muted'));retry.disabled=false;}};
         schedule.onclick=async()=>{if(!window.confirm('Read '+f.folder+' and append new files every day while OpenWorkGraph is running?'))return;
           try{await api('/v1/schedules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'event_log_folder_feed',target_id:f.feed_id,interval_minutes:1440,confirm_scheduled_runs:true})});
             out.replaceChildren(el('div','Scheduled daily. Manage it under scheduled jobs.'));}
@@ -1281,7 +1286,7 @@
         remove.onclick=async()=>{if(!window.confirm('Delete this feed? Events already appended stay in the log.'))return;
           try{await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/delete',{method:'POST'});out.replaceChildren(el('div','Feed deleted.'));render(await getJSON(base));}
           catch(error){out.replaceChildren(el('div',error.message,'muted'));}};
-        wrap.append(run,schedule,remove);
+        wrap.append(run,retry,schedule,remove);
         const latest=f.recent_files[0];
         return [f.folder,f.pattern,Number(f.files_appended).toLocaleString(),Number(f.files_failed).toLocaleString(),
           latest?latest.name+' \u2014 '+(latest.outcome==='appended'?Number(latest.added_events).toLocaleString()+' events added'+(latest.warning?' · '+latest.warning:''):'not appended: '+latest.error):'\u2014',wrap];})));

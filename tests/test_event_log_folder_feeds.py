@@ -130,8 +130,11 @@ with TestClient(app) as client:
     assert r.status_code == 200, r.text
     feed_id = r.json()["feed_id"]
     assert client.post(f"/v1/event-logs/feeds/{feed_id}/run", headers=owner).status_code == 403
+    assert client.post(f"/v1/event-logs/feeds/{feed_id}/retry-failed", headers=bearer).status_code == 403
+    assert client.post(f"/v1/event-logs/feeds/{feed_id}/retry-failed", headers=owner).status_code == 403
     r = client.post(f"/v1/event-logs/feeds/{feed_id}/run", headers=store)
     assert r.status_code == 200 and r.json()["events_added"] == 1, r.text
+    assert client.post(f"/v1/event-logs/feeds/{feed_id}/retry-failed", headers=store).json()["files_appended"] == 0
     assert client.get(f"/v1/event-logs/{log_id}/feeds", headers=owner).json()["feeds"][0]["files_appended"] == 1
     assert client.post(f"/v1/event-logs/feeds/{feed_id}/delete", headers=owner).status_code == 200
     assert client.post(f"/v1/event-logs/feeds/{feed_id}/run", headers=store).status_code == 422
@@ -323,3 +326,86 @@ def test_feed_deleted_during_snapshot_is_not_recreated(tmp_path, monkeypatch):
     assert feeds.run(feed['feed_id'])['files_failed'] == 1
     assert feeds.feeds(log)['feeds'] == []
     assert workspace.summary(log)['events'] == 2
+
+
+def test_explicit_retry_processes_only_previously_failed_content(tmp_path, monkeypatch):
+    log = _log()
+    folder = tmp_path / 'exports'
+    folder.mkdir()
+    feed = feeds.create(log, {'folder': str(folder), 'confirm_folder_reads': True})
+    _drop(folder, 'failed.csv', HEADER + 'o2;Create;03/03/2024 10:00\n')
+    original = workspace.append_log
+    def unavailable(*args, **kwargs):
+        raise workspace.EventLogWorkspaceError('temporary ingestion failure')
+    monkeypatch.setattr(workspace, 'append_log', unavailable)
+    assert feeds.run(feed['feed_id'])['files_failed'] == 1
+    assert feeds.run(feed['feed_id'], retry_failed=True)['files_failed'] == 1
+    listed = feeds.feeds(log)['feeds'][0]
+    assert (listed['files_failed'], len(listed['recent_files'])) == (1, 1)
+    monkeypatch.setattr(workspace, 'append_log', original)
+    _drop(folder, 'new.csv', HEADER + 'o3;Create;04/03/2024 10:00\n')
+    retried = feeds.run(feed['feed_id'], retry_failed=True)
+    assert (retried['files_appended'], retried['events_added'], retried['new_files_left_for_normal_run']) == (1, 1, 1)
+    assert retried['files'][0]['name'] == 'failed.csv'
+    listed = feeds.feeds(log)['feeds'][0]
+    assert (listed['files_appended'], listed['files_failed'], len(listed['recent_files'])) == (1, 0, 1)
+    assert feeds.run(feed['feed_id'], retry_failed=True)['files_appended'] == 0
+    assert feeds.run(feed['feed_id'])['events_added'] == 1
+    assert workspace.summary(log)['events'] == 4
+
+
+def test_retry_failure_rolls_back_replaced_receipt_and_keeps_error(tmp_path, monkeypatch):
+    log = _log()
+    folder = tmp_path / 'exports'
+    folder.mkdir()
+    feed = feeds.create(log, {'folder': str(folder), 'confirm_folder_reads': True})
+    _drop(folder, 'failed.csv', HEADER + 'o2;Create;03/03/2024 10:00\n')
+    append = workspace.append_log
+    def fail_before_append(*args, **kwargs):
+        raise workspace.EventLogWorkspaceError('initial failure')
+    monkeypatch.setattr(workspace, 'append_log', fail_before_append)
+    assert feeds.run(feed['feed_id'])['files_failed'] == 1
+    _drop(folder, 'copy.csv', HEADER + 'o2;Create;03/03/2024 10:00\n')
+    attempts = []
+    def interrupted(*args, **kwargs):
+        attempts.append(1)
+        record = kwargs['_transaction_hook']
+        def fail_after_record(conn, log_id):
+            record(conn, log_id)
+            raise workspace.EventLogWorkspaceError('retry transaction failure')
+        kwargs['_transaction_hook'] = fail_after_record
+        return append(*args, **kwargs)
+    monkeypatch.setattr(workspace, 'append_log', interrupted)
+    retried = feeds.run(feed['feed_id'], retry_failed=True)
+    assert retried['files_failed'] == 1
+    assert retried['duplicate_failed_files_skipped'] == 1
+    assert retried['files_already_appended'] == 0
+    assert len(attempts) == 1
+    listed = feeds.feeds(log)['feeds'][0]
+    assert (listed['files_appended'], listed['files_failed'], len(listed['recent_files'])) == (0, 1, 1)
+    assert listed['recent_files'][0]['error'] == 'retry transaction failure'
+    assert workspace.summary(log)['events'] == 2
+
+
+def test_retry_committed_before_quality_failure_is_not_replayed(tmp_path, monkeypatch):
+    log = _log()
+    folder = tmp_path / 'exports'
+    folder.mkdir()
+    feed = feeds.create(log, {'folder': str(folder), 'confirm_folder_reads': True})
+    _drop(folder, 'failed.csv', HEADER + 'o2;Create;03/03/2024 10:00\n')
+    append = workspace.append_log
+    def unavailable(*args, **kwargs):
+        raise workspace.EventLogWorkspaceError('temporary failure')
+    monkeypatch.setattr(workspace, 'append_log', unavailable)
+    assert feeds.run(feed['feed_id'])['files_failed'] == 1
+    monkeypatch.setattr(workspace, 'append_log', append)
+    def fail_quality(*args, **kwargs):
+        raise workspace.EventLogWorkspaceError('quality report failure')
+    monkeypatch.setattr(workspace, '_record_quality', fail_quality)
+    result = feeds.run(feed['feed_id'], retry_failed=True)
+    assert (result['files_appended'], result['files_failed']) == (1, 0)
+    assert 'quality report' in result['files'][0]['warning']
+    assert feeds.run(feed['feed_id'], retry_failed=True)['files_appended'] == 0
+    listed = feeds.feeds(log)['feeds'][0]
+    assert (listed['files_appended'], listed['files_failed'], len(listed['recent_files'])) == (1, 0, 1)
+    assert workspace.summary(log)['events'] == 3
