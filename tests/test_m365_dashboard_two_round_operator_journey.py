@@ -712,3 +712,43 @@ def test_transaction_preflight_revocation_after_private_read_withholds_counts(mo
         preflight.assert_called_once()
         execute.assert_not_called()
         assert session_valid.call_count == 2
+
+
+def test_reviewed_commit_revoked_after_write_withholds_checkpoint_generation(monkeypatch):
+    """A completed write must not disclose its generation after session expiry.
+
+    The write is not rolled back or retried: the operator must inspect the
+    persisted receipt, OWG membership and checkpoint before taking any action.
+    """
+    configure(monkeypatch)
+    with (
+        patch("server.m365_operator_audit_routes.dashboard_session_valid",
+              side_effect=[True, False]) as session_valid,
+        patch("server.m365_outlook_reviewed_transaction.execute",
+              return_value={"status": "checkpoint_committed",
+                            "generation": 7, "idempotent_replay": False}) as commit,
+    ):
+        with pytest.raises(HTTPException) as error:
+            operator_reviewed_commit(request(), FIRST, **COMMIT_APPROVALS)
+        assert error.value.status_code == 409
+        assert "Do not retry" in str(error.value.detail)
+        assert "7" not in str(error.value.detail)
+        assert "secret-" not in str(error.value.detail)
+        commit.assert_called_once()
+        assert session_valid.call_count == 2
+
+
+def test_reviewed_commit_authorized_after_write_returns_generation(monkeypatch):
+    configure(monkeypatch)
+    with (
+        patch("server.m365_operator_audit_routes.dashboard_session_valid",
+              return_value=True) as session_valid,
+        patch("server.m365_outlook_reviewed_transaction.execute",
+              return_value={"status": "checkpoint_committed",
+                            "generation": 7, "idempotent_replay": False}) as commit,
+    ):
+        result = body(operator_reviewed_commit(request(), FIRST, **COMMIT_APPROVALS))
+        assert result["generation"] == 7
+        assert result["automatic_retry_allowed"] is False
+        commit.assert_called_once()
+        assert session_valid.call_count == 2
