@@ -244,6 +244,7 @@ def get_reconstruction_review() -> Response:
         "coverage": result.get("coverage", {}),
         "identity_timelines": result.get("identity_timelines", [])[:12],
         "identity_timelines_truncated": bool(result.get("identity_timelines_truncated", False) or len(result.get("identity_timelines", [])) > 12),
+        "identity_timelines_returned_count": min(len(result.get("identity_timelines", [])), 12),
         # Expose the bounded, directly observed event-to-pair provenance used
         # for the fingerprint. Connected navigation groups are not cases.
         "observed_pair_event_assignments": result.get("observed_pair_event_assignments", [])[:24],
@@ -251,8 +252,11 @@ def get_reconstruction_review() -> Response:
         # Components are navigational hypotheses, never confirmed cases.
         "observed_case_groups": result.get("observed_case_groups", [])[:24],
         "observed_case_groups_truncated": bool(result.get("observed_case_groups_truncated", False) or len(result.get("observed_case_groups", [])) > 24),
+        "observed_case_groups_returned_count": min(len(result.get("observed_case_groups", [])), 24),
         "observed_pair_event_assignments_truncated": bool(result.get("observed_pair_event_assignments_truncated", False) or len(result.get("observed_pair_event_assignments", [])) > 24),
+        "observed_pair_event_assignments_returned_count": min(len(result.get("observed_pair_event_assignments", [])), 24),
         "observed_group_continuity_truncated": bool(result.get("observed_group_continuity_truncated", False) or len(result.get("observed_group_continuity", [])) > 24),
+        "observed_group_continuity_returned_count": min(len(result.get("observed_group_continuity", [])), 24),
         "notice": result.get("notice"),
         "derived": True,
         "authoritative": False,
