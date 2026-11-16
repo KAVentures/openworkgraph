@@ -51,6 +51,12 @@ def _connect(path: str) -> sqlite3.Connection:
     for suffix in ("-wal", "-shm"):
         if Path(str(p) + suffix).exists() or Path(str(p) + suffix).is_symlink():
             raise ValueError("unsupported dependency database sidecar")
+    # A retained rollback journal can resurrect owner declarations removed after
+    # consent withdrawal. Refuse recovery of untrusted or stale journal bytes.
+    # Include dangling symlinks, for which Path.exists() returns False.
+    journal = Path(str(p) + "-journal")
+    if journal.exists() or journal.is_symlink():
+        raise ValueError("unsafe dependency database rollback journal")
     db = sqlite3.connect(str(p), timeout=5)
     db.execute("PRAGMA busy_timeout=5000")
     if db.execute("PRAGMA journal_mode").fetchone()[0].lower() != "delete":

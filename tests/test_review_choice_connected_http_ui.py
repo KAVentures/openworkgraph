@@ -139,6 +139,71 @@ class Node {
         assert saved.status_code == 200
         assert saved.json()["decision"] == "approved"
         assert saved.json()["execution_authorized"] is False
+        # The same mounted HTTP routes must deny anonymous/foreign sessions.
+        endpoint = "/v1/review-choice-workbench/idea-1"
+        assert client.get(endpoint).status_code == 403
+        assert client.get(endpoint, headers={"Authorization": "OWG-Session stranger"}).status_code == 403
+        assert client.get("/v1/review-choice-workbench/idea-1/review/p1").status_code == 403
+
+        headers = {"Authorization": "OWG-Session owner"}
+        snapshot = client.get(endpoint, headers=headers).json()
+        project = snapshot["projects"][0]
+        basis = {
+            "project_id": project["project_id"],
+            "project_set_sha256": snapshot["project_set_sha256"],
+            "idea_revision": snapshot["idea"]["revision"],
+            "idea_state": snapshot["idea"]["state"],
+            "spec_sha256": project["spec_sha256"],
+            "archive_sha256": project["archive_sha256"],
+            "process_status": snapshot["process_status"],
+            "process_reference": snapshot["process_reference"],
+            "dataset_origins": snapshot["dataset_origins"],
+            "dataset_origin_check_available": snapshot["dataset_origin_check_available"],
+            "blockers": project["blockers"],
+        }
+        handoff = endpoint + "/reviewed-handoff-preflight"
+        assert client.post(handoff, json=basis).status_code == 403
+        assert client.post(handoff, json=basis, headers=headers).status_code == 200
+
+        # A concurrent source change must invalidate the old reviewed basis.
+        evidence["digest"] = "a" * 64
+        assert client.post(handoff, json=basis, headers=headers).status_code == 409
+        stale_save = client.post(endpoint + "/review", headers=headers, json={
+            "basis": basis, "expected_review_revision": 1,
+            "decision": "approved", "reviewer_notes": "stale",
+        })
+        assert stale_save.status_code == 409
+        assert client.get(endpoint + "/review/p1", headers=headers).json()["revision"] == 1
+
+        # Revocation remains available despite stale or disappeared source data.
+        revoke = endpoint + "/review/p1/revoke"
+        assert client.post(revoke, headers=headers, json={"expected_review_revision": 2}).status_code == 409
+        assert client.post(revoke, json={"expected_review_revision": 1}).status_code == 403
+        withdrawn = client.post(revoke, headers=headers, json={"expected_review_revision": 1})
+        assert withdrawn.status_code == 200, withdrawn.text
+        assert withdrawn.json()["decision"] == "revoked"
+        assert withdrawn.json()["revision"] == 2
+        assert withdrawn.json()["execution_authorized"] is False
+        assert client.post(handoff, json=basis, headers=headers).status_code == 409
+
+        # Recovery requires inspecting the NEW source basis and a fresh human
+        # approval; an old approval cannot silently regain authority.
+        fresh = client.get(endpoint, headers=headers).json()
+        fresh_project = fresh["projects"][0]
+        new_basis = dict(basis, project_set_sha256=fresh["project_set_sha256"],
+                         spec_sha256=fresh_project["spec_sha256"],
+                         blockers=fresh_project["blockers"])
+        assert client.post(handoff, json=new_basis, headers=headers).status_code == 409
+        approved = client.post(endpoint + "/review", headers=headers, json={
+            "basis": new_basis, "expected_review_revision": 2,
+            "decision": "approved", "reviewer_notes": "Re-inspected updated evidence",
+        })
+        assert approved.status_code == 200, approved.text
+        assert approved.json()["revision"] == 3
+        reopened = client.post(handoff, json=new_basis, headers=headers)
+        assert reopened.status_code == 200, reopened.text
+        assert reopened.json()["review_revision"] == 3
+        assert reopened.json()["execution_authorized"] is False
     finally:
         server.shutdown()
         server.server_close()
