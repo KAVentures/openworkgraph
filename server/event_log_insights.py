@@ -25,6 +25,8 @@ concentrate, not why, and every number can be re-derived from the log.
 """
 from __future__ import annotations
 
+import json
+
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
@@ -34,6 +36,8 @@ from . import event_log_workspace as workspace
 
 FORMAT = "openworkgraph.event-log-insights.v1"
 MIN_CASES = 5
+MAX_SEGMENTS = 3
+NUMERIC_DISTINCT = 10  # numeric case attributes with more distinct values are grouped by quartile
 _SEP = "\x1f"
 
 
@@ -98,6 +102,35 @@ def insights(log_id: str, spec: Any = None) -> dict[str, Any]:
                     WHERE x.case_id NOT IN (SELECT case_id FROM a a2 WHERE a2.activity = a.activity)) AS without_median
             FROM a JOIN ins_cases c USING (case_id) GROUP BY 1
             HAVING count(*) < ? ORDER BY count(*) DESC LIMIT 40""", [cases * 0.5]).fetchall()
+        # Case attributes (from the import or a joined case table): values, and quartile ranges of numeric ones.
+        data["segments"] = conn.execute(f"""WITH attrs AS (
+              SELECT c.case_id, left(kv.key, 100) AS k, kv.value AS v, try_cast(kv.value AS DOUBLE) AS x
+              FROM objects o JOIN ins_cases c ON c.case_id = o.object_id,
+                unnest(map_entries(json_transform(o.attributes, '"MAP(VARCHAR, VARCHAR)"'))) AS m(kv)
+              WHERE o.log_id = ?),
+            numeric AS (SELECT k, quantile_cont(x, [0.25, 0.5, 0.75]) AS q FROM attrs GROUP BY k
+              HAVING count(x) >= 0.9 * count(*) AND count(DISTINCT x) > {NUMERIC_DISTINCT}),
+            groups AS (
+              SELECT DISTINCT case_id, k || '=' || v AS label, NULL::VARCHAR AS bounds FROM attrs
+                WHERE k NOT IN (SELECT k FROM numeric) AND length(v) < 100
+              UNION ALL
+              SELECT DISTINCT a.case_id,
+                CASE WHEN a.x < n.q[1] THEN a.k || ' < ' || printf('%.6g', n.q[1])
+                     WHEN a.x < n.q[2] THEN printf('%.6g', n.q[1]) || ' ≤ ' || a.k || ' < ' || printf('%.6g', n.q[2])
+                     WHEN a.x < n.q[3] THEN printf('%.6g', n.q[2]) || ' ≤ ' || a.k || ' < ' || printf('%.6g', n.q[3])
+                     ELSE a.k || ' ≥ ' || printf('%.6g', n.q[3]) END,
+                CASE WHEN a.x < n.q[1] THEN to_json({{'name': a.k, 'max': n.q[1]}})
+                     WHEN a.x < n.q[2] THEN to_json({{'name': a.k, 'min': n.q[1], 'max': n.q[2]}})
+                     WHEN a.x < n.q[3] THEN to_json({{'name': a.k, 'min': n.q[2], 'max': n.q[3]}})
+                     ELSE to_json({{'name': a.k, 'min': n.q[3]}}) END::VARCHAR
+              FROM attrs a JOIN numeric n USING (k) WHERE a.x IS NOT NULL),
+            sized AS (SELECT label, any_value(bounds) AS bounds, count(*) AS n FROM groups GROUP BY label
+              HAVING count(*) >= 3 AND count(*) <= ? ORDER BY count(*) DESC, label LIMIT 60)
+            SELECT s.label, s.bounds, s.n, quantile_cont(c.duration, 0.5) AS with_median,
+                   (SELECT quantile_cont(duration, 0.5) FROM ins_cases x WHERE x.case_id NOT IN
+                      (SELECT case_id FROM groups g WHERE g.label = s.label)) AS without_median
+            FROM sized s JOIN groups g USING (label) JOIN ins_cases c ON c.case_id = g.case_id
+            GROUP BY s.label, s.bounds, s.n""", [log_id, cases * 0.8]).fetchall()
         data["tail"] = conn.execute("""SELECT count(*), coalesce(sum(duration), 0) FROM ins_cases
             WHERE duration > (SELECT quantile_cont(duration, 0.9) FROM ins_cases)""").fetchone()
         data["variants"] = [n for (n,) in conn.execute(
@@ -182,6 +215,25 @@ def _findings(data: dict[str, Any], cases: int, total: float, settings: InsightS
             "cohort": {"activity": activity}, "follows": [],
             "analysis": "benchmark",
             "caveat": "Cases with this activity may differ in other ways; this is an association, not a cause."})
+    segments = []
+    for label, bounds, with_cases, with_median, without_median in data.get("segments", []):
+        if with_median is None or without_median is None or without_median <= 0:
+            continue
+        excess = with_median - without_median
+        if excess <= 0 or with_median < 1.5 * without_median:
+            continue
+        cohort = {"attribute_range": json.loads(bounds)} if bounds else {"attribute": label}
+        segments.append({
+            "kind": "attribute_segment",
+            "title": f"Cases with {label} ({with_cases / cases:.0%}) take {with_median / without_median:.1f}× as long",
+            "cases": with_cases, "case_share": round(with_cases / cases, 6),
+            "impact_seconds": round(excess * with_cases, 3),
+            "numbers": {"segment": label, "median_seconds_with": with_median, "median_seconds_without": without_median},
+            "cohort": cohort, "follows": [], "analysis": "root-cause",
+            "caveat": ("Cases in this group may differ in other ways (and numeric ranges are this log's quartiles); "
+                       "this is an association, not a cause.")})
+    # Keep the three largest, so one attribute with many values cannot crowd out the other findings.
+    out += sorted(segments, key=lambda f: -f["impact_seconds"])[:MAX_SEGMENTS]
     tail_cases, tail_time = data["tail"]
     if tail_cases and data.get("median"):
         share = tail_time / total
