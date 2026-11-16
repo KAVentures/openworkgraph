@@ -829,6 +829,7 @@
     const deleteButton=button('Delete saved expression','secondary');deleteButton.id='owgCohortMetricDelete';
     const savedStatus=el('div');savedStatus.setAttribute('role','status');
     let savedEntries=[];
+    let savedLoadSequence=0;
     const savedPath=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/cohort-metric-definitions';
     const currentDefinition=()=>{
       const first=metric.value==='duration_hours'
@@ -837,11 +838,11 @@
         ?first:{[operation.value]:[first,{field:other.value}]}};
     };
     const loadSaved=async()=>{
-      const log=state.logId,generation=state.generation;
+      const log=state.logId,generation=state.generation,sequence=++savedLoadSequence;
       if(!log)return;
       const response=await api(savedPath());
       const data=await response.json();
-      if(log!==state.logId||generation!==state.generation)return;
+      if(log!==state.logId||generation!==state.generation||sequence!==savedLoadSequence)return;
       savedEntries=data.definitions||[];
       savedPicker.replaceChildren(new Option('Choose saved expression',''),
         ...savedEntries.map(item=>new Option(item.name,item.metric_id)));
@@ -864,25 +865,38 @@
       updateOperation();savedStatus.textContent='Loaded '+item.name+'. Calculate to apply current cohort filters.';
     });
     saveButton.onclick=async()=>{
+      const log=state.logId,generation=state.generation,path=savedPath();
+      const isCurrent=()=>log===state.logId&&generation===state.generation;
       saveButton.disabled=true;
       try{
-        const response=await api(savedPath(),{method:'POST',headers:{'Content-Type':'application/json'},
+        const response=await api(path,{method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify({name:savedName.value,definition:currentDefinition()})});
-        const item=await response.json();await loadSaved();savedPicker.value=item.metric_id;
+        const item=await response.json();
+        if(!isCurrent())return;
+        await loadSaved();
+        if(!isCurrent())return;
+        savedPicker.value=item.metric_id;
         savedStatus.textContent='Saved '+item.name+' for this log.';
-      }catch(error){savedStatus.textContent=error.message;}
+      }catch(error){if(isCurrent())savedStatus.textContent=error.message;}
       finally{saveButton.disabled=false;}
     };
     deleteButton.onclick=async()=>{
       const id=savedPicker.value;if(!id)return;
+      const log=state.logId,generation=state.generation,path=savedPath();
+      const isCurrent=()=>log===state.logId&&generation===state.generation;
       deleteButton.disabled=true;
       try{
-        await api(savedPath()+'/'+encodeURIComponent(id)+'/delete',{method:'POST'});
-        await loadSaved();savedStatus.textContent='Saved expression deleted.';
-      }catch(error){savedStatus.textContent=error.message;}
+        await api(path+'/'+encodeURIComponent(id)+'/delete',{method:'POST'});
+        if(!isCurrent())return;
+        await loadSaved();
+        if(isCurrent())savedStatus.textContent='Saved expression deleted.';
+      }catch(error){if(isCurrent())savedStatus.textContent=error.message;}
       finally{deleteButton.disabled=false;}
     };
-    loadSaved().catch(error=>{savedStatus.textContent=error.message;});
+    const initialLog=state.logId,initialGeneration=state.generation;
+    loadSaved().catch(error=>{
+      if(initialLog===state.logId&&initialGeneration===state.generation)savedStatus.textContent=error.message;
+    });
     const filters=cohortFields('owgCohortMetricFilter','Choose matching cases',activityNames);
     const run=button('Calculate cohort metric','secondary');run.id='owgCohortMetricRun';
     const out=el('div');out.id='owgCohortMetricResult';out.setAttribute('role','status');out.setAttribute('aria-live','polite');
