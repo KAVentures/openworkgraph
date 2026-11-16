@@ -46,8 +46,9 @@ const path=require('node:path');
   // Re-open the log and confirm that the definition survived the dashboard re-render.
   const picker=page.locator('#owgEventLogPick');
   const logId=await picker.inputValue();
-  await picker.selectOption('');
+  // Re-select the existing log through the real picker; an empty option is not guaranteed.
   await picker.selectOption(logId);
+  await picker.dispatchEvent('change');
   await page.locator('#owgCohortMetricSaved option').filter({hasText:'Browser acceptance duration'}).waitFor({timeout:60000});
   await page.locator('#owgCohortMetricSaved').selectOption(savedId);
   assert.equal(await page.locator('#owgCohortMetricField').inputValue(),'duration_seconds');
