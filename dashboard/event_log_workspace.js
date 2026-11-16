@@ -824,6 +824,7 @@
     const deleteButton=button('Delete saved expression','secondary');deleteButton.id='owgCohortMetricDelete';
     const savedStatus=el('div');savedStatus.setAttribute('role','status');
     let savedEntries=[];
+    let savedLoadSequence=0;
     const savedPath=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/cohort-metric-definitions';
     const currentDefinition=()=>{
       const first=metric.value==='duration_hours'
@@ -832,11 +833,11 @@
         ?first:{[operation.value]:[first,{field:other.value}]}};
     };
     const loadSaved=async()=>{
-      const log=state.logId,generation=state.generation;
+      const log=state.logId,generation=state.generation,sequence=++savedLoadSequence;
       if(!log)return;
       const response=await api(savedPath());
       const data=await response.json();
-      if(log!==state.logId||generation!==state.generation)return;
+      if(log!==state.logId||generation!==state.generation||sequence!==savedLoadSequence)return;
       savedEntries=data.definitions||[];
       savedPicker.replaceChildren(new Option('Choose saved expression',''),
         ...savedEntries.map(item=>new Option(item.name,item.metric_id)));
