@@ -177,9 +177,15 @@ def _grant(request: Request, ref: str | None = None) -> dict:
     return identity
 
 @router.get("/v1/open-work/dispatch/granted")
-async def granted_offers(request: Request):
+async def granted_offers(request: Request, response: Response):
     identity = _grant(request)
+    response.headers["Cache-Control"] = "no-store"
     state = await _run(dispatch.status, owner=False)
+    # A grant or its offer may be revoked while the disk-backed queue is read
+    # in a worker thread. Never disclose that stale snapshot after revocation.
+    current = _grant(request, identity["work_item_ref"])
+    if current["grant_id"] != identity["grant_id"]:
+        raise HTTPException(409, "agent grant changed during offer read")
     state["offers"] = [item for item in state["offers"] if
                        item["work_item_ref"] == identity["work_item_ref"] and item["status"] == "offered"]
     return state
