@@ -149,3 +149,30 @@ def test_session_revoked_during_receipt_read_denies_response(monkeypatch, tmp_pa
         asyncio.run(routes.read_local_bound_attempt_receipts(request(), Response()))
     assert error.value.status_code == 403
     assert checks >= 2
+
+
+def test_binding_revoked_during_final_source_recheck_denies_receipts(monkeypatch, tmp_path):
+    """The final source await must not open a binding-revocation race."""
+    bindings = setup(monkeypatch, tmp_path)
+    active = {"value": True}
+    checks = []
+
+    def current_binding(**_kwargs):
+        checks.append(active["value"])
+        return {"association": "operator_confirmed"} if active["value"] else None
+
+    async def source_recheck(_scope):
+        # The first source check admits the read; the second represents a
+        # concurrent explicit operator unbind while the source awaits.
+        source_recheck.calls += 1
+        if source_recheck.calls == 2:
+            active["value"] = False
+    source_recheck.calls = 0
+    monkeypatch.setattr(bindings, "get_binding", current_binding)
+    monkeypatch.setattr(routes, "_recheck_source", source_recheck)
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(routes.read_local_bound_attempt_receipts(request(), Response()))
+    assert error.value.status_code == 403
+    assert source_recheck.calls == 2
+    assert checks[-1] is False
+    assert not list(tmp_path.iterdir())
