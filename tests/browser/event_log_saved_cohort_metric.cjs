@@ -53,6 +53,7 @@ const path=require('node:path');
     name:'second-synthetic-log.csv',mimeType:'text/csv',
     buffer:Buffer.from('case_id,activity,timestamp\\nCASE-2,Created,2026-01-01T10:00:00Z\\nCASE-2,Completed,2026-01-01T10:05:00Z\\n')
   });
+  await page.locator('#owgEventLogCase option[value="case_id"]').waitFor({state:'attached',timeout:30000});
   await page.locator('#owgEventLogCase').selectOption('case_id');
   await page.locator('#owgEventLogActivity').selectOption('activity');
   await page.locator('#owgEventLogTime').selectOption('timestamp');
