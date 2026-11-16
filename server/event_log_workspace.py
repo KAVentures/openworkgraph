@@ -80,6 +80,10 @@ CREATE TABLE IF NOT EXISTS saved_analyses (
 CREATE TABLE IF NOT EXISTS metric_definitions (
   log_id VARCHAR NOT NULL, metric_id VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL, definition VARCHAR NOT NULL
 );
+CREATE TABLE IF NOT EXISTS cohort_metric_definitions (
+  log_id VARCHAR NOT NULL, metric_id VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL,
+  name VARCHAR NOT NULL, definition VARCHAR NOT NULL
+);
 CREATE TABLE IF NOT EXISTS quarantine (
   log_id VARCHAR NOT NULL, batch INTEGER NOT NULL, row_n BIGINT NOT NULL, reasons VARCHAR NOT NULL, row VARCHAR NOT NULL
 );
@@ -736,7 +740,7 @@ def delete_log(log_id: str) -> dict[str, Any]:
                 from .jira_retained_profiles import forget_dataset
                 forget_dataset(conn, log_id)
                 for table in ("object_relationships", "event_source_keys", "event_source_namespaces", "discovery_snapshots", "log_appends", "log_quality", "quarantine", "quarantine_decisions", "filter_sets",
-                              "domain_pack_installs", "metric_definitions", "saved_analyses", "signal_snoozes", "signal_reviews", "signal_transitions", "signal_rules", "case_tags", "case_attribute_uploads", "cost_models", "event_objects", "events", "objects",
+                              "domain_pack_installs", "cohort_metric_definitions", "metric_definitions", "saved_analyses", "signal_snoozes", "signal_reviews", "signal_transitions", "signal_rules", "case_tags", "case_attribute_uploads", "cost_models", "event_objects", "events", "objects",
                               "object_attribute_values",
                               "logs"):
                     conn.execute(f"DELETE FROM {table} WHERE log_id = ?", [log_id])

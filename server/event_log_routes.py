@@ -1632,6 +1632,32 @@ from .event_log_job_routes import add_routes as _add_analysis_job_routes
 _add_analysis_job_routes(router, _require_dashboard, _json_body)
 
 
+@router.get("/v1/event-logs/{log_id}/cohort-metric-definitions")
+def event_log_list_cohort_metric_definitions(request: Request, log_id: str):
+    _require_dashboard(request)
+    from . import event_log_saved_cohort_metrics as saved
+    return _respond(saved.list_saved, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/cohort-metric-definitions")
+async def event_log_save_cohort_metric_definition(request: Request, log_id: str):
+    _require_dashboard(request)
+    from . import event_log_saved_cohort_metrics as saved
+    spec = await _json_body(request, "saved cohort metric", strict=True, limit=8192)
+    response = await run_in_threadpool(_respond, saved.save, log_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/cohort-metric-definitions/{metric_id}/delete")
+async def event_log_delete_cohort_metric_definition(request: Request, log_id: str, metric_id: str):
+    _require_dashboard(request)
+    from . import event_log_saved_cohort_metrics as saved
+    response = await run_in_threadpool(_respond, saved.delete, log_id, metric_id)
+    _require_dashboard(request)
+    return response
+
+
 @router.post("/v1/event-logs/{log_id}/cohort-metric")
 async def event_log_cohort_metric(
     request: Request, log_id: str,

@@ -818,11 +818,71 @@
     const updateOperation=()=>show(otherWrap,operation.value!=='single');
     operation.addEventListener('change',updateOperation);
     updateOperation();
+    const savedPicker=select('owgCohortMetricSaved',[['','Choose saved expression']]);
+    const savedName=input('owgCohortMetricSaveName','text','Metric name');savedName.maxLength=120;
+    const saveButton=button('Save expression','secondary');saveButton.id='owgCohortMetricSave';
+    const deleteButton=button('Delete saved expression','secondary');deleteButton.id='owgCohortMetricDelete';
+    const savedStatus=el('div');savedStatus.setAttribute('role','status');
+    let savedEntries=[];
+    const savedPath=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/cohort-metric-definitions';
+    const currentDefinition=()=>{
+      const first=metric.value==='duration_hours'
+        ?{divide:[{field:'duration_seconds'},{literal:3600}]}:{field:metric.value};
+      return {version:1,expression:operation.value==='single'
+        ?first:{[operation.value]:[first,{field:other.value}]}};
+    };
+    const loadSaved=async()=>{
+      const log=state.logId,generation=state.generation;
+      if(!log)return;
+      const response=await api(savedPath());
+      const data=await response.json();
+      if(log!==state.logId||generation!==state.generation)return;
+      savedEntries=data.definitions||[];
+      savedPicker.replaceChildren(new Option('Choose saved expression',''),
+        ...savedEntries.map(item=>new Option(item.name,item.metric_id)));
+    };
+    savedPicker.addEventListener('change',()=>{
+      const item=savedEntries.find(entry=>entry.metric_id===savedPicker.value);
+      if(!item)return;
+      const expression=item.definition.expression;
+      const isHours=JSON.stringify(expression)===JSON.stringify({divide:[{field:'duration_seconds'},{literal:3600}]});
+      if(expression.field||isHours){
+        metric.value=isHours?'duration_hours':expression.field;operation.value='single';
+      }else{
+        const op=Object.keys(expression)[0],parts=expression[op];
+        if(!['add','subtract','multiply','divide'].includes(op)||!Array.isArray(parts)||parts.length!==2)return;
+        const first=parts[0],second=parts[1];
+        const hours=JSON.stringify(first)===JSON.stringify({divide:[{field:'duration_seconds'},{literal:3600}]});
+        if(!second.field||(!first.field&&!hours))return;
+        metric.value=hours?'duration_hours':first.field;other.value=second.field;operation.value=op;
+      }
+      updateOperation();savedStatus.textContent='Loaded '+item.name+'. Calculate to apply current cohort filters.';
+    });
+    saveButton.onclick=async()=>{
+      saveButton.disabled=true;
+      try{
+        const response=await api(savedPath(),{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({name:savedName.value,definition:currentDefinition()})});
+        const item=await response.json();await loadSaved();savedPicker.value=item.metric_id;
+        savedStatus.textContent='Saved '+item.name+' for this log.';
+      }catch(error){savedStatus.textContent=error.message;}
+      finally{saveButton.disabled=false;}
+    };
+    deleteButton.onclick=async()=>{
+      const id=savedPicker.value;if(!id)return;
+      deleteButton.disabled=true;
+      try{
+        await api(savedPath()+'/'+encodeURIComponent(id)+'/delete',{method:'POST'});
+        await loadSaved();savedStatus.textContent='Saved expression deleted.';
+      }catch(error){savedStatus.textContent=error.message;}
+      finally{deleteButton.disabled=false;}
+    };
+    loadSaved().catch(error=>{savedStatus.textContent=error.message;});
     const filters=cohortFields('owgCohortMetricFilter','Choose matching cases',activityNames);
     const run=button('Calculate cohort metric','secondary');run.id='owgCohortMetricRun';
     const out=el('div');out.id='owgCohortMetricResult';out.setAttribute('role','status');out.setAttribute('aria-live','polite');
     const controls=el('div',null,'row');controls.append(field('Metric',metric),field('Calculation',operation),otherWrap,run);
-    box.append(controls,filters.node,out);
+    box.append(controls,field('Saved expression',savedPicker),field('Name to save',savedName),saveButton,deleteButton,savedStatus,filters.node,out);
     let turn=0;
     run.onclick=async()=>{
       const t=++turn,generation=state.generation,logId=state.logId,caseType=state.caseType;
