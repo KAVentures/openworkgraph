@@ -2297,7 +2297,18 @@
       // A rejected handoff must never leave an unrelated approval visible.
       refresh().then(async()=>{
         if(!current())return;
-        if(!handoff.project_id){await show(id);return;}
+        if(!handoff.project_id){
+          // A newly saved process has an opportunity but no agent project yet.
+          // Open its authenticated evidence journey directly so the person can
+          // inspect source/revision status and decide what review is needed.
+          await show(id);
+          if(!current())return;
+          const journeyButton=document.getElementById('owgPipelineJourney');
+          if(!journeyButton)throw new Error('Evidence journey control unavailable.');
+          await journeyButton.onclick();
+          if(current())status.textContent='Opened the saved process opportunity for evidence review. No project or execution was authorized.';
+          return;
+        }
         const journeyResponse=await api('/v1/automation-pipeline/'+encodeURIComponent(id)+'/journey');
         if(!journeyResponse.ok)throw new Error('Authenticated journey refused ('+journeyResponse.status+').');
         const journey=await journeyResponse.json();
