@@ -48,7 +48,13 @@ def _store_guard():
         fd = os.open(lock_path, flags, 0o600)
         try:
             info = os.fstat(fd)
-            if not stat.S_ISREG(info.st_mode) or (os.name == "posix" and info.st_mode & 0o077):
+            # Windows lacks O_NOFOLLOW: reject an existing symlink or a
+            # path swapped after open, rather than locking an unrelated file.
+            path_info = lock_path.lstat()
+            if (not stat.S_ISREG(info.st_mode)
+                    or not stat.S_ISREG(path_info.st_mode)
+                    or (hasattr(info, "st_ino") and info.st_ino != path_info.st_ino)
+                    or (os.name == "posix" and info.st_mode & 0o077)):
                 raise OSError("unsafe review lock")
             if os.name == "nt":
                 import msvcrt
