@@ -37,7 +37,7 @@ const path=require('node:path');
   await page.locator('#owgCohortMetricSaveName').fill('Browser acceptance duration');
   await page.locator('#owgCohortMetricField').selectOption('duration_seconds');
   await page.locator('#owgCohortMetricSave').click();
-  await page.locator('#owgCohortMetricSaved option:checked').filter({hasText:'Browser acceptance duration'}).waitFor();
+  await page.waitForFunction(() => { const picker = document.querySelector('#owgCohortMetricSaved'); return picker && picker.selectedOptions.length > 0 && picker.selectedOptions[0].textContent.includes('Browser acceptance duration'); }, { timeout: 30000 });
   const savedId=await page.locator('#owgCohortMetricSaved').inputValue();
   assert.ok(savedId);
   await page.locator('#owgCohortMetricRun').click();
