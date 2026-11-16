@@ -408,6 +408,11 @@ def operator_reviewed_commit(
         raise HTTPException(
             409, "Outcome may be uncertain; inspect audit, membership and checkpoint manually. Do not retry."
         ) from None
+    # The OWG append/checkpoint may have completed while the dashboard session
+    # expired. Never disclose its private generation to a revoked session, and
+    # never retry a potentially completed write. Require manual reconciliation.
+    if not dashboard_session_valid(authorization[len("owg-session "):].strip()):
+        raise HTTPException(409, "Dashboard session expired during commit; inspect audit, membership and checkpoint manually. Do not retry.")
     return JSONResponse({
         "format": "openworkgraph.m365-dashboard-reviewed-commit.v1",
         "status": "checkpoint_committed", "generation": result["generation"],
