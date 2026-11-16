@@ -20,6 +20,19 @@ from .m365_outlook_checkpoint import inspect_checkpoint
 FORMAT = "openworkgraph.m365-reviewed-transaction.v1"
 
 
+def _verified_review(checked, expected_digest):
+    """Reject malformed reviewer results before any local OWG mutation."""
+    if (type(checked) is not dict
+            or checked.get("status") != "review_ready"
+            or checked.get("csv_sha256") != expected_digest
+            or any(type(checked.get(key)) is not int or checked[key] < 0
+                   for key in ("event_snapshots", "removal_markers_for_review"))
+            or type(checked.get("pages")) is not int
+            or not 1 <= checked["pages"] <= 1000):
+        raise ReceiptError("Candidate review unavailable or changed")
+    return checked
+
+
 def preflight(*, tenant, mailbox, folder, log_id, confirm_log_id,
               grant_file, candidate, ledger_dir, expected_review_csv_sha256,
               expected_previous_candidate_sha256=None, consent_local_read=False):
@@ -42,8 +55,7 @@ def preflight(*, tenant, mailbox, folder, log_id, confirm_log_id,
     initial_checkpoint = inspect_checkpoint(
         **scope, ledger_dir=Path(ledger_dir), consent_local_read=True)
     checked = cycle.review(candidate=Path(candidate), consent_local_read=True, **scope)
-    if checked.get("csv_sha256") != expected_review_csv_sha256:
-        raise ReceiptError("Candidate changed since explicit review")
+    _verified_review(checked, expected_review_csv_sha256)
     predecessor = inspect_checkpoint(
         **scope, ledger_dir=Path(ledger_dir), consent_local_read=True)
     if predecessor != initial_checkpoint:
@@ -108,8 +120,7 @@ def execute(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
                                   folder=folder, log_id=log_id)
     checked = cycle.review(candidate=Path(candidate), consent_local_read=True, **scope)
     audit("review", checked)
-    if checked.get("csv_sha256") != expected_review_csv_sha256:
-        raise ReceiptError("Candidate changed since explicit review")
+    _verified_review(checked, expected_review_csv_sha256)
     # Refuse a stale predecessor BEFORE the first append. The checkpoint
     # commit still performs its authoritative exclusive-create CAS after
     # authenticated membership verification; this is only an early guard.
