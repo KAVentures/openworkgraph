@@ -458,3 +458,105 @@ def test_real_graph_candidate_review_and_transaction_preflight_bridge(tmp_path):
     assert proposed["checkpoint_advanced"] is False
     assert len(transport.requests) == 1
     assert "test-token" not in candidate.read_text()
+
+
+def test_graph_review_real_durable_checkpoint_two_round_restart(tmp_path):
+    """Graph transport -> private review -> real CAS ledger, then incremental Graph.
+
+    OWG append/membership and handoff are controlled adapter boundaries here,
+    NOT proof of an authenticated OWG write or live Microsoft tenant.
+    """
+    import os
+    from server import m365_outlook_delta as delta
+    from server.m365_outlook_candidate_review import review
+    from server import m365_outlook_checkpoint as checkpoint
+
+    grant = tmp_path / "grant.json"
+    grant.write_text(json.dumps({
+        "version": 1, "enabled": True, "consented": True,
+        "tenant_scope": "tenant", "mailbox_scope": "mailbox",
+        "folder_id": "folder",
+    }))
+    grant.chmod(0o600)
+    ledger = tmp_path / "ledger"
+    ledger.mkdir(mode=0o700)
+    scope = dict(tenant="tenant", mailbox="mailbox", folder="folder",
+                 grant_file=grant)
+    first_url = delta._initial("folder")
+    first_cursor = ("https://graph.microsoft.com/v1.0/me/mailFolders/folder/"
+                    "messages/delta?%24deltatoken=one")
+    second_cursor = ("https://graph.microsoft.com/v1.0/me/mailFolders/folder/"
+                     "messages/delta?%24deltatoken=two")
+    message = {"id": "m1", "receivedDateTime": "2026-11-01T10:00:00Z",
+               "lastModifiedDateTime": "2026-11-01T10:01:00Z",
+               "isRead": False}
+    rounds = [
+        (first_url, {"value": [message], "@odata.deltaLink": first_cursor}),
+        (first_cursor, {"value": [], "@odata.deltaLink": second_cursor}),
+    ]
+    predecessor = None
+    for number, (url, page) in enumerate(rounds, 1):
+        transport = Transport(Response(url, json.dumps(page).encode()))
+        csv_path = tmp_path / f"round{number}.csv"
+        candidate = tmp_path / f"round{number}.json"
+        delta.export_delta(
+            tenant="tenant", mailbox="mailbox", folder_id="folder",
+            grant_file=grant, output=csv_path, candidate=candidate,
+            token="test-token", consent_read=True, consent_export=True,
+            opener=transport, **({
+                "previous_candidate": tmp_path / "round1.json",
+                "confirm_previous_import": True,
+            } if number == 2 else {}),
+        )
+        reviewed = review(**scope, candidate=candidate, consent_local_read=True)
+        assert reviewed["status"] == "review_ready"
+        assert reviewed["event_snapshots"] == (1 if number == 1 else 0)
+        assert len(transport.requests) == 1
+        assert transport.requests[0][0].full_url == url
+        assert checkpoint.inspect_checkpoint(
+            **scope, ledger_dir=ledger, consent_local_read=True
+        ) == (None if number == 1 else first_entry)
+        with (
+            patch.object(checkpoint, "prepare_handoff",
+                         return_value={"idempotent_replay": True}) as handoff,
+            patch.object(checkpoint, "reconcile_membership",
+                         return_value={"status": "all_candidate_events_present"}) as membership,
+        ):
+            committed = checkpoint.commit_checkpoint(
+                **scope, log_id="log", confirm_log_id="log",
+                candidate=candidate, csv_path=csv_path,
+                receipt_file=tmp_path / "receipt.json",
+                journal_dir=tmp_path / "journal",
+                handoff_dir=tmp_path / "handoff",
+                successor_label="next", ledger_dir=ledger,
+                expected_previous_candidate_sha256=predecessor,
+                consent_local_read=True, confirm_removals_reviewed=True,
+                confirm_checkpoint_commit=True,
+            )
+        handoff.assert_called_once()
+        membership.assert_called_once()
+        assert committed["generation"] == number
+        assert committed["idempotent_replay"] is False
+        # Reopen from disk as a new inspection, not a cached in-memory cursor.
+        entry = checkpoint.inspect_checkpoint(
+            **scope, ledger_dir=ledger, consent_local_read=True)
+        assert entry["generation"] == number
+        assert entry["candidate_sha256"] == reviewed["csv_sha256"]
+        assert entry["cursor_url"] == (first_cursor if number == 1 else second_cursor)
+        assert entry["event_membership_verified"] is True
+        assert "test-token" not in "".join(p.read_text() for p in ledger.iterdir())
+        if number == 1:
+            first_entry = entry
+        predecessor = reviewed["csv_sha256"]
+
+    # Revocation must hide the durable cursor even though the ledger persists.
+    grant.write_text(json.dumps({
+        "version": 1, "enabled": False, "consented": True,
+        "tenant_scope": "tenant", "mailbox_scope": "mailbox",
+        "folder_id": "folder",
+    }))
+    os.chmod(grant, 0o600)
+    with pytest.raises(delta.DeltaError):
+        checkpoint.inspect_checkpoint(
+            **scope, ledger_dir=ledger, consent_local_read=True)
+    assert len(list(ledger.iterdir())) == 2
