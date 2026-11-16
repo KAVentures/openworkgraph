@@ -354,3 +354,36 @@ def test_scope_lookup_exception_purges_only_current_actor(tmp_path, fail_on_call
                               case_id="invoice")["direct"] == []
     assert dependency_context(path, scope=scope, actor="session_b",
                               case_id="invoice")["direct"] == ["other"]
+
+
+def test_dependency_store_rejects_retained_rollback_journal(tmp_path):
+    """A crash artifact must not recover declarations removed on revocation."""
+    from server.open_work_dependency_store import declare_dependency, dependency_context
+    path = tmp_path / "dependency.sqlite"
+    kwargs = dict(path=str(path), scope="tenant", actor="alice",
+                  case_id="case", prerequisite="approval")
+    assert declare_dependency(**kwargs)
+    journal = tmp_path / "dependency.sqlite-journal"
+    journal.write_bytes(b"old-declaration-rollback-bytes")
+    with pytest.raises(ValueError, match="rollback journal"):
+        dependency_context(str(path), scope="tenant", actor="alice", case_id="case")
+    assert journal.read_bytes() == b"old-declaration-rollback-bytes"
+    journal.unlink()
+    assert dependency_context(str(path), scope="tenant", actor="alice",
+                              case_id="case")["direct"] == ["approval"]
+
+
+def test_dependency_store_rejects_dangling_rollback_journal_symlink(tmp_path):
+    from server.open_work_dependency_store import declare_dependency
+    path = tmp_path / "dependency.sqlite"
+    kwargs = dict(path=str(path), scope="tenant", actor="alice",
+                  case_id="case", prerequisite="approval")
+    assert declare_dependency(**kwargs)
+    journal = tmp_path / "dependency.sqlite-journal"
+    try:
+        journal.symlink_to(tmp_path / "missing")
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation unavailable")
+    with pytest.raises(ValueError, match="rollback journal"):
+        declare_dependency(**kwargs)
+    assert journal.is_symlink()

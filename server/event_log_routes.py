@@ -383,16 +383,36 @@ async def append_event_log(
         return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
-@router.post("/v1/event-logs/{log_id}/activity-labels/search")
-async def event_log_activity_label_search(request: Request, log_id: str):
-    """Search activity labels in the current case notion, never source events."""
-    from . import event_log_activity_lookup as activity_lookup
+@router.get("/v1/event-logs/{log_id}/feeds")
+def list_event_log_feeds(request: Request, log_id: str):
+    from . import event_log_folder_feeds as folder_feeds
     _require_dashboard(request)
-    body = await _json_body(request, "activity label search", strict=True, limit=4096)
-    if not isinstance(body, dict) or set(body) - {"search", "after", "case_type"} or "search" not in body:
-        raise HTTPException(422, "activity label search needs search text")
-    return await run_in_threadpool(_respond, activity_lookup.search, log_id, body["search"],
-                                   body.get("after", ""), body.get("case_type"))
+    return _respond(folder_feeds.feeds, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/feeds")
+async def create_event_log_feed(request: Request, log_id: str):
+    """Point the log at a local folder whose new CSV exports are appended with the log's mapping."""
+    from . import event_log_folder_feeds as folder_feeds
+    _require_dashboard(request)
+    spec = await _json_body(request, "folder feed settings", strict=True, limit=8192)
+    return await run_in_threadpool(_respond, folder_feeds.create, log_id, spec)
+
+
+@router.post("/v1/event-logs/feeds/{feed_id}/run")
+async def run_event_log_feed(request: Request, feed_id: str):
+    from . import event_log_folder_feeds as folder_feeds
+    _require_dashboard(request)
+    if request.headers.get("x-owg-local-storage-confirmed") != "true":
+        raise HTTPException(403, "Explicit confirmation to store these events on this computer is required")
+    return await run_in_threadpool(_respond, folder_feeds.run, feed_id)
+
+
+@router.post("/v1/event-logs/feeds/{feed_id}/delete")
+async def delete_event_log_feed(request: Request, feed_id: str):
+    from . import event_log_folder_feeds as folder_feeds
+    _require_dashboard(request)
+    return await run_in_threadpool(_respond, folder_feeds.delete, feed_id)
 
 
 @router.post("/v1/event-logs/{log_id}/case-attributes")
@@ -443,10 +463,28 @@ async def remove_case_attributes(request: Request, log_id: str):
     return await run_in_threadpool(_respond, case_attributes.remove, log_id, spec)
 
 
+@router.post("/v1/event-logs/{log_id}/activity-labels/search")
+async def event_log_activity_label_search(request: Request, log_id: str):
+    """Search activity labels in the current case notion, never source events."""
+    from . import event_log_activity_lookup as activity_lookup
+    _require_dashboard(request)
+    body = await _json_body(request, "activity label search", strict=True, limit=4096)
+    if not isinstance(body, dict) or set(body) - {"search", "after", "case_type"} or "search" not in body:
+        raise HTTPException(422, "activity label search needs search text")
+    return await run_in_threadpool(_respond, activity_lookup.search, log_id, body["search"],
+                                   body.get("after", ""), body.get("case_type"))
+
+
 @router.get("/v1/event-logs/{log_id}/quality")
 def event_log_quality(request: Request, log_id: str):
     _require_dashboard(request)
     return _respond(quality.quality, log_id)
+
+
+@router.get("/v1/event-logs/{log_id}/quality/overview")
+def event_log_quality_overview(request: Request, log_id: str):
+    _require_dashboard(request)
+    return _respond(quality.overview, log_id)
 
 
 @router.get("/v1/event-logs/{log_id}/quality/batch-history")
@@ -1192,6 +1230,23 @@ async def event_log_case_sharing_preview(request: Request, log_id: str):
     return await run_in_threadpool(_respond, prepare, log_id, parsed)
 
 
+@router.post("/v1/event-logs/{log_id}/company-handoff-preview")
+async def event_log_company_handoff_preview(request: Request, log_id: str):
+    """Explicitly prepare one paired, minimized file for separate human publication."""
+    _require_dashboard(request)
+    if request.headers.get("x-owg-company-handoff-preview") != "true":
+        raise HTTPException(403, "Explicit aggregate and case handoff preview confirmation required")
+    spec = await _json_body(request, "company handoff preview")
+    from .analysis_handoff_bundle import prepare as prepare_handoff
+    try:
+        packet = await run_in_threadpool(prepare_handoff, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    except ValueError:
+        raise HTTPException(422, "Paired handoff exceeds format bounds or has inconsistent evidence") from None
+    return JSONResponse(packet, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/{log_id}/analysis-sharing-preview")
 async def analysis_sharing_preview(request: Request, log_id: str):
     _require_dashboard(request)
@@ -1577,6 +1632,32 @@ from .event_log_job_routes import add_routes as _add_analysis_job_routes
 _add_analysis_job_routes(router, _require_dashboard, _json_body)
 
 
+@router.get("/v1/event-logs/{log_id}/cohort-metric-definitions")
+def event_log_list_cohort_metric_definitions(request: Request, log_id: str):
+    _require_dashboard(request)
+    from . import event_log_saved_cohort_metrics as saved
+    return _respond(saved.list_saved, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/cohort-metric-definitions")
+async def event_log_save_cohort_metric_definition(request: Request, log_id: str):
+    _require_dashboard(request)
+    from . import event_log_saved_cohort_metrics as saved
+    spec = await _json_body(request, "saved cohort metric", strict=True, limit=8192)
+    response = await run_in_threadpool(_respond, saved.save, log_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/cohort-metric-definitions/{metric_id}/delete")
+async def event_log_delete_cohort_metric_definition(request: Request, log_id: str, metric_id: str):
+    _require_dashboard(request)
+    from . import event_log_saved_cohort_metrics as saved
+    response = await run_in_threadpool(_respond, saved.delete, log_id, metric_id)
+    _require_dashboard(request)
+    return response
+
+
 @router.post("/v1/event-logs/{log_id}/cohort-metric")
 async def event_log_cohort_metric(
     request: Request, log_id: str,
@@ -1586,9 +1667,13 @@ async def event_log_cohort_metric(
     _require_dashboard(request)
     spec = await _json_body(request, "cohort metric", strict=True, limit=8192)
     from . import event_log_cohort_metrics
-    return await run_in_threadpool(
+    response = await run_in_threadpool(
         _respond, event_log_cohort_metrics.summarize, log_id, spec, case_type
     )
+    # A session can be revoked while DuckDB is computing the aggregate.
+    # Check again before releasing even aggregate-only numeric results.
+    _require_dashboard(request)
+    return response
 
 
 @router.get("/v1/event-logs/{log_id}/activity-mappings")
