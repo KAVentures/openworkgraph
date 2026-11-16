@@ -142,14 +142,14 @@ def execute(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
                             confirm_candidate_reviewed=True,
                             expected_review_csv_sha256=expected_review_csv_sha256)
     audit("append", appended)
-    if appended["status"] != "receipt_persisted":
+    if type(appended) is not dict or appended.get("status") != "receipt_persisted":
         raise UncertainReceipt("Append outcome uncertain")
     handoff = cycle.handoff(**shared, journal_dir=Path(journal_dir),
                             handoff_dir=Path(handoff_dir),
                             successor_label=successor_label,
                             consent_local_read=True,
                             confirm_removals_reviewed=True)
-    if handoff["status"] != "next_round_handoff_prepared":
+    if type(handoff) is not dict or handoff.get("status") != "next_round_handoff_prepared":
         raise UncertainReceipt("Handoff outcome uncertain")
     # Persist an independently verifiable handoff receipt before checkpoint
     # advancement. Audit failure after append requires manual reconciliation.
