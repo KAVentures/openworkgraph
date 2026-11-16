@@ -370,3 +370,60 @@ else:
         if child.poll() is None:
             child.kill()
             child.communicate(timeout=5)
+
+
+def test_cross_process_revocation_during_atomic_replace_removes_snapshot(local_store, tmp_path):
+    """Revocation in another process after replace must prevent save acknowledgement.
+
+    The child writes the snapshot and pauses inside os.replace, while the
+    parent withdraws retention. This exercises the post-replace policy check
+    across a process boundary, not just an in-process monkeypatch.
+    """
+    import subprocess
+    import sys
+
+    consent = tmp_path / "retention-granted"
+    consent.write_text("granted")
+    script = """
+import os
+import sys
+from pathlib import Path
+from server import reconstruction_review_store as store
+store._path = lambda: Path(sys.argv[1])
+consent = Path(sys.argv[2])
+store._retention_allowed = lambda: consent.exists()
+original_replace = os.replace
+def paused_replace(source, destination):
+    original_replace(source, destination)
+    print("REPLACED", flush=True)
+    sys.stdin.readline()
+os.replace = paused_replace
+try:
+    store.save_reconstruction_review({"mode": "all_saved"}, 1, {
+        "evidence_sha256": "a" * 64,
+        "annotations": [{"event_id": "event-1", "true_resource_pairs": []}],
+    })
+except PermissionError:
+    print("REVOKED", flush=True)
+else:
+    print("UNSAFE_SAVE", flush=True)
+"""
+    child = subprocess.Popen(
+        [sys.executable, "-c", script, str(local_store), str(consent)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert child.stdout.readline().strip() == "REPLACED"
+        assert local_store.exists(), "child did not reach the atomic replace"
+        consent.unlink()
+        child.stdin.write("\n")
+        child.stdin.flush()
+        stdout, stderr = child.communicate(timeout=10)
+        assert child.returncode == 0, stderr
+        assert stdout.strip() == "REVOKED", stdout
+        assert not local_store.exists(), "revoked labels survived the post-write check"
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.communicate(timeout=5)
