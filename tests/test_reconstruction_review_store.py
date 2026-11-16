@@ -427,3 +427,69 @@ else:
         if child.poll() is None:
             child.kill()
             child.communicate(timeout=5)
+
+
+def test_cross_process_delete_after_atomic_replace_wins(local_store):
+    """A separate deletion must wait for the writer's lock and remove its snapshot."""
+    import subprocess
+    import sys
+    import time
+
+    writer_script = """
+import os
+import sys
+from pathlib import Path
+from server import reconstruction_review_store as store
+store._path = lambda: Path(sys.argv[1])
+store._retention_allowed = lambda: True
+original_replace = os.replace
+def paused_replace(source, destination):
+    original_replace(source, destination)
+    print("REPLACED", flush=True)
+    sys.stdin.readline()
+os.replace = paused_replace
+store.save_reconstruction_review({"mode": "all_saved"}, 1, {
+    "evidence_sha256": "a" * 64,
+    "annotations": [{"event_id": "event-1", "true_resource_pairs": []}],
+})
+print("SAVED", flush=True)
+"""
+    delete_script = """
+import sys
+from pathlib import Path
+from server import reconstruction_review_store as store
+store._path = lambda: Path(sys.argv[1])
+print("DELETING", flush=True)
+store.clear_saved_reconstruction_review()
+print("DELETED", flush=True)
+"""
+    writer = subprocess.Popen(
+        [sys.executable, "-c", writer_script, str(local_store)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True,
+    )
+    deleter = None
+    try:
+        assert writer.stdout.readline().strip() == "REPLACED"
+        assert local_store.exists()
+        deleter = subprocess.Popen(
+            [sys.executable, "-c", delete_script, str(local_store)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        assert deleter.stdout.readline().strip() == "DELETING"
+        time.sleep(0.2)
+        assert deleter.poll() is None, "delete bypassed the writer lock"
+        writer.stdin.write(chr(10))
+        writer.stdin.flush()
+        writer_out, writer_err = writer.communicate(timeout=10)
+        assert writer.returncode == 0, writer_err
+        assert writer_out.strip() == "SAVED"
+        delete_out, delete_err = deleter.communicate(timeout=10)
+        assert deleter.returncode == 0, delete_err
+        assert delete_out.strip() == "DELETED"
+        assert not local_store.exists(), "deletion must win after writer unlock"
+    finally:
+        for child in (writer, deleter):
+            if child is not None and child.poll() is None:
+                child.kill()
+                child.communicate(timeout=5)
