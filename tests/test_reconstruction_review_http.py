@@ -497,3 +497,44 @@ def test_review_provenance_reports_http_cap_truncation(monkeypatch):
         assert len(payload[field]) == 24
         assert payload[field + "_truncated"] is True
     assert payload["authoritative"] is False
+
+
+def test_identity_timeline_projection_reports_incomplete_evidence(monkeypatch):
+    """A clipped interruption timeline must not look like complete provenance."""
+    import json
+    _setup(monkeypatch)
+    from server import work_resumption, reconstruction_review_cli
+
+    monkeypatch.setattr(work_resumption, "resumption_candidates", lambda connection, *, lease: {
+        "identity_timelines": [{"event_id": str(i)} for i in range(13)],
+        "identity_timelines_truncated": False,
+    })
+    monkeypatch.setattr(reconstruction_review_cli, "build_review_queue", lambda result: {
+        "event_reviews": [], "evidence_sha256": "a" * 64,
+    })
+    payload = json.loads(history_routes.get_reconstruction_review().body)
+    assert len(payload["identity_timelines"]) == 12
+    assert payload["identity_timelines_truncated"] is True
+    assert payload["authoritative"] is False
+
+    from server.main import ROOT
+    source = (ROOT / "dashboard" / "history_retention.js").read_text(encoding="utf-8")
+    assert "identity_timelines_truncated:data.identity_timelines_truncated===true" in source
+
+
+def test_identity_timeline_upstream_truncation_is_preserved(monkeypatch):
+    """An upstream capped scan remains marked incomplete even below HTTP cap."""
+    import json
+    _setup(monkeypatch)
+    from server import work_resumption, reconstruction_review_cli
+
+    monkeypatch.setattr(work_resumption, "resumption_candidates", lambda connection, *, lease: {
+        "identity_timelines": [{"event_id": "one"}],
+        "identity_timelines_truncated": True,
+    })
+    monkeypatch.setattr(reconstruction_review_cli, "build_review_queue", lambda result: {
+        "event_reviews": [], "evidence_sha256": "a" * 64,
+    })
+    payload = json.loads(history_routes.get_reconstruction_review().body)
+    assert len(payload["identity_timelines"]) == 1
+    assert payload["identity_timelines_truncated"] is True
