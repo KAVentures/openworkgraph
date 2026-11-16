@@ -3097,6 +3097,13 @@ async def read_local_bound_attempt_receipts(request: Request, response: Response
         await asyncio.to_thread(require_exclusive_run_case_binding, **fields)
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, ValueError) as exc:
         raise _safe_error(exc) from None
+    try:
+        await asyncio.to_thread(
+            _operation_ledger_guard, scope, payload["work_item_ref"],
+            payload["expected_revision"], payload["expected_edit_token"], signature,
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, ValueError) as exc:
+        raise _safe_error(exc) from None
     _dashboard_only(request)
     response.headers["Cache-Control"] = "no-store"
     return {

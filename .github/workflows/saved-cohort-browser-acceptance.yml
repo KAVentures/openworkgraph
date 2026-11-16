@@ -1,0 +1,30 @@
+name: saved-cohort-browser-acceptance
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'dashboard/event_log_workspace.js'
+      - 'server/event_log_*.py'
+      - 'tests/browser/event_log_saved_cohort_metric.cjs'
+      - '.github/workflows/saved-cohort-browser-acceptance.yml'
+  workflow_dispatch:
+jobs:
+  chromium:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install app and browser dependencies
+        run: |
+          python -m pip install -e ".[dev,gateway]"
+          npm install --prefix "$RUNNER_TEMP/owg-browser" playwright@1.64.1
+          node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install --with-deps chromium
+      - name: Run authenticated saved-cohort Chromium journey
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_saved_cohort_metric.cjs
