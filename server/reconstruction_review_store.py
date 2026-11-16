@@ -151,6 +151,11 @@ def save_reconstruction_review(
             if os.name == "posix":
                 os.chmod(temp, 0o600)
             os.replace(temp, path)
+            # Consent may change while the atomic replace is executing.
+            # Never acknowledge retention when it was withdrawn mid-write.
+            if not _retention_allowed():
+                path.unlink(missing_ok=True)
+                raise PermissionError("Review retention was revoked during persistence")
         finally:
             try:
                 os.unlink(temp)
