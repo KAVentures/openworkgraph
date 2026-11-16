@@ -2310,8 +2310,10 @@
           if(!current())return;
           const journeyButton=document.getElementById('owgPipelineJourney');
           if(!journeyButton)throw new Error('Evidence journey control unavailable.');
+          // The journey handler owns its authenticated load/error status. Do not
+          // overwrite a denied, revoked, or stale-source response with success.
+          if(current())status.textContent='Inspecting saved process evidence. No project or execution was authorized.';
           await journeyButton.onclick();
-          if(current())status.textContent='Opened the saved process opportunity for evidence review. No project or execution was authorized.';
           return;
         }
         const journeyResponse=await api('/v1/automation-pipeline/'+encodeURIComponent(id)+'/journey');
