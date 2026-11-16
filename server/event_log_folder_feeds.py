@@ -381,6 +381,8 @@ def run_scheduled(feed_id: str) -> tuple[str, float]:
         return "failed:files_unreadable", 0.0
     if any(item.get("warning") for item in result["files"]):
         return "failed:quality_report_unavailable", 0.0
+    if result["files_previously_failed"]:
+        return "failed:previously_failed_files", 0.0
     return f"succeeded:{result['files_appended']}_files_appended", 0.0
 
 

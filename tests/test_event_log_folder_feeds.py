@@ -635,6 +635,24 @@ def test_processing_io_error_is_not_reported_as_success(tmp_path, monkeypatch):
     assert workspace.summary(log)['events'] == 2
 
 
+def test_scheduled_run_stays_failed_while_failed_content_is_still_present(tmp_path, monkeypatch):
+    log = _log()
+    folder = tmp_path / 'exports'
+    folder.mkdir()
+    feed = feeds.create(log, {'folder': str(folder), 'confirm_folder_reads': True})
+    _drop(folder, 'a.csv', HEADER + 'o2;Create;03/03/2024 10:00\n')
+    append = workspace.append_log
+    def unavailable(*args, **kwargs):
+        raise workspace.EventLogWorkspaceError('temporary failure')
+    monkeypatch.setattr(workspace, 'append_log', unavailable)
+    assert feeds.run_scheduled(feed['feed_id']) == ('failed:1_files_not_appended', 0.0)
+    assert feeds.run_scheduled(feed['feed_id']) == ('failed:previously_failed_files', 0.0)
+    monkeypatch.setattr(workspace, 'append_log', append)
+    assert feeds.run(feed['feed_id'], retry_failed=True)['files_appended'] == 1
+    assert feeds.run_scheduled(feed['feed_id']) == ('succeeded:0_files_appended', 0.0)
+    assert workspace.summary(log)['events'] == 3
+
+
 def test_symlinked_files_remain_excluded(tmp_path):
     log = _log()
     folder = tmp_path / 'exports'

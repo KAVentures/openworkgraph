@@ -1294,7 +1294,9 @@ hand.
   later run. The response counts errors encountered during that run and shows
   at most 20 filenames; the existing 20-result limit can defer other files. A
   scheduled run reports failure when any file cannot be read or staged, or
-  when the folder cannot be listed.
+  when the folder cannot be listed. It also continues reporting failure while
+  previously failed, unchanged content remains present; retry or remove that
+  content to clear the condition.
 - Each settled file is copied into a temporary snapshot while hashing. The
   snapshot is what gets appended; files whose identity, size or modification
   time changes during the copy are deferred. A successful append and its content receipt commit together;
