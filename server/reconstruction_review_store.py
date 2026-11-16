@@ -74,13 +74,13 @@ def _load(grant: dict[str, Any], generation: int, evidence_sha256: str) -> dict[
             value = json.loads(raw.decode("utf-8"))
         finally:
             os.close(fd)
-    except (FileNotFoundError, OSError, ValueError, UnicodeError):
+    except (FileNotFoundError, OSError, ValueError, UnicodeError, TypeError):
         return None
     if not isinstance(value, dict) or value.get("version") != 1:
         return None
     try:
         expiry = datetime.fromisoformat(value["expires_at"])
-    except (KeyError, ValueError, TypeError):
+    except (KeyError, ValueError, TypeError, OverflowError):
         return None
     if (expiry.tzinfo is None or expiry <= datetime.now(timezone.utc)
             or expiry > datetime.now(timezone.utc) + _TTL
