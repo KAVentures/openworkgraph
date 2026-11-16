@@ -159,3 +159,53 @@ def test_retention_revoked_between_validation_and_atomic_write(local_store, monk
     with pytest.raises(PermissionError, match="revoked"):
         store.save_reconstruction_review({"mode": "all_saved"}, 1, _envelope())
     assert not local_store.exists()
+
+
+def test_concurrent_delete_waits_for_atomic_save_and_wins(local_store, monkeypatch):
+    """A local deletion racing with an atomic save must not resurrect labels.
+
+    This covers in-process serialization, not cross-process revocation.
+    """
+    import threading
+
+    grant = {"mode": "all_saved"}
+    entered_replace = threading.Event()
+    allow_replace = threading.Event()
+    original_replace = store.os.replace
+    errors = []
+
+    def delayed_replace(src, dst):
+        entered_replace.set()
+        if not allow_replace.wait(timeout=5):
+            raise TimeoutError("test did not release atomic replace")
+        return original_replace(src, dst)
+
+    monkeypatch.setattr(store.os, "replace", delayed_replace)
+
+    def save():
+        try:
+            store.save_reconstruction_review(grant, 1, _envelope())
+        except Exception as exc:
+            errors.append(exc)
+
+    def delete():
+        try:
+            store.clear_saved_reconstruction_review()
+        except Exception as exc:
+            errors.append(exc)
+
+    writer = threading.Thread(target=save)
+    writer.start()
+    assert entered_replace.wait(timeout=5)
+    deleter = threading.Thread(target=delete)
+    deleter.start()
+    try:
+        deleter.join(timeout=0.05)
+        assert deleter.is_alive(), "delete must wait until atomic save releases lock"
+    finally:
+        allow_replace.set()
+        writer.join(timeout=5)
+        deleter.join(timeout=5)
+    assert not writer.is_alive() and not deleter.is_alive()
+    assert not errors
+    assert not local_store.exists()
