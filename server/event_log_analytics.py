@@ -245,8 +245,13 @@ def _cohort_hint(kind: str, value: str, bounds: str | None) -> dict[str, Any] | 
     """The case filter that selects the cases with this feature, where one exists."""
     if kind in ("activity", "resource") and len(value) <= 200:
         return {kind: value}
-    if kind == "attribute" and len(value.partition("=")[2]) < 100 and len(value) <= 200:
-        return {"attribute": value}
+    if kind == "attribute" and bounds:
+        attribute = json.loads(bounds)
+        # The cohort syntax splits on the first '='. A name containing that
+        # delimiter cannot be represented without selecting another key.
+        name, raw = attribute["name"], attribute["value"]
+        if "=" not in name and len(raw) < 100 and len(value) <= 200:
+            return {"attribute": value}
     if kind == "attribute_range" and bounds:
         return {"attribute_range": json.loads(bounds)}
     return None
@@ -310,26 +315,28 @@ def root_cause(log_id: str, outcome: str, case_type: str | None = None, *, thres
                 WHERE o.log_id = $log_id),
             -- Numeric attributes with many values (amounts, durations, counts) rarely repeat a value often
             -- enough to be tested; their quartiles are tested as ranges instead.
-            numeric AS (SELECT k, quantile_cont(x, [0.25, 0.5, 0.75]) AS q FROM attrs GROUP BY k
-                HAVING count(x) >= 0.9 * count(*) AND count(DISTINCT x) > $min_distinct),
-            ranged AS (SELECT a.case_id, a.k, a.x, n.q FROM attrs a JOIN numeric n USING (k) WHERE a.x IS NOT NULL),
+            numeric AS (SELECT k, quantile_cont(x, [0.25, 0.5, 0.75]) FILTER (WHERE isfinite(x)) AS q FROM attrs GROUP BY k
+                HAVING count(*) FILTER (WHERE isfinite(x)) >= 0.9 * count(*)
+                   AND count(DISTINCT x) FILTER (WHERE isfinite(x)) > $min_distinct),
+            ranged AS (SELECT a.case_id, a.k, a.x, n.q FROM attrs a JOIN numeric n USING (k) WHERE isfinite(a.x)),
             f AS (
               SELECT DISTINCT case_id, 'activity' AS kind, activity AS value, NULL::VARCHAR AS bounds FROM ce
                 WHERE activity IS DISTINCT FROM $excluded
               UNION SELECT DISTINCT case_id, 'resource', resource, NULL FROM ce WHERE resource <> ''
-              UNION SELECT DISTINCT case_id, 'attribute', k || '=' || left(v, 100), NULL FROM attrs
+              UNION SELECT DISTINCT case_id, 'attribute', k || '=' || left(v, 100),
+                  to_json({'name': k, 'value': left(v, 100)})::VARCHAR FROM attrs
               UNION SELECT DISTINCT case_id, 'attribute_range', CASE
-                  WHEN x < q[1] THEN k || ' < ' || printf('%.6g', q[1])
-                  WHEN x < q[2] THEN printf('%.6g', q[1]) || ' ≤ ' || k || ' < ' || printf('%.6g', q[2])
-                  WHEN x < q[3] THEN printf('%.6g', q[2]) || ' ≤ ' || k || ' < ' || printf('%.6g', q[3])
-                  ELSE k || ' ≥ ' || printf('%.6g', q[3]) END,
+                  WHEN x < q[1] THEN k || ' < ' || printf('%.17g', q[1])
+                  WHEN x < q[2] THEN printf('%.17g', q[1]) || ' ≤ ' || k || ' < ' || printf('%.17g', q[2])
+                  WHEN x < q[3] THEN printf('%.17g', q[2]) || ' ≤ ' || k || ' < ' || printf('%.17g', q[3])
+                  ELSE k || ' ≥ ' || printf('%.17g', q[3]) END,
                   -- The exact edges, so a filter selects exactly the cases counted here.
                   CASE WHEN x < q[1] THEN to_json({'name': k, 'max': q[1]})
                        WHEN x < q[2] THEN to_json({'name': k, 'min': q[1], 'max': q[2]})
                        WHEN x < q[3] THEN to_json({'name': k, 'min': q[2], 'max': q[3]})
                        ELSE to_json({'name': k, 'min': q[3]}) END::VARCHAR FROM ranged)
-            SELECT kind, value, count(*) AS n1, count(*) FILTER (WHERE co.y) AS y1, any_value(bounds) AS bounds
-            FROM f JOIN co USING (case_id) GROUP BY 1, 2
+            SELECT kind, value, count(*) AS n1, count(*) FILTER (WHERE co.y) AS y1, bounds
+            FROM f JOIN co USING (case_id) GROUP BY 1, 2, 5
             HAVING count(*) >= $min AND count(*) <= $max""",
                             {"excluded": excluded, "log_id": log_id, "min_distinct": NUMERIC_RANGE_MIN_DISTINCT,
                              "min": MIN_GROUP_CASES, "max": n - MIN_GROUP_CASES}).fetchall()
