@@ -1807,11 +1807,20 @@ which filter was applied and how many cases the log had before filtering. In the
 overview shows "Filtered: N of M cases"; sections not in that list still use every case, and the
 filter note says so.
 
+**Case attributes in the filter.** The dashboard's case filter also takes one case-attribute value,
+written `name=value` (for example `Region=EU`), and a numeric range on one case attribute (from,
+inclusive, and/or below, exclusive). These are the `attribute` and `attribute_range` query
+parameters (`attribute_range={"name":"amount","min":200,"max":400}`). Attributes come from the
+import (OCEL object attributes) or from a joined case table. They combine with the follower rules,
+every condition must hold, and they apply to the same views. Values that are not numbers never
+match a range. The inputs are validated before anything is sent. Saving the filter keeps the
+values and ranges with it.
+
 **Saved filters.** The active case filter can be saved under a name and applied again later from
 the same panel; applying it re-runs every filtered view at once. The API stores any case filter
 (`{"name": "...", "cohort": {"follows": [...], "started_from": "...", ...}}`, up to 50 per log,
-names unique regardless of case) as `openworkgraph.event-log-filter-set.v1`; the dashboard panel
-applies follower rules. A saved filter is re-applied to the log as it is now, so the listing says
+names unique regardless of case) as `openworkgraph.event-log-filter-set.v1`. The dashboard panel
+applies follower rules, case-attribute values and numeric ranges. A saved filter is re-applied to the log as it is now, so the listing says
 when newer exports were appended after it was saved and names any activities it uses that the log
 does not contain. Saved filters are deleted with the log and never change events.
 

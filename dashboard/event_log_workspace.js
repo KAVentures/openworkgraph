@@ -2,7 +2,12 @@
 (() => {
   'use strict';
   const MODEL_FORMAT='openworkgraph.reference-model.v1';
-  const state={logs:[],logId:'',caseType:'',generation:0,refresh:0,follows:[],objectTypes:[]};
+  const state={logs:[],logId:'',caseType:'',generation:0,refresh:0,follows:[],attr:{},objectTypes:[]};
+  // The global case filter: follower rules plus an optional case-attribute value and/or numeric range.
+  const filterOn=()=>state.follows.length>0||!!state.attr.attribute||!!state.attr.attribute_range;
+  const globalCohort=()=>({...(state.follows.length?{follows:state.follows}:{}),...state.attr});
+  const rangeText=r=>(r.min!==undefined?r.min+' ≤ ':'')+r.name+(r.max!==undefined?' < '+r.max:'');
+  const attrText=()=>[state.attr.attribute,state.attr.attribute_range?rangeText(state.attr.attribute_range):''].filter(Boolean).join('; ');
   let activityLookupBusy=false;
   // Views that honour the workspace case filter; every other section uses all cases.
   const FILTERED=new Set(['summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','waiting-time','drift','model-discovery','organization','report.html']);
@@ -80,7 +85,7 @@
     return response;
   }
   const getJSON=async path=>(await api(path)).json();
-  const logPath=(suffix,params)=>{const q=new URLSearchParams();for(const [key,value] of Object.entries(params||{})){if(Array.isArray(value))value.forEach(v=>q.append(key,v));else q.set(key,value);}if(state.caseType)q.set('case_type',state.caseType);if(state.follows.length&&FILTERED.has(suffix))q.set('follows',JSON.stringify(state.follows));const s=q.toString();return '/v1/event-logs/'+encodeURIComponent(state.logId)+'/'+suffix+(s?'?'+s:'');};
+  const logPath=(suffix,params)=>{const q=new URLSearchParams();for(const [key,value] of Object.entries(params||{})){if(Array.isArray(value))value.forEach(v=>q.append(key,v));else q.set(key,value);}if(state.caseType)q.set('case_type',state.caseType);if(FILTERED.has(suffix)){if(state.follows.length)q.set('follows',JSON.stringify(state.follows));if(state.attr.attribute)q.set('attribute',state.attr.attribute);if(state.attr.attribute_range)q.set('attribute_range',JSON.stringify(state.attr.attribute_range));}const s=q.toString();return '/v1/event-logs/'+encodeURIComponent(state.logId)+'/'+suffix+(s?'?'+s:'');};
 
   function table(headers,rows){
     const wrap=el('div',null,'table-wrap');const t=el('table');const head=el('thead');const hr=el('tr');
@@ -342,7 +347,7 @@
       }catch(error){status(error.message);}finally{refreshImport();}
     };
     pick.onchange=()=>{selectLog(pick.value);refreshImport();};
-    caseType.onchange=()=>{state.generation++;state.caseType=caseType.value;state.follows=[];results.replaceChildren();};
+    caseType.onchange=()=>{state.generation++;state.caseType=caseType.value;state.follows=[];state.attr={};results.replaceChildren();};
     analyze.onclick=()=>analyse().catch(error=>status(error.message));
     const relationshipExportNote=()=>{const log=state.logs.find(l=>l.log_id===state.logId);return log&&log.object_relationships&&!['ocel','ocelxml'].includes(exportFormat.value)?' This format omits supplied object relationships; OCEL JSON/XML preserve the retained assertions.':'';};
     exportFormat.onchange=()=>{const note=relationshipExportNote();const review=exportFormat.value.endsWith('-review')?'Review CSV changes formula-like text and column names; use the regular export for re-import.':'';if(review||note)status((review+note).trim());};
@@ -569,7 +574,7 @@
       run.disabled=true;
       try{
         const cohort=filter.read();delete cohort.label;
-        if(state.follows.length)cohort.follows=state.follows;
+        if(filterOn())Object.assign(cohort,globalCohort());
         if(!Object.keys(cohort).length)throw new Error('Choose which cases to copy.');
         const spec={name:name.value.trim(),cohort};if(state.caseType)spec.case_type=state.caseType;
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/derive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
@@ -588,7 +593,7 @@
 
   async function selectLog(logId){
     const savedPanel=document.getElementById('owgEventLogSavedList');if(savedPanel){show(savedPanel,false);document.getElementById('owgEventLogSavedReports')?.setAttribute('aria-expanded','false');}
-    const generation=++state.generation;state.logId=logId;state.caseType='';state.follows=[];state.objectTypes=[];
+    const generation=++state.generation;state.logId=logId;state.caseType='';state.follows=[];state.attr={};state.objectTypes=[];
     document.getElementById('owgEventLogResults').replaceChildren();
     const types=await getJSON('/v1/event-logs/'+encodeURIComponent(logId)+'/object-types');
     if(generation!==state.generation)return;
@@ -776,7 +781,7 @@
         const spec={currency:currency.value.trim().toUpperCase(),activity_costs,hourly_open_case_cost:Number(hourly.value||0)};
         if(fallback.value.trim()!=='')spec.default_activity_cost=Number(fallback.value);
         if(state.caseType)spec.case_type=state.caseType;
-        if(state.follows.length)spec.cohort={follows:state.follows};
+        if(filterOn())spec.cohort=globalCohort();
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/costs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
         if(generation!==state.generation)return;
         let money;try{money=new Intl.NumberFormat(undefined,{style:'currency',currency:r.currency});}catch(_){money={format:v=>r.currency+' '+Number(v).toFixed(2)};}
@@ -889,7 +894,7 @@
       run.disabled=true;out.replaceChildren(el('div','Calculating…','muted'));
       try{
         const cohort=filters.read();
-        if(state.follows.length)cohort.follows=state.follows;
+        if(filterOn())Object.assign(cohort,globalCohort());
         const first=metric.value==='duration_hours'
           ?{divide:[{field:'duration_seconds'},{literal:3600}]}
           :{field:metric.value};
@@ -964,7 +969,7 @@
     function start(){
       try{const cohort=filters.read();
         if(exactActivity.value){if(Array.from(exactActivity.value).length>200)throw new Error('Activity labels must have at most 200 characters.');cohort.activity=exactActivity.value;}
-        if(options.caseType===undefined&&state.follows.length)cohort.follows=state.follows;
+        if(options.caseType===undefined&&filterOn())Object.assign(cohort,globalCohort());
         spec={cohort,limit:30};if(path)spec.path=path;if(transition)spec.transition=transition;detail.replaceChildren();opening++;load(null);}
       catch(error){message.textContent=error.message;}
     }
@@ -1024,7 +1029,7 @@
     out.appendChild(el('div','Looking for where case time and repetition concentrate…','muted'));
     box.appendChild(out);
     const generation=state.generation;
-    const spec={limit:6};if(state.caseType)spec.case_type=state.caseType;if(state.follows.length)spec.cohort={follows:state.follows};
+    const spec={limit:6};if(state.caseType)spec.case_type=state.caseType;if(filterOn())spec.cohort=globalCohort();
     api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/insights',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})
       .then(r=>r.json()).then(r=>{
         if(generation!==state.generation)return;
@@ -1036,7 +1041,7 @@
           const title=el('strong',f.title);
           const meta=el('div',Number(f.cases).toLocaleString()+' cases ('+pct(f.case_share)+')'+(f.impact_seconds?' · about '+duration(f.impact_seconds)+' of case time involved':'')+'. '+f.caveat,'muted');
           item.append(title,meta);
-          if(f.follows&&f.follows.length&&!state.follows.length){
+          if(f.follows&&f.follows.length&&!filterOn()){
             const go=button('Filter to these cases','secondary');go.setAttribute('aria-label','Filter to these cases: '+f.title);
             go.onclick=()=>{state.follows=f.follows;analyse().catch(error=>status(error.message));};
             item.appendChild(go);
@@ -1115,7 +1120,28 @@
     const add=button('Add rule','secondary');add.id='owgCaseFilterAdd';
     const apply=button('Apply filter');apply.id='owgCaseFilterApply';
     const clear=button('Clear filter','secondary');clear.id='owgCaseFilterClear';
-    const message=el('div',state.follows.length?'Active: '+state.follows.map(followText).join('; ')+'.':'No case filter: every case is included.','muted');
+    const activeText=[...state.follows.map(followText),attrText()].filter(Boolean).join('; ');
+    const message=el('div',filterOn()?'Active: '+activeText+'.':'No case filter: every case is included.','muted');
+    // Case attributes (from the import or a joined case table): one value, and/or a numeric range.
+    const attrValue=input('owgCaseFilterAttribute','text','for example Region=EU');attrValue.maxLength=200;attrValue.value=state.attr.attribute||'';
+    const rangeName=input('owgCaseFilterRangeName','text','for example amount');rangeName.maxLength=200;
+    const rangeMin=input('owgCaseFilterRangeMin','number','from (inclusive)');rangeMin.step='any';
+    const rangeMax=input('owgCaseFilterRangeMax','number','below (exclusive)');rangeMax.step='any';
+    if(state.attr.attribute_range){const r=state.attr.attribute_range;rangeName.value=r.name;if(r.min!==undefined)rangeMin.value=r.min;if(r.max!==undefined)rangeMax.value=r.max;}
+    const attrRow=el('div',null,'row');attrRow.style.alignItems='end';
+    attrRow.append(field('Case attribute equals (name=value)',attrValue),field('Numeric case attribute',rangeName),field('From',rangeMin),field('Below',rangeMax));
+    function readAttr(){
+      const out={},value=attrValue.value.trim();
+      if(value){if(!value.includes('=')||!value.split('=')[0].trim())throw new Error('Write the case attribute as name=value.');out.attribute=value;}
+      const name=rangeName.value.trim();
+      if(name||rangeMin.value||rangeMax.value){
+        if(!name)throw new Error('Name the numeric case attribute.');
+        const r={name};if(rangeMin.value!=='')r.min=Number(rangeMin.value);if(rangeMax.value!=='')r.max=Number(rangeMax.value);
+        if(r.min===undefined&&r.max===undefined)throw new Error('Give a lower bound, an upper bound or both.');
+        if(r.min!==undefined&&r.max!==undefined&&!(r.min<r.max))throw new Error('The lower bound must be below the upper bound.');
+        out.attribute_range=r;}
+      return out;
+    }
     message.id='owgCaseFilterStatus';message.setAttribute('role','status');
     const names=activityNames.slice(0,500).map(a=>[a,a]);
     function render(){
@@ -1143,11 +1169,11 @@
       add.disabled=draft.length>=5;
     }
     add.onclick=()=>{draft.push({from:names[0]?.[0]||'',to:(names[1]||names[0])?.[0]||'',mode:'eventual'});render();const focus=document.getElementById((names.length?'owgCaseFilterFrom':'owgCaseFilterFromExact')+draft.length);if(focus)focus.focus();};
-    apply.onclick=()=>{try{state.follows=followSpec(draft);analyse().catch(error=>status(error.message));}catch(error){message.textContent=error.message;}};
-    clear.onclick=()=>{state.follows=[];analyse().catch(error=>status(error.message));};
+    apply.onclick=()=>{try{const follows=followSpec(draft),attr=readAttr();state.follows=follows;state.attr=attr;analyse().catch(error=>status(error.message));}catch(error){message.textContent=error.message;}};
+    clear.onclick=()=>{state.follows=[];state.attr={};analyse().catch(error=>status(error.message));};
     render();
     const controls=el('div',null,'row');controls.append(add,apply,clear);
-    box.append(rows,controls,message,filterSetBlock(activityNames));
+    box.append(rows,attrRow,controls,message,filterSetBlock(activityNames));
     return box;
   }
 
@@ -1155,8 +1181,8 @@
   function filterSetBlock(activityNames){
     const wrap=el('div');wrap.id='owgFilterSets';
     const name=input('owgFilterSetName','text','Filter name');name.maxLength=120;
-    const save=button('Save active filter','secondary');save.id='owgFilterSetSave';save.disabled=!state.follows.length;
-    const message=el('div',state.follows.length?'':'Apply a filter to save it.','muted');message.id='owgFilterSetStatus';message.setAttribute('role','status');
+    const save=button('Save active filter','secondary');save.id='owgFilterSetSave';save.disabled=!filterOn();
+    const message=el('div',filterOn()?'':'Apply a filter to save it.','muted');message.id='owgFilterSetStatus';message.setAttribute('role','status');
     const list=el('div');list.id='owgFilterSetList';
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Name for the active filter',name),save);
     wrap.append(el('h4','Saved filters'),row,message,list);
@@ -1165,21 +1191,22 @@
     async function refresh(){
       const r=await getJSON(base());if(generation!==state.generation)return;
       list.replaceChildren(r.filter_sets.length?table(['Filter','Rules','Notes',''],r.filter_sets.map(set=>{
-        const follows=set.cohort.follows||[],other=Object.keys(set.cohort).filter(k=>k!=='follows');
-        const use=button('Apply','secondary');use.setAttribute('aria-label','Apply saved filter '+set.name);use.disabled=!follows.length||other.length>0;
-        use.onclick=()=>{state.follows=follows;analyse().catch(error=>status(error.message));};
+        const follows=set.cohort.follows||[],other=Object.keys(set.cohort).filter(k=>!['follows','attribute','attribute_range'].includes(k));
+        const attr={...(set.cohort.attribute?{attribute:set.cohort.attribute}:{}),...(set.cohort.attribute_range?{attribute_range:set.cohort.attribute_range}:{})};
+        const use=button('Apply','secondary');use.setAttribute('aria-label','Apply saved filter '+set.name);use.disabled=!(follows.length||Object.keys(attr).length)||other.length>0;
+        use.onclick=()=>{state.follows=follows;state.attr=attr;analyse().catch(error=>status(error.message));};
         const del=button('Delete','secondary');del.setAttribute('aria-label','Delete saved filter '+set.name);
         del.onclick=async()=>{try{await api(base()+'/'+encodeURIComponent(set.set_id)+'/delete',{method:'POST'});message.textContent='Saved filter deleted.';await refresh();}catch(error){message.textContent=error.message;}};
         const notes=[...(set.activities_not_in_log.length?['Not in this log: '+set.activities_not_in_log.join(', ')]:[]),
           ...(set.log_appended_since_saved?['Newer exports were appended since it was saved']:[]),
           ...(other.length?['Also filters by '+other.join(', ')+', which this panel cannot apply']:[])];
         const actions=el('span');actions.append(use,' ',del);
-        return [set.name,follows.map(followText).join('; ')||'—',notes.join('. ')||'—',actions];
+        return [set.name,[...follows.map(followText),attr.attribute||'',attr.attribute_range?rangeText(attr.attribute_range):''].filter(Boolean).join('; ')||'—',notes.join('. ')||'—',actions];
       })):el('div','No saved filters yet.','muted'));
     }
     save.onclick=async()=>{
       try{
-        await api(base(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name.value,cohort:{follows:state.follows}})});
+        await api(base(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name.value,cohort:globalCohort()})});
         message.textContent='Saved "'+name.value.trim()+'".';name.value='';await refresh();
       }catch(error){message.textContent=error.message;}
     };
@@ -1337,7 +1364,7 @@
       finally{run.disabled=false;}
     };
     run.onclick=()=>{const id=caseId.value.trim();if(!id){out.replaceChildren(el('div','Enter a case ID.','muted'));return;}explainCase(id);};
-    const spec={limit:5};if(state.caseType)spec.case_type=state.caseType;if(state.follows.length)spec.cohort={follows:state.follows};
+    const spec={limit:5};if(state.caseType)spec.case_type=state.caseType;if(filterOn())spec.cohort=globalCohort();
     post('slowest',spec).then(r=>{
       if(generation!==state.generation||!r.cases.length)return;
       const wrap=el('div',null,'row');wrap.appendChild(el('span','Slowest cases:','muted'));
@@ -4424,7 +4451,7 @@
       try{
         message.textContent='Clustering…';run.disabled=true;
         const body={};if(k.value)body.k=Number(k.value);if(state.caseType)body.case_type=state.caseType;
-        if(state.follows.length)body.cohort={follows:state.follows};
+        if(filterOn())body.cohort=globalCohort();
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/trace-clusters',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
         if(generation!==state.generation)return;
         const rows=r.clusters.map(c=>['Cluster '+c.cluster,Number(c.cases).toLocaleString()+' ('+pct(c.share)+')',Number(c.variants).toLocaleString(),
@@ -5152,7 +5179,7 @@
       try{
         const spec={top_values:5};
         if(state.caseType)spec.case_type=state.caseType;
-        if(state.follows.length)spec.cohort={follows:state.follows};
+        if(filterOn())spec.cohort=globalCohort();
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/attribute-profile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
         if(generation!==state.generation)return;
         if(!r.attributes.length){out.replaceChildren(el('div','The events carry no attributes. Keep extra columns as attributes when importing a CSV.','muted'));return;}
@@ -5202,7 +5229,7 @@
         if(!endList.length)throw new Error('List the activities that end a case.');
         const spec={end_activities:endList,history:Number(history.value),limit:50};
         if(state.caseType)spec.case_type=state.caseType;
-        if(state.follows.length)spec.cohort={follows:state.follows};
+        if(filterOn())spec.cohort=globalCohort();
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/next-activity',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
         if(generation!==state.generation)return;
         const b=r.backtest;
