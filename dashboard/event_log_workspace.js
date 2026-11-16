@@ -1061,7 +1061,11 @@
             save.onclick=async()=>{const name=(window.prompt('Name for a new log with these '+f.cases+' cases',(f.numbers.segment||'segment').slice(0,120))||'').trim();if(!name)return;
               try{const r2=await post('/derive',{name:name.slice(0,120),cohort:f.cohort});casesOut.replaceChildren(el('div','Saved '+Number(r2.copied.events).toLocaleString()+' events of '+Number(r2.derived_from.cases_matched).toLocaleString()+' cases as “'+r2.log.name+'”. This log is unchanged.'));}
               catch(error){casesOut.replaceChildren(el('div',error.message,'muted'));}};
-            const row=el('div',null,'row');row.append(slowest,save);item.append(row,casesOut);
+            const row=el('div',null,'row');
+            // Make the group the global case filter, so every filtered view shows only these cases.
+            if(!filterOn()){const go=button('Filter to these cases','secondary');go.setAttribute('aria-label','Filter to these cases: '+f.title);
+              go.onclick=()=>{state.attr={...f.cohort};analyse().catch(error=>status(error.message));};row.appendChild(go);}
+            row.append(slowest,save);item.append(row,casesOut);
           }
           list.appendChild(item);
         });
@@ -3021,6 +3025,10 @@
           casePanel.replaceChildren(el('div','Saved '+Number(r.copied.events).toLocaleString()+' events of '+Number(r.derived_from.cases_matched).toLocaleString()+' cases as “'+r.log.name+'”. This log is unchanged.'));}
         catch(error){casePanel.replaceChildren(el('div',error.message,'muted'));}
       };
+      if((a.cohort.attribute||a.cohort.attribute_range)&&!filterOn()){
+        const go=button('Filter','secondary');go.setAttribute('aria-label','Filter every view to the cases with '+label);
+        go.onclick=()=>{state.attr={...(a.cohort.attribute?{attribute:a.cohort.attribute}:{}),...(a.cohort.attribute_range?{attribute_range:a.cohort.attribute_range}:{})};analyse().catch(error=>status(error.message));};
+        wrap.appendChild(go);}
       wrap.append(slowest,tag,save);return wrap;
     }
     run.onclick=async()=>{

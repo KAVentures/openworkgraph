@@ -1816,6 +1816,11 @@ every condition must hold, and they apply to the same views. Values that are not
 match a range. The inputs are validated before anything is sent. Saving the filter keeps the
 values and ranges with it.
 
+An automatic insight about a case-attribute group (`attribute_segment`) and a root-cause row for
+an attribute value or range both offer to become this filter in one click: "Filter to these cases"
+and "Filter". They are offered only while no global filter is active, so they never silently
+replace one. They set exactly the finding's `attribute` or `attribute_range`.
+
 **Saved filters.** The active case filter can be saved under a name and applied again later from
 the same panel; applying it re-runs every filtered view at once. The API stores any case filter
 (`{"name": "...", "cohort": {"follows": [...], "started_from": "...", ...}}`, up to 50 per log,
