@@ -425,6 +425,22 @@ async def retry_failed_event_log_feed_files(request: Request, feed_id: str):
     return await run_in_threadpool(_respond, folder_feeds.run, feed_id, retry_failed=True)
 
 
+@router.get("/v1/event-logs/feeds/{feed_id}/failures")
+def list_event_log_feed_failures(request: Request, feed_id: str, after: str = Query(default="", max_length=64)):
+    from . import event_log_folder_feeds as folder_feeds
+    _require_dashboard(request)
+    return _respond(folder_feeds.failures, feed_id, after=after)
+
+
+@router.post("/v1/event-logs/feeds/{feed_id}/retry-failed/{sha256}")
+async def retry_one_event_log_feed_file(request: Request, feed_id: str, sha256: str):
+    from . import event_log_folder_feeds as folder_feeds
+    _require_dashboard(request)
+    if request.headers.get("x-owg-local-storage-confirmed") != "true":
+        raise HTTPException(403, "Explicit confirmation to store these events on this computer is required")
+    return await run_in_threadpool(_respond, folder_feeds.run, feed_id, retry_failed=True, retry_hash=sha256)
+
+
 @router.post("/v1/event-logs/{log_id}/case-attributes")
 async def add_case_attributes(
     request: Request, log_id: str,
