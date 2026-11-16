@@ -599,6 +599,7 @@ in cohorts and as a JSON query parameter
 (`?attribute_range={"name":"amount","min":1000}`). `min` is inclusive, `max`
 is exclusive, and either can be left out. Non-numeric and non-finite values
 (including NaN and infinity) never contribute to the quartiles or match a range.
+Range attribute names match literal stored keys, including punctuation and Unicode.
 
 In the dashboard, the "Its cases" column offers three actions for each
 association that has such a filter:
