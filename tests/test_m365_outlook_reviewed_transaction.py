@@ -147,7 +147,8 @@ class ReviewedTransactionTests(unittest.TestCase):
             append.assert_not_called()
 
     def test_review_digest_mismatch_refuses_before_append(self):
-        with patch.object(tx.cycle, "review", return_value={"csv_sha256": "b" * 64}), \
+        with patch.object(tx, "inspect_checkpoint", return_value=None), \
+             patch.object(tx.cycle, "review", return_value={"csv_sha256": "b" * 64}), \
              patch.object(tx.cycle, "append") as append:
             with self.assertRaisesRegex(ReceiptError, "changed"):
                 tx.execute(**inputs())
