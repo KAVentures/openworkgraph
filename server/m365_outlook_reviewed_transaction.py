@@ -160,6 +160,14 @@ def execute(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
         expected_previous_candidate_sha256=expected_previous_candidate_sha256,
         consent_local_read=True, confirm_removals_reviewed=True,
         confirm_checkpoint_commit=True)
+    # Checkpoint writes are irreversible. Never report success from an
+    # untrusted/malformed adapter receipt; require manual reconciliation.
+    if (type(committed) is not dict
+            or committed.get("status") != "checkpoint_committed"
+            or type(committed.get("generation")) is not int
+            or committed["generation"] != (1 if predecessor is None else predecessor["generation"] + 1)
+            or type(committed.get("idempotent_replay", False)) is not bool):
+        raise UncertainReceipt("Checkpoint outcome uncertain; inspect persisted ledger")
     audit("checkpoint-commit", committed)
     return {"format": FORMAT, "status": "checkpoint_committed",
             "generation": committed["generation"],
