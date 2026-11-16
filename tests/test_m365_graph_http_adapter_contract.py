@@ -395,3 +395,66 @@ def test_real_graph_delta_candidate_passes_real_offline_review_without_append(tm
     assert exported["checkpoint_advanced"] is False
     assert len(transport.requests) == 1
     assert transport.requests[0][0].get_header("Authorization") == "Bearer test-token"
+
+
+def test_real_graph_candidate_review_and_transaction_preflight_bridge(tmp_path):
+    """Real Graph HTTP -> private CSV/candidate -> review -> transaction preflight.
+
+    The checkpoint inspection is isolated because this is deliberately a
+    pre-append contract; no OWG writes or checkpoint mutation are authorized.
+    """
+    from server import m365_outlook_delta as delta
+    from server.m365_outlook_candidate_review import review
+    from server.m365_outlook_reviewed_transaction import preflight
+
+    grant_file = tmp_path / "grant.json"
+    grant_file.write_text(json.dumps({
+        "version": 1, "enabled": True, "consented": True,
+        "tenant_scope": "tenant", "mailbox_scope": "mailbox",
+        "folder_id": "folder",
+    }))
+    grant_file.chmod(0o600)
+    initial = delta._initial("folder")
+    cursor = ("https://graph.microsoft.com/v1.0/me/mailFolders/folder/"
+              "messages/delta?%24deltatoken=reviewed")
+    message = {
+        "id": "message-1",
+        "receivedDateTime": "2026-11-01T10:00:00Z",
+        "lastModifiedDateTime": "2026-11-01T10:01:00Z",
+        "isRead": False,
+    }
+    transport = Transport(Response(initial, json.dumps({
+        "value": [message], "@odata.deltaLink": cursor,
+    }).encode()))
+    csv_path = tmp_path / "round.csv"
+    candidate = tmp_path / "round.json"
+    scope = dict(tenant="tenant", mailbox="mailbox", folder="folder",
+                 grant_file=grant_file)
+    delta.export_delta(
+        tenant="tenant", mailbox="mailbox", folder_id="folder",
+        grant_file=grant_file, output=csv_path, candidate=candidate,
+        token="test-token", consent_read=True, consent_export=True,
+        opener=transport,
+    )
+    reviewed = review(**scope, candidate=candidate, consent_local_read=True)
+    assert reviewed["status"] == "review_ready"
+    assert reviewed["event_snapshots"] == 1
+    assert reviewed["checkpoint_advanced"] is False
+    assert reviewed["csv_sha256"] == json.loads(candidate.read_text())["csv_sha256"]
+
+    with patch("server.m365_outlook_reviewed_transaction.inspect_checkpoint",
+               return_value=None) as checkpoint:
+        proposed = preflight(
+            **scope, log_id="log", confirm_log_id="log",
+            candidate=candidate, ledger_dir=tmp_path / "ledger",
+            expected_review_csv_sha256=reviewed["csv_sha256"],
+            consent_local_read=True,
+        )
+    assert checkpoint.call_count == 2
+    assert proposed["status"] == "review_ready_for_explicit_commit"
+    assert proposed["proposed_generation"] == 1
+    assert proposed["reviewed_event_snapshots"] == 1
+    assert proposed["owg_writes"] == 0
+    assert proposed["checkpoint_advanced"] is False
+    assert len(transport.requests) == 1
+    assert "test-token" not in candidate.read_text()
