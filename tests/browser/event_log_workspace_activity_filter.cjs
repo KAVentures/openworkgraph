@@ -34,7 +34,7 @@ const path=require('node:path');
   await page.locator('#owgCaseFilterAdd').click();await page.locator('#owgCaseFilterFromExact1').fill('Create');await page.locator('#owgCaseFilterToExact1').fill('Slow');
   const [summary,variants,map]=await Promise.all([
     page.waitForResponse(r=>r.url().includes('/summary?')&&new URL(r.url()).searchParams.has('follows')&&r.status()===200),
-    page.waitForResponse(r=>r.url().includes('/variants?')&&new URL(r.url()).searchParams.has('follows')&&r.status()===200),
+    page.waitForResponse(r=>r.url().includes('/variants/preview?')&&new URL(r.url()).searchParams.has('follows')&&r.status()===200),
     page.waitForResponse(r=>r.url().includes('/process-map?')&&new URL(r.url()).searchParams.has('follows')&&r.status()===200),
     page.locator('#owgCaseFilterApply').click()]);
   await page.locator('#owgCaseFilterCount').filter({hasText:'Filtered: 6 of 40 cases'}).waitFor();
