@@ -339,6 +339,8 @@ def test_explicit_retry_processes_only_previously_failed_content(tmp_path, monke
         raise workspace.EventLogWorkspaceError('temporary ingestion failure')
     monkeypatch.setattr(workspace, 'append_log', unavailable)
     assert feeds.run(feed['feed_id'])['files_failed'] == 1
+    skipped = feeds.run(feed['feed_id'])
+    assert (skipped['files_already_appended'], skipped['files_previously_failed']) == (0, 1)
     assert feeds.run(feed['feed_id'], retry_failed=True)['files_failed'] == 1
     listed = feeds.feeds(log)['feeds'][0]
     assert (listed['files_failed'], len(listed['recent_files'])) == (1, 1)

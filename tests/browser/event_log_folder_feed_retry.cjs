@@ -49,6 +49,8 @@ const path=require('node:path');
    await page.locator('#owgFolderFeedResult').filter({hasText:'synthetic temporary ingestion failure'}).waitFor();
    const retry=page.locator('#owgFolderFeedList').getByRole('button',{name:'Retry failed files for '+exports,exact:true});
    await page.waitForFunction(folder=>[...document.querySelectorAll('#owgFolderFeedList button')].some(b=>b.getAttribute('aria-label')==='Retry failed files for '+folder&&!b.disabled),exports);
+   await page.locator('#owgFolderFeedList').getByRole('button',{name:'Run feed for '+exports,exact:true}).click();
+   await page.locator('#owgFolderFeedResult').filter({hasText:'1 previously failed (use Retry failed files)'}).waitFor();
    await fs.unlink(path.join(scratch,'fail-append'));
    await fs.writeFile(path.join(exports,'orders-2.csv'),'case,activity,time\nc5,Receive,2024-03-06T08:00:00Z\nc5,Pay,2024-03-06T09:00:00Z\n');await fs.utimes(path.join(exports,'orders-2.csv'),old,old);
    await retry.click();await page.locator('#owgFolderFeedResult').filter({hasText:'1 file(s) appended with 2 new events'}).waitFor();

@@ -1262,7 +1262,7 @@
     for(const control of [folder,pattern])control.addEventListener('input',ready);consent.addEventListener('change',ready);
     const base='/v1/event-logs/'+encodeURIComponent(state.logId)+'/feeds';
     const generation=state.generation;
-    const describe=r=>r.files_appended+' file(s) appended with '+Number(r.events_added).toLocaleString()+' new events'+(r.files_failed?', '+r.files_failed+' could not be appended':'')+(r.files_already_appended?', '+r.files_already_appended+' already appended':'')+(r.files_still_being_written?', '+r.files_still_being_written+' still being written (next run)':'')+'.'+((r.files||[]).some(file=>file.warning)?' An append committed, but its quality report could not be recorded.':'');
+    const describe=r=>r.files_appended+' file(s) appended with '+Number(r.events_added).toLocaleString()+' new events'+(r.files_failed?', '+r.files_failed+' could not be appended':'')+(r.files_already_appended?', '+r.files_already_appended+' already appended':'')+(r.files_previously_failed?', '+r.files_previously_failed+' previously failed (use Retry failed files)':'')+(r.files_still_being_written?', '+r.files_still_being_written+' still being written (next run)':'')+'.'+((r.files||[]).some(file=>file.warning)?' An append committed, but its quality report could not be recorded.':'');
     const render=r=>{
       if(!r.feeds.length){list.replaceChildren(el('div','No folder feed yet.','muted'));return;}
       list.replaceChildren(table(['Folder','Pattern','Files appended','Failed','Latest file',''],r.feeds.map(f=>{

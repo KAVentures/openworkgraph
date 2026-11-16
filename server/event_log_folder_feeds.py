@@ -217,7 +217,7 @@ def run(feed_id: str, *, now: float | None = None, retry_failed: bool = False) -
         if stat.S_ISREG(info.st_mode):
             candidates.append((info.st_mtime, path.name, path, info))
     candidates.sort()
-    waiting, already, skipped_new, duplicate_failed, results, attempted = 0, 0, 0, 0, [], set()
+    waiting, already, previously_failed, skipped_new, duplicate_failed, results, attempted = 0, 0, 0, 0, 0, [], set()
     for mtime, name, path, info in candidates:
         if current - mtime < SETTLE_SECONDS:
             waiting += 1
@@ -239,7 +239,10 @@ def run(feed_id: str, *, now: float | None = None, retry_failed: bool = False) -
                     skipped_new += 1
                     continue
                 if prior and (not retry_failed or prior[0] == 'appended'):
-                    already += 1
+                    if prior[0] == 'appended':
+                        already += 1
+                    else:
+                        previously_failed += 1
                     continue
                 if retry_failed and sha in attempted:
                     duplicate_failed += 1
@@ -293,10 +296,10 @@ def run(feed_id: str, *, now: float | None = None, retry_failed: bool = False) -
     return {"format": FORMAT, "feed_id": feed_id, "log_id": feed["log_id"], "ran_at": _now(),
             "files_appended": len(appended), "files_failed": len(results) - len(appended),
             "events_added": sum(r["added_events"] for r in appended),
-            "files_already_appended": already, "files_still_being_written": waiting,
+            "files_already_appended": already, "files_previously_failed": previously_failed, "files_still_being_written": waiting,
             **({"retry_failed_only": True, "new_files_left_for_normal_run": skipped_new,
                 "duplicate_failed_files_skipped": duplicate_failed} if retry_failed else {}),
-            "more_files_waiting": len(candidates) - waiting - already - skipped_new - duplicate_failed - len(results) > 0 and len(results) >= MAX_FILES_PER_RUN,
+            "more_files_waiting": len(candidates) - waiting - already - previously_failed - skipped_new - duplicate_failed - len(results) > 0 and len(results) >= MAX_FILES_PER_RUN,
             "files": results}
 
 

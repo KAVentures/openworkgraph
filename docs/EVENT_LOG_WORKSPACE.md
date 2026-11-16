@@ -1307,7 +1307,8 @@ hand.
   failed receipt. It does not process new or changed files; use **Run now**
   for those. A successful retry replaces the failure receipt atomically, and
   another failed attempt updates its error. Missing or unsettled files wait
-  until they are present and settled. Automatic runs do not retry failures.
+  until they are present and settled. Automatic runs do not retry failures and
+  report them separately from files already appended.
 - Each run appends at most 20 files. Files in the folder are never changed or
   deleted.
 - "Run every day" schedules the feed on the local scheduler (job kind
