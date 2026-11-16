@@ -3104,6 +3104,10 @@ async def read_local_bound_attempt_receipts(request: Request, response: Response
         )
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, ValueError) as exc:
         raise _safe_error(exc) from None
+    # A source may be disconnected/replaced during the final binding and
+    # declaration checks above. Recheck after those awaits, then authenticate
+    # the session again before disclosing even untrusted journal entries.
+    await _recheck_source(scope)
     _dashboard_only(request)
     response.headers["Cache-Control"] = "no-store"
     return {
