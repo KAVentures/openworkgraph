@@ -312,3 +312,61 @@ def test_cross_process_lock_path_symlink_is_rejected(local_store, tmp_path):
         store.save_reconstruction_review({"mode": "all_saved"}, 1, _envelope())
     assert unrelated.read_text() == "leave intact"
     assert not local_store.exists()
+
+
+def test_cross_process_revocation_before_locked_save_fails_closed(local_store, tmp_path):
+    """A separate process must recheck revoked retention before persisting labels.
+
+    The child passes its initial consent check, then waits while the parent
+    revokes the shared policy. This is a real subprocess boundary rather than
+    a monkeypatched thread-local permission change.
+    """
+    import subprocess
+    import sys
+
+    consent = tmp_path / "retention-granted"
+    consent.write_text("granted")
+    script = """
+import sys
+from pathlib import Path
+from server import reconstruction_review_store as store
+store._path = lambda: Path(sys.argv[1])
+consent = Path(sys.argv[2])
+checks = [0]
+def retention_allowed():
+    checks[0] += 1
+    if checks[0] == 1:
+        permitted = consent.exists()
+        print("INITIAL_CHECK", flush=True)
+        sys.stdin.readline()
+        return permitted
+    return consent.exists()
+store._retention_allowed = retention_allowed
+try:
+    store.save_reconstruction_review({"mode": "all_saved"}, 1, {
+        "evidence_sha256": "a" * 64,
+        "annotations": [{"event_id": "event-1", "true_resource_pairs": []}],
+    })
+except PermissionError:
+    print("REVOKED", flush=True)
+else:
+    print("UNSAFE_SAVE", flush=True)
+"""
+    child = subprocess.Popen(
+        [sys.executable, "-c", script, str(local_store), str(consent)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert child.stdout.readline().strip() == "INITIAL_CHECK"
+        consent.unlink()
+        child.stdin.write("\n")
+        child.stdin.flush()
+        stdout, stderr = child.communicate(timeout=10)
+        assert child.returncode == 0, stderr
+        assert stdout.strip() == "REVOKED", stdout
+        assert not local_store.exists()
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.communicate(timeout=5)
