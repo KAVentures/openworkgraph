@@ -229,11 +229,11 @@ def list_event_logs(request: Request):
 @router.get("/v1/event-logs/signal-overview")
 def event_log_signal_overview(
     request: Request, status: str = Query(default="attention", max_length=20),
-    limit: int = Query(default=100, ge=1, le=200),
+    limit: int = Query(default=100, ge=1, le=200), offset: int = Query(default=0, ge=0, le=2500),
 ):
     """Local dashboard-only, non-mutating review queue across saved logs."""
     _require_dashboard(request)
-    return _respond(signal_overview.overview, status=status, limit=limit)
+    return _respond(signal_overview.overview, status=status, limit=limit, offset=offset)
 
 
 @router.get("/v1/event-logs/signal-timeline")
