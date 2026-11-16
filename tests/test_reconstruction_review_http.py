@@ -473,3 +473,27 @@ def test_saved_review_read_rejects_grant_change_during_queue(monkeypatch):
     with pytest.raises(HTTPException) as error:
         history_routes.get_saved_reconstruction_review()
     assert error.value.status_code == 403
+
+
+def test_review_provenance_reports_http_cap_truncation(monkeypatch):
+    """Never silently claim complete provenance when the HTTP projection clips it."""
+    import json
+    _setup(monkeypatch)
+    from server import work_resumption, reconstruction_review_cli
+
+    monkeypatch.setattr(work_resumption, "resumption_candidates", lambda connection, *, lease: {
+        "observed_pair_event_assignments": [{"event_id": str(i)} for i in range(25)],
+        "observed_group_continuity": [{"event_id": str(i)} for i in range(25)],
+        "observed_case_groups": [{"group_id": str(i)} for i in range(25)],
+        "observed_case_groups_truncated": False,
+        "observed_pair_event_assignments_truncated": False,
+        "observed_group_continuity_truncated": False,
+    })
+    monkeypatch.setattr(reconstruction_review_cli, "build_review_queue", lambda result: {
+        "event_reviews": [], "evidence_sha256": "a" * 64,
+    })
+    payload = json.loads(history_routes.get_reconstruction_review().body)
+    for field in ("observed_pair_event_assignments", "observed_group_continuity", "observed_case_groups"):
+        assert len(payload[field]) == 24
+        assert payload[field + "_truncated"] is True
+    assert payload["authoritative"] is False
