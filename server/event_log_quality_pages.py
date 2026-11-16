@@ -1,10 +1,10 @@
 """Bounded pages of stored batch quality metadata, with no whole-log scan."""
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from . import event_log_quality_trends as trends
+from . import event_log_quality as quality
 from . import event_log_workspace as workspace
 
 MAX_PAGE = 100
@@ -40,19 +40,17 @@ def page(log_id: str, before: int | None = None, limit: int = MAX_PAGE) -> dict[
                     [log_id, *selected, limit + 1]).fetchall()
                 if len(records) > len(selected) or len({row[0] for row in records}) != len(records):
                     raise workspace.EventLogWorkspaceError('Duplicate batch quality reports; history page unavailable')
-                reports = [json.loads(row[1]) for row in records]
-                if any(type(report.get('batch')) is not int or report['batch'] != record[0]
-                       for report, record in zip(reports, records)):
-                    raise workspace.EventLogWorkspaceError('Inconsistent batch quality report; history page unavailable')
+                reports = [report for batch, raw in records
+                           if (report := quality._parse_stored_report(batch, raw)) is not None]
                 # The preceding report supplies the earliest row's comparison;
                 # it is used for calculation only, never returned as part of this page.
-                prior = conn.execute('SELECT batch, report FROM log_quality WHERE log_id = ? AND batch < ? ORDER BY batch DESC LIMIT 2',
-                                     [log_id, min(selected)]).fetchall()
+                prior = conn.execute(f'SELECT batch, report FROM log_quality WHERE log_id = ? AND batch < ? AND {quality._VALID_REPORT_SQL} '
+                                     'ORDER BY batch DESC LIMIT 2', [log_id, min(selected)]).fetchall()
                 if prior and len(prior) > 1 and prior[0][0] == prior[1][0]:
                     raise workspace.EventLogWorkspaceError('Duplicate batch quality reports; history page unavailable')
-                previous = json.loads(prior[0][1]) if prior else None
-                if previous is not None and (type(previous.get('batch')) is not int or previous['batch'] != prior[0][0]):
-                    raise workspace.EventLogWorkspaceError('Inconsistent batch quality report; history page unavailable')
+                # Corrupt rows are skipped; an intervening missing batch then
+                # makes the adjacent comparison explicitly unavailable.
+                previous = quality._parse_stored_report(*prior[0]) if prior else None
         finally:
             conn.close()
     present = {report['batch'] for report in reports}

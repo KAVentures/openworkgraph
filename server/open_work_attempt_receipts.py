@@ -52,6 +52,11 @@ def _connect(path: str):
         sidecar = Path(str(target) + suffix)
         if sidecar.exists() or sidecar.is_symlink():
             raise ValueError("unsupported receipt journal sidecar")
+    # A leftover rollback journal may contain previously revoked receipt rows.
+    # Do not let SQLite silently replay or adopt it on a later consented read.
+    rollback = Path(str(target) + "-journal")
+    if rollback.exists() or rollback.is_symlink():
+        raise ValueError("unsupported receipt rollback journal")
     db = sqlite3.connect(str(target), timeout=5)
     db.execute("PRAGMA busy_timeout=5000")
     if db.execute("PRAGMA journal_mode").fetchone()[0].lower() != "delete":
