@@ -196,11 +196,11 @@ class ReviewedTransactionTests(unittest.TestCase):
                         {"status": "checkpoint_committed", "generation": 2},
                         {"status": "checkpoint_committed", "generation": 1,
                          "idempotent_replay": "false"}):
-            with self.subTest(receipt=receipt), \\
-                 patch.object(tx, "inspect_checkpoint", return_value=None), \\
-                 patch.object(tx.cycle, "review", return_value=reviewed), \\
-                 patch.object(tx.cycle, "append", return_value={"status": "receipt_persisted"}), \\
-                 patch.object(tx.cycle, "handoff", return_value={"status": "next_round_handoff_prepared"}), \\
+            with self.subTest(receipt=receipt), \
+                 patch.object(tx, "inspect_checkpoint", return_value=None), \
+                 patch.object(tx.cycle, "review", return_value=reviewed), \
+                 patch.object(tx.cycle, "append", return_value={"status": "receipt_persisted"}), \
+                 patch.object(tx.cycle, "handoff", return_value={"status": "next_round_handoff_prepared"}), \
                  patch.object(tx.cycle, "checkpoint_commit", return_value=receipt) as checkpoint:
                 with self.assertRaises(UncertainReceipt):
                     tx.execute(**inputs())
