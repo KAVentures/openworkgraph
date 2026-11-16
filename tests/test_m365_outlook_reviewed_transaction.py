@@ -170,6 +170,24 @@ class ReviewedTransactionTests(unittest.TestCase):
         self.assertEqual(result["generation"], 2)
         self.assertFalse(result["automatic_retry_allowed"])
 
+    def test_malformed_post_append_receipts_never_advance_checkpoint(self):
+        reviewed = {"status": "review_ready", "csv_sha256": DIGEST,
+                    "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}
+        for phase in ("append", "handoff"):
+            for malformed in (None, {}, [], "receipt_persisted", {"status": False}):
+                with self.subTest(phase=phase, malformed=malformed), \
+                     patch.object(tx, "inspect_checkpoint", return_value=None), \
+                     patch.object(tx.cycle, "review", return_value=reviewed), \
+                     patch.object(tx.cycle, "append", return_value=(
+                         malformed if phase == "append" else {"status": "receipt_persisted"})), \
+                     patch.object(tx.cycle, "handoff", return_value=malformed) as handoff, \
+                     patch.object(tx.cycle, "checkpoint_commit") as checkpoint:
+                    with self.assertRaises(UncertainReceipt):
+                        tx.execute(**inputs())
+                    checkpoint.assert_not_called()
+                    if phase == "append":
+                        handoff.assert_not_called()
+
     def test_uncertain_append_never_handoffs_or_commits(self):
         with patch.object(tx, "inspect_checkpoint", return_value=None), \
              patch.object(tx.cycle, "review", return_value={"status": "review_ready", "csv_sha256": DIGEST, "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}), \
