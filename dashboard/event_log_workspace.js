@@ -2956,6 +2956,46 @@
     outcome.onchange=sync;sync();
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Outcome',outcome),hoursField,activityField,exactField,lookup.wrap,run);
     const out=el('div');out.id='owgEventLogRootCauseResults';box.append(row,activityNote,out);
+    // Each association carries the case filter that selects exactly its cases: look at them, tag them or save them.
+    const casePanel=el('div');casePanel.id='owgEventLogRootCauseCases';casePanel.setAttribute('role','status');
+    const caseGeneration=state.generation,casesBase='/v1/event-logs/'+encodeURIComponent(state.logId);
+    const postJSON=(path,body)=>api(casesBase+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(x=>x.json());
+    const withType=body=>{if(state.caseType)body.case_type=state.caseType;return body;};
+    function caseActions(a){
+      const label=a.feature.kind+': '+a.feature.value;
+      const wrap=el('div',null,'row');
+      const slowest=button('Slowest cases','secondary');slowest.setAttribute('aria-label','Slowest cases with '+label);
+      const tag=button('Tag cases','secondary');tag.setAttribute('aria-label','Tag the cases with '+label);
+      const save=button('Save as log','secondary');save.setAttribute('aria-label','Save the cases with '+label+' as a new log');
+      slowest.onclick=async()=>{
+        try{
+          const r=await postJSON('/cases/slowest',withType({cohort:a.cohort,limit:10}));
+          if(caseGeneration!==state.generation)return;
+          const list=el('div',null,'row');
+          r.cases.forEach(c=>{const b=button(c.case_id+' ('+duration(c.duration_seconds)+')','secondary');b.setAttribute('aria-label','Explain case '+c.case_id);
+            b.onclick=()=>{const id=document.getElementById('owgCaseExplainId'),run=document.getElementById('owgCaseExplainRun');
+              if(!id||!run)return;id.value=c.case_id;run.click();document.getElementById('owgCaseExplain').scrollIntoView({block:'start'});};
+            list.appendChild(b);});
+          casePanel.replaceChildren(el('h4','Slowest of the '+Number(a.cases_with_feature).toLocaleString()+' cases with '+label),
+            r.cases.length?list:el('div','No cases.','muted'),el('div','Choose a case to explain where its time went.','muted'));
+        }catch(error){casePanel.replaceChildren(el('div',error.message,'muted'));}
+      };
+      tag.onclick=async()=>{
+        const name=(window.prompt('Tag for the '+a.cases_with_feature+' cases with '+label,'')||'').trim();
+        if(!name)return;
+        try{const r=await postJSON('/case-tags',withType({tag:name.slice(0,60),cohort:a.cohort,note:('root cause: '+label).slice(0,500)}));
+          casePanel.replaceChildren(el('div','Tagged '+Number(r.tagged).toLocaleString()+' cases “'+name.slice(0,60)+'”. Choose the tag under Tagged in any filter.'));}
+        catch(error){casePanel.replaceChildren(el('div',error.message,'muted'));}
+      };
+      save.onclick=async()=>{
+        const name=(window.prompt('Name for a new log with the '+a.cases_with_feature+' cases with '+label,label.slice(0,120))||'').trim();
+        if(!name)return;
+        try{const r=await postJSON('/derive',withType({name:name.slice(0,120),cohort:a.cohort}));
+          casePanel.replaceChildren(el('div','Saved '+Number(r.copied.events).toLocaleString()+' events of '+Number(r.derived_from.cases_matched).toLocaleString()+' cases as “'+r.log.name+'”. This log is unchanged.'));}
+        catch(error){casePanel.replaceChildren(el('div',error.message,'muted'));}
+      };
+      wrap.append(slowest,tag,save);return wrap;
+    }
     run.onclick=async()=>{
       try{
         const params={outcome:outcome.value};
@@ -2963,11 +3003,12 @@
         if(!activityField.hidden){const label=exact.value||activity.value;
           if(!label||Array.from(label).length>200)throw new Error('Choose an activity label of at most 200 characters.');params.activity=label;}
         const r=await getJSON(logPath('root-cause',params));
-        const rows=(r.associations||[]).map(a=>[a.feature.kind+': '+a.feature.value,Number(a.cases_with_feature).toLocaleString(),pct(a.outcome_rate_with),pct(a.outcome_rate_without),(a.risk_difference>0?'+':'')+(a.risk_difference*100).toFixed(1)+' pts ['+(a.ci95[0]*100).toFixed(1)+', '+(a.ci95[1]*100).toFixed(1)+']',a.holds_after_bonferroni?'yes':'no']);
+        const rows=(r.associations||[]).map(a=>[a.feature.kind+': '+a.feature.value,Number(a.cases_with_feature).toLocaleString(),pct(a.outcome_rate_with),pct(a.outcome_rate_without),(a.risk_difference>0?'+':'')+(a.risk_difference*100).toFixed(1)+' pts ['+(a.ci95[0]*100).toFixed(1)+', '+(a.ci95[1]*100).toFixed(1)+']',a.holds_after_bonferroni?'yes':'no',a.cohort?caseActions(a):'—']);
+        casePanel.replaceChildren();
         out.replaceChildren(
           el('div','Outcome in '+pct(r.outcome_rate)+' of '+Number(r.cases).toLocaleString()+' cases; '+Number(r.features_tested)+' features tested.','muted'),
-          table(['Feature','Cases with it','Outcome with','Outcome without','Difference (95% CI)','Holds after correction'],rows),
-          el('div',r.note||'These are associations in this log, not causes. A step can be a consequence of the outcome rather than its reason.','muted'));
+          table(['Feature','Cases with it','Outcome with','Outcome without','Difference (95% CI)','Holds after correction','Its cases'],rows),
+          el('div',r.note||'These are associations in this log, not causes. A step can be a consequence of the outcome rather than its reason.','muted'),casePanel);
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
     };
     return box;

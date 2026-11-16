@@ -136,6 +136,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/shared_cases.cjs
       - name: Verify explaining a slow case in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_case_explain.cjs
+      - name: Verify root-cause associations open, tag and save exactly their cases
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_root_cause_cases.cjs
       - name: Verify shared case query history and snapshot checks
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/shared_case_queries.cjs
       - name: Verify saving matching cases as a new event log in Chromium
