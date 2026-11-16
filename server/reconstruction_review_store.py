@@ -99,7 +99,10 @@ def read_saved_reconstruction_review(
             clear_saved_reconstruction_review()
             return None
         result = _load(grant, generation, evidence_sha256)
-        if result is None:
+        # Loading and decoding evidence may overlap a consent/retention change.
+        # Revalidate before returning labels to the authenticated caller.
+        if (result is None or grant.get("mode") != "all_saved"
+                or not _retention_allowed()):
             clear_saved_reconstruction_review()
             return None
         return {
