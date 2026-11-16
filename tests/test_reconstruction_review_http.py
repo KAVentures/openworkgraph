@@ -434,3 +434,42 @@ def test_saved_read_denies_without_grant_before_history_query(monkeypatch):
     with pytest.raises(HTTPException) as error:
         history_routes.get_saved_reconstruction_review()
     assert error.value.status_code == 403
+
+
+def test_saved_review_read_suppresses_labels_if_history_changes_during_queue(monkeypatch):
+    """Stale reviewer labels must not escape after a concurrent history mutation."""
+    state = _setup(monkeypatch)
+    from server import work_resumption, reconstruction_review_cli
+
+    def candidates(connection, *, lease):
+        assert lease == {"mode": "all_saved"}
+        state["generation"] += 1
+        return {"coverage": {"scan_truncated": False}}
+
+    monkeypatch.setattr(work_resumption, "resumption_candidates", candidates)
+    monkeypatch.setattr(reconstruction_review_cli, "build_review_queue",
+                        lambda result: {"evidence_sha256": "a" * 64, "event_reviews": []})
+    monkeypatch.setattr(history_routes, "read_saved_reconstruction_review",
+                        lambda *args: {"annotations": [{"event_id": "private"}]})
+    with pytest.raises(HTTPException) as error:
+        history_routes.get_saved_reconstruction_review()
+    assert error.value.status_code == 403
+
+
+def test_saved_review_read_rejects_grant_change_during_queue(monkeypatch):
+    """A changed grant scope cannot authorize an old review snapshot."""
+    state = _setup(monkeypatch)
+    from server import work_resumption, reconstruction_review_cli
+
+    def candidates(connection, *, lease):
+        state["grant"] = {"mode": "off"}
+        return {"coverage": {}}
+
+    monkeypatch.setattr(work_resumption, "resumption_candidates", candidates)
+    monkeypatch.setattr(reconstruction_review_cli, "build_review_queue",
+                        lambda result: {"evidence_sha256": "a" * 64, "event_reviews": []})
+    monkeypatch.setattr(history_routes, "read_saved_reconstruction_review",
+                        lambda *args: {"annotations": [{"event_id": "private"}]})
+    with pytest.raises(HTTPException) as error:
+        history_routes.get_saved_reconstruction_review()
+    assert error.value.status_code == 403
