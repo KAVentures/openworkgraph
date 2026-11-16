@@ -1289,10 +1289,20 @@ hand.
   copy is not appended again; an edited file counts as new.
 - Files modified in the last minute are left for the next run, in case the
   exporter is still writing them.
+- Each settled file is copied into a temporary snapshot while hashing. The
+  snapshot is what gets appended; files whose identity, size or modification
+  time changes during the copy are deferred. A successful append and its content receipt commit together;
+  overlapping runs in the same OWG process are serialized at append time.
+  Temporary storage must have space for the
+  file, and the normal event-log import size limit applies.
 - Events already in the log are skipped by the usual append rules, so
   overlapping exports are safe.
 - A file that cannot be appended (wrong columns, for example) is recorded with
-  the reason and is not retried with the same content.
+  the reason and is not retried with the same content. Files too large to
+  snapshot are reported on each run until removed or replaced, since no
+  content hash is recorded. If an append commits but its later quality report
+  fails, the feed records the append and surfaces a warning; it does not replay
+  the file.
 - Each run appends at most 20 files. Files in the folder are never changed or
   deleted.
 - "Run every day" schedules the feed on the local scheduler (job kind
