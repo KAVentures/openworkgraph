@@ -348,3 +348,50 @@ def test_real_delta_grant_expiry_and_mid_round_revocation_fail_closed(
     assert len(transport.requests) == (0 if failure == "expired" else 1)
     assert not (tmp_path / "events.csv").exists()
     assert not (tmp_path / "candidate.json").exists()
+
+
+def test_real_graph_delta_candidate_passes_real_offline_review_without_append(tmp_path):
+    """Connect the actual Graph HTTP delta adapter to the actual candidate reviewer.
+
+    This covers the provider-to-review boundary with persisted artifacts; it
+    intentionally does not claim OWG append or checkpoint integration.
+    """
+    from server import m365_outlook_delta as delta
+    from server import m365_outlook_candidate_review as reviewer
+
+    url = delta._initial("folder")
+    cursor = ("https://graph.microsoft.com/v1.0/me/mailFolders/folder/"
+              "messages/delta?%24deltatoken=review")
+    response = Response(url, json.dumps({
+        "value": [{"id": "message1",
+                   "receivedDateTime": "2026-11-01T10:00:00Z",
+                   "lastModifiedDateTime": "2026-11-01T10:01:00Z",
+                   "isRead": False}],
+        "@odata.deltaLink": cursor,
+    }).encode())
+    transport = Transport(response)
+    candidate = tmp_path / "review.json"
+    csv_path = tmp_path / "review.csv"
+    scope = dict(tenant="tenant", mailbox="mailbox", folder="folder",
+                 grant_file=tmp_path / "grant.json")
+    with (patch.object(delta, "_delta_private_parent"),
+          patch.object(delta, "_grant", return_value=b"fixed-grant"),
+          patch.object(reviewer, "_delta_private_parent"),
+          patch.object(reviewer, "_grant", return_value=b"fixed-grant")):
+        exported = delta.export_delta(
+            tenant=scope["tenant"], mailbox=scope["mailbox"],
+            folder_id=scope["folder"], grant_file=scope["grant_file"],
+            token="test-token", consent_read=True, consent_export=True,
+            output=csv_path, candidate=candidate, opener=transport)
+        reviewed = reviewer.review(
+            **scope, candidate=candidate, consent_local_read=True)
+
+    assert reviewed["status"] == "review_ready"
+    assert reviewed["csv_sha256"] == json.loads(candidate.read_text())["csv_sha256"]
+    assert reviewed["event_snapshots"] == exported["event_snapshots"] == 1
+    assert reviewed["removal_markers_for_review"] == 0
+    assert reviewed["owg_writes"] == 0
+    assert reviewed["checkpoint_advanced"] is False
+    assert exported["checkpoint_advanced"] is False
+    assert len(transport.requests) == 1
+    assert transport.requests[0][0].get_header("Authorization") == "Bearer test-token"
