@@ -39,9 +39,19 @@ async function scenario(name,options={}){
  const refresh=async()=>true;
  vm.runInNewContext(handler,{window,document,api,show,refresh,detail,status});
  assert.ok(listener);
- listener({detail:{...handoff,...options.handoff}});
+ listener({detail:options.discovery?{idea_id:'idea-1'}:{...handoff,...options.handoff}});
  for(let i=0;i<30;i++)await Promise.resolve();
- if(options.denied||options.approved||options.handoff){
+ if(options.discovery){
+   assert.equal(shown,1,name+' must open the saved opportunity');
+   assert.equal(journeyOpened,1,name+' must open its evidence journey');
+   assert.equal(calls.length,0,name+' must not invoke reviewed-project approval APIs');
+   assert.match(status.textContent,/No project or execution was authorized/);
+ }else if(options.invalid){
+   assert.equal(shown,0,name+' must not show a decision surface');
+   assert.equal(journeyOpened,0,name+' must not open a journey');
+   assert.equal(calls.length,0,name+' must not fetch even the journey');
+   assert.match(status.textContent,/Incomplete reviewed handoff/);
+ }else if(options.denied||options.approved||options.handoff){
    assert.equal(shown,0,name+' must not show a decision surface');
    assert.equal(journeyOpened,0,name+' must not open a journey');
    assert.match(status.textContent,/Unable to open reviewed evidence|Inspect again|refused/);
@@ -55,10 +65,14 @@ async function scenario(name,options={}){
  console.log('PASS '+name);
 }
 (async()=>{
+ await scenario('saved process opens evidence journey without approval',{discovery:true});
  await scenario('approved destination rechecks authenticated saved review');
  await scenario('revoked approval denied at destination',{denied:true});
  await scenario('stale saved revision denied',{approved:{review_revision:3}});
  await scenario('wrong project denied',{approved:{project_id:'other'}});
  await scenario('execution authority cannot be smuggled in',{approved:{execution_authorized:true}});
  await scenario('missing saved approval revision denied',{handoff:{review_revision:undefined}});
+ await scenario('missing project cannot open generic pipeline',{handoff:{project_id:undefined},invalid:true});
+ await scenario('synthetic empty opportunity denied before fetching',{handoff:{idea_id:''},invalid:true});
+ await scenario('oversized project identifier denied before fetching',{handoff:{project_id:'x'.repeat(129)},invalid:true});
 })().catch(e=>{console.error(e);process.exitCode=1;});
