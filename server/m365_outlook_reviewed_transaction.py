@@ -118,6 +118,10 @@ def execute(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
             record_operator_phase(phase, result, directory=Path(audit_dir),
                                   tenant=tenant, mailbox=mailbox,
                                   folder=folder, log_id=log_id)
+    # Snapshot the predecessor before reviewing the candidate. A concurrent
+    # checkpoint transition during review must refuse before any OWG append.
+    initial_predecessor = inspect_checkpoint(
+        **scope, ledger_dir=Path(ledger_dir), consent_local_read=True)
     checked = cycle.review(candidate=Path(candidate), consent_local_read=True, **scope)
     audit("review", checked)
     _verified_review(checked, expected_review_csv_sha256)
@@ -126,6 +130,8 @@ def execute(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
     # authenticated membership verification; this is only an early guard.
     predecessor = inspect_checkpoint(
         **scope, ledger_dir=Path(ledger_dir), consent_local_read=True)
+    if predecessor != initial_predecessor:
+        raise ReceiptError("Checkpoint changed during candidate review; append refused")
     if predecessor is None:
         if expected_previous_candidate_sha256 is not None:
             raise ReceiptError("Missing predecessor checkpoint; append refused")
