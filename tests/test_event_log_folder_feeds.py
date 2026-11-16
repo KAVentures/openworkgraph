@@ -684,3 +684,48 @@ def test_replaced_symlink_is_deferred_without_becoming_a_read_failure(tmp_path, 
     result = feeds.run(feed['feed_id'])
     assert (result['files_still_being_written'], result['files_unreadable']) == (1, 0)
     assert workspace.summary(log)['events'] == 2
+
+
+def test_feed_preserves_literal_folder_and_pattern_whitespace(tmp_path):
+    log = _log()
+    plain = tmp_path / 'exports'
+    spaced = tmp_path / 'exports '
+    plain.mkdir()
+    try:
+        spaced.mkdir()
+    except OSError:
+        pytest.skip('filesystem does not allow a trailing space in a folder name')
+    if plain.samefile(spaced):
+        pytest.skip('filesystem does not distinguish trailing spaces in folder names')
+    _drop(plain, ' 订单-1.csv', HEADER + 'wrong;Create;03/03/2024 10:00\n')
+    _drop(spaced, '订单-1.csv', HEADER + 'also-wrong;Create;03/03/2024 10:00\n')
+    _drop(spaced, ' 订单-1.csv', HEADER + 'wanted;Create;03/03/2024 10:00\n')
+    feed = feeds.create(log, {'folder': str(spaced), 'pattern': ' 订单-*.csv', 'confirm_folder_reads': True})
+    assert feed['folder'] == str(spaced.resolve())
+    assert feed['pattern'] == ' 订单-*.csv'
+    result = feeds.run(feed['feed_id'])
+    assert result['events_added'] == 1 and [f['name'] for f in result['files']] == [' 订单-1.csv']
+    case_ids = workspace._query(log, None, lambda conn: {'ids': [r[0] for r in conn.execute('SELECT DISTINCT case_id FROM ce').fetchall()]})['ids']
+    assert 'wanted' in case_ids and 'wrong' not in case_ids and 'also-wrong' not in case_ids
+
+
+@pytest.mark.parametrize('pattern', ['../*.csv', '..\\*.csv', 'a/b.csv', 'a\\b.csv', 'a\n.csv', 'a\x7f.csv', 'a\ud800.csv', 'x'*81+'.csv', 0, False, [], {}])
+def test_feed_pattern_rejects_path_separators_controls_and_oversize(tmp_path, pattern):
+    log = _log()
+    folder = tmp_path / 'exports'
+    folder.mkdir()
+    with pytest.raises(workspace.EventLogWorkspaceError, match='pattern'):
+        feeds.create(log, {'folder': str(folder), 'pattern': pattern, 'confirm_folder_reads': True})
+
+
+def test_unresolvable_home_is_a_readable_validation_error(monkeypatch):
+    def fail_expand(self):
+        raise RuntimeError('home unavailable')
+    monkeypatch.setattr(feeds.Path, 'expanduser', fail_expand)
+    with pytest.raises(workspace.EventLogWorkspaceError, match='absolute path'):
+        feeds._folder('~missing/exports')
+
+
+def test_invalid_surrogate_in_folder_is_rejected():
+    with pytest.raises(workspace.EventLogWorkspaceError, match='absolute path'):
+        feeds._folder('/tmp/\ud800')

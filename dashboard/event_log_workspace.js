@@ -1251,7 +1251,7 @@
     box.appendChild(el('div','Point this log at a folder where a system drops exports. Each run appends new files that match the pattern, using the column mapping of this log\u2019s latest CSV import. Files are read, never changed or deleted. A file is appended once, by its content.','muted'));
     const list=el('div');list.id='owgFolderFeedList';list.setAttribute('role','status');
     const folder=input('owgFolderFeedFolder','text','for example /Users/me/Exports/orders');folder.size=40;
-    const pattern=input('owgFolderFeedPattern','text');pattern.value='*.csv';pattern.maxLength=84;
+    const pattern=input('owgFolderFeedPattern','text');pattern.value='*.csv';pattern.maxLength=164;
     const consent=input('owgFolderFeedConsent','checkbox');
     const consentLabel=el('label',' Read files from this folder and store their events with the log on this computer');consentLabel.prepend(consent);
     const create=button('Create feed','secondary');create.id='owgFolderFeedCreate';create.disabled=true;
@@ -1316,7 +1316,7 @@
           latest?latest.name+' \u2014 '+(latest.outcome==='appended'?Number(latest.added_events).toLocaleString()+' events added'+(latest.warning?' · '+latest.warning:''):'not appended: '+latest.error):'\u2014',wrap];})));
     };
     create.onclick=async()=>{create.disabled=true;
-      try{await api(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({folder:folder.value.trim(),pattern:pattern.value.trim(),confirm_folder_reads:true})});
+      try{await api(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({folder:folder.value,pattern:pattern.value,confirm_folder_reads:true})});
         consent.checked=false;out.replaceChildren(el('div','Feed created. Run it now or every day.'));render(await getJSON(base));}
       catch(error){out.replaceChildren(el('div',error.message,'muted'));ready();}};
     getJSON(base).then(r=>{if(generation===state.generation)render(r);}).catch(error=>list.replaceChildren(el('div',error.message,'muted')));

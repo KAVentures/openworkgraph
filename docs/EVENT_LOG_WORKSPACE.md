@@ -1282,7 +1282,10 @@ hand.
 
 - You create a feed for one absolute folder and one file pattern
   (`orders-*.csv`; `.csv`, `.tsv` or `.txt`), and you confirm that the folder
-  may be read. Subfolders are not read.
+  may be read. Folder paths and filename patterns preserve spaces and Unicode
+  literally; wildcard characters in the pattern retain their usual meaning.
+  Path separators and control characters are not permitted in the pattern,
+  and subfolders are not read.
 - The mapping is copied when the feed is created. A changed mapping needs a
   new feed.
 - A file is appended once, identified by the SHA-256 of its content. A renamed
