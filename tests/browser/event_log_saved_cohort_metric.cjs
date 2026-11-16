@@ -49,6 +49,9 @@ const path=require('node:path');
   // Re-select the existing log through the real picker; an empty option is not guaranteed.
   await picker.selectOption(logId);
   await picker.dispatchEvent('change');
+  // Selecting a log clears its analysis panel; explicitly reopen Analyse before checking saved definitions.
+  await page.locator('#owgEventLogAnalyze').click();
+  await page.locator('#owgCohortMetricSection').waitFor({state:'visible',timeout:60000});
   await page.waitForFunction(() => [...document.querySelectorAll('#owgCohortMetricSaved option')].some(option => option.textContent.includes('Browser acceptance duration')), null, {timeout:60000});
   await page.locator('#owgCohortMetricSaved').selectOption(savedId);
   assert.equal(await page.locator('#owgCohortMetricField').inputValue(),'duration_seconds');
