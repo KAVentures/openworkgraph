@@ -395,6 +395,12 @@ def run_scheduled(feed_id: str) -> tuple[str, float]:
         return "failed:quality_report_unavailable", 0.0
     if result["files_previously_failed"]:
         return "failed:previously_failed_files", 0.0
+    if result["more_files_waiting"] and result["files_still_being_written"]:
+        return "partial:more_files_pending_and_not_ready", 0.0
+    if result["more_files_waiting"]:
+        return "partial:more_files_pending", 0.0
+    if result["files_still_being_written"]:
+        return "partial:files_not_ready", 0.0
     return f"succeeded:{result['files_appended']}_files_appended", 0.0
 
 
