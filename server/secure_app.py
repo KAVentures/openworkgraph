@@ -119,6 +119,24 @@ def _bootstrap_script() -> str:
     } catch (_) { return false; }
   })();
 
+  function showSessionRecovery() {
+    if (document.getElementById('owgSessionRecovery')) return;
+    const banner = document.createElement('div');
+    banner.id = 'owgSessionRecovery';
+    banner.setAttribute('role', 'alert');
+    banner.style.cssText = 'position:sticky;top:0;z-index:9999;padding:12px 16px;background:#fff3cd;color:#332700;border:2px solid #8a6900;font:inherit';
+    banner.textContent = 'OpenWorkGraph session expired or the local observer restarted. Reopen the dashboard from the current OpenWorkGraph launcher to restore access. No action was submitted.';
+    document.body.prepend(banner);
+  }
+  function markSessionLost() {
+    window.__owgAuthLost = true;
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', showSessionRecovery, {once:true});
+    } else {
+      showSessionRecovery();
+    }
+  }
+
   window.fetch = async (input, init={}) => {
     const url = typeof input === 'string' ? input : String(input?.url || '');
     if (!url.startsWith('/v1/') || url === '/v1/dashboard-session' || url === '/v1/dashboard-session/reopen') return nativeFetch(input, init);
@@ -131,13 +149,13 @@ def _bootstrap_script() -> str:
     if (response.status === 401 && !dashboardSession) {
       // Opened without a valid launch link (for example a tab kept open across a
       // restart): the dashboard shows a banner explaining how to reopen it.
-      window.__owgAuthLost = true;
+      markSessionLost();
     }
     if (response.status === 401 && dashboardSession) {
       let detail = '';
       try { detail = String((await response.clone().json())?.detail || ''); } catch (_) {}
       if (detail === 'authentication required') {
-        window.__owgAuthLost = true;
+        markSessionLost();
         dashboardSession = '';
         sessionStorage.removeItem(SESSION_KEY);
       }

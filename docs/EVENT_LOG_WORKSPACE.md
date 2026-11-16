@@ -373,6 +373,7 @@ case time they involve. The same list comes from
 | `slow_transition` | One step-to-step gap accounts for at least 15% of all recorded case time. |
 | `repeated_activity` | An activity recurs within at least 5% of cases. It shows the median duration with and without the repeat. |
 | `costly_detour` | Cases with a minority activity take at least 1.5× as long as the rest. |
+| `attribute_segment` | Cases with a case-attribute value take at least 1.5× as long as the rest (median). The value can come from the import or a joined case table. Numeric attributes with more than 10 distinct values are grouped by this log's quartiles. At most the 3 largest are listed. The finding's `cohort` (`attribute` or `attribute_range`) selects exactly its cases. In the dashboard it offers "Slowest cases" and "Save as log". |
 | `long_tail` | Always shown: the slowest tenth of cases and their share of case time. |
 | `variant_spread` | Always shown: how many paths cover 80% of cases. |
 | `slowing_down` | The newer half of cases (by start) has a median at least 1.25× the older half's. |
@@ -599,6 +600,19 @@ in cohorts and as a JSON query parameter
 is exclusive, and either can be left out. Non-numeric and non-finite values
 (including NaN and infinity) never contribute to the quartiles or match a range.
 Range attribute names match literal stored keys, including punctuation and Unicode.
+
+In the dashboard, the "Its cases" column offers three actions for each
+association that has such a filter:
+
+- **Slowest cases** lists its ten slowest cases. Choosing one explains it in
+  "Explain a case".
+- **Tag cases** tags all of its cases. The note records the association, and
+  the tag then works as a filter everywhere.
+- **Save as log** saves its cases, with their full histories, as a new log.
+  The current log is unchanged.
+
+All three use the association's exact filter, so they act on exactly the
+cases it counted.
 
 These are associations in the imported log. They are not causes: a feature
 can be a consequence of the outcome (a fix step in slow cases, for example),
@@ -1794,11 +1808,25 @@ which filter was applied and how many cases the log had before filtering. In the
 overview shows "Filtered: N of M cases"; sections not in that list still use every case, and the
 filter note says so.
 
+**Case attributes in the filter.** The dashboard's case filter also takes one case-attribute value,
+written `name=value` (for example `Region=EU`), and a numeric range on one case attribute (from,
+inclusive, and/or below, exclusive). These are the `attribute` and `attribute_range` query
+parameters (`attribute_range={"name":"amount","min":200,"max":400}`). Attributes come from the
+import (OCEL object attributes) or from a joined case table. They combine with the follower rules,
+every condition must hold, and they apply to the same views. Values that are not numbers never
+match a range. The inputs are validated before anything is sent. Saving the filter keeps the
+values and ranges with it.
+
+An automatic insight about a case-attribute group (`attribute_segment`) and a root-cause row for
+an attribute value or range both offer to become this filter in one click: "Filter to these cases"
+and "Filter". They are offered only while no global filter is active, so they never silently
+replace one. They set exactly the finding's `attribute` or `attribute_range`.
+
 **Saved filters.** The active case filter can be saved under a name and applied again later from
 the same panel; applying it re-runs every filtered view at once. The API stores any case filter
 (`{"name": "...", "cohort": {"follows": [...], "started_from": "...", ...}}`, up to 50 per log,
-names unique regardless of case) as `openworkgraph.event-log-filter-set.v1`; the dashboard panel
-applies follower rules. A saved filter is re-applied to the log as it is now, so the listing says
+names unique regardless of case) as `openworkgraph.event-log-filter-set.v1`. The dashboard panel
+applies follower rules, case-attribute values and numeric ranges. A saved filter is re-applied to the log as it is now, so the listing says
 when newer exports were appended after it was saved and names any activities it uses that the log
 does not contain. Saved filters are deleted with the log and never change events.
 
