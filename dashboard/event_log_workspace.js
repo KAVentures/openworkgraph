@@ -310,6 +310,7 @@
     }
     timeFormat.onchange=()=>{const fmt=timeFormat.value;if(fmt&&!fmt.includes('%z')&&!naiveOffset.value.trim())naiveOffset.value=localOffset();};
     consent.onchange=refreshImport;name.oninput=refreshImport;
+    card.appendChild(agentRunsSection());
     importButton.onclick=async()=>{
       const chosen=file.files&&file.files[0];if(!chosen||!consent.checked)return;
       const q=new URLSearchParams({format:format.value,name:name.value.trim()});
@@ -544,6 +545,36 @@
     };
     document.addEventListener('owg:eventlog-deleted',()=>load());
     refresh.onclick=()=>load();load();return box;
+  }
+
+  // Agent mining: observed AI agent runs (structure only) become an event log like any other.
+  function agentRunsSection(){
+    const box=section('AI agent runs as a log');box.id='owgAgentRuns';
+    box.appendChild(el('div','Analyse how your AI agents work, like any process: each observed agent run becomes a case and each step (tool calls by tool name, failures, approvals, handoffs) an event. Outcome, agent, model and token totals become case attributes. No prompt, tool argument, result, file path or message text is included.','muted'));
+    const period=select('owgAgentRunsPeriod',[['7','Last 7 days'],['30','Last 30 days'],['90','Last 90 days'],['','All retained runs']]);period.value='30';
+    const runName=input('owgAgentRunsName','text');runName.value='AI agent runs';runName.maxLength=120;
+    const models=input('owgAgentRunsModelCalls','checkbox');
+    const modelsLabel=el('label',' Include model calls as steps');modelsLabel.prepend(models);
+    const store=input('owgAgentRunsConsent','checkbox');
+    const storeLabel=el('label',' Store this log on this computer until I delete it');storeLabel.prepend(store);
+    const go=button('Import AI agent runs','secondary');go.id='owgAgentRunsImport';go.disabled=true;
+    const out=el('div');out.id='owgAgentRunsStatus';out.setAttribute('role','status');
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Runs from',period),field('Log name',runName));
+    box.append(row,modelsLabel,storeLabel,go,out);
+    const ready=()=>{go.disabled=!(store.checked&&runName.value.trim());};
+    store.addEventListener('change',ready);runName.addEventListener('input',ready);
+    go.onclick=async()=>{
+      const spec={name:runName.value.trim(),include_model_calls:models.checked};
+      if(period.value)spec.since=new Date(Date.now()-Number(period.value)*86400000).toISOString();
+      go.disabled=true;out.textContent='Reading observed agent runs\u2026';
+      try{
+        const r=await (await api('/v1/event-logs/import-agent-runs',{method:'POST',headers:{'Content-Type':'application/json','X-OWG-Local-Storage-Confirmed':'true'},body:JSON.stringify(spec)})).json();
+        out.textContent='Imported '+Number(r.runs).toLocaleString()+' agent runs with '+Number(r.events).toLocaleString()+' steps as \u201c'+r.name+'\u201d.'+(r.runs_with_steps_truncated?' '+r.runs_with_steps_truncated+' long run(s) were cut at '+r.max_steps_per_run+' steps.':'');
+        store.checked=false;
+        await refreshLogs(r.log_id);
+      }catch(error){out.textContent=error.message;}finally{ready();}
+    };
+    return box;
   }
 
   async function refreshLogs(selectId){
