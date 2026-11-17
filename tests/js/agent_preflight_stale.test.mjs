@@ -83,7 +83,7 @@ test('authenticated preflight never submits a superseded selection',async()=>{
   ui.select(old);
   const running=ui.run.dispatch('click');
   ui.select(newer);
-  auth.resolve();
+  auth.resolve(true);
   await running;
   assert.equal(ui.calls.length,0);
   assert.equal(ui.run.disabled,false);
@@ -92,7 +92,7 @@ test('authenticated preflight never submits a superseded selection',async()=>{
 });
 
 test('delayed old success and failure cannot overwrite a newer selection',async()=>{
-  const ui=harness(Promise.resolve());
+  const ui=harness(Promise.resolve(true));
   const old={size:12,name:'old.json'},newer={size:12,name:'new.json'};
   ui.select(old);
   const first=ui.run.dispatch('click');
@@ -114,7 +114,7 @@ test('delayed old success and failure cannot overwrite a newer selection',async(
 });
 
 test('current denied request is recoverable with a new explicit click',async()=>{
-  const ui=harness(Promise.resolve());
+  const ui=harness(Promise.resolve(true));
   ui.select({size:12,name:'plan.json'});
   const first=ui.run.dispatch('click');
   await flush();
