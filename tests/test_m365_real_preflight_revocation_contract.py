@@ -153,3 +153,38 @@ def test_real_graph_preflight_revoked_before_http_performs_no_provider_io(
         module.preflight(**args)
     assert transport.requests == []
     assert not report.exists()
+
+
+@pytest.mark.parametrize("module,prefix,payload", [
+    (identity, "mailbox-identity-", {
+        "id": "provider-id", "userPrincipalName": "user@example.org",
+    }),
+    (folder, "folder-preflight-", {
+        "id": "folder-id", "displayName": "Inbox",
+        "childFolderCount": 0, "totalItemCount": 2,
+    }),
+])
+def test_expired_real_grant_blocks_graph_and_private_evidence(
+        tmp_path, monkeypatch, module, prefix, payload):
+    """Use the production grant validator, not a mocked authorization check."""
+    report = tmp_path / (prefix + "expired.json")
+    grant = tmp_path / "grant.json"
+    grant.write_text(json.dumps({
+        "version": 1, "enabled": True, "consented": True,
+        "tenant_scope": "tenant", "mailbox_scope": "mailbox",
+        "folder_id": "folder-id", "expires_at": "2000-01-01T00:00:00Z",
+    }))
+    transport = Transport(payload)
+    monkeypatch.setattr(module, "_delta_private_parent", lambda p: None)
+    from server.m365_outlook_delta import _grant as production_grant
+    monkeypatch.setattr(module, "_grant", production_grant)
+    args = dict(tenant="tenant", mailbox="mailbox", folder="folder-id",
+                grant_file=grant, output=report, token="token",
+                consent_graph_read=True, consent_private_report=True,
+                opener=transport)
+    if module is identity:
+        args["expected_address"] = "user@example.org"
+    with pytest.raises(ValueError, match="expired or invalid"):
+        module.preflight(**args)
+    assert transport.requests == []
+    assert not report.exists()
