@@ -19,7 +19,7 @@ test('in-flight preflight cannot overwrite a changed file selection',()=>{
   assert.match(source,/if\(generation!==selectionGeneration\|\|file\.files\?\.\[0\]!==selected\|\|requestId!==requestGeneration\)return;[\s\S]*?const response=await fetch/);
   assert.match(source,/generation!==selectionGeneration\|\|file\.files\?\.\[0\]!==selected/);
   assert.match(source,/if\(generation===selectionGeneration&&requestId===requestGeneration\)run\.disabled=false/);
-  assert.match(source,/if\(generation===selectionGeneration&&requestId===requestGeneration\)[\s\S]*?status\.textContent='Preflight unavailable/);
+  assert.match(source,/if\(generation===selectionGeneration&&requestId===requestGeneration && !controller\.signal\.aborted\)[\s\S]*?status\.textContent='Preflight unavailable/);
 });
 
 import vm from 'node:vm';
@@ -59,7 +59,7 @@ function harness(auth){
     calls.push({url,options});
     const d=deferred();pending.push(d);return d.promise;
   };
-  vm.runInNewContext(source,{document,window:{__owgAuthReady:auth},fetch,Blob,JSON,URL,setTimeout});
+  vm.runInNewContext(source,{document,window:{__owgAuthReady:auth},fetch,Blob,JSON,URL,AbortController,setTimeout});
   const file=nodes.get('owgAgentPreflightFile');
   const run=nodes.get('owgAgentPreflightRun');
   const status=nodes.get('owgAgentPreflightStatus');
@@ -150,4 +150,45 @@ test('two explicit requests for the same selected plan only display the latest r
   assert.match(ui.status.textContent,/complete/);
   assert.equal(ui.result.children.length,current);
   assert.equal(ui.run.disabled,false);
+});
+
+
+test('changing selected file cancels the superseded in-flight request without hiding the new selection',async()=>{
+  const ui=harness(Promise.resolve(true));
+  ui.select({size:12,name:'old.json'});
+  const first=ui.run.dispatch('click');
+  await flush();
+  assert.equal(ui.calls.length,1);
+  assert.equal(ui.calls[0].options.signal.aborted,false);
+  ui.select({size:12,name:'new.json'});
+  assert.equal(ui.calls[0].options.signal.aborted,true);
+  assert.equal(ui.run.disabled,false);
+  ui.pending[0].reject(Object.assign(new Error('aborted'),{name:'AbortError'}));
+  await first;
+  assert.match(ui.status.textContent,/File selected/);
+  assert.equal(ui.result.children.length,0);
+  const second=ui.run.dispatch('click');
+  await flush();
+  assert.equal(ui.calls[1].options.signal.aborted,false);
+  ui.pending[1].resolve(reply());
+  await second;
+  assert.match(ui.status.textContent,/complete/);
+});
+
+test('explicit retry cancels an obsolete request for the same file',async()=>{
+  const ui=harness(Promise.resolve(true));
+  const selected={size:12,name:'plan.json'};
+  ui.select(selected);
+  const first=ui.run.dispatch('click');
+  await flush();
+  ui.file.dispatch('change');
+  const second=ui.run.dispatch('click');
+  await flush();
+  assert.equal(ui.calls[0].options.signal.aborted,true);
+  assert.equal(ui.calls[1].options.signal.aborted,false);
+  ui.pending[1].resolve(reply());
+  await second;
+  ui.pending[0].reject(new Error('aborted'));
+  await first;
+  assert.match(ui.status.textContent,/complete/);
 });
