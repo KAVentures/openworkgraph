@@ -218,3 +218,37 @@ with TestClient(app) as client:
     result = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1], env=env,
                             capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+
+def test_event_attribute_sum_discloses_partial_coverage_and_complete_policy():
+    """Invalid or missing numeric observations must never silently count as complete."""
+    csv = ("case,activity,time,amount\n"
+           "a,Start,2024-01-01T00:00:00Z,10\n"
+           "a,End,2024-01-01T01:00:00Z,invalid\n"
+           "b,Start,2024-01-02T00:00:00Z,3\n"
+           "b,End,2024-01-02T01:00:00Z,7\n"
+           "c,Start,2024-01-03T00:00:00Z,\n")
+    log = workspace.import_log(
+        BytesIO(csv.encode()), name="partial-sum", source_format="csv",
+        mapping={"case_column": "case", "activity_column": "activity",
+                 "timestamp_column": "time", "attribute_columns": ["amount"]},
+    )["log_id"]
+
+    def calculate(policy):
+        return query.run(log, {"level": "cases", "measures": [
+            {"fn": "count"}, {"fn": "sum", "of": "metric:total"}],
+            "metrics": [{"name": "total", "kind": "event_attribute_sum",
+                         "attribute": "amount", "unit": "USD", "missing_policy": policy}]})
+
+    available = calculate("available")
+    complete = calculate("complete")
+    assert available["rows"] == [[3, 20.0]]
+    assert complete["rows"] == [[3, 10.0]]
+    assert available["metrics"][0]["cases_with_partial_attribute_coverage"] == 1
+    assert available["metrics"][0]["cases_with_no_finite_attribute"] == 1
+    assert available["metrics"][0]["event_rows_with_missing_invalid_or_nonfinite_attribute"] == 2
+    assert complete["metrics"][0]["cases_excluded_by_complete_policy"] == 1
+    assert complete["metrics"][0]["cases_with_value"] == 1
+    assert complete["metrics"][0]["cases_without_value"] == 2
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        calculate("ignore_everything")
