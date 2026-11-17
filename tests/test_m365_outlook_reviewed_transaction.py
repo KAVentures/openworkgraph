@@ -24,6 +24,24 @@ def inputs(**changes):
 
 
 class ReviewedTransactionTests(unittest.TestCase):
+
+    def test_checkpoint_advance_during_review_refuses_before_any_owg_write(self):
+        """Concurrent checkpoint movement invalidates the reviewed snapshot."""
+        checked = {"status": "review_ready", "csv_sha256": DIGEST,
+                   "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}
+        advanced = {"candidate_sha256": "b" * 64, "log_id": "log", "generation": 1}
+        with patch.object(tx, "inspect_checkpoint", side_effect=[None, advanced]) as inspect, \
+             patch.object(tx.cycle, "review", return_value=checked), \
+             patch.object(tx.cycle, "append") as append, \
+             patch.object(tx.cycle, "handoff") as handoff, \
+             patch.object(tx.cycle, "checkpoint_commit") as commit:
+            with self.assertRaisesRegex(ReceiptError, "Checkpoint changed"):
+                tx.execute(**inputs())
+            self.assertEqual(inspect.call_count, 2)
+            append.assert_not_called()
+            handoff.assert_not_called()
+            commit.assert_not_called()
+
     def test_cli_preflight_needs_no_append_only_arguments(self):
         argv = ["--preflight-only", "--tenant", "t", "--mailbox", "m",
                 "--folder", "f", "--log-id", "log", "--confirm-log-id", "log",
