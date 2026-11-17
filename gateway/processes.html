@@ -584,6 +584,7 @@
         // Initialized before the OIDC callback can synchronously call clear().
         let handoffGeneration=0;
         function clear(releaseBusy=false) {
+          processOpenGeneration++;
           resetHandoff("Session cleared. Recheck after sign-in.");
           $("handoffPacket").value="";
           identityGeneration++;
@@ -1705,13 +1706,19 @@
               "New revision saved. Earlier revision reviews do not approve this new design.",
             );
           });
+        // A delayed authorized read must not replace a newer selection or a
+        // cleared identity. This guard is separate from handoff freshness.
+        let processOpenGeneration = 0;
         async function open(id, revision) {
+          const openTicket = ++processOpenGeneration;
+          const identityTicket = identityGeneration;
           const params = revision
             ? "?" + new URLSearchParams({ revision: String(revision) })
             : "";
           const data = await call(
             "/v1/human/processes/" + encodeURIComponent(id) + params,
           );
+          if (openTicket !== processOpenGeneration || identityTicket !== identityGeneration) return;
           render(data);
           note("Opened exact saved revision " + data.process.revision + ".");
         }
