@@ -144,6 +144,9 @@ def test_scans_stay_bounded_on_large_histories():
     full = resumption_candidates(db, lease=ALL)
     assert full["coverage"]["sessions_considered"] == 28 and len(full["candidates"]) == 6
     assert full["candidates_total"] == 27
+    assert all(len(t["episodes"]) <= 8 for t in full["identity_timelines"])
+    assert all(len(e["segments"]) <= 8 for t in full["identity_timelines"] for e in t["episodes"])
+    assert all(t["episodes_truncated"] for t in full["identity_timelines"])
 
 
 def test_real_http_route_requires_ai_context_and_honours_the_grant(tmp_path):
