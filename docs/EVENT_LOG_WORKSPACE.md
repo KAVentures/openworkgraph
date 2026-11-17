@@ -1951,3 +1951,36 @@ confirmation header. The JSON body has `name`, plus optional `since`, `until` (t
 offset), `max_runs` (1–5,000, default 1,000) and `include_model_calls`. Each run keeps at most 500
 steps, and the answer counts runs that were cut. To analyse new runs, import again. A log is a
 snapshot.
+
+## Automation candidates
+
+"Automation candidates" ranks activities by evidence an event log can show. Vendors such as
+Celonis, UiPath and SAP Signavio rank automation potential in a similar way. Every component is
+returned:
+
+| Component | Meaning |
+| --- | --- |
+| volume | Occurrences per week, on a log scale relative to the busiest activity. |
+| routine | Average of how often the activity follows its most common predecessor and is followed by its most common successor. |
+| time | Share of all waiting in the log that comes right before this activity. |
+
+`score = 100 × (0.4 volume + 0.4 routine + 0.2 time)`
+
+Each activity also reports occurrences, cases, case share, repeats per case, the median wait
+before it, resources, the top resource's share, and a routing pattern:
+
+- **fixed**: the same neighbours in at least 80% of occurrences, and rarely repeated. Rules may
+  cover it.
+- **mostly fixed**: the same neighbours in 60–80% of occurrences. Rules with exceptions.
+- **variable**: routing varies. Judgement is involved, and an AI agent with human review may fit.
+
+Activities seen in fewer than 5 cases are left out and counted. The global case filter applies.
+"Add to automation pipeline" creates an idea in the automation pipeline with
+`source.kind = "event_log"` and the evidence in its description, ready for the ease and impact
+assessment there.
+
+Waiting is the gap since the previous event, not working time. The ranking estimates no savings
+and authorizes nothing.
+
+`GET /v1/event-logs/{log_id}/automation-candidates?limit=&case_type=` plus the usual case-filter
+parameters; dashboard session only.

@@ -10,7 +10,7 @@
   const attrText=()=>[state.attr.attribute,state.attr.attribute_range?rangeText(state.attr.attribute_range):''].filter(Boolean).join('; ');
   let activityLookupBusy=false;
   // Views that honour the workspace case filter; every other section uses all cases.
-  const FILTERED=new Set(['summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','waiting-time','drift','model-discovery','organization','report.html']);
+  const FILTERED=new Set(['automation-candidates','summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','waiting-time','drift','model-discovery','organization','report.html']);
 
   const el=(tag,text,cls)=>{
     const node=document.createElement(tag);
@@ -740,6 +740,7 @@
     results.appendChild(caseExplainSection());
     results.appendChild(discoverySection());
     results.appendChild(driftSection());
+    results.appendChild(automationSection());
     results.appendChild(folderFeedSection());
     results.appendChild(agentShareSection());
     results.appendChild(deriveSection(names));
@@ -1403,6 +1404,43 @@
       try{show(await (await api(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({level:level.value||null})})).json());}
       catch(error){out.textContent=error.message;}
     };
+    return box;
+  }
+
+  // Automation candidates: activities ranked by volume, routine routing and the waiting before them.
+  function automationSection(){
+    const box=section('Automation candidates');box.id='owgAutomation';
+    box.appendChild(el('div','Rank this process\u2019s activities by how often they happen, how fixed their routing is and how much waiting comes right before them. Every component is shown. It is evidence for a review, not a recommendation, and it estimates no savings.','muted'));
+    const run=button('Rank activities','secondary');run.id='owgAutomationRun';
+    const out=el('div');out.id='owgAutomationResults';out.setAttribute('role','status');
+    box.append(run,out);
+    const PATTERNS={fixed:'Fixed',mostly_fixed:'Mostly fixed',variable:'Variable'};
+    const pct=x=>Math.round(x*100)+'%';
+    run.onclick=async()=>{run.disabled=true;out.replaceChildren(el('div','Ranking activities\u2026','muted'));
+      try{
+        const r=await getJSON(logPath('automation-candidates',{limit:15}));
+        if(!r.candidates.length){out.replaceChildren(el('div','No activity occurs in at least '+r.min_cases+' cases.','muted'));return;}
+        const logName=(state.logs.find(l=>l.log_id===state.logId)||{}).name||state.logId;
+        const rows=r.candidates.map(c=>{
+          const add=button('Add to automation pipeline','secondary');add.setAttribute('aria-label','Add '+c.activity+' to the automation pipeline');
+          add.onclick=async()=>{add.disabled=true;
+            try{
+              const description=('From event log \u201c'+logName+'\u201d: '+c.occurrences+' occurrences in '+c.cases+' cases ('+c.per_week+' per week), '+
+                PATTERNS[c.routing_pattern].toLowerCase()+' routing (same predecessor '+pct(c.same_predecessor_share)+', same successor '+pct(c.same_successor_share)+'), '+
+                (c.median_wait_before_seconds===null?'':'median wait before '+duration(c.median_wait_before_seconds)+', ')+c.resources+' resource(s), '+c.repeats_per_case+' per case. Score '+c.score+' of 100. Evidence only; assess before approving.').slice(0,2000);
+              await api('/v1/automation-pipeline',{method:'POST',headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({title:('Automate '+c.activity).slice(0,200),description,source:{kind:'event_log',reference:(state.logId+':'+c.activity).slice(0,200)}})});
+              add.replaceWith(el('span','Added to the pipeline as an idea.'));
+            }catch(error){add.disabled=false;add.textContent=error.message;}};
+          return [c.activity,String(c.score),pct(c.components.volume)+' / '+pct(c.components.routine)+' / '+pct(c.components.time),
+            String(c.per_week),PATTERNS[c.routing_pattern],c.median_wait_before_seconds===null?'\u2014':duration(c.median_wait_before_seconds),
+            String(c.resources),String(c.repeats_per_case),add];});
+        out.replaceChildren(
+          el('div','Score = 100 \u00d7 (0.4 volume + 0.4 routine + 0.2 waiting share), over '+Number(r.cases).toLocaleString()+' cases and '+r.weeks_observed+' weeks'+(r.cases_before_filter?' (filtered from '+Number(r.cases_before_filter).toLocaleString()+')':'')+'.'+(r.activities_below_min_cases?' '+r.activities_below_min_cases+' rarer activit'+(r.activities_below_min_cases===1?'y is':'ies are')+' left out.':''),'muted'),
+          table(['Activity','Score','Volume / routine / waiting','Per week','Routing','Median wait before','Resources','Per case','Action'],rows),
+          el('div','Fixed routing suggests rules may cover the step; variable routing suggests judgement, where an AI agent with human review may fit. '+r.caveat,'muted'));
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{run.disabled=false;}};
     return box;
   }
 

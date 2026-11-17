@@ -738,6 +738,15 @@ async def event_log_stuck_cases(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.get("/v1/event-logs/{log_id}/automation-candidates")
+def event_log_automation_candidates(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                                    limit: int = Query(default=15, ge=1, le=50),
+                                    cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_automation_candidates as automation
+    _require_dashboard(request)
+    return _respond(automation.candidates, log_id, case_type, limit=limit, cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/variants")
 def event_log_variants(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                        limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):
