@@ -88,6 +88,18 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"case_id": case_id, "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def get_process_automation_candidates(log_id: str, limit: int = 10, case_type: str | None = None) -> dict[str, Any]:
+        """Activities of a shared log ranked as automation candidates, with every score component.
+
+        Score = 100 x (0.4 volume + 0.4 routine routing + 0.2 share of waiting before the activity).
+        Each activity also has its routing pattern (fixed, mostly_fixed, variable), median wait before it,
+        resources and repeats per case. Evidence for a review, not a recommendation: waiting is the gap since
+        the previous event, no savings are estimated, and nothing authorizes automating anything.
+        """
+        return _get("get_process_automation_candidates", f"/v1/process-intelligence/{_log(log_id)}/automation-candidates",
+                    {"limit": max(1, min(int(limit), 50)), "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_slowest_process_cases(log_id: str, limit: int = 10, case_type: str | None = None) -> dict[str, Any]:
         """The slowest cases of a shared log (first to last recorded event), slowest first.
 

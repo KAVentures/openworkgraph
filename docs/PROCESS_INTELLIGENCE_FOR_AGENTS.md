@@ -16,7 +16,7 @@ Imported business logs stay closed to AI tokens and MCP clients by default. In t
 | Level | The agent may read |
 | --- | --- |
 | Not shared (default) | Nothing; the log answers exactly like an unknown log, so it cannot be discovered. |
-| `aggregates` | Overview (cases, durations, KPIs, top variants), automatic insights and root-cause associations. |
+| `aggregates` | Overview (cases, durations, KPIs, top variants), automatic insights, root-cause associations and automation candidates. |
 | `cases` | The above, plus explaining one case and listing the slowest cases. |
 
 Sharing a log needs a dashboard confirmation; stopping does not. Every agent request also needs
@@ -56,6 +56,7 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 | `get_process_root_cause` | Associations with `duration_over` (hours), `rework`, `contains_activity` or `ends_with` (activity). |
 | `explain_process_case` | One case's steps, gaps over the typical gap, repeats and uncommon steps (cases level). |
 | `get_slowest_process_cases` | Slowest cases first (cases level). |
+| `get_process_automation_candidates` | Activities ranked as automation candidates with every score component and routing pattern (aggregates level). See "Automation candidates" in EVENT_LOG_WORKSPACE.md. |
 
 | `tag_process_cases` | Adds an `agent: ` tag with a note to cases (cases level and the tag permission). |
 
@@ -73,6 +74,7 @@ nothing authorizes an action.
 | `GET /v1/process-intelligence/{log_id}/root-cause?outcome=&hours=&activity=&case_type=` | Same, `aggregates` or `cases`. |
 | `GET /v1/process-intelligence/{log_id}/case?case_id=&case_type=` | Same, `cases` only. |
 | `GET /v1/process-intelligence/{log_id}/slowest-cases?limit=&case_type=` | Same, `cases` only. |
+| `GET /v1/process-intelligence/{log_id}/automation-candidates?limit=&case_type=` | Same, `aggregates` or `cases`. |
 | `POST /v1/event-logs/{log_id}/agent-share/tags` (`{"allowed": true \| false}`) | Dashboard session only. |
 | `POST /v1/process-intelligence/{log_id}/case-tags` (`{"tag", "case_ids", "note"?, "case_type"?}`) | Agent, `cases` level and the tag permission (403 without it). |
 

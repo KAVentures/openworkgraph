@@ -109,6 +109,13 @@ async def agent_case(request: Request, log_id: str, case_id: str = Query(min_len
     return await _answer(sharing.explain_case, log_id, case_id, case_type)
 
 
+@router.get("/v1/process-intelligence/{log_id}/automation-candidates")
+async def agent_automation_candidates(request: Request, log_id: str, limit: int = Query(default=10, ge=1, le=50),
+                                      case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.automation_candidates, log_id, case_type, limit)
+
+
 @router.get("/v1/process-intelligence/{log_id}/slowest-cases")
 async def agent_slowest(request: Request, log_id: str, limit: int = Query(default=10, ge=1, le=50),
                         case_type: str | None = Query(default=None, max_length=200)):

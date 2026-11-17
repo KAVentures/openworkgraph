@@ -267,6 +267,16 @@ def explain_case(log_id: str, case_id: str, case_type: str | None = None) -> dic
     return {"format": FORMAT, "log_id": log_id, **case_explain.explain(log_id, spec)}
 
 
+def automation_candidates(log_id: str, case_type: str | None = None, limit: int = 10) -> dict[str, Any]:
+    """Activities ranked by volume, routine routing and waiting (aggregates level)."""
+    require(log_id, "aggregates")
+    from . import event_log_automation_candidates as automation
+    result = automation.candidates(log_id, case_type, limit=max(1, min(int(limit), 50)))
+    keep = ("case_notion", "cases", "weeks_observed", "weights", "min_cases", "activities_below_min_cases",
+            "candidates", "routing_patterns", "caveat")
+    return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
+
+
 def slowest_cases(log_id: str, case_type: str | None = None, limit: int = 10) -> dict[str, Any]:
     require(log_id, "cases")
     from . import event_log_case_explain as case_explain

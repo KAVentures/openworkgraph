@@ -51,6 +51,8 @@ def test_sharing_levels_and_revocation():
     ov = sharing.overview(log, sla_hours=24)
     assert ov["cases"] == 12 and ov["top_variants"][0]["path"] == ["Receive", "Approve", "Pay"]
     assert "throughput_seconds" in ov["kpis"] and ov["kpis"]["sla"]["breached_cases"] == 6
+    auto = sharing.automation_candidates(log)
+    assert [c["activity"] for c in auto["candidates"]][0] in {"Receive", "Approve", "Pay"} and auto["weights"]["routine"] == 0.4
     rc = sharing.root_cause(log, "duration_over", hours=24)
     bob = next(a for a in rc["associations"] if a["feature"] == {"kind": "resource", "value": "bob"})
     assert bob["risk_difference"] == 1.0 and bob["holds_after_bonferroni"]
@@ -155,6 +157,8 @@ with TestClient(app) as client:
     assert client.get(f"/v1/process-intelligence/{log_id}/case?case_id=c0", headers=agent).status_code == 404
     r = client.get(f"/v1/process-intelligence/{log_id}/root-cause?outcome=rework", headers=agent)
     assert r.status_code == 200, r.text
+    r = client.get(f"/v1/process-intelligence/{log_id}/automation-candidates?limit=5", headers=agent)
+    assert r.status_code == 200 and [c["activity"] for c in r.json()["candidates"]] == ["B", "A"], r.text
     # The global AI-access switch still applies.
     set_ai_access(False)
     assert client.get(f"/v1/process-intelligence/{log_id}/overview", headers=agent).status_code == 403
@@ -208,7 +212,8 @@ async def _listed_tools(tmp_path: Path, enabled: bool) -> set[str]:
 
 
 PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_root_cause",
-                 "explain_process_case", "get_slowest_process_cases", "tag_process_cases"}
+                 "explain_process_case", "get_slowest_process_cases", "tag_process_cases",
+                 "get_process_automation_candidates"}
 
 
 def test_mcp_tools_are_listed_only_when_a_log_is_shared(tmp_path):
