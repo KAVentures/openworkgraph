@@ -741,6 +741,7 @@
     results.appendChild(discoverySection());
     results.appendChild(driftSection());
     results.appendChild(automationSection());
+    results.appendChild(agentRunsRefreshSection());
     results.appendChild(folderFeedSection());
     results.appendChild(agentShareSection());
     results.appendChild(deriveSection(names));
@@ -1376,6 +1377,30 @@
   // Analyst tags on cases: mark cases while investigating, then filter any analysis with "Tagged".
   // Explain one case: compare each of its gaps with the typical gap of the same transition.
   // Owner-chosen, read-only process intelligence for connected AI agents (MCP), per log.
+  // For a log made from AI agent runs: append runs that finished since, now or every day.
+  function agentRunsRefreshSection(){
+    const box=section('Keep agent runs up to date');box.id='owgAgentRunsRefresh';box.hidden=true;
+    const info=el('div',null,'muted');info.id='owgAgentRunsRefreshInfo';
+    const now=button('Add new runs now','secondary');now.id='owgAgentRunsRefreshNow';
+    const daily=button('Add new runs every day','secondary');daily.id='owgAgentRunsRefreshDaily';
+    const out=el('div');out.id='owgAgentRunsRefreshStatus';out.setAttribute('role','status');
+    const row=el('div',null,'row');row.append(now,daily);
+    box.append(info,row,out);
+    const base='/v1/event-logs/'+encodeURIComponent(state.logId)+'/agent-runs',generation=state.generation,logId=state.logId;
+    const describe=r=>{info.textContent='This log was made from observed AI agent runs'+(r.include_model_calls?' (with model calls)':'')+'. Last updated '+String(r.last_refreshed_at||r.created_at).slice(0,16).replace('T',' ')+' UTC. New finished runs are appended; runs already here stay as they are.';};
+    getJSON(base).then(r=>{if(generation!==state.generation||!r.agent_runs)return;box.hidden=false;describe(r);}).catch(()=>{});
+    now.onclick=async()=>{now.disabled=true;out.textContent='Reading observed agent runs\u2026';
+      try{const r=await (await api(base+'/refresh',{method:'POST',headers:{'X-OWG-Local-Storage-Confirmed':'true'}})).json();
+        out.textContent=(r.runs_added?'Added '+r.runs_added+' run(s) with '+r.events_added+' steps. Analyse again to include them.':'No new finished runs.')+(r.runs_still_running?' '+r.runs_still_running+' run(s) still in progress will be added later.':'');
+        describe(await getJSON(base));}
+      catch(error){out.textContent=error.message;}finally{now.disabled=false;}};
+    daily.onclick=async()=>{if(!window.confirm('Append newly finished AI agent runs to this log every day while OpenWorkGraph is running?'))return;
+      try{await api('/v1/schedules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'event_log_agent_runs',target_id:logId,interval_minutes:1440,confirm_scheduled_runs:true})});
+        out.textContent='Scheduled daily. Manage it under scheduled jobs. Signal rules on this log then watch your agents.';}
+      catch(error){out.textContent=error.message;}};
+    return box;
+  }
+
   function agentShareSection(){
     const box=section('Share with AI agents');box.id='owgAgentShare';
     box.appendChild(el('div','Let AI apps connected to OpenWorkGraph (for example Claude) ask about this process: overview, KPIs, variants, insights and root cause. At the cases level they can also explain individual cases. They can only read, unless you also let them tag cases below. AI access must also be on, and answers are redacted at your AI-context detail level, so case IDs stay pseudonymous unless you choose full detail.','muted'));
