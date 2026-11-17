@@ -108,6 +108,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_benefits.cjs
       - name: Verify automatic event-log insights in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_insights.cjs
+      - name: Verify insights point at slow case-attribute groups and act on exactly their cases
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_insight_segments.cjs
       - name: Verify reviewed decision tables and case boundaries in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_decision_tables.cjs
       - name: Verify the one-click synthetic sample log in Chromium
@@ -134,6 +136,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/shared_cases.cjs
       - name: Verify explaining a slow case in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_case_explain.cjs
+      - name: Verify root-cause associations open, tag and save exactly their cases
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_root_cause_cases.cjs
       - name: Verify shared case query history and snapshot checks
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/shared_case_queries.cjs
       - name: Verify saving matching cases as a new event log in Chromium
@@ -188,6 +192,14 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/automation_realized_value.cjs
       - name: Verify the local event-log workspace import, analytics, export and deletion
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_workspace.cjs
+      - name: Verify case-attribute values and numeric ranges in the global case filter
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_attribute_filter.cjs
+      - name: Verify numeric case-attribute ranges in KPI and benchmark case pickers
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_cohort_ranges.cjs
+      - name: Verify case attributes are suggested in every case-attribute input
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_case_attribute_suggestions.cjs
+      - name: Verify insight and root-cause attribute groups become the global case filter
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_filter_from_findings.cjs
       - name: Verify grouping activities for every analysis in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/activity_mappings.cjs
       - name: Verify process cost from a dashboard cost model in Chromium

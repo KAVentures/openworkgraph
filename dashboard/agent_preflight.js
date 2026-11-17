@@ -26,7 +26,11 @@
     const status=el('p','No scenario JSON selected. Nothing will run automatically.','muted');
     status.setAttribute('role','status');status.id='owgAgentPreflightStatus';
     const result=el('div');result.id='owgAgentPreflightReport';
+    let selectionGeneration=0;
     file.addEventListener('change',()=>{
+      selectionGeneration++;
+      // A response from a previously selected plan must never appear as the
+      // assessment of the current file (or survive an explicit deselection).
       result.replaceChildren();
       run.disabled=!file.files?.length;
       status.textContent=file.files?.length?
@@ -35,11 +39,15 @@
     });
     run.addEventListener('click',async()=>{
       const selected=file.files?.[0];if(!selected)return;
+      const generation=selectionGeneration;
       if(selected.size>limit){status.textContent='Preflight JSON exceeds the 64 KiB limit.';return;}
       result.replaceChildren();run.disabled=true;
       status.textContent='Checking selected synthetic scenarios locally…';
       try{
         if(!await window.__owgAuthReady)throw new Error('Reopen the authenticated local OWG dashboard.');
+        // Selection may change while authentication is resolving. Do not send
+        // the superseded plan to the local endpoint after that happens.
+        if(generation!==selectionGeneration||file.files?.[0]!==selected)return;
         const response=await fetch('/v1/process-design/preflight',{
           method:'POST',headers:{'Content-Type':'application/json'},
           body:selected,cache:'no-store'
@@ -49,6 +57,7 @@
           throw new Error(String(data.detail||('Preflight request rejected ('+response.status+')')));
         }
         const report=await response.json();
+        if(generation!==selectionGeneration||file.files?.[0]!==selected)return;
         if(report.format!=='openworkgraph.agent-preflight-report.v1')
           throw new Error('Unexpected local preflight report.');
         result.appendChild(el('h3','Structural review'));
@@ -91,8 +100,12 @@
         });
         result.appendChild(exportReport);
         status.textContent='Local deterministic preflight complete. No agent, tool, or business action was executed.';
-      }catch(error){status.textContent='Preflight unavailable: '+String(error?.message||'unknown error');}
-      finally{run.disabled=false;}
+      }catch(error){
+        if(generation===selectionGeneration)
+          status.textContent='Preflight unavailable: '+String(error?.message||'unknown error');
+      }finally{
+        if(generation===selectionGeneration)run.disabled=false;
+      }
     });
     row.append(file,run);card.append(row,status,result);
     panel.appendChild(card);
