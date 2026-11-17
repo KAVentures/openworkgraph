@@ -126,7 +126,7 @@ const pathModule = require("node:path");
     let staleReadIntercepted;
     const staleReadSeen = new Promise(resolve => { staleReadIntercepted = resolve; });
     let processReads = 0;
-    await racePage.route(/\\/v1\\/human\\/processes\\/process_[^/?]+(?:\\?.*)?$/, async route => {
+    await racePage.route(/\/v1\/human\/processes\/process_[^/?]+(?:\?.*)?$/, async route => {
       processReads++;
       if (processReads === 1) {
         await new Promise(resolve => { releaseStaleRead = resolve; staleReadIntercepted(); });
