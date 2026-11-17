@@ -569,3 +569,37 @@ def test_reviewer_provenance_displays_returned_counts_as_inert_text():
                   "observed_group_continuity", "observed_case_groups"):
         assert field + "_returned_count:Number.isInteger(data." + field + "_returned_count)" in source
     assert "evidence.textContent=JSON.stringify({" in source
+
+
+def test_live_review_rejects_invalid_engine_evidence_without_leaking_it(monkeypatch):
+    """Malformed provenance must not cause an HTTP 500 or echo source content."""
+    _setup(monkeypatch)
+    from server import work_resumption, reconstruction_review_cli
+
+    monkeypatch.setattr(work_resumption, "resumption_candidates",
+                        lambda connection, *, lease: {"identity_timelines": [], "secret": "private"})
+    def invalid(_response):
+        raise ValueError("private event identifier must not escape")
+    monkeypatch.setattr(reconstruction_review_cli, "build_review_queue", invalid)
+    with pytest.raises(HTTPException) as error:
+        history_routes.get_reconstruction_review()
+    assert error.value.status_code == 422
+    assert error.value.detail == "Invalid reconstruction evidence"
+    assert "private" not in error.value.detail
+
+
+def test_saved_review_rejects_invalid_engine_evidence_before_storage_read(monkeypatch):
+    """A corrupt source must never cause stale reviewer annotations to be returned."""
+    _setup(monkeypatch)
+    from server import work_resumption, reconstruction_review_cli
+
+    monkeypatch.setattr(work_resumption, "resumption_candidates",
+                        lambda connection, *, lease: {"identity_timelines": []})
+    monkeypatch.setattr(reconstruction_review_cli, "build_review_queue",
+                        lambda response: (_ for _ in ()).throw(ValueError("private source detail")))
+    monkeypatch.setattr(history_routes, "read_saved_reconstruction_review",
+                        lambda *args: pytest.fail("read stale labels after invalid source"))
+    with pytest.raises(HTTPException) as error:
+        history_routes.get_saved_reconstruction_review()
+    assert error.value.status_code == 422
+    assert error.value.detail == "Invalid reconstruction evidence"
