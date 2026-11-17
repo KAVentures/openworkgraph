@@ -243,7 +243,12 @@ def get_reconstruction_review() -> Response:
         result.get("identity_timelines_truncated", False)
         or len(result.get("identity_timelines", [])) > 12
     )}
-    queue = build_review_queue(review_result)
+    try:
+        queue = build_review_queue(review_result)
+    except ValueError as exc:
+        # Malformed engine evidence is a rejected review, not an uncaught 500.
+        # Do not serialize partial source history into the error response.
+        raise HTTPException(status_code=422, detail="Invalid reconstruction evidence") from exc
     # Encode before the final authorization check: revocation during JSON
     # serialization must fail closed, not return already-stale evidence.
     payload = json.dumps({
@@ -332,8 +337,11 @@ def get_saved_reconstruction_review() -> Response:
     if grant.get("mode") != "all_saved":
         raise HTTPException(status_code=403, detail="Explicit all-saved history access required")
     generation = history_generation()
-    with connect() as connection:
-        queue = build_review_queue(resumption_candidates(connection, lease=grant))
+    try:
+        with connect() as connection:
+            queue = build_review_queue(resumption_candidates(connection, lease=grant))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid reconstruction evidence") from exc
     saved = read_saved_reconstruction_review(grant, generation, queue["evidence_sha256"])
     if active_ai_history_access() != grant or history_generation() != generation:
         raise HTTPException(status_code=403, detail="History access changed during review")
