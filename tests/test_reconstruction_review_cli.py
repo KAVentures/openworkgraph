@@ -1062,3 +1062,20 @@ class MalformedAnnotationIdentityTests(unittest.TestCase):
         result = score_review_annotations(source, [annotation])
         self.assertEqual(result["false_positive_pairs"], 1)
         self.assertFalse(result["held_out_verified"])
+
+
+class MalformedUnicodeEvidenceTests(unittest.TestCase):
+    def test_unpaired_surrogates_are_validation_errors_not_server_crashes(self):
+        # JSON transports can carry escaped lone surrogates. UTF-8 evidence
+        # hashing must reject them with a handled ValueError, not UnicodeError.
+        for field, value in (
+            ("observed_case_groups", [{"proves_same_case": False, "label": "\\ud800"}]),
+            ("identity_timelines", [{"label": "\\ud800"}]),
+            ("observed_group_continuity", [{"label": "\\ud800"}]),
+            ("coverage", {"scan_truncated": False, "label": "\\ud800"}),
+        ):
+            with self.subTest(field=field):
+                source = payload([pair("A", "F", ["e1"])])
+                source[field] = value
+                with self.assertRaises(ValueError):
+                    build_review_queue(source)
