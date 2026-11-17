@@ -1,0 +1,32 @@
+name: Root-cause evidence acceptance
+on:
+  pull_request:
+    paths:
+      - 'dashboard/event_log_workspace.js'
+      - 'server/event_log_analytics.py'
+      - 'server/event_log_cohorts.py'
+      - 'server/event_log_cases.py'
+      - 'tests/test_root_cause_numeric_ranges.py'
+      - 'tests/browser/event_log_root_cause_evidence.cjs'
+      - 'tests/browser/process_logs_app.py'
+      - '.github/workflows/root-cause-evidence.yml'
+permissions:
+  contents: read
+jobs:
+  root-cause-evidence-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -e '.[dev,gateway]'
+      - run: python -m pytest -q tests/test_root_cause_numeric_ranges.py tests/test_event_log_analytics.py tests/test_event_log_cases.py
+      - run: |
+          npm install --prefix "$RUNNER_TEMP/owg-browser" playwright@1.64.1 axe-core@4.10.3
+          node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install --with-deps chromium || node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install chromium
+      - run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_root_cause_evidence.cjs

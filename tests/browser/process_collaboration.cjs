@@ -152,6 +152,7 @@ const pathModule = require("node:path");
     await setHandoffPacket(handoffPacket({revision: handoffProcess.revision + 1}));
     await alice.locator("#handoffCheck").click();
     await alice.locator("#handoffStatus").filter({hasText: "REFUSED:"}).waitFor();
+    // Real Gateway 403 from a valid identity without process scope; do not mock a response.
     // Denial can revoke the session: isolate it from the rest of the lifecycle.
     const deniedHandoffPage = await login("alice");
     await deniedHandoffPage.getByRole("button", {name:"Shared support process · r1", exact:true}).click();
@@ -161,11 +162,12 @@ const pathModule = require("node:path");
       buffer:Buffer.from(JSON.stringify(handoffPacket())),
     });
     const detailUrl = "**/v1/human/processes/" + handoffProcess.workflow_id;
-    await deniedHandoffPage.route(detailUrl, async route => route.fulfill({status:403, contentType:"application/json", body:'{"detail":"denied"}'}), {times:1});
+    await deniedHandoffPage.route(detailUrl, async route => route.continue({headers:{...route.request().headers(),authorization:"Bearer no-process"}}), {times:1});
     await deniedHandoffPage.locator("#handoffCheck").click();
     await deniedHandoffPage.locator("#handoffStatus").filter({hasText:/REFUSED:|Session cleared/}).waitFor();
     assert.equal(uploadedHandoff, false);
 
+    // Real Gateway verifier rejects the expired bearer (401), without a mocked response.
     // An expired delegated session (401) must fail closed rather than reuse a
     // previously authenticated process selection or display a false match.
     const expiredHandoffPage = await login("alice");
@@ -175,9 +177,7 @@ const pathModule = require("node:path");
       name:"expired-review.json",mimeType:"application/json",
       buffer:Buffer.from(JSON.stringify(handoffPacket())),
     });
-    await expiredHandoffPage.route(detailUrl, async route => route.fulfill({
-      status:401,contentType:"application/json",body:'{"detail":"expired"}',
-    }), {times:1});
+    await expiredHandoffPage.route(detailUrl, async route => route.continue({headers:{...route.request().headers(),authorization:"Bearer expired-session"}}), {times:1});
     await expiredHandoffPage.locator("#handoffCheck").click();
     await expiredHandoffPage.locator("#handoffStatus").filter({hasText:/REFUSED:|Session cleared/}).waitFor({state:"attached"});
     assert.doesNotMatch(await expiredHandoffPage.locator("#handoffStatus").textContent(),/^MATCH:/);
