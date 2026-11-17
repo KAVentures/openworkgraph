@@ -47,6 +47,7 @@ const path=require('node:path');
    assert.equal(await page.locator('#owgEventLogKpiCohortAttribute').getAttribute('list'),'owgCaseAttributeValueSuggestions');
    assert.equal(await page.locator('#owgEventLogCohortAAttribute').getAttribute('list'),'owgCaseAttributeValueSuggestions');
    assert.equal(await page.locator('#owgEventLogKpiCohortEventAttribute').getAttribute('list'),null);
+   assert.equal(await page.locator('#owgEventLogKpiCohortRangeName').getAttribute('list'),'owgCaseAttributeNumericSuggestions','section range inputs get the numeric names');
    // A suggested value works as typed.
    await page.locator('#owgCaseFilterAttribute').fill('Region=EU');
    const [summary]=await Promise.all([page.waitForResponse(r=>/\/v1\/event-logs\/log_[0-9a-f]+\/summary(\?|$)/.test(r.url())),page.locator('#owgCaseFilterApply').click()]);

@@ -85,7 +85,7 @@
     return response;
   }
   const getJSON=async path=>(await api(path)).json();
-  const logPath=(suffix,params)=>{const q=new URLSearchParams();for(const [key,value] of Object.entries(params||{})){if(Array.isArray(value))value.forEach(v=>q.append(key,v));else q.set(key,value);}if(state.caseType)q.set('case_type',state.caseType);if(FILTERED.has(suffix)){if(state.follows.length)q.set('follows',JSON.stringify(state.follows));if(state.attr.attribute)q.set('attribute',state.attr.attribute);if(state.attr.attribute_range)q.set('attribute_range',JSON.stringify(state.attr.attribute_range));}const s=q.toString();return '/v1/event-logs/'+encodeURIComponent(state.logId)+'/'+suffix+(s?'?'+s:'');};
+  const logPath=(suffix,params)=>{const q=new URLSearchParams();for(const [key,value] of Object.entries(params||{})){if(Array.isArray(value))value.forEach(v=>q.append(key,v));else q.set(key,value!==null&&typeof value==='object'?JSON.stringify(value):value);}if(state.caseType)q.set('case_type',state.caseType);if(FILTERED.has(suffix)){if(state.follows.length)q.set('follows',JSON.stringify(state.follows));if(state.attr.attribute)q.set('attribute',state.attr.attribute);if(state.attr.attribute_range)q.set('attribute_range',JSON.stringify(state.attr.attribute_range));}const s=q.toString();return '/v1/event-logs/'+encodeURIComponent(state.logId)+'/'+suffix+(s?'?'+s:'');};
 
   function table(headers,rows){
     const wrap=el('div',null,'table-wrap');const t=el('table');const head=el('thead');const hr=el('tr');
@@ -1260,6 +1260,15 @@
     if(values.attribute&&values.attribute.trim()){if(!/^[^=]+=.*/.test(values.attribute.trim()))throw new Error('Attribute must look like name=value.');spec.attribute=values.attribute.trim();}
     if(values.eventAttribute&&values.eventAttribute.trim()){if(!/^[^=]+=.*/.test(values.eventAttribute.trim()))throw new Error('Event attribute must look like name=value.');spec.event_attribute=values.eventAttribute.trim();}
     if(values.tag&&values.tag.trim())spec.tag=values.tag.trim().slice(0,60);
+    // A numeric case attribute between two bounds (lower inclusive, upper exclusive; either may be left empty).
+    const rangeName=(values.rangeName||'').trim(),rangeMin=values.rangeMin??'',rangeMax=values.rangeMax??'';
+    if(rangeName||rangeMin!==''||rangeMax!==''){
+      if(!rangeName)throw new Error('Name the numeric case attribute.');
+      const r={name:rangeName};if(rangeMin!=='')r.min=Number(rangeMin);if(rangeMax!=='')r.max=Number(rangeMax);
+      if(r.min===undefined&&r.max===undefined)throw new Error('Give a lower bound, an upper bound or both.');
+      if([r.min,r.max].some(v=>v!==undefined&&!Number.isFinite(v)))throw new Error('Range bounds must be numbers.');
+      if(r.min!==undefined&&r.max!==undefined&&!(r.min<r.max))throw new Error('The lower bound must be below the upper bound.');
+      spec.attribute_range=r;}
     return spec;
   }
   function cohortFields(prefix,legend,activityNames){
@@ -1272,10 +1281,15 @@
     const attribute=input(prefix+'Attribute','text','name=value');
     const eventAttribute=input(prefix+'EventAttribute','text','name=value');eventAttribute.title='Cases with at least one event carrying this value, such as a column kept from a CSV import';
     const tag=input(prefix+'Tag','text','any');tag.maxLength=60;tag.title='Cases you tagged under Case tags';
+    const rangeName=input(prefix+'RangeName','text','numeric attribute');rangeName.maxLength=200;
+    const rangeMin=input(prefix+'RangeMin','number','from');rangeMin.step='any';
+    const rangeMax=input(prefix+'RangeMax','number','below');rangeMax.step='any';
     const row=el('div',null,'row');row.style.alignItems='end';
     row.append(field('Name',label),field('Started from (UTC)',from),field('Started before (UTC)',before),field('Resource',resource),field('Contains activity',activity),field('Case attribute',attribute),field('Event attribute',eventAttribute),field('Tagged',tag));
-    box.appendChild(row);
-    return {node:box,read:()=>cohortSpec({label:label.value,from:from.value,before:before.value,resource:resource.value,activity:activity.value,attribute:attribute.value,eventAttribute:eventAttribute.value,tag:tag.value})};
+    const rangeRow=el('div',null,'row');rangeRow.style.alignItems='end';
+    rangeRow.append(field('Numeric case attribute',rangeName),field('From (inclusive)',rangeMin),field('Below (exclusive)',rangeMax));
+    box.append(row,rangeRow);
+    return {node:box,read:()=>cohortSpec({label:label.value,from:from.value,before:before.value,resource:resource.value,activity:activity.value,attribute:attribute.value,eventAttribute:eventAttribute.value,tag:tag.value,rangeName:rangeName.value,rangeMin:rangeMin.value,rangeMax:rangeMax.value})};
   }
   function variantCoverageSection(activityNames){
     const box=section('Variant coverage');
