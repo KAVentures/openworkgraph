@@ -290,6 +290,10 @@
     });
     receiptForm.addEventListener('submit', async event => {
       event.preventDefault();
+      if (receiptApprovalConsumed && receiptApproval.checked) {
+        receiptStatus.textContent = 'This approval has already been used; withdraw it before requesting a new review.';
+        return;
+      }
       clearReceipts('');
       const [ref, deployment, run] = receiptInputs.map(input => input.value.trim());
       if (!/^owg:w:[0-9a-f]{32}$/.test(ref) || !deployment || !run ||
