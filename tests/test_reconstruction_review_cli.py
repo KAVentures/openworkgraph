@@ -990,3 +990,30 @@ class ReturnedEvidenceCountIntegrityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "inconsistent identity_timelines_returned_count"):
             build_review_queue(source)
 
+
+
+class IdentityTimelineResourceBoundsTests(unittest.TestCase):
+    def test_oversized_hidden_timeline_refused_before_digest(self):
+        source = payload([pair("A", "F", ["e1"])])
+        source["identity_timelines"] = [{"id": str(i)} for i in range(12)] + [
+            {"id": "hidden", "data": "x" * 65536}
+        ]
+        with self.assertRaisesRegex(ValueError, "unbounded identity timeline evidence"):
+            build_review_queue(source)
+
+    def test_malformed_hidden_timeline_refused(self):
+        source = payload([pair("A", "F", ["e1"])])
+        source["identity_timelines"] = [{"id": str(i)} for i in range(12)] + [None]
+        with self.assertRaisesRegex(ValueError, "invalid identity timeline evidence"):
+            build_review_queue(source)
+
+    def test_unbounded_timeline_collection_refused(self):
+        source = payload([pair("A", "F", ["e1"])])
+        source["identity_timelines"] = [{"id": str(i)} for i in range(257)]
+        with self.assertRaisesRegex(ValueError, "invalid or unbounded identity timelines"):
+            build_review_queue(source)
+
+    def test_bounded_over_cap_marks_incomplete(self):
+        source = payload([pair("A", "F", ["e1"])])
+        source["identity_timelines"] = [{"id": str(i)} for i in range(13)]
+        self.assertTrue(build_review_queue(source)["coverage_incomplete"])
