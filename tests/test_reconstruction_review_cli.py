@@ -1069,10 +1069,10 @@ class MalformedUnicodeEvidenceTests(unittest.TestCase):
         # JSON transports can carry escaped lone surrogates. UTF-8 evidence
         # hashing must reject them with a handled ValueError, not UnicodeError.
         for field, value in (
-            ("observed_case_groups", [{"proves_same_case": False, "label": "\\ud800"}]),
-            ("identity_timelines", [{"label": "\\ud800"}]),
-            ("observed_group_continuity", [{"label": "\\ud800"}]),
-            ("coverage", {"scan_truncated": False, "label": "\\ud800"}),
+            ("observed_case_groups", [{"proves_same_case": False, "label": chr(0xD800)}]),
+            ("identity_timelines", [{"label": chr(0xD800)}]),
+            ("observed_group_continuity", [{"label": chr(0xD800)}]),
+            ("coverage", {"scan_truncated": False, "label": chr(0xD800)}),
         ):
             with self.subTest(field=field):
                 source = payload([pair("A", "F", ["e1"])])
