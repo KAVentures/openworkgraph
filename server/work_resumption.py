@@ -401,12 +401,6 @@ def resumption_candidates(
     result["observed_pair_event_assignments_truncated"] = len(pair_assignments) > 24
     result["observed_group_continuity"] = group_matches[:24]
     result["observed_group_continuity_truncated"] = len(group_matches) > 24
-    # Bind reviewer evidence only after the full continuity result is populated.
-    # A partial response must not be fingerprinted as a complete inspection.
-    # Denied, revoked or unknown history access gets no review queue at all.
-    from .reconstruction_review_cli import REVIEWABLE_ACCESS, build_review_queue
-    if result.get("saved_history_access") in REVIEWABLE_ACCESS:
-        result["event_assignment_review"] = build_review_queue(result)
     if not current["refs"]:
         result["notice"] = ("The latest session has no observed stable pointer, so resumption "
                             "cannot be assessed; this does not mean the work is new.")
@@ -527,6 +521,13 @@ def resumption_candidates(
         candidate["candidate_id"] = f"resumption_candidate_{number:02d}"
     result["candidates"] = candidates[:limit]
     result["candidates_total"] = len(candidates)
+    # Fingerprint the FINAL evidence projection, including identity timelines,
+    # interruption bursts, candidate tracks and truncation notices. Building
+    # the queue earlier silently omitted those fields from its evidence digest.
+    # No reviewer queue is emitted without a reviewable history grant.
+    from .reconstruction_review_cli import REVIEWABLE_ACCESS, build_review_queue
+    if result.get("saved_history_access") in REVIEWABLE_ACCESS:
+        result["event_assignment_review"] = build_review_queue(result)
     if truncated:
         result["notice"] = ("Only the newest activity inside the grant was scanned; "
                             "older sessions may also share these pointers.")
