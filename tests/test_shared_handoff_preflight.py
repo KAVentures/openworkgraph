@@ -31,7 +31,7 @@ def test_handoff_preflight_reads_fresh_authorized_process_without_upload():
 
 def test_handoff_preflight_invalidates_on_session_and_selection_changes():
     html = PAGE.read_text(encoding="utf-8")
-    assert 'function clear(releaseBusy=false) {\n          resetHandoff(' in html
+    assert 'function clear(releaseBusy=false) {\n          processOpenGeneration++;\n          resetHandoff(' in html
     assert 'function render(data) {\n          resetHandoff(' in html
     assert 'handoffPacket").addEventListener("change",()=>resetHandoff(' in html
     assert 'Consent, owner approval, source access, retention and execution authorization remain unverified.' in html
