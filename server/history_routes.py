@@ -319,7 +319,7 @@ def score_reconstruction_review_submission(request: ReconstructionReviewSubmissi
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail="History access changed during review") from exc
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail="Invalid reconstruction review submission") from exc
     if not still_authorized():
         raise HTTPException(status_code=403, detail="History access changed during review")
     return Response(content=payload, media_type="application/json",
@@ -383,7 +383,7 @@ def save_reconstruction_review_submission(request: ReconstructionReviewSubmissio
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail="Invalid reconstruction review submission") from exc
     return Response(content=json.dumps(saved), media_type="application/json",
                     headers={"Cache-Control": "no-store"})
 
