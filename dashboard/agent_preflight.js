@@ -45,6 +45,9 @@
       status.textContent='Checking selected synthetic scenarios locally…';
       try{
         if(!await window.__owgAuthReady)throw new Error('Reopen the authenticated local OWG dashboard.');
+        // Selection may change while authentication is resolving. Do not send
+        // the superseded plan to the local endpoint after that happens.
+        if(generation!==selectionGeneration||file.files?.[0]!==selected)return;
         const response=await fetch('/v1/process-design/preflight',{
           method:'POST',headers:{'Content-Type':'application/json'},
           body:selected,cache:'no-store'
