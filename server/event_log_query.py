@@ -124,11 +124,12 @@ class CaseAttributeNumber(_Strict):
 
 
 class EventAttributeSum(_Strict):
-    """The sum of a numeric event attribute over the case's events, in the declared unit."""
+    """Sum finite numeric event values; disclose missing/invalid input coverage."""
     name: MetricName
     kind: Literal["event_attribute_sum"]
     attribute: AttributeName
     unit: Unit
+    missing_policy: Literal["available", "complete"] = "available"
 
 
 class EventAttributeStatistic(_Strict):
@@ -495,10 +496,34 @@ def _metrics(conn, metrics: list[Any]) -> tuple[dict[str, str], list[dict[str, A
                 FROM qstat WHERE qc.case_id = qstat.case_id""", [metric.missing_policy])
             unit = metric.unit
         else:
-            # A non-finite event value makes the case's sum non-finite, so it is withheld below, not silently skipped.
-            conn.execute(f"""UPDATE qc SET {column} = s.v FROM (SELECT case_id,
-                  sum(try_cast(json_extract_string(attributes, ?) AS DOUBLE)) AS v FROM ce GROUP BY case_id) s
-                WHERE qc.case_id = s.case_id""", [_path(metric.attribute)])
+            # Sum only finite observations, and make incomplete input explicit.
+            # A missing attribute is not a zero. Under complete policy the whole
+            # case is unknown if any included event lacks a finite value.
+            conn.execute("""CREATE OR REPLACE TEMP TABLE qsum AS
+                SELECT case_id, count(*) AS event_rows,
+                    count(*) FILTER (WHERE v IS NOT NULL AND isfinite(v)) AS finite_rows,
+                    count(*) FILTER (WHERE v IS NULL OR NOT isfinite(v)) AS excluded_rows,
+                    sum(v) FILTER (WHERE v IS NOT NULL AND isfinite(v)) AS total
+                FROM (SELECT case_id, try_cast(json_extract_string(attributes, ?) AS DOUBLE) AS v
+                      FROM ce WHERE case_id IN (SELECT case_id FROM qc)) typed
+                GROUP BY case_id""", [_path(metric.attribute)])
+            counts = conn.execute("""SELECT coalesce(sum(event_rows), 0),
+                coalesce(sum(finite_rows), 0), coalesce(sum(excluded_rows), 0),
+                count(*) FILTER (WHERE finite_rows > 0 AND excluded_rows > 0),
+                count(*) FILTER (WHERE finite_rows = 0) FROM qsum""").fetchone()
+            extra.update(dict(zip(("flattened_case_event_rows_considered",
+                "event_rows_with_finite_attribute",
+                "event_rows_with_missing_invalid_or_nonfinite_attribute",
+                "cases_with_partial_attribute_coverage",
+                "cases_with_no_finite_attribute"), (int(v or 0) for v in counts))))
+            extra["cases_excluded_by_complete_policy"] = (
+                extra["cases_with_partial_attribute_coverage"] if metric.missing_policy == "complete" else 0)
+            extra["coverage_scope"] = "selected_full_cases_flattened_case_event_rows"
+            conn.execute(f"""UPDATE qc SET {column} =
+                CASE WHEN qsum.finite_rows = 0 THEN NULL
+                     WHEN ? = 'complete' AND qsum.excluded_rows > 0 THEN NULL
+                     ELSE qsum.total END FROM qsum WHERE qc.case_id = qsum.case_id""",
+                [metric.missing_policy])
             unit = metric.unit
         # NaN, ±Infinity (and sums that overflow) are not values: they become missing and are counted.
         non_finite = conn.execute(f"SELECT count(*) FROM qc WHERE {column} IS NOT NULL AND NOT isfinite({column})").fetchone()[0]
