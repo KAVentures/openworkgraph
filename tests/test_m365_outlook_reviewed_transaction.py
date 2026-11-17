@@ -175,7 +175,7 @@ class ReviewedTransactionTests(unittest.TestCase):
                  patch.object(tx.cycle, "append") as append, \
                  patch.object(tx.cycle, "handoff") as handoff, \
                  patch.object(tx.cycle, "checkpoint_commit") as checkpoint:
-                with self.assertRaisesRegex(ReceiptError, "review unavailable or changed"):
+                with self.assertRaisesRegex(ReceiptError, "Candidate review unavailable or changed"):
                     tx.execute(**inputs())
                 append.assert_not_called()
                 handoff.assert_not_called()
