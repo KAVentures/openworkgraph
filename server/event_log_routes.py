@@ -443,6 +443,16 @@ async def delete_event_log_feed(request: Request, feed_id: str):
     return await run_in_threadpool(_respond, folder_feeds.delete, feed_id)
 
 
+@router.post("/v1/event-logs/feeds/{feed_id}/retry-failed")
+async def retry_failed_event_log_feed_files(request: Request, feed_id: str):
+    """Retry unchanged failed content; leave unseen files for an ordinary run."""
+    from . import event_log_folder_feeds as folder_feeds
+    _require_dashboard(request)
+    if request.headers.get("x-owg-local-storage-confirmed") != "true":
+        raise HTTPException(403, "Explicit confirmation to store these events on this computer is required")
+    return await run_in_threadpool(_respond, folder_feeds.run, feed_id, retry_failed=True)
+
+
 @router.post("/v1/event-logs/{log_id}/case-attributes")
 async def add_case_attributes(
     request: Request, log_id: str,
@@ -1475,9 +1485,10 @@ def event_log_signal_inbox(request: Request, log_id: str):
 
 @router.get("/v1/event-logs/{log_id}/signal-history")
 def event_log_signal_history(request: Request, log_id: str,
-                             limit: int = Query(default=50, ge=1, le=200)):
+                             limit: int = Query(default=50, ge=1, le=200),
+                             before: str = Query(default="", max_length=256)):
     _require_dashboard(request)
-    return _respond(signal_transitions.list_history, log_id, limit=limit)
+    return _respond(signal_transitions.list_history, log_id, limit=limit, before=before)
 
 
 @router.post("/v1/event-logs/{log_id}/signal-inbox/acknowledge-batch")
