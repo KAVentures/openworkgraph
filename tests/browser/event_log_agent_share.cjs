@@ -43,6 +43,24 @@ const path=require('node:path');
    assert.deepEqual(await piLogs(),[['orders','aggregates']]);
    const overview=await page.evaluate(async()=>{const id=(await (await fetch('/v1/process-intelligence/logs')).json()).logs[0].log_id;return (await fetch('/v1/process-intelligence/'+id+'/overview')).json();});
    assert.equal(overview.cases,6);assert.deepEqual(overview.top_variants[0].path,['Receive','Pay']);
+   // The tag permission appears only at the cases level and asks for confirmation.
+   const tags=page.locator('#owgAgentShareTags');
+   assert.equal(await tags.isVisible(),false);
+   await page.locator('#owgAgentShareLevel').selectOption('cases');
+   page.once('dialog',d=>d.accept());await page.locator('#owgAgentShareSave').click();
+   await tags.waitFor();assert.equal(await tags.isChecked(),false);
+   page.once('dialog',d=>d.dismiss());await tags.click();
+   assert.equal(await tags.isChecked(),false);
+   page.once('dialog',d=>d.accept());await tags.click();
+   await page.locator('#owgAgentShareTagsStatus').filter({hasText:'AI agents may tag cases.'}).waitFor();
+   const tagged=await page.evaluate(async()=>{const id=(await (await fetch('/v1/process-intelligence/logs')).json()).logs[0].log_id;
+     const r=await (await fetch('/v1/process-intelligence/'+id+'/case-tags',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tag:'check',case_ids:['c1']})})).json();
+     return [r.tag,r.tagged];});
+   assert.deepEqual(tagged,['agent: check',1]);
+   // Lowering the level hides the permission and drops it.
+   await page.locator('#owgAgentShareLevel').selectOption('aggregates');
+   page.once('dialog',d=>d.accept());await page.locator('#owgAgentShareSave').click();
+   await page.waitForFunction(()=>document.querySelector('#owgAgentShareTags').closest('label').hidden);
    // Stopping needs no confirmation and takes effect at once.
    await page.locator('#owgAgentShareLevel').selectOption('');await page.locator('#owgAgentShareSave').click();
    await page.locator('#owgAgentShareStatus').filter({hasText:'Not shared'}).waitFor();
@@ -51,6 +69,6 @@ const path=require('node:path');
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgAgentShare'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Agent sharing browser acceptance passed: off by default, confirmed share, agent-visible overview, immediate revoke, WCAG audit.');
+   console.log('Agent sharing browser acceptance passed: off by default, confirmed share, agent-visible overview, confirmed agent tag permission dropped with the cases level, immediate revoke, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});

@@ -97,4 +97,26 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"limit": max(1, min(int(limit), 50)), "case_type": case_type})
 
 
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+    def tag_process_cases(log_id: str, tag: str, case_ids: list[str], note: str = "") -> dict[str, Any]:
+        """Record a decision about cases as a case tag, for example "needs review" or "duplicate invoice".
+
+        Only works if the owner shared the log at the cases level AND separately allowed agents to
+        tag cases. The tag is stored as "agent: <tag>" with a note that an AI agent added it, so the
+        owner can see and remove it. Use case IDs exactly as returned by the other process tools.
+        This changes nothing else and authorizes no action in any business system.
+        """
+        if not isinstance(tag, str) or not 0 < len(tag.strip()) <= 52:
+            raise ToolError("tag must be a non-empty text of at most 52 characters")
+        if not isinstance(case_ids, list) or not 0 < len(case_ids) <= 1000 or not all(isinstance(c, str) and c for c in case_ids):
+            raise ToolError("case_ids must be a list of 1-1000 case IDs")
+        runtime_module.authorize_tool("tag_process_cases")
+        try:
+            result = runtime_module.secure_post(f"/v1/process-intelligence/{_log(log_id)}/case-tags",
+                                                {"tag": tag, "case_ids": case_ids, "note": str(note or "")[:400]})
+        except Exception as exc:
+            raise ToolError(str(exc) or "tagging failed") from None
+        return runtime_module.core._finish("tag_process_cases", result)
+
+
 __all__ = ["register_process_intelligence_tools"]

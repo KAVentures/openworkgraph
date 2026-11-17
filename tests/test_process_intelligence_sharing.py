@@ -46,7 +46,8 @@ def test_sharing_levels_and_revocation():
     sharing.set_share(log, "aggregates")
     assert settings.tools_enabled() is True
     listed = sharing.shared_logs()["logs"]
-    assert [(entry["log_id"], entry["level"], entry["case_notions"]) for entry in listed] == [(log, "aggregates", ["case"])]
+    assert [(entry["log_id"], entry["level"], entry["case_notions"], entry["agents_may_tag_cases"]) for entry in listed] == [
+        (log, "aggregates", ["case"], False)]
     ov = sharing.overview(log, sla_hours=24)
     assert ov["cases"] == 12 and ov["top_variants"][0]["path"] == ["Receive", "Approve", "Pay"]
     assert "throughput_seconds" in ov["kpis"] and ov["kpis"]["sla"]["breached_cases"] == 6
@@ -67,6 +68,53 @@ def test_sharing_levels_and_revocation():
     with pytest.raises(sharing.NotShared):
         sharing.overview(log)
     assert settings.tools_enabled() is False
+
+
+def test_agent_case_tags_need_cases_level_and_a_separate_grant():
+    from server import event_log_case_tags as case_tags
+    log = _log()
+    sharing.set_share(log, "aggregates")
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        sharing.set_tag_grant(log, True)  # the cases level comes first
+    with pytest.raises(sharing.NotShared):
+        sharing.agent_tag_cases(log, {"tag": "review", "case_ids": ["c0"]})
+    sharing.set_share(log, "cases")
+    assert sharing.share_status(log)["agents_may_tag_cases"] is False
+    with pytest.raises(sharing.NotAllowed):
+        sharing.agent_tag_cases(log, {"tag": "review", "case_ids": ["c0"]})
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        sharing.set_tag_grant(log, "yes")
+    assert sharing.set_tag_grant(log, True)["agents_may_tag_cases"] is True
+    assert sharing.shared_logs()["logs"][0]["agents_may_tag_cases"] is True
+    # Outside an AI request the IDs are used as given; the tag is always prefixed and noted.
+    done = sharing.agent_tag_cases(log, {"tag": "needs review", "case_ids": ["c0", "c2", "nope"], "note": "slow approver"})
+    assert (done["tag"], done["tagged"], done["unknown_case_ids"]) == ("agent: needs review", 2, 1)
+    listed = case_tags.listing(log)
+    assert [(t["tag"], t["cases"]) for t in listed["tags"]] == [("agent: needs review", 2)]
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        sharing.agent_tag_cases(log, {"tag": "x", "case_ids": ["c0"], "cohort": {"tag": "y"}})
+    # Lowering the level drops the grant; sharing again at cases needs a new grant.
+    sharing.set_share(log, "aggregates")
+    sharing.set_share(log, "cases")
+    assert sharing.share_status(log)["agents_may_tag_cases"] is False
+    with pytest.raises(sharing.NotAllowed):
+        sharing.agent_tag_cases(log, {"tag": "review", "case_ids": ["c0"]})
+
+
+def test_agent_pseudonyms_resolve_locally(monkeypatch):
+    from server import ai_context
+    log = _log()
+    sharing.set_share(log, "cases")
+    sharing.set_tag_grant(log, True)
+    token = ai_context.redact_contextually({"case_id": "c4"})["case_id"]
+    assert token != "c4"
+    monkeypatch.setattr(ai_context, "ai_request_active", lambda: True)
+    monkeypatch.setattr(ai_context, "effective_detail", lambda: {"detail_level": ai_context.DETAIL_REDACTED})
+    done = sharing.agent_tag_cases(log, {"tag": "dup", "case_ids": [token, "CASE_ID_000000"]})
+    assert (done["tagged"], done["unknown_case_ids"], done["ambiguous_case_ids"]) == (1, 1, 0)
+    # A real ID is not accepted in redacted mode: the agent never saw it.
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        sharing.agent_tag_cases(log, {"tag": "dup", "case_ids": ["c4"]})
 
 
 def test_deleting_the_log_removes_its_share():
@@ -116,6 +164,20 @@ with TestClient(app) as client:
     # At the default AI-context detail level identifiers reach the agent pseudonymised.
     assert r.status_code == 200 and r.json()["events"] == 2 and r.json()["case_id"] != "c0", r.text
     assert r.headers["X-OpenWorkGraph-Detail-Level"] != "full"
+    token = r.json()["case_id"]
+    # Tagging needs a separate owner grant; an agent cannot grant it to itself.
+    tag = {"tag": "needs review", "case_ids": [token], "note": "unusual path"}
+    assert client.post(f"/v1/process-intelligence/{log_id}/case-tags", json=tag, headers=agent).status_code == 403
+    assert client.post(f"/v1/event-logs/{log_id}/agent-share/tags", json={"allowed": True}, headers=agent).status_code == 403
+    r = client.post(f"/v1/event-logs/{log_id}/agent-share/tags", json={"allowed": True}, headers=owner)
+    assert r.status_code == 200 and r.json()["agents_may_tag_cases"] is True, r.text
+    assert client.post(f"/v1/event-logs/{log_id}/agent-share/tags", json={"allowed": "yes"}, headers=owner).status_code == 422
+    # The agent tags with the pseudonym it was given; the owner sees the real case, prefixed and noted.
+    r = client.post(f"/v1/process-intelligence/{log_id}/case-tags", json=tag, headers=agent)
+    assert r.status_code == 200 and r.json()["tagged"] == 1, r.text
+    tags = client.get(f"/v1/event-logs/{log_id}/case-tags?tag=agent:%20needs%20review", headers=owner).json()
+    assert [c["case_id"] for c in tags["cases"]] == ["c0"] and tags["cases"][0]["note"].startswith("Added by an AI agent."), tags
+    assert client.post(f"/v1/process-intelligence/{log_id}/case-tags", json={**tag, "cohort": {}}, headers=agent).status_code == 422
     # Agents still cannot read the dashboard-only event-log API.
     assert client.get(f"/v1/event-logs/{log_id}/summary", headers=agent).status_code == 403
     client.post(f"/v1/event-logs/{log_id}/agent-share", json={"level": None}, headers=owner)
@@ -146,7 +208,7 @@ async def _listed_tools(tmp_path: Path, enabled: bool) -> set[str]:
 
 
 PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_root_cause",
-                 "explain_process_case", "get_slowest_process_cases"}
+                 "explain_process_case", "get_slowest_process_cases", "tag_process_cases"}
 
 
 def test_mcp_tools_are_listed_only_when_a_log_is_shared(tmp_path):

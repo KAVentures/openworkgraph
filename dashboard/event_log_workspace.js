@@ -1346,15 +1346,26 @@
   // Owner-chosen, read-only process intelligence for connected AI agents (MCP), per log.
   function agentShareSection(){
     const box=section('Share with AI agents');box.id='owgAgentShare';
-    box.appendChild(el('div','Let AI apps connected to OpenWorkGraph (for example Claude) ask about this process: overview, KPIs, variants, insights and root cause. At the cases level they can also explain individual cases. They can only read, never change this log. AI access must also be on, and answers are redacted at your AI-context detail level, so case IDs stay pseudonymous unless you choose full detail.','muted'));
+    box.appendChild(el('div','Let AI apps connected to OpenWorkGraph (for example Claude) ask about this process: overview, KPIs, variants, insights and root cause. At the cases level they can also explain individual cases. They can only read, unless you also let them tag cases below. AI access must also be on, and answers are redacted at your AI-context detail level, so case IDs stay pseudonymous unless you choose full detail.','muted'));
     const level=select('owgAgentShareLevel',[['','Not shared'],['aggregates','Process overview, insights and root cause'],['cases','Also individual cases']]);
     const apply=button('Save sharing','secondary');apply.id='owgAgentShareSave';
     const out=el('div');out.id='owgAgentShareStatus';out.setAttribute('role','status');
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('AI agents may read',level),apply);
-    box.append(row,out);
+    const tagBox=input('owgAgentShareTags','checkbox');
+    const tagLabel=el('label',' Let AI agents tag cases (tags start with \u201cagent:\u201d and say an agent added them; nothing else changes)');tagLabel.prepend(tagBox);
+    const tagOut=el('div');tagOut.id='owgAgentShareTagsStatus';tagOut.setAttribute('role','status');
+    box.append(row,out,tagLabel,tagOut);
     const base='/v1/event-logs/'+encodeURIComponent(state.logId)+'/agent-share',generation=state.generation;
     const show=r=>{level.value=r.level||'';
-      out.textContent=r.level?('Shared with AI agents since '+String(r.granted_at).slice(0,16).replace('T',' ')+' UTC.'+(r.tools_listed?' Restart a connected AI app to see the process tools.':'')):'Not shared: AI agents cannot read this log.';};
+      out.textContent=r.level?('Shared with AI agents since '+String(r.granted_at).slice(0,16).replace('T',' ')+' UTC.'+(r.tools_listed?' Restart a connected AI app to see the process tools.':'')):'Not shared: AI agents cannot read this log.';
+      tagLabel.hidden=r.level!=='cases';tagBox.checked=Boolean(r.agents_may_tag_cases);};
+    tagBox.onchange=async()=>{
+      const allowed=tagBox.checked;
+      if(allowed&&!window.confirm('Let connected AI apps add tags to cases in this log? Their tags start with \u201cagent:\u201d and you can delete them.')){tagBox.checked=false;return;}
+      try{const r=await (await api(base+'/tags',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({allowed})})).json();
+        show(r);tagOut.textContent=r.agents_may_tag_cases?'AI agents may tag cases.':'AI agents cannot tag cases.';}
+      catch(error){tagBox.checked=!allowed;tagOut.textContent=error.message;}
+    };
     getJSON(base).then(r=>{if(generation===state.generation)show(r);}).catch(error=>{out.textContent=error.message;});
     apply.onclick=async()=>{
       if(level.value&&!window.confirm('Let connected AI apps read '+(level.value==='cases'?'this process and its individual cases':'this process overview, insights and root cause')+'? You can stop sharing at any time.'))return;
