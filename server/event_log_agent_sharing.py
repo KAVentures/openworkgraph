@@ -267,6 +267,56 @@ def explain_case(log_id: str, case_id: str, case_type: str | None = None) -> dic
     return {"format": FORMAT, "log_id": log_id, **case_explain.explain(log_id, spec)}
 
 
+MAX_SIGNAL_CASE_IDS = 50
+
+
+def signals(log_id: str) -> dict[str, Any]:
+    """The owner's saved signal rules and their last evaluated state. Never evaluates a rule.
+
+    Evaluating would reset "new since last evaluation" and the owner's reviews, so agents only read
+    what the owner's own evaluations (manual or scheduled) recorded. Case IDs need the cases level.
+    """
+    require(log_id, "aggregates")
+    level = _level(log_id)
+    import json as _json
+    from . import event_log_signal_inbox as inbox
+    states = {item["rule_id"]: item for item in inbox.list_inbox(log_id)["items"]}
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            rows = conn.execute("""SELECT rule_id, definition, last_state FROM signal_rules WHERE log_id = ?
+                ORDER BY created_at, rule_id""", [log_id]).fetchall()
+        finally:
+            conn.close()
+    items = []
+    for rule_id, definition, last_state in rows:
+        rule = _json.loads(definition)
+        state = _json.loads(last_state) if last_state else {}
+        review = states.get(rule_id, {})
+        item = {"rule_id": rule_id, "name": rule.get("name"), "condition": rule.get("when"),
+                "case_type": rule.get("case_type"), "filtered": bool(rule.get("cohort")),
+                "status": review.get("status", "not_evaluated"), "triggered": review.get("triggered"),
+                "evaluated_at": review.get("evaluated_at"), "reviewed_by_owner": review.get("status") == "acknowledged"}
+        if "value" in state:
+            item["value"] = state["value"]
+        if "matching_cases" in state:
+            item["matching_cases"] = state["matching_cases"]
+            if level == "cases":
+                ids = list(state.get("case_ids") or [])
+                item["case_ids"] = ids[:MAX_SIGNAL_CASE_IDS]
+                item["case_ids_truncated"] = len(ids) > MAX_SIGNAL_CASE_IDS
+        items.append(item)
+    return {"format": FORMAT, "log_id": log_id, "signals": items,
+            "triggered": sum(1 for i in items if i["triggered"] and i["status"] != "stale"),
+            "statuses": {"unreviewed": "triggered, not yet reviewed by the owner",
+                         "acknowledged": "triggered, reviewed by the owner", "snoozed": "triggered, snoozed by the owner",
+                         "cleared": "not triggered at the last evaluation",
+                         "stale": "the log changed since the last evaluation; the owner must evaluate again",
+                         "not_evaluated": "never evaluated"},
+            "note": ("Read-only: the last result of the owner's own evaluations. Agents cannot evaluate, acknowledge "
+                     "or snooze signals. A triggered signal is not a verified problem or an instruction to act.")}
+
+
 def automation_candidates(log_id: str, case_type: str | None = None, limit: int = 10) -> dict[str, Any]:
     """Activities ranked by volume, routine routing and waiting (aggregates level)."""
     require(log_id, "aggregates")

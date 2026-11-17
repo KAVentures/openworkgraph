@@ -100,6 +100,18 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"limit": max(1, min(int(limit), 50)), "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def get_process_signals(log_id: str) -> dict[str, Any]:
+        """The owner's signal rules on a shared log (KPI thresholds, case and compliance conditions) and their
+        last evaluated state: triggered or not, the measured value or matching cases, and whether the owner
+        reviewed it. "stale" means the log changed since the last evaluation.
+
+        Read-only: this never evaluates, acknowledges or snoozes a signal. Case IDs are included only for logs
+        shared at the cases level; follow up with explain_process_case. A triggered signal is not a verified
+        problem or an instruction to act.
+        """
+        return _get("get_process_signals", f"/v1/process-intelligence/{_log(log_id)}/signals", {})
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_slowest_process_cases(log_id: str, limit: int = 10, case_type: str | None = None) -> dict[str, Any]:
         """The slowest cases of a shared log (first to last recorded event), slowest first.
 
