@@ -123,12 +123,28 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("invalid identity timeline evidence") from exc
         if len(encoded_timeline) > 65536:
             raise ValueError("unbounded identity timeline evidence")
+    # Continuity is visible only up to the HTTP inspection cap. An adapter
+    # omitting the truncation flag must not allow scoring partial evidence.
+    continuity = response.get("observed_group_continuity", [])
+    if not isinstance(continuity, list) or len(continuity) > 256:
+        raise ValueError("invalid or unbounded group continuity")
+    for record in continuity:
+        if not isinstance(record, dict):
+            raise ValueError("invalid group continuity evidence")
+        try:
+            encoded = json.dumps(record, sort_keys=True, allow_nan=False).encode("utf-8")
+        except (TypeError, ValueError, RecursionError) as exc:
+            raise ValueError("invalid group continuity evidence") from exc
+        if len(encoded) > 65536:
+            raise ValueError("unbounded group continuity evidence")
+    continuity_truncated = (_truncation_flag(response, "observed_group_continuity_truncated")
+                            or len(continuity) > 24)
     identity_timelines_truncated = (_truncation_flag(response, "identity_timelines_truncated")
                                     or len(identity_timelines) > 12)
     completeness_flags = (
         identity_timelines_truncated,
         _truncation_flag(response, "observed_pair_event_assignments_truncated"),
-        _truncation_flag(response, "observed_group_continuity_truncated"),
+        continuity_truncated,
         _truncation_flag(response, "observed_case_groups_truncated"),
         _truncation_flag(coverage, "scan_truncated"),
     )
@@ -223,7 +239,7 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         # Continuity is part of the reviewer-visible evidence basis. A changed
         # group linkage must invalidate old labels even when pair rows match.
         "observed_group_continuity": response.get("observed_group_continuity"),
-        "observed_group_continuity_truncated": response.get("observed_group_continuity_truncated"),
+        "observed_group_continuity_truncated": continuity_truncated,
         # The reviewer also sees the current connected-component navigation
         # groups. Their membership and truncation are part of the evidence
         # basis even when direct pair assignments remain unchanged.
