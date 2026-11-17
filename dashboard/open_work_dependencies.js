@@ -329,7 +329,7 @@
         if (!Number.isSafeInteger(selected.revision) || selected.revision < 1 ||
             typeof selected.edit_token !== 'string' ||
             !/^[0-9a-f]{32}$/.test(selected.edit_token)) throw new Error('invalid review');
-        const response = await fetch('/v1/open-work/declarations/human-outcomes/attempt-receipts', {
+        const response = await fetch('/v1/open-work/declarations/human-outcomes/case-review', {
           ...options, method:'POST',
           headers:{...options.headers, 'Content-Type':'application/json'},
           body:JSON.stringify({
@@ -341,8 +341,17 @@
         });
         if (!current()) return;
         if (!response.ok) throw new Error('binding or receipt access denied');
-        const result = await response.json();
+        const combined = await response.json();
         if (!current()) return;
+        if (!combined || combined.format !== 'openworkgraph.bound-case-review.v1' ||
+            combined.case_ref !== ref || combined.cross_store_atomic_snapshot !== false ||
+            combined.provider_event_independently_rechecked_on_this_read !== false ||
+            combined.customer_outcome_verified !== false ||
+            combined.customer_outcome !== 'unknown' ||
+            combined.agent_execution_authorized !== false ||
+            combined.source_read_performed !== false) throw new Error('invalid combined review');
+        const result = combined.receipts;
+        const dependency = combined.dependencies;
         if (!result || result.format !== 'openworkgraph.bound-attempt-receipts.v1' ||
             result.case_ref !== ref ||
             typeof result.run_ref !== 'string' || !result.run_ref ||
@@ -359,16 +368,7 @@
               row.customer_outcome === 'unknown')) {
           throw new Error('invalid receipt projection');
         }
-        // A retained receipt is useful only with current, independently authorized
-        // prerequisite context. Do not display either projection if this second
-        // read is denied, revoked, truncated incorrectly, or malformed.
-        const dependencyResponse = await fetch(
-          '/v1/open-work/declarations/durable-dependencies?work_item_ref=' +
-          encodeURIComponent(ref), options);
-        if (!current()) return;
-        if (!dependencyResponse.ok) throw new Error('dependency access denied');
-        const dependency = await dependencyResponse.json();
-        if (!current()) return;
+        // The server re-admits both snapshots before returning a combined review.
         const context = dependency && dependency.context;
         const validRefs = values => Array.isArray(values) && values.length <= 10000 &&
           values.every(value => typeof value === 'string' &&

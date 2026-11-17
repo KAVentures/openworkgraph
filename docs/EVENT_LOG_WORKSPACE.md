@@ -1321,11 +1321,17 @@ hand.
 - Events already in the log are skipped by the usual append rules, so
   overlapping exports are safe.
 - A file that cannot be appended (wrong columns, for example) is recorded with
-  the reason and is not retried with the same content. Files too large to
+  the reason and is not automatically retried with the same content. Files too large to
   snapshot are reported on each run until removed or replaced, since no
   content hash is recorded. If an append commits but its later quality report
   fails, the feed records the append and surfaces a warning; it does not replay
   the file.
+- **Retry failed files** explicitly retries unchanged content that has a
+  failed receipt. It does not process new or changed files; use **Run now**
+  for those. A successful retry replaces the failure receipt atomically, and
+  another failed attempt updates its error. Missing or unsettled files wait
+  until they are present and settled. Automatic runs do not retry failures and
+  report them separately from files already appended.
 - Each run appends at most 20 files. Files in the folder are never changed or
   deleted.
 - "Run every day" schedules the feed on the local scheduler (job kind
@@ -1336,6 +1342,7 @@ hand.
 | --- | --- |
 | `POST /v1/event-logs/{log_id}/feeds` | `{"folder": "/abs/path", "pattern": "*.csv", "confirm_folder_reads": true}` |
 | `GET /v1/event-logs/{log_id}/feeds` | Feeds with counts and the 20 latest file results. |
+| `POST /v1/event-logs/feeds/{feed_id}/retry-failed` | Retry only previously failed, unchanged settled content; owner session and local-storage confirmation required. |
 | `POST /v1/event-logs/feeds/{feed_id}/run` | Append new files now. Requires `X-OWG-Local-Storage-Confirmed: true`. |
 | `POST /v1/event-logs/feeds/{feed_id}/delete` | Delete the feed and its schedule. Appended events stay. |
 
@@ -1965,3 +1972,36 @@ Deleting the log removes its schedule.
 `GET /v1/event-logs/{log_id}/agent-runs` reports whether the log was made from agent runs and when
 it was last refreshed. `POST /v1/event-logs/{log_id}/agent-runs/refresh` needs a dashboard session
 and the local-storage confirmation header.
+
+## Automation candidates
+
+"Automation candidates" ranks activities by evidence an event log can show. Vendors such as
+Celonis, UiPath and SAP Signavio rank automation potential in a similar way. Every component is
+returned:
+
+| Component | Meaning |
+| --- | --- |
+| volume | Occurrences per week, on a log scale relative to the busiest activity. |
+| routine | Average of how often the activity follows its most common predecessor and is followed by its most common successor. |
+| time | Share of all waiting in the log that comes right before this activity. |
+
+`score = 100 × (0.4 volume + 0.4 routine + 0.2 time)`
+
+Each activity also reports occurrences, cases, case share, repeats per case, the median wait
+before it, resources, the top resource's share, and a routing pattern:
+
+- **fixed**: the same neighbours in at least 80% of occurrences, and rarely repeated. Rules may
+  cover it.
+- **mostly fixed**: the same neighbours in 60–80% of occurrences. Rules with exceptions.
+- **variable**: routing varies. Judgement is involved, and an AI agent with human review may fit.
+
+Activities seen in fewer than 5 cases are left out and counted. The global case filter applies.
+"Add to automation pipeline" creates an idea in the automation pipeline with
+`source.kind = "event_log"` and the evidence in its description, ready for the ease and impact
+assessment there.
+
+Waiting is the gap since the previous event, not working time. The ranking estimates no savings
+and authorizes nothing.
+
+`GET /v1/event-logs/{log_id}/automation-candidates?limit=&case_type=` plus the usual case-filter
+parameters; dashboard session only.
