@@ -109,6 +109,30 @@ class TruncatedNavigationEvidenceTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "incomplete source evidence"):
                     score_review_annotations(source, labels)
 
+    def test_hidden_continuity_records_force_incomplete_scoring(self):
+        source = payload([pair("A", "F", ["e1"])])
+        source["observed_group_continuity"] = [{"group_id": str(i)} for i in range(25)]
+        queue = build_review_queue(source)
+        self.assertTrue(queue["coverage_incomplete"])
+        row = queue["event_reviews"][0]
+        labels = [{"window": row["window"], "event_id": row["event_id"],
+                   "true_resource_pairs": row["candidate_resource_pairs"]}]
+        with self.assertRaisesRegex(ValueError, "incomplete source evidence"):
+            score_review_annotations(source, labels)
+        # An explicit false flag must not override the actual source length.
+        source["observed_group_continuity_truncated"] = False
+        self.assertTrue(build_review_queue(source)["coverage_incomplete"])
+
+    def test_hidden_continuity_validation_is_fail_closed(self):
+        source = payload([pair("A", "F", ["e1"])])
+        for records in ([{"group_id": str(i)} for i in range(257)],
+                        [{"group_id": str(i)} for i in range(24)] + [None],
+                        [{"group_id": "x" * 65536}]):
+            with self.subTest(size=len(records)):
+                source["observed_group_continuity"] = records
+                with self.assertRaisesRegex(ValueError, "continuity"):
+                    build_review_queue(source)
+
     def test_complete_navigation_remains_scoreable(self):
         source = payload([pair("A", "F", ["e1"])])
         source["observed_case_groups_truncated"] = False
