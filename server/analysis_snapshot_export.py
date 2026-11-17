@@ -42,7 +42,7 @@ def export_snapshot(log_id, spec):
                 value = maps[i].setdefault(key, f'G{i+1}_{len(maps[i])+1}')
             cells.append(value)
         rows.append(cells)
-    coverage = [{'slot': i+1, 'with_value': c['cases_with_value'], 'without_value': c['cases_without_value'],
+    # Metric slots refer to the original spec positions, not the compacted\n    # coverage list: unused earlier metrics must not relabel a later metric.\n    coverage = [{'slot': slots[c['name']], 'with_value': c['cases_with_value'], 'without_value': c['cases_without_value'],
         'missing_operand': c.get('cases_with_missing_operand', 0), 'zero_divisor': c.get('cases_with_zero_divisor', 0),
         'non_finite': c.get('cases_with_non_finite_value', 0)} for i, c in enumerate(result['metrics']) if c['name'] in needed]
     return Snapshot(generated_at=datetime.now(timezone.utc), level=parsed.level, columns=columns, rows=rows,
