@@ -269,6 +269,35 @@ class ReviewedTransactionTests(unittest.TestCase):
             handoff.assert_not_called()
             checkpoint.assert_not_called()
 
+    def test_uncertain_append_cli_requires_manual_reconciliation_without_retry(self):
+        """An ambiguous authenticated append cannot advance the durable cursor."""
+        reviewed = {"status": "review_ready", "csv_sha256": DIGEST,
+                    "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}
+        argv = ["--tenant", "t", "--mailbox", "m", "--folder", "f",
+                "--log-id", "log", "--confirm-log-id", "log",
+                "--grant-file", "grant", "--candidate", "candidate",
+                "--ledger-dir", "ledger", "--csv-path", "csv",
+                "--receipt-file", "receipt", "--journal-dir", "journal",
+                "--handoff-dir", "handoff", "--successor-label", "next",
+                "--expected-review-csv-sha256", DIGEST,
+                "--consent-local-read", "--consent-local-append",
+                "--confirm-candidate-reviewed", "--confirm-removals-reviewed",
+                "--confirm-checkpoint-commit"]
+        with patch.object(tx, "inspect_checkpoint", return_value=None), \
+             patch.object(tx.cycle, "review", return_value=reviewed), \
+             patch.object(tx.cycle, "append", side_effect=UncertainReceipt("connection closed")) as append, \
+             patch.object(tx.cycle, "handoff") as handoff, \
+             patch.object(tx.cycle, "checkpoint_commit") as checkpoint:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(tx.main(argv), 3)
+            refusal = json.loads(output.getvalue())
+            self.assertEqual(refusal["status"], "manual_reconciliation_required")
+            self.assertIs(refusal["automatic_retry_allowed"], False)
+            append.assert_called_once()
+            handoff.assert_not_called()
+            checkpoint.assert_not_called()
+
     def test_uncertain_append_never_handoffs_or_commits(self):
         with patch.object(tx, "inspect_checkpoint", return_value=None), \
              patch.object(tx.cycle, "review", return_value={"status": "review_ready", "csv_sha256": DIGEST, "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}), \
