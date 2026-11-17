@@ -447,8 +447,9 @@ def test_transitive_group_reports_missing_direct_edge_without_inventing_case():
 def test_identity_interruption_burst_reports_omitted_evidence():
     # A busy identity must not silently claim its six displayed IDs are complete.
     from server.work_resumption import _identity_bursts, _visible_bursts
-    # _iso uses Python ordinal-day timestamps; 1000 is outside datetime range.
-    observations = [(739000.0 + i / 86400, f"e{i}") for i in range(11)]
+    # _iso consumes SQLite julianday values, not Python ordinal days.
+    # This is a valid Julian day near 2026, so timestamp formatting is exercised.
+    observations = [(2461000.0 + i / 86400, f"e{i}") for i in range(11)]
     bursts = _identity_bursts(observations, 30 / 1440)
     assert len(bursts) == 1
     assert bursts[0]["observed_count"] == 11
