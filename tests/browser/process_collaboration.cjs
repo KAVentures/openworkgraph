@@ -167,6 +167,28 @@ const pathModule = require("node:path");
     await deniedHandoffPage.locator("#handoffStatus").filter({hasText:/REFUSED:|Session cleared/}).waitFor();
     assert.equal(uploadedHandoff, false);
 
+    // Recovery is an explicit fresh login and fresh server verification, never
+    // reuse of the denied result or an automatic grant after HTTP 403.
+    const recoveredHandoffPage = await login("alice");
+    await recoveredHandoffPage.getByRole("button", {name:"Shared support process · r1",exact:true}).click();
+    await recoveredHandoffPage.locator("#selectedTitle").filter({hasText:"revision 1"}).waitFor();
+    await recoveredHandoffPage.locator("#handoffPacket").setInputFiles({
+      name:"recovered-review.json",mimeType:"application/json",
+      buffer:Buffer.from(JSON.stringify(handoffPacket())),
+    });
+    const recoveredRead = recoveredHandoffPage.waitForResponse(response =>
+      response.request().method()==="GET" &&
+      new URL(response.url()).pathname==="/v1/human/processes/"+handoffProcess.workflow_id);
+    await recoveredHandoffPage.locator("#handoffCheck").click();
+    assert.equal((await recoveredRead).status(),200,
+      "recovery must independently read the current authorized Gateway revision");
+    await recoveredHandoffPage.locator("#handoffStatus")
+      .filter({hasText:"MATCH: Fresh authorized process revision"}).waitFor();
+    assert.match(await recoveredHandoffPage.locator("#handoffStatus").textContent(),
+      /execution authorization remain unverified/i);
+    assert.equal(uploadedHandoff,false,
+      "neither denied nor recovered packet may be posted to Gateway");
+
     // Real Gateway verifier rejects the expired bearer (401), without a mocked response.
     // An expired delegated session (401) must fail closed rather than reuse a
     // previously authenticated process selection or display a false match.
