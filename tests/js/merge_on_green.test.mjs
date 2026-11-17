@@ -153,3 +153,37 @@ test('coordinator passes exact head to GitHub merge only after refreshed gates',
   await mod.run({github,context,core:{info:line=>notices.push(line)}});
   assert.equal(merges.length,1);
 });
+
+test('specialized acceptance workflows fail closed on pending, failed and skipped runs', () => {
+  const extra = {id: 999, name:'Root-cause evidence acceptance', head_sha:sha,
+    event:'pull_request', status:'completed', conclusion:'success', run_attempt:1};
+  assert.equal(verdict({workflowRuns:[...workflows(),extra]}), null);
+  assert.match(verdict({workflowRuns:[...workflows(),{...extra,status:'queued',conclusion:null}]}),
+    /incomplete-specialized-workflow:Root-cause evidence acceptance/);
+  assert.match(verdict({workflowRuns:[...workflows(),{...extra,conclusion:'failure'}]}),
+    /incomplete-specialized-workflow:Root-cause evidence acceptance/);
+  assert.match(verdict({workflowRuns:[...workflows(),{...extra,conclusion:'skipped'}]}),
+    /incomplete-specialized-workflow:Root-cause evidence acceptance/);
+  assert.equal(verdict({workflowRuns:[...workflows(),
+    {...extra,name:'draft-smoke',conclusion:'skipped'}]}), null);
+});
+
+test('latest specialized failure supersedes a green run; unrelated commits cannot block', () => {
+  const extra = {id: 999, name:'Workspace activity case filter acceptance',
+    head_sha:sha,event:'pull_request',status:'completed',conclusion:'success',run_attempt:1};
+  const oldGreen = {...extra,id:998};
+  assert.match(verdict({workflowRuns:[...workflows(),oldGreen,{...extra,conclusion:'failure'}]}),
+    /incomplete-specialized-workflow/);
+  assert.equal(verdict({workflowRuns:[...workflows(),extra,
+    {...extra,id:1000,head_sha:'b'.repeat(40),conclusion:'failure'}]}), null);
+});
+
+test('explicit incomplete or do-not-merge acceptance blocks override exact-head approval', () => {
+  for (const body of [
+    `**INCOMPLETE — DO NOT MERGE YET**\\n<!-- OWG-MERGE-ON-GREEN:${sha} -->`,
+    `NOT YET ACCEPTED: independent validation missing.\\n<!-- OWG-MERGE-ON-GREEN:${sha} -->`,
+    `DO NOT MERGE without provider acceptance.\\n<!-- OWG-MERGE-ON-GREEN:${sha} -->`,
+  ]) {
+    assert.match(verdict({pr:pr({body})}), /author-explicit-acceptance-blocker/);
+  }
+});
