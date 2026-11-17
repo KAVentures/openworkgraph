@@ -40,7 +40,8 @@ from typing import Any, Callable
 from .db import DATA_DIR
 
 FORMAT = "openworkgraph.local-schedules.v1"
-KINDS = ("retained_jira_profile", "event_log_signals", "event_log_report", "local_backup", "event_log_folder_feed")
+KINDS = ("retained_jira_profile", "event_log_signals", "event_log_report", "local_backup", "event_log_folder_feed",
+         "event_log_agent_runs")
 MIN_BACKUP_INTERVAL_MINUTES = 24 * 60
 MIN_INTERVAL_MINUTES = 15
 MAX_INTERVAL_MINUTES = 7 * 24 * 60
@@ -372,6 +373,15 @@ def _check_target(kind: str, target_id: str) -> None:
         except Exception:
             raise ScheduleError("unknown event log folder feed") from None
         return
+    if kind == "event_log_agent_runs":
+        from . import event_log_agent_mining as agent_mining
+        try:
+            made_from_runs = agent_mining.source(target_id)["agent_runs"]
+        except Exception:
+            made_from_runs = False
+        if not made_from_runs:
+            raise ScheduleError("unknown AI agent runs log")
+        return
     if kind == "retained_jira_profile":
         from . import jira_retained_profiles as profiles
         ids = {p["profile_id"] for p in profiles.status().get("profiles", [])}
@@ -419,6 +429,9 @@ def _run_job(kind: str, target_id: str) -> tuple[str, float]:
     if kind == "event_log_folder_feed":
         from . import event_log_folder_feeds as feeds
         return feeds.run_scheduled(target_id)
+    if kind == "event_log_agent_runs":
+        from . import event_log_agent_mining as agent_mining
+        return agent_mining.run_scheduled(target_id)
     if kind == "event_log_report":
         from . import event_log_saved_reports as saved_reports
         from .event_log_workspace import EventLogWorkspaceError
