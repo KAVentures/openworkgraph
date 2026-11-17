@@ -57,6 +57,23 @@ def test_coverage_and_safe_missing_arithmetic_propagate_without_definitions(log)
     assert 'private_metric' not in json.dumps(r) and 'from_activity' not in json.dumps(r)
 
 
+def test_export_coverage_uses_original_metric_slots_when_earlier_metric_unused(log):
+    # The shared contract's slot indexes the original typed analysis, not
+    # the subset of metrics exported. No raw metric names leave this snapshot.
+    unused={'kind':'activity_count','name':'private_unused','activity':'A'}
+    selected={'kind':'time_between','name':'private_selected','from_activity':'A','to_activity':'B'}
+    definition=spec(dimensions=[],metrics=[unused,selected],
+                    measures=[{'fn':'max','of':'metric:private_selected'}])
+    preview=sharing.export_snapshot(log,definition)
+    assert preview['columns'][0]['metric_slot']==2
+    assert preview['metric_coverage']==[{'slot':2,'with_value':1,'without_value':1,
+        'missing_operand':0,'zero_divisor':0,'non_finite':0}]
+    assert len(preview['metric_definition_sha256'])==1
+    assert 'private_unused' not in json.dumps(preview)
+    assert 'private_selected' not in json.dumps(preview)
+    assert Snapshot.model_validate(preview).model_dump(mode='json')==preview
+
+
 def test_budget_refuses_before_a_partial_fingerprint(log,monkeypatch):
     import server.process_discovery_provenance as provenance
     monkeypatch.setattr(provenance,'MAX_SOURCE_ROWS',0)

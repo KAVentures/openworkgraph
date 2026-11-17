@@ -781,6 +781,9 @@ from .open_work_declaration_routes import router as _open_work_declaration_route
 app.include_router(_open_work_declaration_router)
 from .event_log_routes import router as _event_log_router  # noqa: E402
 app.include_router(_event_log_router)
+# Owner-chosen, per-log read-only process intelligence for connected AI agents.
+from .process_intelligence_routes import router as _process_intelligence_router  # noqa: E402
+app.include_router(_process_intelligence_router)
 from .m365_operator_audit_routes import router as _m365_operator_audit_router  # noqa: E402
 app.include_router(_m365_operator_audit_router)
 # R24 cross-object lead time analysis uses the same dashboard-only event-log guard.
