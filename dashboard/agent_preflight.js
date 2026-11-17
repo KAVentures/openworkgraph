@@ -48,9 +48,9 @@
       const generation=selectionGeneration;
       const requestId=++requestGeneration;
       cancelPending();
+      if(selected.size>limit){status.textContent='Preflight JSON exceeds the 64 KiB limit.';return;}
       const controller=new AbortController();
       pendingController=controller;
-      if(selected.size>limit){status.textContent='Preflight JSON exceeds the 64 KiB limit.';return;}
       result.replaceChildren();run.disabled=true;
       status.textContent='Checking selected synthetic scenarios locally…';
       try{
