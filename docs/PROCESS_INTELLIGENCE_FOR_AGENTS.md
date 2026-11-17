@@ -56,6 +56,7 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 | `get_process_root_cause` | Associations with `duration_over` (hours), `rework`, `contains_activity` or `ends_with` (activity). |
 | `explain_process_case` | One case's steps, gaps over the typical gap, repeats and uncommon steps (cases level). |
 | `get_slowest_process_cases` | Slowest cases first (cases level). |
+| `get_process_signals` | Your signal rules and their last evaluated state: triggered or not, value or matching cases, and whether you reviewed it (aggregates level; case IDs at cases level). Never evaluates, acknowledges or snoozes. |
 | `get_process_automation_candidates` | Activities ranked as automation candidates with every score component and routing pattern (aggregates level). See "Automation candidates" in EVENT_LOG_WORKSPACE.md. |
 
 | `tag_process_cases` | Adds an `agent: ` tag with a note to cases (cases level and the tag permission). |
@@ -74,6 +75,7 @@ nothing authorizes an action.
 | `GET /v1/process-intelligence/{log_id}/root-cause?outcome=&hours=&activity=&case_type=` | Same, `aggregates` or `cases`. |
 | `GET /v1/process-intelligence/{log_id}/case?case_id=&case_type=` | Same, `cases` only. |
 | `GET /v1/process-intelligence/{log_id}/slowest-cases?limit=&case_type=` | Same, `cases` only. |
+| `GET /v1/process-intelligence/{log_id}/signals` | Same, `aggregates` or `cases` (case IDs only at `cases`). |
 | `GET /v1/process-intelligence/{log_id}/automation-candidates?limit=&case_type=` | Same, `aggregates` or `cases`. |
 | `POST /v1/event-logs/{log_id}/agent-share/tags` (`{"allowed": true \| false}`) | Dashboard session only. |
 | `POST /v1/process-intelligence/{log_id}/case-tags` (`{"tag", "case_ids", "note"?, "case_type"?}`) | Agent, `cases` level and the tag permission (403 without it). |

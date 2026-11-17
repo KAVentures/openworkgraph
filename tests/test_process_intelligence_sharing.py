@@ -119,6 +119,33 @@ def test_agent_pseudonyms_resolve_locally(monkeypatch):
         sharing.agent_tag_cases(log, {"tag": "dup", "case_ids": ["c4"]})
 
 
+def test_agents_read_signal_states_without_evaluating():
+    from server import event_log_signals as signal_rules
+    log = _log()
+    sharing.set_share(log, "aggregates")
+    assert sharing.signals(log)["signals"] == []
+    slow = signal_rules.add_rule(log, {"name": "Slow payments", "when": {"kind": "cases", "condition": "duration_over",
+                                                                       "seconds": 24 * 3600}})["rule_id"]
+    signal_rules.add_rule(log, {"name": "Too many cases", "when": {"kind": "kpi", "metric": "case_count",
+                                                                   "operator": "above", "threshold": 100}})
+    before = sharing.signals(log)
+    assert [s["status"] for s in before["signals"]] == ["not_evaluated", "not_evaluated"]
+    # Reading never evaluates.
+    assert signal_rules.list_rules(log)["rules"][0].get("last_evaluated_at") is None
+    signal_rules.evaluate(log)
+    after = {s["name"]: s for s in sharing.signals(log)["signals"]}
+    assert after["Slow payments"]["status"] == "unreviewed" and after["Slow payments"]["matching_cases"] == 6
+    assert "case_ids" not in after["Slow payments"]  # aggregates level: counts only
+    assert after["Too many cases"]["status"] == "cleared" and after["Too many cases"]["value"] == 12
+    assert sharing.signals(log)["triggered"] == 1
+    sharing.set_share(log, "cases")
+    slow_item = next(s for s in sharing.signals(log)["signals"] if s["rule_id"] == slow)
+    assert sorted(slow_item["case_ids"]) == sorted(f"c{i}" for i in range(0, 12, 2)) and not slow_item["case_ids_truncated"]
+    sharing.set_share(log, None)
+    with pytest.raises(sharing.NotShared):
+        sharing.signals(log)
+
+
 def test_deleting_the_log_removes_its_share():
     log = _log()
     sharing.set_share(log, "cases")
@@ -157,6 +184,8 @@ with TestClient(app) as client:
     assert client.get(f"/v1/process-intelligence/{log_id}/case?case_id=c0", headers=agent).status_code == 404
     r = client.get(f"/v1/process-intelligence/{log_id}/root-cause?outcome=rework", headers=agent)
     assert r.status_code == 200, r.text
+    r = client.get(f"/v1/process-intelligence/{log_id}/signals", headers=agent)
+    assert r.status_code == 200 and r.json()["signals"] == [], r.text
     r = client.get(f"/v1/process-intelligence/{log_id}/automation-candidates?limit=5", headers=agent)
     assert r.status_code == 200 and [c["activity"] for c in r.json()["candidates"]] == ["B", "A"], r.text
     # The global AI-access switch still applies.
@@ -213,7 +242,7 @@ async def _listed_tools(tmp_path: Path, enabled: bool) -> set[str]:
 
 PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_root_cause",
                  "explain_process_case", "get_slowest_process_cases", "tag_process_cases",
-                 "get_process_automation_candidates"}
+                 "get_process_automation_candidates", "get_process_signals"}
 
 
 def test_mcp_tools_are_listed_only_when_a_log_is_shared(tmp_path):
