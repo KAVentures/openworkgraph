@@ -70,6 +70,36 @@ const path=require('node:path');
   await page.locator('#owgCohortMetricSection').waitFor({state:'visible',timeout:60000});
   assert.equal(await page.locator('#owgCohortMetricSaved option').filter({hasText:'Browser acceptance duration'}).count(),0,
     'saved cohort definitions must remain scoped to their own log');
+  // Deterministic stale-response regression: hold a real authenticated response for
+  // the original log until after the operator has switched back to the second log.
+  // A late response must never populate the second log's saved-definition picker.
+  let interceptedResolve,releaseResponse;
+  const intercepted=new Promise(resolve=>{interceptedResolve=resolve;});
+  const release=new Promise(resolve=>{releaseResponse=resolve;});
+  let delayed=false;
+  const definitionPath='/v1/event-logs/'+encodeURIComponent(logId)+'/cohort-metric-definitions';
+  const delayOriginalDefinitions=async route=>{
+    if(delayed){await route.continue();return;}
+    delayed=true;
+    const response=await route.fetch();
+    interceptedResolve();
+    await release;
+    await route.fulfill({response});
+  };
+  await page.route('**'+definitionPath,delayOriginalDefinitions);
+  await picker.selectOption(logId);
+  await picker.dispatchEvent('change');
+  await page.locator('#owgEventLogAnalyze').click();
+  await Promise.race([intercepted,new Promise((_,reject)=>setTimeout(()=>reject(new Error('Expected original-log definitions request')),30000))]);
+  await picker.selectOption(secondLogId);
+  await picker.dispatchEvent('change');
+  await page.locator('#owgEventLogAnalyze').click();
+  await page.locator('#owgCohortMetricSection').waitFor({state:'visible',timeout:60000});
+  releaseResponse();
+  await page.waitForTimeout(300);
+  assert.equal(await page.locator('#owgCohortMetricSaved option').filter({hasText:'Browser acceptance duration'}).count(),0,
+    'late original-log response must not leak a saved definition into the second log');
+  await page.unroute('**'+definitionPath,delayOriginalDefinitions);
   // Re-open the original log and confirm that the definition survived the dashboard re-render.
   // Re-select the existing log through the real picker; an empty option is not guaranteed.
   await picker.selectOption(logId);
