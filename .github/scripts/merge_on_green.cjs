@@ -42,6 +42,22 @@ function latestRunsForHead(runs, sha) {
   return grouped;
 }
 
+function latestSpecializedRunsForHead(runs, sha) {
+  const grouped = new Map();
+  for (const run of runs || []) {
+    // Draft smoke is not a release acceptance check; every other triggered
+    // PR-specific workflow must pass on the exact same commit.
+    if (run.head_sha !== sha || run.event !== 'pull_request' ||
+        REQUIRED_WORKFLOWS.includes(run.name) || run.name === 'draft-smoke') continue;
+    const current = grouped.get(run.name);
+    if (!current || Number(run.id) > Number(current.id) ||
+        (run.id === current.id && Number(run.run_attempt) > Number(current.run_attempt))) {
+      grouped.set(run.name, run);
+    }
+  }
+  return grouped;
+}
+
 function latestReviewStates(reviews) {
   const state = new Map();
   for (const review of reviews || []) {
@@ -58,6 +74,9 @@ function decision({pr, owner, repo, workflowRuns, testJobs, reviewThreads, hasMo
   if (pr.base?.ref !== 'main' || pr.base?.repo?.full_name !== owner + '/' + repo ||
       pr.head?.repo?.full_name !== owner + '/' + repo) return 'cross-repository-or-base';
   if (pr.draft || !exactOptIn(pr)) return 'draft-or-not-explicitly-opted-in';
+  // Opt-in cannot override an explicit outstanding author acceptance blocker.
+  if (/\b(?:INCOMPLETE|NOT YET ACCEPTED|DO NOT MERGE)\b/i.test(pr.body || ''))
+    return 'author-explicit-acceptance-blocker';
   if (pr.mergeable !== true || pr.mergeable_state !== 'clean') return 'not-cleanly-mergeable';
   if (upToDateWithMain !== true) return 'not-tested-against-current-main';
   if ((pr.requested_reviewers || []).length || (pr.requested_teams || []).length)
@@ -71,6 +90,10 @@ function decision({pr, owner, repo, workflowRuns, testJobs, reviewThreads, hasMo
     const run = workflows.get(name);
     if (!run || run.status !== 'completed' || run.conclusion !== 'success')
       return 'incomplete-exact-head-workflow:' + name;
+  }
+  for (const [name, run] of latestSpecializedRunsForHead(workflowRuns, pr.head.sha)) {
+    if (run.status !== 'completed' || run.conclusion !== 'success')
+      return 'incomplete-specialized-workflow:' + name;
   }
   const jobNames = new Map((testJobs || []).map(j => [j.name, j]));
   for (const name of REQUIRED_TEST_JOBS) {
@@ -171,4 +194,4 @@ async function run({github, context, core}) {
 }
 
 module.exports = {REQUIRED_WORKFLOWS, REQUIRED_TEST_JOBS, OPT_IN_PREFIX,
-  exactOptIn, latestRunsForHead, latestReviewStates, decision, run};
+  exactOptIn, latestRunsForHead, latestSpecializedRunsForHead, latestReviewStates, decision, run};
