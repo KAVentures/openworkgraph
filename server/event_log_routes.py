@@ -632,6 +632,15 @@ def event_log_summary(request: Request, log_id: str, case_type: str | None = Que
     return _respond(workspace.summary, log_id, case_type, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/case-attribute-values")
+def event_log_case_attribute_values(request: Request, log_id: str,
+                                    case_type: str | None = Query(default=None, max_length=200)):
+    """Case attribute names, numeric ranges and common values, to suggest case-filter inputs."""
+    from . import event_log_case_attribute_values as case_attribute_values
+    _require_dashboard(request)
+    return _respond(case_attribute_values.values, log_id, case_type)
+
+
 @router.post("/v1/event-logs/{log_id}/attribute-profile")
 async def event_log_attribute_profile(request: Request, log_id: str):
     """Coverage, type, level and frequent values of every event attribute."""
