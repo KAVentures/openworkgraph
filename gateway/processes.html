@@ -515,10 +515,17 @@
         const note = (text) => {
           $("status").textContent = String(text || "");
         };
-        function button(text, fn) {
+        function button(text, fn, allowOverlap = false) {
           const n = el("button", text);
           n.type = "button";
-          n.addEventListener("click", () => run(fn));
+          n.addEventListener("click", () => {
+            if (!allowOverlap) return run(fn);
+            // Selection reads are safe to supersede; mutations still serialize.
+            if (busy) { note("Wait for the current process request."); return; }
+            Promise.resolve().then(fn).catch(error => {
+              if (!error.staleIdentity) note(error.message || "Process request failed.");
+            });
+          });
           return n;
         }
         async function run(fn) {
@@ -743,7 +750,7 @@
             const row = el("p");
             row.append(
               button(item.title + " · r" + item.revision, () =>
-                open(item.workflow_id),
+                open(item.workflow_id), true
               ),
               el(
                 "span",
