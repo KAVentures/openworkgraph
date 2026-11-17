@@ -15,6 +15,8 @@ from .record_graph_tools import register_record_graph_tools
 from .case_context_tools import register_case_context_tools
 from .outcome_receipt_tools import register_outcome_receipt_tools
 from .dispatch_tools import register_dispatch_tools
+from .process_intelligence_tools import register_process_intelligence_tools
+from server.process_intelligence_settings import tools_enabled as process_intelligence_tools_enabled
 from server.open_work_mcp_settings import experimental_tools_enabled
 
 install_history_guard(_secure_runtime)
@@ -29,6 +31,9 @@ if experimental_tools_enabled():
     register_case_context_tools(mcp, _secure_runtime)
     register_outcome_receipt_tools(mcp, _secure_runtime)
     register_dispatch_tools(mcp, _secure_runtime)
+# Listed only after the owner shares an event log with agents from the dashboard.
+if process_intelligence_tools_enabled():
+    register_process_intelligence_tools(mcp, _secure_runtime)
 _inner = mcp.streamable_http_app()
 
 class MCPBearerGuard:

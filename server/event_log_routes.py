@@ -239,11 +239,11 @@ def event_log_signal_overview(
 @router.get("/v1/event-logs/signal-timeline")
 def event_log_signal_timeline(
     request: Request, transition: str = Query(default="all", max_length=20),
-    limit: int = Query(default=100, ge=1, le=200),
+    limit: int = Query(default=100, ge=1, le=200), before: str = Query(default="", max_length=256),
 ):
     """Read-only cross-log transition journal; local dashboard session only."""
     _require_dashboard(request)
-    return _respond(signal_timeline.timeline, transition=transition, limit=limit)
+    return _respond(signal_timeline.timeline, transition=transition, limit=limit, before=before)
 
 
 @router.post("/v1/event-logs/xlsx-to-csv")
@@ -301,6 +301,34 @@ def import_sample_event_log(request: Request):
     if request.headers.get("x-owg-local-storage-confirmed") != "true":
         raise HTTPException(403, "Explicit confirmation to store this event log on this computer is required")
     return _respond(sample.import_sample)
+
+
+@router.post("/v1/event-logs/import-agent-runs")
+async def import_agent_runs(request: Request):
+    """Agent mining: observed AI agent runs (structure only) become a new event log."""
+    _require_dashboard(request)
+    if request.headers.get("x-owg-local-storage-confirmed") != "true":
+        raise HTTPException(403, "Explicit confirmation to store this event log on this computer is required")
+    spec = await _json_body(request, "agent-run import", strict=True, limit=4096)
+    from . import event_log_agent_mining as agent_mining
+    return await run_in_threadpool(_respond, agent_mining.import_agent_runs, spec)
+
+
+@router.get("/v1/event-logs/{log_id}/agent-runs")
+async def agent_runs_source(request: Request, log_id: str):
+    _require_dashboard(request)
+    from . import event_log_agent_mining as agent_mining
+    return await run_in_threadpool(_respond, agent_mining.source, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/agent-runs/refresh")
+async def refresh_agent_runs(request: Request, log_id: str):
+    """Append AI agent runs that finished since the log was made or last refreshed."""
+    _require_dashboard(request)
+    if request.headers.get("x-owg-local-storage-confirmed") != "true":
+        raise HTTPException(403, "Explicit confirmation to store this event log on this computer is required")
+    from . import event_log_agent_mining as agent_mining
+    return await run_in_threadpool(_respond, agent_mining.refresh, log_id)
 
 
 @router.post("/v1/event-logs/import")
@@ -413,6 +441,16 @@ async def delete_event_log_feed(request: Request, feed_id: str):
     from . import event_log_folder_feeds as folder_feeds
     _require_dashboard(request)
     return await run_in_threadpool(_respond, folder_feeds.delete, feed_id)
+
+
+@router.post("/v1/event-logs/feeds/{feed_id}/retry-failed")
+async def retry_failed_event_log_feed_files(request: Request, feed_id: str):
+    """Retry unchanged failed content; leave unseen files for an ordinary run."""
+    from . import event_log_folder_feeds as folder_feeds
+    _require_dashboard(request)
+    if request.headers.get("x-owg-local-storage-confirmed") != "true":
+        raise HTTPException(403, "Explicit confirmation to store these events on this computer is required")
+    return await run_in_threadpool(_respond, folder_feeds.run, feed_id, retry_failed=True)
 
 
 @router.post("/v1/event-logs/{log_id}/case-attributes")
@@ -725,6 +763,15 @@ async def event_log_stuck_cases(request: Request, log_id: str):
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/v1/event-logs/{log_id}/automation-candidates")
+def event_log_automation_candidates(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                                    limit: int = Query(default=15, ge=1, le=50),
+                                    cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_automation_candidates as automation
+    _require_dashboard(request)
+    return _respond(automation.candidates, log_id, case_type, limit=limit, cohort=cohort)
 
 
 @router.get("/v1/event-logs/{log_id}/variants")
@@ -1438,9 +1485,10 @@ def event_log_signal_inbox(request: Request, log_id: str):
 
 @router.get("/v1/event-logs/{log_id}/signal-history")
 def event_log_signal_history(request: Request, log_id: str,
-                             limit: int = Query(default=50, ge=1, le=200)):
+                             limit: int = Query(default=50, ge=1, le=200),
+                             before: str = Query(default="", max_length=256)):
     _require_dashboard(request)
-    return _respond(signal_transitions.list_history, log_id, limit=limit)
+    return _respond(signal_transitions.list_history, log_id, limit=limit, before=before)
 
 
 @router.post("/v1/event-logs/{log_id}/signal-inbox/acknowledge-batch")

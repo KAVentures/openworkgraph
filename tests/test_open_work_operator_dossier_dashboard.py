@@ -68,7 +68,7 @@ vm.runInNewContext(fs.readFileSync('dashboard/open_work_dependencies.js','utf8')
   {document,window:{__owgAuthReady:Promise.resolve()},fetch,AbortController,encodeURIComponent});
 const card=document.getElementById('owgDurableDependencyView');
 const forms=card.children.filter(x=>x.tagName==='form');
-assert.equal(forms.length,2);
+assert.equal(forms.length,3,'declaration, dossier and retained-receipt review forms are all present');
 const form=forms[1], refField=form.children[0].children[0];
 const consent=form.children[1].children[0];
 const status=card.children[card.children.indexOf(form)+1];
