@@ -109,6 +109,10 @@ with TestClient(app) as client:
     overview=client.get(path+'/object-relationships',headers=headers)
     assert overview.status_code==200 and overview.json()['retained_relationships']==2
     assert overview.headers['cache-control']=='no-store'
+    assert client.get(path+'/object-relationships?offset=-1',headers=headers).status_code==422
+    assert client.get(path+'/object-relationships?offset=200',headers=headers).status_code==422
+    empty=client.get(path+'/object-relationships?offset=200&revision='+str(overview.json()['revision']),headers=headers)
+    assert empty.status_code==200 and empty.json()['groups_total']==2 and empty.json()['groups']==[]
     first=client.post(query,json={'limit':1},headers=headers)
     assert first.status_code==200 and first.json()['has_more']
     cursor=first.json()['next_cursor']
@@ -300,6 +304,15 @@ def test_group_overview_discloses_its_limit_without_losing_query_rows():
     payload=document();payload['objects'][0]['relationships']=[{'objectId':'item1','qualifier':str(i)} for i in range(201)]
     log=imported(payload)['log_id'];result=relationships.overview(log)
     assert result['groups_total']==201 and len(result['groups'])==200 and result['groups_truncated']
+    assert result['groups_next_offset']==200
+    second=relationships.overview(log, offset=200, revision=result['revision'])
+    assert second['groups_total']==201 and len(second['groups'])==1 and second['groups_next_offset'] is None
+    assert len({g['qualifier'] for page in (result,second) for g in page['groups']})==201
+    beyond=relationships.overview(log, offset=400, revision=result['revision'])
+    assert beyond['groups_total']==201 and beyond['groups']==[]
+    with pytest.raises(workspace.EventLogWorkspaceError):relationships.overview(log, offset=200)
+    appended(log,payload)
+    with pytest.raises(workspace.EventLogWorkspaceError, match='changed'):relationships.overview(log, offset=200, revision=result['revision'])
     first=relationships.query(log,{'limit':200})
     last=relationships.query(log,{'limit':200,'cursor':first['next_cursor']})
     assert len(first['rows'])==200 and len(last['rows'])==1

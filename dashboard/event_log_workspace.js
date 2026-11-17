@@ -2363,14 +2363,32 @@
     showRows.onclick=()=>{bookmarks=[null];load().catch(()=>{});};
     next.onclick=()=>{if(nextCursor){bookmarks.push(nextCursor);load(nextCursor).catch(()=>{});}};
     previous.onclick=()=>{if(bookmarks.length>1){bookmarks.pop();load(bookmarks[bookmarks.length-1]).catch(()=>{});}};
-    getJSON(base+'/object-relationships').then(profile=>{
-      if(!current())return;
-      groupRows.replaceChildren(el('p','Retained assertions: '+Number(profile.retained_relationships).toLocaleString()+'. Showing '+profile.groups.length+' of '+profile.groups_total+' relationship groups'+(profile.groups_truncated?' (group view limited)':'')+'.','muted'),table(['Source type','Relationship label','Target type','Assertions','Inspect'],profile.groups.map(group=>{
-        const inspect=button('Inspect group','secondary');inspect.onclick=()=>{object.value='';sourceType.value=group.source_type;targetType.value=group.target_type;exact.checked=true;qualifier.value=group.qualifier;scopeChanged();load().catch(()=>{});};
-        return [group.source_type,literal(group.qualifier),group.target_type,group.relationships,inspect];
-      })));
-      if(requestVersion===0)load().catch(()=>{});
-    }).catch(error=>{if(current())statusLine.textContent=error.message;});
+    let groupVersion=0,groupRevision=null,groupOffset=0;
+    async function loadGroups(offset=0){
+      const turn=++groupVersion;
+      groupRows.replaceChildren(el('p','Loading relationship groups…','muted'));
+      try{
+        const query=offset?'?offset='+offset+'&revision='+groupRevision:'';
+        const profile=await getJSON(base+'/object-relationships'+query);
+        if(!current()||turn!==groupVersion)return;
+        groupRevision=profile.revision;groupOffset=offset;
+        const previousGroups=button('Previous groups','secondary'),nextGroups=button('Next groups','secondary');
+        previousGroups.id='owgObjectRelationGroupsPrevious';nextGroups.id='owgObjectRelationGroupsNext';
+        previousGroups.disabled=offset===0;nextGroups.disabled=profile.groups_next_offset==null;
+        previousGroups.onclick=()=>loadGroups(Math.max(0,groupOffset-200));
+        nextGroups.onclick=()=>loadGroups(profile.groups_next_offset);
+        groupRows.replaceChildren(el('p','Retained assertions: '+Number(profile.retained_relationships).toLocaleString()+'. Showing '+(profile.groups.length?offset+1:0)+'–'+(offset+profile.groups.length)+' of '+profile.groups_total+' relationship groups.','muted'),table(['Source type','Relationship label','Target type','Assertions','Inspect'],profile.groups.map(group=>{
+          const inspect=button('Inspect group','secondary');inspect.onclick=()=>{object.value='';sourceType.value=group.source_type;targetType.value=group.target_type;exact.checked=true;qualifier.value=group.qualifier;scopeChanged();load().catch(()=>{});};
+          return [group.source_type,literal(group.qualifier),group.target_type,group.relationships,inspect];
+        })),previousGroups,nextGroups);
+        if(requestVersion===0)load().catch(()=>{});
+      }catch(error){
+        if(!current()||turn!==groupVersion)return;
+        const restart=button('Reload relationship groups','secondary');restart.onclick=()=>loadGroups();
+        groupRows.replaceChildren(el('p',error.message,'muted'),restart);
+      }
+    }
+    loadGroups();
     return box;
   }
 

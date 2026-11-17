@@ -157,15 +157,28 @@ def _revision(conn,log_id):
     return int(conn.execute('SELECT coalesce(max(batch),0) FROM log_appends WHERE log_id=?',[log_id]).fetchone()[0])
 
 
-def overview(log_id):
+def overview(log_id, offset=0, revision=None):
+    from . import event_log_workspace as workspace
+    if type(offset) is not int or not 0 <= offset <= 2_147_483_647 or (revision is not None and (type(revision) is not int or revision < 0)):
+        raise workspace.EventLogWorkspaceError('Invalid relationship group page')
+    if offset and revision is None:
+        raise workspace.EventLogWorkspaceError('Restart relationship groups from the first page')
     with _read_log(log_id) as (conn,info):
+        current_revision = _revision(conn,log_id)
+        if revision is not None and revision != current_revision:
+            raise workspace.EventLogWorkspaceError('The relationship data changed; restart from the first page')
         groups=conn.execute('''SELECT s.object_type,t.object_type,r.qualifier,count(*),
             count(DISTINCT r.source_object_id),count(DISTINCT r.target_object_id),count(*) OVER()
             FROM object_relationships r JOIN objects s ON s.log_id=r.log_id AND s.object_id=r.source_object_id
             JOIN objects t ON t.log_id=r.log_id AND t.object_id=r.target_object_id
-            WHERE r.log_id=? GROUP BY 1,2,3 ORDER BY 4 DESC,1,2,3 LIMIT 201''',[log_id]).fetchall()
-        return {'log':info,'revision':_revision(conn,log_id),'revision_basis':'local_log_append_batch',
-            'retained_relationships':count(conn,log_id),'groups_total':int(groups[0][-1]) if groups else 0,
+            WHERE r.log_id=? GROUP BY 1,2,3 ORDER BY 4 DESC,1,2,3 LIMIT 201 OFFSET ?''',[log_id,offset]).fetchall()
+        total = int(groups[0][-1]) if groups else conn.execute('''SELECT count(*) FROM (
+            SELECT 1 FROM object_relationships r JOIN objects s ON s.log_id=r.log_id AND s.object_id=r.source_object_id
+            JOIN objects t ON t.log_id=r.log_id AND t.object_id=r.target_object_id
+            WHERE r.log_id=? GROUP BY s.object_type,t.object_type,r.qualifier)''',[log_id]).fetchone()[0]
+        return {'log':info,'revision':current_revision,'revision_basis':'local_log_append_batch',
+            'retained_relationships':count(conn,log_id),'groups_total':int(total),
+            'groups_offset':offset,'groups_next_offset':offset+200 if len(groups)>200 else None,
             'groups_truncated':len(groups)>200,'groups':[{'source_type':s,'target_type':t,'qualifier':q,
                 'relationships':n,'source_objects':ns,'target_objects':nt} for s,t,q,n,ns,nt,_ in groups[:200]],
             'basis':'caller_supplied_ocel_object_relationships','independently_verified':False,

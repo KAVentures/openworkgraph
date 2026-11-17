@@ -22,8 +22,9 @@ visible without fabricated lifecycle steps. The main analysis case notion stays
 unchanged. Group buttons select the corresponding type/qualifier filters.
 
 The table pages at 1–200 assertions. Cursors bind the log, filters and append
-revision; after an append, restart at page one. Group summaries show at most 200
-groups with an explicit total/truncation flag. A diagram shows at most 12 neighbor
+revision; after an append, restart at page one. Group summaries page through 200
+type/qualifier groups at a time, with the exact total shown. Group pages also bind
+to the append revision; after a change, reload from the first page. A diagram shows at most 12 neighbor
 objects and 24 links from the current page, with its display limits stated. The
 table retains every assertion on that page. Inspection is one hop, not transitive
 closure or a derived case correlation.
