@@ -180,3 +180,83 @@ def test_reject_malformed_or_oversized_requests_before_any_write(local, invalid)
                          content=invalid)
     assert result.status_code in (413, 422)
     assert not facts._path().exists()
+
+
+def test_combined_case_review_rechecks_revocation_after_source_await(monkeypatch):
+    """A binding withdrawn during the last source check must not be disclosed."""
+    import asyncio
+    from fastapi import HTTPException, Request, Response
+
+    calls = {"receipts": 0, "dependencies": 0, "source": 0}
+    revoked = {"value": False}
+    monkeypatch.setattr(routes, "_dashboard_only", lambda request: None)
+
+    async def scope():
+        return "tenant-scoped"
+
+    async def source(_scope):
+        calls["source"] += 1
+        revoked["value"] = True
+
+    async def receipts(_request, _response):
+        calls["receipts"] += 1
+        if revoked["value"]:
+            raise HTTPException(403, "binding revoked")
+        return {"case_ref": "case-1", "entries": []}
+
+    async def dependencies(_request, _response):
+        calls["dependencies"] += 1
+        return {"dependencies": []}
+
+    monkeypatch.setattr(routes, "_require_scope", scope)
+    monkeypatch.setattr(routes, "_recheck_source", source)
+    monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", receipts)
+    monkeypatch.setattr(routes, "get_local_durable_reviewed_dependencies", dependencies)
+
+    async def receive():
+        return {"type": "http.request", "body": b"{}", "more_body": False}
+
+    request = Request({"type": "http", "method": "POST", "path": "/",
+                       "headers": [], "query_string": b""}, receive=receive)
+    with pytest.raises(HTTPException) as err:
+        asyncio.run(routes.read_local_combined_case_review(request, Response()))
+    assert err.value.status_code == 403
+    assert calls == {"receipts": 3, "dependencies": 2, "source": 1}
+
+
+def test_combined_case_review_final_admission_unchanged(monkeypatch):
+    """A stable, approved snapshot remains readable after the final recheck."""
+    import asyncio
+    from fastapi import Request, Response
+
+    calls = {"receipts": 0, "dependencies": 0}
+    monkeypatch.setattr(routes, "_dashboard_only", lambda request: None)
+
+    async def scope():
+        return "tenant-scoped"
+
+    async def source(_scope):
+        return None
+
+    async def receipts(_request, _response):
+        calls["receipts"] += 1
+        return {"case_ref": "case-1", "entries": []}
+
+    async def dependencies(_request, _response):
+        calls["dependencies"] += 1
+        return {"dependencies": []}
+
+    monkeypatch.setattr(routes, "_require_scope", scope)
+    monkeypatch.setattr(routes, "_recheck_source", source)
+    monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", receipts)
+    monkeypatch.setattr(routes, "get_local_durable_reviewed_dependencies", dependencies)
+
+    async def receive():
+        return {"type": "http.request", "body": b"{}", "more_body": False}
+
+    request = Request({"type": "http", "method": "POST", "path": "/",
+                       "headers": [], "query_string": b""}, receive=receive)
+    result = asyncio.run(routes.read_local_combined_case_review(request, Response()))
+    assert result["cross_store_atomic_snapshot"] is False
+    assert result["customer_outcome"] == "unknown"
+    assert calls == {"receipts": 3, "dependencies": 3}

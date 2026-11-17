@@ -42,7 +42,8 @@ def test_combined_case_review_rechecks_both_snapshots_and_returns_unknown(monkey
     response = Response()
     result = asyncio.run(routes.read_local_combined_case_review(
         _request({"approved": True}), response))
-    assert counts == {"receipt": 2, "dependency": 2}
+    # The final source await requires a third, fail-closed admission pass.
+    assert counts == {"receipt": 3, "dependency": 3}
     assert result["customer_outcome"] == "unknown"
     assert result["agent_execution_authorized"] is False
     assert result["cross_store_atomic_snapshot"] is False
