@@ -6,6 +6,7 @@ This is not a live Microsoft tenant acceptance test.
 """
 import hashlib
 import json
+import os
 from unittest.mock import patch
 
 import pytest
@@ -74,7 +75,7 @@ def test_two_generations_persist_across_restart_and_reject_revoked_grant(tmp_pat
 
     files = sorted(ledger.glob("checkpoint-*.json"))
     assert len(files) == 2
-    assert all((p.stat().st_mode & 0o077) == 0 for p in files)
+    # POSIX permission bits are not enforced by the Windows filesystem.\n    # The durable ledger and grant-revocation assertions still run on every OS.\n    if os.name == "posix":\n        assert all((p.stat().st_mode & 0o077) == 0 for p in files)
     grant.write_text(json.dumps({
         "version": 1, "enabled": False, "consented": False,
         "tenant_scope": tenant, "mailbox_scope": mailbox, "folder_id": folder,
