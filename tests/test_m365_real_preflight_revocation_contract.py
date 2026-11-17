@@ -122,3 +122,34 @@ def test_real_graph_preflight_revocation_after_http_never_writes_report(
     assert len(transport.requests) == 1
     assert len(calls) == 2
     assert not report.exists()
+
+
+@pytest.mark.parametrize("module,payload", [
+    (identity, {"id": "provider-id", "userPrincipalName": "user@example.org"}),
+    (folder, {"id": "folder-id", "displayName": "Inbox",
+              "childFolderCount": 0, "totalItemCount": 2}),
+])
+def test_real_graph_preflight_revoked_before_http_performs_no_provider_io(
+        tmp_path, monkeypatch, module, payload):
+    """A revoked local grant must stop both Graph reads and evidence creation."""
+    report = tmp_path / "report.json"
+    grant = tmp_path / "grant.json"
+    grant.write_text("{}")
+    transport = Transport(payload)
+    monkeypatch.setattr(module, "_scope", lambda *args: "a" * 64)
+    monkeypatch.setattr(module, "_delta_private_parent", lambda p: None)
+
+    def revoked(*args):
+        raise PermissionError("grant revoked")
+
+    monkeypatch.setattr(module, "_grant", revoked)
+    args = dict(tenant="tenant", mailbox="mailbox", folder="folder-id",
+                grant_file=grant, output=report, token="token",
+                consent_graph_read=True, consent_private_report=True,
+                opener=transport)
+    if module is identity:
+        args["expected_address"] = "user@example.org"
+    with pytest.raises((PermissionError, ValueError)):
+        module.preflight(**args)
+    assert transport.requests == []
+    assert not report.exists()
