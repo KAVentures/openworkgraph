@@ -3148,12 +3148,15 @@ async def read_local_combined_case_review(request: Request, response: Response):
     from urllib.parse import urlencode
 
     _dashboard_only(request)
-    initial_scope = await _require_scope()
-    # Read exactly once, then replay the *same* bounded request to the
-    # existing receipt admission on both sides of the dependency read.
+    # Reject oversized input before source admission, which may otherwise
+    # mask the bounded-request error with a missing-connector 403. Session
+    # admission still runs first; no source data is disclosed here.
     raw = await request.body()
     if len(raw) > _MAX_BODY:
         raise HTTPException(413, "case review request too large")
+    initial_scope = await _require_scope()
+    # Replay the same bounded request to the existing receipt admission
+    # on both sides of the dependency read.
 
     async def receipt_pass():
         async def receive():
