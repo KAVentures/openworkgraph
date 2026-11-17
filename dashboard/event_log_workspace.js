@@ -4873,6 +4873,8 @@
       ['acknowledged','Acknowledged'],['cleared','Cleared'],['unavailable','Unavailable']]);
     allFilter.setAttribute('aria-label','Across-log signal status filter');
     const allRefresh=button('Refresh all-log signals','secondary');allRefresh.id='owgSignalAllRefresh';
+    const allPrevious=button('Previous signals','secondary');allPrevious.id='owgSignalAllPrevious';allPrevious.disabled=true;
+    const allNext=button('Next signals','secondary');allNext.id='owgSignalAllNext';allNext.disabled=true;
     const allStatus=el('div','Load saved signals across logs to review them here.','muted');
     allStatus.id='owgSignalAllStatus';allStatus.setAttribute('role','status');allStatus.setAttribute('aria-live','polite');
     const allResults=el('div');allResults.id='owgSignalAllResults';
@@ -4886,7 +4888,7 @@
     timelineStatus.id='owgSignalTimelineStatus';timelineStatus.setAttribute('role','status');timelineStatus.setAttribute('aria-live','polite');
     const timelineResults=el('div');timelineResults.id='owgSignalTimelineResults';
     const timelineControls=el('div',null,'actions');timelineControls.append(timelineFilter,timelineRefresh);
-    const allControls=el('div',null,'actions');allControls.append(allFilter,allRefresh);
+    const allControls=el('div',null,'actions');allControls.append(allFilter,allRefresh,allPrevious,allNext);
     box.append(row,message,rules,evaluate,out,reviewHeading,reviewNote,reviewRefresh,inbox,
       deliveryPanel,transitionHeading,transitionNote,transitionRefresh,transitionStatus,transitionResults,
       allHeading,allNote,allControls,allStatus,allResults,
@@ -5061,25 +5063,28 @@
     // Cross-log overview is read-only. Counts cover every saved rule before
     // bounded display, and the source-log selection is refreshed before opening.
     // An old response cannot replace the current view after switching datasets.
-    let allRequestId=0;
-    async function refreshAllSignals(){
+    let allRequestId=0,allPreviousOffset=null,allNextOffset=null;
+    async function refreshAllSignals(offset=0){
       const requestId=++allRequestId;
-      allRefresh.disabled=true;
+      allRefresh.disabled=true;allPrevious.disabled=true;allNext.disabled=true;
+      allResults.replaceChildren();
       allStatus.textContent='Inspecting saved signal states across local logs…';
       try{
-        const params=new URLSearchParams({status:allFilter.value,limit:'100'});
+        const params=new URLSearchParams({status:allFilter.value,limit:'100',offset:String(offset)});
         const r=await getJSON('/v1/event-logs/signal-overview?'+params);
         if(generation!==state.generation||requestId!==allRequestId)return;
         const counts=r.counts||{};
+        allPreviousOffset=r.previous_offset??null;allNextOffset=r.next_offset??null;
+        const returned=Number(r.returned_rules||0),matched=Number(r.matched_rules||0),start=Number(r.offset||0);
+        const pageText=returned&&(start||allNextOffset!==null)?(start+1)+'–'+(start+returned):String(returned);
         allStatus.textContent=Number(r.attention||0)+' signal states need attention across '+
           Number(r.datasets_scanned||0)+' saved logs ('+Number(r.datasets_with_rules||0)+
           ' with rules). '+Number(counts.unreviewed||0)+' unreviewed, '+
           Number(counts.stale||0)+' stale, '+Number(counts.not_evaluated||0)+
           ' unevaluated, '+Number(counts.unavailable||0)+' unavailable; '+
-          Number(counts.snoozed||0)+' snoozed. Showing '+
-          Number(r.returned_rules||0)+' of '+Number(r.matched_rules||0)+' matching rules'+
-          (r.truncated?' (limited; narrow the filter to inspect others)':'')+
-          '. No source refresh or automatic action.';
+          Number(counts.snoozed||0)+' snoozed. Showing '+pageText+' of '+matched+' matching rules.'+
+          (start&&!returned?' The list changed; use Previous or Refresh.':'')+
+          ' Results can change between pages. No source refresh or automatic action.';
         const rows=(r.items||[]).map(item=>{
           const open=button('Open log','secondary');
           open.setAttribute('aria-label','Open dataset '+item.log_name+' to review signal '+item.name);
@@ -5107,15 +5112,18 @@
           : el('div','No saved signals match this filter.','muted'));
       }catch(error){
         if(generation===state.generation&&requestId===allRequestId){
+          allPreviousOffset=null;allNextOffset=null;
           allResults.replaceChildren();
           allStatus.textContent=error.message||'Cannot inspect local saved signals.';
         }
       }finally{
-        if(generation===state.generation&&requestId===allRequestId)allRefresh.disabled=false;
+        if(generation===state.generation&&requestId===allRequestId){allRefresh.disabled=false;allPrevious.disabled=allPreviousOffset===null;allNext.disabled=allNextOffset===null;}
       }
     }
     allFilter.onchange=()=>refreshAllSignals();
     allRefresh.onclick=()=>refreshAllSignals();
+    allPrevious.onclick=()=>{if(allPreviousOffset!==null)refreshAllSignals(allPreviousOffset);};
+    allNext.onclick=()=>{if(allNextOffset!==null)refreshAllSignals(allNextOffset);};
     // This journal describes state *changes*, not the current signal inbox.
     // An old request cannot repaint a different dataset after navigation.
     let timelineRequestId=0;

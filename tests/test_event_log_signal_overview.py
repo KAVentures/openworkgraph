@@ -176,10 +176,13 @@ with TestClient(app) as client:
     assert r.status_code == 200, r.text
     data = r.json()
     assert data["attention"] == 1 and data["counts"]["not_evaluated"] == 1
+    assert data['offset'] == 0 and data['next_offset'] is None and data['previous_offset'] is None
     assert data["items"][0]["log_id"] == id
     assert "evidence_cases" not in str(data) and "state_fingerprint" not in str(data)
     assert client.get(url+"?status=nope", headers=owner).status_code == 422
     assert client.get(url+"?limit=201", headers=owner).status_code == 422
+    assert client.get(url+"?offset=-1", headers=owner).status_code == 422
+    assert client.get(url+"?offset=2501", headers=owner).status_code == 422
     assert client.post(url, json={}, headers=owner).status_code == 405
 '''
     env = os.environ.copy()
@@ -203,3 +206,28 @@ def test_ui_has_real_deep_link_and_discloses_scanned_scope():
     assert '@router.get("/v1/event-logs/signal-overview")' in routes
     assert "_require_dashboard(request)" in routes.split("def event_log_signal_overview(")[1].split(
         "@router.post", 1)[0]
+
+
+def test_overview_pages_all_matches_without_changing_full_counts():
+    logs = [_log() for _ in range(5)]
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            for i in range(205):
+                definition = json.dumps({'name': f'Signal {i:03}'})
+                conn.execute('INSERT INTO signal_rules VALUES (?, ?, now(), ?, NULL, NULL)',
+                             [logs[i // 50], f'sig_{i:016x}', definition])
+        finally:
+            conn.close()
+    pages = [overview.overview(status='all', limit=50, offset=offset) for offset in (0, 50, 100, 150, 200)]
+    assert [len(page['items']) for page in pages] == [50, 50, 50, 50, 5]
+    assert [page['next_offset'] for page in pages] == [50, 100, 150, 200, None]
+    assert [page['previous_offset'] for page in pages] == [None, 0, 50, 100, 150]
+    assert all(page['matched_rules'] == 205 and page['counts']['not_evaluated'] == 205 for page in pages)
+    ids = [(item['log_id'], item['rule_id']) for page in pages for item in page['items']]
+    assert len(ids) == len(set(ids)) == 205
+    empty = overview.overview(status='cleared', limit=50, offset=200)
+    assert empty['items'] == [] and empty['previous_offset'] == 150 and empty['next_offset'] is None
+    for invalid in (-1, 2501, True, '1', 1.5):
+        with pytest.raises(workspace.EventLogWorkspaceError, match='offset'):
+            overview.overview(offset=invalid)
