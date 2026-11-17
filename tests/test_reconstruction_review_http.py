@@ -603,3 +603,36 @@ def test_saved_review_rejects_invalid_engine_evidence_before_storage_read(monkey
         history_routes.get_saved_reconstruction_review()
     assert error.value.status_code == 422
     assert error.value.detail == "Invalid reconstruction evidence"
+
+
+def test_scoring_rejects_invalid_review_without_exposing_source_details(monkeypatch):
+    """Reviewer/API validation failures must not echo event IDs or source text."""
+    _setup(monkeypatch)
+    from server import work_resumption
+    def invalid(*args, **kwargs):
+        raise ValueError("private event identifier in malformed evidence")
+    monkeypatch.setattr(work_resumption, "score_live_reconstruction_review", invalid)
+    from server.history_routes import ReconstructionReviewSubmission
+    request = ReconstructionReviewSubmission(evidence_sha256="a" * 64, annotations=[])
+    with pytest.raises(HTTPException) as error:
+        history_routes.score_reconstruction_review_submission(request)
+    assert error.value.status_code == 422
+    assert error.value.detail == "Invalid reconstruction review submission"
+    assert "private" not in error.value.detail
+
+
+def test_save_rejects_invalid_review_without_persisting_or_leaking(monkeypatch):
+    """Failed validation cannot persist labels or disclose private source text."""
+    _setup(monkeypatch)
+    from server import work_resumption
+    monkeypatch.setattr(work_resumption, "score_live_reconstruction_review",
+                        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("private source record")))
+    monkeypatch.setattr(history_routes, "save_reconstruction_review",
+                        lambda *args, **kwargs: pytest.fail("persisted invalid reviewer annotations"))
+    from server.history_routes import ReconstructionReviewSubmission
+    request = ReconstructionReviewSubmission(evidence_sha256="a" * 64, annotations=[])
+    with pytest.raises(HTTPException) as error:
+        history_routes.save_reconstruction_review_submission(request)
+    assert error.value.status_code == 422
+    assert error.value.detail == "Invalid reconstruction review submission"
+    assert "private" not in error.value.detail
