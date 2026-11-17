@@ -84,7 +84,7 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         # The digest includes navigation evidence. Bound untrusted records
         # before hashing so forged metadata cannot exhaust review requests.
         try:
-            encoded = json.dumps(group, sort_keys=True, allow_nan=False).encode("utf-8")
+            encoded = json.dumps(group, sort_keys=True, allow_nan=False, ensure_ascii=False).encode("utf-8")
         except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
             raise ValueError("invalid provisional group evidence") from exc
         if len(encoded) > 65536:
@@ -118,7 +118,7 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(timeline, dict):
             raise ValueError("invalid identity timeline evidence")
         try:
-            encoded_timeline = json.dumps(timeline, sort_keys=True, allow_nan=False).encode("utf-8")
+            encoded_timeline = json.dumps(timeline, sort_keys=True, allow_nan=False, ensure_ascii=False).encode("utf-8")
         except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
             raise ValueError("invalid identity timeline evidence") from exc
         if len(encoded_timeline) > 65536:
@@ -132,7 +132,7 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(record, dict):
             raise ValueError("invalid group continuity evidence")
         try:
-            encoded = json.dumps(record, sort_keys=True, allow_nan=False).encode("utf-8")
+            encoded = json.dumps(record, sort_keys=True, allow_nan=False, ensure_ascii=False).encode("utf-8")
         except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
             raise ValueError("invalid group continuity evidence") from exc
         if len(encoded) > 65536:
@@ -260,6 +260,10 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
     # malformed or excessive context before digesting; otherwise untrusted scan
     # metadata can cause an uncaught serialization failure or resource exhaustion.
     try:
+        # Validate Unicode scalar values without changing the canonical digest's
+        # historical ASCII-escaped serialization (saved review compatibility).
+        json.dumps(fingerprint_basis, sort_keys=True, separators=(",", ":"),
+                   allow_nan=False, ensure_ascii=False).encode("utf-8")
         evidence_bytes = json.dumps(
             fingerprint_basis, sort_keys=True, separators=(",", ":"), allow_nan=False
         ).encode("utf-8")
