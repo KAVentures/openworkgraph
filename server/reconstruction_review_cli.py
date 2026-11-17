@@ -85,7 +85,7 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         # before hashing so forged metadata cannot exhaust review requests.
         try:
             encoded = json.dumps(group, sort_keys=True, allow_nan=False).encode("utf-8")
-        except (TypeError, ValueError, RecursionError) as exc:
+        except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
             raise ValueError("invalid provisional group evidence") from exc
         if len(encoded) > 65536:
             raise ValueError("unbounded provisional group evidence")
@@ -119,7 +119,7 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("invalid identity timeline evidence")
         try:
             encoded_timeline = json.dumps(timeline, sort_keys=True, allow_nan=False).encode("utf-8")
-        except (TypeError, ValueError, RecursionError) as exc:
+        except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
             raise ValueError("invalid identity timeline evidence") from exc
         if len(encoded_timeline) > 65536:
             raise ValueError("unbounded identity timeline evidence")
@@ -133,7 +133,7 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("invalid group continuity evidence")
         try:
             encoded = json.dumps(record, sort_keys=True, allow_nan=False).encode("utf-8")
-        except (TypeError, ValueError, RecursionError) as exc:
+        except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
             raise ValueError("invalid group continuity evidence") from exc
         if len(encoded) > 65536:
             raise ValueError("unbounded group continuity evidence")
@@ -263,7 +263,7 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         evidence_bytes = json.dumps(
             fingerprint_basis, sort_keys=True, separators=(",", ":"), allow_nan=False
         ).encode("utf-8")
-    except (TypeError, ValueError, RecursionError) as exc:
+    except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
         raise ValueError("invalid review evidence context") from exc
     if len(evidence_bytes) > 1048576:
         raise ValueError("unbounded review evidence context")
