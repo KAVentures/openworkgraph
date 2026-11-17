@@ -404,6 +404,11 @@ def resumption_candidates(
     if not current["refs"]:
         result["notice"] = ("The latest session has no observed stable pointer, so resumption "
                             "cannot be assessed; this does not mean the work is new.")
+        # Even an empty current session has a reviewable evidence projection.
+        # Keep the queue available, but bind its digest to the final notice.
+        from .reconstruction_review_cli import REVIEWABLE_ACCESS, build_review_queue
+        if result.get("saved_history_access") in REVIEWABLE_ACCESS:
+            result["event_assignment_review"] = build_review_queue(result)
         return result
 
     # Each identity gets a separate chronological evidence trail, even when
