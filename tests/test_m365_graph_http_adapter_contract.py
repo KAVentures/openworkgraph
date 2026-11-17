@@ -560,3 +560,82 @@ def test_graph_review_real_durable_checkpoint_two_round_restart(tmp_path):
         checkpoint.inspect_checkpoint(
             **scope, ledger_dir=ledger, consent_local_read=True)
     assert len(list(ledger.iterdir())) == 2
+
+
+def test_real_graph_review_to_authenticated_owg_append_contract(tmp_path):
+    """Exercise actual Graph CSV and OWG append adapters across their HTTP boundary.
+
+    Only the HTTP transports and OWG inventory responses are simulated. No
+    Microsoft tenant or running OWG daemon is needed; checkpoint is untouched.
+    """
+    import os
+    from server import m365_outlook_delta as delta
+    from server.m365_outlook_candidate_review import review
+    from server import m365_outlook_owg_receipt as owg
+
+    grant = tmp_path / "grant.json"
+    grant.write_text(json.dumps({
+        "version": 1, "enabled": True, "consented": True,
+        "tenant_scope": "tenant", "mailbox_scope": "mailbox",
+        "folder_id": "folder",
+    }))
+    os.chmod(grant, 0o600)
+    initial = delta._initial("folder")
+    cursor = ("https://graph.microsoft.com/v1.0/me/mailFolders/folder/"
+              "messages/delta?%24deltatoken=append")
+    transport = Transport(Response(initial, json.dumps({
+        "value": [{"id": "m1", "receivedDateTime": "2026-11-01T10:00:00Z",
+                   "lastModifiedDateTime": "2026-11-01T10:01:00Z",
+                   "isRead": False}],
+        "@odata.deltaLink": cursor,
+    }).encode()))
+    csv_path, candidate = tmp_path / "events.csv", tmp_path / "candidate.json"
+    delta.export_delta(
+        tenant="tenant", mailbox="mailbox", folder_id="folder",
+        grant_file=grant, output=csv_path, candidate=candidate,
+        token="test-token", consent_read=True, consent_export=True,
+        opener=transport,
+    )
+    reviewed = review(
+        tenant="tenant", mailbox="mailbox", folder="folder",
+        grant_file=grant, candidate=candidate, consent_local_read=True,
+    )
+    assert reviewed["status"] == "review_ready"
+    assert reviewed["event_snapshots"] == 1
+
+    scope = delta._scope("tenant", "mailbox", "folder")
+    namespace = "m365_" + scope[:32]
+    log_id = "log_" + "a" * 16
+    inventory = lambda count: [{
+        "log_id": log_id, "source_format": "csv", "events": count,
+        "source_identity": {"namespaces": [{
+            "source_namespace": namespace, "case_namespace": namespace,
+        }]},
+    }]
+    seen = []
+    def post_response(_transport, req):
+        seen.append(req)
+        assert req.get_method() == "POST"
+        assert req.full_url.startswith("http://127.0.0.1:8765/v1/event-logs/" + log_id + "/append?")
+        assert req.get_header("Authorization") == "OWG-Session " + "s" * 24
+        assert req.get_header("X-owg-local-storage-confirmed") == "true"
+        assert req.data == csv_path.read_bytes()
+        return {"log": {"log_id": log_id}, "added_events": 1,
+                "duplicate_events_skipped": 0, "rejected_events": 0, "batch": 1}
+
+    with (patch.object(owg, "_inventory", side_effect=[inventory(0), inventory(1)]) as reads,
+          patch.object(owg, "_read_json", side_effect=post_response)):
+        receipt = owg.append_verified(
+            tenant="tenant", mailbox="mailbox", folder="folder",
+            grant_file=grant, candidate=candidate, csv_path=csv_path,
+            log_id=log_id, confirm_log_id=log_id, port=8765,
+            session="s" * 24, consent_local_read=True,
+            consent_local_append=True, opener=object(),
+        )
+    assert reads.call_count == 2
+    assert len(seen) == 1
+    assert receipt["status"] == "verified"
+    assert receipt["added_events"] == 1
+    assert receipt["csv_sha256"] == reviewed["csv_sha256"]
+    assert receipt["checkpoint_advanced"] is False
+    assert len(transport.requests) == 1
