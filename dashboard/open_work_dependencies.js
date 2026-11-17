@@ -359,6 +359,29 @@
               row.customer_outcome === 'unknown')) {
           throw new Error('invalid receipt projection');
         }
+        // A retained receipt is useful only with current, independently authorized
+        // prerequisite context. Do not display either projection if this second
+        // read is denied, revoked, truncated incorrectly, or malformed.
+        const dependencyResponse = await fetch(
+          '/v1/open-work/declarations/durable-dependencies?work_item_ref=' +
+          encodeURIComponent(ref), options);
+        if (!current()) return;
+        if (!dependencyResponse.ok) throw new Error('dependency access denied');
+        const dependency = await dependencyResponse.json();
+        if (!current()) return;
+        const context = dependency && dependency.context;
+        const validRefs = values => Array.isArray(values) && values.length <= 10000 &&
+          values.every(value => typeof value === 'string' &&
+            /^owg:w:[0-9a-f]{32}$/.test(value)) &&
+          new Set(values).size === values.length;
+        if (!dependency || dependency.format !== 'openworkgraph.reviewed-durable-dependencies.v1' ||
+            dependency.agent_execution_authorized !== false ||
+            dependency.customer_outcome !== 'unknown' || !context ||
+            !validRefs(context.direct) || !validRefs(context.prerequisites) ||
+            typeof context.truncated !== 'boolean' ||
+            !context.direct.every(value => context.prerequisites.includes(value))) {
+          throw new Error('invalid dependency projection');
+        }
         receiptStatus.textContent = 'Historical journal only. Provider evidence was not rechecked; customer outcome unknown.';
         const add = value => {
           const li = document.createElement('li');
@@ -367,6 +390,9 @@
         };
         add('Bound run: ' + result.run_ref.slice(0,128));
         add('Retained entries: ' + result.entries.length);
+        add('Reviewed direct prerequisites: ' + context.direct.length);
+        add('Reviewed transitive prerequisites: ' + context.prerequisites.length);
+        if (context.truncated) add('Dependency context truncated; completeness unknown.');
         result.entries.forEach(row => add('Journal #' + row.id + ': ' + row.status +
           ', provider operation ' + row.provider_operation +
           ', customer outcome unknown'));
