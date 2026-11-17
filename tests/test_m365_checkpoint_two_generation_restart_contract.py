@@ -79,6 +79,18 @@ def test_two_generations_persist_across_restart_and_reject_revoked_grant(tmp_pat
     # The durable ledger and grant-revocation assertions still run on every OS.
     if os.name == "posix":
         assert all((p.stat().st_mode & 0o077) == 0 for p in files)
+    # A persisted earlier generation is part of the trusted checkpoint chain.
+    # Corruption must not be interpreted as a fresh, usable incremental cursor.
+    first = files[0]
+    original = first.read_bytes()
+    try:
+        first.write_bytes(b"{not-json")
+        with pytest.raises((ReceiptError, ValueError, json.JSONDecodeError)):
+            inspect_checkpoint(**scope, consent_local_read=True)
+    finally:
+        first.write_bytes(original)
+    assert inspect_checkpoint(**scope, consent_local_read=True)["generation"] == 2
+
     grant.write_text(json.dumps({
         "version": 1, "enabled": False, "consented": False,
         "tenant_scope": tenant, "mailbox_scope": mailbox, "folder_id": folder,
