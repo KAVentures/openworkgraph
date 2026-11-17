@@ -43,9 +43,34 @@ const path=require('node:path');
   await page.locator('#owgCohortMetricRun').click();
   await page.locator('#owgCohortMetricResult').filter({hasText:'matching cases'}).waitFor({timeout:60000});
   assert.match(await page.locator('#owgCohortMetricResult').innerText(),/No raw cases returned/);
-  // Re-open the log and confirm that the definition survived the dashboard re-render.
+  // A second saved log must not inherit the first log's private metric definitions.
+  // Switching back must recover the original definition from authenticated storage.
   const picker=page.locator('#owgEventLogPick');
   const logId=await picker.inputValue();
+  // The sample endpoint is idempotent: clicking it twice reopens the same log.
+  // Import a distinct synthetic CSV through the authenticated dashboard instead.
+  await page.locator('#owgEventLogFile').setInputFiles({
+    name:'second-synthetic-log.csv',mimeType:'text/csv',
+    buffer:Buffer.from('case_id,activity,timestamp\nCASE-2,Created,2026-01-01T10:00:00Z\nCASE-2,Completed,2026-01-01T10:05:00Z\n')
+  });
+  await page.locator('#owgEventLogCase option[value="case_id"]').waitFor({state:'attached',timeout:30000});
+  await page.locator('#owgEventLogCase').selectOption('case_id');
+  await page.locator('#owgEventLogActivity').selectOption('activity');
+  await page.locator('#owgEventLogTime').selectOption('timestamp');
+  await page.locator('#owgEventLogName').fill('Second synthetic browser acceptance log');
+  await page.locator('#owgEventLogConsent').check();
+  await page.locator('#owgEventLogImport').click();
+  await page.waitForFunction(previous => {
+    const selected=document.querySelector('#owgEventLogPick');
+    return selected && selected.value && selected.value!==previous;
+  },logId,{timeout:60000});
+  const secondLogId=await picker.inputValue();
+  assert.notEqual(secondLogId,logId,'import must create a distinct saved log');
+  await page.locator('#owgEventLogAnalyze').click();
+  await page.locator('#owgCohortMetricSection').waitFor({state:'visible',timeout:60000});
+  assert.equal(await page.locator('#owgCohortMetricSaved option').filter({hasText:'Browser acceptance duration'}).count(),0,
+    'saved cohort definitions must remain scoped to their own log');
+  // Re-open the original log and confirm that the definition survived the dashboard re-render.
   // Re-select the existing log through the real picker; an empty option is not guaranteed.
   await picker.selectOption(logId);
   await picker.dispatchEvent('change');
