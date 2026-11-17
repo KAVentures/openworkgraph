@@ -234,6 +234,149 @@
       }
     });
 
+
+    // Retained attempt receipts are a separate, explicit, read-only review.
+    // A journal entry is not independent provider verification or customer success.
+    const receiptForm = document.createElement('form');
+    receiptForm.setAttribute('aria-label', 'Review bound agent attempt receipts');
+    const receiptHeading = document.createElement('h4');
+    receiptHeading.textContent = 'Review bound agent attempt receipts';
+    const receiptInputs = [
+      ['Case reference', 38], ['Deployment ID', 128], ['Run ID', 128]
+    ].map(([name, limit]) => {
+      const label = document.createElement('label');
+      label.textContent = name + ': ';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.maxLength = limit;
+      input.autocomplete = 'off';
+      label.appendChild(input);
+      receiptForm.appendChild(label);
+      return input;
+    });
+    const receiptApprovalLabel = document.createElement('label');
+    const receiptApproval = document.createElement('input');
+    receiptApproval.type = 'checkbox';
+    receiptApprovalLabel.append(receiptApproval,
+      document.createTextNode(' I explicitly authorize historical run comparison for this bound case'));
+    const receiptButton = document.createElement('button');
+    receiptButton.type = 'submit';
+    receiptButton.textContent = 'Inspect retained attempt receipts';
+    const receiptStatus = document.createElement('p');
+    receiptStatus.setAttribute('role', 'status');
+    receiptStatus.setAttribute('aria-live', 'polite');
+    const receiptResults = document.createElement('ul');
+    receiptForm.append(receiptApprovalLabel, receiptButton);
+    card.append(receiptHeading, receiptForm, receiptStatus, receiptResults);
+    let receiptController = null;
+    let receiptGeneration = 0;
+    function clearReceipts(message) {
+      receiptGeneration += 1;
+      if (receiptController) receiptController.abort();
+      receiptController = null;
+      receiptButton.disabled = false;
+      receiptResults.replaceChildren();
+      receiptStatus.textContent = message;
+    }
+    receiptInputs.forEach(input => input.addEventListener('input', () => {
+      receiptApproval.checked = false;
+      clearReceipts('Run selection changed; a new explicit review is required.');
+    }));
+    receiptApproval.addEventListener('change', () => {
+      if (!receiptApproval.checked) clearReceipts('Historical review approval withdrawn.');
+    });
+    receiptForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      clearReceipts('');
+      const [ref, deployment, run] = receiptInputs.map(input => input.value.trim());
+      if (!/^owg:w:[0-9a-f]{32}$/.test(ref) || !deployment || !run ||
+          !receiptApproval.checked) {
+        receiptStatus.textContent = 'A reviewed case, deployment, run and explicit approval are required.';
+        return;
+      }
+      const generation = receiptGeneration;
+      const controller = new AbortController();
+      receiptController = controller;
+      receiptButton.disabled = true;
+      const current = () => generation === receiptGeneration &&
+        receiptController === controller && !controller.signal.aborted &&
+        receiptApproval.checked;
+      const options = {credentials:'same-origin', cache:'no-store',
+        headers:{Accept:'application/json'}, signal:controller.signal};
+      try {
+        if (window.__owgAuthReady) await window.__owgAuthReady;
+        if (!current()) return;
+        receiptStatus.textContent = 'Checking current case review and run binding…';
+        const inventoryResponse = await fetch('/v1/open-work/declarations', options);
+        if (!current()) return;
+        if (!inventoryResponse.ok) throw new Error('declaration access denied');
+        const inventory = await inventoryResponse.json();
+        if (!current()) return;
+        if (inventory.format !== 'openworkgraph.local-case-declarations.v1' ||
+            inventory.available !== true || !Array.isArray(inventory.items) ||
+            inventory.items.length > 10000) throw new Error('invalid declarations');
+        const matches = inventory.items.filter(item => item && item.work_item_ref === ref);
+        if (matches.length !== 1) throw new Error('case not reviewed');
+        const selected = matches[0];
+        if (!Number.isSafeInteger(selected.revision) || selected.revision < 1 ||
+            typeof selected.edit_token !== 'string' ||
+            !/^[0-9a-f]{32}$/.test(selected.edit_token)) throw new Error('invalid review');
+        const response = await fetch('/v1/open-work/declarations/human-outcomes/attempt-receipts', {
+          ...options, method:'POST',
+          headers:{...options.headers, 'Content-Type':'application/json'},
+          body:JSON.stringify({
+            work_item_ref:ref, expected_revision:selected.revision,
+            expected_edit_token:selected.edit_token,
+            confirm_historical_review:true, confirm_run_comparison:true,
+            max_cases:1, deployment_id:deployment, run_id:run
+          })
+        });
+        if (!current()) return;
+        if (!response.ok) throw new Error('binding or receipt access denied');
+        const result = await response.json();
+        if (!current()) return;
+        if (!result || result.format !== 'openworkgraph.bound-attempt-receipts.v1' ||
+            result.case_ref !== ref ||
+            typeof result.run_ref !== 'string' || !result.run_ref ||
+            result.receipt_provenance !== 'local_untrusted_journal' ||
+            result.provider_event_independently_rechecked_on_this_read !== false ||
+            result.customer_outcome_verified !== false ||
+            result.agent_execution_authorized !== false ||
+            result.source_read_performed !== false ||
+            !Array.isArray(result.entries) || result.entries.length > 100 ||
+            !result.entries.every(row => row && Number.isSafeInteger(row.id) &&
+              row.id > 0 && typeof row.checked_at === 'string' &&
+              ['unknown','verified_provider_event','verified_provider_operation'].includes(row.status) &&
+              ['unknown','succeeded','failed'].includes(row.provider_operation) &&
+              row.customer_outcome === 'unknown')) {
+          throw new Error('invalid receipt projection');
+        }
+        receiptStatus.textContent = 'Historical journal only. Provider evidence was not rechecked; customer outcome unknown.';
+        const add = value => {
+          const li = document.createElement('li');
+          li.textContent = value;
+          receiptResults.appendChild(li);
+        };
+        add('Bound run: ' + result.run_ref.slice(0,128));
+        add('Retained entries: ' + result.entries.length);
+        result.entries.forEach(row => add('Journal #' + row.id + ': ' + row.status +
+          ', provider operation ' + row.provider_operation +
+          ', customer outcome unknown'));
+      } catch (_) {
+        if (current()) {
+          receiptResults.replaceChildren();
+          receiptStatus.textContent = 'Receipt review denied, stale or unavailable; no outcome established.';
+        }
+      } finally {
+        if (receiptController === controller) {
+          receiptController = null;
+          receiptButton.disabled = false;
+          // One explicit approval is consumed even on a denied attempt.
+          receiptApproval.checked = false;
+        }
+      }
+    });
+
     host.appendChild(card);
     let requestController = null;
     function line(value) {
