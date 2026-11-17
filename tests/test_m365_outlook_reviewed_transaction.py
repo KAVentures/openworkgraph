@@ -154,6 +154,33 @@ class ReviewedTransactionTests(unittest.TestCase):
                 tx.execute(**inputs())
             append.assert_not_called()
 
+    def test_malformed_review_metadata_refuses_before_any_owg_write(self):
+        valid = {"status": "review_ready", "csv_sha256": DIGEST,
+                 "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}
+        invalid = (
+            {"status": "review_pending"},
+            {"event_snapshots": True},
+            {"event_snapshots": -1},
+            {"removal_markers_for_review": True},
+            {"removal_markers_for_review": -1},
+            {"pages": True},
+            {"pages": 0},
+            {"pages": 1001},
+            {"pages": "1"},
+        )
+        for change in invalid:
+            with self.subTest(change=change), \
+                 patch.object(tx, "inspect_checkpoint", return_value=None), \
+                 patch.object(tx.cycle, "review", return_value={**valid, **change}), \
+                 patch.object(tx.cycle, "append") as append, \
+                 patch.object(tx.cycle, "handoff") as handoff, \
+                 patch.object(tx.cycle, "checkpoint_commit") as checkpoint:
+                with self.assertRaisesRegex(ReceiptError, "review unavailable or changed"):
+                    tx.execute(**inputs())
+                append.assert_not_called()
+                handoff.assert_not_called()
+                checkpoint.assert_not_called()
+
     def test_success_calls_real_phases_in_order(self):
         order = []
         def step(name, response):
