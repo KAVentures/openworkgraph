@@ -1949,8 +1949,22 @@ variants, KPIs, root cause, conformance, filters and the rest work on agents too
 `POST /v1/event-logs/import-agent-runs` takes a dashboard session and the local-storage
 confirmation header. The JSON body has `name`, plus optional `since`, `until` (times with an
 offset), `max_runs` (1–5,000, default 1,000) and `include_model_calls`. Each run keeps at most 500
-steps, and the answer counts runs that were cut. To analyse new runs, import again. A log is a
-snapshot.
+steps, and the answer counts runs that were cut. A run still in progress is left out until it
+finishes or has been quiet for 30 minutes.
+
+### Keeping the agent-runs log up to date
+
+A log made from agent runs remembers that. Its "Keep agent runs up to date" section can **Add new
+runs now**, or **Add new runs every day** with the local scheduler (job kind
+`event_log_agent_runs`). A refresh appends only settled runs that are not in the log yet, with
+their case attributes. It looks back 7 days before the last refresh, so runs that finish late are
+still caught. Runs already in the log are not changed. Together with signal rules on the same log,
+for example the share of runs with Outcome = error, this monitors your agents continuously.
+Deleting the log removes its schedule.
+
+`GET /v1/event-logs/{log_id}/agent-runs` reports whether the log was made from agent runs and when
+it was last refreshed. `POST /v1/event-logs/{log_id}/agent-runs/refresh` needs a dashboard session
+and the local-storage confirmation header.
 
 ## Automation candidates
 
