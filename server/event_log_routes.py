@@ -691,9 +691,11 @@ def event_log_object_map(request: Request, log_id: str):
 
 
 @router.get("/v1/event-logs/{log_id}/object-relationships")
-def event_log_object_relationships(request: Request, log_id: str):
+def event_log_object_relationships(request: Request, log_id: str,
+        offset: int = Query(default=0, ge=0, le=2_147_483_647),
+        revision: int | None = Query(default=None, ge=0, le=2_147_483_647)):
     _require_dashboard(request)
-    return _respond(object_relationships.overview, log_id)
+    return _respond(object_relationships.overview, log_id, offset, revision)
 
 
 @router.post("/v1/event-logs/{log_id}/object-relationships/query")
