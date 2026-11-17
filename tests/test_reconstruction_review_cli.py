@@ -1017,3 +1017,24 @@ class IdentityTimelineResourceBoundsTests(unittest.TestCase):
         source = payload([pair("A", "F", ["e1"])])
         source["identity_timelines"] = [{"id": str(i)} for i in range(13)]
         self.assertTrue(build_review_queue(source)["coverage_incomplete"])
+
+
+class MalformedAnnotationIdentityTests(unittest.TestCase):
+    def test_non_scalar_annotation_identity_refused_as_validation_error(self):
+        source = payload([pair("A", "F", ["e1"])])
+        for field in ("window", "event_id"):
+            for invalid in ([], {}, None, 1, True):
+                with self.subTest(field=field, invalid=invalid):
+                    annotation = {"window": "current", "event_id": "e1",
+                                  "true_resource_pairs": []}
+                    annotation[field] = invalid
+                    with self.assertRaisesRegex(ValueError, "invalid annotated event identity"):
+                        score_review_annotations(source, [annotation])
+
+    def test_valid_annotation_identity_still_scores(self):
+        source = payload([pair("A", "F", ["e1"])])
+        annotation = {"window": "current", "event_id": "e1",
+                      "true_resource_pairs": []}
+        result = score_review_annotations(source, [annotation])
+        self.assertEqual(result["false_positive_pairs"], 1)
+        self.assertFalse(result["held_out_verified"])
