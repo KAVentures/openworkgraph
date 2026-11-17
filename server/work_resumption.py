@@ -104,7 +104,8 @@ def _visible_bursts(track: dict[str, Any], threshold_days: float) -> dict[str, A
         "segments": [{
             "first_observed_at": _iso(burst["first"]),
             "last_observed_at": _iso(burst["last"]),
-            "evidence_event_ids": burst["event_ids"],
+            "evidence_event_ids": burst["event_ids"][:8],
+            "evidence_truncated": len(burst["event_ids"]) > 8,
             "gap_from_previous_seconds": (
                 max(0, round((burst["first"] - bursts[len(bursts) - len(selected) + i - 1]["last"]) * 86400))
                 if len(bursts) - len(selected) + i > 0 else None
@@ -427,7 +428,8 @@ def resumption_candidates(
                 "first_observed_at": _iso(track["first"]),
                 "last_observed_at": _iso(track["last"]),
                 "idle_gap_session_started_at": _iso(sessions[index][0]),
-                "evidence_event_ids": list(reversed(track["event_ids"])),
+                "evidence_event_ids": list(reversed(track["event_ids"][-8:])),
+                "evidence_truncated": len(track["event_ids"]) > 8,
                 **_visible_bursts(track, IDENTITY_INTERRUPTION_MINUTES / 1440),
                 "gap_from_previous_seconds": (
                     max(0, round((track["first"] - previous_end) * 86400))
