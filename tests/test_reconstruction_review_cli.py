@@ -955,3 +955,38 @@ class ProvisionalGroupAuthorityTests(unittest.TestCase):
                 source["observed_case_groups"] = groups
                 with self.assertRaisesRegex(ValueError, "invalid or unbounded provisional case groups"):
                     build_review_queue(source)
+
+class ReturnedEvidenceCountIntegrityTests(unittest.TestCase):
+    def test_api_adapter_counts_match_bounded_visible_evidence(self):
+        source = payload([pair("A", "F", ["e1"])])
+        source.update({
+            "identity_timelines": [{"id": "timeline"}],
+            "identity_timelines_returned_count": 1,
+            "observed_pair_event_assignments_returned_count": 1,
+            "observed_group_continuity": [],
+            "observed_group_continuity_returned_count": 0,
+            "observed_case_groups": [],
+            "observed_case_groups_returned_count": 0,
+        })
+        self.assertEqual(build_review_queue(source)["event_reviews_count"], 1)
+        for field in ("identity_timelines_returned_count",
+                      "observed_pair_event_assignments_returned_count",
+                      "observed_group_continuity_returned_count",
+                      "observed_case_groups_returned_count"):
+            with self.subTest(field=field):
+                tampered = dict(source, **{field: source[field] + 1})
+                with self.assertRaisesRegex(ValueError, "inconsistent " + field):
+                    build_review_queue(tampered)
+                tampered = dict(source, **{field: True})
+                with self.assertRaisesRegex(ValueError, "inconsistent " + field):
+                    build_review_queue(tampered)
+
+    def test_http_cap_count_must_not_claim_unshown_records(self):
+        source = payload([pair("A", "F", ["e1"])])
+        source["identity_timelines"] = [{"id": str(i)} for i in range(13)]
+        source["identity_timelines_returned_count"] = 12
+        self.assertTrue(build_review_queue(source)["coverage_incomplete"])
+        source["identity_timelines_returned_count"] = 13
+        with self.assertRaisesRegex(ValueError, "inconsistent identity_timelines_returned_count"):
+            build_review_queue(source)
+
