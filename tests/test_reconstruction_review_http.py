@@ -636,3 +636,19 @@ def test_save_rejects_invalid_review_without_persisting_or_leaking(monkeypatch):
     assert error.value.status_code == 422
     assert error.value.detail == "Invalid reconstruction review submission"
     assert "private" not in error.value.detail
+
+
+def test_live_reconstruction_binds_review_after_identity_and_candidate_evidence():
+    """A reviewer digest must cover the complete response, not a partial scan."""
+    import inspect
+    from server import work_resumption
+    source = inspect.getsource(work_resumption.resumption_candidates)
+    timeline = source.index('result["identity_timelines"] = timelines')
+    candidates = source.index('result["candidates_total"] = len(candidates)')
+    final_queue = source.rindex('result["event_assignment_review"] = build_review_queue(result)')
+    assert timeline < candidates < final_queue
+    # The empty-session early return must also bind a review to its final notice.
+    empty_branch = source.split('if not current["refs"]:', 1)[1].split('return result', 1)[0]
+    assert empty_branch.index('result["notice"]') < empty_branch.index(
+        'result["event_assignment_review"] = build_review_queue(result)'
+    )
