@@ -121,6 +121,24 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         _truncation_flag(response, "observed_case_groups_truncated"),
         _truncation_flag(coverage, "scan_truncated"),
     )
+    # Returned-count metadata is reviewer-visible provenance. If supplied by
+    # an API adapter, refuse inconsistent counts rather than silently trusting
+    # a forged or stale claim about how much evidence was actually displayed.
+    # Offline engine responses may omit these presentation-only fields.
+    for collection, cap in (
+        ("identity_timelines", 12),
+        ("observed_pair_event_assignments", 24),
+        ("observed_group_continuity", 24),
+        ("observed_case_groups", 24),
+    ):
+        count_key = collection + "_returned_count"
+        if count_key in response:
+            value = response[count_key]
+            records = response.get(collection, [])
+            if not isinstance(records, list):
+                raise ValueError("invalid " + collection)
+            if type(value) is not int or value != min(len(records), cap):
+                raise ValueError("inconsistent " + count_key)
     incomplete = any(completeness_flags)
     seen_pair_keys: set[str] = set()
     for pair in pairs:
