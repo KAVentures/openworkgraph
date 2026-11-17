@@ -89,9 +89,10 @@ def _identity_bursts(observations: list[tuple[float, str]], threshold_days: floa
     bursts: list[dict[str, Any]] = []
     for instant, event_id in sorted(observations):
         if not bursts or instant - bursts[-1]["last"] > threshold_days:
-            bursts.append({"first": instant, "last": instant, "event_ids": []})
+            bursts.append({"first": instant, "last": instant, "event_ids": [], "observed_count": 0})
         burst = bursts[-1]
         burst["last"] = instant
+        burst["observed_count"] += 1
         if len(burst["event_ids"]) < 6:
             burst["event_ids"].append(event_id)
     return bursts
@@ -105,7 +106,7 @@ def _visible_bursts(track: dict[str, Any], threshold_days: float) -> dict[str, A
             "first_observed_at": _iso(burst["first"]),
             "last_observed_at": _iso(burst["last"]),
             "evidence_event_ids": burst["event_ids"][:8],
-            "evidence_truncated": len(burst["event_ids"]) > 8,
+            "evidence_truncated": burst["observed_count"] > len(burst["event_ids"]),
             "gap_from_previous_seconds": (
                 max(0, round((burst["first"] - bursts[len(bursts) - len(selected) + i - 1]["last"]) * 86400))
                 if len(bursts) - len(selected) + i > 0 else None
