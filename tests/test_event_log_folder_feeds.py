@@ -164,6 +164,9 @@ def test_snapshot_hash_matches_the_bytes_actually_appended(tmp_path, monkeypatch
     original = (HEADER + 'o2;Create;03/03/2024 10:00\n').encode()
     replacement = (HEADER + 'o3;Create;04/03/2024 10:00\n').encode()
     path = _drop(folder, 'a.csv', original.decode())
+    # write_text() normalizes newlines on Windows; hash the actual bytes
+    # the importer reads, not the pre-write Unix-style fixture string.
+    original = path.read_bytes()
     append = workspace.append_log
     def replace_before_append(*args, **kwargs):
         path.write_bytes(replacement)

@@ -1914,6 +1914,31 @@ const path=require('node:path');
    assert.deepEqual(numericAxe.violations,[]);
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
+   // End-to-end recovery: invalidate the real local dashboard session in a
+   // fresh browser load, then exercise the actual authenticated local API.
+   // A denied request must not look like a completed workflow action.
+   await page.evaluate(()=>sessionStorage.removeItem('owg_dashboard_session_v1'));
+   await page.reload();
+   const denied=await page.evaluate(async()=> {
+     const response=await fetch('/v1/ai-access',{cache:'no-store'});
+     return {status:response.status,detail:(await response.json()).detail};
+   });
+   assert.equal(denied.status,401,'local API must reject an unauthenticated dashboard');
+   await page.locator('#owgSessionRecovery[role=alert]').waitFor();
+   assert.match(await page.locator('#owgSessionRecovery').textContent(),/Reopen the dashboard from the current OpenWorkGraph launcher/);
+   assert.match(await page.locator('#owgSessionRecovery').textContent(),/No action was submitted/);
+   // Recovery with a fresh authorized launch must restore API access and
+   // clear the denial banner; the old tab cannot silently authorize itself.
+   // A launcher recovery is a fresh browsing context, not a hash-only
+   // navigation in the denied tab (which does not re-run bootstrap).
+   const recoveredPage=await browser.newPage();
+   await recoveredPage.goto(base+'/#session='+session);
+   const restored=await recoveredPage.evaluate(async()=> (await fetch('/v1/ai-access',{cache:'no-store'})).status);
+   assert.equal(restored,200,'a fresh authenticated launch restores local API access');
+   await recoveredPage.waitForFunction(()=>!document.querySelector('#owgSessionRecovery'));
+   assert.equal(await recoveredPage.locator('#owgSessionRecovery').count(),0);
+   assert.equal(await page.locator('#owgSessionRecovery').count(),1,'denied tab remains unauthorized');
+   await recoveredPage.close();
    assert.deepEqual(errors,[]);
    console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, a counts-only quality report and the rejected row kept, then released under an explicit offset decision, variants, Disco-style map sliders, case playback along the map, direct and eventual follower case filters saved and re-applied with a filtered case drill-down, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity, routing, arrival and activity-time uncertainty, step-by-step routing, and a held-out validation, working calendars, a shared resource pool and seasonal arrivals entered and measured from the log, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, a dotted chart with hover, drift detection, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses with a typed, saved case metric, compliance rules saved as signals, backtested predictions with a censoring-aware as-of replay, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps and what flattening onto each type leaves out or copies, which object attributes change over time, and object rules across types, and an object process model checked with an edited arc.');
  }finally{
