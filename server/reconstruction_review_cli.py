@@ -110,6 +110,7 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
     # Validate *every* flag before aggregating. Short-circuiting with "or"
     # otherwise hides malformed later flags whenever an earlier flag is true.
     completeness_flags = (
+        _truncation_flag(response, "identity_timelines_truncated"),
         _truncation_flag(response, "observed_pair_event_assignments_truncated"),
         _truncation_flag(response, "observed_group_continuity_truncated"),
         _truncation_flag(response, "observed_case_groups_truncated"),
@@ -202,6 +203,7 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         # inspection API. Their provenance is part of the reviewer decision
         # context even when the event/pair projection is unchanged.
         "identity_timelines": response.get("identity_timelines"),
+        "identity_timelines_truncated": response.get("identity_timelines_truncated", False),
         "event_reviews": rows,
     }
     # All reviewer-visible context participates in the evidence binding. Reject
