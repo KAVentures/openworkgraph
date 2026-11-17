@@ -131,6 +131,7 @@ with TestClient(app) as client:
     assert empty.status_code == 200, empty.text
     assert empty.headers.get("Cache-Control") == "no-store"
     assert empty.json()["retained_total"] == 0
+    assert empty.json()['next_before'] is None
     csv = b"case,activity,time\n1,Open,2024-01-01T00:00:00Z\n1,Close,2024-01-02T00:00:00Z\n"
     imported = client.post("/v1/event-logs/import?format=csv&name=History"
                            "&case_column=case&activity_column=activity&timestamp_column=time",
@@ -152,6 +153,7 @@ with TestClient(app) as client:
     assert "state_fingerprint" not in str(payload)
     assert client.get(url+"?transition=nope", headers=owner).status_code == 422
     assert client.get(url+"?limit=201", headers=owner).status_code == 422
+    assert client.get(url+"?before=bad!", headers=owner).status_code == 422
     assert client.post(url, json={}, headers=owner).status_code == 405
 '''
     env = os.environ.copy()
@@ -174,3 +176,48 @@ def test_dashboard_has_filter_drilldown_and_no_approval_controls():
     assert '@router.get("/v1/event-logs/signal-timeline")' in routes
     assert "_require_dashboard(request)" in routes.split(
         "def event_log_signal_timeline(")[1].split("@router.post", 1)[0]
+
+
+def test_timeline_pages_stable_order_with_ties_and_newer_insertions():
+    log = _log()
+    rule = _add(log, 'History pages')
+    at = datetime(2024, 3, 1, tzinfo=timezone.utc).replace(tzinfo=None)
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            conn.executemany('INSERT INTO signal_transitions VALUES (?, ?, ?, ?, ?, ?)', [
+                [log, rule, f'sevt_{i:024x}', at, 'triggered' if i % 2 else 'cleared', 'a'*64]
+                for i in range(205)])
+        finally:
+            conn.close()
+    first = timeline.timeline(limit=50)
+    assert len(first['items']) == 50 and first['next_before']
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            conn.execute('INSERT INTO signal_transitions VALUES (?, ?, ?, ?, ?, ?)',
+                         [log, rule, f'sevt_{9999:024x}', at, 'triggered', 'b'*64])
+        finally:
+            conn.close()
+    pages = [first]
+    while pages[-1]['next_before'] is not None:
+        pages.append(timeline.timeline(limit=50, before=pages[-1]['next_before']))
+    assert [len(page['items']) for page in pages] == [50, 50, 50, 50, 5]
+    ids = [item['event_id'] for page in pages for item in page['items']]
+    assert len(ids) == len(set(ids)) == 205
+    assert ids == sorted(ids, reverse=True)
+    assert timeline.timeline(limit=1)['items'][0]['event_id'] == f'sevt_{9999:024x}'
+    assert pages[-1]['counts'] == {'triggered': 103, 'cleared': 103}
+    assert not any('state_fingerprint' in item for page in pages for item in page['items'])
+
+
+def test_timeline_rejects_invalid_cursors():
+    import base64
+    def encoded(value):
+        return base64.urlsafe_b64encode(json.dumps(value).encode()).decode().rstrip('=')
+    for bad in (None, False, [], '!', 'a'*257,
+                encoded({'at':'2024-99-01T00:00:00Z','id':'sevt_'+'0'*24}),
+                encoded({'at':'2024-01-01T00:00:00Z','id':'bad'}),
+                encoded({'at':'2024-01-01T00:00:00Z','id':'sevt_'+'0'*24,'extra':1})):
+        with pytest.raises(workspace.EventLogWorkspaceError, match='cursor'):
+            timeline.timeline(before=bad)
