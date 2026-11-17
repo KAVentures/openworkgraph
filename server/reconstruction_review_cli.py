@@ -110,8 +110,19 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
     # Validate *every* flag before aggregating. Short-circuiting with "or"
     # otherwise hides malformed later flags whenever an earlier flag is true.
     identity_timelines = response.get("identity_timelines", [])
-    if not isinstance(identity_timelines, list):
-        raise ValueError("invalid identity timelines")
+    if not isinstance(identity_timelines, list) or len(identity_timelines) > 256:
+        raise ValueError("invalid or unbounded identity timelines")
+    # Inspection exposes at most twelve timelines. Bound each source record
+    # before digesting it, including records outside the visible HTTP cap.
+    for timeline in identity_timelines:
+        if not isinstance(timeline, dict):
+            raise ValueError("invalid identity timeline evidence")
+        try:
+            encoded_timeline = json.dumps(timeline, sort_keys=True, allow_nan=False).encode("utf-8")
+        except (TypeError, ValueError, RecursionError) as exc:
+            raise ValueError("invalid identity timeline evidence") from exc
+        if len(encoded_timeline) > 65536:
+            raise ValueError("unbounded identity timeline evidence")
     identity_timelines_truncated = (_truncation_flag(response, "identity_timelines_truncated")
                                     or len(identity_timelines) > 12)
     completeness_flags = (
