@@ -104,8 +104,13 @@ class Node {
  assert.match(status.textContent,/Read-only choice inspected/);
  const preflight=details.children.find(x=>x.textContent==='Revalidate review basis on server');
  await preflight.onclick();
- for(let i=0;i<12;i++)await new Promise(r=>setTimeout(r,5));
- const state=details.children.find(x=>x.tagName==='p'&&/Saved review:/.test(x.textContent));
+ let state;
+ for(let i=0;i<200;i++){
+  state=details.children.find(x=>x.tagName==='p'&&/Saved review:/.test(x.textContent));
+  if(state)break;
+  await new Promise(r=>setTimeout(r,25));
+ }
+ assert.ok(state,'The saved-review status should become visible after asynchronous HTTP preflight');
  assert.match(state.textContent,/unreviewed \(revision 0\)/);
  const approve=details.children.find(x=>x.textContent==='Approve reviewed choice');
  const consent=details.children.find(x=>x.tagName==='label'&&x.children.some(y=>y.tagName==='input')).children[0];
