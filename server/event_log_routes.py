@@ -229,11 +229,11 @@ def list_event_logs(request: Request):
 @router.get("/v1/event-logs/signal-overview")
 def event_log_signal_overview(
     request: Request, status: str = Query(default="attention", max_length=20),
-    limit: int = Query(default=100, ge=1, le=200),
+    limit: int = Query(default=100, ge=1, le=200), offset: int = Query(default=0, ge=0, le=2500),
 ):
     """Local dashboard-only, non-mutating review queue across saved logs."""
     _require_dashboard(request)
-    return _respond(signal_overview.overview, status=status, limit=limit)
+    return _respond(signal_overview.overview, status=status, limit=limit, offset=offset)
 
 
 @router.get("/v1/event-logs/signal-timeline")
@@ -630,6 +630,15 @@ def event_log_summary(request: Request, log_id: str, case_type: str | None = Que
                       cohort: dict[str, Any] = Depends(_case_filter)):
     _require_dashboard(request)
     return _respond(workspace.summary, log_id, case_type, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/case-attribute-values")
+def event_log_case_attribute_values(request: Request, log_id: str,
+                                    case_type: str | None = Query(default=None, max_length=200)):
+    """Case attribute names, numeric ranges and common values, to suggest case-filter inputs."""
+    from . import event_log_case_attribute_values as case_attribute_values
+    _require_dashboard(request)
+    return _respond(case_attribute_values.values, log_id, case_type)
 
 
 @router.post("/v1/event-logs/{log_id}/attribute-profile")

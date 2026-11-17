@@ -37,7 +37,7 @@ def _schedules() -> dict[str, dict[str, Any]]:
         return {}
 
 
-def overview(*, status: str = "attention", limit: int = 100) -> dict[str, Any]:
+def overview(*, status: str = "attention", limit: int = 100, offset: int = 0) -> dict[str, Any]:
     """Snapshot bounded cross-log review status, without changing saved rules.
 
     Full status counters are calculated BEFORE limiting displayed rows; no
@@ -47,6 +47,8 @@ def overview(*, status: str = "attention", limit: int = 100) -> dict[str, Any]:
         raise workspace.EventLogWorkspaceError("unknown signal overview filter")
     if type(limit) is not int or not 1 <= limit <= MAX_RETURNED:
         raise workspace.EventLogWorkspaceError("signal overview limit must be 1 to 200")
+    if type(offset) is not int or not 0 <= offset <= MAX_RULES_TOTAL:
+        raise workspace.EventLogWorkspaceError("signal overview offset must be 0 to 2500")
     schedules = _schedules()
     now = inbox._now()
     counts = {name: 0 for name in _STATUS_ORDER}
@@ -127,7 +129,8 @@ def overview(*, status: str = "attention", limit: int = 100) -> dict[str, Any]:
         filtered = pending
     else:
         filtered = [r for r in pending if r["status"] == status]
-    shown = filtered[:limit]
+    shown = filtered[offset:offset + limit]
+    next_offset = offset + len(shown) if shown and offset + len(shown) < len(filtered) else None
     return {
         "format": "openworkgraph.signal-review-overview.v1",
         "filter": status,
@@ -137,7 +140,8 @@ def overview(*, status: str = "attention", limit: int = 100) -> dict[str, Any]:
         "counts": counts,
         "attention": sum(counts[s] for s in ("unavailable", "unreviewed", "stale", "not_evaluated")),
         "matched_rules": len(filtered), "returned_rules": len(shown),
-        "truncated": len(filtered) > len(shown), "limit": limit,
+        "truncated": len(filtered) > len(shown), "limit": limit, "offset": offset,
+        "next_offset": next_offset, "previous_offset": max(0, offset - limit) if offset else None,
         "items": shown,
         "local_only": True, "source_data_read": False,
         "evaluations_performed": False,
