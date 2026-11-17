@@ -623,6 +623,25 @@ class FingerprintScopeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "digest mismatch"):
             score_bound_review_annotations(changed, envelope)
 
+    def test_identity_timeline_truncation_invalidates_labels_and_scoring(self):
+        from server.reconstruction_review_cli import score_bound_review_annotations, score_review_annotations
+        source = payload([pair("A", "F", ["e1"])])
+        queue = build_review_queue(source)
+        row = queue["event_reviews"][0]
+        labels = [{"window": row["window"], "event_id": row["event_id"],
+                   "true_resource_pairs": row["candidate_resource_pairs"]}]
+        changed = dict(source, identity_timelines_truncated=True)
+        incomplete = build_review_queue(changed)
+        self.assertTrue(incomplete["coverage_incomplete"])
+        self.assertNotEqual(queue["evidence_sha256"], incomplete["evidence_sha256"])
+        with self.assertRaisesRegex(ValueError, "incomplete source evidence"):
+            score_review_annotations(changed, labels)
+        with self.assertRaisesRegex(ValueError, "digest mismatch"):
+            score_bound_review_annotations(changed, {
+                "evidence_sha256": queue["evidence_sha256"], "annotations": labels})
+        with self.assertRaisesRegex(ValueError, "invalid identity_timelines_truncated"):
+            build_review_queue(dict(source, identity_timelines_truncated="false"))
+
 class LiveReconstructionServiceTests(unittest.TestCase):
     def test_live_service_rebuilds_evidence_and_refuses_stale_envelope(self):
         from unittest.mock import patch
