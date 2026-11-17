@@ -95,7 +95,7 @@ const results=card.children[card.children.indexOf(form)+2];
   delayReceipt=true;
   approval.checked=true;
   const pending=form.listeners.submit({preventDefault(){}});
-  for(let i=0;i<20 && !releaseReceipt;i++) await new Promise(resolve=>setImmediate(resolve));
+  for(let i=0;i<20 && !releaseReceipt;i++) await Promise.resolve();
   assert.ok(releaseReceipt,'deferred receipt request reached');
   approval.checked=false;
   approval.listeners.change();
