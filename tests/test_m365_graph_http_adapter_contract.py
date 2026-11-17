@@ -639,3 +639,53 @@ def test_real_graph_review_to_authenticated_owg_append_contract(tmp_path):
     assert receipt["csv_sha256"] == reviewed["csv_sha256"]
     assert receipt["checkpoint_advanced"] is False
     assert len(transport.requests) == 1
+
+    # Continue this same provider -> review -> authenticated append journey
+    # through the actual durable checkpoint writer, then restart from disk.
+    from server import m365_outlook_checkpoint as checkpoint
+    ledger = tmp_path / "ledger"
+    ledger.mkdir(mode=0o700)
+    scope_args = dict(tenant="tenant", mailbox="mailbox", folder="folder",
+                      grant_file=grant)
+    assert checkpoint.inspect_checkpoint(
+        **scope_args, ledger_dir=ledger, consent_local_read=True) is None
+    with (patch.object(checkpoint, "prepare_handoff",
+                       return_value={"idempotent_replay": True}),
+          patch.object(checkpoint, "reconcile_membership",
+                       return_value={"status": "all_candidate_events_present"})):
+        committed = checkpoint.commit_checkpoint(
+            **scope_args, log_id=log_id, confirm_log_id=log_id,
+            candidate=candidate, csv_path=csv_path,
+            receipt_file=tmp_path / "receipt.json",
+            journal_dir=tmp_path / "journal",
+            handoff_dir=tmp_path / "handoff",
+            successor_label="incremental", ledger_dir=ledger,
+            consent_local_read=True, confirm_removals_reviewed=True,
+            confirm_checkpoint_commit=True)
+    assert committed["generation"] == 1
+    persisted = checkpoint.inspect_checkpoint(
+        **scope_args, ledger_dir=ledger, consent_local_read=True)
+    assert persisted["candidate_sha256"] == reviewed["csv_sha256"]
+    assert persisted["cursor_url"] == cursor
+
+    # A fresh adapter instance must use the durable cursor, not the initial
+    # Graph URL; the second candidate remains uncommitted until review.
+    next_cursor = ("https://graph.microsoft.com/v1.0/me/mailFolders/folder/"
+                   "messages/delta?%24deltatoken=incremental")
+    incremental = Transport(Response(cursor, json.dumps({
+        "value": [], "@odata.deltaLink": next_cursor,
+    }).encode()))
+    next_csv, next_candidate = tmp_path / "next.csv", tmp_path / "next.json"
+    delta.export_delta(
+        tenant="tenant", mailbox="mailbox", folder_id="folder",
+        grant_file=grant, output=next_csv, candidate=next_candidate,
+        token="test-token", consent_read=True, consent_export=True,
+        previous_candidate=candidate, confirm_previous_import=True,
+        opener=incremental)
+    assert len(incremental.requests) == 1
+    assert incremental.requests[0][0].full_url == persisted["cursor_url"]
+    assert review(**scope_args, candidate=next_candidate,
+                  consent_local_read=True)["status"] == "review_ready"
+    assert checkpoint.inspect_checkpoint(
+        **scope_args, ledger_dir=ledger,
+        consent_local_read=True)["generation"] == 1
