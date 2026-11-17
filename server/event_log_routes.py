@@ -239,11 +239,11 @@ def event_log_signal_overview(
 @router.get("/v1/event-logs/signal-timeline")
 def event_log_signal_timeline(
     request: Request, transition: str = Query(default="all", max_length=20),
-    limit: int = Query(default=100, ge=1, le=200),
+    limit: int = Query(default=100, ge=1, le=200), before: str = Query(default="", max_length=256),
 ):
     """Read-only cross-log transition journal; local dashboard session only."""
     _require_dashboard(request)
-    return _respond(signal_timeline.timeline, transition=transition, limit=limit)
+    return _respond(signal_timeline.timeline, transition=transition, limit=limit, before=before)
 
 
 @router.post("/v1/event-logs/xlsx-to-csv")

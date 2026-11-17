@@ -4892,10 +4892,12 @@
       ['all','All changes'],['triggered','Triggered only'],['cleared','Cleared only']]);
     timelineFilter.setAttribute('aria-label','Across-log signal change filter');
     const timelineRefresh=button('Refresh all-log changes','secondary');timelineRefresh.id='owgSignalTimelineRefresh';
+    const timelinePrevious=button('Newer changes','secondary');timelinePrevious.id='owgSignalTimelinePrevious';timelinePrevious.disabled=true;
+    const timelineNext=button('Older changes','secondary');timelineNext.id='owgSignalTimelineNext';timelineNext.disabled=true;
     const timelineStatus=el('div','Load locally recorded changes across saved logs.','muted');
     timelineStatus.id='owgSignalTimelineStatus';timelineStatus.setAttribute('role','status');timelineStatus.setAttribute('aria-live','polite');
     const timelineResults=el('div');timelineResults.id='owgSignalTimelineResults';
-    const timelineControls=el('div',null,'actions');timelineControls.append(timelineFilter,timelineRefresh);
+    const timelineControls=el('div',null,'actions');timelineControls.append(timelineFilter,timelineRefresh,timelinePrevious,timelineNext);
     const allControls=el('div',null,'actions');allControls.append(allFilter,allRefresh,allPrevious,allNext);
     box.append(row,message,rules,evaluate,out,reviewHeading,reviewNote,reviewRefresh,inbox,
       deliveryPanel,transitionHeading,transitionNote,transitionRefresh,transitionStatus,transitionResults,
@@ -5134,21 +5136,23 @@
     allNext.onclick=()=>{if(allNextOffset!==null)refreshAllSignals(allNextOffset);};
     // This journal describes state *changes*, not the current signal inbox.
     // An old request cannot repaint a different dataset after navigation.
-    let timelineRequestId=0;
-    async function refreshTimeline(){
+    let timelineRequestId=0,timelineCursor='',timelineHistory=[],timelineNextCursor=null;
+    async function refreshTimeline(before='',history=[]){
       const requestId=++timelineRequestId;
-      timelineRefresh.disabled=true;
+      timelineRefresh.disabled=true;timelinePrevious.disabled=true;timelineNext.disabled=true;timelineResults.replaceChildren();
       timelineStatus.textContent='Loading recorded signal changes across local logs…';
       try{
         const params=new URLSearchParams({transition:timelineFilter.value,limit:'100'});
+        if(before)params.set('before',before);
         const r=await getJSON('/v1/event-logs/signal-timeline?'+params);
         if(generation!==state.generation||requestId!==timelineRequestId)return;
+        timelineCursor=before;timelineHistory=history;timelineNextCursor=r.next_before??null;
         timelineStatus.textContent=Number(r.retained_total||0)+' retained changes ('+
           Number(r.counts?.triggered||0)+' triggered, '+Number(r.counts?.cleared||0)+
           ' cleared); showing '+Number(r.returned_transitions||0)+' of '+
           Number(r.matched_transitions||0)+' matching'+
-          (r.truncated?' (recent results only)':'')+
-          '. This is not a live notification feed.';
+          (before?' (older page)':'')+
+          '. Results can change between pages. This is not a live notification feed.';
         const rows=(r.items||[]).map(item=>{
           const open=button('Open log','secondary');
           open.setAttribute('aria-label','Open dataset '+item.log_name+' for signal '+item.name);
@@ -5174,15 +5178,18 @@
           :el('div','No saved signal changes match this filter.','muted'));
       }catch(error){
         if(generation===state.generation&&requestId===timelineRequestId){
+          timelineCursor='';timelineHistory=[];timelineNextCursor=null;
           timelineResults.replaceChildren();
           timelineStatus.textContent=error.message||'Signal change timeline unavailable.';
         }
       }finally{
-        if(generation===state.generation&&requestId===timelineRequestId)timelineRefresh.disabled=false;
+        if(generation===state.generation&&requestId===timelineRequestId){timelineRefresh.disabled=false;timelinePrevious.disabled=!timelineHistory.length;timelineNext.disabled=timelineNextCursor===null;}
       }
     }
     timelineFilter.onchange=()=>refreshTimeline();
     timelineRefresh.onclick=()=>refreshTimeline();
+    timelinePrevious.onclick=()=>{if(timelineHistory.length)refreshTimeline(timelineHistory[timelineHistory.length-1],timelineHistory.slice(0,-1));};
+    timelineNext.onclick=()=>{if(timelineNextCursor!==null)refreshTimeline(timelineNextCursor,[...timelineHistory,timelineCursor]);};
     reviewRefresh.onclick=()=>refreshInbox().catch(error=>{message.textContent=error.message;});
     async function refresh(){
       const r=await getJSON(base());if(generation!==state.generation)return;
