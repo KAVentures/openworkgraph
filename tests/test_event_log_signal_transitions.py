@@ -179,6 +179,7 @@ with TestClient(app) as client:
     bearer = {"Authorization": "Bearer " + local_auth.ensure_api_token()}
     assert client.get(path, headers=bearer).status_code in (401, 403)
     assert client.get(path, headers=auth, params={"limit": 201}).status_code == 422
+    assert client.get(path, headers=auth, params={"before": "bad!"}).status_code == 422
 """
     env = os.environ.copy()
     env.update({"WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"),
@@ -187,3 +188,38 @@ with TestClient(app) as client:
     result = subprocess.run([sys.executable, "-c", script], cwd=ROOT,
                             env=env, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+
+def test_per_log_history_pages_tied_events_and_isolates_other_logs():
+    from datetime import datetime
+    log, other = _log(), _log()
+    rule = signals.add_rule(log, _rule('Paged', kind='kpi', metric='case_count', operator='above', threshold=0))['rule_id']
+    other_rule = signals.add_rule(other, _rule('Other', kind='kpi', metric='case_count', operator='above', threshold=0))['rule_id']
+    at = datetime(2024, 3, 1)
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            conn.executemany('INSERT INTO signal_transitions VALUES (?, ?, ?, ?, ?, ?)', [
+                [log, rule, f'sevt_{i:024x}', at, 'triggered' if i % 2 else 'cleared', 'a'*64]
+                for i in range(205)])
+            conn.execute('INSERT INTO signal_transitions VALUES (?, ?, ?, ?, ?, ?)',
+                         [other, other_rule, f'sevt_{9999:024x}', at, 'triggered', 'b'*64])
+        finally:
+            conn.close()
+    pages = [transitions.list_history(log, limit=50)]
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            conn.execute('INSERT INTO signal_transitions VALUES (?, ?, ?, ?, ?, ?)',
+                         [log, rule, f'sevt_{9998:024x}', at, 'triggered', 'c'*64])
+        finally:
+            conn.close()
+    while pages[-1]['next_before'] is not None:
+        pages.append(transitions.list_history(log, limit=50, before=pages[-1]['next_before']))
+    assert [len(page['items']) for page in pages] == [50, 50, 50, 50, 5]
+    ids = [item['event_id'] for page in pages for item in page['items']]
+    assert len(ids) == len(set(ids)) == 205 and ids == sorted(ids, reverse=True)
+    assert f'sevt_{9999:024x}' not in ids and f'sevt_{9998:024x}' not in ids
+    assert transitions.list_history(log, limit=1)['items'][0]['event_id'] == f'sevt_{9998:024x}'
+    with pytest.raises(workspace.EventLogWorkspaceError, match='cursor'):
+        transitions.list_history(log, before='bad!')

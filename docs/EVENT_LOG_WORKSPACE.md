@@ -244,6 +244,12 @@ analysis reads them.
   analysis query returns in well under 30 seconds on a CI runner
   (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_scale_acceptance.py`).
 
+## Sharing with AI agents
+
+A log can be shared, read-only, with AI apps connected to OpenWorkGraph over MCP, at the
+`aggregates` or `cases` level. Logs are not shared by default. See
+[PROCESS_INTELLIGENCE_FOR_AGENTS.md](PROCESS_INTELLIGENCE_FOR_AGENTS.md).
+
 ## API
 
 All routes need the local dashboard session (`Authorization: OWG-Session ...`).
@@ -1306,10 +1312,26 @@ hand.
   copy is not appended again; an edited file counts as new.
 - Files modified in the last minute are left for the next run, in case the
   exporter is still writing them.
+- Each settled file is copied into a temporary snapshot while hashing. The
+  snapshot is what gets appended; files whose identity, size or modification
+  time changes during the copy are deferred. A successful append and its content receipt commit together;
+  overlapping runs in the same OWG process are serialized at append time.
+  Temporary storage must have space for the
+  file, and the normal event-log import size limit applies.
 - Events already in the log are skipped by the usual append rules, so
   overlapping exports are safe.
 - A file that cannot be appended (wrong columns, for example) is recorded with
-  the reason and is not retried with the same content.
+  the reason and is not automatically retried with the same content. Files too large to
+  snapshot are reported on each run until removed or replaced, since no
+  content hash is recorded. If an append commits but its later quality report
+  fails, the feed records the append and surfaces a warning; it does not replay
+  the file.
+- **Retry failed files** explicitly retries unchanged content that has a
+  failed receipt. It does not process new or changed files; use **Run now**
+  for those. A successful retry replaces the failure receipt atomically, and
+  another failed attempt updates its error. Missing or unsettled files wait
+  until they are present and settled. Automatic runs do not retry failures and
+  report them separately from files already appended.
 - Each run appends at most 20 files. Files in the folder are never changed or
   deleted.
 - "Run every day" schedules the feed on the local scheduler (job kind
@@ -1320,6 +1342,7 @@ hand.
 | --- | --- |
 | `POST /v1/event-logs/{log_id}/feeds` | `{"folder": "/abs/path", "pattern": "*.csv", "confirm_folder_reads": true}` |
 | `GET /v1/event-logs/{log_id}/feeds` | Feeds with counts and the 20 latest file results. |
+| `POST /v1/event-logs/feeds/{feed_id}/retry-failed` | Retry only previously failed, unchanged settled content; owner session and local-storage confirmation required. |
 | `POST /v1/event-logs/feeds/{feed_id}/run` | Append new files now. Requires `X-OWG-Local-Storage-Confirmed: true`. |
 | `POST /v1/event-logs/feeds/{feed_id}/delete` | Delete the feed and its schedule. Appended events stay. |
 
@@ -1905,3 +1928,80 @@ mapping. Define a mapping to harmonize names that differ between source
 systems. The comparison is descriptive: the two logs may differ in extraction,
 coverage and case mix, so a difference is not evidence of its cause. The
 intervals are not corrected for the number of rows shown.
+
+## AI agent runs as a log (agent mining)
+
+Process-mining vendors now analyse AI agents' work alongside people's. SAP Signavio calls this
+agent mining. OpenWorkGraph already records the structure of observed agent runs (see
+`get_agent_runs`). "AI agent runs as a log" turns those runs into an ordinary event log, so
+variants, KPIs, root cause, conformance, filters and the rest work on agents too.
+
+- **Case:** one observed run, with its opaque execution ID. Native run, trace and session IDs are
+  not used.
+- **Events:** structural steps.
+  - Run started; Run finished, or Run failed.
+  - Tool calls as `Tool: <name>`, with the status in brackets when the call failed.
+  - Approvals, handoffs and errors.
+  - Model calls only when you tick "Include model calls".
+  - Each event's attributes are status, tool category and step seconds. The resource is the agent.
+- **Case attributes:** Outcome, Agent, Provider, Framework, Model, Tool calls, Failed tool calls,
+  Approvals requested, Input tokens, Output tokens, and Complete boundary ("no" when the start or
+  finish was not observed).
+- **Privacy:**
+  - No prompt, tool argument, tool result, file path or message text is copied.
+  - Tool names use the same privacy-safe labels as the agent-run report: known runtime and MCP tool
+    names stay readable, and other names become stable opaque hashes.
+  - The log is stored only after you confirm local storage, like any import.
+
+`POST /v1/event-logs/import-agent-runs` takes a dashboard session and the local-storage
+confirmation header. The JSON body has `name`, plus optional `since`, `until` (times with an
+offset), `max_runs` (1–5,000, default 1,000) and `include_model_calls`. Each run keeps at most 500
+steps, and the answer counts runs that were cut. A run still in progress is left out until it
+finishes or has been quiet for 30 minutes.
+
+### Keeping the agent-runs log up to date
+
+A log made from agent runs remembers that. Its "Keep agent runs up to date" section can **Add new
+runs now**, or **Add new runs every day** with the local scheduler (job kind
+`event_log_agent_runs`). A refresh appends only settled runs that are not in the log yet, with
+their case attributes. It looks back 7 days before the last refresh, so runs that finish late are
+still caught. Runs already in the log are not changed. Together with signal rules on the same log,
+for example the share of runs with Outcome = error, this monitors your agents continuously.
+Deleting the log removes its schedule.
+
+`GET /v1/event-logs/{log_id}/agent-runs` reports whether the log was made from agent runs and when
+it was last refreshed. `POST /v1/event-logs/{log_id}/agent-runs/refresh` needs a dashboard session
+and the local-storage confirmation header.
+
+## Automation candidates
+
+"Automation candidates" ranks activities by evidence an event log can show. Vendors such as
+Celonis, UiPath and SAP Signavio rank automation potential in a similar way. Every component is
+returned:
+
+| Component | Meaning |
+| --- | --- |
+| volume | Occurrences per week, on a log scale relative to the busiest activity. |
+| routine | Average of how often the activity follows its most common predecessor and is followed by its most common successor. |
+| time | Share of all waiting in the log that comes right before this activity. |
+
+`score = 100 × (0.4 volume + 0.4 routine + 0.2 time)`
+
+Each activity also reports occurrences, cases, case share, repeats per case, the median wait
+before it, resources, the top resource's share, and a routing pattern:
+
+- **fixed**: the same neighbours in at least 80% of occurrences, and rarely repeated. Rules may
+  cover it.
+- **mostly fixed**: the same neighbours in 60–80% of occurrences. Rules with exceptions.
+- **variable**: routing varies. Judgement is involved, and an AI agent with human review may fit.
+
+Activities seen in fewer than 5 cases are left out and counted. The global case filter applies.
+"Add to automation pipeline" creates an idea in the automation pipeline with
+`source.kind = "event_log"` and the evidence in its description, ready for the ease and impact
+assessment there.
+
+Waiting is the gap since the previous event, not working time. The ranking estimates no savings
+and authorizes nothing.
+
+`GET /v1/event-logs/{log_id}/automation-candidates?limit=&case_type=` plus the usual case-filter
+parameters; dashboard session only.
