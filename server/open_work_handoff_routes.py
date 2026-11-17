@@ -155,11 +155,25 @@ async def owner_issue_grant(request: Request):
     from .open_work_declaration_routes import _source_scope
     scope = await asyncio.to_thread(_source_scope)
     try:
-        return await asyncio.to_thread(grants.issue, data.get("work_item_ref"),
+        issued = await asyncio.to_thread(grants.issue, data.get("work_item_ref"),
             data.get("agent"), data.get("hours"), confirmed=data.get("confirm_grant"), source_scope=scope,
             context_approved=data.get("confirm_case_context") is True)
     except grants.GrantError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
+    # The connected source can be replaced while the grant is persisted.
+    # Never return a credential issued under a now-stale consent scope.
+    # Revoke first, and fail closed even if cleanup cannot be completed.
+    try:
+        current_scope = await asyncio.to_thread(_source_scope)
+    except (OSError, ValueError):
+        current_scope = None
+    if current_scope != scope:
+        try:
+            await asyncio.to_thread(grants.revoke, issued["grant_id"])
+        except (grants.GrantError, OSError):
+            raise HTTPException(503, "grant revocation cleanup unavailable") from None
+        raise HTTPException(409, "source connection changed during grant issue")
+    return issued
 
 @router.post("/v1/open-work/dispatch/grants/revoke")
 async def owner_revoke_grant(request: Request):
@@ -177,9 +191,15 @@ def _grant(request: Request, ref: str | None = None) -> dict:
     return identity
 
 @router.get("/v1/open-work/dispatch/granted")
-async def granted_offers(request: Request):
+async def granted_offers(request: Request, response: Response):
     identity = _grant(request)
+    response.headers["Cache-Control"] = "no-store"
     state = await _run(dispatch.status, owner=False)
+    # A grant or its offer may be revoked while the disk-backed queue is read
+    # in a worker thread. Never disclose that stale snapshot after revocation.
+    current = _grant(request, identity["work_item_ref"])
+    if current["grant_id"] != identity["grant_id"]:
+        raise HTTPException(409, "agent grant changed during offer read")
     state["offers"] = [item for item in state["offers"] if
                        item["work_item_ref"] == identity["work_item_ref"] and item["status"] == "offered"]
     return state

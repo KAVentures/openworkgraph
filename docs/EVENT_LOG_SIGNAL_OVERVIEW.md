@@ -18,7 +18,8 @@ without creating a second rule store or approval workflow.
    never evaluated and unavailable/corrupt states.
 3. Choose a state filter to inspect acknowledged, cleared or snoozed results,
    or all states. Counts cover the entire supported local inventory, even
-   when the visible table is limited to 100 results.
+   when the visible table is limited to 100 results per page. Use **Next
+   signals** and **Previous signals** to browse the matching results.
 4. Choose **Open log** on a result. The original log picker changes to
    the correct dataset, analyses re-render, and the existing per-log
    Signal review inbox opens. Only there can the owner acknowledge,
@@ -30,7 +31,7 @@ messages, refresh jobs or business/agent actions.
 
 ## Endpoint and integrity
 
-`GET /v1/event-logs/signal-overview?status=attention&limit=100`
+`GET /v1/event-logs/signal-overview?status=attention&limit=100&offset=0`
 
 This route uses the same authenticated local-dashboard session requirement
 as `/v1/event-logs/{log_id}/signal-inbox`. An AI/MCP bearer cannot read it.
@@ -47,8 +48,8 @@ snooze matching and expiry rules, so:
   silently treated as cleared.
 - Acknowledged, cleared and snoozed counts are distinct from the
   attention count. The result includes a bounded, explicitly truncated
-  row list; no case IDs, evidence values, source records or review
-  fingerprints are returned.
+  row list; `offset`, `next_offset` and `previous_offset` support paging.
+  No case IDs, evidence values, source records or review fingerprints are returned.
 - Only local schedule metadata is consulted to show whether a saved
   signal has a configured periodic check. It never starts that job.
 
@@ -56,7 +57,10 @@ Supported limits: up to 50 local logs, 2,500 signal rules total, and
 1–200 returned rows per request (100 in the dashboard). Invalid status
 filters and excessive limits are rejected, rather than changing the scope
 silently. The API response includes scanned dataset count, full state
-counters, filtered matching count and truncation.
+counters, filtered matching count and truncation. Each page is a fresh local
+snapshot, so changes between requests can move items or produce an empty page;
+use Refresh to return to the first page. This is offset paging, not a frozen
+review queue. The existing bounded inventory is still read to calculate counts.
 
 ## Permissions and user-facing limitations
 
