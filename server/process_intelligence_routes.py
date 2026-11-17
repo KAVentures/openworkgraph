@@ -4,6 +4,8 @@
 * ``GET /v1/process-intelligence/...``: read-only, for the local AI bearer (the MCP server) or the
   dashboard. A bearer additionally needs the global AI-access switch on, and every log must be
   shared at the needed level; otherwise the answer is the same as for an unknown log.
+* ``POST /v1/event-logs/{log_id}/agent-share/tags``: dashboard only; lets agents tag cases (cases level).
+* ``POST /v1/process-intelligence/{log_id}/case-tags``: the one agent write; adds an ``agent: `` tag.
 """
 from __future__ import annotations
 
@@ -39,6 +41,8 @@ async def _answer(operation, *args: Any, **kwargs: Any) -> JSONResponse:
         result = await run_in_threadpool(operation, *args, **kwargs)
     except sharing.NotShared as exc:
         raise HTTPException(404, str(exc)) from None
+    except sharing.NotAllowed as exc:
+        raise HTTPException(403, str(exc)) from None
     except EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
@@ -57,6 +61,22 @@ async def set_agent_share(request: Request, log_id: str):
     if not isinstance(body, dict) or set(body) != {"level"}:
         raise HTTPException(422, 'send {"level": "aggregates" | "cases" | null}')
     return await _answer(sharing.set_share, log_id, body["level"])
+
+
+@router.post("/v1/event-logs/{log_id}/agent-share/tags")
+async def set_agent_tag_grant(request: Request, log_id: str):
+    _require_dashboard(request)
+    body = await _json_body(request, "agent tag permission", strict=True, limit=1024)
+    if not isinstance(body, dict) or set(body) != {"allowed"}:
+        raise HTTPException(422, 'send {"allowed": true | false}')
+    return await _answer(sharing.set_tag_grant, log_id, body["allowed"])
+
+
+@router.post("/v1/process-intelligence/{log_id}/case-tags")
+async def agent_tag_cases(request: Request, log_id: str):
+    _require_agent_access(request)
+    body = await _json_body(request, "agent case tags", strict=True, limit=65536)
+    return await _answer(sharing.agent_tag_cases, log_id, body)
 
 
 @router.get("/v1/process-intelligence/logs")
