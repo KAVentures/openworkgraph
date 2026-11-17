@@ -16,9 +16,10 @@ dataset, rule name and transition. Filter to all, triggered or cleared. Choose
 signal inbox. The timeline never acknowledges, snoozes or re-evaluates a rule.
 
 The counts are computed across the complete retained *local journal*, before
-limiting visible rows; the UI shows up to 100 recent matching transitions.
-Ties are ordered by the stored transition ID. A filtered or truncated list
-must not be read as exhaustive. The maximum API page size is 200. This is
+limiting visible rows; the UI shows up to 100 matching transitions per page.
+Use **Older changes** and **Newer changes** to navigate. Ties are ordered by
+the stored transition ID. A filtered or truncated list must not be read as
+exhaustive. The maximum API page size is 200. This is
 **not** a live notifications service and **not** the current review state:
 a historical trigger may already have cleared, become stale, or been reviewed.
 
@@ -29,10 +30,12 @@ a historical trigger may already have cleared, become stale, or been reviewed.
 - `transition`: exactly `all`, `triggered` or `cleared`; invalid filters
   are rejected.
 - `limit`: integer 1–200; no unbounded results.
+- `before`: optional `next_before` cursor from the previous page. The cursor
+  identifies a timestamp and opaque transition ID, not source content.
 - Response `format`: `openworkgraph.signal-transition-timeline.v1`,
   `counts.triggered`, `counts.cleared`, `retained_total`,
   `matched_transitions`, `returned_transitions`, `truncated` and
-  `items`. Each item contains only random event ID, dataset ID/name, saved
+  `next_before` and `items`. Each item contains only random event ID, dataset ID/name, saved
   rule ID/name, change and evaluation time. No matching cases, source records,
   live credentials, raw event contents or state fingerprints are returned.
 
@@ -43,6 +46,12 @@ retained logs and rules, and performs **no source access, evaluation, outbound
 delivery, agent dispatch or business write**. Removed source rules/logs are
 not exposed through stale orphan journal rows. Corrupt stored rule names are
 shown as unavailable rather than interpreted as markup.
+
+Pages use the timestamp and transition ID as a keyset boundary, so newer
+insertions do not shift already traversed older results. Each request is still
+a fresh snapshot: deletions and retention trimming can remove items between
+pages, and Refresh returns to the newest page. Counts describe the whole
+currently retained matching journal, not just the part after the cursor.
 
 The existing journal retains at most 5,000 transitions per dataset. An initial
 false evaluation does not create a fake clearance. Repeated evaluations that
