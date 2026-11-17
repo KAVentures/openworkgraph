@@ -121,12 +121,12 @@ const pathModule = require("node:path");
     );
     // Overlapping authenticated selections: a late first response must not
     // replace the newer selection, even when both target the same process.
-    const racePage = await login("alice");
+    const selectionRacePage = await login("alice");
     let releaseStaleRead;
     let staleReadIntercepted;
     const staleReadSeen = new Promise(resolve => { staleReadIntercepted = resolve; });
     let processReads = 0;
-    await racePage.route(/\/v1\/human\/processes\/process_[^/?]+(?:\?.*)?$/, async route => {
+    await selectionRacePage.route(/\/v1\/human\/processes\/process_[^/?]+(?:\?.*)?$/, async route => {
       processReads++;
       if (processReads === 1) {
         await new Promise(resolve => { releaseStaleRead = resolve; staleReadIntercepted(); });
@@ -136,14 +136,14 @@ const pathModule = require("node:path");
         await route.fulfill({ response: upstream, json: data });
       } else await route.continue();
     });
-    await racePage.getByRole("button", {name:"Shared support process · r1",exact:true}).click();
+    await selectionRacePage.getByRole("button", {name:"Shared support process · r1",exact:true}).click();
     await staleReadSeen;
-    await racePage.getByRole("button", {name:"Shared support process · r1",exact:true}).click();
-    await racePage.locator("#selectedTitle").filter({hasText:"Shared support process · revision 1"}).waitFor();
+    await selectionRacePage.getByRole("button", {name:"Shared support process · r1",exact:true}).click();
+    await selectionRacePage.locator("#selectedTitle").filter({hasText:"Shared support process · revision 1"}).waitFor();
     releaseStaleRead();
-    await racePage.waitForTimeout(150);
-    assert.doesNotMatch(await racePage.locator("#selectedTitle").textContent(), /STALE RESPONSE/);
-    await racePage.close();
+    await selectionRacePage.waitForTimeout(150);
+    assert.doesNotMatch(await selectionRacePage.locator("#selectedTitle").textContent(), /STALE RESPONSE/);
+    await selectionRacePage.close();
     // Browser acceptance of the real authenticated handoff preflight against the
     // synthetic Gateway. The packet is kept in Chromium, never posted to it.
     const handoffPublished = await (await handoffPublishedResponse).json();
