@@ -1486,18 +1486,23 @@
     for(const control of [folder,pattern])control.addEventListener('input',ready);consent.addEventListener('change',ready);
     const base='/v1/event-logs/'+encodeURIComponent(state.logId)+'/feeds';
     const generation=state.generation;
-    const describe=r=>r.files_appended+' file(s) appended with '+Number(r.events_added).toLocaleString()+' new events'+(r.files_failed?', '+r.files_failed+' could not be appended':'')+(r.files_already_appended?', '+r.files_already_appended+' already appended':'')+(r.files_still_being_written?', '+r.files_still_being_written+' still being written (next run)':'')+'.'+((r.files||[]).some(file=>file.warning)?' An append committed, but its quality report could not be recorded.':'');
+    const describe=r=>r.files_appended+' file(s) appended with '+Number(r.events_added).toLocaleString()+' new events'+(r.files_failed?', '+r.files_failed+' could not be appended':'')+(r.files_already_appended?', '+r.files_already_appended+' already appended':'')+(r.files_previously_failed?', '+r.files_previously_failed+' previously failed (use Retry failed files)':'')+(r.files_still_being_written?', '+r.files_still_being_written+' still being written (next run)':'')+'.'+((r.files||[]).some(file=>file.warning)?' An append committed, but its quality report could not be recorded.':'');
     const render=r=>{
       if(!r.feeds.length){list.replaceChildren(el('div','No folder feed yet.','muted'));return;}
       list.replaceChildren(table(['Folder','Pattern','Files appended','Failed','Latest file',''],r.feeds.map(f=>{
         const wrap=el('div',null,'row');
         const run=button('Run now','secondary');run.setAttribute('aria-label','Run feed for '+f.folder);
+        const retry=button('Retry failed files','secondary');retry.setAttribute('aria-label','Retry failed files for '+f.folder);retry.disabled=!f.files_failed;
         const schedule=button('Run every day','secondary');schedule.setAttribute('aria-label','Run feed for '+f.folder+' every day');
         const remove=button('Delete feed','secondary');remove.setAttribute('aria-label','Delete feed for '+f.folder);
         run.onclick=async()=>{run.disabled=true;out.replaceChildren(el('div','Reading the folder\u2026','muted'));
           try{const r2=await (await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/run',{method:'POST',headers:{'X-OWG-Local-Storage-Confirmed':'true'}})).json();
             out.replaceChildren(el('div',describe(r2)+(r2.events_added?' Analyse again to include them.':'')),...(r2.files||[]).filter(file=>file.outcome==='failed').map(file=>el('div',file.name+': '+file.error,'muted')));render(await getJSON(base));}
           catch(error){out.replaceChildren(el('div',error.message,'muted'));run.disabled=false;}};
+        retry.onclick=async()=>{retry.disabled=true;out.replaceChildren(el('div','Retrying unchanged failed files…','muted'));
+          try{const r2=await (await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/retry-failed',{method:'POST',headers:{'X-OWG-Local-Storage-Confirmed':'true'}})).json();
+            out.replaceChildren(el('div',describe(r2)+' Only unchanged failed files were retried; new files are left for Run now.'+(!r2.files_appended&&!r2.files_failed?' No matching failed files were ready; they may have changed, been removed or still be settling.':'')+(r2.events_added?' Analyse again to include them.':'')),...(r2.files||[]).filter(file=>file.outcome==='failed').map(file=>el('div',file.name+': '+file.error,'muted')));render(await getJSON(base));}
+          catch(error){out.replaceChildren(el('div',error.message,'muted'));retry.disabled=false;}};
         schedule.onclick=async()=>{if(!window.confirm('Read '+f.folder+' and append new files every day while OpenWorkGraph is running?'))return;
           try{await api('/v1/schedules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'event_log_folder_feed',target_id:f.feed_id,interval_minutes:1440,confirm_scheduled_runs:true})});
             out.replaceChildren(el('div','Scheduled daily. Manage it under scheduled jobs.'));}
@@ -1505,7 +1510,7 @@
         remove.onclick=async()=>{if(!window.confirm('Delete this feed? Events already appended stay in the log.'))return;
           try{await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/delete',{method:'POST'});out.replaceChildren(el('div','Feed deleted.'));render(await getJSON(base));}
           catch(error){out.replaceChildren(el('div',error.message,'muted'));}};
-        wrap.append(run,schedule,remove);
+        wrap.append(run,retry,schedule,remove);
         const latest=f.recent_files[0];
         return [f.folder,f.pattern,Number(f.files_appended).toLocaleString(),Number(f.files_failed).toLocaleString(),
           latest?latest.name+' \u2014 '+(latest.outcome==='appended'?Number(latest.added_events).toLocaleString()+' events added'+(latest.warning?' · '+latest.warning:''):'not appended: '+latest.error):'\u2014',wrap];})));
@@ -4997,6 +5002,8 @@
     const transitionHeading=el('h4','Signal state changes');
     const transitionNote=el('p','Locally recorded triggered and cleared transitions from explicit or scheduled evaluations. Repeated unchanged results do not create alerts. This is not live source monitoring or a notification feed. Up to 5,000 transitions are retained per log.','muted');
     const transitionRefresh=button('Refresh signal changes','secondary');transitionRefresh.id='owgSignalTransitionRefresh';
+    const transitionPrevious=button('Newer signal changes','secondary');transitionPrevious.id='owgSignalTransitionPrevious';transitionPrevious.disabled=true;
+    const transitionNext=button('Older signal changes','secondary');transitionNext.id='owgSignalTransitionNext';transitionNext.disabled=true;
     const transitionStatus=el('div','Refresh to inspect saved signal changes.','muted');
     transitionStatus.id='owgSignalTransitionStatus';transitionStatus.setAttribute('role','status');transitionStatus.setAttribute('aria-live','polite');
     const transitionResults=el('div');transitionResults.id='owgSignalTransitions';
@@ -5027,7 +5034,7 @@
     const timelineControls=el('div',null,'actions');timelineControls.append(timelineFilter,timelineRefresh,timelinePrevious,timelineNext);
     const allControls=el('div',null,'actions');allControls.append(allFilter,allRefresh,allPrevious,allNext);
     box.append(row,message,rules,evaluate,out,reviewHeading,reviewNote,reviewRefresh,inbox,
-      deliveryPanel,transitionHeading,transitionNote,transitionRefresh,transitionStatus,transitionResults,
+      deliveryPanel,transitionHeading,transitionNote,transitionRefresh,transitionPrevious,transitionNext,transitionStatus,transitionResults,
       allHeading,allNote,allControls,allStatus,allResults,
       timelineHeading,timelineNote,timelineControls,timelineStatus,timelineResults);
     const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/signals';
@@ -5095,32 +5102,37 @@
     deliveryRefresh.onclick=()=>refreshDelivery().catch(error=>{deliveryStatus.textContent=error.message;});
     const transitionBase=()=>'/v1/event-logs/'+encodeURIComponent(selectedLogId)+'/signal-history';
     const generation=state.generation;
-    let transitionRequestId=0;
-    async function refreshHistory(){
+    let transitionRequestId=0,transitionCursor='',transitionHistory=[],transitionNextCursor=null;
+    async function refreshHistory(before='',history=[]){
       const requestId=++transitionRequestId;
-      transitionRefresh.disabled=true;
+      transitionRefresh.disabled=true;transitionPrevious.disabled=true;transitionNext.disabled=true;transitionResults.replaceChildren();
       transitionStatus.textContent='Loading locally recorded signal changes…';
       try{
-        const r=await getJSON(transitionBase()+'?limit=100');
+        const params=new URLSearchParams({limit:'100'});if(before)params.set('before',before);
+        const r=await getJSON(transitionBase()+'?'+params);
         if(generation!==state.generation||requestId!==transitionRequestId)return;
+        transitionCursor=before;transitionHistory=history;transitionNextCursor=r.next_before??null;
         const events=r.items||[];
         transitionStatus.textContent=Number(r.retained_total||0)+' saved transitions in this log; showing '+
-          events.length+(r.truncated?' (limited to recent results)':'')+
-          '. Evaluations only; no notifications or automated actions.';
+          events.length+(before?' (older page)':'')+
+          '. Results can change between pages. Evaluations only; no notifications or automated actions.';
         transitionResults.replaceChildren(events.length
           ?table(['Evaluated (UTC)','Signal','Change'],events.map(x=>[
             x.evaluated_at||'—',x.name,x.transition==='triggered'?'Triggered':'Cleared']))
           :el('div','No triggered/cleared changes recorded for this dataset yet.','muted'));
       }catch(error){
         if(generation===state.generation&&requestId===transitionRequestId){
+          transitionCursor='';transitionHistory=[];transitionNextCursor=null;
           transitionStatus.textContent=error.message||'Signal change history unavailable.';
           transitionResults.replaceChildren();
         }
       }finally{
-        if(generation===state.generation&&requestId===transitionRequestId)transitionRefresh.disabled=false;
+        if(generation===state.generation&&requestId===transitionRequestId){transitionRefresh.disabled=false;transitionPrevious.disabled=!transitionHistory.length;transitionNext.disabled=transitionNextCursor===null;}
       }
     }
     transitionRefresh.onclick=()=>refreshHistory();
+    transitionPrevious.onclick=()=>{if(transitionHistory.length)refreshHistory(transitionHistory[transitionHistory.length-1],transitionHistory.slice(0,-1));};
+    transitionNext.onclick=()=>{if(transitionNextCursor!==null)refreshHistory(transitionNextCursor,[...transitionHistory,transitionCursor]);};
     let inboxRefreshId=0;
     async function refreshInbox(){
       const requestId=++inboxRefreshId;
