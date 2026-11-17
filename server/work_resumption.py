@@ -526,16 +526,14 @@ def resumption_candidates(
         candidate["candidate_id"] = f"resumption_candidate_{number:02d}"
     result["candidates"] = candidates[:limit]
     result["candidates_total"] = len(candidates)
-    # Fingerprint the FINAL evidence projection, including identity timelines,
-    # interruption bursts, candidate tracks and truncation notices. Building
-    # the queue earlier silently omitted those fields from its evidence digest.
-    # No reviewer queue is emitted without a reviewable history grant.
-    from .reconstruction_review_cli import REVIEWABLE_ACCESS, build_review_queue
-    if result.get("saved_history_access") in REVIEWABLE_ACCESS:
-        result["event_assignment_review"] = build_review_queue(result)
     if truncated:
         result["notice"] = ("Only the newest activity inside the grant was scanned; "
                             "older sessions may also share these pointers.")
+    # Bind the reviewer queue only after all evidence and coverage metadata
+    # have been populated. A digest of a partial projection is not sufficient.
+    from .reconstruction_review_cli import REVIEWABLE_ACCESS, build_review_queue
+    if result.get("saved_history_access") in REVIEWABLE_ACCESS:
+        result["event_assignment_review"] = build_review_queue(result)
     return result
 
 
