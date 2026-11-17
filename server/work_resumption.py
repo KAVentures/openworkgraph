@@ -99,7 +99,7 @@ def _identity_bursts(observations: list[tuple[float, str]], threshold_days: floa
 
 def _visible_bursts(track: dict[str, Any], threshold_days: float) -> dict[str, Any]:
     bursts = _identity_bursts(track["observations"], threshold_days)
-    selected = bursts[-20:]
+    selected = bursts[-8:]
     return {
         "segments": [{
             "first_observed_at": _iso(burst["first"]),
@@ -420,7 +420,7 @@ def resumption_candidates(
                        if identity in bucket["tracks"]]
         if len(occurrences) < 2:
             continue
-        selected = occurrences[-20:]
+        selected = occurrences[-8:]
         episodes: list[dict[str, Any]] = []
         for position, (index, track) in enumerate(selected):
             previous_end = selected[position - 1][1]["last"] if position else None
