@@ -3109,6 +3109,21 @@ async def read_local_bound_attempt_receipts(request: Request, response: Response
     # the session again before disclosing even untrusted journal entries.
     await _recheck_source(scope)
     _dashboard_only(request)
+    # The final source check is asynchronous. A run/case binding can be
+    # revoked while it is in flight, independently of source consent.
+    # Revalidate both the binding and the owner-reviewed declaration before
+    # returning retained receipts. A source check alone is insufficient.
+    try:
+        if not await asyncio.to_thread(get_binding, **fields):
+            raise HTTPException(403, "current operator run/case binding required")
+        await asyncio.to_thread(require_exclusive_run_case_binding, **fields)
+        await asyncio.to_thread(
+            _operation_ledger_guard, scope, payload["work_item_ref"],
+            payload["expected_revision"], payload["expected_edit_token"], signature,
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, ValueError) as exc:
+        raise _safe_error(exc) from None
+    _dashboard_only(request)
     response.headers["Cache-Control"] = "no-store"
     return {
         "format": "openworkgraph.bound-attempt-receipts.v1",
