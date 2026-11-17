@@ -236,7 +236,14 @@ def get_reconstruction_review() -> Response:
     generation = history_generation()
     with connect() as connection:
         result = resumption_candidates(connection, lease=grant)
-    queue = build_review_queue(result)
+    # The HTTP projection caps identity timelines at 12. Bind that loss of
+    # reviewer-visible evidence to the queue digest and scoring eligibility.
+    # Preserve the original engine result; only enrich the review input.
+    review_result = {**result, "identity_timelines_truncated": (
+        result.get("identity_timelines_truncated", False)
+        or len(result.get("identity_timelines", [])) > 12
+    )}
+    queue = build_review_queue(review_result)
     # Encode before the final authorization check: revocation during JSON
     # serialization must fail closed, not return already-stale evidence.
     payload = json.dumps({
