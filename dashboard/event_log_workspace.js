@@ -89,7 +89,8 @@
     const q=new URLSearchParams(),args=FILTERED.has(suffix)?mergeActiveCohort(params||{},globalCohort()):{...(params||{})};
     for(const [key,value] of Object.entries(args)){
       if(key==='attribute_range'||key==='follows')q.set(key,JSON.stringify(value));
-      else if(Array.isArray(value))value.forEach(v=>q.append(key,v));else q.set(key,value);
+      else if(Array.isArray(value))value.forEach(v=>q.append(key,v));
+      else q.set(key,value!==null&&typeof value==='object'?JSON.stringify(value):value);
     }
     if(state.caseType)q.set('case_type',state.caseType);
     const search=q.toString();return '/v1/event-logs/'+encodeURIComponent(state.logId)+'/'+suffix+(search?'?'+search:'');
@@ -731,7 +732,24 @@
     results.appendChild(complianceSection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(domainPackSection());
     results.appendChild(costSection(names));
+    attachCaseAttributeSuggestions(generation);
     status('');
+  }
+
+  // Suggest case attributes (from the import or a joined case table) in every case-attribute input:
+  // name=value inputs get the common values, numeric-range inputs the numeric attribute names.
+  async function attachCaseAttributeSuggestions(generation){
+    try{
+      const q=state.caseType?'?case_type='+encodeURIComponent(state.caseType):'';
+      const r=await getJSON('/v1/event-logs/'+encodeURIComponent(state.logId)+'/case-attribute-values'+q);
+      if(generation!==state.generation||!r.attributes.length)return;
+      const list=(id,options)=>{let node=document.getElementById(id);if(!node){node=document.createElement('datalist');node.id=id;document.body.appendChild(node);}
+        node.replaceChildren(...options.map(([value,label])=>{const o=document.createElement('option');o.value=value;if(label)o.label=label;return o;}));};
+      list('owgCaseAttributeValueSuggestions',r.attributes.filter(a=>!a.numeric).flatMap(a=>a.top_values.map(v=>[a.name+'='+v.value,v.cases+' cases'])));
+      list('owgCaseAttributeNumericSuggestions',r.attributes.filter(a=>a.numeric).map(a=>[a.name,a.min+' to '+a.max]));
+      for(const node of document.querySelectorAll('#owgCaseFilterAttribute,input[id$="CohortAttribute"],input[id$="FilterAttribute"],input[id$="CohortAAttribute"],input[id$="CohortBAttribute"]'))node.setAttribute('list','owgCaseAttributeValueSuggestions');
+      for(const node of document.querySelectorAll('input[id$="RangeName"]'))node.setAttribute('list','owgCaseAttributeNumericSuggestions');
+    }catch(_){/* suggestions are a convenience */}
   }
 
   // Process cost from the user's own cost model: a price per activity execution and an optional hourly cost per open case.
@@ -1281,18 +1299,16 @@
     for(const key of ['resource','activity'])if(values[key]&&values[key].trim())spec[key]=values[key];
     if(values.attribute&&values.attribute.trim()){if(!/^[^=]+=.*/.test(values.attribute.trim()))throw new Error('Attribute must look like name=value.');spec.attribute=values.attribute.trim();}
     if(values.eventAttribute&&values.eventAttribute.trim()){if(!/^[^=]+=.*/.test(values.eventAttribute.trim()))throw new Error('Event attribute must look like name=value.');spec.event_attribute=values.eventAttribute.trim();}
-    // Match the server's whitespace normalization; JS trim() would also
-    // remove U+FEFF, which can be part of a stored attribute name.
-    const rangeName=(values.rangeName||'').replace(/^[\p{White_Space}\u001c-\u001f]+|[\p{White_Space}\u001c-\u001f]+$/gu,''),minimum=String(values.rangeMin??''),maximum=String(values.rangeMax??'');
-    if(rangeName||minimum||maximum){
-      if(!rangeName||Array.from(rangeName).length>200)throw new Error('Enter a numeric case attribute name of at most 200 characters.');
-      if(!minimum&&!maximum)throw new Error('Enter at least one numeric range bound.');
-      const range={name:rangeName};
-      for(const [key,value] of [['min',minimum],['max',maximum]])if(value){const n=Number(value);if(!Number.isFinite(n))throw new Error('Numeric range bounds must be finite numbers.');range[key]=n;}
-      if(range.min!==undefined&&range.max!==undefined&&range.min>=range.max)throw new Error('The numeric range minimum must be below its maximum.');
-      spec.attribute_range=range;
-    }
     if(values.tag&&values.tag.trim())spec.tag=values.tag.trim().slice(0,60);
+    // A numeric case attribute between two bounds (lower inclusive, upper exclusive; either may be left empty).
+    const rangeName=(values.rangeName||'').replace(/^[\p{White_Space}\u001c-\u001f]+|[\p{White_Space}\u001c-\u001f]+$/gu,''),rangeMin=values.rangeMin??'',rangeMax=values.rangeMax??'';
+    if(rangeName||rangeMin!==''||rangeMax!==''){
+      if(!rangeName||Array.from(rangeName).length>200)throw new Error('Enter a numeric case attribute name of at most 200 characters.');
+      const r={name:rangeName};if(rangeMin!=='')r.min=Number(rangeMin);if(rangeMax!=='')r.max=Number(rangeMax);
+      if(r.min===undefined&&r.max===undefined)throw new Error('Give a lower bound, an upper bound or both.');
+      if([r.min,r.max].some(v=>v!==undefined&&!Number.isFinite(v)))throw new Error('Range bounds must be numbers.');
+      if(r.min!==undefined&&r.max!==undefined&&!(r.min<r.max))throw new Error('The lower bound must be below the upper bound.');
+      spec.attribute_range=r;}
     return spec;
   }
   function cohortFields(prefix,legend,activityNames){
@@ -1305,13 +1321,15 @@
     const attribute=input(prefix+'Attribute','text','name=value');
     const eventAttribute=input(prefix+'EventAttribute','text','name=value');eventAttribute.title='Cases with at least one event carrying this value, such as a column kept from a CSV import';
     const tag=input(prefix+'Tag','text','any');tag.maxLength=60;tag.title='Cases you tagged under Case tags';
-    const rangeName=input(prefix+'RangeName','text','Case attribute name'),rangeMin=input(prefix+'RangeMin','number','No minimum'),rangeMax=input(prefix+'RangeMax','number','No maximum');
-    rangeName.maxLength=400;rangeMin.step=rangeMax.step='any';
+    const rangeName=input(prefix+'RangeName','text','numeric attribute');rangeName.maxLength=200;
+    const rangeMin=input(prefix+'RangeMin','number','from');rangeMin.step='any';
+    const rangeMax=input(prefix+'RangeMax','number','below');rangeMax.step='any';
     const row=el('div',null,'row');row.style.alignItems='end';
     row.append(field('Name',label),field('Started from (UTC)',from),field('Started before (UTC)',before),field('Resource',resource),field('Contains activity',activity),field('Case attribute',attribute),field('Event attribute',eventAttribute),field('Tagged',tag));
-    const rangeRow=el('div',null,'row');rangeRow.style.alignItems='end';rangeRow.append(field('Numeric case attribute',rangeName),field('Minimum (inclusive)',rangeMin),field('Maximum (exclusive)',rangeMax));
+    const rangeRow=el('div',null,'row');rangeRow.style.alignItems='end';
+    rangeRow.append(field('Numeric case attribute',rangeName),field('From (inclusive)',rangeMin),field('Below (exclusive)',rangeMax));
     box.append(row,rangeRow);
-    return {node:box,read:()=>{if(rangeMin.validity.badInput||rangeMax.validity.badInput)throw new Error('Numeric range bounds must be finite numbers.');return cohortSpec({label:label.value,from:from.value,before:before.value,resource:resource.value,activity:activity.value,attribute:attribute.value,eventAttribute:eventAttribute.value,tag:tag.value,rangeName:rangeName.value,rangeMin:rangeMin.value,rangeMax:rangeMax.value});}};
+    return {node:box,read:()=>cohortSpec({label:label.value,from:from.value,before:before.value,resource:resource.value,activity:activity.value,attribute:attribute.value,eventAttribute:eventAttribute.value,tag:tag.value,rangeName:rangeName.value,rangeMin:rangeMin.value,rangeMax:rangeMax.value})};
   }
   function variantCoverageSection(activityNames){
     const box=section('Variant coverage');
@@ -4917,6 +4935,8 @@
       ['acknowledged','Acknowledged'],['cleared','Cleared'],['unavailable','Unavailable']]);
     allFilter.setAttribute('aria-label','Across-log signal status filter');
     const allRefresh=button('Refresh all-log signals','secondary');allRefresh.id='owgSignalAllRefresh';
+    const allPrevious=button('Previous signals','secondary');allPrevious.id='owgSignalAllPrevious';allPrevious.disabled=true;
+    const allNext=button('Next signals','secondary');allNext.id='owgSignalAllNext';allNext.disabled=true;
     const allStatus=el('div','Load saved signals across logs to review them here.','muted');
     allStatus.id='owgSignalAllStatus';allStatus.setAttribute('role','status');allStatus.setAttribute('aria-live','polite');
     const allResults=el('div');allResults.id='owgSignalAllResults';
@@ -4930,7 +4950,7 @@
     timelineStatus.id='owgSignalTimelineStatus';timelineStatus.setAttribute('role','status');timelineStatus.setAttribute('aria-live','polite');
     const timelineResults=el('div');timelineResults.id='owgSignalTimelineResults';
     const timelineControls=el('div',null,'actions');timelineControls.append(timelineFilter,timelineRefresh);
-    const allControls=el('div',null,'actions');allControls.append(allFilter,allRefresh);
+    const allControls=el('div',null,'actions');allControls.append(allFilter,allRefresh,allPrevious,allNext);
     box.append(row,message,rules,evaluate,out,reviewHeading,reviewNote,reviewRefresh,inbox,
       deliveryPanel,transitionHeading,transitionNote,transitionRefresh,transitionStatus,transitionResults,
       allHeading,allNote,allControls,allStatus,allResults,
@@ -5105,25 +5125,28 @@
     // Cross-log overview is read-only. Counts cover every saved rule before
     // bounded display, and the source-log selection is refreshed before opening.
     // An old response cannot replace the current view after switching datasets.
-    let allRequestId=0;
-    async function refreshAllSignals(){
+    let allRequestId=0,allPreviousOffset=null,allNextOffset=null;
+    async function refreshAllSignals(offset=0){
       const requestId=++allRequestId;
-      allRefresh.disabled=true;
+      allRefresh.disabled=true;allPrevious.disabled=true;allNext.disabled=true;
+      allResults.replaceChildren();
       allStatus.textContent='Inspecting saved signal states across local logs…';
       try{
-        const params=new URLSearchParams({status:allFilter.value,limit:'100'});
+        const params=new URLSearchParams({status:allFilter.value,limit:'100',offset:String(offset)});
         const r=await getJSON('/v1/event-logs/signal-overview?'+params);
         if(generation!==state.generation||requestId!==allRequestId)return;
         const counts=r.counts||{};
+        allPreviousOffset=r.previous_offset??null;allNextOffset=r.next_offset??null;
+        const returned=Number(r.returned_rules||0),matched=Number(r.matched_rules||0),start=Number(r.offset||0);
+        const pageText=returned&&(start||allNextOffset!==null)?(start+1)+'–'+(start+returned):String(returned);
         allStatus.textContent=Number(r.attention||0)+' signal states need attention across '+
           Number(r.datasets_scanned||0)+' saved logs ('+Number(r.datasets_with_rules||0)+
           ' with rules). '+Number(counts.unreviewed||0)+' unreviewed, '+
           Number(counts.stale||0)+' stale, '+Number(counts.not_evaluated||0)+
           ' unevaluated, '+Number(counts.unavailable||0)+' unavailable; '+
-          Number(counts.snoozed||0)+' snoozed. Showing '+
-          Number(r.returned_rules||0)+' of '+Number(r.matched_rules||0)+' matching rules'+
-          (r.truncated?' (limited; narrow the filter to inspect others)':'')+
-          '. No source refresh or automatic action.';
+          Number(counts.snoozed||0)+' snoozed. Showing '+pageText+' of '+matched+' matching rules.'+
+          (start&&!returned?' The list changed; use Previous or Refresh.':'')+
+          ' Results can change between pages. No source refresh or automatic action.';
         const rows=(r.items||[]).map(item=>{
           const open=button('Open log','secondary');
           open.setAttribute('aria-label','Open dataset '+item.log_name+' to review signal '+item.name);
@@ -5151,15 +5174,18 @@
           : el('div','No saved signals match this filter.','muted'));
       }catch(error){
         if(generation===state.generation&&requestId===allRequestId){
+          allPreviousOffset=null;allNextOffset=null;
           allResults.replaceChildren();
           allStatus.textContent=error.message||'Cannot inspect local saved signals.';
         }
       }finally{
-        if(generation===state.generation&&requestId===allRequestId)allRefresh.disabled=false;
+        if(generation===state.generation&&requestId===allRequestId){allRefresh.disabled=false;allPrevious.disabled=allPreviousOffset===null;allNext.disabled=allNextOffset===null;}
       }
     }
     allFilter.onchange=()=>refreshAllSignals();
     allRefresh.onclick=()=>refreshAllSignals();
+    allPrevious.onclick=()=>{if(allPreviousOffset!==null)refreshAllSignals(allPreviousOffset);};
+    allNext.onclick=()=>{if(allNextOffset!==null)refreshAllSignals(allNextOffset);};
     // This journal describes state *changes*, not the current signal inbox.
     // An old request cannot repaint a different dataset after navigation.
     let timelineRequestId=0;
