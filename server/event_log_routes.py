@@ -314,6 +314,23 @@ async def import_agent_runs(request: Request):
     return await run_in_threadpool(_respond, agent_mining.import_agent_runs, spec)
 
 
+@router.get("/v1/event-logs/{log_id}/agent-runs")
+async def agent_runs_source(request: Request, log_id: str):
+    _require_dashboard(request)
+    from . import event_log_agent_mining as agent_mining
+    return await run_in_threadpool(_respond, agent_mining.source, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/agent-runs/refresh")
+async def refresh_agent_runs(request: Request, log_id: str):
+    """Append AI agent runs that finished since the log was made or last refreshed."""
+    _require_dashboard(request)
+    if request.headers.get("x-owg-local-storage-confirmed") != "true":
+        raise HTTPException(403, "Explicit confirmation to store this event log on this computer is required")
+    from . import event_log_agent_mining as agent_mining
+    return await run_in_threadpool(_respond, agent_mining.refresh, log_id)
+
+
 @router.post("/v1/event-logs/import")
 async def import_event_log(
     request: Request,
