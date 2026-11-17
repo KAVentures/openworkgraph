@@ -84,8 +84,8 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         # The digest includes navigation evidence. Bound untrusted records
         # before hashing so forged metadata cannot exhaust review requests.
         try:
-            encoded = json.dumps(group, sort_keys=True, allow_nan=False).encode("utf-8")
-        except (TypeError, ValueError, RecursionError) as exc:
+            encoded = json.dumps(group, sort_keys=True, allow_nan=False, ensure_ascii=False).encode("utf-8")
+        except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
             raise ValueError("invalid provisional group evidence") from exc
         if len(encoded) > 65536:
             raise ValueError("unbounded provisional group evidence")
@@ -109,12 +109,63 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         indexed[(window, event_id)].add(pair_key)
     # Validate *every* flag before aggregating. Short-circuiting with "or"
     # otherwise hides malformed later flags whenever an earlier flag is true.
+    identity_timelines = response.get("identity_timelines", [])
+    if not isinstance(identity_timelines, list) or len(identity_timelines) > 256:
+        raise ValueError("invalid or unbounded identity timelines")
+    # Inspection exposes at most twelve timelines. Bound each source record
+    # before digesting it, including records outside the visible HTTP cap.
+    for timeline in identity_timelines:
+        if not isinstance(timeline, dict):
+            raise ValueError("invalid identity timeline evidence")
+        try:
+            encoded_timeline = json.dumps(timeline, sort_keys=True, allow_nan=False, ensure_ascii=False).encode("utf-8")
+        except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
+            raise ValueError("invalid identity timeline evidence") from exc
+        if len(encoded_timeline) > 65536:
+            raise ValueError("unbounded identity timeline evidence")
+    # Continuity is visible only up to the HTTP inspection cap. An adapter
+    # omitting the truncation flag must not allow scoring partial evidence.
+    continuity = response.get("observed_group_continuity", [])
+    if not isinstance(continuity, list) or len(continuity) > 256:
+        raise ValueError("invalid or unbounded group continuity")
+    for record in continuity:
+        if not isinstance(record, dict):
+            raise ValueError("invalid group continuity evidence")
+        try:
+            encoded = json.dumps(record, sort_keys=True, allow_nan=False, ensure_ascii=False).encode("utf-8")
+        except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
+            raise ValueError("invalid group continuity evidence") from exc
+        if len(encoded) > 65536:
+            raise ValueError("unbounded group continuity evidence")
+    continuity_truncated = (_truncation_flag(response, "observed_group_continuity_truncated")
+                            or len(continuity) > 24)
+    identity_timelines_truncated = (_truncation_flag(response, "identity_timelines_truncated")
+                                    or len(identity_timelines) > 12)
     completeness_flags = (
+        identity_timelines_truncated,
         _truncation_flag(response, "observed_pair_event_assignments_truncated"),
-        _truncation_flag(response, "observed_group_continuity_truncated"),
+        continuity_truncated,
         _truncation_flag(response, "observed_case_groups_truncated"),
         _truncation_flag(coverage, "scan_truncated"),
     )
+    # Returned-count metadata is reviewer-visible provenance. If supplied by
+    # an API adapter, refuse inconsistent counts rather than silently trusting
+    # a forged or stale claim about how much evidence was actually displayed.
+    # Offline engine responses may omit these presentation-only fields.
+    for collection, cap in (
+        ("identity_timelines", 12),
+        ("observed_pair_event_assignments", 24),
+        ("observed_group_continuity", 24),
+        ("observed_case_groups", 24),
+    ):
+        count_key = collection + "_returned_count"
+        if count_key in response:
+            value = response[count_key]
+            records = response.get(collection, [])
+            if not isinstance(records, list):
+                raise ValueError("invalid " + collection)
+            if type(value) is not int or value != min(len(records), cap):
+                raise ValueError("inconsistent " + count_key)
     incomplete = any(completeness_flags)
     seen_pair_keys: set[str] = set()
     for pair in pairs:
@@ -188,7 +239,7 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         # Continuity is part of the reviewer-visible evidence basis. A changed
         # group linkage must invalidate old labels even when pair rows match.
         "observed_group_continuity": response.get("observed_group_continuity"),
-        "observed_group_continuity_truncated": response.get("observed_group_continuity_truncated"),
+        "observed_group_continuity_truncated": continuity_truncated,
         # The reviewer also sees the current connected-component navigation
         # groups. Their membership and truncation are part of the evidence
         # basis even when direct pair assignments remain unchanged.
@@ -202,16 +253,21 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         # inspection API. Their provenance is part of the reviewer decision
         # context even when the event/pair projection is unchanged.
         "identity_timelines": response.get("identity_timelines"),
+        "identity_timelines_truncated": identity_timelines_truncated,
         "event_reviews": rows,
     }
     # All reviewer-visible context participates in the evidence binding. Reject
     # malformed or excessive context before digesting; otherwise untrusted scan
     # metadata can cause an uncaught serialization failure or resource exhaustion.
     try:
+        # Validate Unicode scalar values without changing the canonical digest's
+        # historical ASCII-escaped serialization (saved review compatibility).
+        json.dumps(fingerprint_basis, sort_keys=True, separators=(",", ":"),
+                   allow_nan=False, ensure_ascii=False).encode("utf-8")
         evidence_bytes = json.dumps(
             fingerprint_basis, sort_keys=True, separators=(",", ":"), allow_nan=False
         ).encode("utf-8")
-    except (TypeError, ValueError, RecursionError) as exc:
+    except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
         raise ValueError("invalid review evidence context") from exc
     if len(evidence_bytes) > 1048576:
         raise ValueError("unbounded review evidence context")
@@ -244,7 +300,13 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
     for annotation in annotations:
         if not isinstance(annotation, dict):
             raise ValueError("invalid annotation")
-        key = (annotation.get("window"), annotation.get("event_id"))
+        # Untrusted JSON may contain arrays/objects in identifier fields. Reject
+        # them explicitly rather than raising TypeError during dict lookup and
+        # turning an invalid review request into an HTTP 500.
+        window, event_id = annotation.get("window"), annotation.get("event_id")
+        if not isinstance(window, str) or not isinstance(event_id, str):
+            raise ValueError("invalid annotated event identity")
+        key = (window, event_id)
         if key not in observed or key in labels:
             raise ValueError("unknown or duplicate annotated event")
         expected = annotation.get("true_resource_pairs")
