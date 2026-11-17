@@ -22,7 +22,7 @@ Rules:
 * events already in the log are skipped by the ordinary append rules, so
   overlapping exports are safe;
 * a file that cannot be appended is recorded as failed and not retried with
-  the same content.
+  the same content; files too large to snapshot are reported on each run.
 
 Feeds and their file records are deleted with the log. Files in the folder are
 never modified or deleted.
@@ -34,7 +34,10 @@ import json
 import os
 import re
 import secrets
+import stat
+import tempfile
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -161,12 +164,39 @@ def delete(feed_id: str) -> dict[str, Any]:
     return {"format": FORMAT, "deleted": feed_id, "log_id": feed["log_id"]}
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(1 << 20):
+class _FileChanged(Exception):
+    """The exporter changed or replaced a file while it was being read."""
+
+
+def _identity(info: os.stat_result) -> tuple[int, int, int, int]:
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
+
+
+@contextmanager
+def _snapshot(path: Path, expected: os.stat_result):
+    """Hash exactly the bytes later appended, without following a replaced symlink."""
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    with os.fdopen(fd, "rb") as source, tempfile.TemporaryFile() as snapshot:
+        opened = os.fstat(source.fileno())
+        if not stat.S_ISREG(opened.st_mode) or _identity(opened) != _identity(expected):
+            raise _FileChanged()
+        if opened.st_size > workspace.MAX_IMPORT_BYTES:
+            raise EventLogWorkspaceError("event log is larger than the supported limit")
+        digest, size = hashlib.sha256(), 0
+        while chunk := source.read(1 << 20):
+            size += len(chunk)
+            if size > workspace.MAX_IMPORT_BYTES:
+                raise EventLogWorkspaceError("event log is larger than the supported limit")
             digest.update(chunk)
-    return digest.hexdigest()
+            snapshot.write(chunk)
+        if _identity(os.fstat(source.fileno())) != _identity(opened):
+            raise _FileChanged()
+        current = path.lstat()
+        if not stat.S_ISREG(current.st_mode) or _identity(current) != _identity(opened):
+            raise _FileChanged()
+        snapshot.seek(0)
+        yield digest.hexdigest(), size, snapshot
 
 
 def run(feed_id: str, *, now: float | None = None) -> dict[str, Any]:
@@ -179,50 +209,69 @@ def run(feed_id: str, *, now: float | None = None) -> dict[str, Any]:
     candidates = []
     for path in folder.glob(feed["pattern"]):
         try:
-            stat = path.stat()
+            info = path.lstat()
         except OSError:
             continue
-        if path.is_file() and not path.is_symlink():
-            candidates.append((stat.st_mtime, path.name, path, stat.st_size))
+        if stat.S_ISREG(info.st_mode):
+            candidates.append((info.st_mtime, path.name, path, info))
     candidates.sort()
-    with workspace._LOCK:
-        conn = workspace._connect()
-        try:
-            seen = {h for (h,) in conn.execute("SELECT sha256 FROM event_log_feed_files WHERE feed_id = ?",
-                                                [feed_id]).fetchall()}
-        finally:
-            conn.close()
     waiting, already, results = 0, 0, []
-    for mtime, name, path, size in candidates:
+    for mtime, name, path, info in candidates:
         if current - mtime < SETTLE_SECONDS:
             waiting += 1
             continue
         if len(results) >= MAX_FILES_PER_RUN:
             break
         try:
-            sha = _sha256(path)
+            with _snapshot(path, info) as (sha, size, snapshot), workspace._LOCK:
+                conn = workspace._connect()
+                try:
+                    # Recheck under the append lock: another run may have won,
+                    # or the feed may have been deleted during the snapshot.
+                    _feed(conn, feed_id)
+                    prior = conn.execute("SELECT outcome, detail FROM event_log_feed_files WHERE feed_id = ? AND sha256 = ? LIMIT 1", [feed_id, sha]).fetchone()
+                finally:
+                    conn.close()
+                if prior:
+                    already += 1
+                    continue
+                def record_append(conn, log_id):
+                    batch, added, duplicate, rejected = conn.execute("""SELECT batch, added_events, duplicate_events, rejected_events
+                        FROM log_appends WHERE log_id = ? ORDER BY batch DESC LIMIT 1""", [log_id]).fetchone()
+                    detail = {"added_events": added, "duplicate_events_skipped": duplicate, "rejected_events": rejected, "batch": batch}
+                    conn.execute("INSERT INTO event_log_feed_files VALUES (?, ?, ?, ?, ?, now(), ?, ?)",
+                                 [log_id, feed_id, name[:200], sha, size, "appended", json.dumps(detail)])
+                try:
+                    appended = workspace.append_log(feed["log_id"], snapshot, source_format="csv", mapping=feed["mapping"],
+                                                    kind="folder_feed", _transaction_hook=record_append)
+                    outcome, detail = "appended", {"added_events": appended["added_events"],
+                        "duplicate_events_skipped": appended["duplicate_events_skipped"],
+                        "rejected_events": appended["rejected_events"], "batch": appended["batch"]}
+                except EventLogWorkspaceError as exc:
+                    conn = workspace._connect()
+                    try:
+                        # A post-commit reporting error must not turn a committed
+                        # append into a failed record or a retry.
+                        prior = conn.execute("SELECT outcome, detail FROM event_log_feed_files WHERE feed_id = ? AND sha256 = ? LIMIT 1", [feed_id, sha]).fetchone()
+                        if prior:
+                            outcome, detail = prior[0], json.loads(prior[1])
+                            detail["warning"] = "The append committed, but its quality report could not be recorded."
+                            conn.execute("UPDATE event_log_feed_files SET detail = ? WHERE feed_id = ? AND sha256 = ?",
+                                         [json.dumps(detail), feed_id, sha])
+                        else:
+                            outcome, detail = "failed", {"error": str(exc)[:300]}
+                            conn.execute("INSERT INTO event_log_feed_files VALUES (?, ?, ?, ?, ?, now(), ?, ?)",
+                                         [feed["log_id"], feed_id, name[:200], sha, size, outcome, json.dumps(detail)])
+                    finally:
+                        conn.close()
+        except _FileChanged:
+            waiting += 1
+            continue
         except OSError:
             continue
-        if sha in seen:
-            already += 1
-            continue
-        seen.add(sha)
-        try:
-            with path.open("rb") as handle:
-                appended = workspace.append_log(feed["log_id"], handle, source_format="csv", mapping=feed["mapping"],
-                                                kind="folder_feed")
-            outcome, detail = "appended", {"added_events": appended["added_events"],
-                                           "duplicate_events_skipped": appended["duplicate_events_skipped"],
-                                           "rejected_events": appended["rejected_events"], "batch": appended["batch"]}
         except EventLogWorkspaceError as exc:
-            outcome, detail = "failed", {"error": str(exc)[:300]}
-        with workspace._LOCK:
-            conn = workspace._connect()
-            try:
-                conn.execute("INSERT INTO event_log_feed_files VALUES (?, ?, ?, ?, ?, now(), ?, ?)",
-                             [feed["log_id"], feed_id, name[:200], sha, size, outcome, json.dumps(detail)])
-            finally:
-                conn.close()
+            results.append({"name": name, "outcome": "failed", "error": str(exc)[:300]})
+            continue
         results.append({"name": name, "outcome": outcome, **detail})
     appended = [r for r in results if r["outcome"] == "appended"]
     return {"format": FORMAT, "feed_id": feed_id, "log_id": feed["log_id"], "ran_at": _now(),
@@ -241,6 +290,8 @@ def run_scheduled(feed_id: str) -> tuple[str, float]:
         return "failed:feed_unavailable", 0.0
     if result["files_failed"]:
         return f"failed:{result['files_failed']}_files_not_appended", 0.0
+    if any(item.get("warning") for item in result["files"]):
+        return "failed:quality_report_unavailable", 0.0
     return f"succeeded:{result['files_appended']}_files_appended", 0.0
 
 

@@ -713,7 +713,7 @@
     results.appendChild(deriveSection(names));
     results.appendChild(dottedSection());
     results.appendChild(waitingSection());
-    results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity)));
+    results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity),inspection));
     results.appendChild(organizationSection());
     results.appendChild(logComparisonSection());
     results.appendChild(analysisSection(names));
@@ -972,13 +972,13 @@
     first.disabled=true;next.disabled=true;
     const note=el('div','Case keys and labels are supplied by this log. They do not verify business identity, people or outcomes.','muted');
     const chosen=el('div','All paths.','muted');chosen.id=prefix+'Path';
-    const reset=button('All paths','secondary');reset.onclick=()=>{path=null;transition=null;chosen.textContent='All paths.';};
+    const reset=button('All paths','secondary');reset.onclick=()=>{association=false;path=null;transition=null;chosen.textContent='All paths.';};
     const message=el('div');message.id=prefix+'Status';message.setAttribute('role','status');
     const list=el('div');list.id=prefix+'List';
     const detail=el('div');detail.id=prefix==='owgEventLogCases'?'owgEventLogCaseEvents':prefix+'Events';
     const controls=el('div',null,'row');controls.append(browse,reset,first,next);
     box.append(note,filters.node,el('div','Suggestions include up to 500 frequent activities. An exact label overrides the suggestion and is matched literally.','muted'),field('Exact activity to inspect',exactActivity),activityLookup.wrap,chosen,controls,message,list,detail);
-    let path=null,transition=null,spec=null,nextAfter=null,listing=0,opening=0;
+    let path=null,transition=null,spec=null,nextAfter=null,listing=0,opening=0,association=false;
     async function load(after){
       const ticket=++listing;first.disabled=true;next.disabled=true;browse.disabled=true;
       message.textContent='Loading cases…';
@@ -1001,6 +1001,7 @@
       try{const cohort=filters.read();
         if(exactActivity.value){if(Array.from(exactActivity.value).length>200)throw new Error('Activity labels must have at most 200 characters.');cohort.activity=exactActivity.value;}
         if(options.caseType===undefined&&filterOn())Object.assign(cohort,globalCohort());
+        if(association){chosen.textContent='All paths.';association=false;}
         spec={cohort,limit:30};if(path)spec.path=path;if(transition)spec.transition=transition;detail.replaceChildren();opening++;load(null);}
       catch(error){message.textContent=error.message;}
     }
@@ -1027,15 +1028,20 @@
     }
     return {node:box,path(value){
       if(value.length>500){message.textContent='This path exceeds the 500-step case selector limit. Browse by activity or cohort instead.';box.scrollIntoView({block:'nearest'});return;}
-      path=value.slice();transition=null;chosen.textContent='Exact path: '+JSON.stringify(path);start();box.scrollIntoView({block:'nearest'});
+      association=false;path=value.slice();transition=null;chosen.textContent='Exact path: '+JSON.stringify(path);start();box.scrollIntoView({block:'nearest'});
     },activity(value){
       const picker=document.getElementById(prefix+'FilterActivity');
       if(!Array.from(picker.options).some(option=>option.value===value))picker.add(new Option(value,value));
-      exactActivity.value='';activityLookup.reset();path=null;transition=null;chosen.textContent='All paths.';picker.value=value;start();box.scrollIntoView({block:'nearest'});
+      association=false;exactActivity.value='';activityLookup.reset();path=null;transition=null;chosen.textContent='All paths.';picker.value=value;start();box.scrollIntoView({block:'nearest'});
     },transition(value){
-      exactActivity.value='';activityLookup.reset();path=null;transition=value.slice();document.getElementById(prefix+'FilterActivity').value='';
+      association=false;exactActivity.value='';activityLookup.reset();path=null;transition=value.slice();document.getElementById(prefix+'FilterActivity').value='';
       chosen.textContent='Adjacent transition: '+JSON.stringify(transition)+'. Timestamp ties do not verify order.';
       start();box.scrollIntoView({block:'nearest'});
+    },cohort(value){
+      // This selection uses the full case notion, not the active workspace filter.
+      path=null;transition=null;association=true;spec={cohort:value,limit:30};
+      chosen.textContent='Association cases: '+JSON.stringify(value)+'. This selection uses all cases in the current case notion. Browse cases uses the fields above instead.';
+      detail.replaceChildren();opening++;load(null);box.scrollIntoView({block:'nearest'});
     }};
   }
 
@@ -1353,7 +1359,7 @@
     for(const control of [folder,pattern])control.addEventListener('input',ready);consent.addEventListener('change',ready);
     const base='/v1/event-logs/'+encodeURIComponent(state.logId)+'/feeds';
     const generation=state.generation;
-    const describe=r=>r.files_appended+' file(s) appended with '+Number(r.events_added).toLocaleString()+' new events'+(r.files_failed?', '+r.files_failed+' could not be appended':'')+(r.files_already_appended?', '+r.files_already_appended+' already appended':'')+(r.files_still_being_written?', '+r.files_still_being_written+' still being written (next run)':'')+'.';
+    const describe=r=>r.files_appended+' file(s) appended with '+Number(r.events_added).toLocaleString()+' new events'+(r.files_failed?', '+r.files_failed+' could not be appended':'')+(r.files_already_appended?', '+r.files_already_appended+' already appended':'')+(r.files_still_being_written?', '+r.files_still_being_written+' still being written (next run)':'')+'.'+((r.files||[]).some(file=>file.warning)?' An append committed, but its quality report could not be recorded.':'');
     const render=r=>{
       if(!r.feeds.length){list.replaceChildren(el('div','No folder feed yet.','muted'));return;}
       list.replaceChildren(table(['Folder','Pattern','Files appended','Failed','Latest file',''],r.feeds.map(f=>{
@@ -1363,7 +1369,7 @@
         const remove=button('Delete feed','secondary');remove.setAttribute('aria-label','Delete feed for '+f.folder);
         run.onclick=async()=>{run.disabled=true;out.replaceChildren(el('div','Reading the folder\u2026','muted'));
           try{const r2=await (await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/run',{method:'POST',headers:{'X-OWG-Local-Storage-Confirmed':'true'}})).json();
-            out.replaceChildren(el('div',describe(r2)+(r2.events_added?' Analyse again to include them.':'')));render(await getJSON(base));}
+            out.replaceChildren(el('div',describe(r2)+(r2.events_added?' Analyse again to include them.':'')),...(r2.files||[]).filter(file=>file.outcome==='failed').map(file=>el('div',file.name+': '+file.error,'muted')));render(await getJSON(base));}
           catch(error){out.replaceChildren(el('div',error.message,'muted'));run.disabled=false;}};
         schedule.onclick=async()=>{if(!window.confirm('Read '+f.folder+' and append new files every day while OpenWorkGraph is running?'))return;
           try{await api('/v1/schedules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'event_log_folder_feed',target_id:f.feed_id,interval_minutes:1440,confirm_scheduled_runs:true})});
@@ -1375,7 +1381,7 @@
         wrap.append(run,schedule,remove);
         const latest=f.recent_files[0];
         return [f.folder,f.pattern,Number(f.files_appended).toLocaleString(),Number(f.files_failed).toLocaleString(),
-          latest?latest.name+' \u2014 '+(latest.outcome==='appended'?Number(latest.added_events).toLocaleString()+' events added':'not appended: '+latest.error):'\u2014',wrap];})));
+          latest?latest.name+' \u2014 '+(latest.outcome==='appended'?Number(latest.added_events).toLocaleString()+' events added'+(latest.warning?' · '+latest.warning:''):'not appended: '+latest.error):'\u2014',wrap];})));
     };
     create.onclick=async()=>{create.disabled=true;
       try{await api(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({folder:folder.value.trim(),pattern:pattern.value.trim(),confirm_folder_reads:true})});
@@ -3016,7 +3022,7 @@
     return box;
   }
 
-  function rootCauseSection(activityNames){
+  function rootCauseSection(activityNames,inspection){
     const box=section('What is associated with an outcome');
     const outcome=select('owgEventLogOutcome',[['duration_over','Case takes longer than'],['rework','Case has rework'],['contains_activity','Case contains activity'],['ends_with','Case ends with activity']]);
     const hours=input('owgEventLogOutcomeHours','number','hours');hours.min='0';hours.step='any';
@@ -3040,6 +3046,8 @@
     function caseActions(a){
       const label=a.feature.kind+': '+a.feature.value;
       const wrap=el('div',null,'row');
+      const inspect=button('Inspect cases','secondary');inspect.setAttribute('aria-label','Inspect cases with '+label);
+      inspect.onclick=()=>inspection.cohort(a.cohort);
       const slowest=button('Slowest cases','secondary');slowest.setAttribute('aria-label','Slowest cases with '+label);
       const tag=button('Tag cases','secondary');tag.setAttribute('aria-label','Tag the cases with '+label);
       const save=button('Save as log','secondary');save.setAttribute('aria-label','Save the cases with '+label+' as a new log');
@@ -3074,7 +3082,7 @@
         const go=button('Filter','secondary');go.setAttribute('aria-label','Filter every view to the cases with '+label);
         go.onclick=()=>{state.attr={...(a.cohort.attribute?{attribute:a.cohort.attribute}:{}),...(a.cohort.attribute_range?{attribute_range:a.cohort.attribute_range}:{})};analyse().catch(error=>status(error.message));};
         wrap.appendChild(go);}
-      wrap.append(slowest,tag,save);return wrap;
+      wrap.append(inspect,slowest,tag,save);return wrap;
     }
     run.onclick=async()=>{
       try{
