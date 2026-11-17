@@ -191,7 +191,7 @@ def test_non_finite_values_and_overflow_are_withheld_and_disclosed():
     assert cov["cases_excluded_by_complete_policy"] == 1  # a: NaN input
     assert cov["event_rows_with_missing_invalid_or_nonfinite_attribute"] == 1
     assert r["rows"] == [[5.0, 5.0]]
-    big = _run(log, [{**spend, "kind": "case_attribute_number"}, {"name": "w", "kind": "event_attribute_sum",
+    big = _run(log, [{k: v for k, v in {**spend, "kind": "case_attribute_number"}.items() if k != "missing_policy"}, {"name": "w", "kind": "event_attribute_sum",
                                                                  "attribute": "value", "unit": "EUR"}],
                [{"fn": "count"}])
     json.dumps(big, allow_nan=False)
