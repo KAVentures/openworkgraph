@@ -1921,3 +1921,33 @@ mapping. Define a mapping to harmonize names that differ between source
 systems. The comparison is descriptive: the two logs may differ in extraction,
 coverage and case mix, so a difference is not evidence of its cause. The
 intervals are not corrected for the number of rows shown.
+
+## AI agent runs as a log (agent mining)
+
+Process-mining vendors now analyse AI agents' work alongside people's. SAP Signavio calls this
+agent mining. OpenWorkGraph already records the structure of observed agent runs (see
+`get_agent_runs`). "AI agent runs as a log" turns those runs into an ordinary event log, so
+variants, KPIs, root cause, conformance, filters and the rest work on agents too.
+
+- **Case:** one observed run, with its opaque execution ID. Native run, trace and session IDs are
+  not used.
+- **Events:** structural steps.
+  - Run started; Run finished, or Run failed.
+  - Tool calls as `Tool: <name>`, with the status in brackets when the call failed.
+  - Approvals, handoffs and errors.
+  - Model calls only when you tick "Include model calls".
+  - Each event's attributes are status, tool category and step seconds. The resource is the agent.
+- **Case attributes:** Outcome, Agent, Provider, Framework, Model, Tool calls, Failed tool calls,
+  Approvals requested, Input tokens, Output tokens, and Complete boundary ("no" when the start or
+  finish was not observed).
+- **Privacy:**
+  - No prompt, tool argument, tool result, file path or message text is copied.
+  - Tool names use the same privacy-safe labels as the agent-run report: known runtime and MCP tool
+    names stay readable, and other names become stable opaque hashes.
+  - The log is stored only after you confirm local storage, like any import.
+
+`POST /v1/event-logs/import-agent-runs` takes a dashboard session and the local-storage
+confirmation header. The JSON body has `name`, plus optional `since`, `until` (times with an
+offset), `max_runs` (1–5,000, default 1,000) and `include_model_calls`. Each run keeps at most 500
+steps, and the answer counts runs that were cut. To analyse new runs, import again. A log is a
+snapshot.

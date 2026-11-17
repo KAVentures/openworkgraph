@@ -303,6 +303,17 @@ def import_sample_event_log(request: Request):
     return _respond(sample.import_sample)
 
 
+@router.post("/v1/event-logs/import-agent-runs")
+async def import_agent_runs(request: Request):
+    """Agent mining: observed AI agent runs (structure only) become a new event log."""
+    _require_dashboard(request)
+    if request.headers.get("x-owg-local-storage-confirmed") != "true":
+        raise HTTPException(403, "Explicit confirmation to store this event log on this computer is required")
+    spec = await _json_body(request, "agent-run import", strict=True, limit=4096)
+    from . import event_log_agent_mining as agent_mining
+    return await run_in_threadpool(_respond, agent_mining.import_agent_runs, spec)
+
+
 @router.post("/v1/event-logs/import")
 async def import_event_log(
     request: Request,
