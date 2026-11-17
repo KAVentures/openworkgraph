@@ -1476,9 +1476,10 @@ def event_log_signal_inbox(request: Request, log_id: str):
 
 @router.get("/v1/event-logs/{log_id}/signal-history")
 def event_log_signal_history(request: Request, log_id: str,
-                             limit: int = Query(default=50, ge=1, le=200)):
+                             limit: int = Query(default=50, ge=1, le=200),
+                             before: str = Query(default="", max_length=256)):
     _require_dashboard(request)
-    return _respond(signal_transitions.list_history, log_id, limit=limit)
+    return _respond(signal_transitions.list_history, log_id, limit=limit, before=before)
 
 
 @router.post("/v1/event-logs/{log_id}/signal-inbox/acknowledge-batch")
