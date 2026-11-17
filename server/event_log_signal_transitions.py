@@ -12,6 +12,7 @@ import secrets
 from typing import Any
 
 from . import event_log_signal_inbox as inbox
+from . import event_log_signal_timeline as timeline
 from . import event_log_workspace as workspace
 
 MAX_RETAINED_PER_LOG = 5000
@@ -57,25 +58,30 @@ def trim(conn, log_id: str) -> None:
         [log_id, log_id, MAX_RETAINED_PER_LOG])
 
 
-def list_history(log_id: str, *, limit: int = 50) -> dict[str, Any]:
+def list_history(log_id: str, *, limit: int = 50, before: str = "") -> dict[str, Any]:
     if type(limit) is not int or not 1 <= limit <= MAX_RETURNED:
         raise workspace.EventLogWorkspaceError("signal history limit must be 1 to 200")
+    cursor = timeline._read_cursor(before)
     with workspace._LOCK:
         conn = workspace._connect()
         try:
             workspace._check_log(conn, log_id)
             count = int(conn.execute(
                 "SELECT count(*) FROM signal_transitions WHERE log_id=?", [log_id]).fetchone()[0])
+            where = "" if cursor is None else " AND (t.occurred_at < ? OR (t.occurred_at = ? AND t.transition_id < ?))"
+            params = [log_id] if cursor is None else [log_id, cursor[0], cursor[0], cursor[1]]
             rows = conn.execute(
                 """SELECT t.rule_id,t.transition_id,t.occurred_at,t.event_type,
                           t.state_fingerprint,s.definition
                    FROM signal_transitions t
                    JOIN signal_rules s ON s.log_id=t.log_id AND s.rule_id=t.rule_id
-                   WHERE t.log_id=?
-                   ORDER BY t.occurred_at DESC,t.transition_id DESC LIMIT ?""",
-                [log_id, limit]).fetchall()
+                   WHERE t.log_id=?""" + where +
+                " ORDER BY t.occurred_at DESC,t.transition_id DESC LIMIT ?",
+                [*params, limit + 1]).fetchall()
         finally:
             conn.close()
+    more = len(rows) > limit
+    rows = rows[:limit]
     items = []
     for rid, event_id, at, event, fingerprint, definition in rows:
         name = json.loads(definition).get("name", "Unnamed signal")
@@ -91,6 +97,7 @@ def list_history(log_id: str, *, limit: int = 50) -> dict[str, Any]:
         "format": "openworkgraph.signal-transitions.v1",
         "items": items, "retained_total": count, "returned": len(items),
         "truncated": count > len(items), "retention_limit": MAX_RETAINED_PER_LOG,
+        "next_before": timeline._cursor(rows[-1][2], rows[-1][1]) if more else None,
         "historical_backfill": False,
         "source": "locally evaluated saved log rules; not a live provider event stream",
         "delivery_enabled": False, "actions_authorized": False,

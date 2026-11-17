@@ -182,13 +182,16 @@ def test_metric_references_need_the_metric_prefix():
 def test_non_finite_values_and_overflow_are_withheld_and_disclosed():
     import json
     log = _review_log()
-    spend = {"name": "v", "kind": "event_attribute_sum", "attribute": "value", "unit": "EUR"}
+    spend = {"name": "v", "kind": "event_attribute_sum", "attribute": "value", "unit": "EUR",
+             "missing_policy": "complete"}
     r = _run(log, [spend], [{"fn": "sum", "of": "metric:v"}, {"fn": "max", "of": "metric:v"}])
     json.dumps(r, allow_nan=False)                           # never a non-JSON NaN or Infinity
     cov = r["metrics"][0]
-    assert cov["cases_with_non_finite_value"] == 2 and cov["cases_with_value"] == 1   # a: NaN, c: overflow
+    assert cov["cases_with_non_finite_value"] == 1 and cov["cases_with_value"] == 1  # c: overflow
+    assert cov["cases_excluded_by_complete_policy"] == 1  # a: NaN input
+    assert cov["event_rows_with_missing_invalid_or_nonfinite_attribute"] == 1
     assert r["rows"] == [[5.0, 5.0]]
-    big = _run(log, [{**spend, "kind": "case_attribute_number"}, {"name": "w", "kind": "event_attribute_sum",
+    big = _run(log, [{k: v for k, v in {**spend, "kind": "case_attribute_number"}.items() if k != "missing_policy"}, {"name": "w", "kind": "event_attribute_sum",
                                                                  "attribute": "value", "unit": "EUR"}],
                [{"fn": "count"}])
     json.dumps(big, allow_nan=False)
