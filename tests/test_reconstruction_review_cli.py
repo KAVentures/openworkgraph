@@ -641,6 +641,12 @@ class FingerprintScopeTests(unittest.TestCase):
                 "evidence_sha256": queue["evidence_sha256"], "annotations": labels})
         with self.assertRaisesRegex(ValueError, "invalid identity_timelines_truncated"):
             build_review_queue(dict(source, identity_timelines_truncated="false"))
+        capped = dict(source, identity_timelines=[{"session": n} for n in range(13)])
+        self.assertTrue(build_review_queue(capped)["coverage_incomplete"])
+        self.assertEqual(build_review_queue(capped)["evidence_sha256"],
+                         build_review_queue(dict(capped, identity_timelines_truncated=True))["evidence_sha256"])
+        with self.assertRaisesRegex(ValueError, "incomplete source evidence"):
+            score_review_annotations(capped, labels)
 
 class LiveReconstructionServiceTests(unittest.TestCase):
     def test_live_service_rebuilds_evidence_and_refuses_stale_envelope(self):
