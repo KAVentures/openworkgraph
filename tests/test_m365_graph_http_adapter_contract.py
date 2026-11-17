@@ -689,3 +689,32 @@ def test_real_graph_review_to_authenticated_owg_append_contract(tmp_path):
     assert checkpoint.inspect_checkpoint(
         **scope_args, ledger_dir=ledger,
         consent_local_read=True)["generation"] == 1
+
+    # Explicitly commit the incremental zero-event round, proving that a
+    # second reviewed cursor can advance without inventing OWG events.
+    second_review = review(
+        **scope_args, candidate=next_candidate, consent_local_read=True)
+    assert second_review["event_snapshots"] == 0
+    with (patch.object(checkpoint, "prepare_handoff",
+                       return_value={"idempotent_replay": True}) as handoff,
+          patch.object(checkpoint, "reconcile_membership",
+                       return_value={"status": "all_candidate_events_present"}) as membership):
+        second_commit = checkpoint.commit_checkpoint(
+            **scope_args, log_id=log_id, confirm_log_id=log_id,
+            candidate=next_candidate, csv_path=next_csv,
+            receipt_file=tmp_path / "second-receipt.json",
+            journal_dir=tmp_path / "second-journal",
+            handoff_dir=tmp_path / "second-handoff",
+            successor_label="next-incremental", ledger_dir=ledger,
+            expected_previous_candidate_sha256=reviewed["csv_sha256"],
+            consent_local_read=True, confirm_removals_reviewed=True,
+            confirm_checkpoint_commit=True)
+    handoff.assert_called_once()
+    membership.assert_called_once()
+    assert second_commit["generation"] == 2
+    reloaded = checkpoint.inspect_checkpoint(
+        **scope_args, ledger_dir=ledger, consent_local_read=True)
+    assert reloaded["generation"] == 2
+    assert reloaded["cursor_url"] == next_cursor
+    assert reloaded["candidate_sha256"] == second_review["csv_sha256"]
+    assert len(list(ledger.glob("checkpoint-*.json"))) == 2
