@@ -1,0 +1,96 @@
+"""Routes for sharing a log's process intelligence with connected AI agents (see event_log_agent_sharing).
+
+* ``GET|POST /v1/event-logs/{log_id}/agent-share``: dashboard session only; the owner chooses the level.
+* ``GET /v1/process-intelligence/...``: read-only, for the local AI bearer (the MCP server) or the
+  dashboard. A bearer additionally needs the global AI-access switch on, and every log must be
+  shared at the needed level; otherwise the answer is the same as for an unknown log.
+"""
+from __future__ import annotations
+
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import JSONResponse
+
+from . import event_log_agent_sharing as sharing
+from .event_log_routes import _json_body, _require_dashboard
+from .event_log_workspace import EventLogWorkspaceError
+from .local_auth import dashboard_session_valid
+
+router = APIRouter()
+
+
+def _is_dashboard(request: Request) -> bool:
+    auth = str(request.headers.get("authorization") or "")
+    return auth.lower().startswith("owg-session ") and dashboard_session_valid(auth[len("owg-session "):].strip())
+
+
+def _require_agent_access(request: Request) -> None:
+    if _is_dashboard(request):
+        return
+    from .ai_access import ai_access_enabled
+    if not ai_access_enabled():
+        raise HTTPException(403, "OpenWorkGraph AI access is off")
+
+
+async def _answer(operation, *args: Any, **kwargs: Any) -> JSONResponse:
+    try:
+        result = await run_in_threadpool(operation, *args, **kwargs)
+    except sharing.NotShared as exc:
+        raise HTTPException(404, str(exc)) from None
+    except EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/v1/event-logs/{log_id}/agent-share")
+async def get_agent_share(request: Request, log_id: str):
+    _require_dashboard(request)
+    return await _answer(sharing.share_status, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/agent-share")
+async def set_agent_share(request: Request, log_id: str):
+    _require_dashboard(request)
+    body = await _json_body(request, "agent sharing", strict=True, limit=1024)
+    if not isinstance(body, dict) or set(body) != {"level"}:
+        raise HTTPException(422, 'send {"level": "aggregates" | "cases" | null}')
+    return await _answer(sharing.set_share, log_id, body["level"])
+
+
+@router.get("/v1/process-intelligence/logs")
+async def agent_logs(request: Request):
+    _require_agent_access(request)
+    return await _answer(sharing.shared_logs)
+
+
+@router.get("/v1/process-intelligence/{log_id}/overview")
+async def agent_overview(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                         sla_hours: float | None = Query(default=None, gt=0, le=100000)):
+    _require_agent_access(request)
+    return await _answer(sharing.overview, log_id, case_type, sla_hours)
+
+
+@router.get("/v1/process-intelligence/{log_id}/root-cause")
+async def agent_root_cause(request: Request, log_id: str,
+                           outcome: str = Query(pattern="^(duration_over|rework|contains_activity|ends_with)$"),
+                           hours: float | None = Query(default=None, gt=0, le=100000),
+                           activity: str | None = Query(default=None, max_length=200),
+                           case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.root_cause, log_id, outcome, case_type, hours, activity)
+
+
+@router.get("/v1/process-intelligence/{log_id}/case")
+async def agent_case(request: Request, log_id: str, case_id: str = Query(min_length=1, max_length=500),
+                     case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.explain_case, log_id, case_id, case_type)
+
+
+@router.get("/v1/process-intelligence/{log_id}/slowest-cases")
+async def agent_slowest(request: Request, log_id: str, limit: int = Query(default=10, ge=1, le=50),
+                        case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.slowest_cases, log_id, case_type, limit)

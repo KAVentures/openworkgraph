@@ -244,6 +244,12 @@ analysis reads them.
   analysis query returns in well under 30 seconds on a CI runner
   (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_scale_acceptance.py`).
 
+## Sharing with AI agents
+
+A log can be shared, read-only, with AI apps connected to OpenWorkGraph over MCP, at the
+`aggregates` or `cases` level. Logs are not shared by default. See
+[PROCESS_INTELLIGENCE_FOR_AGENTS.md](PROCESS_INTELLIGENCE_FOR_AGENTS.md).
+
 ## API
 
 All routes need the local dashboard session (`Authorization: OWG-Session ...`).

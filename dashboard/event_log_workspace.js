@@ -710,6 +710,7 @@
     results.appendChild(discoverySection());
     results.appendChild(driftSection());
     results.appendChild(folderFeedSection());
+    results.appendChild(agentShareSection());
     results.appendChild(deriveSection(names));
     results.appendChild(dottedSection());
     results.appendChild(waitingSection());
@@ -1342,6 +1343,27 @@
   }
   // Analyst tags on cases: mark cases while investigating, then filter any analysis with "Tagged".
   // Explain one case: compare each of its gaps with the typical gap of the same transition.
+  // Owner-chosen, read-only process intelligence for connected AI agents (MCP), per log.
+  function agentShareSection(){
+    const box=section('Share with AI agents');box.id='owgAgentShare';
+    box.appendChild(el('div','Let AI apps connected to OpenWorkGraph (for example Claude) ask about this process: overview, KPIs, variants, insights and root cause. At the cases level they can also explain individual cases. They can only read, never change this log. AI access must also be on, and answers are redacted at your AI-context detail level, so case IDs stay pseudonymous unless you choose full detail.','muted'));
+    const level=select('owgAgentShareLevel',[['','Not shared'],['aggregates','Process overview, insights and root cause'],['cases','Also individual cases']]);
+    const apply=button('Save sharing','secondary');apply.id='owgAgentShareSave';
+    const out=el('div');out.id='owgAgentShareStatus';out.setAttribute('role','status');
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('AI agents may read',level),apply);
+    box.append(row,out);
+    const base='/v1/event-logs/'+encodeURIComponent(state.logId)+'/agent-share',generation=state.generation;
+    const show=r=>{level.value=r.level||'';
+      out.textContent=r.level?('Shared with AI agents since '+String(r.granted_at).slice(0,16).replace('T',' ')+' UTC.'+(r.tools_listed?' Restart a connected AI app to see the process tools.':'')):'Not shared: AI agents cannot read this log.';};
+    getJSON(base).then(r=>{if(generation===state.generation)show(r);}).catch(error=>{out.textContent=error.message;});
+    apply.onclick=async()=>{
+      if(level.value&&!window.confirm('Let connected AI apps read '+(level.value==='cases'?'this process and its individual cases':'this process overview, insights and root cause')+'? You can stop sharing at any time.'))return;
+      try{show(await (await api(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({level:level.value||null})})).json());}
+      catch(error){out.textContent=error.message;}
+    };
+    return box;
+  }
+
   // A local folder whose new CSV exports are appended to this log with its recorded mapping.
   function folderFeedSection(){
     const box=section('Folder feed');box.id='owgFolderFeed';
