@@ -174,6 +174,9 @@ def test_expired_real_grant_blocks_graph_and_private_evidence(
         "tenant_scope": "tenant", "mailbox_scope": "mailbox",
         "folder_id": "folder-id", "expires_at": "2000-01-01T00:00:00Z",
     }))
+    # The real grant reader rejects group/world-readable artifacts on POSIX.
+    # Keep the fixture valid so the expiry gate, not file permissions, is tested.
+    grant.chmod(0o600)
     transport = Transport(payload)
     monkeypatch.setattr(module, "_delta_private_parent", lambda p: None)
     from server.m365_outlook_delta import _grant as production_grant
