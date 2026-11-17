@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import csv
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import BytesIO, StringIO
 from pathlib import Path
 from typing import Any
@@ -30,6 +30,8 @@ FORMAT = "openworkgraph.event_log_agent_mining.v1"
 MAX_RUNS = 5000
 MAX_STEPS_PER_RUN = 500
 MAX_EVIDENCE = 100_000
+SETTLE_MINUTES = 30
+REFRESH_OVERLAP_DAYS = 7
 _FAILED = {"error", "failed", "denied", "cancelled", "timeout"}
 CASE_ATTRIBUTES = ["Outcome", "Agent", "Provider", "Framework", "Model", "Tool calls", "Failed tool calls",
                    "Approvals requested", "Input tokens", "Output tokens", "Complete boundary"]
@@ -71,14 +73,33 @@ def _activity(step: dict[str, Any], include_model_calls: bool) -> str | None:
     return operation.replace("_", " ").capitalize()[:120] or None
 
 
-def _traces(since: str | None, until: str | None, max_runs: int) -> list[dict[str, Any]]:
+def _settled(trace: dict[str, Any], now: datetime) -> bool:
+    """A run is taken once it finished, or once nothing happened in it for SETTLE_MINUTES."""
+    if trace.get("run_finish_observed"):
+        return True
+    last = max((_iso(s.get("observed_at")) or "" for s in trace.get("events") or [] if isinstance(s, dict)), default="")
+    if not last:
+        return False
+    return (now - datetime.fromisoformat(last.replace("Z", "+00:00"))).total_seconds() >= SETTLE_MINUTES * 60
+
+
+def _traces(since: str | None, until: str | None, max_runs: int, *, skip: set[str] | None = None) -> tuple[list[dict[str, Any]], int]:
     from .agent_execution_traces import _agent_groups, _one_trace
     from .procedural_memory import load_recent_evidence
     raw = load_recent_evidence(limit=MAX_EVIDENCE, since=since, until=until, agent_only=True)
     groups = [events for events in _agent_groups(raw) if events]
-    traces = [_one_trace(events, max_events=MAX_STEPS_PER_RUN) for events in groups]
+    now = datetime.now(timezone.utc)
+    traces, running = [], 0
+    for events in groups:
+        trace = _one_trace(events, max_events=MAX_STEPS_PER_RUN)
+        if skip and trace.get("execution_id") in skip:
+            continue
+        if not _settled(trace, now):
+            running += 1
+            continue
+        traces.append(trace)
     traces.sort(key=lambda t: str(t.get("started_at") or ""), reverse=True)
-    return traces[:max_runs]
+    return traces[:max_runs], running
 
 
 def _rows(traces: list[dict[str, Any]], include_model_calls: bool) -> tuple[list[list[str]], list[list[str]], int]:
@@ -117,6 +138,33 @@ def _rows(traces: list[dict[str, Any]], include_model_calls: bool) -> tuple[list
     return events, cases, truncated
 
 
+_MAPPING = {"case_column": "run", "activity_column": "step", "timestamp_column": "time",
+            "resource_column": "agent", "attribute_columns": ["status", "tool category", "step seconds"]}
+
+
+def _events_csv(events: list[list[str]]) -> BytesIO:
+    buffer = StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["run", "step", "time", "agent", "status", "tool category", "step seconds"])
+    writer.writerows(events)
+    return BytesIO(buffer.getvalue().encode("utf-8"))
+
+
+def _add_case_attributes(log_id: str, cases: list[list[str]]) -> None:
+    from . import event_log_case_attributes as case_attributes
+    with tempfile.TemporaryDirectory(prefix="owg-agentmine-", dir=str(workspace.DATA_DIR)) as tmp:
+        path = Path(tmp) / "runs.csv"
+        with path.open("w", encoding="utf-8", newline="") as handle:
+            table = csv.writer(handle)
+            table.writerow(["run", *CASE_ATTRIBUTES])
+            table.writerows(cases)
+        case_attributes.add(log_id, path, id_column="run", columns=CASE_ATTRIBUTES)
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def import_agent_runs(spec: Any) -> dict[str, Any]:
     """Create an event log from observed AI agent runs. ``spec``: name, since, until, max_runs, include_model_calls."""
     if not isinstance(spec, dict) or set(spec) - {"name", "since", "until", "max_runs", "include_model_calls"}:
@@ -133,37 +181,81 @@ def import_agent_runs(spec: Any) -> dict[str, Any]:
     if type(include_model_calls) is not bool:
         raise EventLogWorkspaceError("include_model_calls must be true or false")
 
-    traces = _traces(since, until, max_runs)
+    traces, running = _traces(since, until, max_runs)
     events, cases, truncated = _rows(traces, include_model_calls)
     if not events:
-        raise EventLogWorkspaceError("no observed AI agent runs with timed steps in this range")
-    buffer = StringIO()
-    writer = csv.writer(buffer)
-    writer.writerow(["run", "step", "time", "agent", "status", "tool category", "step seconds"])
-    writer.writerows(events)
-    mapping = {"case_column": "run", "activity_column": "step", "timestamp_column": "time",
-               "resource_column": "agent", "attribute_columns": ["status", "tool category", "step seconds"]}
-    result = workspace.import_log(BytesIO(buffer.getvalue().encode("utf-8")), name=name,
-                                  source_format="csv", mapping=mapping)
+        raise EventLogWorkspaceError("no finished AI agent runs with timed steps in this range")
+
+    def remember(conn, log_id):
+        conn.execute("INSERT INTO event_log_agent_run_sources VALUES (?, ?, ?, ?)",
+                     [log_id, include_model_calls, _now(), _now()])
+    result = workspace.import_log(_events_csv(events), name=name, source_format="csv", mapping=_MAPPING,
+                                  _transaction_hook=remember)
     log_id = result["log_id"]
-    from . import event_log_case_attributes as case_attributes
-    with tempfile.TemporaryDirectory(prefix="owg-agentmine-", dir=str(workspace.DATA_DIR)) as tmp:
-        path = Path(tmp) / "runs.csv"
-        with path.open("w", encoding="utf-8", newline="") as handle:
-            table = csv.writer(handle)
-            table.writerow(["run", *CASE_ATTRIBUTES])
-            table.writerows(cases)
-        try:
-            case_attributes.add(log_id, path, id_column="run", columns=CASE_ATTRIBUTES)
-        except Exception:
-            workspace.delete_log(log_id)
-            raise
+    try:
+        _add_case_attributes(log_id, cases)
+    except Exception:
+        workspace.delete_log(log_id)
+        raise
     return {"format": FORMAT, "log_id": log_id, "name": name.strip(), "runs": len(cases), "events": len(events),
-            "runs_with_steps_truncated": truncated, "max_steps_per_run": MAX_STEPS_PER_RUN,
-            "model_calls_included": include_model_calls, "case_attributes": CASE_ATTRIBUTES,
+            "runs_still_running": running, "runs_with_steps_truncated": truncated,
+            "max_steps_per_run": MAX_STEPS_PER_RUN, "model_calls_included": include_model_calls,
+            "case_attributes": CASE_ATTRIBUTES,
             "note": ("Each case is one observed AI agent run, each event a structural step. No prompt, tool "
-                     "argument, result, path or message text is included. Runs only partly observed have "
-                     "Complete boundary = no.")}
+                     "argument, result, path or message text is included. Runs still in progress are left out "
+                     "until they finish or stay quiet for 30 minutes; refresh the log to add them.")}
 
 
-__all__ = ["import_agent_runs", "FORMAT", "CASE_ATTRIBUTES"]
+def source(log_id: str) -> dict[str, Any]:
+    """Whether this log was made from agent runs, and when it was last refreshed."""
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            row = conn.execute("""SELECT include_model_calls, created_at, last_refreshed_at
+                FROM event_log_agent_run_sources WHERE log_id = ?""", [log_id]).fetchone()
+        finally:
+            conn.close()
+    if not row:
+        return {"format": FORMAT, "log_id": log_id, "agent_runs": False}
+    return {"format": FORMAT, "log_id": log_id, "agent_runs": True, "include_model_calls": row[0],
+            "created_at": row[1].isoformat() + "Z", "last_refreshed_at": row[2].isoformat() + "Z" if row[2] else None}
+
+
+def refresh(log_id: str) -> dict[str, Any]:
+    """Append agent runs that finished since the log was made or last refreshed. Runs already in it are kept as they are."""
+    current = source(log_id)
+    if not current["agent_runs"]:
+        raise EventLogWorkspaceError("this log was not made from AI agent runs")
+    last = current["last_refreshed_at"] or current["created_at"]
+    since = (datetime.fromisoformat(last.replace("Z", "+00:00")) - timedelta(days=REFRESH_OVERLAP_DAYS)).isoformat()
+
+    def known(conn):
+        return {"case_ids": [r[0] for r in conn.execute("SELECT DISTINCT case_id FROM ce").fetchall()]}
+    existing = set(workspace._query(log_id, None, known)["case_ids"])
+    traces, running = _traces(since, None, MAX_RUNS, skip=existing)
+    events, cases, truncated = _rows(traces, current["include_model_calls"])
+    appended = 0
+    if events:
+        appended = workspace.append_log(log_id, _events_csv(events), source_format="csv", mapping=_MAPPING)["added_events"]
+        _add_case_attributes(log_id, cases)
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            conn.execute("UPDATE event_log_agent_run_sources SET last_refreshed_at = ? WHERE log_id = ?", [_now(), log_id])
+        finally:
+            conn.close()
+    return {"format": FORMAT, "log_id": log_id, "runs_added": len(cases), "events_added": appended,
+            "runs_still_running": running, "runs_with_steps_truncated": truncated,
+            "note": "Runs already in the log are not changed. Analyse again to include the new runs."}
+
+
+def run_scheduled(log_id: str) -> tuple[str, float]:
+    try:
+        result = refresh(log_id)
+    except EventLogWorkspaceError:
+        return "failed:event_log_unavailable", 0.0
+    return f"succeeded:{result['runs_added']}_runs_added", 0.0
+
+
+__all__ = ["import_agent_runs", "refresh", "source", "run_scheduled", "FORMAT", "CASE_ATTRIBUTES"]

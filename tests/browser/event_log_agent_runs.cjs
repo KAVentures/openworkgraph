@@ -42,10 +42,22 @@ const path=require('node:path');
    assert(result.rc.some(([value,diff])=>value==='Agent=Reviewer'&&diff>0),'failures associated with the Reviewer agent: '+JSON.stringify(result.rc));
    assert(result.attrs.includes('Outcome')&&result.attrs.includes('Failed tool calls'));
    assert(!result.text.includes('synthetic-run-')&&!result.text.includes('synthetic-session-'),'native run IDs never reach the log');
+   // The log knows where it came from: add newly finished runs now, or every day.
+   await page.locator('#owgEventLogAnalyze').click();
+   const refresh=page.locator('#owgAgentRunsRefresh');await refresh.waitFor();await refresh.scrollIntoViewIfNeeded();
+   await page.locator('#owgAgentRunsRefreshInfo').filter({hasText:'made from observed AI agent runs'}).waitFor();
+   await page.locator('#owgAgentRunsRefreshNow').click();
+   await page.locator('#owgAgentRunsRefreshStatus').filter({hasText:'No new finished runs.'}).waitFor();
+   page.once('dialog',d=>d.accept());await page.locator('#owgAgentRunsRefreshDaily').click();
+   await page.locator('#owgAgentRunsRefreshStatus').filter({hasText:'Scheduled daily.'}).waitFor();
+   const kinds=await page.evaluate(async()=>(await (await fetch('/v1/schedules')).json()).schedules.map(s=>s.kind));
+   assert.deepEqual(kinds,['event_log_agent_runs']);
+   const audit2=await (async()=>{await page.addScriptTag({content:axeSource});return page.evaluate(async()=>window.axe.run(document.querySelector('#owgAgentRunsRefresh'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));})();
+   assert.deepEqual(audit2.violations.map(v=>v.id),[]);
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgAgentRuns'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Agent mining browser acceptance passed: consented import of observed agent runs, variants, root cause by agent, case attributes, no native IDs, WCAG audit.');
+   console.log('Agent mining browser acceptance passed: consented import of observed agent runs, variants, root cause by agent, case attributes, no native IDs, refresh now and daily, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});

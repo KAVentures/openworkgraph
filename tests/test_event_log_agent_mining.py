@@ -35,18 +35,23 @@ def _run(index: int, *, fail: bool) -> list[dict]:
             for n, (op, status, extra) in enumerate(steps)]
 
 
+class _Calls(list):
+    raw: list
+
+
 @pytest.fixture(autouse=True)
 def _data(tmp_path, monkeypatch):
     monkeypatch.setattr(workspace, "DATA_DIR", tmp_path / "data")
     (tmp_path / "data").mkdir()
     raw = [event for i in range(12) for event in _run(i, fail=i % 4 == 0)]  # only Reviewer runs fail
     from server import procedural_memory
-    calls = []
+    calls = _Calls()
 
     def fake(**kwargs):
         calls.append(kwargs)
         return raw
     monkeypatch.setattr(procedural_memory, "load_recent_evidence", fake)
+    calls.raw = raw  # type: ignore[attr-defined]
     return calls
 
 
@@ -92,7 +97,7 @@ def test_validation(_data):
 def test_no_runs_is_a_clear_error(monkeypatch):
     from server import procedural_memory
     monkeypatch.setattr(procedural_memory, "load_recent_evidence", lambda **kwargs: [])
-    with pytest.raises(workspace.EventLogWorkspaceError, match="no observed AI agent runs"):
+    with pytest.raises(workspace.EventLogWorkspaceError, match="no finished AI agent runs"):
         mining.import_agent_runs({})
 
 
@@ -110,7 +115,7 @@ with TestClient(app) as client:
     assert client.post(path, json={}, headers={**bearer, **consent}).status_code == 403
     assert client.post(path, json={}, headers=owner).status_code == 403
     r = client.post(path, json={}, headers={**owner, **consent})
-    assert r.status_code == 422 and "no observed AI agent runs" in r.text, r.text
+    assert r.status_code == 422 and "no finished AI agent runs" in r.text, r.text
     ingest_agent_payloads([{"agent_name": "Coder", "provider": "test", "framework": "custom-agent",
                             "observation_level": "native_trace", "run_id": "r1", "session_id": "s1",
                             "event_id": f"e{n}", "operation": op, "status": "success",
@@ -126,3 +131,41 @@ print("ok")
                 "WORKFLOW_OBSERVER_CONFIG": str(tmp_path / "config.json")})
     done = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True, timeout=180)
     assert done.returncode == 0 and done.stdout.strip().endswith("ok"), f"stdout={done.stdout}\nstderr={done.stderr}"
+
+
+def test_refresh_appends_only_new_finished_runs_and_can_be_scheduled(_data, tmp_path, monkeypatch):
+    from server import local_scheduler as scheduler
+    monkeypatch.setattr(scheduler, "_path", lambda: tmp_path / "schedules.json")
+    plain = workspace.import_log(__import__("io").BytesIO(b"case,activity,time\nc1,A,2024-01-01T00:00:00Z\n"),
+                                 name="plain", source_format="csv",
+                                 mapping={"case_column": "case", "activity_column": "activity", "timestamp_column": "time"})["log_id"]
+    assert mining.source(plain)["agent_runs"] is False
+    with pytest.raises(workspace.EventLogWorkspaceError, match="not made from AI agent runs"):
+        mining.refresh(plain)
+    log = mining.import_agent_runs({"name": "agents"})["log_id"]
+    assert mining.source(log)["agent_runs"] is True
+    assert mining.refresh(log)["runs_added"] == 0  # nothing new; existing runs untouched
+    # Two more finished runs and one still in progress arrive.
+    _data.raw.extend(_run(20, fail=False) + _run(21, fail=True))
+    now = datetime.now(timezone.utc)
+    _data.raw.extend(agent_event_to_evidence({"agent_name": "Coder", "provider": "test", "framework": "custom-agent",
+                                              "observation_level": "native_trace", "run_id": "live-run",
+                                              "event_id": f"live-{n}", "operation": op, "status": "running",
+                                              "observed_at": (now - timedelta(minutes=5 - n)).isoformat()})
+                     for n, op in enumerate(["run_started", "model_call"]))
+    done = mining.refresh(log)
+    assert (done["runs_added"], done["events_added"], done["runs_still_running"]) == (2, 8, 1)
+    assert workspace.summary(log)["cases"] == 14
+    from server import event_log_case_attribute_values as values
+    outcome = {a["name"]: a for a in values.values(log)["attributes"]}["Outcome"]
+    assert sum(v["cases"] for v in outcome["top_values"]) == 14
+    assert mining.refresh(log)["runs_added"] == 0
+    # The same refresh runs on a schedule, and goes away with the log.
+    schedule = scheduler.create("event_log_agent_runs", log, interval_minutes=1440, confirm_scheduled_runs=True)
+    assert schedule["kind"] == "event_log_agent_runs"
+    assert mining.run_scheduled(log) == ("succeeded:0_runs_added", 0.0)
+    with pytest.raises(scheduler.ScheduleError):
+        scheduler.create("event_log_agent_runs", plain, interval_minutes=1440, confirm_scheduled_runs=True)
+    workspace.delete_log(log)
+    assert all(s["target_id"] != log for s in scheduler.status()["schedules"])
+    assert mining.run_scheduled(log) == ("failed:event_log_unavailable", 0.0)
