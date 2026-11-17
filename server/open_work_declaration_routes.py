@@ -3134,3 +3134,62 @@ async def read_local_bound_attempt_receipts(request: Request, response: Response
         "agent_execution_authorized": False,
         "source_read_performed": False,
     }
+
+
+@router.post("/v1/open-work/declarations/human-outcomes/case-review")
+async def read_local_combined_case_review(request: Request, response: Response):
+    """Explicit, bounded, fail-closed operator join of retained run and DAG context.
+
+    Reuse the existing authenticated, actor-scoped route admissions rather than
+    accepting client-supplied scope or a bearer intended for an agent. Two
+    independent read passes detect concurrent revocation/change; this is NOT
+    a cross-store atomic transaction or a fresh provider verification.
+    """
+    from urllib.parse import urlencode
+
+    _dashboard_only(request)
+    # Read exactly once, then replay the *same* bounded request to the
+    # existing receipt admission on both sides of the dependency read.
+    raw = await request.body()
+    if len(raw) > _MAX_BODY:
+        raise HTTPException(413, "case review request too large")
+
+    async def receipt_pass():
+        async def receive():
+            return {"type": "http.request", "body": raw, "more_body": False}
+        replay = Request(dict(request.scope), receive=receive)
+        return await read_local_bound_attempt_receipts(replay, Response())
+
+    async def dependency_pass(ref: str):
+        scope_copy = dict(request.scope)
+        scope_copy["query_string"] = urlencode({"work_item_ref": ref}).encode("ascii")
+        return await get_local_durable_reviewed_dependencies(
+            Request(scope_copy), Response(),
+        )
+
+    first = await receipt_pass()
+    ref = first["case_ref"]
+    before = await dependency_pass(ref)
+    second = await receipt_pass()
+    after = await dependency_pass(ref)
+    # Never disclose a partial join or stale snapshot. The dependency route
+    # revalidates the dashboard session and source after reconciliation, and
+    # the receipt route rechecks the actor's exclusive run/case binding.
+    if first != second or before != after:
+        raise HTTPException(409, "case review changed during combined read")
+    _dashboard_only(request)
+    await _recheck_source(await _require_scope())
+    _dashboard_only(request)
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "format": "openworkgraph.bound-case-review.v1",
+        "case_ref": ref,
+        "receipts": second,
+        "dependencies": after,
+        "source_read_performed": False,
+        "provider_event_independently_rechecked_on_this_read": False,
+        "customer_outcome_verified": False,
+        "customer_outcome": "unknown",
+        "agent_execution_authorized": False,
+        "cross_store_atomic_snapshot": False,
+    }
