@@ -16,6 +16,7 @@ test('agent preflight parses and keeps explicit authenticated local-only preflig
 
 test('in-flight preflight cannot overwrite a changed file selection',()=>{
   assert.match(source,/selectionGeneration\+\+/);
+  assert.match(source,/if\(generation!==selectionGeneration\|\|file\.files\?\.\[0\]!==selected\)return;[\s\S]*?const response=await fetch/);
   assert.match(source,/generation!==selectionGeneration\|\|file\.files\?\.\[0\]!==selected/);
   assert.match(source,/if\(generation===selectionGeneration\)run\.disabled=false/);
   assert.match(source,/if\(generation===selectionGeneration\)[\s\S]*?status\.textContent='Preflight unavailable/);
