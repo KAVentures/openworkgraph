@@ -3148,6 +3148,7 @@ async def read_local_combined_case_review(request: Request, response: Response):
     from urllib.parse import urlencode
 
     _dashboard_only(request)
+    initial_scope = await _require_scope()
     # Read exactly once, then replay the *same* bounded request to the
     # existing receipt admission on both sides of the dependency read.
     raw = await request.body()
@@ -3178,7 +3179,7 @@ async def read_local_combined_case_review(request: Request, response: Response):
     if first != second or before != after:
         raise HTTPException(409, "case review changed during combined read")
     _dashboard_only(request)
-    await _recheck_source(await _require_scope())
+    await _recheck_source(initial_scope)
     _dashboard_only(request)
     response.headers["Cache-Control"] = "no-store"
     return {
