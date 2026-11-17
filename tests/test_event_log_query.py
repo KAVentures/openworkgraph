@@ -222,12 +222,12 @@ with TestClient(app) as client:
 
 def test_event_attribute_sum_discloses_partial_coverage_and_complete_policy():
     """Invalid or missing numeric observations must never silently count as complete."""
-    csv = ("case,activity,time,amount\\n"
-           "a,Start,2024-01-01T00:00:00Z,10\\n"
-           "a,End,2024-01-01T01:00:00Z,invalid\\n"
-           "b,Start,2024-01-02T00:00:00Z,3\\n"
-           "b,End,2024-01-02T01:00:00Z,7\\n"
-           "c,Start,2024-01-03T00:00:00Z,\\n")
+    csv = ("case,activity,time,amount\n"
+           "a,Start,2024-01-01T00:00:00Z,10\n"
+           "a,End,2024-01-01T01:00:00Z,invalid\n"
+           "b,Start,2024-01-02T00:00:00Z,3\n"
+           "b,End,2024-01-02T01:00:00Z,7\n"
+           "c,Start,2024-01-03T00:00:00Z,\n")
     log = workspace.import_log(
         BytesIO(csv.encode()), name="partial-sum", source_format="csv",
         mapping={"case_column": "case", "activity_column": "activity",
