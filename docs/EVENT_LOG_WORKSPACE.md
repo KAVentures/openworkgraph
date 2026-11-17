@@ -1822,6 +1822,15 @@ attribute", "From (inclusive)" and "Below (exclusive)". These are KPIs, the coho
 map comparison, the saved-graph comparison, case tags, saving cases as a log, case metrics and
 case evidence. A range is validated in the section before anything is sent.
 
+After an analysis, every case-attribute input suggests what the log contains. `name=value` inputs
+offer each attribute's 20 most common values with their case counts, and numeric-range inputs offer
+the numeric attributes with their minimum and maximum. This covers the global filter and the
+pickers inside sections. The suggestions come from
+`GET /v1/event-logs/{log_id}/case-attribute-values?case_type=...`
+(`openworkgraph.event-log-case-attribute-values.v1`): up to 100 attribute names per case notion,
+each with its case count, distinct values, whether it is numeric (90% or more of its values are
+numbers) and its top values, skipping values longer than 100 characters. Nothing is stored.
+
 An automatic insight about a case-attribute group (`attribute_segment`) and a root-cause row for
 an attribute value or range both offer to become this filter in one click: "Filter to these cases"
 and "Filter". They are offered only while no global filter is active, so they never silently

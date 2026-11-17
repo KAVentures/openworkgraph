@@ -723,7 +723,24 @@
     results.appendChild(complianceSection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(domainPackSection());
     results.appendChild(costSection(names));
+    attachCaseAttributeSuggestions(generation);
     status('');
+  }
+
+  // Suggest case attributes (from the import or a joined case table) in every case-attribute input:
+  // name=value inputs get the common values, numeric-range inputs the numeric attribute names.
+  async function attachCaseAttributeSuggestions(generation){
+    try{
+      const q=state.caseType?'?case_type='+encodeURIComponent(state.caseType):'';
+      const r=await getJSON('/v1/event-logs/'+encodeURIComponent(state.logId)+'/case-attribute-values'+q);
+      if(generation!==state.generation||!r.attributes.length)return;
+      const list=(id,options)=>{let node=document.getElementById(id);if(!node){node=document.createElement('datalist');node.id=id;document.body.appendChild(node);}
+        node.replaceChildren(...options.map(([value,label])=>{const o=document.createElement('option');o.value=value;if(label)o.label=label;return o;}));};
+      list('owgCaseAttributeValueSuggestions',r.attributes.filter(a=>!a.numeric).flatMap(a=>a.top_values.map(v=>[a.name+'='+v.value,v.cases+' cases'])));
+      list('owgCaseAttributeNumericSuggestions',r.attributes.filter(a=>a.numeric).map(a=>[a.name,a.min+' to '+a.max]));
+      for(const node of document.querySelectorAll('#owgCaseFilterAttribute,input[id$="CohortAttribute"],input[id$="FilterAttribute"],input[id$="CohortAAttribute"],input[id$="CohortBAttribute"]'))node.setAttribute('list','owgCaseAttributeValueSuggestions');
+      for(const node of document.querySelectorAll('input[id$="RangeName"]'))node.setAttribute('list','owgCaseAttributeNumericSuggestions');
+    }catch(_){/* suggestions are a convenience */}
   }
 
   // Process cost from the user's own cost model: a price per activity execution and an optional hourly cost per open case.
