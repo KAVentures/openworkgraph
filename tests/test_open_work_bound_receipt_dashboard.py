@@ -94,6 +94,7 @@ const results=card.children[card.children.indexOf(form)+2];
   // A revoked review must never render a late response, even if fetch ignores abort.
   delayReceipt=true;
   approval.checked=true;
+  approval.listeners.change();
   const pending=form.listeners.submit({preventDefault(){}});
   for(let i=0;i<20 && !releaseReceipt;i++) await Promise.resolve();
   assert.ok(releaseReceipt,'deferred receipt request reached');
@@ -107,6 +108,7 @@ const results=card.children[card.children.indexOf(form)+2];
   delayReceipt=false;
   invalidReceipt=true;
   approval.checked=true;
+  approval.listeners.change();
   await form.listeners.submit({preventDefault(){}});
   assert.equal(results.children.length,0,'invalid outcome verification claim rejected');
   assert.match(status.textContent,/denied|unavailable/);
