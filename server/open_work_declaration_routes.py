@@ -3183,6 +3183,14 @@ async def read_local_combined_case_review(request: Request, response: Response):
         raise HTTPException(409, "case review changed during combined read")
     _dashboard_only(request)
     await _recheck_source(initial_scope)
+    # The final source check can yield while a run binding or reviewed graph
+    # is revoked. Re-admit both disclosures *after* that await, and refuse
+    # the combined result if either projection changed in the meantime.
+    # This narrows the disclosure race; it is not cross-store atomicity.
+    final_receipts = await receipt_pass()
+    final_dependencies = await dependency_pass(ref)
+    if final_receipts != second or final_dependencies != after:
+        raise HTTPException(409, "case review changed during final admission")
     _dashboard_only(request)
     response.headers["Cache-Control"] = "no-store"
     return {
