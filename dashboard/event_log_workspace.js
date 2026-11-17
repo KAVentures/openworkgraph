@@ -10,7 +10,7 @@
   const attrText=()=>[state.attr.attribute,state.attr.attribute_range?rangeText(state.attr.attribute_range):''].filter(Boolean).join('; ');
   let activityLookupBusy=false;
   // Views that honour the workspace case filter; every other section uses all cases.
-  const FILTERED=new Set(['summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','waiting-time','drift','model-discovery','organization','report.html']);
+  const FILTERED=new Set(['automation-candidates','summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','waiting-time','drift','model-discovery','organization','report.html']);
 
   const el=(tag,text,cls)=>{
     const node=document.createElement(tag);
@@ -740,6 +740,8 @@
     results.appendChild(caseExplainSection());
     results.appendChild(discoverySection());
     results.appendChild(driftSection());
+    results.appendChild(automationSection());
+    results.appendChild(agentRunsRefreshSection());
     results.appendChild(folderFeedSection());
     results.appendChild(agentShareSection());
     results.appendChild(deriveSection(names));
@@ -1375,6 +1377,30 @@
   // Analyst tags on cases: mark cases while investigating, then filter any analysis with "Tagged".
   // Explain one case: compare each of its gaps with the typical gap of the same transition.
   // Owner-chosen, read-only process intelligence for connected AI agents (MCP), per log.
+  // For a log made from AI agent runs: append runs that finished since, now or every day.
+  function agentRunsRefreshSection(){
+    const box=section('Keep agent runs up to date');box.id='owgAgentRunsRefresh';box.hidden=true;
+    const info=el('div',null,'muted');info.id='owgAgentRunsRefreshInfo';
+    const now=button('Add new runs now','secondary');now.id='owgAgentRunsRefreshNow';
+    const daily=button('Add new runs every day','secondary');daily.id='owgAgentRunsRefreshDaily';
+    const out=el('div');out.id='owgAgentRunsRefreshStatus';out.setAttribute('role','status');
+    const row=el('div',null,'row');row.append(now,daily);
+    box.append(info,row,out);
+    const base='/v1/event-logs/'+encodeURIComponent(state.logId)+'/agent-runs',generation=state.generation,logId=state.logId;
+    const describe=r=>{info.textContent='This log was made from observed AI agent runs'+(r.include_model_calls?' (with model calls)':'')+'. Last updated '+String(r.last_refreshed_at||r.created_at).slice(0,16).replace('T',' ')+' UTC. New finished runs are appended; runs already here stay as they are.';};
+    getJSON(base).then(r=>{if(generation!==state.generation||!r.agent_runs)return;box.hidden=false;describe(r);}).catch(()=>{});
+    now.onclick=async()=>{now.disabled=true;out.textContent='Reading observed agent runs\u2026';
+      try{const r=await (await api(base+'/refresh',{method:'POST',headers:{'X-OWG-Local-Storage-Confirmed':'true'}})).json();
+        out.textContent=(r.runs_added?'Added '+r.runs_added+' run(s) with '+r.events_added+' steps. Analyse again to include them.':'No new finished runs.')+(r.runs_still_running?' '+r.runs_still_running+' run(s) still in progress will be added later.':'');
+        describe(await getJSON(base));}
+      catch(error){out.textContent=error.message;}finally{now.disabled=false;}};
+    daily.onclick=async()=>{if(!window.confirm('Append newly finished AI agent runs to this log every day while OpenWorkGraph is running?'))return;
+      try{await api('/v1/schedules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'event_log_agent_runs',target_id:logId,interval_minutes:1440,confirm_scheduled_runs:true})});
+        out.textContent='Scheduled daily. Manage it under scheduled jobs. Signal rules on this log then watch your agents.';}
+      catch(error){out.textContent=error.message;}};
+    return box;
+  }
+
   function agentShareSection(){
     const box=section('Share with AI agents');box.id='owgAgentShare';
     box.appendChild(el('div','Let AI apps connected to OpenWorkGraph (for example Claude) ask about this process: overview, KPIs, variants, insights and root cause. At the cases level they can also explain individual cases. They can only read, unless you also let them tag cases below. AI access must also be on, and answers are redacted at your AI-context detail level, so case IDs stay pseudonymous unless you choose full detail.','muted'));
@@ -1406,6 +1432,43 @@
     return box;
   }
 
+  // Automation candidates: activities ranked by volume, routine routing and the waiting before them.
+  function automationSection(){
+    const box=section('Automation candidates');box.id='owgAutomation';
+    box.appendChild(el('div','Rank this process\u2019s activities by how often they happen, how fixed their routing is and how much waiting comes right before them. Every component is shown. It is evidence for a review, not a recommendation, and it estimates no savings.','muted'));
+    const run=button('Rank activities','secondary');run.id='owgAutomationRun';
+    const out=el('div');out.id='owgAutomationResults';out.setAttribute('role','status');
+    box.append(run,out);
+    const PATTERNS={fixed:'Fixed',mostly_fixed:'Mostly fixed',variable:'Variable'};
+    const pct=x=>Math.round(x*100)+'%';
+    run.onclick=async()=>{run.disabled=true;out.replaceChildren(el('div','Ranking activities\u2026','muted'));
+      try{
+        const r=await getJSON(logPath('automation-candidates',{limit:15}));
+        if(!r.candidates.length){out.replaceChildren(el('div','No activity occurs in at least '+r.min_cases+' cases.','muted'));return;}
+        const logName=(state.logs.find(l=>l.log_id===state.logId)||{}).name||state.logId;
+        const rows=r.candidates.map(c=>{
+          const add=button('Add to automation pipeline','secondary');add.setAttribute('aria-label','Add '+c.activity+' to the automation pipeline');
+          add.onclick=async()=>{add.disabled=true;
+            try{
+              const description=('From event log \u201c'+logName+'\u201d: '+c.occurrences+' occurrences in '+c.cases+' cases ('+c.per_week+' per week), '+
+                PATTERNS[c.routing_pattern].toLowerCase()+' routing (same predecessor '+pct(c.same_predecessor_share)+', same successor '+pct(c.same_successor_share)+'), '+
+                (c.median_wait_before_seconds===null?'':'median wait before '+duration(c.median_wait_before_seconds)+', ')+c.resources+' resource(s), '+c.repeats_per_case+' per case. Score '+c.score+' of 100. Evidence only; assess before approving.').slice(0,2000);
+              await api('/v1/automation-pipeline',{method:'POST',headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({title:('Automate '+c.activity).slice(0,200),description,source:{kind:'event_log',reference:(state.logId+':'+c.activity).slice(0,200)}})});
+              add.replaceWith(el('span','Added to the pipeline as an idea.'));
+            }catch(error){add.disabled=false;add.textContent=error.message;}};
+          return [c.activity,String(c.score),pct(c.components.volume)+' / '+pct(c.components.routine)+' / '+pct(c.components.time),
+            String(c.per_week),PATTERNS[c.routing_pattern],c.median_wait_before_seconds===null?'\u2014':duration(c.median_wait_before_seconds),
+            String(c.resources),String(c.repeats_per_case),add];});
+        out.replaceChildren(
+          el('div','Score = 100 \u00d7 (0.4 volume + 0.4 routine + 0.2 waiting share), over '+Number(r.cases).toLocaleString()+' cases and '+r.weeks_observed+' weeks'+(r.cases_before_filter?' (filtered from '+Number(r.cases_before_filter).toLocaleString()+')':'')+'.'+(r.activities_below_min_cases?' '+r.activities_below_min_cases+' rarer activit'+(r.activities_below_min_cases===1?'y is':'ies are')+' left out.':''),'muted'),
+          table(['Activity','Score','Volume / routine / waiting','Per week','Routing','Median wait before','Resources','Per case','Action'],rows),
+          el('div','Fixed routing suggests rules may cover the step; variable routing suggests judgement, where an AI agent with human review may fit. '+r.caveat,'muted'));
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{run.disabled=false;}};
+    return box;
+  }
+
   // A local folder whose new CSV exports are appended to this log with its recorded mapping.
   function folderFeedSection(){
     const box=section('Folder feed');box.id='owgFolderFeed';
@@ -1423,18 +1486,23 @@
     for(const control of [folder,pattern])control.addEventListener('input',ready);consent.addEventListener('change',ready);
     const base='/v1/event-logs/'+encodeURIComponent(state.logId)+'/feeds';
     const generation=state.generation;
-    const describe=r=>r.files_appended+' file(s) appended with '+Number(r.events_added).toLocaleString()+' new events'+(r.files_failed?', '+r.files_failed+' could not be appended':'')+(r.files_already_appended?', '+r.files_already_appended+' already appended':'')+(r.files_still_being_written?', '+r.files_still_being_written+' still being written (next run)':'')+'.'+((r.files||[]).some(file=>file.warning)?' An append committed, but its quality report could not be recorded.':'');
+    const describe=r=>r.files_appended+' file(s) appended with '+Number(r.events_added).toLocaleString()+' new events'+(r.files_failed?', '+r.files_failed+' could not be appended':'')+(r.files_already_appended?', '+r.files_already_appended+' already appended':'')+(r.files_previously_failed?', '+r.files_previously_failed+' previously failed (use Retry failed files)':'')+(r.files_still_being_written?', '+r.files_still_being_written+' still being written (next run)':'')+'.'+((r.files||[]).some(file=>file.warning)?' An append committed, but its quality report could not be recorded.':'');
     const render=r=>{
       if(!r.feeds.length){list.replaceChildren(el('div','No folder feed yet.','muted'));return;}
       list.replaceChildren(table(['Folder','Pattern','Files appended','Failed','Latest file',''],r.feeds.map(f=>{
         const wrap=el('div',null,'row');
         const run=button('Run now','secondary');run.setAttribute('aria-label','Run feed for '+f.folder);
+        const retry=button('Retry failed files','secondary');retry.setAttribute('aria-label','Retry failed files for '+f.folder);retry.disabled=!f.files_failed;
         const schedule=button('Run every day','secondary');schedule.setAttribute('aria-label','Run feed for '+f.folder+' every day');
         const remove=button('Delete feed','secondary');remove.setAttribute('aria-label','Delete feed for '+f.folder);
         run.onclick=async()=>{run.disabled=true;out.replaceChildren(el('div','Reading the folder\u2026','muted'));
           try{const r2=await (await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/run',{method:'POST',headers:{'X-OWG-Local-Storage-Confirmed':'true'}})).json();
             out.replaceChildren(el('div',describe(r2)+(r2.events_added?' Analyse again to include them.':'')),...(r2.files||[]).filter(file=>file.outcome==='failed').map(file=>el('div',file.name+': '+file.error,'muted')));render(await getJSON(base));}
           catch(error){out.replaceChildren(el('div',error.message,'muted'));run.disabled=false;}};
+        retry.onclick=async()=>{retry.disabled=true;out.replaceChildren(el('div','Retrying unchanged failed files…','muted'));
+          try{const r2=await (await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/retry-failed',{method:'POST',headers:{'X-OWG-Local-Storage-Confirmed':'true'}})).json();
+            out.replaceChildren(el('div',describe(r2)+' Only unchanged failed files were retried; new files are left for Run now.'+(!r2.files_appended&&!r2.files_failed?' No matching failed files were ready; they may have changed, been removed or still be settling.':'')+(r2.events_added?' Analyse again to include them.':'')),...(r2.files||[]).filter(file=>file.outcome==='failed').map(file=>el('div',file.name+': '+file.error,'muted')));render(await getJSON(base));}
+          catch(error){out.replaceChildren(el('div',error.message,'muted'));retry.disabled=false;}};
         schedule.onclick=async()=>{if(!window.confirm('Read '+f.folder+' and append new files every day while OpenWorkGraph is running?'))return;
           try{await api('/v1/schedules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'event_log_folder_feed',target_id:f.feed_id,interval_minutes:1440,confirm_scheduled_runs:true})});
             out.replaceChildren(el('div','Scheduled daily. Manage it under scheduled jobs.'));}
@@ -1442,7 +1510,7 @@
         remove.onclick=async()=>{if(!window.confirm('Delete this feed? Events already appended stay in the log.'))return;
           try{await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/delete',{method:'POST'});out.replaceChildren(el('div','Feed deleted.'));render(await getJSON(base));}
           catch(error){out.replaceChildren(el('div',error.message,'muted'));}};
-        wrap.append(run,schedule,remove);
+        wrap.append(run,retry,schedule,remove);
         const latest=f.recent_files[0];
         return [f.folder,f.pattern,Number(f.files_appended).toLocaleString(),Number(f.files_failed).toLocaleString(),
           latest?latest.name+' \u2014 '+(latest.outcome==='appended'?Number(latest.added_events).toLocaleString()+' events added'+(latest.warning?' · '+latest.warning:''):'not appended: '+latest.error):'\u2014',wrap];})));
@@ -4952,6 +5020,8 @@
     const transitionHeading=el('h4','Signal state changes');
     const transitionNote=el('p','Locally recorded triggered and cleared transitions from explicit or scheduled evaluations. Repeated unchanged results do not create alerts. This is not live source monitoring or a notification feed. Up to 5,000 transitions are retained per log.','muted');
     const transitionRefresh=button('Refresh signal changes','secondary');transitionRefresh.id='owgSignalTransitionRefresh';
+    const transitionPrevious=button('Newer signal changes','secondary');transitionPrevious.id='owgSignalTransitionPrevious';transitionPrevious.disabled=true;
+    const transitionNext=button('Older signal changes','secondary');transitionNext.id='owgSignalTransitionNext';transitionNext.disabled=true;
     const transitionStatus=el('div','Refresh to inspect saved signal changes.','muted');
     transitionStatus.id='owgSignalTransitionStatus';transitionStatus.setAttribute('role','status');transitionStatus.setAttribute('aria-live','polite');
     const transitionResults=el('div');transitionResults.id='owgSignalTransitions';
@@ -4982,7 +5052,7 @@
     const timelineControls=el('div',null,'actions');timelineControls.append(timelineFilter,timelineRefresh,timelinePrevious,timelineNext);
     const allControls=el('div',null,'actions');allControls.append(allFilter,allRefresh,allPrevious,allNext);
     box.append(row,message,rules,evaluate,out,reviewHeading,reviewNote,reviewRefresh,inbox,
-      deliveryPanel,transitionHeading,transitionNote,transitionRefresh,transitionStatus,transitionResults,
+      deliveryPanel,transitionHeading,transitionNote,transitionRefresh,transitionPrevious,transitionNext,transitionStatus,transitionResults,
       allHeading,allNote,allControls,allStatus,allResults,
       timelineHeading,timelineNote,timelineControls,timelineStatus,timelineResults);
     const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/signals';
@@ -5050,32 +5120,37 @@
     deliveryRefresh.onclick=()=>refreshDelivery().catch(error=>{deliveryStatus.textContent=error.message;});
     const transitionBase=()=>'/v1/event-logs/'+encodeURIComponent(selectedLogId)+'/signal-history';
     const generation=state.generation;
-    let transitionRequestId=0;
-    async function refreshHistory(){
+    let transitionRequestId=0,transitionCursor='',transitionHistory=[],transitionNextCursor=null;
+    async function refreshHistory(before='',history=[]){
       const requestId=++transitionRequestId;
-      transitionRefresh.disabled=true;
+      transitionRefresh.disabled=true;transitionPrevious.disabled=true;transitionNext.disabled=true;transitionResults.replaceChildren();
       transitionStatus.textContent='Loading locally recorded signal changes…';
       try{
-        const r=await getJSON(transitionBase()+'?limit=100');
+        const params=new URLSearchParams({limit:'100'});if(before)params.set('before',before);
+        const r=await getJSON(transitionBase()+'?'+params);
         if(generation!==state.generation||requestId!==transitionRequestId)return;
+        transitionCursor=before;transitionHistory=history;transitionNextCursor=r.next_before??null;
         const events=r.items||[];
         transitionStatus.textContent=Number(r.retained_total||0)+' saved transitions in this log; showing '+
-          events.length+(r.truncated?' (limited to recent results)':'')+
-          '. Evaluations only; no notifications or automated actions.';
+          events.length+(before?' (older page)':'')+
+          '. Results can change between pages. Evaluations only; no notifications or automated actions.';
         transitionResults.replaceChildren(events.length
           ?table(['Evaluated (UTC)','Signal','Change'],events.map(x=>[
             x.evaluated_at||'—',x.name,x.transition==='triggered'?'Triggered':'Cleared']))
           :el('div','No triggered/cleared changes recorded for this dataset yet.','muted'));
       }catch(error){
         if(generation===state.generation&&requestId===transitionRequestId){
+          transitionCursor='';transitionHistory=[];transitionNextCursor=null;
           transitionStatus.textContent=error.message||'Signal change history unavailable.';
           transitionResults.replaceChildren();
         }
       }finally{
-        if(generation===state.generation&&requestId===transitionRequestId)transitionRefresh.disabled=false;
+        if(generation===state.generation&&requestId===transitionRequestId){transitionRefresh.disabled=false;transitionPrevious.disabled=!transitionHistory.length;transitionNext.disabled=transitionNextCursor===null;}
       }
     }
     transitionRefresh.onclick=()=>refreshHistory();
+    transitionPrevious.onclick=()=>{if(transitionHistory.length)refreshHistory(transitionHistory[transitionHistory.length-1],transitionHistory.slice(0,-1));};
+    transitionNext.onclick=()=>{if(transitionNextCursor!==null)refreshHistory(transitionNextCursor,[...transitionHistory,transitionCursor]);};
     let inboxRefreshId=0;
     async function refreshInbox(){
       const requestId=++inboxRefreshId;
