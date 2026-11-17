@@ -36,7 +36,7 @@ const path=require('node:path');
   assert.equal((await cases.json()).selected_cases,6); // intersects the active follower filter
   await page.locator('#owgEventLogCasesStatus').filter({hasText:'6 matching cases'}).waitFor();
   await page.locator(prefix+'RangeMax').fill('900');await page.locator('#owgEventLogCasesBrowse').click();
-  await page.locator('#owgEventLogCasesStatus').filter({hasText:'minimum must be below'}).waitFor();
+  await page.locator('#owgEventLogCasesStatus').filter({hasText:'lower bound must be below'}).waitFor();
   const first='#owgEventLogCohortA',second='#owgEventLogCohortB';
   for(const selector of [first,second])await page.locator(selector+'RangeName').fill('\ufeffcost\\"mixed 雪');
   await page.locator(first+'RangeMax').fill('1000');await page.locator(second+'RangeMin').fill('1000');
