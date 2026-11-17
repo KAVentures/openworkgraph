@@ -50,6 +50,11 @@ const fetch=async (url, options) => {
     format:'openworkgraph.local-case-declarations.v1',available:true,
     items:[{work_item_ref:ref,revision:1,edit_token:'b'.repeat(32)}]
   })};
+  if(url.includes('/durable-dependencies?')) return {ok:true,json:async()=>({
+    format:'openworkgraph.reviewed-durable-dependencies.v1',
+    agent_execution_authorized:false,customer_outcome:'unknown',
+    context:{direct:[],prerequisites:[],truncated:false}
+  })};
   if(url.endsWith('/attempt-receipts')) {
     if(delayReceipt) await new Promise(resolve=>{releaseReceipt=resolve});
     return {ok:true,json:async()=>({
@@ -80,12 +85,12 @@ const results=card.children[card.children.indexOf(form)+2];
   assert.equal(calls.length,0,'no request without approval');
   approval.checked=true;
   await form.listeners.submit({preventDefault(){}});
-  assert.equal(calls.length,2,'declaration admission then bound journal read');
+  assert.equal(calls.length,3,'declaration, bound journal and current dependency reads');
   assert.equal(JSON.parse(calls[1].options.body).confirm_run_comparison,true);
-  assert.equal(results.children.length,3);
+  assert.equal(results.children.length,5);
   assert.equal(approval.checked,true,'approval remains visible for withdrawal');
   await form.listeners.submit({preventDefault(){}});
-  assert.equal(calls.length,2,'one approval cannot silently repeat a read');
+  assert.equal(calls.length,3,'one approval cannot silently repeat a read');
   approval.checked=false;
   approval.listeners.change();
   assert.equal(results.children.length,0,'withdrawal clears displayed historical data');
