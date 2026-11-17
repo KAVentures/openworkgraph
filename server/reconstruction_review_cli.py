@@ -280,7 +280,13 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
     for annotation in annotations:
         if not isinstance(annotation, dict):
             raise ValueError("invalid annotation")
-        key = (annotation.get("window"), annotation.get("event_id"))
+        # Untrusted JSON may contain arrays/objects in identifier fields. Reject
+        # them explicitly rather than raising TypeError during dict lookup and
+        # turning an invalid review request into an HTTP 500.
+        window, event_id = annotation.get("window"), annotation.get("event_id")
+        if not isinstance(window, str) or not isinstance(event_id, str):
+            raise ValueError("invalid annotated event identity")
+        key = (window, event_id)
         if key not in observed or key in labels:
             raise ValueError("unknown or duplicate annotated event")
         expected = annotation.get("true_resource_pairs")
