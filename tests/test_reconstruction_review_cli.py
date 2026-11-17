@@ -1079,3 +1079,31 @@ class MalformedUnicodeEvidenceTests(unittest.TestCase):
                 source[field] = value
                 with self.assertRaises(ValueError):
                     build_review_queue(source)
+
+
+class AdversarialInterleavingIsolationTests(unittest.TestCase):
+    def test_shared_resource_does_not_create_transitive_cross_case_event_links(self):
+        # Two interleaved workflows mention a common file, but no source event
+        # observes both outer issues. A connected-component case inference
+        # would incorrectly invent a cross-case pair here.
+        source = payload([
+            pair("case-A", "shared", ["a-before", "a-after"]),
+            pair("case-B", "shared", ["b-between"]),
+        ])
+        rows = build_review_queue(source)["event_reviews"]
+        by_event = {row["event_id"]: row for row in rows}
+        self.assertEqual(set(by_event), {"a-before", "b-between", "a-after"})
+        self.assertEqual(by_event["a-before"]["candidate_resource_pairs"],
+                         by_event["a-after"]["candidate_resource_pairs"])
+        self.assertNotEqual(by_event["a-before"]["candidate_resource_pairs"],
+                            by_event["b-between"]["candidate_resource_pairs"])
+        self.assertTrue(all(len(row["candidate_resource_pairs"]) == 1 for row in rows))
+        self.assertTrue(all(row["confirmed_case"] is False for row in rows))
+        labels = [{"window": row["window"], "event_id": row["event_id"],
+                   "true_resource_pairs": row["candidate_resource_pairs"]}
+                  for row in rows]
+        score = score_review_annotations(source, labels)
+        self.assertEqual(score["false_positive_pairs"], 0)
+        # This is a synthetic regression, NOT an independently labeled holdout.
+        self.assertFalse(score["held_out_verified"])
+        self.assertFalse(score["cross_case_contamination_measured"])
