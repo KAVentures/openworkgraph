@@ -270,6 +270,7 @@
     card.append(receiptHeading, receiptForm, receiptStatus, receiptResults);
     let receiptController = null;
     let receiptGeneration = 0;
+    let receiptApprovalConsumed = false;
     function clearReceipts(message) {
       receiptGeneration += 1;
       if (receiptController) receiptController.abort();
@@ -280,20 +281,23 @@
     }
     receiptInputs.forEach(input => input.addEventListener('input', () => {
       receiptApproval.checked = false;
+      receiptApprovalConsumed = false;
       clearReceipts('Run selection changed; a new explicit review is required.');
     }));
     receiptApproval.addEventListener('change', () => {
-      if (!receiptApproval.checked) clearReceipts('Historical review approval withdrawn.');
+      if (receiptApproval.checked) receiptApprovalConsumed = false;
+      else clearReceipts('Historical review approval withdrawn.');
     });
     receiptForm.addEventListener('submit', async event => {
       event.preventDefault();
       clearReceipts('');
       const [ref, deployment, run] = receiptInputs.map(input => input.value.trim());
       if (!/^owg:w:[0-9a-f]{32}$/.test(ref) || !deployment || !run ||
-          !receiptApproval.checked) {
+          !receiptApproval.checked || receiptApprovalConsumed) {
         receiptStatus.textContent = 'A reviewed case, deployment, run and explicit approval are required.';
         return;
       }
+      receiptApprovalConsumed = true;
       const generation = receiptGeneration;
       const controller = new AbortController();
       receiptController = controller;
@@ -371,8 +375,9 @@
         if (receiptController === controller) {
           receiptController = null;
           receiptButton.disabled = false;
-          // One explicit approval is consumed even on a denied attempt.
-          receiptApproval.checked = false;
+          // Keep consent visibly checked while successful historical evidence
+          // remains displayed, so withdrawal can clear it immediately.
+          if (!receiptResults.children.length) receiptApproval.checked = false;
         }
       }
     });
