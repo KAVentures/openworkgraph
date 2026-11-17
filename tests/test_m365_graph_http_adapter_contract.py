@@ -42,7 +42,7 @@ class Transport:
 
 
 @pytest.mark.parametrize("kind", ["identity", "folder"])
-@pytest.mark.parametrize("failure", ["unauthorized", "redirect", "html", "mismatch", "oversized"])
+@pytest.mark.parametrize("failure", ["unauthorized", "rate_limited", "service_unavailable", "redirect", "html", "malformed_json", "mismatch", "oversized"])
 def test_graph_http_adapter_refuses_untrusted_provider_response(tmp_path, kind, failure):
     module = identity if kind == "identity" else folder
     url = (identity.URL if kind == "identity" else
@@ -57,8 +57,11 @@ def test_graph_http_adapter_refuses_untrusted_provider_response(tmp_path, kind, 
     raw = json.dumps(data).encode()
     if failure == "oversized":
         raw = b"x" * (module.MAX_BYTES + 1)
+    if failure == "malformed_json":
+        raw = b"{invalid-json"
     response = Response(url + "/else" if failure == "redirect" else url, raw,
-                        status=401 if failure == "unauthorized" else 200,
+                        status={"unauthorized": 401, "rate_limited": 429,
+                                "service_unavailable": 503}.get(failure, 200),
                         content_type="text/html" if failure == "html" else "application/json")
     transport = Transport(response)
     output = tmp_path / ("mailbox-identity-test.json" if kind == "identity"
