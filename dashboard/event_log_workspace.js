@@ -1269,7 +1269,8 @@
     // A numeric case attribute between two bounds (lower inclusive, upper exclusive; either may be left empty).
     const rangeName=(values.rangeName||'').replace(/^[\p{White_Space}\u001c-\u001f]+|[\p{White_Space}\u001c-\u001f]+$/gu,''),rangeMin=values.rangeMin??'',rangeMax=values.rangeMax??'';
     if(rangeName||rangeMin!==''||rangeMax!==''){
-      if(!rangeName||Array.from(rangeName).length>200)throw new Error('Enter a numeric case attribute name of at most 200 characters.');
+      if(!rangeName)throw new Error('Name the numeric case attribute.');
+      if(Array.from(rangeName).length>200)throw new Error('Enter a numeric case attribute name of at most 200 characters.');
       const r={name:rangeName};if(rangeMin!=='')r.min=Number(rangeMin);if(rangeMax!=='')r.max=Number(rangeMax);
       if(r.min===undefined&&r.max===undefined)throw new Error('Give a lower bound, an upper bound or both.');
       if([r.min,r.max].some(v=>v!==undefined&&!Number.isFinite(v)))throw new Error('Range bounds must be numbers.');
