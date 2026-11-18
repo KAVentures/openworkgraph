@@ -79,6 +79,21 @@ def test_bounded_payload_and_invalid_digest(local_store):
     assert not local_store.exists()
 
 
+@pytest.mark.parametrize("bad_envelope", [None, [], "labels", 7, True])
+def test_non_object_review_envelope_fails_closed(local_store, bad_envelope):
+    with pytest.raises(ValueError, match="review envelope must be an object"):
+        store.save_reconstruction_review({"mode": "all_saved"}, 1, bad_envelope)
+    assert not local_store.exists()
+
+
+def test_non_json_review_annotation_fails_closed(local_store):
+    envelope = _envelope()
+    envelope["annotations"][0]["unexpected"] = {1, 2}
+    with pytest.raises(ValueError, match="invalid review annotation payload"):
+        store.save_reconstruction_review({"mode": "all_saved"}, 1, envelope)
+    assert not local_store.exists()
+
+
 def test_symlink_is_not_followed(local_store, tmp_path):
     target = tmp_path / "unrelated"
     target.write_text("do not modify")
