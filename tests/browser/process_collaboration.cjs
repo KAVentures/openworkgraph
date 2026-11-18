@@ -173,7 +173,7 @@ const pathModule = require("node:path");
     await alice.locator("#handoffCheck").click();
     await alice.locator("#handoffStatus").filter({hasText: "REFUSED:"}).waitFor();
     assert.match(await alice.locator("#handoffStatus").textContent(), /lacks independent design review/);
-    assert.match(await alice.locator("#handoffStatus").textContent(), /No packet checked|execution authorization remain unverified/i);
+    assert.match(await alice.locator("#handoffStatus").textContent(), /No execution authorization/i);
     assert.equal(uploadedHandoff, false, "review packet bytes must remain local");
     await setHandoffPacket(handoffPacket({revision: handoffProcess.revision + 1}));
     await alice.locator("#handoffCheck").click();
