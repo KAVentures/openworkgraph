@@ -89,6 +89,8 @@ const path=require('node:path');
    await page.locator('#owgCaseAttributeUploads').getByRole('button',{name:'Undo upload for Region, Segment'}).click();
    await page.locator('#owgCaseAttributeResult').filter({hasText:'Undid Region, Segment in 4 cases.'}).waitFor();
    await page.locator('#owgCaseAttributeUploads').filter({hasText:'No case attributes added yet.'}).waitFor();
+   assert.deepEqual(errors,[]);
+   console.log('Case attribute table browser acceptance passed: columns joined by case ID with counts, usable as a filter, conflicts refused, removable, WCAG audit.');
    const workbook=path.join(scratch,'enrichment.xlsx');
    execFileSync(python,['-c',`
 import sys, xlsxwriter
@@ -146,6 +148,5 @@ with xlsxwriter.Workbook(sys.argv[1]) as book:
    await sheetStatus.filter({hasText:'not an .xlsx workbook'}).waitFor();
    assert.equal(await page.locator('#owgCaseAttributeAdd').isDisabled(),true);
    assert.deepEqual(errors,[]);
-   console.log('Case attribute table browser acceptance passed: columns joined by case ID with counts, usable as a filter, conflicts refused, removable, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
