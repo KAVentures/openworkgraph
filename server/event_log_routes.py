@@ -547,6 +547,15 @@ def event_log_quality_overview(request: Request, log_id: str):
     return _respond(quality.overview, log_id)
 
 
+@router.get("/v1/event-logs/{log_id}/quality/attribute-coverage")
+def event_log_quality_attribute_coverage(request: Request, log_id: str,
+        offset: int = Query(default=0, ge=0, le=2_147_483_647),
+        revision: int | None = Query(default=None, ge=0, le=2_147_483_647)):
+    from . import event_log_quality_coverage
+    _require_dashboard(request)
+    return _respond(event_log_quality_coverage.page, log_id, offset, revision)
+
+
 @router.get("/v1/event-logs/{log_id}/quality/batch-history")
 def event_log_quality_batch_history(request: Request, log_id: str):
     _require_dashboard(request)
