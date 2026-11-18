@@ -7,6 +7,7 @@ the selected log under the workspace lock. Deleting a log removes its definition
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from hashlib import sha256
 import json
 import re
 import secrets
@@ -35,6 +36,12 @@ def _validated(body: Any) -> tuple[str, dict]:
     return name, definition
 
 
+def _definition_digest(definition: dict) -> str:
+    """Stable digest of the stored expression, independent of JSON key order."""
+    canonical = json.dumps(definition, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def list_saved(log_id: str) -> dict:
     with workspace._LOCK:
         conn = workspace._connect()
@@ -47,7 +54,8 @@ def list_saved(log_id: str) -> dict:
         finally:
             conn.close()
     return {"definitions": [{"metric_id": mid, "created_at": created.isoformat() + "Z",
-                              "name": name, "definition": json.loads(raw)}
+                              "name": name, "definition": json.loads(raw),
+                              "definition_sha256": _definition_digest(json.loads(raw))}
                              for mid, created, name, raw in rows], "max_saved": MAX_SAVED}
 
 
@@ -73,7 +81,8 @@ def save(log_id: str, body: Any) -> dict:
         finally:
             conn.close()
     return {"metric_id": metric_id, "created_at": created.isoformat() + "Z",
-            "name": name, "definition": definition}
+            "name": name, "definition": definition,
+            "definition_sha256": _definition_digest(definition)}
 
 
 def delete(log_id: str, metric_id: str) -> dict:
@@ -121,5 +130,6 @@ def evaluate(log_id: str, metric_id: str, cohort: Any, case_type: str | None = N
         result = cohort_metrics.summarize(
             log_id, {"definition": json.loads(raw), "cohort": cohort}, case_type
         )
-        result["saved_metric"] = {"metric_id": metric_id, "name": name}
+        result["saved_metric"] = {"metric_id": metric_id, "name": name,
+                                  "definition_sha256": _definition_digest(json.loads(raw))}
         return result
