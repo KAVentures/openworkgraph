@@ -56,8 +56,24 @@ def _check_depth(depth: Any) -> int:
 
 
 _STEPS = """CREATE OR REPLACE TEMP TABLE dm AS SELECT case_id, activity, ts, event_id, attributes,
-      coalesce(lead(activity) OVER w, '(end)') AS next, row_number() OVER w AS pos
+      coalesce(lead(activity) OVER w, ?) AS next, row_number() OVER w AS pos
     FROM ce WINDOW w AS (PARTITION BY case_id ORDER BY ts, event_id)"""
+
+
+def _terminal_label(conn) -> str:
+    """Choose a display key distinct from every literal activity in the cohort."""
+    alternative = "(case ended"
+    labels = {row[0] for row in conn.execute(
+        "SELECT DISTINCT activity FROM ce WHERE activity = ? OR starts_with(activity, ?)",
+        [END, alternative]).fetchall()}
+    if END not in labels:
+        return END
+    label = alternative + ")"
+    suffix = 2
+    while label in labels:
+        label = f"{alternative} {suffix})"
+        suffix += 1
+    return label
 
 
 def decision_points(log_id: str, case_type: str | None = None, *,
@@ -65,13 +81,15 @@ def decision_points(log_id: str, case_type: str | None = None, *,
     """Activities after which cases go different ways, with the share of each branch."""
 
     def run(conn):
-        conn.execute(_STEPS)
+        terminal_label = _terminal_label(conn)
+        conn.execute(_STEPS, [terminal_label])
         rows = conn.execute("""SELECT activity, next, count(*), count(DISTINCT case_id) FROM dm
             GROUP BY 1, 2 ORDER BY 1, 3 DESC, 2""").fetchall()
         cases = conn.execute("SELECT count(DISTINCT case_id) FROM ce").fetchone()[0]
-        return {"rows": rows, "cases": cases}
+        return {"rows": rows, "cases": cases, "terminal_label": terminal_label}
 
     data = workspace._query_filtered(log_id, case_type, cohort, run)
+    terminal = data["terminal_label"]
     grouped: dict[str, list[tuple[str, int, int]]] = {}
     for activity, nxt, n, cases in data.pop("rows"):
         grouped.setdefault(activity, []).append((nxt, n, cases))
@@ -82,7 +100,8 @@ def decision_points(log_id: str, case_type: str | None = None, *,
             continue
         total = sum(b[1] for b in branches)
         points.append({"activity": activity, "occurrences": total,
-                       "branches": [{"next": nxt, "occurrences": n, "cases": c, "share": round(n / total, 4)}
+                       "branches": [{"next": nxt, "next_is_terminal": nxt == terminal,
+                                     "occurrences": n, "cases": c, "share": round(n / total, 4)}
                                     for nxt, n, c in branches],
                        "rare_branch_occurrences": total - sum(b[1] for b in kept)})
     points.sort(key=lambda p: (-p["occurrences"], p["activity"]))
@@ -90,7 +109,7 @@ def decision_points(log_id: str, case_type: str | None = None, *,
             "min_branch_occurrences": MIN_BRANCH_OCCURRENCES,
             "decision_points": points[:MAX_DECISION_POINTS],
             "decision_points_total": len(points),
-            "note": f"'{END}' means the case ended after the activity."}
+            "note": f"'{terminal}' means the case ended after the activity."}
 
 
 def _train(case_id: str) -> bool:
@@ -255,7 +274,8 @@ def analyse(log_id: str, activity: str, case_type: str | None = None, *, max_dep
     max_depth = _check_depth(max_depth)
 
     def run(conn):
-        conn.execute(_STEPS)
+        terminal_label = _terminal_label(conn)
+        conn.execute(_STEPS, [terminal_label])
         total = conn.execute("SELECT count(*) FROM dm WHERE activity = ?", [activity]).fetchone()[0]
         # Latest value of each event attribute at or before the decision event, plus the case's attributes.
         rows = conn.execute("""
@@ -273,7 +293,7 @@ def analyse(log_id: str, activity: str, case_type: str | None = None, *, max_dep
               LEFT JOIN latest USING (case_id, pos)
               LEFT JOIN objects o ON o.log_id = $log AND o.object_id = d.case_id""",
                             {"a": activity, "cap": MAX_OCCURRENCES, "log": log_id}).fetchall()
-        return {"rows": rows, "total": total}
+        return {"rows": rows, "total": total, "terminal_label": terminal_label}
 
     data = workspace._query_filtered(log_id, case_type, cohort, run)
     raw, total = data.pop("rows"), data.pop("total")
@@ -293,10 +313,12 @@ def analyse(log_id: str, activity: str, case_type: str | None = None, *, max_dep
                         x[prefix + str(key)[:MAX_TEXT]] = value
         samples.append({"case_id": case_id, "y": nxt, "x": x, "train": _train(case_id)})
 
+    terminal = data["terminal_label"]
     branch_counts = Counter(s["y"] for s in samples)
     base = {"format": FORMAT, **data, "activity": activity, "occurrences": total,
             "occurrences_used": len(samples), "occurrences_capped": total > len(samples),
-            "branches": [{"next": k, "occurrences": v, "share": round(v / len(samples), 4)}
+            "branches": [{"next": k, "next_is_terminal": k == terminal,
+                          "occurrences": v, "share": round(v / len(samples), 4)}
                          for k, v in sorted(branch_counts.items(), key=lambda kv: (-kv[1], kv[0]))],
             "method": ("CART decision tree (Gini impurity) on ~70% of cases, scored on the other ~30% "
                        "(split by a hash of the case id)"),
@@ -332,6 +354,8 @@ def analyse(log_id: str, activity: str, case_type: str | None = None, *, max_dep
     importance = _importance(tree, len(train), Counter())
     scale = sum(importance.values()) or 1.0
     rules = sorted(_rules(tree), key=lambda r: (-r["training_occurrences"], r["next"]))
+    for rule in rules:
+        rule["next_is_terminal"] = rule["next"] == terminal
     return {**base, "max_depth": max_depth, "min_leaf_occurrences": min_leaf,
             "features": [{"name": f["name"], "kind": f["kind"]} for f in features],
             "feature_importance": [{"attribute": k, "share": round(v / scale, 4)}

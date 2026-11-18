@@ -2094,7 +2094,10 @@ data goes with each route. ProM's decision miner, PM4Py, Celonis and SAP Signavi
 analysis.
 
 1. **Decision points.** These are activities after which cases continue to at least two different
-   next activities, or end (`(end)`). Each branch must be seen at least 5 times.
+   next activities, or end. Each branch must be seen at least 5 times. Completion
+   normally appears as `(end)`. If a literal activity uses that label, the result
+   picks a distinct `terminal_label`. Branches and rules flag completion using
+   `next_is_terminal`.
 2. **Data known at the decision.** The rules use two kinds of data:
    - the case's attributes (`case.*`);
    - the latest non-empty value of every event attribute recorded on the case at or before the

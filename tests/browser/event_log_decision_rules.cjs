@@ -52,6 +52,24 @@ const path=require('node:path');
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgDecisions'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
+   const completionRows=['case,activity,time,who,amount'];
+   for(let i=0;i<80;i++){
+     completionRows.push(`c${i},Check,2024-03-01T08:00:00Z,ana,${i%2}`);
+     if(i%2)completionRows.push(`c${i},(end),2024-03-01T09:00:00Z,bob,`);
+   }
+   await page.locator('#owgEventLogFile').setInputFiles({name:'completion.csv',mimeType:'text/csv',buffer:Buffer.from(completionRows.join('\n'))});
+   await page.locator('#owgEventLogStatus').filter({hasText:'File mapping ready.'}).waitFor();
+   await page.locator('#owgEventLogAttributes').selectOption(['amount']);
+   await page.locator('#owgEventLogConsent').check();
+   await page.locator('#owgEventLogImport').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Imported 120 events'}).waitFor();
+   await page.locator('#owgEventLogAnalyze').click();
+   await page.locator('#owgDecisionFind').click();
+   await points.filter({hasText:'(case ended) · case completion 50%'}).waitFor();
+   assert.match(await points.textContent(),/\(end\) 50%/);
+   await points.getByRole('button',{name:'Learn rules after Check'}).click();
+   await results.getByRole('cell',{name:'(case ended) · case completion',exact:true}).waitFor();
+   await results.getByRole('cell',{name:'(end)',exact:true}).waitFor();
    assert.deepEqual(errors,[]);
    console.log('Decision rules browser acceptance passed: found the decision point, learned the amount threshold from data recorded before it, held-out accuracy shown, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
