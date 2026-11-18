@@ -140,3 +140,11 @@ comparison against the current log and the same saved process revision and case 
 Open **Show alignment** to see the observed and expected activity steps for a
 variant. **Inspect cases** opens case evidence using the exact path and the
 filter submitted for that comparison.
+
+
+**Deviation hotspots** ranks up to 15 activity differences by the number of
+affected cases. A repeated difference counts once per case and contributes
+each repeat to the occurrence count. The ranking uses one complete,
+minimum-edit alignment per variant and discloses how many deviating cases
+have truncated alignments and are excluded. Select a hotspot to review its
+matching variants while keeping the overall conformance totals in view.

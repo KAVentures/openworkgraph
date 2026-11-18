@@ -72,6 +72,12 @@ const path=require('node:path');
    await result.getByText(/Showing 1–20 of 25/).waitFor();
    await page.locator('#owgEventLogGraphVariantStatus').selectOption('match');
    await result.getByText(/of 0 selected variant results/).waitFor();
+   await result.getByRole('button',{name:'Review variants for Observed only Alternate 0',exact:true}).click();
+   await result.getByText(/Variant filter: Observed only · Alternate 0/).waitFor();
+   await result.getByText(/Showing 1–1 of 1 selected variant results/).waitFor();
+   await result.getByRole('button',{name:'Clear hotspot filter'}).click();
+   await result.getByText(/Showing 1–20 of 25/).waitFor();
+
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(()=>window.axe.run(document.querySelector('#owgEventLogSavedGraph'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id),[]);
