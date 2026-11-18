@@ -4141,7 +4141,12 @@
         if(!(cutoff>0&&cutoff<1))throw new Error('Choose a role similarity threshold above 0 and below 1.');
         const r=await getJSON(logPath('roles',{names:names.checked?'shown':'pseudonymous',threshold:cutoff}));
         if(generation!==state.generation||ticket!==request)return;
-        if(!r.roles.length){out.replaceChildren(el('div','This log has no resource column values to analyse.','muted'));return;}
+        if(!r.roles.length){
+          out.textContent=r.coverage.events_with_resource
+            ? 'No events fall within both the resource and activity analysis limits. Try a narrower case filter.'
+            : 'No events in the selected cases have a resource label.';
+          return;
+        }
         out.replaceChildren(
           el('p',r.roles.length+' roles from '+r.coverage.resources_represented+' resources whose activity mixes correlate at '+r.threshold+' or more.','muted'),
           el('p','Coverage: '+Number(r.coverage.events_represented).toLocaleString()+' of '+
