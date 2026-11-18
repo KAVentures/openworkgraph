@@ -133,6 +133,20 @@ class TruncatedNavigationEvidenceTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "continuity"):
                     build_review_queue(source)
 
+    def test_over_cap_navigation_still_rejects_malformed_truncation_flags(self):
+        # A large source list must not short-circuit validation of the
+        # explicit completeness flag supplied by the authenticated adapter.
+        for collection, flag in (
+            ("observed_group_continuity", "observed_group_continuity_truncated"),
+            ("identity_timelines", "identity_timelines_truncated"),
+        ):
+            with self.subTest(collection=collection):
+                source = payload([pair("A", "F", ["e1"])])
+                source[collection] = [{"group_id": str(i)} for i in range(25)]
+                source[flag] = "false"
+                with self.assertRaisesRegex(ValueError, "invalid " + flag):
+                    build_review_queue(source)
+
     def test_complete_navigation_remains_scoreable(self):
         source = payload([pair("A", "F", ["e1"])])
         source["observed_case_groups_truncated"] = False
