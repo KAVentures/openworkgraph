@@ -842,6 +842,15 @@ def event_log_heuristics_net(request: Request, log_id: str, case_type: str | Non
                     cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/footprints")
+def event_log_footprints(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                         noise: float = Query(default=0.2, ge=0, lt=1), activities: float = Query(default=1.0, gt=0, le=1),
+                         cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_footprints as footprints
+    _require_dashboard(request)
+    return _respond(footprints.footprints, log_id, case_type, noise=noise, activities=activities, cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/variants")
 def event_log_variants(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                        limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):
