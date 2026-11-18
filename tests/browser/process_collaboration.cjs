@@ -119,6 +119,31 @@ const pathModule = require("node:path");
       await alice.locator("#design").textContent(),
       /Evidence missing/,
     );
+    // Overlapping authenticated selections: a late first response must not
+    // replace the newer selection, even when both target the same process.
+    const selectionRacePage = await login("alice");
+    let releaseStaleRead;
+    let staleReadIntercepted;
+    const staleReadSeen = new Promise(resolve => { staleReadIntercepted = resolve; });
+    let processReads = 0;
+    await selectionRacePage.route(/\/v1\/human\/processes\/process_[^/?]+(?:\?.*)?$/, async route => {
+      processReads++;
+      if (processReads === 1) {
+        await new Promise(resolve => { releaseStaleRead = resolve; staleReadIntercepted(); });
+        const upstream = await route.fetch();
+        const data = await upstream.json();
+        data.process.title = "STALE RESPONSE MUST NOT RENDER";
+        await route.fulfill({ response: upstream, json: data });
+      } else await route.continue();
+    });
+    await selectionRacePage.getByRole("button", {name:"Shared support process · r1",exact:true}).click();
+    await staleReadSeen;
+    await selectionRacePage.getByRole("button", {name:"Shared support process · r1",exact:true}).click();
+    await selectionRacePage.locator("#selectedTitle").filter({hasText:"Shared support process · revision 1"}).waitFor();
+    releaseStaleRead();
+    await selectionRacePage.waitForTimeout(150);
+    assert.doesNotMatch(await selectionRacePage.locator("#selectedTitle").textContent(), /STALE RESPONSE/);
+    await selectionRacePage.close();
     // Browser acceptance of the real authenticated handoff preflight against the
     // synthetic Gateway. The packet is kept in Chromium, never posted to it.
     const handoffPublished = await (await handoffPublishedResponse).json();

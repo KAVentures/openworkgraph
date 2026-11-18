@@ -515,10 +515,17 @@
         const note = (text) => {
           $("status").textContent = String(text || "");
         };
-        function button(text, fn) {
+        function button(text, fn, allowOverlap = false) {
           const n = el("button", text);
           n.type = "button";
-          n.addEventListener("click", () => run(fn));
+          n.addEventListener("click", () => {
+            if (!allowOverlap) return run(fn);
+            // Selection reads are safe to supersede; mutations still serialize.
+            if (busy) { note("Wait for the current process request."); return; }
+            Promise.resolve().then(fn).catch(error => {
+              if (!error.staleIdentity) note(error.message || "Process request failed.");
+            });
+          });
           return n;
         }
         async function run(fn) {
@@ -583,7 +590,9 @@
         const implementation=window.owgImplementationPlans.create({detailHost:$("implementationDetail"),call,onDenied:()=>{clear();note("Implementation-plan access changed; sign in again to refresh permissions.");}});
         // Initialized before the OIDC callback can synchronously call clear().
         let handoffGeneration=0;
+        let processOpenGeneration=0;
         function clear(releaseBusy=false) {
+          processOpenGeneration++;
           resetHandoff("Session cleared. Recheck after sign-in.");
           $("handoffPacket").value="";
           identityGeneration++;
@@ -741,7 +750,7 @@
             const row = el("p");
             row.append(
               button(item.title + " · r" + item.revision, () =>
-                open(item.workflow_id),
+                open(item.workflow_id), true
               ),
               el(
                 "span",
@@ -1705,13 +1714,18 @@
               "New revision saved. Earlier revision reviews do not approve this new design.",
             );
           });
+        // A delayed authorized read must not replace a newer selection or a
+        // cleared identity. This guard is separate from handoff freshness.
         async function open(id, revision) {
+          const openTicket = ++processOpenGeneration;
+          const identityTicket = identityGeneration;
           const params = revision
             ? "?" + new URLSearchParams({ revision: String(revision) })
             : "";
           const data = await call(
             "/v1/human/processes/" + encodeURIComponent(id) + params,
           );
+          if (openTicket !== processOpenGeneration || identityTicket !== identityGeneration) return;
           render(data);
           note("Opened exact saved revision " + data.process.revision + ".");
         }
