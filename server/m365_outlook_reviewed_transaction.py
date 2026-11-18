@@ -123,8 +123,9 @@ def execute(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
     initial_predecessor = inspect_checkpoint(
         **scope, ledger_dir=Path(ledger_dir), consent_local_read=True)
     checked = cycle.review(candidate=Path(candidate), consent_local_read=True, **scope)
-    audit("review", checked)
+    # Only validated, digest-matched review evidence may enter the audit trail.
     _verified_review(checked, expected_review_csv_sha256)
+    audit("review", checked)
     # Refuse a stale predecessor BEFORE the first append. The checkpoint
     # commit still performs its authoritative exclusive-create CAS after
     # authenticated membership verification; this is only an early guard.
