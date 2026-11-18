@@ -12,7 +12,7 @@
   const attrText=()=>[state.attr.attribute,state.attr.attribute_range?rangeText(state.attr.attribute_range):'',state.attr.starts_with?'starts with '+JSON.stringify(state.attr.starts_with):'',state.attr.ends_with?'ends with '+JSON.stringify(state.attr.ends_with):'',state.attr.duration?durationText(state.attr.duration):''].filter(Boolean).join('; ');
   let activityLookupBusy=false;
   // Views that honour the workspace case filter; every other section uses all cases.
-  const FILTERED=new Set(['automation-candidates','decision-points','decision-rules','summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','waiting-time','drift','model-discovery','organization','report.html']);
+  const FILTERED=new Set(['automation-candidates','summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','performance-spectrum','waiting-time','drift','model-discovery','organization','report.html','decision-points','decision-rules']);
 
   const el=(tag,text,cls)=>{
     const node=document.createElement(tag);
@@ -759,6 +759,7 @@
     results.appendChild(agentShareSection());
     results.appendChild(deriveSection(names));
     results.appendChild(dottedSection());
+    results.appendChild(spectrumSection());
     results.appendChild(waitingSection());
     results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity),inspection));
     results.appendChild(organizationSection());
@@ -3532,6 +3533,60 @@
     result.cases.forEach((c,row)=>c.points.forEach(([t,slot])=>points.push({x:x(t),y:top+row*rowHeight+rowHeight/2,slot,t,row})));
     const ticks=(width<520?[0,0.5,1]:[0,0.25,0.5,0.75,1]).map(f=>({x:x(f*span),seconds:f*span}));
     return {width,height,points,ticks,top,bottom,left};
+  }
+
+  // Performance spectrum: each occurrence of a step-to-step segment as a line from its start to its end.
+  const SPECTRUM_COLOURS={fast:'#2a78c5',normal:'#8a8a84',slow:'#d08a1f',very_slow:'#c0392b'};
+  const SPECTRUM_NAMES={fast:'Fast',normal:'Normal',slow:'Slow',very_slow:'Very slow'};
+  function spectrumSection(){
+    const box=section('Performance spectrum');box.id='owgSpectrum';
+    box.appendChild(el('div','For the busiest step-to-step segments, each occurrence is a line from when the first step happened (top) to when the next one did (bottom), coloured by how long it took compared with the segment’s other occurrences. Lines that meet at the bottom show work released together; crossing lines show later work overtaking earlier work.','muted'));
+    const run=button('Draw performance spectrum','secondary');run.id='owgSpectrumRun';
+    const statusLine=el('div',null,'muted');statusLine.id='owgSpectrumStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgSpectrumResults';
+    box.append(run,statusLine,out);
+    const pct=x=>x===null?'—':Math.round(x*100)+'%';
+    run.onclick=async()=>{
+      const generation=state.generation;run.disabled=true;statusLine.textContent='Drawing…';out.replaceChildren();
+      try{
+        const r=await getJSON(logPath('performance-spectrum',{top:'6',bins:'30'}));
+        if(generation!==state.generation)return;
+        if(!r.segments.length){statusLine.textContent='No case has two consecutive events.';return;}
+        statusLine.textContent=r.segments.length+' of '+r.segments_total+' segments, busiest first.'+(r.cases_before_filter?' Filtered from '+Number(r.cases_before_filter).toLocaleString()+' cases.':'');
+        const legend=el('ul');legend.style.cssText='list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:4px 14px;margin:6px 0';
+        for(const k of Object.keys(SPECTRUM_COLOURS)){const item=el('li');const sw=el('span');sw.setAttribute('aria-hidden','true');
+          sw.style.cssText='display:inline-block;width:14px;height:3px;vertical-align:middle;margin-right:6px;background:'+SPECTRUM_COLOURS[k];
+          item.append(sw,document.createTextNode(SPECTRUM_NAMES[k]+' — '+r.classes[k]));legend.appendChild(item);}
+        out.appendChild(legend);
+        const span=Math.max(1,r.bin_seconds*r.bins);
+        const stamp=s=>new Date(Date.parse(r.time_origin)+s*1000).toISOString().slice(0,16).replace('T',' ');
+        const ink=getComputedStyle(box).color||'#52514e';
+        for(const seg of r.segments){
+          const title=el('h4',seg.from+' → '+seg.to);title.style.margin='12px 0 4px';
+          const width=Math.max(260,Math.min(1000,out.clientWidth||600)),height=90,pad=8;
+          const canvas=document.createElement('canvas');const ratio=window.devicePixelRatio||1;
+          canvas.width=width*ratio;canvas.height=height*ratio;canvas.style.cssText='width:'+width+'px;height:'+height+'px;display:block';
+          canvas.setAttribute('role','img');
+          canvas.setAttribute('aria-label','Performance spectrum of '+seg.from+' to '+seg.to+': '+seg.occurrences+' occurrences, '+pct(seg.fifo_share)+' finish in start order, '+pct(seg.batched_share)+' released together. The table below gives the figures.');
+          const ctx=canvas.getContext('2d');ctx.scale(ratio,ratio);
+          const end=Math.max(span,...seg.lines.map(l=>l.end));
+          const x=t=>pad+(width-2*pad)*t/end;
+          ctx.strokeStyle='rgba(128,128,128,0.5)';ctx.beginPath();ctx.moveTo(pad,pad);ctx.lineTo(width-pad,pad);ctx.moveTo(pad,height-pad);ctx.lineTo(width-pad,height-pad);ctx.stroke();
+          ctx.lineWidth=1;
+          for(const l of seg.lines){ctx.strokeStyle=SPECTRUM_COLOURS[l.class];ctx.globalAlpha=0.7;ctx.beginPath();ctx.moveTo(x(l.start),pad);ctx.lineTo(x(l.end),height-pad);ctx.stroke();}
+          ctx.globalAlpha=1;ctx.fillStyle=ink;ctx.font='11px system-ui,sans-serif';ctx.textAlign='left';
+          const d=seg.duration_seconds;
+          const facts=el('div',seg.occurrences.toLocaleString()+' occurrences'+(seg.lines_sampled?' ('+seg.lines.length+' drawn)':'')+' · median '+duration(d.median)+', 25th–75th percentile '+duration(d.p25)+'–'+duration(d.p75)+', 95th '+duration(d.p95)+' · '+pct(seg.fifo_share)+' finish in start order · '+pct(seg.batched_share)+' released together (≥'+r.batch_min+' ending at one instant).','muted');
+          const busy=seg.bins.filter(b=>Object.values(b.counts).some(n=>n));
+          const tbl=table(['Started from','Fast','Normal','Slow','Very slow','Median'],busy.map(b=>[stamp(b.bin*r.bin_seconds),...['fast','normal','slow','very_slow'].map(k=>String(b.counts[k])),duration(b.median_seconds)]));
+          const more=document.createElement('details');more.appendChild(el('summary','Occurrences per period'));more.appendChild(tbl);
+          out.append(title,canvas,facts,more);
+        }
+        out.appendChild(el('div',r.caveat,'muted'));
+        statusLine.textContent+=' Time runs from '+stamp(0)+' to '+stamp(span)+'.';
+      }catch(error){statusLine.textContent=error.message;}
+      finally{run.disabled=false;}};
+    return box;
   }
 
   function dottedSection(){

@@ -984,6 +984,20 @@ async def event_log_working_calendar(request: Request,log_id: str,
         cohort=cohort,**spec.model_dump())
 
 
+@router.get("/v1/event-logs/{log_id}/performance-spectrum")
+def event_log_performance_spectrum(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                                   segment: list[str] = Query(default=[], max_length=12),
+                                   top: int = Query(default=6, ge=1, le=12), bins: int = Query(default=30, ge=2, le=100),
+                                   cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_performance_spectrum as spectrum
+    _require_dashboard(request)
+
+    def run():
+        return spectrum.spectrum(log_id, case_type, segments=spectrum.parse_segments(segment), top=top, bins=bins,
+                                 cohort=cohort)
+    return _respond(run)
+
+
 @router.get("/v1/event-logs/{log_id}/dotted-chart")
 def event_log_dotted_chart(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                            time: str = Query(default="absolute", pattern="^(absolute|relative)$"),
