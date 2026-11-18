@@ -94,6 +94,18 @@ def test_non_json_review_annotation_fails_closed(local_store):
     assert not local_store.exists()
 
 
+def test_deeply_nested_saved_review_fails_closed(local_store):
+    # A bounded file can still exceed Python's JSON recursion limit. Treat
+    # malformed local state as absent rather than crashing the review API.
+    local_store.write_text("[" * 1200 + "0" + "]" * 1200)
+    if os.name == "posix":
+        local_store.chmod(0o600)
+    assert store.read_saved_reconstruction_review(
+        {"mode": "all_saved"}, 1, "a" * 64,
+    ) is None
+    assert not local_store.exists()
+
+
 def test_symlink_is_not_followed(local_store, tmp_path):
     target = tmp_path / "unrelated"
     target.write_text("do not modify")
