@@ -1840,6 +1840,17 @@ every condition must hold, and they apply to the same views. Values that are not
 match a range. The inputs are validated before anything is sent. Saving the filter keeps the
 values and ranges with it.
 
+**Endpoints and case duration.** The case filter also keeps cases that start with, or end with,
+an exact activity, in recorded order (time, then event identifier). This is the endpoints filter of
+Disco and Celonis. It can also keep cases whose duration lies in a range: the time from the first to
+the last recorded event, at least the lower bound and below the upper bound. This is Disco's
+performance filter. The dashboard takes hours; the API takes seconds.
+
+The query parameters are `starts_with`, `ends_with`, `duration_min` and `duration_max`. In a JSON
+cohort they are `starts_with`, `ends_with` and `duration: {"min": s, "max": s}`. They combine with
+every other condition and apply to the same views. Saved filters keep them. A saved filter whose
+first or last activity is no longer in the log is flagged, like its follower rules.
+
 The case pickers inside individual sections take the same numeric range, under "Numeric case
 attribute", "From (inclusive)" and "Below (exclusive)". These are KPIs, the cohort benchmark and
 map comparison, the saved-graph comparison, case tags, saving cases as a log, case metrics and
@@ -1863,7 +1874,7 @@ replace one. They set exactly the finding's `attribute` or `attribute_range`.
 the same panel; applying it re-runs every filtered view at once. The API stores any case filter
 (`{"name": "...", "cohort": {"follows": [...], "started_from": "...", ...}}`, up to 50 per log,
 names unique regardless of case) as `openworkgraph.event-log-filter-set.v1`. The dashboard panel
-applies follower rules, case-attribute values and numeric ranges. A saved filter is re-applied to the log as it is now, so the listing says
+applies follower rules, case-attribute values, numeric ranges, endpoints and case duration. A saved filter is re-applied to the log as it is now, so the listing says
 when newer exports were appended after it was saved and names any activities it uses that the log
 does not contain. Saved filters are deleted with the log and never change events.
 

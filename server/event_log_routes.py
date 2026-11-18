@@ -104,11 +104,21 @@ def _case_filter(started_from: str = Query(default="", max_length=64),
                  event_attribute: str = Query(default="", max_length=200),
                  tag: str = Query(default="", max_length=60),
                  follows: str = Query(default="", max_length=4000),
-                 attribute_range: str = Query(default="", max_length=400)) -> dict[str, Any]:
-    """The case filter shared by analysis views; ``follows`` is a JSON list of follower rules."""
+                 attribute_range: str = Query(default="", max_length=400),
+                 starts_with: str = Query(default="", max_length=200),
+                 ends_with: str = Query(default="", max_length=200),
+                 duration_min: float | None = Query(default=None, ge=0, le=10 ** 10),
+                 duration_max: float | None = Query(default=None, ge=0, le=10 ** 10)) -> dict[str, Any]:
+    """The case filter shared by analysis views; ``follows`` is a JSON list of follower rules.
+
+    ``starts_with``/``ends_with`` keep cases whose first/last activity is the given one; ``duration_min``
+    (inclusive) and ``duration_max`` (exclusive) bound the case duration in seconds.
+    """
     cohort: dict[str, Any] = {"started_from": started_from, "started_before": started_before, "resource": resource,
                               "activity": activity, "attribute": attribute, "event_attribute": event_attribute,
-                              "tag": tag}
+                              "tag": tag, "starts_with": starts_with, "ends_with": ends_with}
+    if duration_min is not None or duration_max is not None:
+        cohort["duration"] = {k: v for k, v in (("min", duration_min), ("max", duration_max)) if v is not None}
     if follows:
         try:
             cohort["follows"] = json.loads(follows)
