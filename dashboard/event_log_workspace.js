@@ -953,6 +953,10 @@
       }catch(error){if(isCurrent())savedStatus.textContent=error.message;}
       finally{deleteButton.disabled=false;}
     };
+    // A manually edited expression is no longer the selected saved revision.
+    for(const control of [metric,operation,other]){
+      control.addEventListener('change',()=>{savedPicker.value='';});
+    }
     const initialLog=state.logId,initialGeneration=state.generation;
     loadSaved().catch(error=>{
       if(initialLog===state.logId&&initialGeneration===state.generation)savedStatus.textContent=error.message;
@@ -974,9 +978,13 @@
           :{field:metric.value};
         const expression=operation.value==='single'
           ?first:{[operation.value]:[first,{field:other.value}]};
-        const url=new URL('/v1/event-logs/'+encodeURIComponent(logId)+'/cohort-metric',window.location.origin);
+        const savedId=savedPicker.value;
+        const endpoint='/v1/event-logs/'+encodeURIComponent(logId)+(savedId
+          ?'/cohort-metric-definitions/'+encodeURIComponent(savedId)+'/evaluate':'/cohort-metric');
+        const url=new URL(endpoint,window.location.origin);
         if(caseType)url.searchParams.set('case_type',caseType);
-        const response=await api(url.pathname+url.search,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({definition:{version:1,expression},cohort})});
+        const payload=savedId?{cohort}:{definition:{version:1,expression},cohort};
+        const response=await api(url.pathname+url.search,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
         const data=await response.json();
         if(t!==turn||generation!==state.generation||logId!==state.logId||caseType!==state.caseType)return;
         const m=data.metric||{};
