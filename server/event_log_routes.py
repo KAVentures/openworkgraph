@@ -14,7 +14,7 @@ from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi import Path as PathParam
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
@@ -776,6 +776,25 @@ def event_log_automation_candidates(request: Request, log_id: str, case_type: st
     return _respond(automation.candidates, log_id, case_type, limit=limit, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/decision-points")
+def event_log_decision_points(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                              cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_decision_mining as decisions
+    _require_dashboard(request)
+    return _respond(decisions.decision_points, log_id, case_type, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/decision-rules")
+def event_log_decision_rules(request: Request, log_id: str,
+                             decision_activity: str = Query(min_length=1, max_length=200),
+                             case_type: str | None = Query(default=None, max_length=200),
+                             max_depth: int = Query(default=3, ge=1, le=4),
+                             cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_decision_mining as decisions
+    _require_dashboard(request)
+    return _respond(decisions.analyse, log_id, decision_activity, case_type, max_depth=max_depth, cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/variants")
 def event_log_variants(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                        limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):
@@ -941,6 +960,20 @@ async def event_log_working_calendar(request: Request,log_id: str,
     except ValidationError:raise HTTPException(422,'Invalid working-calendar analysis settings') from None
     return await run_in_threadpool(_respond,waiting.waiting_time,log_id,case_type,
         cohort=cohort,**spec.model_dump())
+
+
+@router.get("/v1/event-logs/{log_id}/performance-spectrum")
+def event_log_performance_spectrum(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                                   segment: list[str] = Query(default=[], max_length=12),
+                                   top: int = Query(default=6, ge=1, le=12), bins: int = Query(default=30, ge=2, le=100),
+                                   cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_performance_spectrum as spectrum
+    _require_dashboard(request)
+
+    def run():
+        return spectrum.spectrum(log_id, case_type, segments=spectrum.parse_segments(segment), top=top, bins=bins,
+                                 cohort=cohort)
+    return _respond(run)
 
 
 @router.get("/v1/event-logs/{log_id}/dotted-chart")
@@ -1564,6 +1597,22 @@ def event_log_model_discovery(request: Request, log_id: str, case_type: str | No
         cohort: dict[str, Any] = Depends(_case_filter)):
     _require_dashboard(request)
     return _respond(model_discovery.discover, log_id, case_type, noise=noise, activities=activities, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/model-discovery.pnml")
+def event_log_model_discovery_pnml(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                                   noise: float = Query(default=0.2, ge=0, lt=1),
+                                   activities: float = Query(default=1.0, gt=0, le=1),
+                                   cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_pnml as pnml
+    _require_dashboard(request)
+    try:
+        xml, meta = pnml.discovered_pnml(log_id, case_type, noise=noise, activities=activities, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(xml, media_type="application/xml", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-discovered.pnml"',
+        "X-OWG-Petri-Net": f"places={meta['places']}; transitions={meta['transitions']}; silent={meta['silent_transitions']}"})
 
 
 @router.post("/v1/event-logs/{log_id}/model-discovery-draft")

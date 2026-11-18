@@ -1530,6 +1530,31 @@ One million events take about 2 seconds locally
 describes the imported log. It is not a verified workflow or policy, and it never authorizes
 execution.
 
+
+### Petri net export (PNML)
+
+"Download Petri net (PNML)" exports the discovered model as a workflow net in PNML
+(ISO/IEC 15909-2). ProM, PM4Py, Apromore, WoPeD and most academic process-mining tools read this
+format. The process tree is translated block by block:
+- an activity becomes a visible transition, and a skip becomes a silent transition;
+- a sequence chains its parts through new places;
+- a choice puts every branch between the same two places;
+- a parallel block adds a silent split and a silent join;
+- a loop runs its body, then leaves through a silent transition or runs the redo part and the body
+  again.
+
+The net has one source place, marked with one token, and one sink place. The sink is declared in
+`finalmarkings`, as PM4Py and ProM read it. Silent transitions carry the ProM `$invisible$` flag.
+
+Place and transition identifiers are generated (`p0`, `t0`, …); activity names appear only as
+transition names. Tests replay every trace up to six steps and check that the net accepts exactly
+the traces the process tree accepts.
+
+`GET /v1/event-logs/{log_id}/model-discovery.pnml?noise=&activities=&case_type=` plus the
+case-filter parameters. It returns `application/xml` with an `X-OWG-Petri-Net` header that counts
+places, transitions and silent transitions. Dashboard session only. Like the discovered draft, the
+net is a candidate model for review, not a verified workflow.
+
 ## Process map with abstraction sliders
 
 `GET /v1/event-logs/{log_id}/process-map?activities=0.8&paths=0.5` (dashboard session only)
@@ -2032,3 +2057,79 @@ and authorizes nothing.
 
 `GET /v1/event-logs/{log_id}/automation-candidates?limit=&case_type=` plus the usual case-filter
 parameters; dashboard session only.
+
+## Performance spectrum
+
+The performance spectrum shows how long each step-to-step segment took, over calendar time. It
+follows Denisov, Fahland and van der Aalst (2018), as in ProM. A segment is "activity A directly
+followed by activity B" within a case. Every occurrence is drawn as a line from the moment A
+happened (top axis) to the moment B happened (bottom axis).
+
+This shows patterns a process map hides:
+- **Batching:** many lines meet at one point at the bottom, so work was released together.
+- **Overtaking:** lines cross, so later work finished before earlier work.
+- **Changes over time:** some periods are slower than others.
+
+For the 6 busiest segments (1–12), or the segments asked for, the result gives:
+
+| Field | Meaning |
+| --- | --- |
+| `duration_seconds` | 25th, 50th, 75th and 95th percentiles, mean and maximum. |
+| `bins` | For equal calendar periods by start time (2–100, default 30): occurrences per class and the median. |
+| `fifo_share` | Among occurrences in start order, the share that also finish no earlier than the one before. Pairs that start at the same instant are skipped. `null` when no two start at different times. |
+| `batched_share` | Share of occurrences that end at the same instant as at least two others of the segment. |
+| `lines` | A repeatable sample of at most 400 occurrences with start, end (seconds from `time_origin`) and class. `lines_sampled` says when it is a sample. |
+
+Each occurrence is put in a class against the segment's own percentiles:
+- `fast`: below the 25th percentile;
+- `normal`: between the 25th and 75th;
+- `slow`: above the 75th;
+- `very_slow`: above the 95th.
+
+Durations are the time between two recorded events, not working time. Overtaking and batching
+describe the log; they do not say why work waited or who caused it. The global case filter
+applies.
+
+`GET /v1/event-logs/{log_id}/performance-spectrum?top=&bins=&segment=A->B&case_type=` plus the
+case-filter parameters. Repeat `segment` for several segments (at most 12). Dashboard session
+only.
+## Decision rules (decision mining)
+
+Decision mining finds the points where cases take different routes and learns which recorded
+data goes with each route. ProM's decision miner, PM4Py, Celonis and SAP Signavio offer the same
+analysis.
+
+1. **Decision points.** These are activities after which cases continue to at least two different
+   next activities, or end (`(end)`). Each branch must be seen at least 5 times.
+2. **Data known at the decision.** The rules use two kinds of data:
+   - the case's attributes (`case.*`);
+   - the latest non-empty value of every event attribute recorded on the case at or before the
+     decision event (`event.*`).
+
+   Values recorded after the decision are never used. Case attributes carry no time, so they may
+   have been set later; the result says so.
+3. **Rules.** A CART decision tree (Gini impurity, depth 1–4, default 3) is learned on about 70% of
+   the cases and scored on the rest.
+   - The split is by a hash of the case id, so it is repeatable and keeps each case on one side.
+   - Numeric attributes are split at the best boundary between observed values. Text attributes
+     are split on their 30 most common values.
+   - Each leaf is a rule. It shows its conditions, the usual next activity, its confidence and the
+     number of training occurrences.
+
+The result also gives:
+- the held-out accuracy, next to the accuracy of always predicting the most common branch;
+- `beats_baseline`;
+- a confusion table;
+- the share of the tree's impurity reduction due to each attribute.
+
+Rules are associations in this log, not the business rule or its cause, and authorize nothing.
+At most 200,000 occurrences of the activity are used, and the result says when it was capped. The
+global case filter applies.
+
+- `GET /v1/event-logs/{log_id}/decision-points?case_type=` plus the case-filter parameters.
+- `GET /v1/event-logs/{log_id}/decision-rules?decision_activity=&max_depth=&case_type=` plus the
+  case-filter parameters. The case filter's own `activity` parameter still selects cases that
+  contain an activity.
+
+Both routes need a dashboard session. Agents can read the same results, at the aggregates level,
+through `get_process_decision_rules` (see PROCESS_INTELLIGENCE_FOR_AGENTS.md).

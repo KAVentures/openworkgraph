@@ -239,6 +239,12 @@ const path=require('node:path');
    outline=await page.locator('#owgDiscoveryOutline').textContent();
    assert.match(outline,/Choose one of:\n {2}Option 1 · 6 cases:\n {4}\(skip\)\n {2}Option 2 · 54 cases:\n {4}Approve\nClose/);
    assert.match(await page.locator('#owgDiscoveryStatus').textContent(),/fits 60 of 60 checked cases/);
+   // The same draft downloads as a PNML workflow net with the skip as a silent transition.
+   const [pnmlDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#owgDiscoveryPnml').click()]);
+   assert.match(pnmlDownload.suggestedFilename(),/-discovered\.pnml$/);
+   const pnmlText=await fs.readFile(await pnmlDownload.path(),'utf8');
+   assert.match(pnmlText,/<pnml>/);assert.match(pnmlText,/<text>Approve<\/text>/);assert.match(pnmlText,/\$invisible\$/);
+   await page.locator('#owgDiscoveryStatus').filter({hasText:'Petri net downloaded (places='}).waitFor();
    const [snapshotResponse]=await Promise.all([
      page.waitForResponse(r=>r.url().endsWith('/model-discovery-draft')&&r.request().method()==='POST'),
      page.locator('#owgDiscoveryDraft').click()
