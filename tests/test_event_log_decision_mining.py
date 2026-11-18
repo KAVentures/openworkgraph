@@ -35,6 +35,32 @@ def _log(n: int = 200):
                                 mapping=MAPPING)["log_id"]
 
 
+def test_literal_end_activity_and_case_completion_are_separate_branches():
+    rows = ["case,activity,time,amount"]
+    for i in range(200):
+        amount = i % 2
+        rows.append(f"c{i},Check,2024-03-01T08:00:00Z,{amount}")
+        if amount:
+            rows.extend([f"c{i},(end),2024-03-01T09:00:00Z,",
+                         f"c{i},(case ended),2024-03-01T10:00:00Z,"])
+    log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="completion branches", source_format="csv",
+        mapping={**MAPPING, "resource_column": "", "attribute_columns": ["amount"]})["log_id"]
+    points = decisions.decision_points(log)
+    terminal = points["terminal_label"]
+    assert terminal == "(case ended 2)"
+    point = next(point for point in points["decision_points"] if point["activity"] == "Check")
+    assert {(b["next"], b["next_is_terminal"], b["occurrences"]) for b in point["branches"]} == {
+        ("(end)", False, 100), (terminal, True, 100),
+    }
+    result = decisions.analyse(log, "Check")
+    assert result["terminal_label"] == terminal
+    assert result["evaluation"]["holdout_accuracy"] == 1
+    assert {(r["next"], r["next_is_terminal"]) for r in result["rules"]} == {
+        ("(end)", False), (terminal, True),
+    }
+    assert set(result["evaluation"]["holdout_confusion"]) == {"(end)", terminal}
+
+
 def test_decision_points_list_branches():
     log = _log()
     result = decisions.decision_points(log)
@@ -149,29 +175,3 @@ print("ok")
     root = Path(__file__).resolve().parents[1]
     done = subprocess.run([sys.executable, "-c", code], cwd=root, env=env, capture_output=True, text=True, timeout=180)
     assert done.returncode == 0 and done.stdout.strip().endswith("ok"), f"stdout={done.stdout}\nstderr={done.stderr}"
-
-
-def test_literal_end_activity_and_case_completion_are_separate_branches():
-    rows = ["case,activity,time,amount"]
-    for i in range(200):
-        amount = i % 2
-        rows.append(f"c{i},Check,2024-03-01T08:00:00Z,{amount}")
-        if amount:
-            rows.extend([f"c{i},(end),2024-03-01T09:00:00Z,",
-                         f"c{i},(case ended),2024-03-01T10:00:00Z,"])
-    log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="completion branches", source_format="csv",
-        mapping={**MAPPING, "resource_column": "", "attribute_columns": ["amount"]})["log_id"]
-    points = decisions.decision_points(log)
-    terminal = points["terminal_label"]
-    assert terminal == "(case ended 2)"
-    point = next(point for point in points["decision_points"] if point["activity"] == "Check")
-    assert {(b["next"], b["next_is_terminal"], b["occurrences"]) for b in point["branches"]} == {
-        ("(end)", False, 100), (terminal, True, 100),
-    }
-    result = decisions.analyse(log, "Check")
-    assert result["terminal_label"] == terminal
-    assert result["evaluation"]["holdout_accuracy"] == 1
-    assert {(r["next"], r["next_is_terminal"]) for r in result["rules"]} == {
-        ("(end)", False), (terminal, True),
-    }
-    assert set(result["evaluation"]["holdout_confusion"]) == {"(end)", terminal}
