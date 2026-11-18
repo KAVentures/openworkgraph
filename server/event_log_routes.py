@@ -547,6 +547,15 @@ def event_log_quality_overview(request: Request, log_id: str):
     return _respond(quality.overview, log_id)
 
 
+@router.get("/v1/event-logs/{log_id}/quality/attribute-coverage")
+def event_log_quality_attribute_coverage(request: Request, log_id: str,
+        offset: int = Query(default=0, ge=0, le=2_147_483_647),
+        revision: int | None = Query(default=None, ge=0, le=2_147_483_647)):
+    from . import event_log_quality_coverage
+    _require_dashboard(request)
+    return _respond(event_log_quality_coverage.page, log_id, offset, revision)
+
+
 @router.get("/v1/event-logs/{log_id}/quality/batch-history")
 def event_log_quality_batch_history(request: Request, log_id: str):
     _require_dashboard(request)
@@ -1068,6 +1077,16 @@ def event_log_drift(request: Request, log_id: str, case_type: str | None = Query
     _require_dashboard(request)
     return _respond(drift.drift, log_id, case_type, window=window, window_cases=window_cases, min_cases=min_cases,
                     cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/roles")
+def event_log_roles(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                    threshold: float = Query(default=0.65, gt=0, lt=1),
+                    names: str = Query(default="pseudonymous", max_length=20),
+                    cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_roles as roles
+    _require_dashboard(request)
+    return _respond(roles.roles, log_id, case_type, threshold=threshold, names=names, cohort=cohort)
 
 
 @router.get("/v1/event-logs/{log_id}/organization")

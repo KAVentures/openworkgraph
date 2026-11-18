@@ -13,6 +13,7 @@
   let activityLookupBusy=false;
   // Views that honour the workspace case filter; every other section uses all cases.
   const FILTERED=new Set(['automation-candidates','summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','performance-spectrum','waiting-time','drift','model-discovery','organization','report.html','decision-points','decision-rules']);
+  FILTERED.add('roles');
   FILTERED.add('model-discovery.pnml');
   FILTERED.add('temporal-profile');
   FILTERED.add('heuristics-net');
@@ -3930,6 +3931,33 @@
         el('div','Current content digest v1: '+r.current.content_sha256+'. '+
           (r.current.content_sha256_v2?' Current content digest v2 (delimiter-safe): '+r.current.content_sha256_v2+'.':' Content digest v2 not recorded (legacy server).')+
           ' '+r.current.completeness.note,'muted'));
+      if(d.attribute_coverage_truncated===true){
+        const coverageHost=el('div');coverageHost.id='owgQualityCoveragePages';
+        const browse=button('Browse all attribute coverage','secondary');
+        browse.id='owgQualityCoverageBrowse';out.append(browse,coverageHost);
+        let coverageTurn=0,coverageRevision=null;
+        async function loadCoverage(offset=0){
+          const turn=++coverageTurn;browse.disabled=true;
+          coverageHost.replaceChildren(el('p','Loading attribute coverage counts…','muted'));
+          try{
+            const query=offset?'?offset='+offset+'&revision='+coverageRevision:'';
+            const page=await getJSON('/v1/event-logs/'+encodeURIComponent(state.logId)+'/quality/attribute-coverage'+query);
+            if(generation!==state.generation||!coverageHost.isConnected||turn!==coverageTurn)return;
+            coverageRevision=page.revision;
+            const previous=button('Previous attributes','secondary'),next=button('Next attributes','secondary');
+            previous.id='owgQualityCoveragePrevious';next.id='owgQualityCoverageNext';
+            previous.disabled=offset===0;next.disabled=page.next_offset==null;
+            previous.onclick=()=>loadCoverage(Math.max(0,offset-32));next.onclick=()=>loadCoverage(page.next_offset);
+            coverageHost.replaceChildren(el('p','Showing '+(page.attributes.length?offset+1:0)+'–'+(offset+page.attributes.length)+' of '+Number(page.total_keys).toLocaleString()+' attribute keys across '+Number(page.events).toLocaleString()+' events. Counts are current, not the original import report.','muted'),
+              table(['Attribute','Events with a value','Without'],page.attributes.map(a=>[a.attribute,Number(a.events_with_value).toLocaleString(),Number(a.events_without_value).toLocaleString()])),previous,next);
+          }catch(error){
+            if(generation!==state.generation||!coverageHost.isConnected||turn!==coverageTurn)return;
+            const reload=button('Reload attribute coverage','secondary');reload.onclick=()=>loadCoverage();
+            coverageHost.replaceChildren(el('p',error.message,'muted'),reload);
+          }finally{if(generation===state.generation&&coverageHost.isConnected&&turn===coverageTurn)browse.disabled=false;}
+        }
+        browse.onclick=()=>loadCoverage();
+      }
       const refresh=button('Refresh quality diagnostics','secondary');
       refresh.onclick=()=>{loaded=false;loadQuality();};out.appendChild(refresh);
       loaded=true;
@@ -4190,9 +4218,25 @@
     const namesLabel=el('label');namesLabel.style.cssText='display:flex;gap:6px;align-items:center';
     const names=input('owgEventLogOrgNames','checkbox');namesLabel.append(names,document.createTextNode(' Show resource names from the log'));
     const run=button('Show handovers','secondary');run.id='owgEventLogOrgRun';
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(namesLabel,run);
+    const rolesRun=button('Discover roles','secondary');rolesRun.id='owgEventLogRolesRun';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(namesLabel,run,rolesRun);
     const out=el('div');out.id='owgEventLogOrgResults';out.setAttribute('role','status');
     box.append(row,out);
+    rolesRun.onclick=async()=>{
+      const generation=state.generation;
+      try{
+        rolesRun.disabled=true;out.replaceChildren(el('div','Grouping resources by the activities they perform…','muted'));
+        const r=await getJSON(logPath('roles',{names:names.checked?'shown':'pseudonymous'}));
+        if(generation!==state.generation)return;
+        if(!r.roles.length){out.replaceChildren(el('div','This log has no resource column values to analyse.','muted'));return;}
+        out.replaceChildren(
+          el('div',r.roles.length+' roles from '+r.coverage.resources+' resources whose activity mixes correlate at '+r.threshold+' or more.'+(r.coverage.resources_truncated?' Only the 200 most active resources are grouped.':''),'muted'),
+          table(['Role','Members','Events','Main activities','Only this role'],r.roles.map(x=>[x.role,x.members.join(', '),Number(x.events).toLocaleString(),
+            x.activity_mix.slice(0,4).map(a=>a.activity+' '+Math.round(a.share*100)+'%').join(', '),x.exclusive_activities.join(', ')||'\u2014'])),
+          el('div',r.interpretation,'muted'));
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{rolesRun.disabled=false;}
+    };
     run.onclick=async()=>{
       const generation=state.generation;
       try{
