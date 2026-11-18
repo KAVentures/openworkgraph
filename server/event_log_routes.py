@@ -14,7 +14,7 @@ from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi import Path as PathParam
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
@@ -1045,6 +1045,16 @@ def event_log_drift(request: Request, log_id: str, case_type: str | None = Query
                     cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/roles")
+def event_log_roles(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                    threshold: float = Query(default=0.65, gt=0, lt=1),
+                    names: str = Query(default="pseudonymous", max_length=20),
+                    cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_roles as roles
+    _require_dashboard(request)
+    return _respond(roles.roles, log_id, case_type, threshold=threshold, names=names, cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/organization")
 def event_log_organization(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                            names: str = Query(default="pseudonymous", max_length=20),
@@ -1635,6 +1645,22 @@ def event_log_model_discovery(request: Request, log_id: str, case_type: str | No
         cohort: dict[str, Any] = Depends(_case_filter)):
     _require_dashboard(request)
     return _respond(model_discovery.discover, log_id, case_type, noise=noise, activities=activities, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/model-discovery.pnml")
+def event_log_model_discovery_pnml(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                                   noise: float = Query(default=0.2, ge=0, lt=1),
+                                   activities: float = Query(default=1.0, gt=0, le=1),
+                                   cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_pnml as pnml
+    _require_dashboard(request)
+    try:
+        xml, meta = pnml.discovered_pnml(log_id, case_type, noise=noise, activities=activities, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(xml, media_type="application/xml", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-discovered.pnml"',
+        "X-OWG-Petri-Net": f"places={meta['places']}; transitions={meta['transitions']}; silent={meta['silent_transitions']}"})
 
 
 @router.post("/v1/event-logs/{log_id}/model-discovery-draft")

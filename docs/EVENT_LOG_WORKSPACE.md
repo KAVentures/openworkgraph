@@ -1130,6 +1130,33 @@ No per-person duration, waiting time, speed, ranking or performance score is cal
 not even on handover edges. Handover counts say who touched a case next, not who was
 responsible or how well anyone worked. One million events are analysed in seconds
 (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_organization.py`).
+
+### Roles
+
+"Discover roles" groups resources that perform a similar mix of activities. This is organizational
+role mining, as in Song and van der Aalst (2008), PM4Py's role discovery and ProM's organizational
+miner.
+
+1. Each resource's activity counts are compared with the Pearson correlation.
+2. Starting from one group per resource, the two groups whose summed profiles correlate most are
+   merged.
+3. Merging repeats while the correlation is at least the threshold (default 0.65, as in PM4Py;
+   `threshold` must be above 0 and below 1).
+
+Each role lists:
+- its members;
+- its events;
+- its activity mix (the top eight activities with their shares);
+- the activities that only this role performs.
+
+The 200 most active resources and the 200 most frequent activities are considered. Resources are
+pseudonymous ("Resource 01", numbered by event count) unless names are asked for. Roles describe
+recorded work, not job titles, responsibilities or how well anyone worked. No duration, speed,
+ranking or score of any person is computed.
+
+`GET /v1/event-logs/{log_id}/roles?threshold=&names=pseudonymous|shown&case_type=` plus the
+case-filter parameters. Dashboard session only.
+
 ## Signals
 
 Signals are saved conditions you check a log against. This is local, signal-only parity with
@@ -1517,6 +1544,31 @@ One million events take about 2 seconds locally
 (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_model_discovery.py`). A discovered draft
 describes the imported log. It is not a verified workflow or policy, and it never authorizes
 execution.
+
+
+### Petri net export (PNML)
+
+"Download Petri net (PNML)" exports the discovered model as a workflow net in PNML
+(ISO/IEC 15909-2). ProM, PM4Py, Apromore, WoPeD and most academic process-mining tools read this
+format. The process tree is translated block by block:
+- an activity becomes a visible transition, and a skip becomes a silent transition;
+- a sequence chains its parts through new places;
+- a choice puts every branch between the same two places;
+- a parallel block adds a silent split and a silent join;
+- a loop runs its body, then leaves through a silent transition or runs the redo part and the body
+  again.
+
+The net has one source place, marked with one token, and one sink place. The sink is declared in
+`finalmarkings`, as PM4Py and ProM read it. Silent transitions carry the ProM `$invisible$` flag.
+
+Place and transition identifiers are generated (`p0`, `t0`, …); activity names appear only as
+transition names. Tests replay every trace up to six steps and check that the net accepts exactly
+the traces the process tree accepts.
+
+`GET /v1/event-logs/{log_id}/model-discovery.pnml?noise=&activities=&case_type=` plus the
+case-filter parameters. It returns `application/xml` with an `X-OWG-Petri-Net` header that counts
+places, transitions and silent transitions. Dashboard session only. Like the discovered draft, the
+net is a candidate model for review, not a verified workflow.
 
 ## Process map with abstraction sliders
 

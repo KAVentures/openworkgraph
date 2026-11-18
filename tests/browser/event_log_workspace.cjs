@@ -252,6 +252,12 @@ const path=require('node:path');
    outline=await page.locator('#owgDiscoveryOutline').textContent();
    assert.match(outline,/Choose one of:\n {2}Option 1 · 6 cases:\n {4}\(skip\)\n {2}Option 2 · 54 cases:\n {4}Approve\nClose/);
    assert.match(await page.locator('#owgDiscoveryStatus').textContent(),/fits 60 of 60 checked cases/);
+   // The same draft downloads as a PNML workflow net with the skip as a silent transition.
+   const [pnmlDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#owgDiscoveryPnml').click()]);
+   assert.match(pnmlDownload.suggestedFilename(),/-discovered\.pnml$/);
+   const pnmlText=await fs.readFile(await pnmlDownload.path(),'utf8');
+   assert.match(pnmlText,/<pnml>/);assert.match(pnmlText,/<text>Approve<\/text>/);assert.match(pnmlText,/\$invisible\$/);
+   await page.locator('#owgDiscoveryStatus').filter({hasText:'Petri net downloaded (places='}).waitFor();
    const [snapshotResponse]=await Promise.all([
      page.waitForResponse(r=>r.url().endsWith('/model-discovery-draft')&&r.request().method()==='POST'),
      page.locator('#owgDiscoveryDraft').click()
@@ -676,6 +682,15 @@ const path=require('node:path');
    assert.match(org,/Resource 01/);assert.doesNotMatch(org,/\bann\b|\bbob\b|\bbot\b/);assert.match(org,/No speed|not say who|Neither says/);
    await page.locator('#owgEventLogOrgNames').check();await page.locator('#owgEventLogOrgRun').click();
    await page.locator('#owgEventLogOrgResults').getByText('bot',{exact:true}).first().waitFor();
+   // Roles group resources by their activity mix; names were chosen above, so they are shown.
+   await page.locator('#owgEventLogRolesRun').click();
+   await page.locator('#owgEventLogOrgResults').getByText('Only this role').waitFor();
+   const rolesText=await page.locator('#owgEventLogOrgResults').textContent();
+   assert.match(rolesText,/roles from \d+ resources whose activity mixes correlate at 0\.65 or more/);assert.match(rolesText,/Role 1/);
+   assert.match(rolesText,/not job titles/);
+   await page.locator('#owgEventLogOrgNames').uncheck();await page.locator('#owgEventLogRolesRun').click();
+   await page.locator('#owgEventLogOrgResults').getByText('Resource 01',{exact:false}).first().waitFor();
+   assert.doesNotMatch(await page.locator('#owgEventLogOrgResults').textContent(),/\bann\b|\bbob\b|\bbot\b/);
    const ruleBody=await page.evaluate(()=>window.__owgEventLogModel.signalRule({name:'Rework',kind:'kpi',metric:'rework_rate',operator:'above',threshold:'25'}));
    assert.deepEqual(ruleBody,{name:'Rework',when:{kind:'kpi',metric:'rework_rate',operator:'above',threshold:0.25}});
    await page.locator('#owgSignalName').fill('Skipped approval');await page.locator('#owgSignalCondition').selectOption('lacks_activity');

@@ -5,8 +5,8 @@ choice. Set it under **Privacy → Interaction detail**.
 
 | Profile | Adds to today's signals |
 |---|---|
-| **Standard** (default) | nothing: clicks, focus, changes, copy/paste, submits and navigation, as before |
-| **Enhanced** | hover dwell on controls, drag and drop, friction candidates |
+| **Standard** | nothing: clicks, focus, changes, copy/paste, submits and navigation, as before |
+| **Enhanced** (default) | hover dwell on controls, drag and drop, friction candidates |
 | **Full fidelity** | Enhanced plus sampled pointer movement; needs its own acknowledgement |
 
 You can also switch each signal on or off on its own, set how long the pointer must
@@ -14,12 +14,26 @@ rest before a hover counts (300–5,000 ms, default 750), and set pointer sample
 second (1–20, default 4). The extension also caps all of these events at 60 a minute.
 How long this detail is kept is set separately (below).
 
-**Time-limited.** Enhanced and Full fidelity are never open-ended. Each time you turn on
-extra detail you choose how long it lasts (1, 7, 30 or 90 days; the API takes
-`duration_days`, 1–90, default 7). When the period ends, the local server and the
-extension both return to Standard by themselves. The Full fidelity acknowledgement is
-cleared whenever pointer movement is turned off or its period ends, so turning Full on
-again always asks again.
+**Context-maximizing by default.** Until you choose, OpenWorkGraph records at Enhanced:
+the richest *structural* interaction evidence it has, with no pointer samples and no
+content. The browser extension, the desktop recorder and the local server all read the
+same default, and the dashboard says that it is the default.
+
+**Stays until you change it, or for a period.** A profile you choose stays until you
+change it. You can instead choose a period (1, 7, 30 or 90 days; the API takes
+`duration_days`, 1–90), after which the local server, the desktop recorder and the
+extension return to Standard by themselves. Full fidelity lasts 7 days unless you choose
+otherwise (`duration_days: null` keeps it until changed). The Full fidelity
+acknowledgement is cleared whenever pointer movement is turned off or its period ends, so
+turning Full on again always asks again.
+
+**Rich content is a separate, explicit choice.** Screenshots with local OCR
+(**Privacy → Full screen capture**) and the text of pages and documents
+(**Privacy → Work text**) record content, not just structure, so each needs its own
+explicit choice and acknowledgement. Capture depth never turns them on. On a shared or
+regulated device, or where an employer's rules or data-protection law limit what may be
+recorded (GDPR Article 25 requires data protection by default for the purpose at hand),
+choose Standard and leave content capture off.
 
 Capture depth only decides what is **recorded locally**. Retention, sharing with your
 organization and sharing with an AI or cloud service keep their own separate
@@ -124,8 +138,8 @@ event (the extension retries failed deliveries with the same event ID) is stored
 ## Desktop
 
 The desktop recorder reads the same capture-depth choice, at most every two
-seconds, so a change needs no restart. It honours the same time limit: once the chosen
-period ends, or if the period is missing, it records Standard only.
+seconds, so a change needs no restart. It honours the same choice: with no choice saved it records Enhanced; once a chosen
+period ends, or if the saved choice is unreadable, it records Standard only.
 
 - **Drag and drop** (`screen_drag`): a mouse press and release at least 16 pixels and
   150 ms apart. It records the start and end points and, when UI labels are on, the
@@ -169,10 +183,10 @@ disabled signal. It also:
 - drops the keys reserved for high-fidelity data (`points`, `trajectory`,
   `pointer_points`, `sample_hz`, `viewport_bucket`, `coordinates`) from every other
   browser event, so coordinates cannot ride along in an ordinary click;
-- returns to Standard once the chosen period ends.
+- returns to Standard once a chosen period ends.
 
-The extension falls back to Standard when the local server cannot be reached or the
-period has ended.
+The extension falls back to Standard when the local server cannot be reached or a
+chosen period has ended.
 
 **Trust boundary.** These rules bound what the paired browser extension can store. The
 extension is a trusted, paired client: one that has been modified can still put other
@@ -267,7 +281,7 @@ corpus with and without added detail (see `evals/reconstruction/README.md`).
 | Route | Purpose |
 |---|---|
 | `GET /v1/capture-depth` | Current profile, signals, parameters |
-| `PUT /v1/capture-depth` | Change them; dashboard session only. Takes `profile`, `signals`, `parameters`, `duration_days` (1–90, default 7) and, for pointer movement, `acknowledgement_version` |
+| `PUT /v1/capture-depth` | Change them; dashboard session only. Takes `profile`, `signals`, `parameters`, `duration_days` (1–90, or `null` to keep it until changed; Full fidelity defaults to 7 when omitted) and, for pointer movement, `acknowledgement_version` |
 | `GET /v1/capture-coverage` | Coverage manifest |
 | `GET /v1/capture-coverage/friction?hours=` | Friction candidates; dashboard session only |
 | `GET /v1/capture-coverage/heatmap?hostname=&pathname=&hours=` | Pages with pointer samples or one page's grid of counts; dashboard session only |
