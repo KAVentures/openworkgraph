@@ -3902,6 +3902,8 @@
         if(generation!==state.generation)return;
         const f=r.fitness;
         status.textContent='Alignment fitness '+pct(f.log)+': '+Number(f.fitting_cases).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases follow the net exactly. On average a case needs '+r.deviation_cost.per_case+' extra or skipped steps to fit.'+(r.unaligned.variants?' '+r.unaligned.variants+' variants ('+Number(r.unaligned.cases).toLocaleString()+' cases) were too long to align within the search limit.':'');
+        if(r.by_month.length>1){aligned.appendChild(el('h4','Fitness by month the cases started'));
+          const t=table(['Month','Cases','Follow the net exactly','Alignment fitness'],r.by_month.map(m=>[m.month,Number(m.cases).toLocaleString(),pct(m.fitting_case_share),pct(m.fitness)]));t.id='owgPetriAlignMonths';aligned.appendChild(t);}
         if(r.log_moves.length){aligned.appendChild(el('h4','Steps the cases took that the net does not allow there'));
           aligned.appendChild(table(['Activity','Cases','Times'],r.log_moves.map(m=>[m.activity,Number(m.cases).toLocaleString(),Number(m.times).toLocaleString()])));}
         if(r.model_moves.length){aligned.appendChild(el('h4','Steps the net requires that the cases skipped'));
