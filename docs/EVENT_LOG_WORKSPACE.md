@@ -2148,6 +2148,28 @@ the section offers 0.3, 0.5, 0.7 and 0.9) and when seen at least the chosen numb
 `GET /v1/event-logs/{log_id}/heuristics-net?dependency_threshold=&and_threshold=&min_occurrences=&all_connected=`
 plus the case-filter parameters. Agents with access to a shared log use `get_process_heuristics_net`.
 
+## Milestone funnel
+
+**Milestone funnel** follows cases through 2 to 8 activities you choose, in order, as Celonis's
+conversion views, UiPath Process Mining milestones and product-analytics funnels do. A case reaches
+step *k* when it did steps 1 … *k* in that order, each after the previous one; other activities may
+come in between. For each step the section shows:
+
+- how many cases reached it, as a share of all cases and of those that reached step 1;
+- the conversion from the previous step and how many cases dropped after it;
+- the hours from the previous step (median, 90th percentile, mean);
+- for cases that reached the previous step but not this one, the activity they did last, and how
+  many of them ended in the last 5% of the log's time span and so may still be open.
+
+The step with the largest drop is named, along with the median and 90th percentile time from the
+first to the last step. An optional **conversion window** counts a step only within that many hours
+of the latest occurrence of the previous step. The funnel shows how far cases got and how long it
+took, not why the others stopped; use the eventual-follower case filter to open the cases behind a
+step.
+
+`GET /v1/event-logs/{log_id}/funnel?step=A&step=B&within_hours=24` plus the case-filter
+parameters. Agents with access to a shared log use `get_process_funnel` (aggregates only).
+
 ## Model quality
 
 **Model quality** discovers the model at several noise levels (by default 0, 10%, 20%, 30% and 50%),

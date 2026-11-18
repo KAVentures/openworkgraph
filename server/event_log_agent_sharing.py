@@ -400,6 +400,14 @@ def model_deviations(log_id: str, case_type: str | None = None, noise: float = 0
             **{k: result[k] for k in keep if k in result}}
 
 
+def funnel(log_id: str, steps: list[str], case_type: str | None = None,
+           within_hours: float | None = None) -> dict[str, Any]:
+    """Milestone funnel over chosen activities (aggregates level: counts, timings, last activities)."""
+    require(log_id, "aggregates")
+    from . import event_log_funnel as fn
+    return {**fn.funnel(log_id, steps, case_type, within_hours=within_hours), "format": FORMAT, "log_id": log_id}
+
+
 def slowest_cases(log_id: str, case_type: str | None = None, limit: int = 10) -> dict[str, Any]:
     require(log_id, "cases")
     from . import event_log_case_explain as case_explain
