@@ -10,7 +10,7 @@
   const attrText=()=>[state.attr.attribute,state.attr.attribute_range?rangeText(state.attr.attribute_range):''].filter(Boolean).join('; ');
   let activityLookupBusy=false;
   // Views that honour the workspace case filter; every other section uses all cases.
-  const FILTERED=new Set(['automation-candidates','summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','waiting-time','drift','model-discovery','organization','report.html']);
+  const FILTERED=new Set(['automation-candidates','summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','performance-spectrum','waiting-time','drift','model-discovery','organization','report.html','decision-points','decision-rules']);
   FILTERED.add('model-discovery.pnml');
 
   const el=(tag,text,cls)=>{
@@ -751,11 +751,13 @@
     results.appendChild(discoverySection());
     results.appendChild(driftSection());
     results.appendChild(automationSection());
+    results.appendChild(decisionSection());
     results.appendChild(agentRunsRefreshSection());
     results.appendChild(folderFeedSection());
     results.appendChild(agentShareSection());
     results.appendChild(deriveSection(names));
     results.appendChild(dottedSection());
+    results.appendChild(spectrumSection());
     results.appendChild(waitingSection());
     results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity),inspection));
     results.appendChild(organizationSection());
@@ -1509,6 +1511,42 @@
           el('div','Fixed routing suggests rules may cover the step; variable routing suggests judgement, where an AI agent with human review may fit. '+r.caveat,'muted'));
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
       finally{run.disabled=false;}};
+    return box;
+  }
+
+  // Decision mining: which recorded data goes with which branch after an activity.
+  function decisionSection(){
+    const box=section('Decision rules');box.id='owgDecisions';
+    box.appendChild(el('div','Find the activities after which cases go different ways, then learn which recorded data goes with each branch. Only data recorded at or before the decision is used. Rules are associations in this log, checked on held-out cases, not the business rule.','muted'));
+    const find=button('Find decision points','secondary');find.id='owgDecisionFind';
+    const points=el('div');points.id='owgDecisionPoints';points.setAttribute('role','status');
+    const out=el('div');out.id='owgDecisionResults';out.setAttribute('role','status');
+    box.append(find,points,out);
+    const pct=x=>Math.round(x*100)+'%';
+    const cond=c=>c.attribute+' '+({'==':'is','!=':'is not','>=':'≥','<':'<'}[c.op])+' '+(typeof c.value==='number'?Number(c.value).toLocaleString():'“'+c.value+'”');
+    const learn=async(activity)=>{out.replaceChildren(el('div','Learning rules for '+activity+'…','muted'));
+      try{
+        const r=await getJSON(logPath('decision-rules',{decision_activity:activity}));
+        const head=el('div','After '+activity+': '+r.branches.map(b=>b.next+' '+pct(b.share)).join(', ')+' ('+Number(r.occurrences).toLocaleString()+' occurrences'+(r.occurrences_capped?', the first '+Number(r.occurrences_used).toLocaleString()+' used':'')+').','muted');
+        if(!r.rules.length){out.replaceChildren(head,el('div',r.note,'muted'));return;}
+        const e=r.evaluation,parts=[];
+        if('holdout_accuracy' in e)parts.push('Held-out accuracy '+pct(e.holdout_accuracy)+' on '+e.holdout_occurrences+' occurrences, against '+pct(e.majority_baseline_accuracy)+' for always predicting “'+e.majority_baseline+'”.'+(e.beats_baseline?'':' The rules do not beat that baseline; treat them as noise.'));
+        else parts.push(e.note);
+        const rows=r.rules.map(rule=>[rule.conditions.length?rule.conditions.map(cond).join(' and '):'(all occurrences)',rule.next,pct(rule.confidence),String(rule.training_occurrences)]);
+        out.replaceChildren(head,el('div',parts.join(' '),'muted'),
+          table(['When','Then usually','Confidence','Training occurrences'],rows),
+          el('div','Most informative data: '+(r.feature_importance.length?r.feature_importance.slice(0,5).map(f=>f.attribute+' '+pct(f.share)).join(', '):'none')+'.','muted'),
+          el('div',r.caveat,'muted'));
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}};
+    find.onclick=async()=>{find.disabled=true;points.replaceChildren(el('div','Looking for decision points…','muted'));out.replaceChildren();
+      try{
+        const r=await getJSON(logPath('decision-points'));
+        if(!r.decision_points.length){points.replaceChildren(el('div','No activity is followed by two or more branches seen at least '+r.min_branch_occurrences+' times each.','muted'));return;}
+        points.replaceChildren(table(['Activity','Occurrences','Branches',''],r.decision_points.map(p=>{
+          const go=button('Learn rules','secondary');go.setAttribute('aria-label','Learn rules after '+p.activity);go.onclick=()=>learn(p.activity);
+          return [p.activity,Number(p.occurrences).toLocaleString(),p.branches.slice(0,4).map(b=>b.next+' '+pct(b.share)).join(', ')+(p.branches.length>4?', …':''),go];})));
+      }catch(error){points.replaceChildren(el('div',error.message,'muted'));}
+      finally{find.disabled=false;}};
     return box;
   }
 
@@ -3472,6 +3510,60 @@
     result.cases.forEach((c,row)=>c.points.forEach(([t,slot])=>points.push({x:x(t),y:top+row*rowHeight+rowHeight/2,slot,t,row})));
     const ticks=(width<520?[0,0.5,1]:[0,0.25,0.5,0.75,1]).map(f=>({x:x(f*span),seconds:f*span}));
     return {width,height,points,ticks,top,bottom,left};
+  }
+
+  // Performance spectrum: each occurrence of a step-to-step segment as a line from its start to its end.
+  const SPECTRUM_COLOURS={fast:'#2a78c5',normal:'#8a8a84',slow:'#d08a1f',very_slow:'#c0392b'};
+  const SPECTRUM_NAMES={fast:'Fast',normal:'Normal',slow:'Slow',very_slow:'Very slow'};
+  function spectrumSection(){
+    const box=section('Performance spectrum');box.id='owgSpectrum';
+    box.appendChild(el('div','For the busiest step-to-step segments, each occurrence is a line from when the first step happened (top) to when the next one did (bottom), coloured by how long it took compared with the segment’s other occurrences. Lines that meet at the bottom show work released together; crossing lines show later work overtaking earlier work.','muted'));
+    const run=button('Draw performance spectrum','secondary');run.id='owgSpectrumRun';
+    const statusLine=el('div',null,'muted');statusLine.id='owgSpectrumStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgSpectrumResults';
+    box.append(run,statusLine,out);
+    const pct=x=>x===null?'—':Math.round(x*100)+'%';
+    run.onclick=async()=>{
+      const generation=state.generation;run.disabled=true;statusLine.textContent='Drawing…';out.replaceChildren();
+      try{
+        const r=await getJSON(logPath('performance-spectrum',{top:'6',bins:'30'}));
+        if(generation!==state.generation)return;
+        if(!r.segments.length){statusLine.textContent='No case has two consecutive events.';return;}
+        statusLine.textContent=r.segments.length+' of '+r.segments_total+' segments, busiest first.'+(r.cases_before_filter?' Filtered from '+Number(r.cases_before_filter).toLocaleString()+' cases.':'');
+        const legend=el('ul');legend.style.cssText='list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:4px 14px;margin:6px 0';
+        for(const k of Object.keys(SPECTRUM_COLOURS)){const item=el('li');const sw=el('span');sw.setAttribute('aria-hidden','true');
+          sw.style.cssText='display:inline-block;width:14px;height:3px;vertical-align:middle;margin-right:6px;background:'+SPECTRUM_COLOURS[k];
+          item.append(sw,document.createTextNode(SPECTRUM_NAMES[k]+' — '+r.classes[k]));legend.appendChild(item);}
+        out.appendChild(legend);
+        const span=Math.max(1,r.bin_seconds*r.bins);
+        const stamp=s=>new Date(Date.parse(r.time_origin)+s*1000).toISOString().slice(0,16).replace('T',' ');
+        const ink=getComputedStyle(box).color||'#52514e';
+        for(const seg of r.segments){
+          const title=el('h4',seg.from+' → '+seg.to);title.style.margin='12px 0 4px';
+          const width=Math.max(260,Math.min(1000,out.clientWidth||600)),height=90,pad=8;
+          const canvas=document.createElement('canvas');const ratio=window.devicePixelRatio||1;
+          canvas.width=width*ratio;canvas.height=height*ratio;canvas.style.cssText='width:'+width+'px;height:'+height+'px;display:block';
+          canvas.setAttribute('role','img');
+          canvas.setAttribute('aria-label','Performance spectrum of '+seg.from+' to '+seg.to+': '+seg.occurrences+' occurrences, '+pct(seg.fifo_share)+' finish in start order, '+pct(seg.batched_share)+' released together. The table below gives the figures.');
+          const ctx=canvas.getContext('2d');ctx.scale(ratio,ratio);
+          const end=Math.max(span,...seg.lines.map(l=>l.end));
+          const x=t=>pad+(width-2*pad)*t/end;
+          ctx.strokeStyle='rgba(128,128,128,0.5)';ctx.beginPath();ctx.moveTo(pad,pad);ctx.lineTo(width-pad,pad);ctx.moveTo(pad,height-pad);ctx.lineTo(width-pad,height-pad);ctx.stroke();
+          ctx.lineWidth=1;
+          for(const l of seg.lines){ctx.strokeStyle=SPECTRUM_COLOURS[l.class];ctx.globalAlpha=0.7;ctx.beginPath();ctx.moveTo(x(l.start),pad);ctx.lineTo(x(l.end),height-pad);ctx.stroke();}
+          ctx.globalAlpha=1;ctx.fillStyle=ink;ctx.font='11px system-ui,sans-serif';ctx.textAlign='left';
+          const d=seg.duration_seconds;
+          const facts=el('div',seg.occurrences.toLocaleString()+' occurrences'+(seg.lines_sampled?' ('+seg.lines.length+' drawn)':'')+' · median '+duration(d.median)+', 25th–75th percentile '+duration(d.p25)+'–'+duration(d.p75)+', 95th '+duration(d.p95)+' · '+pct(seg.fifo_share)+' finish in start order · '+pct(seg.batched_share)+' released together (≥'+r.batch_min+' ending at one instant).','muted');
+          const busy=seg.bins.filter(b=>Object.values(b.counts).some(n=>n));
+          const tbl=table(['Started from','Fast','Normal','Slow','Very slow','Median'],busy.map(b=>[stamp(b.bin*r.bin_seconds),...['fast','normal','slow','very_slow'].map(k=>String(b.counts[k])),duration(b.median_seconds)]));
+          const more=document.createElement('details');more.appendChild(el('summary','Occurrences per period'));more.appendChild(tbl);
+          out.append(title,canvas,facts,more);
+        }
+        out.appendChild(el('div',r.caveat,'muted'));
+        statusLine.textContent+=' Time runs from '+stamp(0)+' to '+stamp(span)+'.';
+      }catch(error){statusLine.textContent=error.message;}
+      finally{run.disabled=false;}};
+    return box;
   }
 
   function dottedSection(){
