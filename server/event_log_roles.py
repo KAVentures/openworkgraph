@@ -20,6 +20,8 @@ import math
 from collections import Counter
 from typing import Any
 
+from shared.event_log_formats import RESOURCE_PRESENCE_WHITESPACE
+
 from . import event_log_workspace as workspace
 from .event_log_workspace import EventLogWorkspaceError
 
@@ -54,43 +56,68 @@ def roles(log_id: str, case_type: str | None = None, *, threshold: float = DEFAU
         raise EventLogWorkspaceError("threshold must be a correlation above 0 and below 1")
 
     def run(conn):
-        ranked = conn.execute("""SELECT resource, count(*) AS n FROM ce WHERE resource <> ''
-            GROUP BY 1 ORDER BY n DESC, resource""").fetchall()
-        activities = [a for (a,) in conn.execute("""SELECT activity FROM ce WHERE resource <> ''
-            GROUP BY 1 ORDER BY count(*) DESC, activity LIMIT ?""", [MAX_ACTIVITIES]).fetchall()]
-        cells = conn.execute("""SELECT resource, activity, count(*) FROM ce WHERE resource <> ''
-            GROUP BY 1, 2""").fetchall()
-        total, with_resource = conn.execute(
-            "SELECT count(*), count(*) FILTER (WHERE resource <> '') FROM ce").fetchone()
+        conn.execute("""CREATE TEMP TABLE role_events AS
+            SELECT resource, activity FROM ce WHERE trim(resource, ?) <> ''""",
+                     [RESOURCE_PRESENCE_WHITESPACE])
+        total = conn.execute("SELECT count(*) FROM ce").fetchone()[0]
+        with_resource, resource_count, activity_count = conn.execute("""SELECT count(*),
+            count(DISTINCT resource), count(DISTINCT activity) FROM role_events""").fetchone()
+        conn.execute("""CREATE TEMP TABLE role_resources AS SELECT resource, count(*) AS n
+            FROM role_events GROUP BY resource ORDER BY n DESC, resource LIMIT ?""", [MAX_RESOURCES])
+        conn.execute("""CREATE TEMP TABLE role_activities AS SELECT activity, count(*) AS n,
+            count(DISTINCT resource) AS performers FROM role_events
+            GROUP BY activity ORDER BY n DESC, activity LIMIT ?""", [MAX_ACTIVITIES])
+        ranked = conn.execute("SELECT resource FROM role_resources ORDER BY n DESC, resource").fetchall()
+        activities = conn.execute("SELECT activity, performers FROM role_activities ORDER BY n DESC, activity").fetchall()
+        cells = conn.execute("""SELECT e.resource, e.activity, count(*)
+            FROM role_events e SEMI JOIN role_resources r USING (resource)
+            SEMI JOIN role_activities a USING (activity) GROUP BY 1, 2""").fetchall()
         return {"ranked": ranked, "activities": activities, "cells": cells,
                 "coverage": {"events": total, "events_with_resource": with_resource,
-                             "resources": len(ranked), "resources_truncated": len(ranked) > MAX_RESOURCES,
-                             "activities_truncated": False}}
+                             "resources": resource_count, "activities": activity_count,
+                             "resources_truncated": resource_count > MAX_RESOURCES,
+                             "activities_truncated": activity_count > MAX_ACTIVITIES}}
 
     data = workspace._query_filtered(log_id, case_type, cohort, run)
-    ranked = data.pop("ranked")[:MAX_RESOURCES]
-    activities = data.pop("activities")
-    keep = set(activities)
-    label = {name: (name if names == "shown" else f"Resource {i:02d}") for i, (name, _) in enumerate(ranked, start=1)}
+    ranked = data.pop("ranked")
+    activities = dict(data.pop("activities"))
+    activity_names = list(activities)
+    label = {name: (name if names == "shown" else f"Resource {i:02d}") for i, (name,) in enumerate(ranked, start=1)}
     profile: dict[str, Counter] = {name: Counter() for name in label}
-    for resource, activity, n in data.pop("cells"):
-        if resource in profile and activity in keep:
-            profile[resource][activity] += n
-    groups: list[tuple[list[str], Counter]] = [([name], profile[name]) for name, _ in ranked if profile[name]]
-    merges = []
+    included_performers: Counter = Counter()
+    represented_events = 0
+    for resource, activity, count in data.pop("cells"):
+        profile[resource][activity] = count
+        included_performers[activity] += 1
+        represented_events += count
+    groups = {i: ([name], profile[name]) for i, (name,) in enumerate(ranked) if profile[name]}
+    data["coverage"].update(resources_represented=len(groups), activities_represented=len(included_performers),
+                            events_represented=represented_events)
+    # A merge changes only the correlations involving its new group. Group
+    # IDs follow the original ordering so equal-correlation ties stay stable.
+    scores = {}
+    next_group = len(ranked)
+    merges = 0
     while len(groups) > 1:
         best, pair = threshold, None
-        for i in range(len(groups)):
-            for j in range(i + 1, len(groups)):
-                r = _pearson(groups[i][1], groups[j][1], activities)
-                if r >= best + (0 if pair is None else 1e-12):
-                    best, pair = r, (i, j)
+        group_ids = list(groups)
+        for pos, left in enumerate(group_ids):
+            for right in group_ids[pos + 1:]:
+                key = (left, right)
+                if key not in scores:
+                    scores[key] = _pearson(groups[left][1], groups[right][1], activity_names)
+                score = scores[key]
+                if score >= best + (0 if pair is None else 1e-12):
+                    best, pair = score, key
         if pair is None:
             break
-        i, j = pair
-        merged = (groups[i][0] + groups[j][0], groups[i][1] + groups[j][1])
-        merges.append({"correlation": round(best, 4), "role_size": len(merged[0])})
-        groups = [g for k, g in enumerate(groups) if k not in pair] + [merged]
+        left, right = pair
+        members_a, counts_a = groups.pop(left)
+        members_b, counts_b = groups.pop(right)
+        groups[next_group] = (members_a + members_b, counts_a + counts_b)
+        next_group += 1
+        merges += 1
+    groups = list(groups.values())
     performers: dict[str, set[int]] = {}
     groups.sort(key=lambda g: (-sum(g[1].values()), min(label[m] for m in g[0])))
     for index, (members, counts) in enumerate(groups):
@@ -106,10 +133,11 @@ def roles(log_id: str, case_type: str | None = None, *, threshold: float = DEFAU
             "member_count": len(members), "events": events,
             "activity_mix": [{"activity": a, "events": n, "share": round(n / events, 4)} for a, n in order[:TOP_ACTIVITIES]],
             "activities": len(counts),
-            "exclusive_activities": sorted(a for a in counts if performers[a] == {index}),
+            "exclusive_activities": sorted(a for a in counts if performers[a] == {index}
+                                           and included_performers[a] == activities[a]),
         })
     return {"format": FORMAT, **data, "threshold": float(threshold), "names": names,
-            "roles": out, "merges": len(merges),
+            "roles": out, "merges": merges,
             "activities_considered": len(activities),
             "method": ("agglomerative grouping of resources by the Pearson correlation of their activity counts; "
                        "groups merge while their summed profiles correlate at or above the threshold"),

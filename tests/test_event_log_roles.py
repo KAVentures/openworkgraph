@@ -97,3 +97,46 @@ print("ok")
     root = Path(__file__).resolve().parents[1]
     done = subprocess.run([sys.executable, "-c", code], cwd=root, env=env, capture_output=True, text=True, timeout=180)
     assert done.returncode == 0 and done.stdout.strip().endswith("ok"), f"stdout={done.stdout}\nstderr={done.stderr}"
+
+
+def test_coverage_counts_trimmed_dimensions_and_checks_exclusivity_across_resources(monkeypatch):
+    monkeypatch.setattr(roles, "MAX_ACTIVITIES", 2)
+    monkeypatch.setattr(roles, "MAX_RESOURCES", 1)
+    rows = ["case,activity,time,who"]
+    assignments = [("Shared", "ana")] * 4 + [("Solo", "ana")] * 3
+    assignments += [("Shared", "bob"), ("Tail", "bob"), ("Shared", "")]
+    for i, (activity, resource) in enumerate(assignments):
+        rows.append(f"c{i},{activity},2024-03-01T08:00:00Z,{resource}")
+    log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="bounded roles",
+                                source_format="csv", mapping=MAPPING)["log_id"]
+    result = roles.roles(log)
+    assert result["coverage"] == {
+        "events": 10, "events_with_resource": 9, "events_represented": 7,
+        "resources": 2, "resources_represented": 1, "resources_truncated": True,
+        "activities": 3, "activities_represented": 2, "activities_truncated": True,
+    }
+    assert len(result["roles"]) == 1
+    assert result["roles"][0]["members"] == ["Resource 01"]
+    assert result["roles"][0]["exclusive_activities"] == ["Solo"]
+    assert "ana" not in repr(result) and "bob" not in repr(result)
+
+
+def test_role_merges_do_not_recompute_scores_for_unchanged_groups(monkeypatch):
+    scored = 0
+    pearson = roles._pearson
+
+    def count(*args):
+        nonlocal scored
+        scored += 1
+        return pearson(*args)
+
+    monkeypatch.setattr(roles, "_pearson", count)
+    rows = ["case,activity,time,who"]
+    count_resources = 40
+    rows += [f"c{i},Open,2024-03-01T08:00:00Z,r{i}" for i in range(count_resources)]
+    log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="repeat profiles",
+                                source_format="csv", mapping=MAPPING)["log_id"]
+    result = roles.roles(log)
+    assert result["merges"] == count_resources - 1
+    assert result["roles"][0]["member_count"] == count_resources
+    assert scored == (count_resources - 1) ** 2
