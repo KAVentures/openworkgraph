@@ -59,6 +59,25 @@ const path=require('node:path');
    await page.locator('#owgCaseAttributeUploads').getByRole('button',{name:'Remove Region, Segment'}).click();
    await page.locator('#owgCaseAttributeResult').filter({hasText:'Removed Region, Segment from 4 cases.'}).waitFor();
    await page.locator('#owgCaseAttributeUploads').filter({hasText:'No case attributes added yet.'}).waitFor();
+   await page.locator('#owgCaseTableColumns').fill('Department');
+   const [template]=await Promise.all([page.waitForEvent('download'),page.locator('#owgCaseTableDownload').click()]);
+   assert.match(template.suggestedFilename(),/-case-table\.csv$/);
+   const templateRows=(await fs.readFile(await template.path(),'utf8')).trimEnd().split(/\r?\n/);
+   assert.deepEqual(templateRows,['case_id,Department','c0,','c1,','c2,','c3,','c4,','c5,']);
+   templateRows[1]='c0,Sales';
+   await page.locator('#owgCaseAttributeFile').setInputFiles({name:'edited-template.csv',mimeType:'text/csv',
+     buffer:Buffer.from(templateRows.join('\n'))});
+   await page.locator('#owgCaseAttributeDelimiter').selectOption(',');
+   await page.locator('#owgCaseAttributeColumns').selectOption(['Department']);
+   await page.locator('#owgCaseAttributeConsent').check();
+   await page.locator('#owgCaseAttributeAdd').click();
+   await page.locator('#owgCaseAttributeResult').filter({hasText:'Added Department to 1 cases.'}).waitFor();
+   await page.locator('#owgCaseTableIncludeValues').check();
+   const [filled]=await Promise.all([page.waitForEvent('download'),page.locator('#owgCaseTableDownload').click()]);
+   assert.match(await fs.readFile(await filled.path(),'utf8'),/^case_id,Department\r?\nc0,Sales/);
+   const templateAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgCaseTableExport'),
+     {runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
+   assert.deepEqual(templateAudit.violations.map(violation=>violation.id),[]);
    assert.deepEqual(errors,[]);
    console.log('Case attribute table browser acceptance passed: columns joined by case ID with counts, usable as a filter, conflicts refused, removable, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
