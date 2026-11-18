@@ -2169,6 +2169,33 @@ shows where the draft and the recorded cases differ, not which one is right.
 `GET /v1/event-logs/{log_id}/footprints?noise=&activities=` plus the case-filter parameters. Agents
 with access to a shared log use `get_process_footprints` (aggregates only).
 
+## Check against a Petri net (PNML import and token replay)
+
+ProM, PM4Py, Apromore, WoPeD and most academic tools exchange models as Petri nets in PNML. The
+**Check against a Petri net** section reads such a file (at most 2 MB; not stored) and replays the
+recorded cases on it with token-based replay (Rozinat and van der Aalst, 2008), as PM4Py's
+`token_based_replay` does. Each case starts from the net's initial marking and fires the
+transition labelled with each activity. Silent (invisible) transitions fire when a bounded search
+finds them enabling the next step or reaching the final marking; otherwise the missing tokens are
+created and counted. At the end the final marking is consumed and any tokens left are counted as
+remaining.
+
+Fitness is `½(1 − missing/consumed) + ½(1 − remaining/produced)`, for each case and over the whole
+log. The section lists the places where tokens went missing or were left behind, the steps taken
+when the net did not allow them, activities the net does not have (skipped and counted), net
+transitions no case took, and the variants that do not fit. *Replay on the discovered net* runs the
+same check on the net that **Process model discovery** exports, discovered with every observed
+path kept (noise 0).
+
+Transitions are matched to activities by their exact label. Silent transitions are those marked
+with ProM's and PM4Py's `$invisible$` tool-specific flag. When the file declares no final marking,
+cases are expected to end with one token on each place nothing consumes from. XML with a DOCTYPE
+or entity declaration is refused. Token replay does not measure precision and can over-count
+problems in nets with duplicate labels or long silent paths.
+
+`POST /v1/event-logs/{log_id}/petri-net-replay` with the PNML file as the body, plus the
+case-filter parameters.
+
 ## Temporal profile
 
 **Temporal profile** (as in PM4Py and ProM) learns the usual time between every ordered pair of
