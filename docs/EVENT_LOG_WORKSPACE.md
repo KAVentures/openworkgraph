@@ -1043,9 +1043,12 @@ profiles.
 - Every case keeps at most 32 attribute names, stored and timed, so the log
   still exports as OCEL.
 - Events and the log's content digests do not change. Each upload is recorded
-  with its columns, counts and the SHA-256 of the file. Removing an upload
-  deletes those attribute names from every case of that object type. It
-  cannot restore values that an overwrite replaced.
+  with its columns, counts and the SHA-256 of the file. New uploads keep their
+  prior cell values locally for undo. Undo restores overwritten values and
+  removes new values only in the cases that this upload changed. If a newer
+  upload changed any of those cells, undo that newer upload first. Older uploads
+  without prior-value records cannot be undone. Deleting the log removes its
+  upload history and prior values.
 
 | Route | Purpose |
 | --- | --- |

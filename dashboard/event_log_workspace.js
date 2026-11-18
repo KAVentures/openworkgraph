@@ -1733,8 +1733,8 @@
   // Columns from a separate case table (customer, region, amount...) joined onto the cases by id.
   function caseAttributeSection(){
     const box=section('Case attributes from a table');box.id='owgCaseAttributes';
-    box.appendChild(el('div','Add columns such as region, segment or contract value from a separate CSV keyed by case ID. They become case attributes for filters, root cause and attribute profiles. Events are not changed, and an upload can be removed again.','muted'));
-    const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/case-attributes';
+    box.appendChild(el('div','Add columns such as region, segment or contract value from a separate CSV keyed by case ID. They become case attributes for filters, root cause and attribute profiles. You can undo new uploads to restore the previous values of the cases they changed.','muted'));
+    const base='/v1/event-logs/'+encodeURIComponent(state.logId)+'/case-attributes';
     const list=el('div');list.id='owgCaseAttributeUploads';list.setAttribute('role','status');
     const file=input('owgCaseAttributeFile','file');file.accept='.csv,.tsv,.txt';
     const delimiter=select('owgCaseAttributeDelimiter',[[',','Comma'],[';','Semicolon'],['t','Tab'],['|','Pipe']]);
@@ -1766,12 +1766,19 @@
     const render=r=>{
       if(!r.uploads.length){list.replaceChildren(el('div','No case attributes added yet.','muted'));return;}
       list.replaceChildren(table(['Added','Columns','Cases updated','Rows not in this log','Cases without a row',''],r.uploads.map(u=>{
-        const remove=button('Remove','secondary');remove.setAttribute('aria-label','Remove '+u.columns.join(', '));
-        remove.onclick=async()=>{if(!window.confirm('Remove '+u.columns.join(', ')+' from every case?'))return;
-          try{const r2=await (await api(base()+'/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({upload_id:u.upload_id})})).json();
-            out.replaceChildren(el('div','Removed '+r2.removed_columns.join(', ')+' from '+Number(r2.cases_changed).toLocaleString()+' cases.'));render(await getJSON(base()));}
-          catch(error){out.replaceChildren(el('div',error.message,'muted'));}};
-        return [String(u.added_at).slice(0,16).replace('T',' '),u.columns.join(', '),Number(u.cases_updated).toLocaleString(),Number(u.rows_not_in_log).toLocaleString(),Number(u.cases_without_row).toLocaleString(),remove];})));
+        const remove=button('Undo upload','secondary');remove.setAttribute('aria-label','Undo upload for '+u.columns.join(', '));
+        remove.onclick=async()=>{
+          if(!window.confirm('Undo this upload for '+u.columns.join(', ')+' and restore the previous values?'))return;
+          remove.disabled=true;
+          try{
+            const r2=await (await api(base+'/remove',{method:'POST',headers:{'Content-Type':'application/json'},
+              body:JSON.stringify({upload_id:u.upload_id})})).json();
+            out.textContent='Undid '+r2.removed_columns.join(', ')+' in '+Number(r2.cases_changed).toLocaleString()+' cases.';
+            render(await getJSON(base));
+          }catch(error){out.textContent=error.message;remove.disabled=false;}
+        };
+        const action=u.undo_supported?remove:el('span','Undo unavailable for this older upload','muted');
+        return [String(u.added_at).slice(0,16).replace('T',' '),u.columns.join(', '),Number(u.cases_updated).toLocaleString(),Number(u.rows_not_in_log).toLocaleString(),Number(u.cases_without_row).toLocaleString(),action];})));
     };
     add.onclick=async()=>{
       const q=new URLSearchParams({id_column:idColumn.value,delimiter:delimiter.value});
@@ -1779,12 +1786,12 @@
       if(state.caseType)q.set('object_type',state.caseType);if(replace.checked)q.set('replace','true');
       add.disabled=true;out.replaceChildren(el('div','Adding…','muted'));
       try{
-        const r=await (await api(base()+'?'+q,{method:'POST',body:file.files[0],headers:{'Content-Type':'text/csv','X-OWG-Local-Storage-Confirmed':'true'}})).json();
+        const r=await (await api(base+'?'+q,{method:'POST',body:file.files[0],headers:{'Content-Type':'text/csv','X-OWG-Local-Storage-Confirmed':'true'}})).json();
         out.replaceChildren(el('div','Added '+r.columns.join(', ')+' to '+Number(r.cases_updated).toLocaleString()+' cases. '+Number(r.rows_not_in_log).toLocaleString()+' rows matched no case; '+Number(r.cases_without_row).toLocaleString()+' cases had no row.'));
-        consent.checked=false;render(await getJSON(base()));
+        consent.checked=false;render(await getJSON(base));
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));ready();}
     };
-    getJSON(base()).then(r=>{if(generation===state.generation)render(r);}).catch(error=>list.replaceChildren(el('div',error.message,'muted')));
+    getJSON(base).then(r=>{if(generation===state.generation)render(r);}).catch(error=>list.replaceChildren(el('div',error.message,'muted')));
     return box;
   }
 

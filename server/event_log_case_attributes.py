@@ -18,8 +18,7 @@ Rules, so nothing is guessed:
 * rows whose id is not a case of the log are counted and ignored.
 
 Each upload is recorded (columns, counts, SHA-256 of the file) and can be
-undone: ``remove`` deletes attributes that an upload added, never attributes
-that came with the original import. Event data and content digests are not
+undone: ``remove`` restores the prior values of cells that upload wrote. Event data and content digests are not
 changed.
 """
 from __future__ import annotations
@@ -120,7 +119,7 @@ def add(log_id: str, path: Path, *, id_column: str, columns: list[str], delimite
                 raise EventLogWorkspaceError("no row of the case table matches a case of this log with a value to add")
             if not replace:
                 clash = conn.execute("""SELECT DISTINCT k FROM matched, unnest(json_keys(attrs)) AS t(k)
-                    WHERE json_exists(old, '$."' || replace(k, '"', '\\"') || '"') ORDER BY 1 LIMIT 5""").fetchall()
+                    WHERE list_contains(json_keys(old), k) ORDER BY 1 LIMIT 5""").fetchall()
                 if clash:
                     raise EventLogWorkspaceError("cases already have " + ", ".join(repr(c[0]) for c in clash)
                                                  + "; choose replace to overwrite those values")
@@ -136,18 +135,27 @@ def add(log_id: str, path: Path, *, id_column: str, columns: list[str], delimite
                 GROUP BY 1""").fetchall())
             conn.execute("BEGIN")
             try:
-                conn.execute("""UPDATE objects SET attributes = json_merge_patch(objects.attributes, m.attrs)::VARCHAR
-                    FROM matched m WHERE objects.log_id = ? AND objects.object_type = ? AND objects.object_id = m.id""",
-                             [log_id, notion])
                 record = {"format": FORMAT, "added_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                           "object_type": notion, "id_column": id_column, "columns": [keys[c] for c in columns],
                           "source_sha256": source_sha, "rows": rows, "rows_without_id": blank_ids,
                           "rows_not_in_log": unmatched, "cases_updated": matched,
                           "cases_without_row": cases - matched, "values_added": {keys[c]: filled.get(keys[c], 0)
                                                                                 for c in columns},
-                          "replaced_existing": bool(replace)}
+                          "replaced_existing": bool(replace), "undo_supported": True}
                 upload = "ca_" + hashlib.sha256((log_id + record["added_at"] + source_sha).encode()).hexdigest()[:16]
                 record["upload_id"] = upload
+                # Capture only the cells this upload writes. Presence and JSON
+                # value are separate so undo can restore a literal JSON null.
+                conn.execute("""INSERT INTO case_attribute_upload_changes
+                    SELECT ?, ?, (SELECT coalesce(max(upload_order), 0) + 1
+                                  FROM case_attribute_upload_changes WHERE log_id = ?),
+                           m.id, cell.key, prior.key IS NOT NULL, prior.value, cell.value
+                    FROM matched m CROSS JOIN LATERAL json_each(m.attrs) cell
+                    LEFT JOIN LATERAL json_each(m.old) prior ON prior.key = cell.key""",
+                             [log_id, upload, log_id])
+                conn.execute("""UPDATE objects SET attributes = json_merge_patch(objects.attributes, m.attrs)::VARCHAR
+                    FROM matched m WHERE objects.log_id = ? AND objects.object_type = ? AND objects.object_id = m.id""",
+                             [log_id, notion])
                 conn.execute("INSERT INTO case_attribute_uploads VALUES (?, ?, now(), ?)",
                              [log_id, upload, json.dumps(record, sort_keys=True)])
                 conn.execute("COMMIT")
@@ -168,11 +176,14 @@ def uploads(log_id: str) -> dict[str, Any]:
                 ORDER BY created_at, upload_id""", [log_id]).fetchall()
         finally:
             conn.close()
-    return {"format": FORMAT, "uploads": [json.loads(r[0]) for r in rows]}
+    records = [json.loads(r[0]) for r in rows]
+    for record in records:
+        record.setdefault("undo_supported", False)
+    return {"format": FORMAT, "uploads": records}
 
 
 def remove(log_id: str, spec: Any) -> dict[str, Any]:
-    """Remove attributes an upload added (by name) from every case of that upload's object type."""
+    """Restore only cells written by this upload, in reverse order for overlapping writes."""
     if not isinstance(spec, dict) or set(spec) - {"upload_id", "columns"} or not isinstance(spec.get("upload_id"), str):
         raise EventLogWorkspaceError("give the upload_id and, optionally, the columns to remove")
     with workspace._LOCK:
@@ -184,18 +195,50 @@ def remove(log_id: str, spec: Any) -> dict[str, Any]:
             if not row:
                 raise EventLogWorkspaceError("unknown case attribute upload")
             record = json.loads(row[0])
+            if record.get("undo_supported") is not True:
+                raise EventLogWorkspaceError("This older upload cannot be undone safely because its prior values were not recorded")
             columns = spec.get("columns") or record["columns"]
-            if not isinstance(columns, list) or set(columns) - set(record["columns"]):
+            if (not isinstance(columns, list) or any(not isinstance(name, str) for name in columns)
+                    or set(columns) - set(record["columns"])):
                 raise EventLogWorkspaceError("only columns that this upload added can be removed")
             conn.execute("BEGIN")
             try:
-                patch = json.dumps({c: None for c in columns})
-                changed = conn.execute("""UPDATE objects SET attributes = json_merge_patch(attributes, ?)::VARCHAR
-                    WHERE log_id = ? AND object_type = ? AND list_has_any(json_keys(attributes), ?)""",
-                                       [patch, log_id, record["object_type"], columns]).fetchone()[0]
+                conn.execute("""CREATE TEMP TABLE undo_cells AS
+                    SELECT * FROM case_attribute_upload_changes
+                    WHERE log_id = ? AND upload_id = ? AND column_name IN (SELECT unnest(?))""",
+                             [log_id, spec["upload_id"], columns])
+                if conn.execute("""SELECT 1 FROM undo_cells u JOIN case_attribute_upload_changes newer
+                    ON newer.log_id = u.log_id AND newer.object_id = u.object_id
+                    AND newer.column_name = u.column_name AND newer.upload_order > u.upload_order LIMIT 1""").fetchone():
+                    raise EventLogWorkspaceError("A newer upload changed some of these values. Undo the newer upload first")
+                if conn.execute("""SELECT 1 FROM undo_cells u LEFT JOIN objects o
+                    ON o.log_id = u.log_id AND o.object_id = u.object_id AND o.object_type = ?
+                    LEFT JOIN LATERAL json_each(o.attributes) cell ON cell.key = u.column_name
+                    WHERE cell.value IS DISTINCT FROM u.applied_value LIMIT 1""",
+                                [record["object_type"]]).fetchone():
+                    raise EventLogWorkspaceError("Some case attribute values changed. Undo would overwrite the current data")
+                changed = conn.execute("""WITH targets AS (SELECT DISTINCT object_id FROM undo_cells),
+                    survivors AS (
+                        SELECT o.object_id, cell.key AS name, cell.value
+                        FROM targets t JOIN objects o ON o.log_id = ? AND o.object_id = t.object_id
+                        CROSS JOIN LATERAL json_each(o.attributes) cell
+                        WHERE NOT EXISTS (SELECT 1 FROM undo_cells u
+                                          WHERE u.object_id = o.object_id AND u.column_name = cell.key)
+                        UNION ALL
+                        SELECT object_id, column_name, previous_value FROM undo_cells WHERE previous_present
+                    ), rebuilt AS (SELECT object_id, json_group_object(name, value) AS attrs
+                                   FROM survivors GROUP BY object_id)
+                    UPDATE objects SET attributes = coalesce(rebuilt.attrs, '{}')::VARCHAR
+                    FROM targets LEFT JOIN rebuilt USING (object_id)
+                    WHERE objects.log_id = ? AND objects.object_type = ? AND objects.object_id = targets.object_id
+                    """, [log_id, log_id, record["object_type"]]).fetchone()[0]
+                conn.execute("""DELETE FROM case_attribute_upload_changes
+                    WHERE log_id = ? AND upload_id = ? AND column_name IN (SELECT unnest(?))""",
+                             [log_id, spec["upload_id"], columns])
                 left = [c for c in record["columns"] if c not in columns]
                 if left:
                     record["columns"] = left
+                    record["values_added"] = {key: value for key, value in record["values_added"].items() if key in left}
                     conn.execute("UPDATE case_attribute_uploads SET record = ? WHERE log_id = ? AND upload_id = ?",
                                  [json.dumps(record, sort_keys=True), log_id, spec["upload_id"]])
                 else:
