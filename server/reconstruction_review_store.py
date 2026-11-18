@@ -117,7 +117,7 @@ def _load(grant: dict[str, Any], generation: int, evidence_sha256: str) -> dict[
             value = json.loads(raw.decode("utf-8"))
         finally:
             os.close(fd)
-    except (FileNotFoundError, OSError, ValueError, UnicodeError, TypeError):
+    except (FileNotFoundError, OSError, ValueError, UnicodeError, TypeError, RecursionError):
         return None
     if not isinstance(value, dict) or value.get("version") != 1:
         return None
