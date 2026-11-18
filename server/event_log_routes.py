@@ -66,8 +66,8 @@ from .local_auth import dashboard_session_valid
 router = APIRouter()
 XLSX_MAX_BYTES = 64 * 1024 * 1024
 _SCRIPT = Path(__file__).resolve().parents[1] / "dashboard" / "event_log_workspace.js"
-_TYPES = {"csv": "text/csv", "sourcecsv": "text/csv", "sourcecsv-review": "text/csv", "csv-review": "text/csv", "xes": "application/xml", "xes-attributes": "application/xml", "ocel": "application/json", "ocelxml": "application/xml"}
-_SUFFIX = {"csv": "csv", "sourcecsv": "csv", "sourcecsv-review": "review.csv", "csv-review": "review.csv", "xes": "xes", "xes-attributes": "xes", "ocel": "jsonocel", "ocelxml": "xmlocel"}
+_TYPES = {"csv": "text/csv", "sourcecsv": "text/csv", "sourcecsv-review": "text/csv", "csv-review": "text/csv", "xes": "application/xml", "ocel": "application/json", "ocelxml": "application/xml"}
+_SUFFIX = {"csv": "csv", "sourcecsv": "csv", "sourcecsv-review": "review.csv", "csv-review": "review.csv", "xes": "xes", "ocel": "jsonocel", "ocelxml": "xmlocel"}
 
 
 def _source_identity_mapping(
@@ -561,32 +561,6 @@ def event_log_quality_batch_history_page(request: Request, log_id: str,
     return _respond(quality_pages.page, log_id, before, limit)
 
 
-@router.post("/v1/event-logs/{log_id}/export/matching-cases")
-async def export_event_log_matching_cases(request: Request, log_id: str):
-    from .event_log_cohort_export import export_matching_cases
-
-    _require_dashboard(request)
-    spec = await _json_body(request, "matching-case export settings", strict=True, limit=32768)
-
-    def prepare():
-        handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="", suffix=".csv",
-                                             dir=str(DATA_DIR), delete=False)
-        try:
-            with handle:
-                export_matching_cases(log_id, spec, handle)
-        except BaseException:
-            os.unlink(handle.name)
-            raise
-        return handle.name
-
-    try:
-        filename = await run_in_threadpool(prepare)
-    except workspace.EventLogWorkspaceError as exc:
-        raise HTTPException(422, str(exc)) from None
-    return FileResponse(filename, media_type="text/csv", filename=f"{log_id}-matching-cases.csv",
-                        headers={"Cache-Control": "no-store"}, background=BackgroundTask(os.unlink, filename))
-
-
 @router.post("/v1/event-logs/{log_id}/derive")
 async def derive_event_log(request: Request, log_id: str):
     """Save the cases matching a filter as a new event log; the source log is unchanged."""
@@ -841,6 +815,17 @@ def event_log_decision_rules(request: Request, log_id: str,
     from . import event_log_decision_mining as decisions
     _require_dashboard(request)
     return _respond(decisions.analyse, log_id, decision_activity, case_type, max_depth=max_depth, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/temporal-profile")
+def event_log_temporal_profile(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                               zeta: float = Query(default=3.0, ge=0.5, le=10),
+                               min_occurrences: int = Query(default=5, ge=2, le=10_000),
+                               cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_temporal_profile as temporal
+    _require_dashboard(request)
+    return _respond(temporal.temporal_profile, log_id, case_type, zeta=zeta, min_occurrences=min_occurrences,
+                    cohort=cohort)
 
 
 @router.get("/v1/event-logs/{log_id}/heuristics-net")
@@ -1734,7 +1719,7 @@ async def event_log_simulation_validation(request: Request, log_id: str,
 
 
 @router.get("/v1/event-logs/{log_id}/export")
-def export_event_log(request: Request, log_id: str, format: str = Query(pattern="^(csv|sourcecsv|csv-review|sourcecsv-review|xes|xes-attributes|ocel|ocelxml)$"),
+def export_event_log(request: Request, log_id: str, format: str = Query(pattern="^(csv|sourcecsv|csv-review|sourcecsv-review|xes|ocel|ocelxml)$"),
                      case_type: str | None = Query(default=None, max_length=200)):
     _require_dashboard(request)
     handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix="." + _SUFFIX[format],

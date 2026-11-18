@@ -114,6 +114,17 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"activity": activity, "max_depth": max(1, min(int(max_depth), 4)), "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def get_process_temporal_profile(log_id: str, zeta: float = 3.0, case_type: str | None = None) -> dict[str, Any]:
+        """Temporal profile of a shared log: for each ordered pair of activities in a case, the mean and
+        standard deviation of the time between them, and how many occurrences lie more than zeta standard
+        deviations away (slower or faster). Aggregates only, no case IDs. Unusual timings to review, not errors.
+        """
+        if isinstance(zeta, bool) or not isinstance(zeta, (int, float)) or not 0.5 <= zeta <= 10:
+            raise ToolError("zeta must be a number from 0.5 to 10")
+        return _get("get_process_temporal_profile", f"/v1/process-intelligence/{_log(log_id)}/temporal-profile",
+                    {"zeta": float(zeta), "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_heuristics_net(log_id: str, dependency_threshold: float = 0.5,
                                    case_type: str | None = None) -> dict[str, Any]:
         """Heuristics-miner model of a shared log: arrows kept only where one activity follows another clearly
