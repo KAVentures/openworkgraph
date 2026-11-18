@@ -1121,3 +1121,39 @@ class AdversarialInterleavingIsolationTests(unittest.TestCase):
         # This is a synthetic regression, NOT an independently labeled holdout.
         self.assertFalse(score["held_out_verified"])
         self.assertFalse(score["cross_case_contamination_measured"])
+
+
+class CrossCaseContaminationScoringTests(unittest.TestCase):
+    """Synthetic adversarial checks, not independent held-out measurements."""
+
+    def test_transitive_bridge_does_not_assign_unrelated_events(self):
+        source = payload([pair("case-A", "shared", ["event-A"]),
+                          pair("case-C", "shared", ["event-C"])])
+        queue = build_review_queue(source)
+        self.assertEqual(queue["event_reviews_count"], 2)
+        self.assertEqual(queue["ambiguous_event_reviews_count"], 0)
+        rows = {row["event_id"]: row for row in queue["event_reviews"]}
+        self.assertEqual(set(rows), {"event-A", "event-C"})
+        self.assertNotEqual(rows["event-A"]["candidate_resource_pairs"],
+                            rows["event-C"]["candidate_resource_pairs"])
+        labels = [{"window": row["window"], "event_id": row["event_id"],
+                   "true_resource_pairs": row["candidate_resource_pairs"]}
+                  for row in queue["event_reviews"]]
+        result = score_review_annotations(source, labels)
+        self.assertEqual(result["false_positive_pairs"], 0)
+        self.assertFalse(result["held_out_verified"])
+
+    def test_shared_event_ambiguity_exposes_cross_case_false_positive(self):
+        source = payload([pair("case-A", "shared", ["same-event"]),
+                          pair("case-C", "shared", ["same-event"])])
+        queue = build_review_queue(source)
+        self.assertEqual(queue["event_reviews_count"], 1)
+        self.assertEqual(queue["ambiguous_event_reviews_count"], 1)
+        row = queue["event_reviews"][0]
+        self.assertEqual(row["review_status"], "ambiguous_multiple_pairs")
+        self.assertFalse(row["confirmed_case"])
+        labels = [{"window": row["window"], "event_id": row["event_id"],
+                   "true_resource_pairs": row["candidate_resource_pairs"][:1]}]
+        result = score_review_annotations(source, labels)
+        self.assertEqual(result["false_positive_pairs"], 1)
+        self.assertFalse(result["held_out_verified"])
