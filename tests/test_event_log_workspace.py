@@ -219,6 +219,38 @@ def test_xes_round_trip_preserves_cases_order_and_resources():
     assert first == second
 
 
+def test_xes_attribute_export_preserves_trace_and_lifecycle_fields():
+    from shared.event_log_formats import read_xes
+
+    text = """<log><trace><string key="concept:name" value="case-1"/>
+      <string key="region" value="A &amp; B"/>
+      <event><string key="concept:name" value="Review"/>
+        <date key="time:timestamp" value="2024-01-01T00:00:00Z"/>
+        <string key="lifecycle:transition" value="complete"/>
+        <string key="batch" value="a&#10;b"/>
+      </event></trace><trace><string key="concept:name" value="empty"/>
+        <string key="region" value="south"/></trace></log>"""
+    log = _import(text, "xes")["log_id"]
+    plain, rich = StringIO(), StringIO()
+    workspace.export_log(log, "xes", plain)
+    workspace.export_log(log, "xes-attributes", rich)
+    trace, event, empty = list(read_xes(BytesIO(rich.getvalue().encode())))
+    assert empty.object_id == "empty" and empty.attributes == {"region": "south"}
+    assert trace.attributes == {"region": "A & B"}
+    assert event.attributes == {"lifecycle:transition": "complete", "batch": "a\nb"}
+    assert "lifecycle:transition" not in plain.getvalue() and "region" not in plain.getvalue()
+    assert _import(rich.getvalue(), "xes", name="rich round trip")["events"] == 1
+
+
+def test_xes_attribute_export_refuses_reserved_event_keys():
+    text = "case,activity,time,identity:id\nc,A,2024-01-01T00:00:00Z,private-id\n"
+    mapping = {"case_column": "case", "activity_column": "activity", "timestamp_column": "time",
+               "attribute_columns": ["identity:id"]}
+    log = _import(text, "csv", mapping=mapping)["log_id"]
+    with pytest.raises(workspace.EventLogWorkspaceError, match="reserved or unsupported"):
+        workspace.export_log(log, "xes-attributes", StringIO())
+
+
 def test_xes_with_doctype_or_entities_is_refused_before_parsing():
     evil = ('<?xml version="1.0"?><!DOCTYPE log [<!ENTITY x SYSTEM "file:///etc/passwd">]>'
             '<log><trace><string key="concept:name" value="&x;"/></trace></log>')
@@ -339,6 +371,13 @@ with TestClient(app) as client:
     exported = client.get(f"/v1/event-logs/{log_id}/export?format=ocel", headers=headers)
     assert exported.status_code == 200 and json.loads(exported.content)["events"]
     assert exported.headers["cache-control"] == "no-store"
+    rich_url = f"/v1/event-logs/{log_id}/export?format=xes-attributes"
+    assert client.get(rich_url).status_code in (401, 403)
+    rich = client.get(rich_url, headers=headers)
+    assert rich.status_code == 200 and rich.headers["content-type"] == "application/xml"
+    assert rich.headers["content-disposition"].endswith('.xes"')
+    assert rich.headers["cache-control"] == "no-store"
+
     assert client.get(f"/v1/event-logs/{log_id}/export?format=pdf", headers=headers).status_code == 422
     assert client.get("/v1/event-logs/log_0000000000000000/summary", headers=headers).status_code == 422
     bad = client.post("/v1/event-logs/import?format=xes&name=x", content=b"<!DOCTYPE x><log/>", headers=confirmed)

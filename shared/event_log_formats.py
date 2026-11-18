@@ -252,21 +252,44 @@ def read_xes(stream: IO[bytes], *, stats: ReadStats | None = None) -> Iterator[E
         raise EventLogFormatError("XES XML could not be parsed") from None
 
 
-def write_xes(cases: Iterable[tuple[str, list[dict[str, Any]]]], out: IO[str]) -> None:
+_XES_EVENT_FIELDS = {"concept:name", "time:timestamp", "org:resource", "identity:id"}
+_XES_INVALID_XML = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
+
+
+def _write_xes_attributes(out, attributes, reserved, indent):
+    if not isinstance(attributes, dict) or len(attributes) > MAX_ATTRIBUTES:
+        raise EventLogFormatError("XES export cannot preserve this attribute set within the import limits")
+    for name, value in attributes.items():
+        if (not name or name != _text(name, 80) or name in reserved
+                or not isinstance(value, str) or value != _text(value, MAX_ATTRIBUTE_VALUE)
+                or _XES_INVALID_XML.search(name) or _XES_INVALID_XML.search(value)):
+            raise EventLogFormatError("XES export cannot preserve a reserved or unsupported attribute. Use OCEL for richer data.")
+        out.write(f'{indent}<string key={quoteattr(name)} value={quoteattr(value)}/>\n')
+
+
+def write_xes(cases: Iterable[tuple[str, list[dict[str, Any]]] |
+                              tuple[str, list[dict[str, Any]], dict[str, str]]],
+              out: IO[str], *, include_attributes: bool = False) -> None:
     """XES 1849 with concept, time and org extensions; one trace per case."""
     out.write('<?xml version="1.0" encoding="UTF-8"?>\n')
     out.write('<log xes.version="1849-2016" xmlns="http://www.xes-standard.org/">\n')
     out.write('  <extension name="Concept" prefix="concept" uri="http://www.xes-standard.org/concept.xesext"/>\n')
     out.write('  <extension name="Time" prefix="time" uri="http://www.xes-standard.org/time.xesext"/>\n')
     out.write('  <extension name="Organizational" prefix="org" uri="http://www.xes-standard.org/org.xesext"/>\n')
-    for case_id, events in cases:
+    if include_attributes:
+        out.write('  <extension name="Lifecycle" prefix="lifecycle" uri="http://www.xes-standard.org/lifecycle.xesext"/>\n')
+    for case_id, events, *trace_attributes in cases:
         out.write(f'  <trace>\n    <string key="concept:name" value={quoteattr(case_id)}/>\n')
+        if include_attributes:
+            _write_xes_attributes(out, trace_attributes[0] if trace_attributes else {}, {"concept:name"}, "    ")
         for event in events:
             out.write("    <event>\n")
             out.write(f'      <string key="concept:name" value={quoteattr(event["activity"])}/>\n')
             out.write(f'      <date key="time:timestamp" value="{escape(_iso(event["timestamp"]))}"/>\n')
             if event.get("resource"):
                 out.write(f'      <string key="org:resource" value={quoteattr(event["resource"])}/>\n')
+            if include_attributes:
+                _write_xes_attributes(out, event["attributes"], _XES_EVENT_FIELDS, "      ")
             out.write("    </event>\n")
         out.write("  </trace>\n")
     out.write("</log>\n")
