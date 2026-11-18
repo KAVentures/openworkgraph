@@ -339,7 +339,14 @@ def get_saved_reconstruction_review() -> Response:
     generation = history_generation()
     try:
         with connect() as connection:
-            queue = build_review_queue(resumption_candidates(connection, lease=grant))
+            result = resumption_candidates(connection, lease=grant)
+            # Use the same evidence projection as the live reviewer. Otherwise
+            # >12 identity timelines change the digest on saved-label reload.
+            review_result = {**result, "identity_timelines_truncated": (
+                result.get("identity_timelines_truncated", False)
+                or len(result.get("identity_timelines", [])) > 12
+            )}
+            queue = build_review_queue(review_result)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="Invalid reconstruction evidence") from exc
     saved = read_saved_reconstruction_review(grant, generation, queue["evidence_sha256"])
