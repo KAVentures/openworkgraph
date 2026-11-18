@@ -46,9 +46,17 @@ sample rather than adding a copy. It is deleted like any other log.
 | --- | --- | --- | --- |
 | CSV | yes | yes | You map the case, activity, timestamp and (optional) resource columns. |
 | Excel (.xlsx) | yes | no | One worksheet is converted to CSV on this computer, then mapped and imported like any CSV (below). |
-| XES (IEEE 1849) | yes | yes | `concept:name`, `time:timestamp` and `org:resource`; other string-like attributes are kept (32 max, 500 chars each). |
+| XES (IEEE 1849) | yes | yes | `concept:name`, `time:timestamp` and `org:resource`; up to 32 other attributes of 500 characters each are imported as strings. Choose **XES with retained attributes** to include static trace and event attributes in the export. |
 | OCEL 2.0 JSON | yes | yes | Objects, object types, events, event-to-object links and supplied directed object-to-object relationships with qualifiers. Object attribute values keep their times (below). |
 | OCEL 2.0 XML | yes | yes | The same retained content in the OCEL 2.0 worked-example XML layout (`.xmlocel`). Objects must precede events as in the original 2.0 printed root schema. See the relationship contract for schema/example errata and format limits. |
+
+The attribute export uses the selected case notion and includes values in the
+download, including supported lifecycle fields. The standard XES choice exports
+only the structural fields. XES uses flat traces, so use OCEL to retain object
+relationships and timed object attributes. The attribute export refuses data
+that would require changing a retained value, exceeding XES import bounds, or
+overwriting a reserved field. The local dashboard export endpoint accepts
+`format=xes-attributes` and returns a `.xes` file.
 
 Every log is stored object-centrically. A flat CSV or XES log becomes one
 object type, `case`. For an OCEL log you choose the case notion (`order`,

@@ -32,10 +32,25 @@ const path=require('node:path');
   await page.locator('#owgEventLogExportFormat').selectOption('sourcecsv');
   const [exact]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogExport').click()]);
   const exactText=await fs.readFile(await exact.path(),'utf8');assert.match(exactText,/crm,=event,crm,=case, =1\+1/);
+  const xes='<log><trace><string key="concept:name" value="case-1"/><string key="region" value="north"/><event>'+
+    '<string key="concept:name" value="Review"/><date key="time:timestamp" value="2026-01-01T00:00:00Z"/>'+
+    '<string key="lifecycle:transition" value="complete"/></event></trace></log>';
+  await page.locator('#owgEventLogFile').setInputFiles({name:'lifecycle.xes',mimeType:'application/xml',buffer:Buffer.from(xes)});
+  await page.locator('#owgEventLogStatus').filter({hasText:'File mapping ready.'}).waitFor();
+  await page.locator('#owgEventLogConsent').check();
+  await page.locator('#owgEventLogImport').click();
+  await page.locator('#owgEventLogStatus').filter({hasText:'Imported 1 events'}).waitFor();
+  await page.locator('#owgEventLogExportFormat').selectOption('xes-attributes');
+  await page.locator('#owgEventLogStatus').filter({hasText:'Includes retained trace and event attribute values'}).waitFor();
+  const [attributeExport]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogExport').click()]);
+  assert.match(attributeExport.suggestedFilename(),/\.xes$/);
+  const attributeText=await fs.readFile(await attributeExport.path(),'utf8');
+  assert.match(attributeText,/key="region" value="north"/);
+  assert.match(attributeText,/key="lifecycle:transition" value="complete"/);
   await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
   const axe=await page.evaluate(()=>axe.run(document.querySelector('#owgEventLogCard'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
   assert.deepEqual(axe.violations.map(v=>v.id),[]);await page.setViewportSize({width:390,height:844});
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));assert.deepEqual(errors,[]);
-  console.log('Review CSV browser passed: text projection, unchanged exact IDs, accessible/mobile.');
+  console.log('Export browser passed: spreadsheet review, exact IDs, XES lifecycle and trace attributes, accessibility and mobile.');
  }finally{if(browser)await browser.close();server.kill('SIGTERM');await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);if(server.exitCode===null)server.kill('SIGKILL');await fs.rm(scratch,{recursive:true,force:true});}
 })().catch(e=>{console.error(e);process.exit(1);});
