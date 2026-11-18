@@ -586,7 +586,7 @@
     return box;
   }
 
-  async function refreshLogs(selectId){
+  async function refreshLogs(selectId, preferredCaseType){
     const refresh=++state.refresh;
     const data=await getJSON('/v1/event-logs');
     if(refresh!==state.refresh)return;
@@ -595,7 +595,7 @@
     setOptions(pick,state.logs.map(l=>[l.log_id,l.name+' · '+Number(l.events).toLocaleString()+' events']));
     show(document.getElementById('owgEventLogManage'),state.logs.length>0);
     const next=state.logs.some(l=>l.log_id===selectId)?selectId:(state.logs[0]?state.logs[0].log_id:'');
-    if(next){pick.value=next;await selectLog(next);}else{state.logId='';state.objectTypes=[];}
+    if(next){pick.value=next;await selectLog(next,next===selectId?preferredCaseType:undefined);}else{state.logId='';state.objectTypes=[];}
   }
 
   // Save the cases matching a filter as a new saved log, to analyse or compare a slice on its own.
@@ -623,7 +623,7 @@
         const data=await getJSON('/v1/event-logs');state.logs=Array.isArray(data.logs)?data.logs:state.logs;
         const pick=document.getElementById('owgEventLogPick');setOptions(pick,state.logs.map(l=>[l.log_id,l.name+' · '+Number(l.events).toLocaleString()+' events']));pick.value=state.logId;
         const open=button('Open '+r.log.name,'secondary');open.id='owgDeriveOpen';
-        open.onclick=()=>refreshLogs(r.log.log_id).then(()=>status('Opened '+r.log.name+'. Select Analyse to explore it.')).catch(error=>status(error.message));
+        open.onclick=()=>refreshLogs(r.log.log_id,r.derived_from.case_notion).then(()=>status('Opened '+r.log.name+'. Select Analyse to explore it.')).catch(error=>status(error.message));
         out.replaceChildren(el('div','Saved '+r.log.name+': '+Number(r.derived_from.cases_matched).toLocaleString()+' of '+Number(r.derived_from.cases_in_source).toLocaleString()+' cases, '+Number(r.copied.events).toLocaleString()+' events.'),open);
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
       finally{run.disabled=false;}
@@ -631,7 +631,7 @@
     return box;
   }
 
-  async function selectLog(logId){
+  async function selectLog(logId,preferredCaseType){
     const savedPanel=document.getElementById('owgEventLogSavedList');if(savedPanel){show(savedPanel,false);document.getElementById('owgEventLogSavedReports')?.setAttribute('aria-expanded','false');}
     const generation=++state.generation;state.logId=logId;state.caseType='';state.follows=[];state.attr={};state.caseActivity='';state.objectTypes=[];
     document.getElementById('owgEventLogResults').replaceChildren();
@@ -641,7 +641,9 @@
     const options=(types.object_types||[]).map(t=>[t.object_type,t.object_type+' ('+Number(t.objects).toLocaleString()+')']);
     const caseType=document.getElementById('owgEventLogCaseType');
     setOptions(caseType,options);
-    state.caseType=options.some(o=>o[0]==='case')?'case':(options[0]?options[0][0]:'');
+    const available=options.map(([type])=>type);
+    state.caseType=available.includes(preferredCaseType)?preferredCaseType:
+      (available.includes('case')?'case':(available[0]||''));
     caseType.value=state.caseType;
   }
 
