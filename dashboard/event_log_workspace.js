@@ -13,6 +13,7 @@
   let activityLookupBusy=false;
   // Views that honour the workspace case filter; every other section uses all cases.
   const FILTERED=new Set(['automation-candidates','summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','performance-spectrum','waiting-time','drift','model-discovery','organization','report.html','decision-points','decision-rules']);
+  FILTERED.add('roles');
   FILTERED.add('model-discovery.pnml');
 
   const el=(tag,text,cls)=>{
@@ -4124,9 +4125,25 @@
     const namesLabel=el('label');namesLabel.style.cssText='display:flex;gap:6px;align-items:center';
     const names=input('owgEventLogOrgNames','checkbox');namesLabel.append(names,document.createTextNode(' Show resource names from the log'));
     const run=button('Show handovers','secondary');run.id='owgEventLogOrgRun';
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(namesLabel,run);
+    const rolesRun=button('Discover roles','secondary');rolesRun.id='owgEventLogRolesRun';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(namesLabel,run,rolesRun);
     const out=el('div');out.id='owgEventLogOrgResults';out.setAttribute('role','status');
     box.append(row,out);
+    rolesRun.onclick=async()=>{
+      const generation=state.generation;
+      try{
+        rolesRun.disabled=true;out.replaceChildren(el('div','Grouping resources by the activities they perform…','muted'));
+        const r=await getJSON(logPath('roles',{names:names.checked?'shown':'pseudonymous'}));
+        if(generation!==state.generation)return;
+        if(!r.roles.length){out.replaceChildren(el('div','This log has no resource column values to analyse.','muted'));return;}
+        out.replaceChildren(
+          el('div',r.roles.length+' roles from '+r.coverage.resources+' resources whose activity mixes correlate at '+r.threshold+' or more.'+(r.coverage.resources_truncated?' Only the 200 most active resources are grouped.':''),'muted'),
+          table(['Role','Members','Events','Main activities','Only this role'],r.roles.map(x=>[x.role,x.members.join(', '),Number(x.events).toLocaleString(),
+            x.activity_mix.slice(0,4).map(a=>a.activity+' '+Math.round(a.share*100)+'%').join(', '),x.exclusive_activities.join(', ')||'\u2014'])),
+          el('div',r.interpretation,'muted'));
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{rolesRun.disabled=false;}
+    };
     run.onclick=async()=>{
       const generation=state.generation;
       try{

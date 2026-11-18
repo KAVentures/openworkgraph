@@ -1130,6 +1130,33 @@ No per-person duration, waiting time, speed, ranking or performance score is cal
 not even on handover edges. Handover counts say who touched a case next, not who was
 responsible or how well anyone worked. One million events are analysed in seconds
 (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_organization.py`).
+
+### Roles
+
+"Discover roles" groups resources that perform a similar mix of activities. This is organizational
+role mining, as in Song and van der Aalst (2008), PM4Py's role discovery and ProM's organizational
+miner.
+
+1. Each resource's activity counts are compared with the Pearson correlation.
+2. Starting from one group per resource, the two groups whose summed profiles correlate most are
+   merged.
+3. Merging repeats while the correlation is at least the threshold (default 0.65, as in PM4Py;
+   `threshold` must be above 0 and below 1).
+
+Each role lists:
+- its members;
+- its events;
+- its activity mix (the top eight activities with their shares);
+- the activities that only this role performs.
+
+The 200 most active resources and the 200 most frequent activities are considered. Resources are
+pseudonymous ("Resource 01", numbered by event count) unless names are asked for. Roles describe
+recorded work, not job titles, responsibilities or how well anyone worked. No duration, speed,
+ranking or score of any person is computed.
+
+`GET /v1/event-logs/{log_id}/roles?threshold=&names=pseudonymous|shown&case_type=` plus the
+case-filter parameters. Dashboard session only.
+
 ## Signals
 
 Signals are saved conditions you check a log against. This is local, signal-only parity with
