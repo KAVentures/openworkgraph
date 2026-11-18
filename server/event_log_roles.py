@@ -33,19 +33,26 @@ TOP_ACTIVITIES = 8
 _NAMES = {"pseudonymous", "shown"}
 
 
-def _pearson(a: Counter, b: Counter, keys: list[str]) -> float:
-    n = len(keys)
-    if n < 2:
+def _moments(counts: Counter, dimensions: int) -> tuple[int, int]:
+    total = sum(counts.values())
+    variance = dimensions * sum(value * value for value in counts.values()) - total * total
+    return total, variance
+
+
+def _pearson(a: Counter, b: Counter, dimensions: int,
+             moments_a: tuple[int, int], moments_b: tuple[int, int]) -> float:
+    if dimensions < 2:
         return 1.0 if a and b else 0.0
-    xa = [a.get(k, 0) for k in keys]
-    xb = [b.get(k, 0) for k in keys]
-    ma, mb = sum(xa) / n, sum(xb) / n
-    cov = sum((x - ma) * (y - mb) for x, y in zip(xa, xb))
-    va = sum((x - ma) ** 2 for x in xa)
-    vb = sum((y - mb) ** 2 for y in xb)
-    if va == 0 or vb == 0:
-        return 1.0 if va == vb == 0 else 0.0
-    return cov / math.sqrt(va * vb)
+    total_a, variance_a = moments_a
+    total_b, variance_b = moments_b
+    if not variance_a or not variance_b:
+        return 1.0 if variance_a == variance_b == 0 else 0.0
+    # Missing activity counts are zero, so only common activities contribute
+    # to the dot product. Integer moments avoid subtracting rounded means.
+    if len(a) > len(b):
+        a, b = b, a
+    dot = sum(count * b.get(activity, 0) for activity, count in a.items())
+    return (dimensions * dot - total_a * total_b) / math.sqrt(variance_a * variance_b)
 
 
 def roles(log_id: str, case_type: str | None = None, *, threshold: float = DEFAULT_THRESHOLD,
@@ -81,7 +88,7 @@ def roles(log_id: str, case_type: str | None = None, *, threshold: float = DEFAU
     data = workspace._query_filtered(log_id, case_type, cohort, run)
     ranked = data.pop("ranked")
     activities = dict(data.pop("activities"))
-    activity_names = list(activities)
+    dimensions = len(activities)
     label = {name: (name if names == "shown" else f"Resource {i:02d}") for i, (name,) in enumerate(ranked, start=1)}
     profile: dict[str, Counter] = {name: Counter() for name in label}
     included_performers: Counter = Counter()
@@ -96,6 +103,7 @@ def roles(log_id: str, case_type: str | None = None, *, threshold: float = DEFAU
     # A merge changes only the correlations involving its new group. Group
     # IDs follow the original ordering so equal-correlation ties stay stable.
     scores = {}
+    moments = {group: _moments(counts, dimensions) for group, (_, counts) in groups.items()}
     next_group = len(ranked)
     merges = 0
     while len(groups) > 1:
@@ -105,7 +113,8 @@ def roles(log_id: str, case_type: str | None = None, *, threshold: float = DEFAU
             for right in group_ids[pos + 1:]:
                 key = (left, right)
                 if key not in scores:
-                    scores[key] = _pearson(groups[left][1], groups[right][1], activity_names)
+                    scores[key] = _pearson(groups[left][1], groups[right][1], dimensions,
+                                           moments[left], moments[right])
                 score = scores[key]
                 if score >= best + (0 if pair is None else 1e-12):
                     best, pair = score, key
@@ -114,7 +123,9 @@ def roles(log_id: str, case_type: str | None = None, *, threshold: float = DEFAU
         left, right = pair
         members_a, counts_a = groups.pop(left)
         members_b, counts_b = groups.pop(right)
-        groups[next_group] = (members_a + members_b, counts_a + counts_b)
+        merged_counts = counts_a + counts_b
+        groups[next_group] = (members_a + members_b, merged_counts)
+        moments[next_group] = _moments(merged_counts, dimensions)
         next_group += 1
         merges += 1
     groups = list(groups.values())
