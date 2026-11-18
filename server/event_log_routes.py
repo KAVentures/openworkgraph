@@ -843,6 +843,20 @@ def event_log_decision_rules(request: Request, log_id: str,
     return _respond(decisions.analyse, log_id, decision_activity, case_type, max_depth=max_depth, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/heuristics-net")
+def event_log_heuristics_net(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                             dependency_threshold: float = Query(default=0.5, ge=0, le=1),
+                             and_threshold: float = Query(default=0.65, ge=0, le=1),
+                             min_occurrences: int = Query(default=1, ge=1, le=1_000_000),
+                             all_connected: bool = Query(default=True),
+                             cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_heuristics_miner as heuristics
+    _require_dashboard(request)
+    return _respond(heuristics.heuristics_net, log_id, case_type, dependency_threshold=dependency_threshold,
+                    and_threshold=and_threshold, min_occurrences=min_occurrences, all_connected=all_connected,
+                    cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/variants")
 def event_log_variants(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                        limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):

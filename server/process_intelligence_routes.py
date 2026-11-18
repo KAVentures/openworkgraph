@@ -124,6 +124,14 @@ async def agent_decision_rules(request: Request, log_id: str, activity: str | No
     return await _answer(sharing.decision_rules, log_id, activity, case_type, max_depth)
 
 
+@router.get("/v1/process-intelligence/{log_id}/heuristics-net")
+async def agent_heuristics_net(request: Request, log_id: str,
+                               dependency_threshold: float = Query(default=0.5, ge=0, le=1),
+                               case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.heuristics_net, log_id, case_type, dependency_threshold)
+
+
 @router.get("/v1/process-intelligence/{log_id}/signals")
 async def agent_signals(request: Request, log_id: str):
     _require_agent_access(request)

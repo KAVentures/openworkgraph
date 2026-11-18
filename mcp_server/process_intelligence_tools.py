@@ -114,6 +114,20 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"activity": activity, "max_depth": max(1, min(int(max_depth), 4)), "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def get_process_heuristics_net(log_id: str, dependency_threshold: float = 0.5,
+                                   case_type: str | None = None) -> dict[str, Any]:
+        """Heuristics-miner model of a shared log: arrows kept only where one activity follows another clearly
+        more often than the reverse (dependency at or above the threshold), with each split and join marked AND
+        (branches occur in both orders) or XOR (one or the other), and self- and two-step loops. Inferred from
+        recorded order, not a modelled process.
+        """
+        if isinstance(dependency_threshold, bool) or not isinstance(dependency_threshold, (int, float)) \
+                or not 0 <= dependency_threshold <= 1:
+            raise ToolError("dependency_threshold must be a number from 0 to 1")
+        return _get("get_process_heuristics_net", f"/v1/process-intelligence/{_log(log_id)}/heuristics-net",
+                    {"dependency_threshold": float(dependency_threshold), "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_signals(log_id: str) -> dict[str, Any]:
         """The owner's signal rules on a shared log (KPI thresholds, case and compliance conditions) and their
         last evaluated state: triggered or not, the measured value or matching cases, and whether the owner

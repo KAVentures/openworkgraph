@@ -55,6 +55,8 @@ def test_sharing_levels_and_revocation():
     assert [c["activity"] for c in auto["candidates"]][0] in {"Receive", "Approve", "Pay"} and auto["weights"]["routine"] == 0.4
     points = sharing.decision_rules(log)
     assert "decision_points" in points and points["log_id"] == log
+    net = sharing.heuristics_net(log)
+    assert net["cases"] == 12 and {e["from"] for e in net["edges"]} >= {"Receive", "Approve"}
     rc = sharing.root_cause(log, "duration_over", hours=24)
     bob = next(a for a in rc["associations"] if a["feature"] == {"kind": "resource", "value": "bob"})
     assert bob["risk_difference"] == 1.0 and bob["holds_after_bonferroni"]
@@ -244,7 +246,8 @@ async def _listed_tools(tmp_path: Path, enabled: bool) -> set[str]:
 
 PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_root_cause",
                  "explain_process_case", "get_slowest_process_cases", "tag_process_cases",
-                 "get_process_automation_candidates", "get_process_signals", "get_process_decision_rules"}
+                 "get_process_automation_candidates", "get_process_signals", "get_process_decision_rules",
+                 "get_process_heuristics_net"}
 
 
 def test_mcp_tools_are_listed_only_when_a_log_is_shared(tmp_path):

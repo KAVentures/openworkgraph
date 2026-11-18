@@ -13,6 +13,7 @@
   let activityLookupBusy=false;
   // Views that honour the workspace case filter; every other section uses all cases.
   const FILTERED=new Set(['automation-candidates','summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','performance-spectrum','waiting-time','drift','model-discovery','organization','report.html','decision-points','decision-rules']);
+  FILTERED.add('heuristics-net');
 
   const el=(tag,text,cls)=>{
     const node=document.createElement(tag);
@@ -797,6 +798,7 @@
     results.appendChild(deriveSection(names));
     results.appendChild(dottedSection());
     results.appendChild(spectrumSection());
+    results.appendChild(heuristicsSection());
     results.appendChild(waitingSection());
     results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity),inspection));
     results.appendChild(organizationSection());
@@ -3658,6 +3660,41 @@
         }
         out.appendChild(el('div',r.caveat,'muted'));
         statusLine.textContent+=' Time runs from '+stamp(0)+' to '+stamp(span)+'.';
+      }catch(error){statusLine.textContent=error.message;}
+      finally{run.disabled=false;}};
+    return box;
+  }
+
+  function heuristicsSection(){
+    const box=section('Heuristics net');box.id='owgHeuristics';
+    box.appendChild(el('div','A model that ignores weak and two-way evidence: an arrow is kept only when one activity follows another clearly more often than the other way round. Splits and joins are marked AND when their branches happen in either order, and XOR when one or the other happens.','muted'));
+    const dep=select('owgHeuristicsDependency',[['0.5','0.5 (default)'],['0.7','0.7'],['0.9','0.9 (strict)'],['0.3','0.3 (loose)']]);
+    const support=input('owgHeuristicsSupport','number');support.min='1';support.value='1';
+    const run=button('Discover heuristics net','secondary');run.id='owgHeuristicsRun';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Dependency threshold',dep),field('Seen at least (times)',support),run);
+    const statusLine=el('div',null,'muted');statusLine.id='owgHeuristicsStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const graphHost=el('div');graphHost.id='owgHeuristicsGraph';
+    const out=el('div');out.id='owgHeuristicsResults';
+    box.append(row,statusLine,graphHost,out);
+    const kind=k=>({and:'AND (parallel)',xor:'XOR (choice)',mixed:'Mixed'})[k]||k;
+    run.onclick=async()=>{
+      const generation=state.generation;run.disabled=true;statusLine.textContent='Discovering…';graphHost.replaceChildren();out.replaceChildren();
+      try{
+        const r=await getJSON(logPath('heuristics-net',{dependency_threshold:dep.value,min_occurrences:String(Math.max(1,Number(support.value)||1))}));
+        if(generation!==state.generation)return;
+        const arrows=r.edges.filter(e=>e.dependency!==null);
+        statusLine.textContent=arrows.length+' arrows kept between '+r.activities.length+' activities, covering '+Math.round((r.coverage.transitions_on_kept_arrows_share||0)*100)+'% of recorded transitions; '+r.splits.length+' splits, '+r.joins.length+' joins, '+r.loops.length+' loops.'+(r.cases_before_filter?' Filtered from '+Number(r.cases_before_filter).toLocaleString()+' cases.':'');
+        const draw=window.owgProcessGraph&&window.owgProcessGraph.drawObserved;
+        if(draw&&r.activities.length){try{const drawing=draw({activities:r.activities,transitions:arrows,cases:[]},()=>{},()=>{});drawing.id='owgHeuristicsDrawing';graphHost.appendChild(drawing);}
+          catch(_){graphHost.appendChild(el('div','The graph could not be drawn; the arrows are listed below.','muted'));}}
+        const gates=[...r.splits.map(s=>['Split after',s]),...r.joins.map(j=>['Join before',j])];
+        if(gates.length){out.appendChild(el('h4','Splits and joins'));
+          out.appendChild(table(['Where','Activity','Branches','Type'],gates.map(([w,g])=>[w,g.activity,g.branches.join(', '),kind(g.type)])));}
+        if(r.loops.length){out.appendChild(el('h4','Loops'));
+          out.appendChild(table(['Kind','Activities','Measure'],r.loops.map(l=>[l.kind==='self'?'Repeats itself':'Back and forth',l.activities.join(' ⇄ '),String(l.measure)])));}
+        const more=document.createElement('details');more.appendChild(el('summary','All arrows'));
+        more.appendChild(table(['From','To','Transitions','Dependency','Kept because'],arrows.map(e=>[e.from,e.to,Number(e.transition_count).toLocaleString(),String(e.dependency),({threshold:'above threshold',best_connection:'best connection',short_loop:'short loop'})[e.kept_by]||e.kept_by])));
+        out.append(more,el('div',r.note,'muted'));
       }catch(error){statusLine.textContent=error.message;}
       finally{run.disabled=false;}};
     return box;
