@@ -133,7 +133,12 @@ with xlsxwriter.Workbook(sys.argv[1]) as book:
    await page.route('**/xlsx-to-csv',async route=>{
      const response=await route.fetch();reached();await gate;await route.fulfill({response});
    },{times:1});
-   await page.locator('#owgCaseAttributeFile').setInputFiles(workbook);
+   const delayed=path.join(scratch,'delayed.xlsx');
+   await fs.copyFile(workbook,delayed);
+   await Promise.all([
+     page.waitForRequest(request=>request.url().endsWith('/xlsx-to-csv'),{timeout:10000}),
+     page.locator('#owgCaseAttributeFile').setInputFiles(delayed)
+   ]);
    await held;
    await page.locator('#owgCaseAttributeFile').setInputFiles({name:'fresh.csv',mimeType:'text/csv',
      buffer:Buffer.from('case_id,Fresh\nc0,value\n')});
