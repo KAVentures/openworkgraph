@@ -1813,6 +1813,41 @@ The same decision can be made up front for a CSV import or append with
 `naive_timestamp_offset=+01:00`. It is part of the transform and its digest, and the report counts
 the times read with the assumed offset.
 
+## Private process map (differential privacy)
+
+"Share a private process map" creates a directly-follows map that can be given to someone else
+without revealing any single case. It follows privacy-preserving process mining: Mannhardt et al.
+2019, the Libra and SaCoFa work of Elkoumy et al., and PM4Py's privacy module. The guarantee is
+ε-differential privacy with respect to adding or removing one case.
+
+1. **Bounded contribution.** Each case contributes at most `k` directly-follows pairs (default 10,
+   from 1 to 100) and `k + 1` activity occurrences. The pairs include `(start) → A` and `B → (end)`.
+   A longer case keeps a random subset, drawn anew for each export.
+2. **Laplace noise.** The budget ε (0.01–10, default 1) is split evenly:
+   - path counts get noise of scale `2k/ε`;
+   - activity counts get noise of scale `2(k+1)/ε`.
+
+   Noise is added to every possible pair over the log's activity labels, observed or not, so
+   whether an edge appears does not reveal that a case took it.
+3. **Release threshold.** Counts below the threshold are left out and the rest are rounded. By
+   default the threshold keeps the expected number of released pairs that no case took at 0.05 per
+   export, and likewise for activities. A fixed `threshold` can be given instead.
+
+The export contains activities, edges and approximate counts, and nothing else: no case
+identifiers, times, resources, attributes or durations.
+
+**Activity names are released as they are.** They come from the log's label set and the noise does
+not protect them. Rename labels that would themselves identify someone before sharing.
+
+**Repeated exports add up:** two exports at ε each spend 2ε in total. The owner also sees how many
+cases there are and how many exceeded the cap, to help choose `k`. That figure is not private, so
+it is kept out of the download (`owner_only_not_private`).
+
+`POST /v1/event-logs/{log_id}/private-map?case_type=` with
+`{"epsilon": 1, "max_transitions_per_case": 10, "threshold": null}`. It is a POST because each call
+draws fresh noise and spends budget. Dashboard session only. It covers every case of the log, not
+the case filter.
+
 ## Case filter and playback
 
 The **Case filter** keeps only cases whose recorded order matches every rule, like Disco's follower

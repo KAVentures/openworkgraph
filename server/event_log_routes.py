@@ -122,6 +122,18 @@ def _case_filter(started_from: str = Query(default="", max_length=64),
     return cohort
 
 
+@router.post("/v1/event-logs/{log_id}/private-map")
+async def event_log_private_map(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200)):
+    """A differentially private directly-follows map. POST: every call draws fresh noise and spends epsilon."""
+    from . import event_log_private_map as private
+    _require_dashboard(request)
+    body = await _json_body(request, "private map settings")
+    if not isinstance(body, dict) or set(body) - {"epsilon", "max_transitions_per_case", "threshold"}:
+        raise HTTPException(422, "settings accept epsilon, max_transitions_per_case and threshold")
+    return await run_in_threadpool(_respond, private.private_map, log_id, case_type,
+                                   **{k: v for k, v in body.items() if v is not None})
+
+
 @router.get("/v1/event-logs/{log_id}/cost-model")
 def event_log_cost_model(request: Request, log_id: str):
     """The log's saved cost model, or null when none is saved."""

@@ -758,6 +758,7 @@
     results.appendChild(waitingSection());
     results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity),inspection));
     results.appendChild(organizationSection());
+    results.appendChild(privateMapSection());
     results.appendChild(logComparisonSection());
     results.appendChild(analysisSection(names));
     results.appendChild(signalSection((activities.activities||[]).map(a=>a.activity)));
@@ -3857,6 +3858,40 @@
           el('h4','Paths: share of cases'),table(['Path',r.baseline.name,r.comparison.name,'Difference'],pathRows),
           el('div',r.variants.shared_variants.toLocaleString()+' variants occur in both logs; they cover '+pct(r.variants.baseline_cases_in_shared_variants)+' of '+r.baseline.name+' cases and '+pct(r.variants.comparison_cases_in_shared_variants)+' of '+r.comparison.name+' cases.','muted'),
           el('div','* the 95% interval of the difference excludes zero. '+r.interpretation,'muted'));
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{run.disabled=false;}
+    };
+    return box;
+  }
+
+  // A differentially private process map that can be shared without revealing any single case.
+  function privateMapSection(){
+    const box=section('Share a private process map');box.id='owgPrivateMap';
+    box.appendChild(el('div','Creates a map of activities and the paths between them with calibrated random noise (differential privacy), so the result hardly changes whether or not any one case is in the log. It contains no case, time, resource or attribute, but activity names are shown as they are. Every map you create draws new noise and uses up privacy again. It covers every case of this log, not the case filter.','muted'));
+    const eps=input('owgPrivateMapEpsilon','number');eps.min='0.01';eps.max='10';eps.step='0.1';eps.value='1';
+    const k=input('owgPrivateMapK','number');k.min='1';k.max='100';k.step='1';k.value='10';
+    const run=button('Create private map','secondary');run.id='owgPrivateMapRun';
+    const row=el('div',null,'row');row.style.alignItems='end';
+    row.append(field('Privacy budget ε (smaller is more private)',eps),field('Most transitions counted per case',k),run);
+    const out=el('div');out.id='owgPrivateMapResults';out.setAttribute('role','status');
+    box.append(row,out);
+    run.onclick=async()=>{
+      const generation=state.generation;run.disabled=true;out.replaceChildren(el('div','Adding noise…','muted'));
+      try{
+        const body={epsilon:Number(eps.value),max_transitions_per_case:Number(k.value)};
+        if(!Number.isFinite(body.epsilon)||!Number.isInteger(body.max_transitions_per_case))throw new Error('Enter a number for ε and a whole number of transitions.');
+        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/private-map'+(state.caseType?'?case_type='+encodeURIComponent(state.caseType):''),
+          {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+        if(generation!==state.generation)return;
+        const p=r.privacy,own=r.owner_only_not_private;
+        const shared={...r};delete shared.owner_only_not_private;
+        const save=button('Download shareable map (JSON)','secondary');save.id='owgPrivateMapDownload';
+        save.onclick=()=>download(state.logId+'-private-map.json',JSON.stringify(shared,null,2),'application/json');
+        out.replaceChildren(
+          el('div','ε = '+p.epsilon+': '+r.edges.length+' paths and '+r.activities.length+' activities released. Noise scale '+p.noise.edge_scale+' on path counts; paths below '+p.release_threshold.edges+' are left out.','muted'),
+          el('div','Only you see this: '+Number(own.cases).toLocaleString()+' cases, '+Number(own.cases_clipped).toLocaleString()+' longer than the transition cap (a random part of those was counted). It is not in the download.','muted'),
+          table(['From','To','About'],r.edges.slice(0,40).map(e=>[e.from,e.to,Number(e.count).toLocaleString()])),
+          save,el('div',r.note,'muted'));
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
       finally{run.disabled=false;}
     };
