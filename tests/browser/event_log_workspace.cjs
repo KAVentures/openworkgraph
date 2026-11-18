@@ -252,6 +252,12 @@ const path=require('node:path');
    outline=await page.locator('#owgDiscoveryOutline').textContent();
    assert.match(outline,/Choose one of:\n {2}Option 1 · 6 cases:\n {4}\(skip\)\n {2}Option 2 · 54 cases:\n {4}Approve\nClose/);
    assert.match(await page.locator('#owgDiscoveryStatus').textContent(),/fits 60 of 60 checked cases/);
+   // The same draft downloads as a PNML workflow net with the skip as a silent transition.
+   const [pnmlDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#owgDiscoveryPnml').click()]);
+   assert.match(pnmlDownload.suggestedFilename(),/-discovered\.pnml$/);
+   const pnmlText=await fs.readFile(await pnmlDownload.path(),'utf8');
+   assert.match(pnmlText,/<pnml>/);assert.match(pnmlText,/<text>Approve<\/text>/);assert.match(pnmlText,/\$invisible\$/);
+   await page.locator('#owgDiscoveryStatus').filter({hasText:'Petri net downloaded (places='}).waitFor();
    const [snapshotResponse]=await Promise.all([
      page.waitForResponse(r=>r.url().endsWith('/model-discovery-draft')&&r.request().method()==='POST'),
      page.locator('#owgDiscoveryDraft').click()
@@ -400,6 +406,23 @@ const path=require('node:path');
    await page.locator('#owgEventLogGraphRun').click();
    await page.waitForFunction(()=>document.querySelector('#owgEventLogGraphResults table tbody tr td')?.textContent==='20');
    assert.equal(await resultCell().nth(2).textContent(),'20');
+   const review=page.locator('#owgEventLogGraphResults');
+   const alignment=review.locator('details').filter({hasText:'Expected by model'}).first();
+   await alignment.locator('summary').click();
+   await alignment.getByText('Expected by model',{exact:true}).first().waitFor();
+   await page.locator('#owgEventLogGraphVariantStatus').selectOption('match');
+   await review.getByText(/of 0 selected variant results/).waitFor();
+   await page.locator('#owgEventLogGraphVariantStatus').selectOption('deviation');
+   const inspect=review.getByRole('button',{name:'Inspect cases',exact:true}).first();
+   await inspect.waitFor();
+   const [evidenceRequest]=await Promise.all([
+     page.waitForRequest(request=>request.url().includes('/cases/query')&&request.method()==='POST'),
+     inspect.click()
+   ]);
+   assert.equal(evidenceRequest.postDataJSON().cohort.resource,'ann');
+   assert.ok(evidenceRequest.postDataJSON().path.length);
+   await page.locator('#owgEventLogCasesPath').filter({hasText:'Saved process comparison cohort'}).waitFor();
+
    await page.locator('#owgEventLogGraphCohortResource').fill('absent');await page.locator('#owgEventLogGraphRun').click();
    await page.locator('#owgEventLogGraphResults').getByText('No cases match this selection; no verdict was established.').waitFor();
    assert.match(await page.locator('#owgEventLogGraphMetrics').textContent(),/Unknown/);

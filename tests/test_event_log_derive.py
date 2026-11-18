@@ -62,6 +62,25 @@ def test_matching_cases_become_a_new_log_and_the_source_is_unchanged():
     assert [entry["log_id"] for entry in workspace.list_logs()["logs"]] == [log]
 
 
+def test_derived_log_keeps_original_events_collapsed_in_the_matching_analysis():
+    from server import event_log_activity_mappings as mappings
+
+    log = _csv_log()
+    mapping = mappings.create(log, {"name": "Intake", "collapse_repeats": True,
+        "groups": [{"label": "Review", "activities": ["Receive", "Escalate"]}]})
+    mappings.apply_mapping(log, mapping["mapping_id"])
+    cohort = {"follows": [{"from": "Review", "to": "Pay", "mode": "direct"}],
+              "event_attribute": "region=south"}
+    assert workspace.summary(log, cohort=cohort)["events"] == 8
+    result = derive.derive(log, {"name": "South", "cohort": cohort})
+    assert result["derived_from"]["cases_matched"] == 4
+    assert result["copied"]["events"] == 10
+    cases = dict(workspace.case_events(result["log"]["log_id"]))
+    assert set(cases) == {"c6", "c7", "c8", "c9"}
+    assert [event["activity"] for event in cases["c6"]] == ["Receive", "Escalate", "Pay"]
+    assert cases["c6"][1]["attributes"] == {"region": "south"}
+
+
 def test_object_centric_logs_keep_linked_objects_and_their_history():
     objects = [{"id": f"o{i}", "type": "order",
                 "attributes": [{"name": "status", "value": "new", "time": "2024-01-01T00:00:00Z"},
@@ -137,3 +156,25 @@ print("ok")
     done = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1], env=env,
                           capture_output=True, text=True, timeout=120)
     assert done.returncode == 0 and done.stdout.strip().endswith("ok"), f"stdout={done.stdout}\nstderr={done.stderr}"
+
+
+
+def test_matching_case_export_uses_the_mapping_but_writes_complete_original_traces():
+    from server import event_log_activity_mappings as mappings
+    from server.event_log_cohort_export import export_matching_cases
+
+    log = _csv_log()
+    mapping = mappings.create(log, {"name": "Intake", "collapse_repeats": True,
+        "groups": [{"label": "Review", "activities": ["Receive", "Escalate"]}]})
+    mappings.apply_mapping(log, mapping["mapping_id"])
+    out = StringIO(newline="")
+    export_matching_cases(log, {"cohort": {"follows": [{"from": "Review", "to": "Pay", "mode": "direct"}],
+                                           "event_attribute": "region=south"}}, out)
+    rows = list(csv.DictReader(StringIO(out.getvalue())))
+    assert {row["case_id"] for row in rows} == {"c6", "c7", "c8", "c9"}
+    assert len(rows) == 10
+    assert [row["activity"] for row in rows if row["case_id"] == "c6"] == ["Receive", "Escalate", "Pay"]
+    assert len(workspace.list_logs()["logs"]) == 1
+    for cohort in ({}, {"label": "only"}, {"activity": "Absent"}):
+        with pytest.raises(workspace.EventLogWorkspaceError):
+            export_matching_cases(log, {"cohort": cohort}, StringIO())

@@ -923,24 +923,40 @@ def activities(log_id: str, case_type: str | None = None, cohort: dict[str, Any]
 
 def case_events(log_id: str, case_type: str | None = None) -> Iterator[tuple[str, list[dict[str, Any]]]]:
     """All events grouped by case, ordered; used by exports and analytics."""
+    for case_id, events, _ in _case_export_rows(log_id, case_type):
+        yield case_id, events
+
+
+def _case_export_rows(log_id, case_type, *, include_trace_attributes=False):
     with _LOCK:
         conn = _connect()
         try:
             _check_log(conn, log_id)
             notion = _case_type(conn, log_id, case_type)
-            cursor = conn.execute(_CASE_EVENTS + " ORDER BY case_id, ts, event_id", [log_id, notion])
-            current, bucket = None, []
+            if include_trace_attributes:
+                query = f"""SELECT o.object_id, c.activity, c.ts, c.resource, c.event_id, c.attributes, o.attributes
+                    FROM objects o LEFT JOIN ({_CASE_EVENTS}) c ON c.case_id = o.object_id
+                    WHERE o.log_id = ? AND o.object_type = ?
+                    ORDER BY o.object_id, c.ts, c.event_id"""
+                cursor = conn.execute(query, [log_id, notion, log_id, notion])
+            else:
+                cursor = conn.execute(_CASE_EVENTS + " ORDER BY case_id, ts, event_id", [log_id, notion])
+            current, bucket, trace_attributes = None, [], {}
             while batch := cursor.fetchmany(10_000):
-                for case_id, activity, ts, resource, event_id, attributes in batch:
-                    if case_id != current and current is not None:
-                        yield current, bucket
-                        bucket = []
-                    current = case_id
+                for case_id, activity, ts, resource, event_id, attributes, *trace in batch:
+                    if case_id != current:
+                        if current is not None:
+                            yield current, bucket, trace_attributes
+                            bucket = []
+                        current = case_id
+                        trace_attributes = json.loads(trace[0] or "{}") if trace else {}
+                    if event_id is None:
+                        continue  # retain an empty trace in the attribute export
                     bucket.append({"case_id": case_id, "activity": activity,
                                    "timestamp": ts.replace(tzinfo=timezone.utc), "resource": resource,
                                    "event_id": event_id, "attributes": json.loads(attributes or "{}")})
             if current is not None:
-                yield current, bucket
+                yield current, bucket, trace_attributes
         finally:
             conn.close()
 
@@ -956,6 +972,14 @@ def export_log(log_id: str, export_format: str, out: IO[str], case_type: str | N
             finally:conn.close()
     elif export_format == "xes":
         write_xes(case_events(log_id, case_type), out)
+    elif export_format == "xes-attributes":
+        rows = _case_export_rows(log_id, case_type, include_trace_attributes=True)
+        try:
+            write_xes(rows, out, include_attributes=True)
+        except EventLogFormatError as exc:
+            raise EventLogWorkspaceError(str(exc)) from None
+        finally:
+            rows.close()
     elif export_format in ("csv", "csv-review"):
         write_csv((event for _, events in case_events(log_id, case_type) for event in events), out,
                   spreadsheet_review=export_format == "csv-review")

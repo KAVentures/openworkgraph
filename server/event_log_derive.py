@@ -62,7 +62,12 @@ def derive(log_id: str, spec: Any) -> dict[str, Any]:
         if conn.execute("SELECT count(*) FROM logs").fetchone()[0] >= workspace.MAX_LOGS:
             raise workspace.EventLogWorkspaceError("delete an event log before saving another")
         source_format = conn.execute("SELECT source_format FROM logs WHERE log_id = ?", [log_id]).fetchone()[0]
-        conn.execute("CREATE OR REPLACE TEMP TABLE dv_events AS SELECT DISTINCT event_id FROM ce")
+        # The mapped projection determines which cases match. A collapsed
+        # analysis row still belongs to the original trace being copied.
+        conn.execute("""CREATE OR REPLACE TEMP TABLE dv_events AS
+            SELECT DISTINCT links.event_id
+            FROM event_objects links SEMI JOIN ce ON links.object_id = ce.case_id
+            WHERE links.log_id = ?""", [log_id])
         conn.execute("BEGIN")
         try:
             conn.execute("""INSERT INTO events SELECT ?, e.event_id, e.activity, e.ts, e.resource, e.attributes

@@ -14,7 +14,7 @@ from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi import Path as PathParam
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
@@ -66,8 +66,8 @@ from .local_auth import dashboard_session_valid
 router = APIRouter()
 XLSX_MAX_BYTES = 64 * 1024 * 1024
 _SCRIPT = Path(__file__).resolve().parents[1] / "dashboard" / "event_log_workspace.js"
-_TYPES = {"csv": "text/csv", "sourcecsv": "text/csv", "sourcecsv-review": "text/csv", "csv-review": "text/csv", "xes": "application/xml", "ocel": "application/json", "ocelxml": "application/xml"}
-_SUFFIX = {"csv": "csv", "sourcecsv": "csv", "sourcecsv-review": "review.csv", "csv-review": "review.csv", "xes": "xes", "ocel": "jsonocel", "ocelxml": "xmlocel"}
+_TYPES = {"csv": "text/csv", "sourcecsv": "text/csv", "sourcecsv-review": "text/csv", "csv-review": "text/csv", "xes": "application/xml", "xes-attributes": "application/xml", "ocel": "application/json", "ocelxml": "application/xml"}
+_SUFFIX = {"csv": "csv", "sourcecsv": "csv", "sourcecsv-review": "review.csv", "csv-review": "review.csv", "xes": "xes", "xes-attributes": "xes", "ocel": "jsonocel", "ocelxml": "xmlocel"}
 
 
 def _source_identity_mapping(
@@ -559,6 +559,32 @@ def event_log_quality_batch_history_page(request: Request, log_id: str,
         limit: int = Query(default=100, ge=1, le=100)):
     _require_dashboard(request)
     return _respond(quality_pages.page, log_id, before, limit)
+
+
+@router.post("/v1/event-logs/{log_id}/export/matching-cases")
+async def export_event_log_matching_cases(request: Request, log_id: str):
+    from .event_log_cohort_export import export_matching_cases
+
+    _require_dashboard(request)
+    spec = await _json_body(request, "matching-case export settings", strict=True, limit=32768)
+
+    def prepare():
+        handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="", suffix=".csv",
+                                             dir=str(DATA_DIR), delete=False)
+        try:
+            with handle:
+                export_matching_cases(log_id, spec, handle)
+        except BaseException:
+            os.unlink(handle.name)
+            raise
+        return handle.name
+
+    try:
+        filename = await run_in_threadpool(prepare)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return FileResponse(filename, media_type="text/csv", filename=f"{log_id}-matching-cases.csv",
+                        headers={"Cache-Control": "no-store"}, background=BackgroundTask(os.unlink, filename))
 
 
 @router.post("/v1/event-logs/{log_id}/derive")
@@ -1622,6 +1648,22 @@ def event_log_model_discovery(request: Request, log_id: str, case_type: str | No
     return _respond(model_discovery.discover, log_id, case_type, noise=noise, activities=activities, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/model-discovery.pnml")
+def event_log_model_discovery_pnml(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                                   noise: float = Query(default=0.2, ge=0, lt=1),
+                                   activities: float = Query(default=1.0, gt=0, le=1),
+                                   cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_pnml as pnml
+    _require_dashboard(request)
+    try:
+        xml, meta = pnml.discovered_pnml(log_id, case_type, noise=noise, activities=activities, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(xml, media_type="application/xml", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-discovered.pnml"',
+        "X-OWG-Petri-Net": f"places={meta['places']}; transitions={meta['transitions']}; silent={meta['silent_transitions']}"})
+
+
 @router.post("/v1/event-logs/{log_id}/model-discovery-draft")
 async def event_log_discovery_draft(request: Request, log_id: str):
     _require_dashboard(request)
@@ -1705,7 +1747,7 @@ async def event_log_simulation_validation(request: Request, log_id: str,
 
 
 @router.get("/v1/event-logs/{log_id}/export")
-def export_event_log(request: Request, log_id: str, format: str = Query(pattern="^(csv|sourcecsv|csv-review|sourcecsv-review|xes|ocel|ocelxml)$"),
+def export_event_log(request: Request, log_id: str, format: str = Query(pattern="^(csv|sourcecsv|csv-review|sourcecsv-review|xes|xes-attributes|ocel|ocelxml)$"),
                      case_type: str | None = Query(default=None, max_length=200)):
     _require_dashboard(request)
     handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix="." + _SUFFIX[format],
@@ -1787,6 +1829,24 @@ async def event_log_delete_cohort_metric_definition(request: Request, log_id: st
     _require_dashboard(request)
     from . import event_log_saved_cohort_metrics as saved
     response = await run_in_threadpool(_respond, saved.delete, log_id, metric_id)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/cohort-metric-definitions/{metric_id}/evaluate")
+async def event_log_evaluate_saved_cohort_metric(
+    request: Request, log_id: str, metric_id: str,
+    case_type: str | None = Query(default=None, max_length=200),
+):
+    """Evaluate a saved, log-scoped metric without accepting a new expression."""
+    _require_dashboard(request)
+    body = await _json_body(request, "saved cohort metric evaluation", strict=True, limit=8192)
+    if not isinstance(body, dict) or set(body) != {"cohort"}:
+        raise HTTPException(422, "cohort is required")
+    from . import event_log_saved_cohort_metrics as saved
+    response = await run_in_threadpool(
+        _respond, saved.evaluate, log_id, metric_id, body["cohort"], case_type
+    )
     _require_dashboard(request)
     return response
 

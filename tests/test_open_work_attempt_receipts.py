@@ -194,3 +194,46 @@ def test_receipt_journal_refuses_dangling_rollback_symlink(tmp_path):
     with pytest.raises(ValueError, match="unsupported receipt rollback journal"):
         list_receipts(str(path), tenant="org", actor="alice", attempt="run")
     assert rollback.is_symlink()
+
+
+
+def test_expired_receipt_cleanup_is_actor_scoped_and_uses_strict_cutoff(tmp_path):
+    """Retention physically removes expired evidence, not other users' rows."""
+    import sqlite3
+    from datetime import datetime, timezone
+    from server.open_work_attempt_receipts import purge_expired_receipts
+
+    path = str(tmp_path / "receipts.sqlite")
+    verdict = {"status": "unknown", "provider_operation": "unknown",
+               "customer_outcome": "unknown"}
+    for tenant, actor in (("org_a", "alice"), ("org_a", "bob"),
+                          ("org_b", "alice")):
+        append_receipt(path, tenant=tenant, actor=actor,
+                       attempt="run_1", verdict=verdict)
+    # Backdate the first actor's receipt, and leave the others untouched.
+    with sqlite3.connect(path) as db:
+        db.execute("UPDATE attempt_receipts SET checked_at=? "
+                   "WHERE tenant=? AND actor=?",
+                   ("2026-11-01T00:00:00+00:00", "org_a", "alice"))
+    now = datetime(2026, 11, 18, tzinfo=timezone.utc)
+    assert purge_expired_receipts(
+        path, tenant="org_a", actor="alice", older_than_days=7, now=now) == 1
+    assert list_receipts(path, tenant="org_a", actor="alice", attempt="run_1") == []
+    assert len(list_receipts(path, tenant="org_a", actor="bob", attempt="run_1")) == 1
+    assert len(list_receipts(path, tenant="org_b", actor="alice", attempt="run_1")) == 1
+    assert purge_expired_receipts(
+        path, tenant="org_a", actor="alice", older_than_days=7, now=now) == 0
+
+
+def test_expired_receipt_cleanup_rejects_invalid_policy_without_deleting(tmp_path):
+    from server.open_work_attempt_receipts import purge_expired_receipts
+
+    path = str(tmp_path / "receipts.sqlite")
+    append_receipt(path, tenant="org", actor="alice", attempt="run",
+                   verdict={"status": "unknown", "provider_operation": "unknown",
+                            "customer_outcome": "unknown"})
+    for invalid in (0, -1, 3651, True, "7"):
+        with pytest.raises(ValueError, match="retention window"):
+            purge_expired_receipts(
+                path, tenant="org", actor="alice", older_than_days=invalid)
+    assert len(list_receipts(path, tenant="org", actor="alice", attempt="run")) == 1

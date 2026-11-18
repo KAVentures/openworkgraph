@@ -11,10 +11,15 @@ decision from retention and sharing: changing it never changes work-text capture
 screenshots, AI access, MCP, Gateway or export settings. The server enforces the
 setting at ingest, so an out-of-date extension cannot store a disabled signal.
 
-Enhanced and Full detail are time-limited: every choice that turns on a high-fidelity
-signal lasts ``duration_days`` (1–90, default 7) and then falls back to Standard on its
-own. The Full acknowledgement is cleared whenever pointer movement is turned off or
-expires, so turning Full on again asks again.
+Enhanced is the default on a device that has not chosen yet: OpenWorkGraph maximizes the
+structural evidence it keeps locally (hover dwell on controls, drag and drop, friction
+candidates) and leaves every content stream (screenshots, OCR, page text) and every sharing
+setting to their own explicit choices. A chosen profile stays until the user changes it,
+unless they pick a period: ``duration_days`` (1–90) makes the extra detail fall back to
+Standard on its own when the period ends. Full fidelity (sampled pointer movement) needs
+its own acknowledgement and, when no period is given, lasts ``DEFAULT_DURATION_DAYS`` (7);
+``duration_days: null`` keeps it until changed. The Full acknowledgement is cleared
+whenever pointer movement is turned off or expires, so turning Full on again asks again.
 """
 from __future__ import annotations
 
@@ -51,6 +56,8 @@ SIGNAL_ACTIONS = {"hover_dwell": {"control_hover_dwell"},
                   "pointer_trajectory": {"pointer_trajectory"}}
 MAX_TRAJECTORY_POINTS = 200
 DEFAULT_DURATION_DAYS = 7
+# What a device records before anyone has chosen: comprehensive structural capture, no pointer samples.
+DEFAULT_PROFILE = "enhanced"
 MAX_DURATION_DAYS = 90
 # Metadata keys that only high-fidelity events may carry; they are dropped from every other action.
 RESERVED_METADATA_KEYS = ("points", "trajectory", "pointer_points", "sample_hz", "viewport_bucket", "coordinates")
@@ -78,8 +85,9 @@ def _path():
 
 
 def _defaults() -> dict[str, Any]:
-    return {"profile": "standard", "signals": dict(PROFILES["standard"]), "parameters": dict(DEFAULT_PARAMETERS),
-            "full_acknowledged_version": None, "updated_at": None, "expires_at": None, "expired": False}
+    return {"profile": DEFAULT_PROFILE, "signals": dict(PROFILES[DEFAULT_PROFILE]), "parameters": dict(DEFAULT_PARAMETERS),
+            "full_acknowledged_version": None, "updated_at": None, "expires_at": None, "expired": False,
+            "persistent": True, "chosen": False}
 
 
 def _parse_time(value: Any) -> datetime | None:
@@ -105,12 +113,17 @@ def load() -> dict[str, Any]:
         value = params.get(name)
         out["parameters"][name] = value if isinstance(value, int) and not isinstance(value, bool) and low <= value <= high \
             else DEFAULT_PARAMETERS[name]
+    out["chosen"] = True
+    out["persistent"] = False
     out["full_acknowledged_version"] = data.get("full_acknowledged_version") if \
         data.get("full_acknowledged_version") == FULL_ACK_VERSION else None
     if out["signals"]["pointer_trajectory"] and out["full_acknowledged_version"] is None:
         out["signals"]["pointer_trajectory"] = False
     expires = _parse_time(data.get("expires_at"))
-    if any(out["signals"].values()):
+    if any(out["signals"].values()) and data.get("persistent") is True and data.get("expires_at") is None:
+        # Chosen to stay on until the user changes it.
+        out["persistent"] = True
+    elif any(out["signals"].values()):
         if expires is None or expires <= datetime.now(timezone.utc):
             # High-fidelity detail is never open-ended: once its period ends, capture is Standard again.
             out["signals"] = dict(PROFILES["standard"])
@@ -134,9 +147,10 @@ def save(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict) or set(payload) - {"profile", "signals", "parameters", "acknowledgement_version",
                                                          "duration_days"}:
         raise CaptureDepthError("capture depth takes profile, signals, parameters, duration_days and acknowledgement_version")
-    duration = payload.get("duration_days", DEFAULT_DURATION_DAYS)
-    if not isinstance(duration, int) or isinstance(duration, bool) or not 1 <= duration <= MAX_DURATION_DAYS:
-        raise CaptureDepthError(f"duration_days must be 1 to {MAX_DURATION_DAYS}")
+    duration = payload.get("duration_days", "unset")
+    if duration is not None and duration != "unset" and (
+            not isinstance(duration, int) or isinstance(duration, bool) or not 1 <= duration <= MAX_DURATION_DAYS):
+        raise CaptureDepthError(f"duration_days must be 1 to {MAX_DURATION_DAYS}, or null to keep it until changed")
     with _LOCK:
         current = load()
         signals = dict(current["signals"])
@@ -164,10 +178,15 @@ def save(payload: Any) -> dict[str, Any]:
             if payload.get("acknowledgement_version") != FULL_ACK_VERSION:
                 raise CaptureDepthError("acknowledge recording pointer movement before turning on pointer trajectories")
             acknowledged = FULL_ACK_VERSION
+        if duration == "unset":
+            # Structural detail stays until changed; pointer samples default to a period.
+            duration = DEFAULT_DURATION_DAYS if signals["pointer_trajectory"] else None
         now = datetime.now(timezone.utc)
-        expires = (now + timedelta(days=duration)).isoformat() if any(signals.values()) else None
+        detail = any(signals.values())
+        expires = (now + timedelta(days=duration)).isoformat() if detail and duration is not None else None
         data = {"signals": signals, "parameters": params, "full_acknowledged_version": acknowledged,
-                "updated_at": now.isoformat(), "expires_at": expires, "duration_days": duration if expires else None}
+                "updated_at": now.isoformat(), "expires_at": expires, "duration_days": duration if expires else None,
+                "persistent": detail and expires is None}
         path = _path()
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, temp = tempfile.mkstemp(prefix=".owg-capture-depth-", suffix=".tmp", dir=path.parent)
@@ -187,6 +206,9 @@ def public() -> dict[str, Any]:
     state = load()
     return {**state, "profiles": {k: dict(v) for k, v in PROFILES.items()}, "parameter_bounds": PARAMETER_BOUNDS,
             "duration_days_bounds": [1, MAX_DURATION_DAYS], "default_duration_days": DEFAULT_DURATION_DAYS,
+            "default_profile": DEFAULT_PROFILE, "duration_days_null_means": "until the user changes it",
+            "rich_content_opt_in": {"screen_capture_mode": "explicit choice in Screen capture",
+                                    "work_text_capture": "explicit choice in Work text"},
             "labels_recorded_for_high_fidelity_events": False,
             "backups_include_raw_pointer_points": True,
             "full_acknowledgement": FULL_ACKNOWLEDGEMENT, "full_acknowledgement_version": FULL_ACK_VERSION,
@@ -456,7 +478,7 @@ def for_extension() -> dict[str, Any]:
     """The subset the paired extension needs to decide what to emit."""
     state = load()
     return {"signals": state["signals"], "parameters": state["parameters"], "profile": state["profile"],
-            "expires_at": state["expires_at"]}
+            "expires_at": state["expires_at"], "persistent": state["persistent"]}
 
 
 def action_allowed(action: str) -> bool:

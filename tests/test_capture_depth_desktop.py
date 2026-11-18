@@ -34,7 +34,13 @@ def test_capture_depth_file_is_read_and_unacknowledged_trajectories_stay_off(tmp
     later = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
     earlier = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
     off = {"drag_drop": False, "pointer_trajectory": False, "trajectory_hz": 4, "hover_dwell": False, "hover_dwell_ms": 750}
+    # Nothing chosen yet: the Enhanced default (no pointer samples).
+    assert capture_depth_signals(tmp_path) == {**off, "drag_drop": True, "hover_dwell": True}
+    (tmp_path / "capture_depth.json").write_text("not json")
     assert capture_depth_signals(tmp_path) == off
+    (tmp_path / "capture_depth.json").write_text(json.dumps({"signals": {"drag_drop": True}, "persistent": True,
+                                                             "expires_at": None}))
+    assert capture_depth_signals(tmp_path)["drag_drop"] is True
     (tmp_path / "capture_depth.json").write_text(json.dumps({"signals": {"drag_drop": True, "pointer_trajectory": True},
                                                              "parameters": {"trajectory_hz": 9}, "expires_at": later}))
     assert capture_depth_signals(tmp_path) == {"drag_drop": True, "pointer_trajectory": False, "trajectory_hz": 9,
@@ -96,6 +102,7 @@ def test_server_ingest_filter_enforces_depth_and_bounds(depth):
     drag = {"event_type": "screen_drag", "metadata": {"action": "drag"}}
     traj = {"event_type": "screen_pointer_trajectory", "metadata": {"points": [[0, 10, 20], [250, -1900, 40]]}}
     click = {"event_type": "screen_click", "metadata": {}}
+    depth.save({"profile": "standard"})
     assert depth.filter_desktop_events([drag, traj, click]) == [click]
     depth.save({"profile": "full", "acknowledgement_version": depth.FULL_ACK_VERSION})
     assert depth.filter_desktop_events([drag, traj, click]) == [drag, traj, click]

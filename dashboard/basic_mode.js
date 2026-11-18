@@ -245,7 +245,7 @@
 
       <div class="card" id="pvSchedules">
         <h2>Scheduled jobs</h2>
-        <div class="muted">Off unless you add one. A schedule repeats a job you could run by hand: refresh a retained Jira profile, re-check saved event-log signals, save a copy of an event log's report, or create a verified local backup. Source reads keep their own consent and pause with recording. Backups require separate acknowledgement, exclude credentials, are NOT encrypted, run at most daily and rotate only scheduled backups (up to 14). Optional per-job quiet hours defer due jobs without counting a run; daylight saving follows the chosen timezone. Failures back off and pause after five in a row. Nothing is sent anywhere.</div>
+        <div class="muted">Off unless you add one. A schedule repeats a job you could run by hand: refresh a retained Jira profile, re-check saved event-log signals, save a copy of an event log's report, or create a verified local backup. Source reads keep their own consent and pause with recording. Backups require separate acknowledgement, exclude credentials, are NOT encrypted, run at most daily and rotate only scheduled backups (up to 14). Optional per-job quiet hours defer due jobs without counting a run; daylight saving follows the chosen timezone. Failures back off and pause after five in a row. Scheduled Jira reads contact the configured Jira service; other external deliveries require their own opt-in.</div>
         <div class="pv-delete">
           <select id="pvScheduleKind" aria-label="Job"><option value="retained_jira_profile">Retained Jira profile</option><option value="event_log_signals">Event log signals</option><option value="event_log_report">Event log report copy</option><option value="local_backup">Local backup (unencrypted)</option></select>
           <input type="text" id="pvScheduleTarget" placeholder="Profile or event log ID" aria-label="Profile or event log ID" spellcheck="false">
@@ -297,7 +297,7 @@
       </div>
       <div class="card" id="pvCaptureDepth">
         <h2>Interaction detail</h2>
-        <div class="muted">How much interaction detail the browser extension and desktop recorder keep on this computer. Standard keeps today's signals. Enhanced adds how long you rest the pointer on buttons and links, drag and drop between controls, and friction candidates such as repeated clicks. Full fidelity also samples pointer movement. Typed text, clipboard contents, dragged data, control labels and secure fields are never recorded. Browser hover, drag and pointer detail is suppressed over embedded frames in a parent page, or when secure-field inspection is unavailable or exceeds its safety limits. Enhanced and Full fidelity last for the period you choose, then return to Standard. Sharing, AI access, exports, screenshots and work text keep their own separate settings. Local backups include recorded pointer movement.</div>
+        <div class="muted">How much interaction detail the browser extension and desktop recorder keep on this computer. Standard keeps today's signals. Enhanced adds how long you rest the pointer on buttons and links, drag and drop between controls, and friction candidates such as repeated clicks. Full fidelity also samples pointer movement. Typed text, clipboard contents, dragged data, control labels and secure fields are never recorded. Browser hover, drag and pointer detail is suppressed over embedded frames in a parent page, or when secure-field inspection is unavailable or exceeds its safety limits. Enhanced is the default, so OpenWorkGraph keeps the richest structural evidence unless you choose less. A profile stays until you change it, or for a period you choose, after which it returns to Standard; Full fidelity lasts 7 days unless you choose otherwise. Sharing, AI access, exports, screenshots and work text keep their own separate settings. Local backups include recorded pointer movement.</div>
         <div class="pv-delete" role="radiogroup" aria-label="Interaction detail profile">
           <label><input type="radio" name="pvDepth" value="standard"> Standard</label>
           <label><input type="radio" name="pvDepth" value="enhanced"> Enhanced</label>
@@ -314,7 +314,7 @@
           <label for="pvDepthHz">Pointer samples per second</label><input type="number" id="pvDepthHz" min="1" max="20">
           <label for="pvDepthRetention">Keep interaction detail (days)</label><input type="number" id="pvDepthRetention" min="1" max="365">
           <label for="pvDepthStorage">Store at most (MB)</label><input type="number" id="pvDepthStorage" min="10" max="10000">
-          <label for="pvDepthDuration">Record extra detail for</label><select id="pvDepthDuration"><option value="1">1 day</option><option value="7" selected>7 days</option><option value="30">30 days</option><option value="90">90 days</option></select>
+          <label for="pvDepthDuration">Record extra detail for</label><select id="pvDepthDuration"><option value="until_changed" selected>Until I change it</option><option value="1">1 day</option><option value="7">7 days</option><option value="30">30 days</option><option value="90">90 days</option></select>
         </div>
         <label class="pv-delete"><input type="checkbox" id="pvDepthAck"> <span id="pvDepthAckText"></span></label>
         <div class="pv-delete">
@@ -836,7 +836,8 @@
       depthBox('pvDepthAckText').textContent = state.full_acknowledgement;
       depthBox('pvDepthAck').checked = !!state.full_acknowledged_version;
       depthBox('pvDepthStatus').textContent = 'Current: ' + ({standard: 'Standard', enhanced: 'Enhanced', full: 'Full fidelity'}[state.profile] || 'Custom') + '.' +
-        (state.expires_at ? ' Returns to Standard on ' + new Date(state.expires_at).toLocaleString() + '.' : '') +
+        (state.chosen === false ? ' This is the default; nothing beyond structural interaction detail is recorded, and sharing is separate.' : '') +
+        (state.expires_at ? ' Returns to Standard on ' + new Date(state.expires_at).toLocaleString() + '.' : (state.persistent ? ' Stays on until you change it.' : '')) +
         (state.expired ? ' The last period of extra detail has ended.' : '');
     };
     const loadDepth = async () => { try { showDepth(await api('/v1/capture-depth')); } catch (error) { depthBox('pvDepthStatus').textContent = error.message || 'Could not load interaction detail.'; } };
@@ -846,7 +847,7 @@
     }));
     depthBox('pvDepthSave').onclick = async () => {
       const signals = Object.fromEntries(Object.entries(depthSignals).map(([key, id]) => [key, depthBox(id).checked]));
-      const payload = {signals, parameters: {hover_dwell_ms: Number(depthBox('pvDepthDwell').value), trajectory_hz: Number(depthBox('pvDepthHz').value), retention_days: Number(depthBox('pvDepthRetention').value), storage_mb: Number(depthBox('pvDepthStorage').value)}, duration_days: Number(depthBox('pvDepthDuration').value)};
+      const payload = {signals, parameters: {hover_dwell_ms: Number(depthBox('pvDepthDwell').value), trajectory_hz: Number(depthBox('pvDepthHz').value), retention_days: Number(depthBox('pvDepthRetention').value), storage_mb: Number(depthBox('pvDepthStorage').value)}, duration_days: depthBox('pvDepthDuration').value === 'until_changed' ? null : Number(depthBox('pvDepthDuration').value)};
       if (signals.pointer_trajectory) {
         if (!depthBox('pvDepthAck').checked) { depthBox('pvDepthStatus').textContent = 'Tick the acknowledgement to record pointer movement.'; return; }
         payload.acknowledgement_version = depth.state?.full_acknowledgement_version;

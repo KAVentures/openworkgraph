@@ -129,3 +129,14 @@ and remaining (r) token method:
   share of cases that were replayed.
 
 As with the rest of the comparison, no business rule, policy or outcome is evaluated.
+
+
+Use **Variant result** to browse matches, deviations, or variants whose
+alignment reached the work limit. Each page shows up to 20 variants. The summary
+still describes the full comparison cohort. Cases beyond the trace or variant
+selection limits remain counted under unknown reasons. Pages rerun the bounded
+comparison against the current log and the same saved process revision and case filter.
+
+Open **Show alignment** to see the observed and expected activity steps for a
+variant. **Inspect cases** opens case evidence using the exact path and the
+filter submitted for that comparison.

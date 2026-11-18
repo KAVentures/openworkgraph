@@ -204,6 +204,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/automation_realized_value.cjs
       - name: Verify the local event-log workspace import, analytics, export and deletion
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_workspace.cjs
+      - name: Verify conformance variant review and scoped case evidence
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_conformance_review.cjs
       - name: Verify case-attribute values and numeric ranges in the global case filter
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_attribute_filter.cjs
       - name: Verify the owner shares a log's process intelligence with AI agents and revokes it
