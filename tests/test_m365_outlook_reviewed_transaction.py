@@ -24,6 +24,24 @@ def inputs(**changes):
 
 
 class ReviewedTransactionTests(unittest.TestCase):
+
+    def test_checkpoint_advance_during_review_refuses_before_any_owg_write(self):
+        """Concurrent checkpoint movement invalidates the reviewed snapshot."""
+        checked = {"status": "review_ready", "csv_sha256": DIGEST,
+                   "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}
+        advanced = {"candidate_sha256": "b" * 64, "log_id": "log", "generation": 1}
+        with patch.object(tx, "inspect_checkpoint", side_effect=[None, advanced]) as inspect, \
+             patch.object(tx.cycle, "review", return_value=checked), \
+             patch.object(tx.cycle, "append") as append, \
+             patch.object(tx.cycle, "handoff") as handoff, \
+             patch.object(tx.cycle, "checkpoint_commit") as commit:
+            with self.assertRaisesRegex(ReceiptError, "Checkpoint changed"):
+                tx.execute(**inputs())
+            self.assertEqual(inspect.call_count, 2)
+            append.assert_not_called()
+            handoff.assert_not_called()
+            commit.assert_not_called()
+
     def test_cli_preflight_needs_no_append_only_arguments(self):
         argv = ["--preflight-only", "--tenant", "t", "--mailbox", "m",
                 "--folder", "f", "--log-id", "log", "--confirm-log-id", "log",
@@ -79,7 +97,7 @@ class ReviewedTransactionTests(unittest.TestCase):
         allowed = ("tenant", "mailbox", "folder", "log_id", "confirm_log_id",
                    "grant_file", "candidate", "ledger_dir", "expected_review_csv_sha256",
                    "expected_previous_candidate_sha256", "consent_local_read")
-        with patch.object(tx.cycle, "review", return_value={"csv_sha256": DIGEST}), \
+        with patch.object(tx.cycle, "review", return_value={"status": "review_ready", "csv_sha256": DIGEST, "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}), \
              patch.object(tx, "inspect_checkpoint", return_value={
                  "candidate_sha256": "b" * 64, "log_id": "log", "generation": 3}), \
              patch.object(tx.cycle, "append") as append, \
@@ -98,7 +116,7 @@ class ReviewedTransactionTests(unittest.TestCase):
                    "expected_previous_candidate_sha256", "consent_local_read")
         old = {"candidate_sha256": "b" * 64, "log_id": "log", "generation": 3}
         new = {"candidate_sha256": "c" * 64, "log_id": "log", "generation": 4}
-        with patch.object(tx.cycle, "review", return_value={"csv_sha256": DIGEST}), \
+        with patch.object(tx.cycle, "review", return_value={"status": "review_ready", "csv_sha256": DIGEST, "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}), \
              patch.object(tx, "inspect_checkpoint", side_effect=[old, new]), \
              patch.object(tx.cycle, "append") as append:
             with self.assertRaisesRegex(ReceiptError, "Checkpoint changed"):
@@ -110,8 +128,8 @@ class ReviewedTransactionTests(unittest.TestCase):
         allowed = ("tenant", "mailbox", "folder", "log_id", "confirm_log_id",
                    "grant_file", "candidate", "ledger_dir", "expected_review_csv_sha256",
                    "consent_local_read")
-        checked = {"csv_sha256": DIGEST, "event_snapshots": 12,
-                   "removal_markers_for_review": 2}
+        checked = {"status": "review_ready", "csv_sha256": DIGEST, "event_snapshots": 12,
+                   "removal_markers_for_review": 2, "pages": 1}
         with patch.object(tx.cycle, "review", return_value=checked), \
              patch.object(tx, "inspect_checkpoint", return_value=None), \
              patch.object(tx.cycle, "append") as append, \
@@ -131,7 +149,7 @@ class ReviewedTransactionTests(unittest.TestCase):
         allowed = ("tenant", "mailbox", "folder", "log_id", "confirm_log_id",
                    "grant_file", "candidate", "ledger_dir", "expected_review_csv_sha256",
                    "expected_previous_candidate_sha256", "consent_local_read")
-        with patch.object(tx.cycle, "review", return_value={"csv_sha256": DIGEST}), \
+        with patch.object(tx.cycle, "review", return_value={"status": "review_ready", "csv_sha256": DIGEST, "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}), \
              patch.object(tx, "inspect_checkpoint", return_value={
                  "candidate_sha256": "b" * 64, "log_id": "log", "generation": 3}), \
              patch.object(tx.cycle, "append") as append:
@@ -147,11 +165,59 @@ class ReviewedTransactionTests(unittest.TestCase):
             append.assert_not_called()
 
     def test_review_digest_mismatch_refuses_before_append(self):
-        with patch.object(tx.cycle, "review", return_value={"csv_sha256": "b" * 64}), \
+        with patch.object(tx, "inspect_checkpoint", return_value=None), \
+             patch.object(tx.cycle, "review", return_value={"csv_sha256": "b" * 64}), \
              patch.object(tx.cycle, "append") as append:
             with self.assertRaisesRegex(ReceiptError, "changed"):
                 tx.execute(**inputs())
             append.assert_not_called()
+
+    def test_invalid_review_is_not_recorded_as_verified_audit_evidence(self):
+        """A mismatched digest cannot produce a trusted review audit receipt."""
+        malformed = {"status": "review_ready", "csv_sha256": "b" * 64,
+                     "event_snapshots": 1, "removal_markers_for_review": 0,
+                     "pages": 1}
+        with patch.dict(os.environ, {"OWG_M365_AUDIT_DIR": "audit"}), \
+             patch.object(tx, "preflight_operator_audit"), \
+             patch.object(tx, "record_operator_phase") as audit, \
+             patch.object(tx, "inspect_checkpoint", return_value=None), \
+             patch.object(tx.cycle, "review", return_value=malformed), \
+             patch.object(tx.cycle, "append") as append:
+            # Audited mutation is intentionally unavailable on Windows. Keep
+            # that fail-closed platform gate while testing the digest/audit
+            # ordering on supported POSIX hosts.
+            expected = "changed" if os.name == "posix" else "Audited mutation unsupported on this platform"
+            with self.assertRaisesRegex(ReceiptError, expected):
+                tx.execute(**inputs())
+            audit.assert_not_called()
+            append.assert_not_called()
+
+    def test_malformed_review_metadata_refuses_before_any_owg_write(self):
+        valid = {"status": "review_ready", "csv_sha256": DIGEST,
+                 "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}
+        invalid = (
+            {"status": "review_pending"},
+            {"event_snapshots": True},
+            {"event_snapshots": -1},
+            {"removal_markers_for_review": True},
+            {"removal_markers_for_review": -1},
+            {"pages": True},
+            {"pages": 0},
+            {"pages": 1001},
+            {"pages": "1"},
+        )
+        for change in invalid:
+            with self.subTest(change=change), \
+                 patch.object(tx, "inspect_checkpoint", return_value=None), \
+                 patch.object(tx.cycle, "review", return_value={**valid, **change}), \
+                 patch.object(tx.cycle, "append") as append, \
+                 patch.object(tx.cycle, "handoff") as handoff, \
+                 patch.object(tx.cycle, "checkpoint_commit") as checkpoint:
+                with self.assertRaisesRegex(ReceiptError, "Candidate review unavailable or changed"):
+                    tx.execute(**inputs())
+                append.assert_not_called()
+                handoff.assert_not_called()
+                checkpoint.assert_not_called()
 
     def test_success_calls_real_phases_in_order(self):
         order = []
@@ -161,18 +227,100 @@ class ReviewedTransactionTests(unittest.TestCase):
                 return response
             return call
         with patch.object(tx, "inspect_checkpoint", return_value=None), \
-             patch.object(tx.cycle, "review", side_effect=step("review", {"csv_sha256": DIGEST})), \
+             patch.object(tx.cycle, "review", side_effect=step("review", {"status": "review_ready", "csv_sha256": DIGEST, "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1})), \
              patch.object(tx.cycle, "append", side_effect=step("append", {"status": "receipt_persisted"})), \
              patch.object(tx.cycle, "handoff", side_effect=step("handoff", {"status": "next_round_handoff_prepared"})), \
-             patch.object(tx.cycle, "checkpoint_commit", side_effect=step("checkpoint", {"status": "checkpoint_committed", "generation": 2})):
+             patch.object(tx.cycle, "checkpoint_commit", side_effect=step("checkpoint", {"status": "checkpoint_committed", "generation": 1})):
             result = tx.execute(**inputs())
         self.assertEqual(order, ["review", "append", "handoff", "checkpoint"])
-        self.assertEqual(result["generation"], 2)
+        self.assertEqual(result["generation"], 1)
         self.assertFalse(result["automatic_retry_allowed"])
+
+    def test_malformed_post_append_receipts_never_advance_checkpoint(self):
+        reviewed = {"status": "review_ready", "csv_sha256": DIGEST,
+                    "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}
+        for phase in ("append", "handoff"):
+            for malformed in (None, {}, [], "receipt_persisted", {"status": False}):
+                with self.subTest(phase=phase, malformed=malformed), \
+                     patch.object(tx, "inspect_checkpoint", return_value=None), \
+                     patch.object(tx.cycle, "review", return_value=reviewed), \
+                     patch.object(tx.cycle, "append", return_value=(
+                         malformed if phase == "append" else {"status": "receipt_persisted"})), \
+                     patch.object(tx.cycle, "handoff", return_value=malformed) as handoff, \
+                     patch.object(tx.cycle, "checkpoint_commit") as checkpoint:
+                    with self.assertRaises(UncertainReceipt):
+                        tx.execute(**inputs())
+                    checkpoint.assert_not_called()
+                    if phase == "append":
+                        handoff.assert_not_called()
+
+    def test_malformed_checkpoint_receipt_is_uncertain_not_success(self):
+        reviewed = {"status": "review_ready", "csv_sha256": DIGEST,
+                    "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}
+        for receipt in (None, {}, {"status": "checkpoint_committed"},
+                        {"status": "checkpoint_committed", "generation": True},
+                        {"status": "checkpoint_committed", "generation": 2},
+                        {"status": "checkpoint_committed", "generation": 1,
+                         "idempotent_replay": "false"}):
+            with self.subTest(receipt=receipt), \
+                 patch.object(tx, "inspect_checkpoint", return_value=None), \
+                 patch.object(tx.cycle, "review", return_value=reviewed), \
+                 patch.object(tx.cycle, "append", return_value={"status": "receipt_persisted"}), \
+                 patch.object(tx.cycle, "handoff", return_value={"status": "next_round_handoff_prepared"}), \
+                 patch.object(tx.cycle, "checkpoint_commit", return_value=receipt) as checkpoint:
+                with self.assertRaises(UncertainReceipt):
+                    tx.execute(**inputs())
+                checkpoint.assert_called_once()
+
+    def test_checkpoint_race_during_review_refuses_before_append(self):
+        reviewed = {"status": "review_ready", "csv_sha256": DIGEST,
+                    "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}
+        old = {"candidate_sha256": "b" * 64, "log_id": "log", "generation": 1}
+        advanced = {"candidate_sha256": "c" * 64, "log_id": "log", "generation": 2}
+        with patch.object(tx, "inspect_checkpoint", side_effect=[old, advanced]) as inspect, \
+             patch.object(tx.cycle, "review", return_value=reviewed), \
+             patch.object(tx.cycle, "append") as append, \
+             patch.object(tx.cycle, "handoff") as handoff, \
+             patch.object(tx.cycle, "checkpoint_commit") as checkpoint:
+            with self.assertRaisesRegex(ReceiptError, "changed during candidate review"):
+                tx.execute(**inputs(expected_previous_candidate_sha256="b" * 64))
+            self.assertEqual(inspect.call_count, 2)
+            append.assert_not_called()
+            handoff.assert_not_called()
+            checkpoint.assert_not_called()
+
+    def test_uncertain_append_cli_requires_manual_reconciliation_without_retry(self):
+        """An ambiguous authenticated append cannot advance the durable cursor."""
+        reviewed = {"status": "review_ready", "csv_sha256": DIGEST,
+                    "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}
+        argv = ["--tenant", "t", "--mailbox", "m", "--folder", "f",
+                "--log-id", "log", "--confirm-log-id", "log",
+                "--grant-file", "grant", "--candidate", "candidate",
+                "--ledger-dir", "ledger", "--csv-path", "csv",
+                "--receipt-file", "receipt", "--journal-dir", "journal",
+                "--handoff-dir", "handoff", "--successor-label", "next",
+                "--expected-review-csv-sha256", DIGEST,
+                "--consent-local-read", "--consent-local-append",
+                "--confirm-candidate-reviewed", "--confirm-removals-reviewed",
+                "--confirm-checkpoint-commit"]
+        with patch.object(tx, "inspect_checkpoint", return_value=None), \
+             patch.object(tx.cycle, "review", return_value=reviewed), \
+             patch.object(tx.cycle, "append", side_effect=UncertainReceipt("connection closed")) as append, \
+             patch.object(tx.cycle, "handoff") as handoff, \
+             patch.object(tx.cycle, "checkpoint_commit") as checkpoint:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(tx.main(argv), 3)
+            refusal = json.loads(output.getvalue())
+            self.assertEqual(refusal["status"], "manual_reconciliation_required")
+            self.assertIs(refusal["automatic_retry_allowed"], False)
+            append.assert_called_once()
+            handoff.assert_not_called()
+            checkpoint.assert_not_called()
 
     def test_uncertain_append_never_handoffs_or_commits(self):
         with patch.object(tx, "inspect_checkpoint", return_value=None), \
-             patch.object(tx.cycle, "review", return_value={"csv_sha256": DIGEST}), \
+             patch.object(tx.cycle, "review", return_value={"status": "review_ready", "csv_sha256": DIGEST, "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}), \
              patch.object(tx.cycle, "append", side_effect=UncertainReceipt("unknown")), \
              patch.object(tx.cycle, "handoff") as handoff, \
              patch.object(tx.cycle, "checkpoint_commit") as checkpoint:
@@ -182,17 +330,17 @@ class ReviewedTransactionTests(unittest.TestCase):
             checkpoint.assert_not_called()
 
     def test_stale_predecessor_refused_before_append(self):
-        with patch.object(tx.cycle, "review", return_value={"csv_sha256": DIGEST}), \
+        with patch.object(tx.cycle, "review", return_value={"status": "review_ready", "csv_sha256": DIGEST, "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}), \
              patch.object(tx, "inspect_checkpoint", return_value={
                  "candidate_sha256": "b" * 64, "log_id": "log"}) as inspect, \
              patch.object(tx.cycle, "append") as append:
             with self.assertRaisesRegex(ReceiptError, "Stale"):
                 tx.execute(**inputs(expected_previous_candidate_sha256="c" * 64))
-            inspect.assert_called_once()
+            self.assertEqual(inspect.call_count, 2)
             append.assert_not_called()
 
     def test_wrong_destination_log_refused_before_append(self):
-        with patch.object(tx.cycle, "review", return_value={"csv_sha256": DIGEST}), \
+        with patch.object(tx.cycle, "review", return_value={"status": "review_ready", "csv_sha256": DIGEST, "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}), \
              patch.object(tx, "inspect_checkpoint", return_value={
                  "candidate_sha256": "b" * 64, "log_id": "other"}), \
              patch.object(tx.cycle, "append") as append:
@@ -201,7 +349,7 @@ class ReviewedTransactionTests(unittest.TestCase):
             append.assert_not_called()
 
     def test_initial_generation_requires_empty_ledger(self):
-        with patch.object(tx.cycle, "review", return_value={"csv_sha256": DIGEST}), \
+        with patch.object(tx.cycle, "review", return_value={"status": "review_ready", "csv_sha256": DIGEST, "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}), \
              patch.object(tx, "inspect_checkpoint", return_value={
                  "candidate_sha256": "b" * 64, "log_id": "log"}), \
              patch.object(tx.cycle, "append") as append:
@@ -210,7 +358,7 @@ class ReviewedTransactionTests(unittest.TestCase):
             append.assert_not_called()
 
     def test_missing_predecessor_refused_before_append(self):
-        with patch.object(tx.cycle, "review", return_value={"csv_sha256": DIGEST}), \
+        with patch.object(tx.cycle, "review", return_value={"status": "review_ready", "csv_sha256": DIGEST, "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}), \
              patch.object(tx, "inspect_checkpoint", return_value=None), \
              patch.object(tx.cycle, "append") as append:
             with self.assertRaisesRegex(ReceiptError, "Missing predecessor"):
@@ -218,9 +366,9 @@ class ReviewedTransactionTests(unittest.TestCase):
             append.assert_not_called()
 
     def test_matching_predecessor_allows_transaction(self):
-        with patch.object(tx.cycle, "review", return_value={"csv_sha256": DIGEST}), \
+        with patch.object(tx.cycle, "review", return_value={"status": "review_ready", "csv_sha256": DIGEST, "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}), \
              patch.object(tx, "inspect_checkpoint", return_value={
-                 "candidate_sha256": "b" * 64, "log_id": "log"}), \
+                 "candidate_sha256": "b" * 64, "log_id": "log", "generation": 1}), \
              patch.object(tx.cycle, "append", return_value={"status": "receipt_persisted"}), \
              patch.object(tx.cycle, "handoff", return_value={"status": "next_round_handoff_prepared"}), \
              patch.object(tx.cycle, "checkpoint_commit", return_value={
@@ -242,7 +390,7 @@ class ReviewedTransactionTests(unittest.TestCase):
              patch.object(tx, "preflight_operator_audit"), \
              patch.object(tx, "record_operator_phase", side_effect=lambda name, result, **kw: order.append("audit:" + name)), \
              patch.object(tx, "inspect_checkpoint", return_value=None), \
-             patch.object(tx.cycle, "review", side_effect=phase("review", {"csv_sha256": DIGEST})), \
+             patch.object(tx.cycle, "review", side_effect=phase("review", {"status": "review_ready", "csv_sha256": DIGEST, "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1})), \
              patch.object(tx.cycle, "append", side_effect=phase("append", {"status": "receipt_persisted"})), \
              patch.object(tx.cycle, "handoff", side_effect=phase("handoff", {"status": "next_round_handoff_prepared"})), \
              patch.object(tx.cycle, "checkpoint_commit", side_effect=phase("checkpoint", {"status": "checkpoint_committed", "generation": 1})):
@@ -260,7 +408,7 @@ class ReviewedTransactionTests(unittest.TestCase):
              patch.object(tx, "preflight_operator_audit"), \
              patch.object(tx, "record_operator_phase", side_effect=audit), \
              patch.object(tx, "inspect_checkpoint", return_value=None), \
-             patch.object(tx.cycle, "review", return_value={"csv_sha256": DIGEST}), \
+             patch.object(tx.cycle, "review", return_value={"status": "review_ready", "csv_sha256": DIGEST, "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}), \
              patch.object(tx.cycle, "append", return_value={"status": "receipt_persisted"}), \
              patch.object(tx.cycle, "handoff", return_value={"status": "next_round_handoff_prepared"}), \
              patch.object(tx.cycle, "checkpoint_commit") as commit:
