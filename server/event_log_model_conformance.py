@@ -1,7 +1,7 @@
 """Bounded structural comparison of retained cases with a saved process graph."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
 
@@ -28,6 +28,8 @@ class SavedGraphQuery(BaseModel):
     content_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     cohort: dict[str, Any] = Field(default_factory=dict)
     max_variants: StrictInt = Field(default=200, ge=1, le=MAX_VARIANTS)
+    variant_status: Literal['all', 'match', 'deviation', 'unknown'] = 'all'
+    variant_offset: StrictInt = Field(default=0, ge=0, le=MAX_VARIANTS)
 
 
 def compare(log_id: str, record: dict[str, Any], spec: SavedGraphQuery,
@@ -62,6 +64,8 @@ def compare(log_id: str, record: dict[str, Any], spec: SavedGraphQuery,
         remaining = MAX_ALIGNMENT_WORK
         matched = deviated = analyzed = examined_variants = 0
         display = []
+        variants_by_status = dict.fromkeys(('match', 'deviation', 'unknown'), 0)
+        selected_variants = 0
         analyzed_events=edit_cost=0
         matching_paths=[]
         replayable=[]
@@ -92,7 +96,12 @@ def compare(log_id: str, record: dict[str, Any], spec: SavedGraphQuery,
                     deviated += count
             else:
                 unknown_reasons['alignment_work_budget'] += count
-            if len(display) < MAX_DISPLAY_VARIANTS:
+            variant_status = ('match' if result['exact_structural_match'] else 'deviation') if complete else 'unknown'
+            variants_by_status[variant_status] += 1
+            if spec.variant_status not in ('all', variant_status):
+                continue
+            selected_variants += 1
+            if spec.variant_offset < selected_variants <= spec.variant_offset + MAX_DISPLAY_VARIANTS:
                 display.append({'path': list(path), 'path_length': len(path),
                     'cases': count, 'ordering_uncertain_cases': uncertain,
                     'comparison_complete': bool(complete),
@@ -122,7 +131,13 @@ def compare(log_id: str, record: dict[str, Any], spec: SavedGraphQuery,
             'structural_match_share_of_analyzed_cases': matched/analyzed if analyzed else None,
             'structural_match_share_of_all_cases_lower_bound': matched/total if total else None,
             'comparison_complete': unknown == 0, 'analyzed_variants': examined_variants,
-            'displayed_variants': display, 'variant_results_truncated': len(rows)>len(display) or unknown_reasons['variant_limit']>0,
+            'displayed_variants': display,
+            'variant_results_truncated': len(rows) > len(display) or unknown_reasons['variant_limit'] > 0,
+            'variant_page': {'status': spec.variant_status, 'offset': spec.variant_offset,
+                             'size': MAX_DISPLAY_VARIANTS, 'total': selected_variants,
+                             'by_status': variants_by_status,
+                             'next_offset': spec.variant_offset + len(display)
+                                 if spec.variant_offset + len(display) < selected_variants else None},
             'ordering_uncertain_cases': tied,
             'ordering_basis': 'timestamp_then_event_id_for_display_not_verified_business_order',
             'label_basis': 'exact_literal_activity_names_no_normalization_or_inferred_mapping',
