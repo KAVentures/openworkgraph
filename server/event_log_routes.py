@@ -14,7 +14,7 @@ from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi import Path as PathParam
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
@@ -1636,6 +1636,22 @@ def event_log_model_discovery(request: Request, log_id: str, case_type: str | No
     return _respond(model_discovery.discover, log_id, case_type, noise=noise, activities=activities, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/model-discovery.pnml")
+def event_log_model_discovery_pnml(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                                   noise: float = Query(default=0.2, ge=0, lt=1),
+                                   activities: float = Query(default=1.0, gt=0, le=1),
+                                   cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_pnml as pnml
+    _require_dashboard(request)
+    try:
+        xml, meta = pnml.discovered_pnml(log_id, case_type, noise=noise, activities=activities, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(xml, media_type="application/xml", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-discovered.pnml"',
+        "X-OWG-Petri-Net": f"places={meta['places']}; transitions={meta['transitions']}; silent={meta['silent_transitions']}"})
+
+
 @router.post("/v1/event-logs/{log_id}/model-discovery-draft")
 async def event_log_discovery_draft(request: Request, log_id: str):
     _require_dashboard(request)
@@ -1801,6 +1817,24 @@ async def event_log_delete_cohort_metric_definition(request: Request, log_id: st
     _require_dashboard(request)
     from . import event_log_saved_cohort_metrics as saved
     response = await run_in_threadpool(_respond, saved.delete, log_id, metric_id)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/cohort-metric-definitions/{metric_id}/evaluate")
+async def event_log_evaluate_saved_cohort_metric(
+    request: Request, log_id: str, metric_id: str,
+    case_type: str | None = Query(default=None, max_length=200),
+):
+    """Evaluate a saved, log-scoped metric without accepting a new expression."""
+    _require_dashboard(request)
+    body = await _json_body(request, "saved cohort metric evaluation", strict=True, limit=8192)
+    if not isinstance(body, dict) or set(body) != {"cohort"}:
+        raise HTTPException(422, "cohort is required")
+    from . import event_log_saved_cohort_metrics as saved
+    response = await run_in_threadpool(
+        _respond, saved.evaluate, log_id, metric_id, body["cohort"], case_type
+    )
     _require_dashboard(request)
     return response
 

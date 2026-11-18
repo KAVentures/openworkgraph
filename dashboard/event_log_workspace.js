@@ -13,6 +13,7 @@
   let activityLookupBusy=false;
   // Views that honour the workspace case filter; every other section uses all cases.
   const FILTERED=new Set(['automation-candidates','summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','performance-spectrum','waiting-time','drift','model-discovery','organization','report.html','decision-points','decision-rules']);
+  FILTERED.add('model-discovery.pnml');
   FILTERED.add('temporal-profile');
   FILTERED.add('heuristics-net');
 
@@ -963,6 +964,10 @@
       }catch(error){if(isCurrent())savedStatus.textContent=error.message;}
       finally{deleteButton.disabled=false;}
     };
+    // A manually edited expression is no longer the selected saved revision.
+    for(const control of [metric,operation,other]){
+      control.addEventListener('change',()=>{savedPicker.value='';});
+    }
     const initialLog=state.logId,initialGeneration=state.generation;
     loadSaved().catch(error=>{
       if(initialLog===state.logId&&initialGeneration===state.generation)savedStatus.textContent=error.message;
@@ -984,9 +989,13 @@
           :{field:metric.value};
         const expression=operation.value==='single'
           ?first:{[operation.value]:[first,{field:other.value}]};
-        const url=new URL('/v1/event-logs/'+encodeURIComponent(logId)+'/cohort-metric',window.location.origin);
+        const savedId=savedPicker.value;
+        const endpoint='/v1/event-logs/'+encodeURIComponent(logId)+(savedId
+          ?'/cohort-metric-definitions/'+encodeURIComponent(savedId)+'/evaluate':'/cohort-metric');
+        const url=new URL(endpoint,window.location.origin);
         if(caseType)url.searchParams.set('case_type',caseType);
-        const response=await api(url.pathname+url.search,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({definition:{version:1,expression},cohort})});
+        const payload=savedId?{cohort}:{definition:{version:1,expression},cohort};
+        const response=await api(url.pathname+url.search,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
         const data=await response.json();
         if(t!==turn||generation!==state.generation||logId!==state.logId||caseType!==state.caseType)return;
         const m=data.metric||{};
@@ -3452,6 +3461,17 @@
           finally{draft.disabled=false;}
         };
         out.appendChild(draft);
+        const petri=button('Download Petri net (PNML)','secondary');petri.id='owgDiscoveryPnml';
+        petri.onclick=async()=>{
+          try{
+            petri.disabled=true;
+            const response=await api(logPath('model-discovery.pnml',{noise:String(r.settings.noise),activities:String(r.settings.activities)}));
+            download(state.logId+'-discovered.pnml',await response.text(),'application/xml');
+            statusLine.textContent='Petri net downloaded ('+(response.headers.get('X-OWG-Petri-Net')||'').replace(/; /g,', ')+'). It opens in ProM, PM4Py and other PNML tools.';
+          }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
+          finally{petri.disabled=false;}
+        };
+        out.appendChild(petri);
       }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
       finally{run.disabled=false;}
     };

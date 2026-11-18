@@ -267,7 +267,7 @@ When you turn on "Did agent work hold up?" in History:
 
 ## Screenshots
 
-Screenshot capture exists as disabled code/config support but is disabled in the normal configuration and is not part of the current product direction or standard exports. The current privacy strategy assumes useful workflow inference should work without continuous screenshots or recording.
+Screenshots are off until you choose them. OpenWorkGraph aims to keep the most useful evidence locally under your control: structural interaction detail is recorded at Enhanced by default (see [Interaction detail](CAPTURE_DEPTH.md)), and full screen capture with local OCR is one explicit choice away. Recording something locally never shares it: AI access, MCP, Gateway sync and exports keep their own settings.
 
 ### Full screen capture (opt-in)
 

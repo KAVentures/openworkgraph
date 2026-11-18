@@ -1503,6 +1503,31 @@ One million events take about 2 seconds locally
 describes the imported log. It is not a verified workflow or policy, and it never authorizes
 execution.
 
+
+### Petri net export (PNML)
+
+"Download Petri net (PNML)" exports the discovered model as a workflow net in PNML
+(ISO/IEC 15909-2). ProM, PM4Py, Apromore, WoPeD and most academic process-mining tools read this
+format. The process tree is translated block by block:
+- an activity becomes a visible transition, and a skip becomes a silent transition;
+- a sequence chains its parts through new places;
+- a choice puts every branch between the same two places;
+- a parallel block adds a silent split and a silent join;
+- a loop runs its body, then leaves through a silent transition or runs the redo part and the body
+  again.
+
+The net has one source place, marked with one token, and one sink place. The sink is declared in
+`finalmarkings`, as PM4Py and ProM read it. Silent transitions carry the ProM `$invisible$` flag.
+
+Place and transition identifiers are generated (`p0`, `t0`, …); activity names appear only as
+transition names. Tests replay every trace up to six steps and check that the net accepts exactly
+the traces the process tree accepts.
+
+`GET /v1/event-logs/{log_id}/model-discovery.pnml?noise=&activities=&case_type=` plus the
+case-filter parameters. It returns `application/xml` with an `X-OWG-Petri-Net` header that counts
+places, transitions and silent transitions. Dashboard session only. Like the discovered draft, the
+net is a candidate model for review, not a verified workflow.
+
 ## Process map with abstraction sliders
 
 `GET /v1/event-logs/{log_id}/process-map?activities=0.8&paths=0.5` (dashboard session only)
