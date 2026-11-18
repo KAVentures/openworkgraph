@@ -183,7 +183,11 @@ class ReviewedTransactionTests(unittest.TestCase):
              patch.object(tx, "inspect_checkpoint", return_value=None), \
              patch.object(tx.cycle, "review", return_value=malformed), \
              patch.object(tx.cycle, "append") as append:
-            with self.assertRaisesRegex(ReceiptError, "changed"):
+            # Audited mutation is intentionally unavailable on Windows. Keep
+            # that fail-closed platform gate while testing the digest/audit
+            # ordering on supported POSIX hosts.
+            expected = "changed" if os.name == "posix" else "Audited mutation unsupported on this platform"
+            with self.assertRaisesRegex(ReceiptError, expected):
                 tx.execute(**inputs())
             audit.assert_not_called()
             append.assert_not_called()
