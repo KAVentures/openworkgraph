@@ -231,3 +231,27 @@ def test_variant_review_filters_and_pages_without_changing_case_denominators(mon
     unknown = graph.compare(log, packet(), selection(variant_status='unknown', max_variants=5))
     assert unknown['unknown_cases'] == 27 and unknown['variant_page']['total'] == 5
     assert all(row['alignment'] == [] for row in unknown['displayed_variants'])
+
+
+
+def test_hotspots_count_cases_and_occurrences_and_scope_the_variant_page():
+    paths = [['Open', 'Extra', 'Extra', 'Close']] * 3
+    paths += [['Open', 'Close']] * 2 + [['Open', 'Review', 'Close']]
+    paths += [['Open', *(['Long'] * 100), 'Close']]
+    log = imported(paths)
+    result = graph.compare(log, packet(), selection())
+    hotspots = result['deviation_hotspots']
+    assert hotspots['deviation_cases'] == 6
+    assert hotspots['cases_with_complete_alignment'] == 5
+    assert hotspots['cases_with_truncated_alignment'] == 1
+    assert hotspots['items'] == [
+        {'type': 'model_only', 'activity': 'Review', 'cases': 5, 'occurrences': 5},
+        {'type': 'log_only', 'activity': 'Extra', 'cases': 3, 'occurrences': 6},
+    ]
+    filtered = graph.compare(log, packet(), selection(variant_status='deviation',
+        alignment_issue={'type': 'log_only', 'activity': 'Extra'}))
+    assert [v['path'] for v in filtered['displayed_variants']] == [paths[0]]
+    assert filtered['variant_page']['total'] == 1
+    assert filtered['variant_page']['alignment_issue'] == {'type': 'log_only', 'activity': 'Extra'}
+    assert filtered['deviation_hotspots'] == hotspots
+    assert filtered['structural_deviation_cases'] == 6

@@ -2769,6 +2769,30 @@
       if(variant.alignment_truncated)details.append(el('p','Only the first 80 alignment steps are shown.','muted'));
       return details;
     }
+    function hotspotReview(result,spec){
+      const number=value=>Number(value).toLocaleString();
+      const hotspots=result.deviation_hotspots;
+      const active=result.variant_page?.alignment_issue;
+      if(!hotspots||(!hotspots.deviation_cases&&!active))return [];
+      const label=issue=>issue.type==='model_only'?'Expected by model':'Observed only';
+      const parts=[el('h4','Deviation hotspots'),el('p',
+        'Ranked by affected cases across '+number(hotspots.cases_with_complete_alignment)+' of '+
+        number(hotspots.deviation_cases)+' deviating cases. Each variant contributes one alignment. A case can appear in multiple rows.','muted')];
+      if(hotspots.cases_with_truncated_alignment)parts.push(el('p','Cases with truncated alignments are excluded from the hotspot counts.','muted'));
+      if(hotspots.items.length)parts.push(table(['Activity','Alignment','Affected cases','Occurrences','Evidence'],hotspots.items.map(issue=>{
+        const review=button('Review variants','secondary');
+        review.setAttribute('aria-label','Review variants for '+label(issue)+' '+issue.activity);
+        review.onclick=()=>compare({...spec,alignment_issue:{type:issue.type,activity:issue.activity}},'deviation',0,true);
+        return [issue.activity,label(issue),number(issue.cases),number(issue.occurrences),review];
+      })));
+      if(hotspots.items.length<hotspots.total)parts.push(el('p','Showing '+hotspots.items.length+' of '+number(hotspots.total)+' deviation hotspots.','muted'));
+      if(active){
+        const clear=button('Clear hotspot filter','secondary');clear.id='owgEventLogGraphClearHotspot';
+        clear.onclick=()=>{const next={...spec};delete next.alignment_issue;compare(next,'all',0,true);};
+        parts.push(el('p','Variant filter: '+label(active)+' · '+active.activity),clear);
+      }
+      return parts;
+    }
     async function compare(spec,variantStatus='all',offset=0,restoreFocus=false){
       const ticket=++comparing;run.disabled=true;last=null;exports.enable(false);out.replaceChildren(el('div','Comparing cases…'));
       try{
@@ -2782,7 +2806,7 @@
         const states=select('owgEventLogGraphVariantStatus',[['all','All results'],
           ['deviation',countLabel('Deviations','deviation')],['match',countLabel('Matches','match')],
           ['unknown',countLabel('Unknown within reviewed variants','unknown')]]);
-        states.value=variantStatus;states.onchange=()=>compare(spec,states.value,0,true);
+        states.value=variantStatus;states.disabled=!!variantPage?.alignment_issue;states.onchange=()=>compare(spec,states.value,0,true);
         const previous=button('Previous variants','secondary'),nextVariants=button('Next variants','secondary');
         previous.disabled=!variantPage||offset===0;nextVariants.disabled=variantPage?.next_offset==null;
         previous.onclick=()=>compare(spec,variantStatus,Math.max(0,offset-variantPage.size),true);
@@ -2798,13 +2822,17 @@
           ...graphMetricSummary(result),
           el('div','Applied cohort: '+JSON.stringify(result.cohort)+'. Timestamp ties can overlap any result. Order is timestamp then event ID for display; it is not verified business order.','muted'),
           table(['Unknown reason','Cases'],Object.entries(result.unknown_case_reasons).filter(([,n])=>n>0).map(([reason,n])=>[reasons[reason]||reason,n])),
+          ...hotspotReview(result,spec),
           ...(variantPage?[variantTools]:[]),el('div',variantNote,'muted'),
           table(['Observed path','Cases','Structural result','Minimum activity edits','Possible incomplete log prefix','Alignment','Evidence'],result.displayed_variants.map(v=>{
             const inspect=button('Inspect cases','secondary');inspect.onclick=()=>inspection.path(v.path,spec.cohort);
             return [v.path.slice(0,40).join(' → ')+(v.path.length>40?' …':''),v.cases,v.comparison_complete?(v.exact_structural_match?'Match':'Deviation'):'Unknown',v.minimum_activity_edit_count===null?'—':v.minimum_activity_edit_count,v.could_be_incomplete_log_prefix===null?'Unknown':(v.could_be_incomplete_log_prefix?'Yes':'No'),alignmentDetails(v),inspect];
           })),
           el('div',result.cases===0?'No cases match this selection; no verdict was established.':result.comparison_complete?'Every selected case was structurally compared. Business rules and outcomes were not checked.':'Some cases remain unknown. They are neither matches nor deviations. Business rules and outcomes were not checked.','muted'));
-        if(restoreFocus&&document.activeElement===document.body&&states.isConnected)states.focus();
+        if(restoreFocus&&document.activeElement===document.body&&states.isConnected){
+          const target=states.disabled?out.querySelector('#owgEventLogGraphClearHotspot'):states;
+          target?.focus();
+        }
       }catch(error){if(current()&&ticket===comparing)out.replaceChildren(el('div',error.message));}
       finally{if(current()&&ticket===comparing)run.disabled=false;}
     }

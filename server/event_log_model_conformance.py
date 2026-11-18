@@ -1,6 +1,7 @@
 """Bounded structural comparison of retained cases with a saved process graph."""
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
@@ -19,6 +20,13 @@ MAX_ALIGNMENT_WORK = 200_000
 MAX_VARIANTS = 1000
 MAX_DISPLAY_VARIANTS = 20
 MAX_REPLAY_EVENTS = 300_000
+MAX_DEVIATION_HOTSPOTS = 15
+
+
+class AlignmentIssue(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    type: Literal['model_only', 'log_only']
+    activity: str = Field(min_length=1, max_length=200)
 
 
 class SavedGraphQuery(BaseModel):
@@ -30,6 +38,7 @@ class SavedGraphQuery(BaseModel):
     max_variants: StrictInt = Field(default=200, ge=1, le=MAX_VARIANTS)
     variant_status: Literal['all', 'match', 'deviation', 'unknown'] = 'all'
     variant_offset: StrictInt = Field(default=0, ge=0, le=MAX_VARIANTS)
+    alignment_issue: AlignmentIssue | None = None
 
 
 def compare(log_id: str, record: dict[str, Any], spec: SavedGraphQuery,
@@ -66,6 +75,11 @@ def compare(log_id: str, record: dict[str, Any], spec: SavedGraphQuery,
         display = []
         variants_by_status = dict.fromkeys(('match', 'deviation', 'unknown'), 0)
         selected_variants = 0
+        issue_cases = Counter()
+        issue_occurrences = Counter()
+        covered_deviation_cases = 0
+        issue_filter = ((spec.alignment_issue.type, spec.alignment_issue.activity)
+                        if spec.alignment_issue else None)
         analyzed_events=edit_cost=0
         matching_paths=[]
         replayable=[]
@@ -98,6 +112,16 @@ def compare(log_id: str, record: dict[str, Any], spec: SavedGraphQuery,
                 unknown_reasons['alignment_work_budget'] += count
             variant_status = ('match' if result['exact_structural_match'] else 'deviation') if complete else 'unknown'
             variants_by_status[variant_status] += 1
+            issues = Counter()
+            if variant_status == 'deviation' and not result.get('alignment_truncated', False):
+                covered_deviation_cases += count
+                issues.update((step['type'], step['activity']) for step in result['alignment']
+                              if step['type'] in ('model_only', 'log_only'))
+                for issue, occurrences in issues.items():
+                    issue_cases[issue] += count
+                    issue_occurrences[issue] += count * occurrences
+            if issue_filter and issue_filter not in issues:
+                continue
             if spec.variant_status not in ('all', variant_status):
                 continue
             selected_variants += 1
@@ -120,7 +144,17 @@ def compare(log_id: str, record: dict[str, Any], spec: SavedGraphQuery,
         replay=replay_paths(replayable,model,max_events=MAX_REPLAY_EVENTS)
         replay['variants']=replay['variants'][:MAX_DISPLAY_VARIANTS]
         replay['case_population_coverage']=replay['replayed_cases']/total if total else None
+        ranked = sorted(issue_cases, key=lambda issue: (-issue_cases[issue], -issue_occurrences[issue], issue))
         return {
+            'deviation_hotspots': {
+                'deviation_cases': deviated,
+                'cases_with_complete_alignment': covered_deviation_cases,
+                'cases_with_truncated_alignment': deviated - covered_deviation_cases,
+                'total': len(ranked),
+                'items': [{'type': kind, 'activity': label, 'cases': issue_cases[(kind, label)],
+                           'occurrences': issue_occurrences[(kind, label)]}
+                          for kind, label in ranked[:MAX_DEVIATION_HOTSPOTS]],
+            },
             'token_replay':replay,
             'structural_fitness':fitness,'visible_prefix_precision':precision,
             'process_reference': {key: record[key] for key in ('workflow_id','revision','content_sha256','title','saved_at')},
@@ -135,6 +169,7 @@ def compare(log_id: str, record: dict[str, Any], spec: SavedGraphQuery,
             'variant_results_truncated': len(rows) > len(display) or unknown_reasons['variant_limit'] > 0,
             'variant_page': {'status': spec.variant_status, 'offset': spec.variant_offset,
                              'size': MAX_DISPLAY_VARIANTS, 'total': selected_variants,
+                             **({'alignment_issue': spec.alignment_issue.model_dump()} if spec.alignment_issue else {}),
                              'by_status': variants_by_status,
                              'next_offset': spec.variant_offset + len(display)
                                  if spec.variant_offset + len(display) < selected_variants else None},
