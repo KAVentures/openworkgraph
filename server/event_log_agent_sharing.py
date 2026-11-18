@@ -408,6 +408,17 @@ def funnel(log_id: str, steps: list[str], case_type: str | None = None,
     return {**fn.funnel(log_id, steps, case_type, within_hours=within_hours), "format": FORMAT, "log_id": log_id}
 
 
+def unusual_cases(log_id: str, case_type: str | None = None, limit: int = 25) -> dict[str, Any]:
+    """Cases that stand out and why. Case IDs and paths only for logs shared at the cases level."""
+    require(log_id, "aggregates")
+    from . import event_log_unusual_cases as uc
+    with_cases = _level(log_id) == "cases"
+    result = uc.unusual_cases(log_id, case_type, limit=max(1, min(int(limit), 50)), include_case_ids=with_cases)
+    if not with_cases:
+        result["top"] = [{k: v for k, v in c.items() if k not in ("path", "path_truncated")} for c in result["top"]]
+    return {**result, "format": FORMAT, "log_id": log_id}
+
+
 def slowest_cases(log_id: str, case_type: str | None = None, limit: int = 10) -> dict[str, Any]:
     require(log_id, "cases")
     from . import event_log_case_explain as case_explain

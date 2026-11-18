@@ -19,6 +19,7 @@
   FILTERED.add('footprints');
   FILTERED.add('model-quality');
   FILTERED.add('funnel');
+  FILTERED.add('unusual-cases');
   FILTERED.add('petri-net-replay');
   FILTERED.add('petri-net-alignments');
 
@@ -806,6 +807,7 @@
     results.appendChild(dottedSection());
     results.appendChild(spectrumSection());
     results.appendChild(heuristicsSection());
+    results.appendChild(unusualCasesSection());
     results.appendChild(funnelSection(names));
     results.appendChild(modelQualitySection());
     results.appendChild(footprintsSection());
@@ -3726,6 +3728,35 @@
         const more=document.createElement('details');more.appendChild(el('summary','All arrows'));
         more.appendChild(table(['From','To','Transitions','Dependency','Kept because'],arrows.map(e=>[e.from,e.to,Number(e.transition_count).toLocaleString(),String(e.dependency),({threshold:'above threshold',best_connection:'best connection',short_loop:'short loop'})[e.kept_by]||e.kept_by])));
         out.append(more,el('div',r.note,'muted'));
+      }catch(error){statusLine.textContent=error.message;}
+      finally{run.disabled=false;}};
+    return box;
+  }
+
+  function unusualCasesSection(){
+    const box=section('Unusual cases');box.id='owgUnusual';
+    box.appendChild(el('div','Cases that stand out from the rest of this selection, each with the reasons: a rare path, unusually slow or fast, unusually many events, heavy rework, or an activity almost no other case has. Unusual is not wrong; this is a list to look at.','muted'));
+    const limit=select('owgUnusualLimit',[['25','Top 25'],['50','Top 50'],['100','Top 100']]);
+    const run=button('Find unusual cases','secondary');run.id='owgUnusualRun';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Show',limit),run);
+    const statusLine=el('div',null,'muted');statusLine.id='owgUnusualStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgUnusualResults';
+    box.append(row,statusLine,out);
+    const label={rare_path:'Rare path',unusually_slow:'Unusually slow',unusually_fast:'Unusually fast',unusually_long:'Unusually many events',heavy_rework:'Heavy rework',rare_activity:'Rare activity'};
+    run.onclick=async()=>{
+      const generation=state.generation;run.disabled=true;statusLine.textContent='Comparing cases…';out.replaceChildren();
+      try{
+        const r=await getJSON(logPath('unusual-cases',{limit:limit.value}));
+        if(generation!==state.generation)return;
+        const counts=Object.entries(r.by_signal).map(([k,n])=>label[k]+' '+Number(n).toLocaleString()).join(', ');
+        statusLine.textContent=Number(r.unusual_cases).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases stand out'+(counts?' ('+counts+')':'')+'. The median case takes '+r.baseline.median_hours+' h and has '+r.baseline.median_events+' events.';
+        if(!r.top.length)return;
+        const t=table(['Case','Score','Why','Events','Hours',''],r.top.map(c=>[String(c.case_id),String(c.score),c.reasons.map(x=>label[x.signal]+': '+x.detail).join('; '),String(c.events),String(c.hours),'']));
+        t.querySelector('tbody').querySelectorAll('tr').forEach((tr,i)=>{const id=String(r.top[i].case_id);const b=button('Explain','secondary');b.setAttribute('aria-label','Explain case '+id);
+          b.onclick=()=>{const field=document.querySelector('#owgCaseExplainId'),go=document.querySelector('#owgCaseExplainRun');if(!field||!go)return;field.value=id;go.click();document.querySelector('#owgCaseExplain').scrollIntoView({block:'start'});};
+          tr.cells[5].appendChild(b);});
+        out.appendChild(t);
+        out.appendChild(el('div',r.caveat,'muted'));
       }catch(error){statusLine.textContent=error.message;}
       finally{run.disabled=false;}};
     return box;
