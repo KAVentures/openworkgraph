@@ -211,7 +211,7 @@ const pathModule = require("node:path");
     await recoveredHandoffPage.locator("#handoffStatus")
       .filter({hasText:"REFUSED:"}).waitFor();
     assert.match(await recoveredHandoffPage.locator("#handoffStatus").textContent(),
-      /execution authorization remain unverified/i);
+      /lacks independent design review/i);
     assert.equal(uploadedHandoff,false,
       "neither denied nor recovered packet may be posted to Gateway");
 
