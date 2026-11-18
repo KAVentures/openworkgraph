@@ -24,9 +24,10 @@ function owgNormalizeDepth(value) {
   const s = v.signals && typeof v.signals === "object" ? v.signals : {};
   const p = v.parameters && typeof v.parameters === "object" ? v.parameters : {};
   const num = (x, lo, hi, d) => Number.isInteger(x) && x >= lo && x <= hi ? x : d;
-  // Detail is time-limited: without an expiry in the future, nothing beyond Standard is emitted.
-  const expires = Date.parse(v.expires_at || "");
-  if (!(expires > Date.now())) return OWG_DEPTH_OFF;
+  // Detail lasts until changed (persistent) or until its chosen period ends; otherwise Standard.
+  const persistent = v.persistent === true && v.expires_at == null;
+  const expires = persistent ? 0 : Date.parse(v.expires_at || "");
+  if (!persistent && !(expires > Date.now())) return OWG_DEPTH_OFF;
   return {signals: {hover_dwell: s.hover_dwell === true, drag_drop: s.drag_drop === true, pointer_trajectory: s.pointer_trajectory === true},
     parameters: {hover_dwell_ms: num(p.hover_dwell_ms, 300, 5000, 750), trajectory_hz: num(p.trajectory_hz, 1, 20, 4),
       max_events_per_minute: num(p.max_events_per_minute, 10, 600, 60)}, expiresAt: expires};
