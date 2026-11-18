@@ -62,3 +62,53 @@ def test_saved_cohort_dashboard_has_save_load_delete_controls():
     for marker in ("owgCohortMetricSaved", "owgCohortMetricSave", "owgCohortMetricDelete",
                    "cohort-metric-definitions", "currentDefinition"):
         assert marker in source
+
+
+def test_saved_metric_evaluation_is_log_scoped_and_rejects_deleted(monkeypatch, tmp_path):
+    import duckdb
+    db = tmp_path / "saved-eval.duckdb"
+    def connect():
+        conn = duckdb.connect(str(db))
+        conn.execute(workspace._SCHEMA)
+        return conn
+    monkeypatch.setattr(workspace, "_connect", connect)
+    first, other = "log_0123456789abcdef", "log_1111111111111111"
+    with connect() as conn:
+        for log_id in (first, other):
+            conn.execute("INSERT INTO logs VALUES (?, ?, ?, current_timestamp, 0, 0, 0)",
+                         [log_id, "test", "csv"])
+    item = saved.save(first, {
+        "name": "Events", "definition": {"version": 1, "expression": {"field": "event_count"}}
+    })
+    calls = []
+    def summarize(log_id, spec, case_type=None):
+        calls.append((log_id, spec, case_type))
+        return {"metric": {"sum": "2"}, "raw_cases_returned": False}
+    monkeypatch.setattr(saved.cohort_metrics, "summarize", summarize)
+    with pytest.raises(workspace.EventLogWorkspaceError, match="unknown"):
+        saved.evaluate(other, item["metric_id"], {})
+    assert not calls
+    result = saved.evaluate(first, item["metric_id"], {"activity": "Review"}, "case")
+    assert result["saved_metric"] == {"metric_id": item["metric_id"], "name": "Events"}
+    assert calls[0][1]["cohort"] == {"activity": "Review"}
+    assert calls[0][2] == "case"
+    saved.delete(first, item["metric_id"])
+    with pytest.raises(workspace.EventLogWorkspaceError, match="unknown"):
+        saved.evaluate(first, item["metric_id"], {})
+    assert len(calls) == 1
+
+
+def test_saved_metric_evaluation_api_requires_session_and_rechecks_revocation(monkeypatch):
+    monkeypatch.setattr(event_log_routes, "dashboard_session_valid", lambda token: token == "valid")
+    app = FastAPI()
+    app.include_router(event_log_routes.router)
+    client = TestClient(app)
+    path = "/v1/event-logs/log_0123456789abcdef/cohort-metric-definitions/cm_0123456789abcdef/evaluate"
+    assert client.post(path, json={"cohort": {}}).status_code == 403
+    headers = {"Authorization": "OWG-Session valid"}
+    assert client.post(path, headers=headers, json={"definition": {}, "cohort": {}}).status_code == 422
+    def revoke(*args, **kwargs):
+        monkeypatch.setattr(event_log_routes, "dashboard_session_valid", lambda token: False)
+        return {"metric": {"sum": "1"}}
+    monkeypatch.setattr(saved, "evaluate", revoke)
+    assert client.post(path, headers=headers, json={"cohort": {}}).status_code == 403
