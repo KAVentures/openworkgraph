@@ -145,12 +145,13 @@ with TestClient(app) as client:
     export = f"/v1/event-logs/{imported.json()['log_id']}/export/matching-cases"
     cohort = {"cohort": {"activity": "A"}}
     assert client.post(export + "?format=xes-attributes", json=cohort, headers=bearer).status_code == 403
-    for fmt, suffix in (("csv-review", ".review.csv"), ("xes", ".xes"), ("xes-attributes", ".xes")):
+    for fmt, suffix in (("csv-review", ".review.csv"), ("xes", ".xes"), ("xes-attributes", ".xes"),
+                        ("ocel", ".jsonocel"), ("ocelxml", ".xmlocel")):
         response = client.post(export + "?format=" + fmt, json=cohort, headers=owner)
         assert response.status_code == 200, response.text
         assert response.headers["content-disposition"].endswith(suffix + '"')
         assert response.headers["cache-control"] == "no-store"
-    assert client.post(export + "?format=ocel", json=cohort, headers=owner).status_code == 422
+    assert client.post(export + "?format=pdf", json=cohort, headers=owner).status_code == 422
 
     assert client.post(path, json=body, headers=bearer).status_code == 403
     made = client.post(path, json=body, headers=owner)
@@ -225,3 +226,49 @@ def test_matching_xes_projection_preserves_only_selected_trace_attributes():
     assert list(csv.reader(StringIO(exact.getvalue())))[1][0] == "=included"
     assert list(csv.reader(StringIO(review.getvalue())))[1][0] == "'=included"
     assert len(workspace.list_logs()["logs"]) == 1
+
+
+@pytest.mark.parametrize("export_format", ["ocel", "ocelxml"])
+def test_matching_ocel_preserves_in_scope_links_and_object_history(export_format):
+    from server.event_log_cohort_export import export_matching_cases
+
+    payload = {"objectTypes": [], "eventTypes": [], "objects": [
+        {"id": "order-in", "type": "order",
+         "attributes": [{"name": "status", "value": "open", "time": "2024-01-01T00:00:00Z"},
+                        {"name": "status", "value": "closed", "time": "2024-01-03T00:00:00Z"}],
+         "relationships": [{"objectId": "shared", "qualifier": "contains"},
+                           {"objectId": "order-out", "qualifier": "outside"}]},
+        {"id": "order-out", "type": "order"},
+        {"id": "shared", "type": "item", "relationships": [{"objectId": "order-in", "qualifier": "inside"}]},
+    ], "events": [
+        {"id": "e1", "type": "Start", "time": "2024-01-01T00:00:00Z",
+         "relationships": [{"objectId": "order-in", "qualifier": "order"},
+                           {"objectId": "shared", "qualifier": "item"}]},
+        {"id": "e2", "type": "Close", "time": "2024-01-03T00:00:00Z",
+         "attributes": [{"name": "result", "value": "complete"}],
+         "relationships": [{"objectId": "order-in", "qualifier": "review"},
+                           {"objectId": "order-in", "qualifier": "close"}]},
+        {"id": "e3", "type": "Private", "time": "2024-01-03T01:00:00Z",
+         "relationships": [{"objectId": "shared", "qualifier": "item"},
+                           {"objectId": "order-out", "qualifier": "order"}]},
+    ]}
+    log = workspace.import_log(BytesIO(json.dumps(payload).encode()), name="scope", source_format="ocel")["log_id"]
+    out = StringIO()
+    export_matching_cases(log, {"cohort": {"activity": "Close"}, "case_type": "order"},
+                          out, export_format=export_format)
+    assert len(workspace.list_logs()["logs"]) == 1
+    result = workspace.import_log(BytesIO(out.getvalue().encode()), name="round trip",
+                                  source_format=export_format)
+    normalized = StringIO()
+    workspace.export_log(result["log_id"], "ocel", normalized)
+    parsed = json.loads(normalized.getvalue())
+    objects = {obj["id"]: obj for obj in parsed["objects"]}
+    assert set(objects) == {"order-in", "shared"}
+    assert objects["order-in"]["relationships"] == [{"objectId": "shared", "qualifier": "contains"}]
+    assert objects["shared"]["relationships"] == [{"objectId": "order-in", "qualifier": "inside"}]
+    assert [a["value"] for a in objects["order-in"]["attributes"]] == ["open", "closed"]
+    assert [e["id"] for e in parsed["events"]] == ["e1", "e2"]
+    assert parsed["events"][1]["attributes"] == [{"name": "result", "value": "complete"}]
+    assert {(r["objectId"], r["qualifier"]) for r in parsed["events"][1]["relationships"]} == {
+        ("order-in", "close"), ("order-in", "review"),
+    }
