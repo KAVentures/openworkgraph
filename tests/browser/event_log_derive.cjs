@@ -59,6 +59,25 @@ const path=require('node:path');
    await page.locator('#owgEventLogAnalyze').click();
    await page.locator('#owgEventLogResults table').first().waitFor();
    assert.match(await page.locator('#owgEventLogResults table').first().innerText(),/\n4\t12\t3\t/);
+   const objects=[{id:'order-1',type:'order'},{id:'item-1',type:'item'},{id:'item-2',type:'item'}];
+   const ocel={objectTypes:[],eventTypes:[],objects,events:[{
+     id:'event-1',type:'Open',time:'2024-04-01T00:00:00Z',
+     relationships:objects.map(object=>({objectId:object.id,qualifier:''}))
+   }]};
+   await page.locator('#owgEventLogFile').setInputFiles({name:'linked.jsonocel',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(ocel))});
+   await page.locator('#owgEventLogStatus').filter({hasText:'File mapping ready.'}).waitFor();
+   await page.locator('#owgEventLogConsent').check();
+   await page.locator('#owgEventLogImport').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Imported 1 events'}).waitFor();
+   await page.locator('#owgEventLogCaseType').selectOption('order');
+   await page.locator('#owgEventLogAnalyze').click();
+   await page.locator('#owgDeriveCohortActivity').selectOption('Open');
+   await page.locator('#owgDeriveName').fill('Order subset');
+   await page.locator('#owgDeriveRun').click();
+   await page.locator('#owgDeriveOpen').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Opened Order subset'}).waitFor();
+   assert.equal(await page.locator('#owgEventLogCaseType option').first().getAttribute('value'),'item');
+   assert.equal(await page.locator('#owgEventLogCaseType').inputValue(),'order');
    assert.deepEqual(errors,[]);
    console.log('Derived log browser acceptance passed: filter required, matching cases saved as a new log, current analysis kept, new log opens and analyses, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
