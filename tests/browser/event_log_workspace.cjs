@@ -212,6 +212,19 @@ const path=require('node:path');
    await page.locator('#owgCaseFilterClear').click();
    await page.locator('#owgCaseFilterStatus').filter({hasText:'every case is included'}).waitFor();
    assert.equal(await page.locator('#owgCaseFilterCount').count(),0);
+   // Endpoints and case-duration filters reach the server as starts_with, ends_with and duration bounds.
+   await page.locator('#owgCaseFilterStartsWith').fill('Receive');await page.locator('#owgCaseFilterEndsWith').fill('Close');
+   await page.locator('#owgCaseFilterDurationMax').fill('100000');
+   const [endpointSummary]=await Promise.all([
+     page.waitForResponse(r=>r.url().includes('/summary?')&&r.url().includes('starts_with=Receive')&&r.url().includes('ends_with=Close')&&r.url().includes('duration_max=360000000')),
+     page.locator('#owgCaseFilterApply').click()]);
+   const endpointCases=(await endpointSummary.json()).cases;assert(endpointCases>0&&endpointCases<=60,String(endpointCases));
+   await page.locator('#owgCaseFilterStatus').filter({hasText:'starts with "Receive"; ends with "Close"; case duration < 100000 h'}).waitFor();
+   await page.locator('#owgCaseFilterEndsWith').fill('Nothing ends here');await page.locator('#owgCaseFilterApply').click();
+   await page.locator('#owgCaseFilterStatus').filter({hasText:'ends with "Nothing ends here"'}).waitFor();
+   await page.locator('#owgCaseFilterClear').click();
+   await page.locator('#owgCaseFilterStatus').filter({hasText:'every case is included'}).waitFor();
+   assert.equal(await page.locator('#owgCaseFilterStartsWith').inputValue(),'');
    await page.locator('#owgMapStatus').filter({hasText:'Showing 5 activities'}).waitFor();
 
    await page.locator('#owgEventLogCasesBrowse').click();

@@ -104,11 +104,21 @@ def _case_filter(started_from: str = Query(default="", max_length=64),
                  event_attribute: str = Query(default="", max_length=200),
                  tag: str = Query(default="", max_length=60),
                  follows: str = Query(default="", max_length=4000),
-                 attribute_range: str = Query(default="", max_length=400)) -> dict[str, Any]:
-    """The case filter shared by analysis views; ``follows`` is a JSON list of follower rules."""
+                 attribute_range: str = Query(default="", max_length=400),
+                 starts_with: str = Query(default="", max_length=200),
+                 ends_with: str = Query(default="", max_length=200),
+                 duration_min: float | None = Query(default=None, ge=0, le=10 ** 10),
+                 duration_max: float | None = Query(default=None, ge=0, le=10 ** 10)) -> dict[str, Any]:
+    """The case filter shared by analysis views; ``follows`` is a JSON list of follower rules.
+
+    ``starts_with``/``ends_with`` keep cases whose first/last activity is the given one; ``duration_min``
+    (inclusive) and ``duration_max`` (exclusive) bound the case duration in seconds.
+    """
     cohort: dict[str, Any] = {"started_from": started_from, "started_before": started_before, "resource": resource,
                               "activity": activity, "attribute": attribute, "event_attribute": event_attribute,
-                              "tag": tag}
+                              "tag": tag, "starts_with": starts_with, "ends_with": ends_with}
+    if duration_min is not None or duration_max is not None:
+        cohort["duration"] = {k: v for k, v in (("min", duration_min), ("max", duration_max)) if v is not None}
     if follows:
         try:
             cohort["follows"] = json.loads(follows)
@@ -120,6 +130,18 @@ def _case_filter(started_from: str = Query(default="", max_length=64),
         except ValueError:
             raise HTTPException(422, "attribute_range must be a JSON object {name, min, max}") from None
     return cohort
+
+
+@router.post("/v1/event-logs/{log_id}/private-map")
+async def event_log_private_map(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200)):
+    """A differentially private directly-follows map. POST: every call draws fresh noise and spends epsilon."""
+    from . import event_log_private_map as private
+    _require_dashboard(request)
+    body = await _json_body(request, "private map settings")
+    if not isinstance(body, dict) or set(body) - {"epsilon", "max_transitions_per_case", "threshold"}:
+        raise HTTPException(422, "settings accept epsilon, max_transitions_per_case and threshold")
+    return await run_in_threadpool(_respond, private.private_map, log_id, case_type,
+                                   **{k: v for k, v in body.items() if v is not None})
 
 
 @router.get("/v1/event-logs/{log_id}/cost-model")
