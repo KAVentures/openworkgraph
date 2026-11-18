@@ -1,0 +1,41 @@
+name: jira-schedule-controls
+on:
+  pull_request:
+    paths:
+      - 'dashboard/event_log_workspace.js'
+      - 'dashboard/basic_mode.js'
+      - 'server/jira_retained*.py'
+      - 'server/local_scheduler*.py'
+      - 'tests/browser/jira_retained_app.py'
+      - 'tests/browser/jira_retained_ingestion.cjs'
+      - '.github/workflows/jira-schedule-controls.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'dashboard/event_log_workspace.js'
+      - 'dashboard/basic_mode.js'
+      - 'server/jira_retained*.py'
+      - 'server/local_scheduler*.py'
+      - 'tests/browser/jira_retained_app.py'
+      - 'tests/browser/jira_retained_ingestion.cjs'
+      - '.github/workflows/jira-schedule-controls.yml'
+permissions:
+  contents: read
+jobs:
+  jira-schedule-controls:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -e '.[dev]'
+      - name: Install browser dependencies
+        run: |
+          npm install --prefix "$RUNNER_TEMP/owg-browser" playwright@1.64.1 axe-core@4.10.3
+          node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install --with-deps chromium || node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install chromium
+      - run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/jira_retained_ingestion.cjs

@@ -116,6 +116,14 @@ async def agent_automation_candidates(request: Request, log_id: str, limit: int 
     return await _answer(sharing.automation_candidates, log_id, case_type, limit)
 
 
+@router.get("/v1/process-intelligence/{log_id}/decision-rules")
+async def agent_decision_rules(request: Request, log_id: str, activity: str | None = Query(default=None, max_length=200),
+                               case_type: str | None = Query(default=None, max_length=200),
+                               max_depth: int = Query(default=3, ge=1, le=4)):
+    _require_agent_access(request)
+    return await _answer(sharing.decision_rules, log_id, activity, case_type, max_depth)
+
+
 @router.get("/v1/process-intelligence/{log_id}/signals")
 async def agent_signals(request: Request, log_id: str):
     _require_agent_access(request)

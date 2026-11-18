@@ -212,6 +212,19 @@ const path=require('node:path');
    await page.locator('#owgCaseFilterClear').click();
    await page.locator('#owgCaseFilterStatus').filter({hasText:'every case is included'}).waitFor();
    assert.equal(await page.locator('#owgCaseFilterCount').count(),0);
+   // Endpoints and case-duration filters reach the server as starts_with, ends_with and duration bounds.
+   await page.locator('#owgCaseFilterStartsWith').fill('Receive');await page.locator('#owgCaseFilterEndsWith').fill('Close');
+   await page.locator('#owgCaseFilterDurationMax').fill('100000');
+   const [endpointSummary]=await Promise.all([
+     page.waitForResponse(r=>r.url().includes('/summary?')&&r.url().includes('starts_with=Receive')&&r.url().includes('ends_with=Close')&&r.url().includes('duration_max=360000000')),
+     page.locator('#owgCaseFilterApply').click()]);
+   const endpointCases=(await endpointSummary.json()).cases;assert(endpointCases>0&&endpointCases<=60,String(endpointCases));
+   await page.locator('#owgCaseFilterStatus').filter({hasText:'starts with "Receive"; ends with "Close"; case duration < 100000 h'}).waitFor();
+   await page.locator('#owgCaseFilterEndsWith').fill('Nothing ends here');await page.locator('#owgCaseFilterApply').click();
+   await page.locator('#owgCaseFilterStatus').filter({hasText:'ends with "Nothing ends here"'}).waitFor();
+   await page.locator('#owgCaseFilterClear').click();
+   await page.locator('#owgCaseFilterStatus').filter({hasText:'every case is included'}).waitFor();
+   assert.equal(await page.locator('#owgCaseFilterStartsWith').inputValue(),'');
    await page.locator('#owgMapStatus').filter({hasText:'Showing 5 activities'}).waitFor();
 
    await page.locator('#owgEventLogCasesBrowse').click();
@@ -387,6 +400,23 @@ const path=require('node:path');
    await page.locator('#owgEventLogGraphRun').click();
    await page.waitForFunction(()=>document.querySelector('#owgEventLogGraphResults table tbody tr td')?.textContent==='20');
    assert.equal(await resultCell().nth(2).textContent(),'20');
+   const review=page.locator('#owgEventLogGraphResults');
+   const alignment=review.locator('details').filter({hasText:'Expected by model'}).first();
+   await alignment.locator('summary').click();
+   await alignment.getByText('Expected by model',{exact:true}).first().waitFor();
+   await page.locator('#owgEventLogGraphVariantStatus').selectOption('match');
+   await review.getByText(/of 0 selected variant results/).waitFor();
+   await page.locator('#owgEventLogGraphVariantStatus').selectOption('deviation');
+   const inspect=review.getByRole('button',{name:'Inspect cases',exact:true}).first();
+   await inspect.waitFor();
+   const [evidenceRequest]=await Promise.all([
+     page.waitForRequest(request=>request.url().includes('/cases/query')&&request.method()==='POST'),
+     inspect.click()
+   ]);
+   assert.equal(evidenceRequest.postDataJSON().cohort.resource,'ann');
+   assert.ok(evidenceRequest.postDataJSON().path.length);
+   await page.locator('#owgEventLogCasesPath').filter({hasText:'Saved process comparison cohort'}).waitFor();
+
    await page.locator('#owgEventLogGraphCohortResource').fill('absent');await page.locator('#owgEventLogGraphRun').click();
    await page.locator('#owgEventLogGraphResults').getByText('No cases match this selection; no verdict was established.').waitFor();
    assert.match(await page.locator('#owgEventLogGraphMetrics').textContent(),/Unknown/);

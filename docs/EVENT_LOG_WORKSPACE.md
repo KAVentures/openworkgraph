@@ -46,9 +46,17 @@ sample rather than adding a copy. It is deleted like any other log.
 | --- | --- | --- | --- |
 | CSV | yes | yes | You map the case, activity, timestamp and (optional) resource columns. |
 | Excel (.xlsx) | yes | no | One worksheet is converted to CSV on this computer, then mapped and imported like any CSV (below). |
-| XES (IEEE 1849) | yes | yes | `concept:name`, `time:timestamp` and `org:resource`; other string-like attributes are kept (32 max, 500 chars each). |
+| XES (IEEE 1849) | yes | yes | `concept:name`, `time:timestamp` and `org:resource`; up to 32 other attributes of 500 characters each are imported as strings. Choose **XES with retained attributes** to include static trace and event attributes in the export. |
 | OCEL 2.0 JSON | yes | yes | Objects, object types, events, event-to-object links and supplied directed object-to-object relationships with qualifiers. Object attribute values keep their times (below). |
 | OCEL 2.0 XML | yes | yes | The same retained content in the OCEL 2.0 worked-example XML layout (`.xmlocel`). Objects must precede events as in the original 2.0 printed root schema. See the relationship contract for schema/example errata and format limits. |
+
+The attribute export uses the selected case notion and includes values in the
+download, including supported lifecycle fields. The standard XES choice exports
+only the structural fields. XES uses flat traces, so use OCEL to retain object
+relationships and timed object attributes. The attribute export refuses data
+that would require changing a retained value, exceeding XES import bounds, or
+overwriting a reserved field. The local dashboard export endpoint accepts
+`format=xes-attributes` and returns a `.xes` file.
 
 Every log is stored object-centrically. A flat CSV or XES log becomes one
 object type, `case`. For an OCEL log you choose the case notion (`order`,
@@ -262,6 +270,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `POST /v1/event-logs/timestamp-formats?column=...&delimiter=...` | Suggest a timestamp format from the start of a CSV file (body, at most 256 KB): `candidates` (each with `pattern`, `order`, `has_offset` and how the first value reads), `ambiguous`, `suggested`. Nothing is stored. Imports and appends take `timestamp_format=`. |
 | `POST /v1/event-logs/xlsx-to-csv?sheet=...` | Convert one worksheet of the `.xlsx` request body to CSV (`csv`, `sheet`, `sheets`, `rows`, `columns`, `date_columns`, `dates_have_no_offset`). Nothing is stored. |
 | `POST /v1/event-logs/{log_id}/delete` | Delete the log and every row that belongs to it. |
+| `POST /v1/event-logs/{log_id}/export/matching-cases` | Download a flat CSV of complete matching cases. Body contains `cohort` and optional `case_type`. |
 | `POST /v1/event-logs/{log_id}/derive` | Save the cases matching a filter as a new log (below). |
 | `GET /v1/event-logs/{log_id}/quality` | Stored quality and mapping reports per import and append, plus current whole-log diagnostics (below). |
 | `GET /v1/event-logs/{log_id}/summary` | Events, cases, activities, time span and case-duration median/p90/mean. |
@@ -1252,7 +1261,13 @@ units and coverage; CSV exports remain numeric tables.
 
 ## Saving matching cases as a new log
 
-**Save matching cases as a new log** (after **Analyse**), or
+Use **Download matching cases as CSV** to download the original events of those
+cases directly. Filters use the selected case notion and the applied activity
+mapping. The CSV retains the original activity names and includes events
+collapsed by the mapping. It contains case IDs, activity names, timestamps, and
+resources. An empty filter or a filter with no matches produces an error.
+
+**Save or export matching cases → Save as new log** (after **Analyse**), or
 `POST /v1/event-logs/{log_id}/derive` with
 `{"name": "Escalated orders", "cohort": {"activity": "Escalate"}, "case_type": null}`,
 copies the cases that match a case filter into a new saved log. `cohort` takes
@@ -1813,6 +1828,41 @@ The same decision can be made up front for a CSV import or append with
 `naive_timestamp_offset=+01:00`. It is part of the transform and its digest, and the report counts
 the times read with the assumed offset.
 
+## Private process map (differential privacy)
+
+"Share a private process map" creates a directly-follows map that can be given to someone else
+without revealing any single case. It follows privacy-preserving process mining: Mannhardt et al.
+2019, the Libra and SaCoFa work of Elkoumy et al., and PM4Py's privacy module. The guarantee is
+ε-differential privacy with respect to adding or removing one case.
+
+1. **Bounded contribution.** Each case contributes at most `k` directly-follows pairs (default 10,
+   from 1 to 100) and `k + 1` activity occurrences. The pairs include `(start) → A` and `B → (end)`.
+   A longer case keeps a random subset, drawn anew for each export.
+2. **Laplace noise.** The budget ε (0.01–10, default 1) is split evenly:
+   - path counts get noise of scale `2k/ε`;
+   - activity counts get noise of scale `2(k+1)/ε`.
+
+   Noise is added to every possible pair over the log's activity labels, observed or not, so
+   whether an edge appears does not reveal that a case took it.
+3. **Release threshold.** Counts below the threshold are left out and the rest are rounded. By
+   default the threshold keeps the expected number of released pairs that no case took at 0.05 per
+   export, and likewise for activities. A fixed `threshold` can be given instead.
+
+The export contains activities, edges and approximate counts, and nothing else: no case
+identifiers, times, resources, attributes or durations.
+
+**Activity names are released as they are.** They come from the log's label set and the noise does
+not protect them. Rename labels that would themselves identify someone before sharing.
+
+**Repeated exports add up:** two exports at ε each spend 2ε in total. The owner also sees how many
+cases there are and how many exceeded the cap, to help choose `k`. That figure is not private, so
+it is kept out of the download (`owner_only_not_private`).
+
+`POST /v1/event-logs/{log_id}/private-map?case_type=` with
+`{"epsilon": 1, "max_transitions_per_case": 10, "threshold": null}`. It is a POST because each call
+draws fresh noise and spends budget. Dashboard session only. It covers every case of the log, not
+the case filter.
+
 ## Case filter and playback
 
 The **Case filter** keeps only cases whose recorded order matches every rule, like Disco's follower
@@ -1840,6 +1890,17 @@ every condition must hold, and they apply to the same views. Values that are not
 match a range. The inputs are validated before anything is sent. Saving the filter keeps the
 values and ranges with it.
 
+**Endpoints and case duration.** The case filter also keeps cases that start with, or end with,
+an exact activity, in recorded order (time, then event identifier). This is the endpoints filter of
+Disco and Celonis. It can also keep cases whose duration lies in a range: the time from the first to
+the last recorded event, at least the lower bound and below the upper bound. This is Disco's
+performance filter. The dashboard takes hours; the API takes seconds.
+
+The query parameters are `starts_with`, `ends_with`, `duration_min` and `duration_max`. In a JSON
+cohort they are `starts_with`, `ends_with` and `duration: {"min": s, "max": s}`. They combine with
+every other condition and apply to the same views. Saved filters keep them. A saved filter whose
+first or last activity is no longer in the log is flagged, like its follower rules.
+
 The case pickers inside individual sections take the same numeric range, under "Numeric case
 attribute", "From (inclusive)" and "Below (exclusive)". These are KPIs, the cohort benchmark and
 map comparison, the saved-graph comparison, case tags, saving cases as a log, case metrics and
@@ -1863,7 +1924,7 @@ replace one. They set exactly the finding's `attribute` or `attribute_range`.
 the same panel; applying it re-runs every filtered view at once. The API stores any case filter
 (`{"name": "...", "cohort": {"follows": [...], "started_from": "...", ...}}`, up to 50 per log,
 names unique regardless of case) as `openworkgraph.event-log-filter-set.v1`. The dashboard panel
-applies follower rules, case-attribute values and numeric ranges. A saved filter is re-applied to the log as it is now, so the listing says
+applies follower rules, case-attribute values, numeric ranges, endpoints and case duration. A saved filter is re-applied to the log as it is now, so the listing says
 when newer exports were appended after it was saved and names any activities it uses that the log
 does not contain. Saved filters are deleted with the log and never change events.
 
@@ -2005,3 +2066,79 @@ and authorizes nothing.
 
 `GET /v1/event-logs/{log_id}/automation-candidates?limit=&case_type=` plus the usual case-filter
 parameters; dashboard session only.
+
+## Performance spectrum
+
+The performance spectrum shows how long each step-to-step segment took, over calendar time. It
+follows Denisov, Fahland and van der Aalst (2018), as in ProM. A segment is "activity A directly
+followed by activity B" within a case. Every occurrence is drawn as a line from the moment A
+happened (top axis) to the moment B happened (bottom axis).
+
+This shows patterns a process map hides:
+- **Batching:** many lines meet at one point at the bottom, so work was released together.
+- **Overtaking:** lines cross, so later work finished before earlier work.
+- **Changes over time:** some periods are slower than others.
+
+For the 6 busiest segments (1–12), or the segments asked for, the result gives:
+
+| Field | Meaning |
+| --- | --- |
+| `duration_seconds` | 25th, 50th, 75th and 95th percentiles, mean and maximum. |
+| `bins` | For equal calendar periods by start time (2–100, default 30): occurrences per class and the median. |
+| `fifo_share` | Among occurrences in start order, the share that also finish no earlier than the one before. Pairs that start at the same instant are skipped. `null` when no two start at different times. |
+| `batched_share` | Share of occurrences that end at the same instant as at least two others of the segment. |
+| `lines` | A repeatable sample of at most 400 occurrences with start, end (seconds from `time_origin`) and class. `lines_sampled` says when it is a sample. |
+
+Each occurrence is put in a class against the segment's own percentiles:
+- `fast`: below the 25th percentile;
+- `normal`: between the 25th and 75th;
+- `slow`: above the 75th;
+- `very_slow`: above the 95th.
+
+Durations are the time between two recorded events, not working time. Overtaking and batching
+describe the log; they do not say why work waited or who caused it. The global case filter
+applies.
+
+`GET /v1/event-logs/{log_id}/performance-spectrum?top=&bins=&segment=A->B&case_type=` plus the
+case-filter parameters. Repeat `segment` for several segments (at most 12). Dashboard session
+only.
+## Decision rules (decision mining)
+
+Decision mining finds the points where cases take different routes and learns which recorded
+data goes with each route. ProM's decision miner, PM4Py, Celonis and SAP Signavio offer the same
+analysis.
+
+1. **Decision points.** These are activities after which cases continue to at least two different
+   next activities, or end (`(end)`). Each branch must be seen at least 5 times.
+2. **Data known at the decision.** The rules use two kinds of data:
+   - the case's attributes (`case.*`);
+   - the latest non-empty value of every event attribute recorded on the case at or before the
+     decision event (`event.*`).
+
+   Values recorded after the decision are never used. Case attributes carry no time, so they may
+   have been set later; the result says so.
+3. **Rules.** A CART decision tree (Gini impurity, depth 1–4, default 3) is learned on about 70% of
+   the cases and scored on the rest.
+   - The split is by a hash of the case id, so it is repeatable and keeps each case on one side.
+   - Numeric attributes are split at the best boundary between observed values. Text attributes
+     are split on their 30 most common values.
+   - Each leaf is a rule. It shows its conditions, the usual next activity, its confidence and the
+     number of training occurrences.
+
+The result also gives:
+- the held-out accuracy, next to the accuracy of always predicting the most common branch;
+- `beats_baseline`;
+- a confusion table;
+- the share of the tree's impurity reduction due to each attribute.
+
+Rules are associations in this log, not the business rule or its cause, and authorize nothing.
+At most 200,000 occurrences of the activity are used, and the result says when it was capped. The
+global case filter applies.
+
+- `GET /v1/event-logs/{log_id}/decision-points?case_type=` plus the case-filter parameters.
+- `GET /v1/event-logs/{log_id}/decision-rules?decision_activity=&max_depth=&case_type=` plus the
+  case-filter parameters. The case filter's own `activity` parameter still selects cases that
+  contain an activity.
+
+Both routes need a dashboard session. Agents can read the same results, at the aggregates level,
+through `get_process_decision_rules` (see PROCESS_INTELLIGENCE_FOR_AGENTS.md).

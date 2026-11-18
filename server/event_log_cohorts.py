@@ -18,7 +18,7 @@ from .event_log_workspace import EventLogWorkspaceError
 
 _SEP = workspace._SEP
 _KEYS = {"label", "started_from", "started_before", "resource", "activity", "attribute", "attribute_range", "event_attribute", "tag",
-         "follows", "variants"}
+         "follows", "variants", "duration", "starts_with", "ends_with"}
 MAX_FOLLOW_RULES = 5
 MAX_COHORT_VARIANTS = 500
 MAX_VARIANT_LENGTH = 1000
@@ -39,7 +39,7 @@ def parse_cohort(spec: Any) -> dict[str, Any]:
     if not isinstance(spec, dict) or set(spec) - _KEYS:
         raise EventLogWorkspaceError(
             "cohort accepts label, started_from, started_before, resource, activity, attribute, attribute_range, event_attribute, "
-            "tag, follows, variants")
+            "tag, follows, variants, duration, starts_with, ends_with")
     cohort: dict[str, Any] = {}
     if spec.get("label") not in (None, ""):
         cohort["label"] = _short(spec["label"], "label")[:80]
@@ -49,7 +49,7 @@ def parse_cohort(spec: Any) -> dict[str, Any]:
             if stamp is None:
                 raise EventLogWorkspaceError(f"cohort {key} must be a timezone-qualified ISO time")
             cohort[key] = stamp.astimezone(timezone.utc).replace(tzinfo=None)
-    for key in ("resource", "activity", "tag"):
+    for key in ("resource", "activity", "tag", "starts_with", "ends_with"):
         if spec.get(key) not in (None, ""):
             cohort[key] = _short(spec[key], key)
     # ``attribute`` matches the case object; ``event_attribute`` matches any event of the case,
@@ -65,6 +65,8 @@ def parse_cohort(spec: Any) -> dict[str, Any]:
         cohort["attribute_range"] = _parse_range(spec["attribute_range"])
     if spec.get("follows") not in (None, [], ""):
         cohort["follows"] = _parse_follows(spec["follows"])
+    if spec.get("duration") not in (None, {}, ""):
+        cohort["duration"] = _parse_duration(spec["duration"])
     if spec.get("variants") not in (None, []):
         cohort["variants"] = _parse_variants(spec["variants"])
     if "started_from" in cohort and "started_before" in cohort and cohort["started_from"] >= cohort["started_before"]:
@@ -100,6 +102,26 @@ def _parse_variants(variants: Any) -> list[list[str]]:
     return parsed
 
 
+def _parse_duration(spec: Any) -> dict[str, float]:
+    """Case duration (first to last recorded event) in seconds: ``min`` inclusive, ``max`` exclusive."""
+    if not isinstance(spec, dict) or set(spec) - {"min", "max"}:
+        raise EventLogWorkspaceError("cohort duration is {min, max} in seconds")
+    bounds: dict[str, float] = {}
+    for key in ("min", "max"):
+        value = spec.get(key)
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value != value \
+                or not 0 <= value <= 10 ** 10:
+            raise EventLogWorkspaceError(f"cohort duration {key} must be a number of seconds from 0 to 10000000000")
+        bounds[key] = float(value)
+    if not bounds:
+        raise EventLogWorkspaceError("cohort duration needs min, max or both")
+    if "min" in bounds and "max" in bounds and bounds["min"] >= bounds["max"]:
+        raise EventLogWorkspaceError("cohort duration min must be below max")
+    return bounds
+
+
 def _parse_range(spec: Any) -> dict[str, Any]:
     """A numeric case-attribute range: ``min`` inclusive, ``max`` exclusive, either may be omitted."""
     if not isinstance(spec, dict) or set(spec) - {"name", "min", "max"}:
@@ -127,7 +149,7 @@ def describe(cohort: dict[str, Any]) -> dict[str, Any]:
             out[key] = value.isoformat() + "Z"
         elif key in ("attribute", "event_attribute"):
             out[key] = f"{value[0]}={value[1]}"
-        elif key == "attribute_range":
+        elif key in ("attribute_range", "duration"):
             out[key] = dict(value)
         else:
             out[key] = value
@@ -180,6 +202,18 @@ def _predicate(cohort: dict[str, Any], log_id: str) -> tuple[str, list[Any]]:
                 HAVING min(k) FILTER (WHERE activity = ?) < max(k) FILTER (WHERE activity = ?)"""
         clauses.append(f"case_id {'NOT IN' if rule['negate'] else 'IN'} ({cases})")
         params += [rule["from"], rule["to"]]
+    if "duration" in cohort:
+        # Disco-style performance filter on case duration, first to last recorded event.
+        d = cohort["duration"]
+        having = (["epoch(max(ts) - min(ts)) >= ?"] if "min" in d else []) + (["epoch(max(ts) - min(ts)) < ?"] if "max" in d else [])
+        clauses.append(f"case_id IN (SELECT case_id FROM ce GROUP BY case_id HAVING {' AND '.join(having)})")
+        params += ([d["min"]] if "min" in d else []) + ([d["max"]] if "max" in d else [])
+    for key, pick in (("starts_with", "arg_min"), ("ends_with", "arg_max")):
+        # Endpoints filter: the case's first or last activity in recorded order (time, then event id).
+        if key in cohort:
+            clauses.append(f"""case_id IN (SELECT case_id FROM ce GROUP BY case_id
+                HAVING {pick}(activity, (ts, event_id)) = ?)""")
+            params.append(cohort[key])
     if "variants" in cohort:
         clauses.append(f"""case_id IN (SELECT case_id FROM ce GROUP BY case_id
             HAVING string_agg(activity, '{_SEP}' ORDER BY ts, event_id) IN (SELECT unnest(?)))""")
