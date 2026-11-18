@@ -89,3 +89,23 @@ def test_rejects_bad_files():
         pr.replay(log, b"<pnml/>")
     with pytest.raises(EventLogWorkspaceError, match="initial marking"):
         pr.replay(log, _sequence_net(["A"]).replace(b"<initialMarking><text>1</text></initialMarking>", b""))
+
+
+def _flower(labels):
+    """One place with every activity as a self-loop: allows anything, so it fits everything imprecisely."""
+    transitions = "".join(f'<transition id="t{i}"><name><text>{a}</text></name></transition>' for i, a in enumerate(labels))
+    arcs = "".join(f'<arc id="i{i}" source="p" target="t{i}"/><arc id="o{i}" source="t{i}" target="p"/>'
+                   for i in range(len(labels)))
+    return (f'<pnml><net id="n"><place id="p"><initialMarking><text>1</text></initialMarking></place>{transitions}'
+            f'{arcs}<finalmarkings><marking><place idref="p"><text>1</text></place></marking></finalmarkings>'
+            '</net></pnml>').encode()
+
+
+def test_precision_separates_a_flower_from_the_sequence():
+    log = _import([["A", "B", "C"]] * 10)
+    exact = pr.replay(log, _sequence_net(["A", "B", "C"]))
+    flower = pr.replay(log, _flower(["A", "B", "C"]))
+    assert exact["fitness"]["log"] == 1.0 and flower["fitness"]["log"] == 1.0
+    assert exact["precision"]["precision"] == 1.0 and exact["precision"]["escaping_edges"] == []
+    assert flower["precision"]["precision"] == round(1 - 6 / 9, 4)
+    assert {"after": None, "net_also_allows": "B", "cases": 10} in flower["precision"]["escaping_edges"]

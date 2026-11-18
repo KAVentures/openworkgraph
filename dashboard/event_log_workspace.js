@@ -3774,12 +3774,14 @@
         const r=await (await api(logPath('petri-net-replay',{}),{method:'POST',headers:{'Content-Type':'application/xml'},body})).json();
         if(generation!==state.generation)return;
         const f=r.fitness;
-        statusLine.textContent='Fitness '+pct(f.log)+' on '+label+': '+Number(f.fitting_cases).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases ('+pct(f.fitting_case_share)+') replay without missing or remaining tokens. The net has '+r.net.places+' places and '+r.net.transitions+' transitions ('+r.net.silent_transitions+' silent).'+(r.cases_excluded?' '+Number(r.cases_excluded).toLocaleString()+' cases beyond the length or variant limit were left out.':'');
+        statusLine.textContent='Fitness '+pct(f.log)+' on '+label+': '+Number(f.fitting_cases).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases ('+pct(f.fitting_case_share)+') replay without missing or remaining tokens.'+(r.precision.precision!==null?' Precision '+pct(r.precision.precision)+'.':'')+' The net has '+r.net.places+' places and '+r.net.transitions+' transitions ('+r.net.silent_transitions+' silent).'+(r.cases_excluded?' '+Number(r.cases_excluded).toLocaleString()+' cases beyond the length or variant limit were left out.':'');
         if(!r.net.final_marking_declared)out.appendChild(el('div','The file declares no final marking, so cases are expected to end with one token on each place nothing consumes from.','muted'));
         if(r.places.length){out.appendChild(el('h4','Places where tokens went missing or were left behind'));
           out.appendChild(table(['Place','Missing tokens','Remaining tokens'],r.places.map(p=>[p.place,Number(p.missing).toLocaleString(),Number(p.remaining).toLocaleString()])));}
         if(r.transitions_fired_without_tokens.length){out.appendChild(el('h4','Steps taken when the net did not allow them'));
           out.appendChild(table(['Transition','Times'],r.transitions_fired_without_tokens.map(t=>[t.transition,Number(t.times).toLocaleString()])));}
+        if(r.precision.escaping_edges.length){out.appendChild(el('h4','Steps the net allows that no case took'));
+          out.appendChild(table(['After','Net also allows','Cases at that point'],r.precision.escaping_edges.map(e=>[e.after===null?'(case start)':e.after,e.net_also_allows,Number(e.cases).toLocaleString()])));}
         if(r.activities_not_in_net.length)out.appendChild(el('div','Activities the net does not have (skipped): '+r.activities_not_in_net.map(a=>a.activity+' ('+a.cases+' cases)').join(', ')+'.','muted'));
         if(r.net_labels_never_seen.length)out.appendChild(el('div','Net transitions no case took: '+r.net_labels_never_seen.join(', ')+'.','muted'));
         if(r.non_fitting_variants.length){const more=document.createElement('details');more.appendChild(el('summary','Variants that do not fit ('+r.non_fitting_variants.length+')'));

@@ -45,6 +45,7 @@ const path=require('node:path');
    await page.locator('#owgPetriFile').setInputFiles({name:'strict.pnml',mimeType:'application/xml',buffer:Buffer.from(xml)});
    await page.locator('#owgPetriRun').click();
    await page.locator('#owgPetriStatus').filter({hasText:'on strict.pnml: 24 of 30 cases'}).waitFor();
+   assert((await page.locator('#owgPetriStatus').textContent()).includes('Precision 100%'));
    const out=page.locator('#owgPetriResults');
    const placesTable=await out.locator('table').first().textContent();
    assert(placesTable.includes('p2'),placesTable);assert(placesTable.includes('p1'),placesTable);

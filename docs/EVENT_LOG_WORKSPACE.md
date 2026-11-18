@@ -2183,7 +2183,15 @@ remaining.
 Fitness is `½(1 − missing/consumed) + ½(1 − remaining/produced)`, for each case and over the whole
 log. The section lists the places where tokens went missing or were left behind, the steps taken
 when the net did not allow them, activities the net does not have (skipped and counted), net
-transitions no case took, and the variants that do not fit. *Replay on the discovered net* runs the
+transitions no case took, and the variants that do not fit.
+
+**Precision** (ETConformance, Muñoz-Gama and Carmona, 2010; PM4Py's `precision_token_based_replay`)
+asks the opposite question: how much more the net allows than the cases did. For each prefix of
+the recorded cases that replays without problems, the activities the net allows next, directly or
+after silent transitions, are compared with the activities cases actually took next. Those no case
+took are escaping edges. Precision is one minus the escaping share, weighted by how many cases
+share each prefix. A net that allows anything in any order (a "flower") fits every case but has low
+precision. The section lists the most common escaping edges. *Replay on the discovered net* runs the
 same check on the net that **Process model discovery** exports, discovered with every observed
 path kept (noise 0).
 

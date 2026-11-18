@@ -237,6 +237,77 @@ def _replay(net: dict[str, Any], trace: tuple[str, ...], by_label: dict[str, lis
             "problem_transitions": problem_transitions, "unknown": unknown}
 
 
+def _reachable_labels(net: dict[str, Any], marking: Counter) -> set[str]:
+    """Visible labels enabled now or after silent transitions only (bounded search)."""
+    labels: set[str] = set()
+    silent = [t for t, label in net["transitions"].items() if label is None]
+    start = tuple(sorted((p, n) for p, n in marking.items() if n))
+    queue, seen = deque([start]), {start}
+    while queue:
+        current = Counter(dict(queue.popleft()))
+        for t, label in net["transitions"].items():
+            if label is not None and _enabled(current, net["pre"][t]):
+                labels.add(label)
+        if len(seen) >= MAX_SILENT_STATES:
+            continue
+        for t in silent:
+            if _enabled(current, net["pre"][t]):
+                nxt = current.copy()
+                nxt.subtract(net["pre"][t])
+                nxt.update(net["post"][t])
+                key = tuple(sorted((p, n) for p, n in nxt.items() if n))
+                if key not in seen:
+                    seen.add(key)
+                    queue.append(key)
+    return labels
+
+
+def _precision(net: dict[str, Any], rows, by_label: dict[str, list[str]]) -> dict[str, Any]:
+    """ETConformance precision (Muñoz-Gama and Carmona, 2010) over the prefixes that replay without problems.
+
+    For each prefix of the log, the activities the net allows next (escaping edges are those no case
+    took after that prefix) are weighed by how many cases share the prefix."""
+    observed: dict[tuple[str, ...], set[str]] = {}
+    weight: Counter = Counter()
+    for path, n in rows:
+        for i in range(len(path)):
+            observed.setdefault(tuple(path[:i]), set()).add(path[i])
+            weight[tuple(path[:i])] += n
+    allowed: dict[tuple[str, ...], set[str]] = {}
+    for path, _ in rows:
+        marking = Counter(net["initial"])
+        for i, activity in enumerate(path):
+            prefix = tuple(path[:i])
+            if prefix not in allowed:
+                allowed[prefix] = _reachable_labels(net, marking)
+            candidates = by_label.get(activity) or []
+            chosen = next((t for t in candidates if _enabled(marking, net["pre"][t])), None)
+            if chosen is None:
+                for t in candidates:
+                    route = _silent_path(net, marking, lambda m, need=net["pre"][t]: _enabled(m, need))
+                    if route is not None:
+                        for silent in route:
+                            marking.subtract(net["pre"][silent])
+                            marking.update(net["post"][silent])
+                        chosen = t
+                        break
+            if chosen is None:
+                break   # the rest of this case does not replay; its later prefixes are not judged
+            marking.subtract(net["pre"][chosen])
+            marking.update(net["post"][chosen])
+    total = escaping = 0
+    escapes: Counter = Counter()
+    for prefix, labels in allowed.items():
+        w = weight[prefix]
+        extra = labels - observed.get(prefix, set())
+        total += w * len(labels)
+        escaping += w * len(extra)
+        for label in extra:
+            escapes[(prefix[-1] if prefix else None, label)] += w
+    return {"precision": round(1 - escaping / total, 4) if total else None, "prefixes_judged": len(allowed),
+            "escaping_edges": [{"after": a, "net_also_allows": b, "cases": k} for (a, b), k in escapes.most_common(20)]}
+
+
 def replay(log_id: str, pnml: bytes, case_type: str | None = None, *,
            cohort: dict[str, Any] | None = None) -> dict[str, Any]:
     net = parse_pnml(pnml)
@@ -299,6 +370,7 @@ def replay(log_id: str, pnml: bytes, case_type: str | None = None, *,
         "variants": len(rows),
         "fitness": {"log": round(log_fitness, 4), "average_case": round(fitness_sum / cases, 4),
                     "fitting_cases": fitting_cases, "fitting_case_share": round(fitting_cases / cases, 4)},
+        "precision": _precision(net, rows, by_label),
         "tokens": {k: totals[k] for k in ("produced", "consumed", "missing", "remaining")},
         "places": sorted(({"place": names[pl], "missing": missing_at[pl], "remaining": remaining_at[pl]}
                           for pl in set(missing_at) | set(remaining_at)),
@@ -311,8 +383,9 @@ def replay(log_id: str, pnml: bytes, case_type: str | None = None, *,
         "method": ("token-based replay (Rozinat and van der Aalst, 2008): silent transitions fire when a bounded "
                    "search finds them enabling the next step or reaching the final marking; otherwise missing "
                    "tokens are created and counted"),
-        "caveat": ("Token replay can over-count problems when a net has duplicate labels or long silent paths, "
-                   "and it does not measure precision. Activities the net does not have are skipped and counted."),
+        "caveat": ("Token replay can over-count problems when a net has duplicate labels or long silent paths. "
+                   "Precision judges only the parts of cases that replay without problems. Activities the net "
+                   "does not have are skipped and counted."),
     }
 
 
