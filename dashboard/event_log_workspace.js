@@ -1521,7 +1521,11 @@
     const out=el('div');out.id='owgDecisionResults';out.setAttribute('role','status');
     box.append(find,points,out);
     const pct=x=>Math.round(x*100)+'%';
-    const cond=c=>c.attribute+' '+({'==':'is','!=':'is not','>=':'≥','<':'<'}[c.op])+' '+(typeof c.value==='number'?Number(c.value).toLocaleString():'“'+c.value+'”');
+    const cond=c=>{
+      const value=typeof c.value==='number'?String(c.value):'“'+c.value+'”';
+      const comparison=c.attribute+' '+({'==':'is','!=':'is not','>=':'≥','<':'<'}[c.op])+' '+value;
+      return c.includes_missing?'('+comparison+' or missing'+(c.includes_non_numeric?' or nonnumeric':'')+')':comparison;
+    };
     const learn=async(activity)=>{out.replaceChildren(el('div','Learning rules for '+activity+'…','muted'));
       try{
         const r=await getJSON(logPath('decision-rules',{decision_activity:activity}));

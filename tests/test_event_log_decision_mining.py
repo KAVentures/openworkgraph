@@ -124,3 +124,26 @@ print("ok")
     root = Path(__file__).resolve().parents[1]
     done = subprocess.run([sys.executable, "-c", code], cwd=root, env=env, capture_output=True, text=True, timeout=180)
     assert done.returncode == 0 and done.stdout.strip().endswith("ok"), f"stdout={done.stdout}\nstderr={done.stderr}"
+
+
+@pytest.mark.parametrize("low,high", [("0.00000001", "0.00000002"), ("1e308", "1.1e308"),
+                                     ("1.0", "1.0000000000000002")])
+def test_numeric_threshold_reproduces_scored_partition(low, high):
+    import math
+
+    rows = ["case,activity,time,amount"]
+    for i in range(200):
+        value, target = (low, "Small") if i % 2 else (high, "Big")
+        rows.extend([f"c{i},Check,2024-03-01T08:00:00Z,{value}",
+                     f"c{i},{target},2024-03-01T09:00:00Z,"])
+    log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="numeric boundary", source_format="csv",
+        mapping={**MAPPING, "resource_column": "", "attribute_columns": ["amount"]})["log_id"]
+    result = decisions.analyse(log, "Check")
+    assert result["learned_anything"] and result["evaluation"]["holdout_accuracy"] == 1
+    rules = {rule["next"]: rule for rule in result["rules"]}
+    assert rules.keys() == {"Big", "Small"}
+    threshold = rules["Big"]["conditions"][0]["value"]
+    assert math.isfinite(threshold) and float(low) < threshold <= float(high)
+    assert rules["Small"]["conditions"] == [{"attribute": "event.amount", "op": "<", "value": threshold,
+                                             "includes_missing": True, "includes_non_numeric": True}]
+    assert min(rule["training_occurrences"] for rule in rules.values()) >= result["min_leaf_occurrences"]

@@ -2010,7 +2010,9 @@ parameters; dashboard session only.
 
 Decision mining finds the points where cases take different routes and learns which recorded
 data goes with each route. ProM's decision miner, PM4Py, Celonis and SAP Signavio offer the same
-analysis.
+analysis. The numeric rules use the full precision of the scored split.
+A rule condition with `includes_missing` also matches an absent attribute.
+A numeric condition with `includes_non_numeric` also matches unusable numbers.
 
 1. **Decision points.** These are activities after which cases continue to at least two different
    next activities, or end (`(end)`). Each branch must be seen at least 5 times.
