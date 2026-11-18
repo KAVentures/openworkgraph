@@ -3191,6 +3191,9 @@ async def read_local_combined_case_review(request: Request, response: Response):
     final_dependencies = await dependency_pass(ref)
     if final_receipts != second or final_dependencies != after:
         raise HTTPException(409, "case review changed during final admission")
+    # Dependency admission can itself yield. Reject a source disconnect or
+    # account replacement occurring during that last read before disclosure.
+    await _recheck_source(initial_scope)
     _dashboard_only(request)
     response.headers["Cache-Control"] = "no-store"
     return {
