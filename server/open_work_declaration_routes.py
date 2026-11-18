@@ -3027,7 +3027,7 @@ async def read_local_bound_attempt_receipts(request: Request, response: Response
     if payload["confirm_historical_review"] is not True or payload["confirm_run_comparison"] is not True:
         raise HTTPException(403, "explicit run and historical review required")
     from .open_work_run_case_binding import get_binding, require_exclusive_run_case_binding, _retention
-    from .open_work_attempt_receipts import list_receipts
+    from .open_work_attempt_receipts import list_receipts, purge_expired_receipts
     from .local_auth import auth_dir
     from datetime import datetime, timezone
     from pathlib import Path
@@ -3057,6 +3057,14 @@ async def read_local_bound_attempt_receipts(request: Request, response: Response
         path = Path(auth_dir()) / ".open_work_attempt_receipts.sqlite3"
         # A missing journal is empty, not an invitation to create storage.
         if path.exists() or path.is_symlink():
+            # Enforce the current owner retention policy on durable storage,
+            # not just on the HTTP projection. Never purge another actor or
+            # tenant; a failed cleanup must deny the read, not silently serve
+            # filtered rows while expired evidence remains on disk.
+            await asyncio.to_thread(
+                purge_expired_receipts, str(path), tenant=scope, actor=actor,
+                older_than_days=retention.days,
+            )
             rows = await asyncio.to_thread(
                 list_receipts, str(path), tenant=scope, actor=actor,
                 attempt=run["run_ref"],
