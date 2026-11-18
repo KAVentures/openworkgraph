@@ -35,7 +35,10 @@ def test_handoff_preflight_invalidates_on_session_and_selection_changes():
     html = PAGE.read_text(encoding="utf-8")
     assert 'function clear(releaseBusy=false) {\n          processOpenGeneration++;\n          resetHandoff(' in html
     assert 'function render(data) {\n          resetHandoff(' in html
-    assert 'handoffPacket").addEventListener("change",()=>resetHandoff(' in html
+    assert 'handoffPacket").addEventListener("change",()=>{ $("handoffConsent").checked=false; resetHandoff(' in html
+    assert 'handoffConsent").addEventListener("change",()=>resetHandoff(' in html
+    assert 'if(!$("handoffConsent").checked){fail("Explicit authorization to inspect this packet is required.");return;}' in html
+    assert 'ticket!==handoffGeneration||selected!==chosen||!$("handoffConsent").checked' in html
     assert 'Consent, owner approval, source access, retention and execution authorization remain unverified.' in html
 
 
