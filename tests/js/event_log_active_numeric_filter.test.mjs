@@ -15,3 +15,10 @@ test('workspace numeric filters intersect safely with per-operation ranges',()=>
  assert.throws(()=>mergeActiveCohort({attribute_range:{name:'amount',min:100}},active),/do not overlap/);
  assert.deepEqual(plain(mergeActiveCohort({},active)),active);
 });
+
+test('workspace activity filters keep literal labels and refuse unrepresentable intersections',()=>{
+ const active={activity:'  Review 雪  '};
+ assert.deepEqual(plain(mergeActiveCohort({resource:'team'},active)),{resource:'team',activity:'  Review 雪  '});
+ assert.deepEqual(plain(mergeActiveCohort({activity:'  Review 雪  '},active)),active);
+ assert.throws(()=>mergeActiveCohort({activity:'Review 雪'},active),/different activity/);
+});
