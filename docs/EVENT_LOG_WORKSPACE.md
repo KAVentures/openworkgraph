@@ -46,9 +46,17 @@ sample rather than adding a copy. It is deleted like any other log.
 | --- | --- | --- | --- |
 | CSV | yes | yes | You map the case, activity, timestamp and (optional) resource columns. |
 | Excel (.xlsx) | yes | no | One worksheet is converted to CSV on this computer, then mapped and imported like any CSV (below). |
-| XES (IEEE 1849) | yes | yes | `concept:name`, `time:timestamp` and `org:resource`; other string-like attributes are kept (32 max, 500 chars each). |
+| XES (IEEE 1849) | yes | yes | `concept:name`, `time:timestamp` and `org:resource`; up to 32 other attributes of 500 characters each are imported as strings. Choose **XES with retained attributes** to include static trace and event attributes in the export. |
 | OCEL 2.0 JSON | yes | yes | Objects, object types, events, event-to-object links and supplied directed object-to-object relationships with qualifiers. Object attribute values keep their times (below). |
 | OCEL 2.0 XML | yes | yes | The same retained content in the OCEL 2.0 worked-example XML layout (`.xmlocel`). Objects must precede events as in the original 2.0 printed root schema. See the relationship contract for schema/example errata and format limits. |
+
+The attribute export uses the selected case notion and includes values in the
+download, including supported lifecycle fields. The standard XES choice exports
+only the structural fields. XES uses flat traces, so use OCEL to retain object
+relationships and timed object attributes. The attribute export refuses data
+that would require changing a retained value, exceeding XES import bounds, or
+overwriting a reserved field. The local dashboard export endpoint accepts
+`format=xes-attributes` and returns a `.xes` file.
 
 Every log is stored object-centrically. A flat CSV or XES log becomes one
 object type, `case`. For an OCEL log you choose the case notion (`order`,
@@ -262,6 +270,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `POST /v1/event-logs/timestamp-formats?column=...&delimiter=...` | Suggest a timestamp format from the start of a CSV file (body, at most 256 KB): `candidates` (each with `pattern`, `order`, `has_offset` and how the first value reads), `ambiguous`, `suggested`. Nothing is stored. Imports and appends take `timestamp_format=`. |
 | `POST /v1/event-logs/xlsx-to-csv?sheet=...` | Convert one worksheet of the `.xlsx` request body to CSV (`csv`, `sheet`, `sheets`, `rows`, `columns`, `date_columns`, `dates_have_no_offset`). Nothing is stored. |
 | `POST /v1/event-logs/{log_id}/delete` | Delete the log and every row that belongs to it. |
+| `POST /v1/event-logs/{log_id}/export/matching-cases` | Download a flat CSV of complete matching cases. Body contains `cohort` and optional `case_type`. |
 | `POST /v1/event-logs/{log_id}/derive` | Save the cases matching a filter as a new log (below). |
 | `GET /v1/event-logs/{log_id}/quality` | Stored quality and mapping reports per import and append, plus current whole-log diagnostics (below). |
 | `GET /v1/event-logs/{log_id}/summary` | Events, cases, activities, time span and case-duration median/p90/mean. |
@@ -1252,7 +1261,13 @@ units and coverage; CSV exports remain numeric tables.
 
 ## Saving matching cases as a new log
 
-**Save matching cases as a new log** (after **Analyse**), or
+Use **Download matching cases as CSV** to download the original events of those
+cases directly. Filters use the selected case notion and the applied activity
+mapping. The CSV retains the original activity names and includes events
+collapsed by the mapping. It contains case IDs, activity names, timestamps, and
+resources. An empty filter or a filter with no matches produces an error.
+
+**Save or export matching cases → Save as new log** (after **Analyse**), or
 `POST /v1/event-logs/{log_id}/derive` with
 `{"name": "Escalated orders", "cohort": {"activity": "Escalate"}, "case_type": null}`,
 copies the cases that match a case filter into a new saved log. `cohort` takes
