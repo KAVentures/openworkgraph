@@ -172,6 +172,22 @@ class ReviewedTransactionTests(unittest.TestCase):
                 tx.execute(**inputs())
             append.assert_not_called()
 
+    def test_invalid_review_is_not_recorded_as_verified_audit_evidence(self):
+        """A mismatched digest cannot produce a trusted review audit receipt."""
+        malformed = {"status": "review_ready", "csv_sha256": "b" * 64,
+                     "event_snapshots": 1, "removal_markers_for_review": 0,
+                     "pages": 1}
+        with patch.dict(os.environ, {"OWG_M365_AUDIT_DIR": "audit"}), \
+             patch.object(tx, "preflight_operator_audit"), \
+             patch.object(tx, "record_operator_phase") as audit, \
+             patch.object(tx, "inspect_checkpoint", return_value=None), \
+             patch.object(tx.cycle, "review", return_value=malformed), \
+             patch.object(tx.cycle, "append") as append:
+            with self.assertRaisesRegex(ReceiptError, "changed"):
+                tx.execute(**inputs())
+            audit.assert_not_called()
+            append.assert_not_called()
+
     def test_malformed_review_metadata_refuses_before_any_owg_write(self):
         valid = {"status": "review_ready", "csv_sha256": DIGEST,
                  "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}
