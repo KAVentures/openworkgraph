@@ -11,6 +11,7 @@
   let activityLookupBusy=false;
   // Views that honour the workspace case filter; every other section uses all cases.
   const FILTERED=new Set(['automation-candidates','summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','waiting-time','drift','model-discovery','organization','report.html']);
+  FILTERED.add('model-discovery.pnml');
 
   const el=(tag,text,cls)=>{
     const node=document.createElement(tag);
@@ -3375,6 +3376,17 @@
           finally{draft.disabled=false;}
         };
         out.appendChild(draft);
+        const petri=button('Download Petri net (PNML)','secondary');petri.id='owgDiscoveryPnml';
+        petri.onclick=async()=>{
+          try{
+            petri.disabled=true;
+            const response=await api(logPath('model-discovery.pnml',{noise:String(r.settings.noise),activities:String(r.settings.activities)}));
+            download(state.logId+'-discovered.pnml',await response.text(),'application/xml');
+            statusLine.textContent='Petri net downloaded ('+(response.headers.get('X-OWG-Petri-Net')||'').replace(/; /g,', ')+'). It opens in ProM, PM4Py and other PNML tools.';
+          }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
+          finally{petri.disabled=false;}
+        };
+        out.appendChild(petri);
       }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
       finally{run.disabled=false;}
     };
