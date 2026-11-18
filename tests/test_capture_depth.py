@@ -18,8 +18,14 @@ def depth(tmp_path, monkeypatch):
     return capture_depth
 
 
-def test_standard_is_the_default_and_profiles_set_signals(depth):
-    assert depth.load()["profile"] == "standard" and not any(depth.load()["signals"].values())
+def test_enhanced_is_the_default_and_profiles_set_signals(depth):
+    default = depth.load()
+    assert default["profile"] == "enhanced" and default["chosen"] is False and default["persistent"] is True
+    assert default["signals"]["pointer_trajectory"] is False and default["expires_at"] is None
+    assert depth.action_allowed("control_hover_dwell") and not depth.action_allowed("pointer_trajectory")
+    assert depth.for_extension()["persistent"] is True and depth.public()["changes_sharing"] is False
+    standard = depth.save({"profile": "standard"})
+    assert standard["profile"] == "standard" and standard["chosen"] is True and not any(standard["signals"].values())
     enhanced = depth.save({"profile": "enhanced"})
     assert enhanced["profile"] == "enhanced" and enhanced["signals"]["pointer_trajectory"] is False
     assert enhanced["changes_sharing"] is False and "work_text_capture" in enhanced["independent_settings"]
@@ -39,7 +45,27 @@ def test_pointer_trajectories_need_their_own_acknowledgement(depth):
     assert depth.save({"profile": "full", "acknowledgement_version": depth.FULL_ACK_VERSION})["profile"] == "full"
 
 
-def test_detailed_capture_is_time_limited_and_expires_to_standard(depth, monkeypatch):
+def test_chosen_detail_stays_until_changed_unless_a_period_is_chosen(depth, monkeypatch):
+    from datetime import datetime, timedelta
+    state = depth.save({"profile": "enhanced"})
+    assert state["persistent"] and state["expires_at"] is None
+    full = depth.save({"profile": "full", "acknowledgement_version": depth.FULL_ACK_VERSION})
+    assert full["expires_at"] is not None and not full["persistent"], "pointer samples default to a period"
+    kept = depth.save({"profile": "full", "duration_days": None})
+    assert kept["persistent"] and kept["expires_at"] is None
+    real = datetime
+
+    class MuchLater(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return real.now(tz) + timedelta(days=400)
+    monkeypatch.setattr(depth, "datetime", MuchLater)
+    assert depth.load()["profile"] == "full" and depth.action_allowed("pointer_trajectory")
+    monkeypatch.setattr(depth, "datetime", real)
+    assert depth.save({"profile": "standard"})["persistent"] is False
+
+
+def test_detailed_capture_with_a_period_expires_to_standard(depth, monkeypatch):
     from datetime import datetime, timedelta, timezone
     state = depth.save({"profile": "enhanced", "duration_days": 3})
     expires = datetime.fromisoformat(state["expires_at"])
@@ -72,6 +98,7 @@ def test_invalid_settings_are_refused(depth, bad):
 
 
 def test_disabled_signals_are_not_allowed_and_metadata_is_bounded(depth):
+    depth.save({"profile": "standard"})
     assert not depth.action_allowed("control_hover_dwell") and depth.action_allowed("click")
     depth.save({"profile": "full", "acknowledgement_version": depth.FULL_ACK_VERSION})
     assert depth.action_allowed("pointer_trajectory")
@@ -101,6 +128,7 @@ from server import capture_depth, main
 from server.main import BrowserEvent
 from server.db import rows, init_db
 init_db()
+capture_depth.save({"profile": "standard"})
 def event(action, metadata, host="work.example"):
     return BrowserEvent(observed_at="2026-11-05T10:00:00Z", action=action,
         page={"origin": "https://" + host, "hostname": host, "pathname": "/orders", "title": "Orders"},
@@ -353,6 +381,7 @@ from server.privacy_pipeline import redact_for_display
 init_db()
 now = datetime.now(timezone.utc).isoformat()
 page = {"origin": "https://work.example", "hostname": "work.example", "pathname": "/x", "title": "X"}
+capture_depth.save({"profile": "standard"})
 assert capture_depth.load()["profile"] == "standard"
 points = [[0, 0.137, 0.519], [250, 0.862, 0.746]]
 # A modified paired client tries to smuggle coordinates into an ordinary click under Standard.
@@ -440,6 +469,7 @@ from server.db import init_db
 from server.main import BrowserEvent
 from server.mcp_trace import workflow_trace
 init_db()
+capture_depth.save({"profile": "standard"})
 start = datetime.now(timezone.utc) - timedelta(minutes=5)
 page = {"origin": "https://work.example", "hostname": "work.example", "pathname": "/orders", "title": "Orders"}
 def send(action, seconds, **kw):

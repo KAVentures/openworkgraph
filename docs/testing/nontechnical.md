@@ -123,7 +123,7 @@ Do not use real customer, patient, employee, legal, financial or other sensitive
 
 - **Recording:** **Pause**, work for a minute, then **Resume**. Nothing from the paused minute appears, even later. (The top bar has Pause and Stop too; **Stop** keeps your data, **Start new run** begins fresh.)
 - **Keep my history:** one choice for everything kept. Pick **This session only** and confirm: the small run summaries are turned off too, so nothing is kept after the session.
-- **AI apps can read my work:** off on a new install. Turn it on, quit and restart OpenWorkGraph: it is still on (your choice is remembered). In the Advanced view, **Turn AI access off every time OpenWorkGraph starts** brings back the old behavior.
+- **AI apps can read my work:** on for a new install, at redacted detail. Turn it off, quit and restart OpenWorkGraph: it is still off (your choice is remembered). In the Advanced view, **Turn AI access off every time OpenWorkGraph starts** brings back the old behavior.
 - **Include older history:** lets AI apps read saved history for 24 hours, then switches itself off.
 - **Hide names and contact details from AI apps:** on by default. Leave it on.
 - **Never record:** add an app you have open (for example **Notes**) and keep working in it for a minute. **Expected:** it shows up only as "Excluded" in Activity, without its title, right away (no restart). Add a website (for example a test site) and the same holds for it with the browser sensor. Remove the entries again, or use **Restore the default list**.
