@@ -137,3 +137,25 @@ print("ok")
     done = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1], env=env,
                           capture_output=True, text=True, timeout=120)
     assert done.returncode == 0 and done.stdout.strip().endswith("ok"), f"stdout={done.stdout}\nstderr={done.stderr}"
+
+
+
+def test_matching_case_export_uses_the_mapping_but_writes_complete_original_traces():
+    from server import event_log_activity_mappings as mappings
+    from server.event_log_cohort_export import export_matching_cases
+
+    log = _csv_log()
+    mapping = mappings.create(log, {"name": "Intake", "collapse_repeats": True,
+        "groups": [{"label": "Review", "activities": ["Receive", "Escalate"]}]})
+    mappings.apply_mapping(log, mapping["mapping_id"])
+    out = StringIO(newline="")
+    export_matching_cases(log, {"cohort": {"follows": [{"from": "Review", "to": "Pay", "mode": "direct"}],
+                                           "event_attribute": "region=south"}}, out)
+    rows = list(csv.DictReader(StringIO(out.getvalue())))
+    assert {row["case_id"] for row in rows} == {"c6", "c7", "c8", "c9"}
+    assert len(rows) == 10
+    assert [row["activity"] for row in rows if row["case_id"] == "c6"] == ["Receive", "Escalate", "Pay"]
+    assert len(workspace.list_logs()["logs"]) == 1
+    for cohort in ({}, {"label": "only"}, {"activity": "Absent"}):
+        with pytest.raises(workspace.EventLogWorkspaceError):
+            export_matching_cases(log, {"cohort": cohort}, StringIO())

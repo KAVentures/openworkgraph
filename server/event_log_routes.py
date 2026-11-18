@@ -539,6 +539,32 @@ def event_log_quality_batch_history_page(request: Request, log_id: str,
     return _respond(quality_pages.page, log_id, before, limit)
 
 
+@router.post("/v1/event-logs/{log_id}/export/matching-cases")
+async def export_event_log_matching_cases(request: Request, log_id: str):
+    from .event_log_cohort_export import export_matching_cases
+
+    _require_dashboard(request)
+    spec = await _json_body(request, "matching-case export settings", strict=True, limit=32768)
+
+    def prepare():
+        handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="", suffix=".csv",
+                                             dir=str(DATA_DIR), delete=False)
+        try:
+            with handle:
+                export_matching_cases(log_id, spec, handle)
+        except BaseException:
+            os.unlink(handle.name)
+            raise
+        return handle.name
+
+    try:
+        filename = await run_in_threadpool(prepare)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return FileResponse(filename, media_type="text/csv", filename=f"{log_id}-matching-cases.csv",
+                        headers={"Cache-Control": "no-store"}, background=BackgroundTask(os.unlink, filename))
+
+
 @router.post("/v1/event-logs/{log_id}/derive")
 async def derive_event_log(request: Request, log_id: str):
     """Save the cases matching a filter as a new event log; the source log is unchanged."""
