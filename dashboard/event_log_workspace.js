@@ -3865,6 +3865,33 @@
         el('div','Current content digest v1: '+r.current.content_sha256+'. '+
           (r.current.content_sha256_v2?' Current content digest v2 (delimiter-safe): '+r.current.content_sha256_v2+'.':' Content digest v2 not recorded (legacy server).')+
           ' '+r.current.completeness.note,'muted'));
+      if(d.attribute_coverage_truncated===true){
+        const coverageHost=el('div');coverageHost.id='owgQualityCoveragePages';
+        const browse=button('Browse all attribute coverage','secondary');
+        browse.id='owgQualityCoverageBrowse';out.append(browse,coverageHost);
+        let coverageTurn=0,coverageRevision=null;
+        async function loadCoverage(offset=0){
+          const turn=++coverageTurn;browse.disabled=true;
+          coverageHost.replaceChildren(el('p','Loading attribute coverage counts…','muted'));
+          try{
+            const query=offset?'?offset='+offset+'&revision='+coverageRevision:'';
+            const page=await getJSON('/v1/event-logs/'+encodeURIComponent(state.logId)+'/quality/attribute-coverage'+query);
+            if(generation!==state.generation||!coverageHost.isConnected||turn!==coverageTurn)return;
+            coverageRevision=page.revision;
+            const previous=button('Previous attributes','secondary'),next=button('Next attributes','secondary');
+            previous.id='owgQualityCoveragePrevious';next.id='owgQualityCoverageNext';
+            previous.disabled=offset===0;next.disabled=page.next_offset==null;
+            previous.onclick=()=>loadCoverage(Math.max(0,offset-32));next.onclick=()=>loadCoverage(page.next_offset);
+            coverageHost.replaceChildren(el('p','Showing '+(page.attributes.length?offset+1:0)+'–'+(offset+page.attributes.length)+' of '+Number(page.total_keys).toLocaleString()+' attribute keys across '+Number(page.events).toLocaleString()+' events. Counts are current, not the original import report.','muted'),
+              table(['Attribute','Events with a value','Without'],page.attributes.map(a=>[a.attribute,Number(a.events_with_value).toLocaleString(),Number(a.events_without_value).toLocaleString()])),previous,next);
+          }catch(error){
+            if(generation!==state.generation||!coverageHost.isConnected||turn!==coverageTurn)return;
+            const reload=button('Reload attribute coverage','secondary');reload.onclick=()=>loadCoverage();
+            coverageHost.replaceChildren(el('p',error.message,'muted'),reload);
+          }finally{if(generation===state.generation&&coverageHost.isConnected&&turn===coverageTurn)browse.disabled=false;}
+        }
+        browse.onclick=()=>loadCoverage();
+      }
       const refresh=button('Refresh quality diagnostics','secondary');
       refresh.onclick=()=>{loaded=false;loadQuality();};out.appendChild(refresh);
       loaded=true;
