@@ -646,6 +646,15 @@ const path=require('node:path');
    assert.match(org,/Resource 01/);assert.doesNotMatch(org,/\bann\b|\bbob\b|\bbot\b/);assert.match(org,/No speed|not say who|Neither says/);
    await page.locator('#owgEventLogOrgNames').check();await page.locator('#owgEventLogOrgRun').click();
    await page.locator('#owgEventLogOrgResults').getByText('bot',{exact:true}).first().waitFor();
+   // Roles group resources by their activity mix; names were chosen above, so they are shown.
+   await page.locator('#owgEventLogRolesRun').click();
+   await page.locator('#owgEventLogOrgResults').getByText('Only this role').waitFor();
+   const rolesText=await page.locator('#owgEventLogOrgResults').textContent();
+   assert.match(rolesText,/roles from \d+ resources whose activity mixes correlate at 0\.65 or more/);assert.match(rolesText,/Role 1/);
+   assert.match(rolesText,/not job titles/);
+   await page.locator('#owgEventLogOrgNames').uncheck();await page.locator('#owgEventLogRolesRun').click();
+   await page.locator('#owgEventLogOrgResults').getByText('Resource 01',{exact:false}).first().waitFor();
+   assert.doesNotMatch(await page.locator('#owgEventLogOrgResults').textContent(),/\bann\b|\bbob\b|\bbot\b/);
    const ruleBody=await page.evaluate(()=>window.__owgEventLogModel.signalRule({name:'Rework',kind:'kpi',metric:'rework_rate',operator:'above',threshold:'25'}));
    assert.deepEqual(ruleBody,{name:'Rework',when:{kind:'kpi',metric:'rework_rate',operator:'above',threshold:0.25}});
    await page.locator('#owgSignalName').fill('Skipped approval');await page.locator('#owgSignalCondition').selectOption('lacks_activity');
