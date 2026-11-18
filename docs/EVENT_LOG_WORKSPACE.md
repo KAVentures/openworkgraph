@@ -2154,6 +2154,28 @@ the section offers 0.3, 0.5, 0.7 and 0.9) and when seen at least the chosen numb
 `GET /v1/event-logs/{log_id}/heuristics-net?dependency_threshold=&and_threshold=&min_occurrences=&all_connected=`
 plus the case-filter parameters. Agents with access to a shared log use `get_process_heuristics_net`.
 
+## Due dates
+
+**Due dates** checks whether the step that matters, such as *Pay invoice* or *Ship order*, happened
+by the date it was due, as UiPath Process Mining's due dates and Celonis's on-time views do. The due
+date is either an attribute (a joined case attribute, or else the first value of an event attribute in
+the case, such as a payment due date column) or a fixed number of days after the case started. The
+first occurrence of the activity in each case is compared with its due date:
+
+- **on time**: by the due date (a date without a time is due by the end of that day, UTC);
+- **early**: with an early window, more than that many days before the due date;
+- **late**: after the due date, with the days late (median, 90th percentile, maximum);
+- **open, overdue**: not done, and the due date is before the log's last event;
+- **open, not yet due**: not done, and the due date is still ahead;
+- **no due date** and **unreadable due date**: counted, never guessed.
+
+A table by due month shows whether adherence is changing, and the most late cases are listed. The
+report says how often deadlines were met, not why.
+
+`GET /v1/event-logs/{log_id}/due-dates?activity=Pay&due_attribute=due` (or `due_days=30`, optionally
+`early_days=7`) plus the case-filter parameters. Agents use `get_process_due_dates`; case IDs only for
+logs shared at the cases level.
+
 ## Unusual cases
 
 **Unusual cases** ranks the cases that stand out from the rest of the selection, as the outlier

@@ -419,6 +419,16 @@ def unusual_cases(log_id: str, case_type: str | None = None, limit: int = 25) ->
     return {**result, "format": FORMAT, "log_id": log_id}
 
 
+def due_dates(log_id: str, activity: str, case_type: str | None = None, due_attribute: str | None = None,
+              due_days: float | None = None, early_days: float | None = None) -> dict[str, Any]:
+    """Due-date adherence of an activity. Late case IDs only for logs shared at the cases level."""
+    require(log_id, "aggregates")
+    from . import event_log_due_dates as dd
+    result = dd.due_dates(log_id, activity, case_type, due_attribute=due_attribute, due_days=due_days,
+                          early_days=early_days, include_case_ids=_level(log_id) == "cases")
+    return {**result, "format": FORMAT, "log_id": log_id}
+
+
 def slowest_cases(log_id: str, case_type: str | None = None, limit: int = 10) -> dict[str, Any]:
     require(log_id, "cases")
     from . import event_log_case_explain as case_explain
