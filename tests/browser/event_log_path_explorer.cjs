@@ -32,7 +32,7 @@ const path=require('node:path');
    await page.waitForFunction(()=>document.querySelector('#owgEventLogCase').options.length===4);
    await page.locator('#owgEventLogResource').selectOption('who');
    await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
-   await page.locator('#owgEventLogStatus').filter({hasText:'Imported 41 events'}).waitFor();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Imported 43 events'}).waitFor();
    await page.locator('#owgEventLogAnalyze').click();
    const box=page.locator('#owgPaths');await box.waitFor();await box.scrollIntoViewIfNeeded();
    const rowsText=async()=>(await page.locator('#owgPathsResults tbody tr').allTextContents()).join('|');

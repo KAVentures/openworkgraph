@@ -227,7 +227,7 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
             if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0):
                 raise ToolError(f"{name} must be a positive number of days")
         return _get("get_process_due_dates", f"/v1/process-intelligence/{_log(log_id)}/due-dates",
-                    {"activity": activity, "due_attribute": due_attribute, "due_days": due_days,
+                    {"due_activity": activity, "due_attribute": due_attribute, "due_days": due_days,
                      "early_days": early_days, "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
