@@ -24,6 +24,8 @@ def test_handoff_preflight_reads_fresh_authorized_process_without_upload():
     assert 'current.latest_revision!==p.revision' in block
     assert 'current.process.content_sha256!==p.content_sha256' in block
     assert 'current.archived' in block
+    assert 'current.review?.status!=="reviewed_design"' in block
+    assert "lacks independent design review of this revision" in block
     assert 'ticket!==handoffGeneration||selected!==chosen' in block
     assert 'execution_authorized!==false' in block
     assert 'source_read_authorized!==false' in block
@@ -43,3 +45,13 @@ def test_handoff_state_initialized_before_oidc_callback_restores_session():
     # resetHandoff must not touch a lexical binding in its temporal dead zone.
     assert html.index("let handoffGeneration=0;") < html.index("function clear(releaseBusy=false)")
     assert html.index("function clear(releaseBusy=false)") < html.index('run(() => connectIdentity(incomingSession, "OWG-Process-Session"))')
+
+
+def test_handoff_match_never_grants_execution_or_source_access():
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split('function resetHandoff(message=', 1)[1].split('      })();', 1)[0]
+    assert 'current.review?.status!=="reviewed_design"' in block
+    assert 'source_read_authorized!==false' in block
+    assert 'execution_authorized!==false' in block
+    assert 'Eligible only for further human review.' in block
+    assert 'Consent, owner approval, source access, retention and execution authorization remain unverified.' in block
