@@ -69,6 +69,9 @@ def test_sharing_levels_and_revocation():
     assert due["groups"]["on_time"] == 6 and due["groups"]["late"] == 6 and due["most_late_cases"] is None
     after = sharing.next_steps(log, ["Receive"])
     assert after["cases_at_point"] == 12 and after["next"][0]["activity"] == "Approve"
+    found = sharing.insights(log, sla_hours=24)
+    assert found["cases"] == 12 and found["findings"] and "case_id" not in str(found)
+    assert any(f["kind"] == "sla_breaches" for f in found["findings"])
     funnel = sharing.funnel(log, ["Receive", "Pay"])
     assert funnel["cases"] == 12 and funnel["steps"][0]["activity"] == "Receive" and "case_id" not in str(funnel)
     profile = sharing.temporal_profile(log)
@@ -268,7 +271,8 @@ PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_root_
                  "get_process_deviations", "get_process_funnel",
                  "get_unusual_process_cases",
                  "get_process_due_dates",
-                 "get_process_next_steps"}
+                 "get_process_next_steps",
+                 "get_process_insights"}
 
 
 def test_mcp_tools_are_listed_only_when_a_log_is_shared(tmp_path):

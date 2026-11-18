@@ -193,6 +193,14 @@ async def agent_next_steps(request: Request, log_id: str, step: list[str] = Quer
     return await _answer(sharing.next_steps, log_id, step, case_type, anchor)
 
 
+@router.get("/v1/process-intelligence/{log_id}/insights")
+async def agent_insights(request: Request, log_id: str, sla_hours: float | None = Query(default=None, gt=0),
+                         limit: int = Query(default=8, ge=1, le=30),
+                         case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.insights, log_id, case_type, sla_hours, limit)
+
+
 @router.get("/v1/process-intelligence/{log_id}/signals")
 async def agent_signals(request: Request, log_id: str):
     _require_agent_access(request)

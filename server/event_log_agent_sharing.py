@@ -437,6 +437,19 @@ def next_steps(log_id: str, steps: list[str] | None = None, case_type: str | Non
     return {**px.next_steps(log_id, steps, case_type, anchor=anchor), "format": FORMAT, "log_id": log_id}
 
 
+def insights(log_id: str, case_type: str | None = None, sla_hours: float | None = None,
+             limit: int = 8) -> dict[str, Any]:
+    """Where to look first: ranked automatic findings with the case filter that reproduces each (aggregates)."""
+    require(log_id, "aggregates")
+    from . import event_log_insights as log_insights
+    spec: dict[str, Any] = {"limit": max(1, min(int(limit), 30))}
+    if case_type:
+        spec["case_type"] = case_type
+    if sla_hours is not None:
+        spec["sla_seconds"] = max(1, min(int(float(sla_hours) * 3600), 10 ** 9))
+    return {**log_insights.insights(log_id, spec), "format": FORMAT, "log_id": log_id}
+
+
 def slowest_cases(log_id: str, case_type: str | None = None, limit: int = 10) -> dict[str, Any]:
     require(log_id, "cases")
     from . import event_log_case_explain as case_explain
