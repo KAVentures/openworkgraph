@@ -60,8 +60,18 @@ const path=require('node:path');
    await page.locator('#owgCaseAttributeDelimiter').selectOption(',');
    await page.locator('#owgCaseAttributeColumns').selectOption(['Region']);
    await page.locator('#owgCaseAttributeReplace').check();
+   assert.equal(await page.locator('#owgCaseAttributeAdd').isDisabled(),true);
+   await page.locator('#owgCaseAttributePreview').click();
+   const preview=page.locator('#owgCaseAttributeResult');
+   await preview.filter({hasText:'Ready to apply with storage confirmation.'}).waitFor();
+   assert.deepEqual(await preview.locator('tbody td').allTextContents(),['Region','1','1']);
+
    await page.locator('#owgCaseAttributeConsent').check();
-   await page.locator('#owgCaseAttributeAdd').click();
+   const [applyRequest]=await Promise.all([
+     page.waitForRequest(request=>request.method()==='POST'&&request.url().includes('expected_preview_sha256=')),
+     page.locator('#owgCaseAttributeAdd').click()
+   ]);
+   assert.match(new URL(applyRequest.url()).searchParams.get('expected_preview_sha256'),/^[a-f0-9]{64}$/);
    await page.locator('#owgCaseAttributeResult').filter({hasText:'Added Region to 1 cases.'}).waitFor();
    page.once('dialog',d=>d.accept());
    await page.locator('#owgCaseAttributeUploads').getByRole('button',{name:'Undo upload for Region, Segment',exact:true}).click();

@@ -1050,9 +1050,15 @@ profiles.
   without prior-value records cannot be undone. Deleting the log removes its
   upload history and prior values.
 
+Use **Preview upload** to review the number of matching cases, missing or
+unmatched IDs, and how many values each column would add or overwrite. Preview
+does not change the log. Applying a reviewed upload checks that the file,
+settings, and matching case attributes still match the preview.
+
 | Route | Purpose |
 | --- | --- |
 | `POST /v1/event-logs/{log_id}/case-attributes?id_column=...&column=...&delimiter=;&object_type=...&replace=true` | Join the CSV body. Requires `X-OWG-Local-Storage-Confirmed: true`. |
+| `POST /v1/event-logs/{log_id}/case-attributes?preview=true&…` | Preview the same CSV and settings with no retained changes. Apply with the returned `expected_preview_sha256` and storage confirmation. |
 | `GET /v1/event-logs/{log_id}/case-attributes` | Recorded uploads. |
 | `POST /v1/event-logs/{log_id}/case-attributes/remove` | `{"upload_id": "...", "columns": [...]}` (columns optional). |
 

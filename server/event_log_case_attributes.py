@@ -63,7 +63,8 @@ def _sql_text(text: str) -> str:
 
 
 def add(log_id: str, path: Path, *, id_column: str, columns: list[str], delimiter: str = ",",
-        object_type: str | None = None, replace: bool = False) -> dict[str, Any]:
+        object_type: str | None = None, replace: bool = False, preview: bool = False,
+        expected_preview_sha256: str | None = None) -> dict[str, Any]:
     """Merge the chosen columns of a CSV case table into the attributes of the matching objects."""
     if delimiter not in _DELIMITERS:
         raise EventLogWorkspaceError("unsupported delimiter")
@@ -115,32 +116,50 @@ def add(log_id: str, path: Path, *, id_column: str, columns: list[str], delimite
                 WHERE o.log_id = ? AND o.object_type = ? AND o.object_id = c.id)""", [log_id, notion]).fetchone()[0]
             cases = conn.execute("SELECT count(*) FROM objects WHERE log_id = ? AND object_type = ?",
                                  [log_id, notion]).fetchone()[0]
-            if not matched:
-                raise EventLogWorkspaceError("no row of the case table matches a case of this log with a value to add")
-            if not replace:
-                clash = conn.execute("""SELECT DISTINCT k FROM matched, unnest(json_keys(attrs)) AS t(k)
-                    WHERE list_contains(json_keys(old), k) ORDER BY 1 LIMIT 5""").fetchall()
-                if clash:
-                    raise EventLogWorkspaceError("cases already have " + ", ".join(repr(c[0]) for c in clash)
-                                                 + "; choose replace to overwrite those values")
+            changes = conn.execute("""SELECT k, count(*),
+                    count(*) FILTER (WHERE list_contains(json_keys(old), k))
+                FROM matched, unnest(json_keys(attrs)) AS t(k) GROUP BY 1 ORDER BY 1""").fetchall()
+            filled = {name: count for name, count, _ in changes}
+            replacements = {name: count for name, _, count in changes}
+            clashes = [name for name, count in replacements.items() if count]
             too_many = conn.execute(f"""SELECT count(*) FROM (
                   SELECT m.id, list_distinct(list_concat(json_keys(json_merge_patch(m.old, m.attrs)),
                     coalesce((SELECT list(DISTINCT v.name) FROM object_attribute_values v
                               WHERE v.log_id = ? AND v.object_id = m.id), []))) AS names FROM matched m)
                 WHERE len(names) > {workspace.MAX_ATTRIBUTES}""", [log_id]).fetchone()[0]
+            plan = {"format": FORMAT, "object_type": notion, "id_column": id_column,
+                    "columns": [keys[c] for c in columns], "source_sha256": source_sha,
+                    "rows": rows, "rows_without_id": blank_ids, "rows_not_in_log": unmatched,
+                    "cases_updated": matched, "cases_without_row": cases - matched,
+                    "values_added": {keys[c]: filled.get(keys[c], 0) for c in columns}}
+            if preview or expected_preview_sha256 is not None:
+                from .event_log_quality import _set_digest
+
+                impact = {**plan, "preview": True, "replace": replace,
+                          "values_to_overwrite": {keys[c]: replacements.get(keys[c], 0) for c in columns},
+                          "cases_over_attribute_limit": too_many,
+                          "can_apply": bool(matched and not too_many and (replace or not clashes))}
+                # Bind the bytes, selection, exact prior values and the displayed impact.
+                snapshot = _set_digest(conn, """SELECT sha256(to_json(struct_pack(
+                    case_id := id, supplied := attrs, previous := old))) AS h FROM matched""", [])
+                binding = {"log": log_id, "delimiter": delimiter, "source_columns": columns,
+                           "impact": impact, "snapshot": snapshot}
+                preview_sha = hashlib.sha256(json.dumps(binding, sort_keys=True).encode()).hexdigest()
+                if preview:
+                    return {**impact, "preview_sha256": preview_sha}
+                if expected_preview_sha256 != preview_sha:
+                    raise EventLogWorkspaceError("The case table or matching cases changed. Preview the upload again")
+            if not matched:
+                raise EventLogWorkspaceError("no row of the case table matches a case of this log with a value to add")
+            if clashes and not replace:
+                raise EventLogWorkspaceError("cases already have " + ", ".join(repr(name) for name in clashes[:5])
+                                             + "; choose replace to overwrite those values")
             if too_many:
                 raise EventLogWorkspaceError(f"{too_many} case(s) would have more than {workspace.MAX_ATTRIBUTES} "
                                              "attribute names; add fewer columns")
-            filled = dict(conn.execute("""SELECT k, count(*) FROM matched, unnest(json_keys(attrs)) AS t(k)
-                GROUP BY 1""").fetchall())
             conn.execute("BEGIN")
             try:
-                record = {"format": FORMAT, "added_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                          "object_type": notion, "id_column": id_column, "columns": [keys[c] for c in columns],
-                          "source_sha256": source_sha, "rows": rows, "rows_without_id": blank_ids,
-                          "rows_not_in_log": unmatched, "cases_updated": matched,
-                          "cases_without_row": cases - matched, "values_added": {keys[c]: filled.get(keys[c], 0)
-                                                                                for c in columns},
+                record = {**plan, "added_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                           "replaced_existing": bool(replace), "undo_supported": True}
                 upload = "ca_" + hashlib.sha256((log_id + record["added_at"] + source_sha).encode()).hexdigest()[:16]
                 record["upload_id"] = upload

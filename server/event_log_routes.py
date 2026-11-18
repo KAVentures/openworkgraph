@@ -483,11 +483,13 @@ async def add_case_attributes(
     delimiter: str = Query(default=",", max_length=1),
     object_type: str | None = Query(default=None, max_length=200),
     replace: bool = Query(default=False),
+    preview: bool = Query(default=False),
+    expected_preview_sha256: str | None = Query(default=None, pattern=r"^[0-9a-f]{64}$"),
 ):
     """Join columns of a CSV case table onto the log's cases (body: the CSV)."""
     from . import event_log_case_attributes as case_attributes
     _require_dashboard(request)
-    if request.headers.get("x-owg-local-storage-confirmed") != "true":
+    if not preview and request.headers.get("x-owg-local-storage-confirmed") != "true":
         raise HTTPException(403, "Explicit confirmation to store these values on this computer is required")
     # A closed file in a private folder: Windows does not let DuckDB open a file this process holds open.
     with tempfile.TemporaryDirectory(dir=str(DATA_DIR), prefix="owg-case-table-") as folder:
@@ -502,7 +504,8 @@ async def add_case_attributes(
         try:
             result = await run_in_threadpool(case_attributes.add, log_id, table, id_column=id_column,
                                              columns=column[:64], delimiter="\t" if delimiter == "t" else delimiter,
-                                             object_type=object_type, replace=replace)
+                                             object_type=object_type, replace=replace, preview=preview,
+                                             expected_preview_sha256=expected_preview_sha256)
         except workspace.EventLogWorkspaceError as exc:
             raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
