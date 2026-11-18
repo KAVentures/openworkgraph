@@ -652,3 +652,42 @@ def test_live_reconstruction_binds_review_after_identity_and_candidate_evidence(
     assert empty_branch.index('result["notice"]') < empty_branch.index(
         'result["event_assignment_review"] = build_review_queue(result)'
     )
+
+
+def test_saved_review_uses_same_truncated_timeline_digest_as_live_review(monkeypatch):
+    """A saved label must be retrievable against the exact live evidence basis."""
+    _setup(monkeypatch)
+    from server import work_resumption, reconstruction_review_cli
+
+    source = {"identity_timelines": [{"id": i} for i in range(13)]}
+    monkeypatch.setattr(work_resumption, "resumption_candidates",
+                        lambda connection, *, lease: source)
+    seen = []
+
+    def build(result):
+        seen.append(result)
+        return {"evidence_sha256": "b" * 64}
+
+    monkeypatch.setattr(reconstruction_review_cli, "build_review_queue", build)
+    monkeypatch.setattr(history_routes, "read_saved_reconstruction_review",
+                        lambda grant, generation, digest: {"evidence_sha256": digest})
+    response = history_routes.get_saved_reconstruction_review()
+    import json
+    assert json.loads(response.body)["saved"]["evidence_sha256"] == "b" * 64
+    assert seen[0]["identity_timelines_truncated"] is True
+    assert "identity_timelines_truncated" not in source
+
+
+def test_saved_review_preserves_explicit_incomplete_timeline_flag(monkeypatch):
+    _setup(monkeypatch)
+    from server import work_resumption, reconstruction_review_cli
+    source = {"identity_timelines": [], "identity_timelines_truncated": True}
+    monkeypatch.setattr(work_resumption, "resumption_candidates",
+                        lambda connection, *, lease: source)
+    def build(result):
+        assert result["identity_timelines_truncated"] is True
+        return {"evidence_sha256": "c" * 64}
+    monkeypatch.setattr(reconstruction_review_cli, "build_review_queue", build)
+    monkeypatch.setattr(history_routes, "read_saved_reconstruction_review",
+                        lambda grant, generation, digest: None)
+    assert b'"saved": null' in history_routes.get_saved_reconstruction_review().body
