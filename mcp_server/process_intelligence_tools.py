@@ -100,6 +100,20 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"limit": max(1, min(int(limit), 50)), "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def get_process_decision_rules(log_id: str, activity: str | None = None, max_depth: int = 3,
+                                   case_type: str | None = None) -> dict[str, Any]:
+        """Decision mining on a shared log. Without an activity: the decision points (activities after which
+        cases go different ways) with each branch's share. With an activity: a small decision tree learned
+        from case attributes and event attributes recorded at or before that activity, with held-out
+        accuracy against always predicting the most common branch. Rules are associations in this log,
+        not the business rule or its cause; a rule that does not beat the baseline is noise.
+        """
+        if activity is not None and (not isinstance(activity, str) or not 0 < len(activity) <= 200):
+            raise ToolError("activity must be a non-empty string of at most 200 characters")
+        return _get("get_process_decision_rules", f"/v1/process-intelligence/{_log(log_id)}/decision-rules",
+                    {"activity": activity, "max_depth": max(1, min(int(max_depth), 4)), "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_signals(log_id: str) -> dict[str, Any]:
         """The owner's signal rules on a shared log (KPI thresholds, case and compliance conditions) and their
         last evaluated state: triggered or not, the measured value or matching cases, and whether the owner
