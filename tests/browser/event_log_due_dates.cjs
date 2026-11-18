@@ -28,14 +28,15 @@ const path=require('node:path');
    for(let i=0;i<20;i++){const d=String(1+i).padStart(2,'0'),due=`2024-01-${String(11+i).padStart(2,'0')}`;
      rows.push(`inv${i},Receive invoice,2024-01-${d}T09:00:00Z,ana,${due}`);
      if(i<12)rows.push(`inv${i},Pay,2024-01-${String(5+i).padStart(2,'0')}T09:00:00Z,ana,`);
-     else if(i<18)rows.push(`inv${i},Pay,2024-01-${String(14+i).padStart(2,'0')}T09:00:00Z,ana,`);}
-   rows.push('late-marker,Receive invoice,2024-02-28T09:00:00Z,ana,2024-02-28');
+     else if(i<18)rows.push(`inv${i},Pay,2024-01-${String(14+i).padStart(2,'0')}T09:00:00Z,ana,`);
+     else rows.push(`inv${i},Remind,2024-01-31T09:00:00Z,ana,`);}
+   rows.push('late-marker,Receive invoice,2024-02-27T09:00:00Z,ana,2024-02-28','late-marker,Remind,2024-02-28T09:00:00Z,ana,');
    await page.locator('#owgEventLogFile').setInputFiles({name:'invoices.csv',mimeType:'text/csv',buffer:Buffer.from(rows.join('\n'))});
    await page.waitForFunction(()=>document.querySelector('#owgEventLogCase').options.length===5);
    await page.locator('#owgEventLogResource').selectOption('who');
    if(await page.locator('#owgEventLogAttributes').count())await page.locator('#owgEventLogAttributes').selectOption(['due']);
    await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
-   await page.locator('#owgEventLogStatus').filter({hasText:'Imported 39 events'}).waitFor();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Imported 42 events'}).waitFor();
    await page.locator('#owgEventLogAnalyze').click();
    const box=page.locator('#owgDue');await box.waitFor();await box.scrollIntoViewIfNeeded();
    await page.locator('#owgDueActivity').selectOption('Pay');
