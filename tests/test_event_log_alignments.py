@@ -133,3 +133,21 @@ def test_happy_path_net_from_the_most_common_variant():
     assert meta2["path"] == ["A", "C"]
     with pytest.raises(EventLogWorkspaceError, match="only 3 distinct paths"):
         pnml.variant_pnml(log, rank=4)
+
+
+def test_one_case_aligned_on_the_discovered_or_given_net(tmp_path, monkeypatch):
+    from server import event_log_agent_sharing as sharing
+    log = _import([["A", "B", "C"]] * 8 + [["A", "C"]])
+    r = al.case_alignment(log, "c8", noise=0.5)
+    assert r["path"] == ["A", "C"] and r["aligned"] and r["skipped_steps"] == ["B"] and not r["fits"]
+    given = al.case_alignment(log, "c0", pnml=_sequence_net(["A", "C"]))
+    assert given["extra_steps"] == ["B"] and given["model"] == {"uploaded": True}
+    with pytest.raises(EventLogWorkspaceError, match="no case"):
+        al.case_alignment(log, "nope")
+    monkeypatch.setenv("WORKFLOW_OBSERVER_AUTH_DIR", str(tmp_path / "auth"))
+    (tmp_path / "auth").mkdir()
+    sharing.set_share(log, "aggregates")
+    with pytest.raises(sharing.NotShared):
+        sharing.case_alignment(log, "c8")
+    sharing.set_share(log, "cases")
+    assert sharing.case_alignment(log, "c8", noise=0.5)["skipped_steps"] == ["B"]

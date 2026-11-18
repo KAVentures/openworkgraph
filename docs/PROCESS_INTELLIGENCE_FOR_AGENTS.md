@@ -70,6 +70,7 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 | `get_process_next_steps` | Path explorer: after a sequence of steps (empty = the case start; or anywhere in the cases), the next activities with case counts and shares, hours from the last step (median, p90) and to the case end, and how many cases end there. Call again with a step appended to go deeper (aggregates level). See "Path explorer" in EVENT_LOG_WORKSPACE.md. |
 | `get_process_insights` | Where to look first: ranked automatic findings (slow transitions, repeated activities, costly detours, the long tail, path spread, slowing down, SLA breaches with `sla_hours`), each with numbers, case share and the reproducing case filter (aggregates level). A good first call. See "Where to look first (automatic insights)" in EVENT_LOG_WORKSPACE.md. |
 | `get_process_deviation_causes` | Case attributes and activities associated with deviating from the discovered net (outcome: the case followed a path the optimal alignment found non-fitting), as risk differences with 95% intervals and a Bonferroni check (aggregates level). See "What goes with the deviations" in EVENT_LOG_WORKSPACE.md. |
+| `align_process_case` | One case's optimal alignment on the discovered net: extra steps, skipped steps and fitness, step by step (cases level only). See "Explain a case". |
 
 | `tag_process_cases` | Adds an `agent: ` tag with a note to cases (cases level and the tag permission). |
 

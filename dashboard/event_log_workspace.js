@@ -1758,7 +1758,14 @@
         if(r.repeated_activities.length)lines.push(el('div','Repeated: '+r.repeated_activities.map(a=>a.activity+' ×'+a.times).join(', ')+'.'));
         if(r.uncommon_activities.length)lines.push(el('div','Uncommon steps (in under 10% of cases): '+r.uncommon_activities.join(', ')+'.'));
         const rows=r.gaps.map(g=>[g.from+' → '+g.to,duration(g.gap_seconds),g.typical_gap_seconds===null?'too few cases':duration(g.typical_gap_seconds),g.excess_seconds>0?'+'+duration(g.excess_seconds):'—']);
-        out.replaceChildren(...lines,table(['Step','This case','Typical (median)','Above typical'],rows),el('div',r.interpretation,'muted'));
+        const model=el('div',null,'muted');model.id='owgCaseExplainModel';
+        out.replaceChildren(...lines,model,table(['Step','This case','Typical (median)','Above typical'],rows),el('div',r.interpretation,'muted'));
+        const q=new URLSearchParams({case_id:id,noise:'0.2'});if(state.caseType)q.set('case_type',state.caseType);
+        getJSON('/v1/event-logs/'+encodeURIComponent(state.logId)+'/case-alignment?'+q).then(a=>{
+          if(generation!==state.generation||!a.aligned)return;
+          const parts=[];if(a.skipped_steps.length)parts.push('skipped '+a.skipped_steps.join(', '));if(a.extra_steps.length)parts.push('did '+a.extra_steps.join(', ')+' where the model does not allow it');
+          model.textContent='Against the discovered model: '+(a.fits?'this case follows it exactly.':parts.join('; ')+' (alignment fitness '+pct(a.fitness)+').');
+        }).catch(()=>{});
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
       finally{run.disabled=false;}
     };

@@ -53,6 +53,7 @@ const path=require('node:path');
    await page.locator('#owgUnusualResults button[aria-label="Explain case t30"]').click();
    assert.equal(await page.locator('#owgCaseExplainId').inputValue(),'t30');
    await page.locator('#owgCaseExplainResult').filter({hasText:/\S/}).waitFor();
+   await page.locator('#owgCaseExplainModel').filter({hasText:'Against the discovered model: did Escalate where the model does not allow it'}).waitFor();
    await page.addScriptTag({content:axeSource});
    const navAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgAnalysisNav'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(navAudit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);

@@ -994,6 +994,16 @@ async def event_log_petri_net_deviation_causes(request: Request, log_id: str,
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.get("/v1/event-logs/{log_id}/case-alignment")
+def event_log_case_alignment(request: Request, log_id: str, case_id: str = Query(min_length=1, max_length=500),
+                             noise: float = Query(default=0.2, ge=0, lt=1),
+                             case_type: str | None = Query(default=None, max_length=200)):
+    """How one case departs from the discovered model: its optimal alignment, extra and skipped steps."""
+    from . import event_log_alignments as aligned
+    _require_dashboard(request)
+    return _respond(aligned.case_alignment, log_id, case_id, case_type, noise=noise)
+
+
 @router.get("/v1/event-logs/{log_id}/variants")
 def event_log_variants(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                        limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):
