@@ -679,7 +679,7 @@ const path=require('node:path');
    await page.locator('#owgEventLogOrgRun').click();
    await page.locator('#owgEventLogOrgResults').getByText('Handovers').first().waitFor();
    let org=await page.locator('#owgEventLogOrgResults').textContent();
-   assert.match(org,/Resource 01/);assert.doesNotMatch(org,/\bann\b|\bbob\b|\bbot\b/);assert.match(org,/No speed|not say who|Neither says/);
+   assert.match(org,/Resource 01/);assert.doesNotMatch(org,/\bann\b|\bbob\b|\bbot\b/);assert.match(org,/No speed|not say who|None says/);
    await page.locator('#owgEventLogOrgNames').check();await page.locator('#owgEventLogOrgRun').click();
    await page.locator('#owgEventLogOrgResults').getByText('bot',{exact:true}).first().waitFor();
    const ruleBody=await page.evaluate(()=>window.__owgEventLogModel.signalRule({name:'Rework',kind:'kpi',metric:'rework_rate',operator:'above',threshold:'25'}));

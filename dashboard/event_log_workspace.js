@@ -4509,6 +4509,7 @@
         out.replaceChildren(
           el('div',Number(r.coverage.events_with_resource).toLocaleString()+' of '+Number(r.coverage.events).toLocaleString()+' events name a resource; '+Number(r.cases_with_handover).toLocaleString()+' cases contain a handover.'+(r.resources_truncated?' Less active resources are grouped as “Other resources”.':''),'muted'),
           table(['From','To','Handovers','Cases'],r.handover_of_work.slice(0,25).map(h=>[h.from,h.to,Number(h.handovers).toLocaleString(),Number(h.cases).toLocaleString()])),
+          ...(r.subcontracting&&r.subcontracting.length?[el('h4','Subcontracting: work passed to another resource and straight back'),table(['From','To and back','Times','Cases'],r.subcontracting.slice(0,25).map(s=>[s.from,s.to,Number(s.times).toLocaleString(),Number(s.cases).toLocaleString()]))]:[]),
           table(['Resources','Shared cases'],r.working_together.slice(0,25).map(w=>[w.resources.join(' + '),Number(w.shared_cases).toLocaleString()])),
           table(['Activity',...m.resources.slice(0,10)],m.activities.slice(0,15).map((a,i)=>[a,...m.events[i].slice(0,10).map(n=>n?Number(n).toLocaleString():'')])),
           el('div',r.interpretation+(r.working_together_excluded_cases?' '+r.working_together_excluded_cases+' cases with very many resources are left out of shared-case pairs.':''),'muted'));
