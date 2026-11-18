@@ -1112,9 +1112,15 @@
       }
       more.onclick=page;await page();
     }
-    return {node:box,path(value){
+    return {node:box,path(value,comparisonCohort){
       if(value.length>500){message.textContent='This path exceeds the 500-step case selector limit. Browse by activity or cohort instead.';box.scrollIntoView({block:'nearest'});return;}
-      association=false;path=value.slice();transition=null;chosen.textContent='Exact path: '+JSON.stringify(path);start();box.scrollIntoView({block:'nearest'});
+      association=false;path=value.slice();transition=null;chosen.textContent='Exact path: '+JSON.stringify(path);
+      if(comparisonCohort!==undefined){
+        chosen.append(' · Saved process comparison cohort. Browse cases uses the fields above.');
+        filterApplied=true;spec={cohort:comparisonCohort,path,limit:30};
+        detail.replaceChildren();opening++;load(null);
+      }else start();
+      box.scrollIntoView({block:'nearest'});
     },activity(value){
       const picker=document.getElementById(prefix+'FilterActivity');
       if(!Array.from(picker.options).some(option=>option.value===value))picker.add(new Option(value,value));
@@ -2862,14 +2868,39 @@
       }catch(error){if(current()&&ticket===loading)message.textContent=error.message;}
       finally{if(current()&&ticket===loading)open.disabled=false;}
     };
-    run.onclick=async()=>{
-      if(!pinned)return;
-      const reference={...pinned},ticket=++comparing;run.disabled=true;last=null;exports.enable(false);out.replaceChildren(el('div','Comparing cases…'));
+    function alignmentDetails(variant){
+      if(!variant.comparison_complete)return 'Alignment unavailable within the work limit.';
+      const details=el('details');
+      details.append(el('summary','Show alignment'));
+      const labels={matched:'Matched',model_only:'Expected by model',log_only:'Observed only'};
+      details.append(table(['Step','Activity','Alignment','Log position'],variant.alignment.map((step,index)=>[
+        index+1,step.activity,labels[step.type]||step.type,step.log_position??'—'
+      ])));
+      if(variant.alignment_truncated)details.append(el('p','Only the first 80 alignment steps are shown.','muted'));
+      return details;
+    }
+    async function compare(spec,variantStatus='all',offset=0,restoreFocus=false){
+      const ticket=++comparing;run.disabled=true;last=null;exports.enable(false);out.replaceChildren(el('div','Comparing cases…'));
       try{
-        const spec={...reference,cohort:filters.read()};
-        const result=await (await api(logPath('process-conformance'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        const body={...spec,variant_status:variantStatus,variant_offset:offset};
+        const result=await (await api(logPath('process-conformance'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
         if(!current()||ticket!==comparing)return;
         last=result;exports.enable(true);
+        const variantPage=result.variant_page;
+        const counts=variantPage?.by_status;
+        const countLabel=(label,key)=>counts?label+' ('+Number(counts[key]).toLocaleString()+')':label;
+        const states=select('owgEventLogGraphVariantStatus',[['all','All results'],
+          ['deviation',countLabel('Deviations','deviation')],['match',countLabel('Matches','match')],
+          ['unknown',countLabel('Unknown within reviewed variants','unknown')]]);
+        states.value=variantStatus;states.onchange=()=>compare(spec,states.value,0,true);
+        const previous=button('Previous variants','secondary'),nextVariants=button('Next variants','secondary');
+        previous.disabled=!variantPage||offset===0;nextVariants.disabled=variantPage?.next_offset==null;
+        previous.onclick=()=>compare(spec,variantStatus,Math.max(0,offset-variantPage.size),true);
+        nextVariants.onclick=()=>compare(spec,variantStatus,variantPage.next_offset,true);
+        const variantTools=el('div',null,'row');variantTools.append(field('Variant result',states),previous,nextVariants);
+        const variantNote=variantPage
+          ? 'Showing '+(result.displayed_variants.length?offset+1:0)+'–'+(offset+result.displayed_variants.length)+' of '+variantPage.total+' selected variant results. Pages refresh against the current log. Cases excluded by the trace or variant limit are counted above.'
+          : 'Showing '+result.displayed_variants.length+' variant results.';
         const reasons={'trace_length_limit':'Case histories exceed the event limit','variant_limit':'Variant selection limit','alignment_work_budget':'Alignment work limit'};
         out.replaceChildren(
           el('h4',result.process_reference.title+' · revision '+result.process_reference.revision),
@@ -2877,14 +2908,20 @@
           ...graphMetricSummary(result),
           el('div','Applied cohort: '+JSON.stringify(result.cohort)+'. Timestamp ties can overlap any result. Order is timestamp then event ID for display; it is not verified business order.','muted'),
           table(['Unknown reason','Cases'],Object.entries(result.unknown_case_reasons).filter(([,n])=>n>0).map(([reason,n])=>[reasons[reason]||reason,n])),
-          el('div','Showing '+result.displayed_variants.length+' variant results'+(result.variant_results_truncated?'; additional variants are not shown.':'.'),'muted'),
-          table(['Observed path','Cases','Structural result','Minimum activity edits','Possible incomplete log prefix','Evidence'],result.displayed_variants.map(v=>{
-            const inspect=button('Inspect cases','secondary');inspect.onclick=()=>inspection.path(v.path);
-            return [v.path.slice(0,40).join(' → ')+(v.path.length>40?' …':''),v.cases,v.comparison_complete?(v.exact_structural_match?'Match':'Deviation'):'Unknown',v.minimum_activity_edit_count===null?'—':v.minimum_activity_edit_count,v.could_be_incomplete_log_prefix===null?'Unknown':(v.could_be_incomplete_log_prefix?'Yes':'No'),inspect];
+          ...(variantPage?[variantTools]:[]),el('div',variantNote,'muted'),
+          table(['Observed path','Cases','Structural result','Minimum activity edits','Possible incomplete log prefix','Alignment','Evidence'],result.displayed_variants.map(v=>{
+            const inspect=button('Inspect cases','secondary');inspect.onclick=()=>inspection.path(v.path,spec.cohort);
+            return [v.path.slice(0,40).join(' → ')+(v.path.length>40?' …':''),v.cases,v.comparison_complete?(v.exact_structural_match?'Match':'Deviation'):'Unknown',v.minimum_activity_edit_count===null?'—':v.minimum_activity_edit_count,v.could_be_incomplete_log_prefix===null?'Unknown':(v.could_be_incomplete_log_prefix?'Yes':'No'),alignmentDetails(v),inspect];
           })),
           el('div',result.cases===0?'No cases match this selection; no verdict was established.':result.comparison_complete?'Every selected case was structurally compared. Business rules and outcomes were not checked.':'Some cases remain unknown. They are neither matches nor deviations. Business rules and outcomes were not checked.','muted'));
+        if(restoreFocus&&document.activeElement===document.body&&states.isConnected)states.focus();
       }catch(error){if(current()&&ticket===comparing)out.replaceChildren(el('div',error.message));}
       finally{if(current()&&ticket===comparing)run.disabled=false;}
+    }
+    run.onclick=()=>{
+      if(!pinned)return;
+      try{compare({...pinned,cohort:filters.read()});}
+      catch(error){last=null;exports.enable(false);out.replaceChildren(el('div',error.message));}
     };
     return box;
   }

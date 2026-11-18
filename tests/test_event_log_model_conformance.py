@@ -210,3 +210,24 @@ def test_precision_budget_does_not_change_completed_alignment_verdicts(monkeypat
     assert result['structural_fitness']['score']==1
     assert result['visible_prefix_precision']['score'] is None
     assert result['visible_prefix_precision']['unknown_reason']=='precision_work_budget'
+
+
+def test_variant_review_filters_and_pages_without_changing_case_denominators(monkeypatch):
+    paths = [['Open', 'Review', 'Close']] * 2 + [
+        ['Open', f'Alternate {index:02d}', 'Close'] for index in range(25)
+    ]
+    log = imported(paths)
+    first = graph.compare(log, packet(), selection(variant_status='deviation'))
+    assert first['variant_page'] == {'status': 'deviation', 'offset': 0, 'size': 20,
+        'total': 25, 'by_status': {'match': 1, 'deviation': 25, 'unknown': 0}, 'next_offset': 20}
+    second = graph.compare(log, packet(), selection(variant_status='deviation', variant_offset=20))
+    assert len(first['displayed_variants']) == 20 and len(second['displayed_variants']) == 5
+    assert second['variant_page']['next_offset'] is None
+    assert len({tuple(row['path']) for result in (first, second) for row in result['displayed_variants']}) == 25
+    for result in (first, second):
+        assert (result['cases'], result['structural_match_cases'], result['structural_deviation_cases']) == (27, 2, 25)
+    assert any(step['type'] == 'model_only' for step in second['displayed_variants'][0]['alignment'])
+    monkeypatch.setattr(graph, 'MAX_ALIGNMENT_WORK', 0)
+    unknown = graph.compare(log, packet(), selection(variant_status='unknown', max_variants=5))
+    assert unknown['unknown_cases'] == 27 and unknown['variant_page']['total'] == 5
+    assert all(row['alignment'] == [] for row in unknown['displayed_variants'])
