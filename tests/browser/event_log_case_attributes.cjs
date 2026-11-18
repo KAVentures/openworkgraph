@@ -1,7 +1,7 @@
 const {chromium}=require('playwright');
 const assert=require('node:assert/strict');
 const fs=require('node:fs/promises');
-const {spawn}=require('node:child_process');
+const {spawn,execFileSync}=require('node:child_process');
 const {tmpdir}=require('node:os');
 const path=require('node:path');
 // Real-browser acceptance: join a separate case table onto a saved log's cases, filter by it, and remove it again.
@@ -89,6 +89,62 @@ const path=require('node:path');
    await page.locator('#owgCaseAttributeUploads').getByRole('button',{name:'Undo upload for Region, Segment'}).click();
    await page.locator('#owgCaseAttributeResult').filter({hasText:'Undid Region, Segment in 4 cases.'}).waitFor();
    await page.locator('#owgCaseAttributeUploads').filter({hasText:'No case attributes added yet.'}).waitFor();
+   const workbook=path.join(scratch,'enrichment.xlsx');
+   execFileSync(python,['-c',`
+import sys, xlsxwriter
+with xlsxwriter.Workbook(sys.argv[1]) as book:
+    draft = book.add_worksheet("Draft")
+    draft.write_row(0, 0, ["case_id", "Department"])
+    draft.write_row(1, 0, ["c0", "DRAFT"])
+    approved = book.add_worksheet("Approved")
+    approved.write_row(0, 0, ["case_id", "Department"])
+    approved.write_row(1, 0, ["c1", "Finance"])
+`,workbook]);
+   const sheetStatus=page.locator('#owgCaseAttributeWorkbookStatus');
+   await page.locator('#owgCaseAttributeFile').setInputFiles(workbook);
+   await sheetStatus.filter({hasText:'Using worksheet "Draft"'}).waitFor();
+   await page.locator('#owgCaseAttributeColumns').selectOption(['Department']);
+   await page.locator('#owgCaseAttributePreview').click();
+   await page.locator('#owgCaseAttributeResult').filter({hasText:'Ready to apply'}).waitFor();
+   await page.locator('#owgCaseAttributeConsent').check();
+   await page.locator('#owgCaseAttributeWorksheet').selectOption('Approved');
+   await sheetStatus.filter({hasText:'Using worksheet "Approved"'}).waitFor();
+   assert.equal(await page.locator('#owgCaseAttributeConsent').isChecked(),false);
+   await page.locator('#owgCaseAttributeColumns').selectOption(['Department']);
+   await page.locator('#owgCaseAttributePreview').click();
+   await page.locator('#owgCaseAttributeResult').filter({hasText:'Ready to apply'}).waitFor();
+   await page.locator('#owgCaseAttributeConsent').check();
+   await page.locator('#owgCaseAttributeAdd').click();
+   await page.locator('#owgCaseAttributeResult').filter({hasText:'Added Department to 1 cases.'}).waitFor();
+   const counts=await page.evaluate(async()=>{
+     const id=document.querySelector('#owgEventLogPick').value;
+     const caseCount=async value=>{
+       const response=await fetch('/v1/event-logs/'+id+'/summary?attribute='+encodeURIComponent('Department='+value));
+       return (await response.json()).cases;
+     };
+     return [await caseCount('Finance'),await caseCount('DRAFT')];
+   });
+   assert.deepEqual(counts,[1,0]);
+   let reached,releaseWorkbook;
+   const held=new Promise(resolve=>{reached=resolve;});
+   const gate=new Promise(resolve=>{releaseWorkbook=resolve;});
+   await page.route('**/xlsx-to-csv',async route=>{
+     const response=await route.fetch();reached();await gate;await route.fulfill({response});
+   },{times:1});
+   await page.locator('#owgCaseAttributeFile').setInputFiles(workbook);
+   await held;
+   await page.locator('#owgCaseAttributeFile').setInputFiles({name:'fresh.csv',mimeType:'text/csv',
+     buffer:Buffer.from('case_id,Fresh\nc0,value\n')});
+   await page.locator('#owgCaseAttributeColumns option[value=Fresh]').waitFor({state:'attached'});
+   const delivered=page.waitForResponse(response=>response.url().endsWith('/xlsx-to-csv'));
+   releaseWorkbook();await (await delivered).finished();
+   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+   assert.deepEqual(await page.locator('#owgCaseAttributeColumns option').allInnerTexts(),['Fresh']);
+   assert.equal(await page.locator('#owgCaseAttributeWorksheet').isVisible(),false);
+   await page.locator('#owgCaseAttributeFile').setInputFiles({name:'bad.xlsx',mimeType:'application/octet-stream',
+     buffer:Buffer.from('not a workbook')});
+   await sheetStatus.filter({hasText:'not an .xlsx workbook'}).waitFor();
+   assert.equal(await page.locator('#owgCaseAttributeAdd').isDisabled(),true);
    assert.deepEqual(errors,[]);
    console.log('Case attribute table browser acceptance passed: columns joined by case ID with counts, usable as a filter, conflicts refused, removable, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}

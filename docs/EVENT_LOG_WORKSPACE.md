@@ -1050,6 +1050,12 @@ profiles.
   without prior-value records cannot be undone. Deleting the log removes its
   upload history and prior values.
 
+Case tables can also come from Excel workbooks. Choose an `.xlsx` file and the
+worksheet to join. OWG converts that sheet to CSV before column selection,
+preview, and apply. Changing worksheets clears the prior preview and storage
+confirmation. Keep IDs stored as text in Excel if they have leading zeros or
+other formatting that belongs to the identifier.
+
 Use **Preview upload** to review the number of matching cases, missing or
 unmatched IDs, and how many values each column would add or overwrite. Preview
 does not change the log. Applying a reviewed upload checks that the file,
