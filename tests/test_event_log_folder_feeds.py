@@ -31,7 +31,7 @@ def _log():
 
 def _drop(folder: Path, name: str, text: str, age: float = 600):
     path = folder / name
-    path.write_text(text, encoding="utf-8")
+    # Preserve exact fixture bytes on Windows (text mode converts LF to CRLF).\n    path.write_bytes(text.encode("utf-8"))
     old = time.time() - age
     os.utime(path, (old, old))
     return path
