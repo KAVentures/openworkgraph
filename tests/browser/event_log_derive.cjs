@@ -35,6 +35,15 @@ const path=require('node:path');
    await page.locator('#owgDeriveRun').click();
    await page.locator('#owgDeriveResult').filter({hasText:'Choose which cases to copy.'}).waitFor();
    await page.locator('#owgDeriveCohortActivity').selectOption('Escalate');
+   const endpoint=await page.evaluate(()=>'/v1/event-logs/'+document.querySelector('#owgEventLogPick').value+'/export/matching-cases');
+   assert.ok([401,403].includes((await context.request.post(base+endpoint,{data:{cohort:{activity:'Escalate'}}})).status()));
+   const [file]=await Promise.all([page.waitForEvent('download'),page.locator('#owgDeriveExport').click()]);
+   const csv=(await fs.readFile(await file.path(),'utf8')).trim().split(/\r?\n/);
+   assert.equal(csv[0],'case_id,activity,timestamp,resource');
+   assert.equal(csv.length,13);
+   assert.deepEqual([...new Set(csv.slice(1).map(line=>line.split(',')[0]))],['c0','c3','c6','c9']);
+   assert.equal(await page.locator('#owgEventLogPick option').count(),1);
+
    await page.locator('#owgDeriveName').fill('Escalated orders');
    await page.locator('#owgDeriveRun').click();
    await page.locator('#owgDeriveResult').filter({hasText:'Saved Escalated orders: 4 of 10 cases, 12 events.'}).waitFor();
