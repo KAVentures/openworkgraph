@@ -949,15 +949,17 @@ def event_log_unusual_cases(request: Request, log_id: str, limit: int = Query(de
 
 
 @router.get("/v1/event-logs/{log_id}/due-dates")
-def event_log_due_dates(request: Request, log_id: str, activity: str = Query(min_length=1, max_length=500),
+def event_log_due_dates(request: Request, log_id: str, due_activity: str = Query(min_length=1, max_length=500),
                         due_attribute: str | None = Query(default=None, max_length=200),
                         due_days: float | None = Query(default=None, gt=0), early_days: float | None = Query(default=None, gt=0),
                         case_type: str | None = Query(default=None, max_length=200),
                         cohort: dict = Depends(_case_filter)):
-    """Whether the chosen activity happened by each case's due date: on time, early, late or still open."""
+    """Whether the chosen activity happened by each case's due date: on time, early, late or still open.
+
+    The activity is ``due_activity``: ``activity`` is the case filter (cases containing an activity)."""
     from . import event_log_due_dates as due
     _require_dashboard(request)
-    return _respond(due.due_dates, log_id, activity, case_type, due_attribute=due_attribute, due_days=due_days,
+    return _respond(due.due_dates, log_id, due_activity, case_type, due_attribute=due_attribute, due_days=due_days,
                     early_days=early_days, cohort=cohort)
 
 

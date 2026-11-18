@@ -176,13 +176,13 @@ async def agent_unusual_cases(request: Request, log_id: str, limit: int = Query(
 
 
 @router.get("/v1/process-intelligence/{log_id}/due-dates")
-async def agent_due_dates(request: Request, log_id: str, activity: str = Query(min_length=1, max_length=500),
+async def agent_due_dates(request: Request, log_id: str, due_activity: str = Query(min_length=1, max_length=500),
                           due_attribute: str | None = Query(default=None, max_length=200),
                           due_days: float | None = Query(default=None, gt=0),
                           early_days: float | None = Query(default=None, gt=0),
                           case_type: str | None = Query(default=None, max_length=200)):
     _require_agent_access(request)
-    return await _answer(sharing.due_dates, log_id, activity, case_type, due_attribute, due_days, early_days)
+    return await _answer(sharing.due_dates, log_id, due_activity, case_type, due_attribute, due_days, early_days)
 
 
 @router.get("/v1/process-intelligence/{log_id}/next-steps")
