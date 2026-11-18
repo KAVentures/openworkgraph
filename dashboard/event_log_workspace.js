@@ -482,7 +482,7 @@
 
   function jiraSourceSection(){
     const box=section('Retained Jira histories');box.id='owgJiraSource';box.style.overflowWrap='anywhere';
-    box.append(el('p','Manually read 1–8 selected Jira issues into a local event log. Use observed references, or explicitly authorized issue keys without desktop capture. Each run rescans the bounded history. Status labels, native issue IDs and source event identities are retained; authors, comments, descriptions and assignee values are excluded. Pagination is not proof of complete history. No background polling or source writes.','muted'));
+    box.append(el('p','Manually read 1–8 selected Jira issues into a local event log. Use observed references, or explicitly authorized issue keys without desktop capture. Each run rescans the bounded history. Status labels, native issue IDs and source event identities are retained; authors, comments, descriptions and assignee values are excluded. Pagination is not proof of complete history. Scheduled reads are optional and require separate confirmation; they pause when recording is paused. No source writes.','muted'));
     const basis=select('owgJiraSourceBasis',[['observed_refs','Observed Jira references'],['native_issue_keys','Selected Jira issue keys (separate admin opt-in)']]);
     const refs=el('textarea');refs.id='owgJiraSourceRefs';refs.rows=3;refs.maxLength=400;refs.placeholder='One owg:r: reference per line';refs.style.maxWidth='100%';
     const read=input('owgJiraSourceRead','checkbox'),retain=input('owgJiraSourceRetain','checkbox'),labels=input('owgJiraSourceLabels','checkbox');
@@ -512,16 +512,18 @@
         const result=await getJSON(endpoint);
         if(capability===capabilityVersion){nativeReady=result.native_case_selection_configured===true;sync();}
         if(request!==version)return;
-        message.textContent=result.configured&&basis.value==='native_issue_keys'&&!nativeReady?'An administrator must separately authorize native issue-key ingestion.':result.configured?'Ready for explicitly confirmed manual reads. A successful read is historical coverage, not verified completeness.':'An administrator must configure the separate retained Jira opt-in and OAuth read scopes. No credentials are entered here.';
+        message.textContent=result.configured&&basis.value==='native_issue_keys'&&!nativeReady?'An administrator must separately authorize native issue-key ingestion.':result.configured?'Profiles can be read manually or scheduled separately. A successful read is historical coverage, not verified completeness.':'An administrator must configure the separate retained Jira opt-in and OAuth read scopes. No credentials are entered here.';
         out.replaceChildren();
         for(const profile of result.profiles){
           const item=el('div',null,'card');item.dataset.profileId=profile.profile_id;
           item.append(el('h4',profile.host+' · '+(profile.selected_case_count??profile.resource_refs.length)+' selected issues'),el('p','Status: '+profile.status+(profile.error?' · '+profile.error:'')+'. Last successful read: '+(profile.last_success_at?new Date(profile.last_success_at*1000).toISOString():'none')+'. Source completeness unverified.'));
           item.append(el('p',profile.selection_basis==='native_issue_keys'?'Selection: exact Jira keys · '+profile.selected_issue_keys.join(', '):'Selection: observed references · '+profile.resource_refs.join(', ')));
+          item.append(el('p','Profile ID: '+profile.profile_id+'. '+(profile.scheduled_runs_enabled?'An enabled schedule exists.':'No enabled schedule. A paused schedule may still exist.')+' Manage schedules in Privacy → Scheduled jobs.','muted'));
           if(profile.checkpoint)item.append(el('p',profile.checkpoint.events+' retained projected events; '+profile.checkpoint.histories+' histories in the last successful bounded rescan.'));
           const row=el('div',null,'row');
           const run=button('Read and retain selected histories');run.disabled=!profile.enabled||['running','checking_credentials'].includes(profile.status)||Date.now()<profile.retry_after*1000||(profile.selection_basis==='native_issue_keys'&&!nativeReady);
-          const toggle=button(profile.enabled?'Disable profile':'Enable profile','secondary'),disconnect=button('Disconnect profile','secondary'),verify=button('Verify renewed credential','secondary');
+          const toggle=button(profile.enabled?'Disable profile':'Enable profile','secondary'),disconnect=button('Disconnect profile','secondary'),verify=button('Verify renewed credential','secondary'),schedule=button('Schedule daily reads','secondary');
+          schedule.disabled=!profile.enabled||profile.scheduled_runs_enabled||profile.status==='dataset_deleted';
           verify.disabled=!profile.log_id||profile.status==='dataset_deleted'||profile.status==='checking_credentials'||Date.now()<profile.retry_after*1000||(profile.selection_basis==='native_issue_keys'&&!nativeReady);
           if(profile.credential_check_status)item.append(el('p','Credential check: '+profile.credential_check_status+(profile.credential_check_error?' · '+credentialError(profile.credential_check_error):'')+'. Last verified: '+(profile.credential_verified_at?new Date(profile.credential_verified_at*1000).toISOString():'none')+'. History freshness and profile enablement are unchanged.'));
           // Lifecycle controls stay available while reading; generation fencing
@@ -538,8 +540,19 @@
           toggle.onclick=()=>action('/'+profile.profile_id+'/enabled',{enabled:!profile.enabled,confirmed:true});
           disconnect.onclick=()=>{if(window.confirm('Disconnect this Jira profile? Its imported log stays on this computer until you delete it.'))action('/'+profile.profile_id,null,'DELETE');};
           verify.onclick=()=>{if(window.confirm('Verify the configured Jira credential against this profile’s previously confirmed account and tenant? This checks account permissions, preserves the selected cases and history, and does not enable a paused profile.'))action('/'+profile.profile_id+'/credential',{revision:profile.revision,confirm_account_check:true},undefined,false);};
+          schedule.onclick=async()=>{
+            if(!window.confirm('Schedule daily reads of this profile’s selected Jira histories while OpenWorkGraph is running and recording? Reads pause when recording is paused. You can pause or remove the schedule under Privacy → Scheduled jobs.'))return;
+            const request=++version;schedule.disabled=true;
+            try{
+              await api('/v1/schedules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'retained_jira_profile',target_id:profile.profile_id,interval_minutes:1440,confirm_scheduled_runs:true})});
+              if(request!==version)return;await load();
+            }catch(error){
+              if(request!==version)return;
+              schedule.disabled=false;message.textContent=error.message.includes('already has a schedule')?'A schedule already exists for this profile. Manage or resume it under Privacy → Scheduled jobs.':error.message;
+            }
+          };
           toggle.disabled=profile.status==='dataset_deleted';
-          row.append(run,verify,toggle,disconnect);
+          row.append(run,verify,schedule,toggle,disconnect);
           if(profile.log_id&&profile.status!=='dataset_deleted'){const choose=button('Open retained log','secondary');choose.onclick=()=>refreshLogs(profile.log_id).catch(error=>{message.textContent=error.message;});row.append(choose);}
           item.append(row);out.append(item);
         }
