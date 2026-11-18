@@ -3151,9 +3151,15 @@ async def read_local_combined_case_review(request: Request, response: Response):
     # Reject oversized input before source admission, which may otherwise
     # mask the bounded-request error with a missing-connector 403. Session
     # admission still runs first; no source data is disclosed here.
-    raw = await request.body()
-    if len(raw) > _MAX_BODY:
-        raise HTTPException(413, "case review request too large")
+    # Stream with a hard cap: Request.body() buffers untrusted input before
+    # its length can be checked, allowing arbitrarily large allocations.
+    # Preserve the original bytes for the existing authenticated replay.
+    bounded = bytearray()
+    async for chunk in request.stream():
+        if len(chunk) > _MAX_BODY - len(bounded):
+            raise HTTPException(413, "case review request too large")
+        bounded.extend(chunk)
+    raw = bytes(bounded)
     initial_scope = await _require_scope()
     # Replay the same bounded request to the existing receipt admission
     # on both sides of the dependency read.
