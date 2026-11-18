@@ -4,10 +4,12 @@
   const MODEL_FORMAT='openworkgraph.reference-model.v1';
   const state={logs:[],logId:'',caseType:'',generation:0,refresh:0,follows:[],attr:{},caseActivity:'',objectTypes:[]};
   // The global case filter: follower rules plus an optional case-attribute value and/or numeric range.
-  const filterOn=()=>state.follows.length>0||!!state.attr.attribute||!!state.attr.attribute_range||!!state.caseActivity;
+  const filterOn=()=>state.follows.length>0||!!state.attr.attribute||!!state.attr.attribute_range||!!state.attr.starts_with||!!state.attr.ends_with||!!state.attr.duration||!!state.caseActivity;
   const globalCohort=()=>({...(state.follows.length?{follows:state.follows}:{}),...state.attr,...(state.caseActivity?{activity:state.caseActivity}:{})});
   const rangeText=r=>(r.min!==undefined?r.min+' ≤ ':'')+r.name+(r.max!==undefined?' < '+r.max:'');
-  const attrText=()=>[state.attr.attribute,state.attr.attribute_range?rangeText(state.attr.attribute_range):''].filter(Boolean).join('; ');
+  const hoursText=s=>Number((s/3600).toFixed(3))+' h';
+  const durationText=d=>'case duration '+(d.min!==undefined?'\u2265 '+hoursText(d.min):'')+(d.min!==undefined&&d.max!==undefined?' and ':'')+(d.max!==undefined?'< '+hoursText(d.max):'');
+  const attrText=()=>[state.attr.attribute,state.attr.attribute_range?rangeText(state.attr.attribute_range):'',state.attr.starts_with?'starts with '+JSON.stringify(state.attr.starts_with):'',state.attr.ends_with?'ends with '+JSON.stringify(state.attr.ends_with):'',state.attr.duration?durationText(state.attr.duration):''].filter(Boolean).join('; ');
   let activityLookupBusy=false;
   // Views that honour the workspace case filter; every other section uses all cases.
   const FILTERED=new Set(['automation-candidates','summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','performance-spectrum','waiting-time','drift','model-discovery','organization','report.html','decision-points','decision-rules']);
@@ -90,6 +92,7 @@
     const q=new URLSearchParams(),args=FILTERED.has(suffix)?mergeActiveCohort(params||{},globalCohort()):{...(params||{})};
     for(const [key,value] of Object.entries(args)){
       if(key==='attribute_range'||key==='follows')q.set(key,JSON.stringify(value));
+      else if(key==='duration'){if(value.min!==undefined)q.set('duration_min',String(value.min));if(value.max!==undefined)q.set('duration_max',String(value.max));}
       else if(Array.isArray(value))value.forEach(v=>q.append(key,v));
       else q.set(key,value!==null&&typeof value==='object'?JSON.stringify(value):value);
     }
@@ -761,6 +764,7 @@
     results.appendChild(waitingSection());
     results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity),inspection));
     results.appendChild(organizationSection());
+    results.appendChild(privateMapSection());
     results.appendChild(logComparisonSection());
     results.appendChild(analysisSection(names));
     results.appendChild(signalSection((activities.activities||[]).map(a=>a.activity)));
@@ -1186,6 +1190,20 @@
       if(range.min!==undefined&&range.max!==undefined&&range.min>=range.max)throw new Error('The numeric ranges do not overlap. Change one range to continue.');
       result.attribute_range=range;
     }
+    for(const [key,what] of [['starts_with','first activity'],['ends_with','last activity']]){
+      if(!active[key])continue;
+      if(result[key]&&result[key]!==active[key])throw new Error('This operation selects a different '+what+' from the active case filter. Clear one to continue.');
+      result[key]=active[key];
+    }
+    if(active.duration){
+      const d={...active.duration},extra=result.duration;
+      if(extra){
+        if(extra.min!==undefined)d.min=d.min===undefined?extra.min:Math.max(d.min,extra.min);
+        if(extra.max!==undefined)d.max=d.max===undefined?extra.max:Math.min(d.max,extra.max);
+      }
+      if(d.min!==undefined&&d.max!==undefined&&d.min>=d.max)throw new Error('The case duration ranges do not overlap. Change one to continue.');
+      result.duration=d;
+    }
     return result;
   }
   function applyActiveCohort(cohort){Object.assign(cohort,mergeActiveCohort(cohort,globalCohort()));}
@@ -1228,7 +1246,7 @@
 
   function caseFilterSection(activityNames){
     const box=section('Case filter');box.id='owgCaseFilter';
-    box.appendChild(el('div','Keep only cases where one activity is (or is never) followed by another, directly or later. Every rule must hold. The filter applies to the overview, variants, activities, KPIs, process map and playback, dotted chart, waiting time, drift, discovery and organization; other sections use every case. Matching describes recorded order only.','muted'));
+    box.appendChild(el('div','Keep only cases where one activity is (or is never) followed by another, directly or later, or that start or end with an activity or last a given time. Every rule must hold. The filter applies to the overview, variants, activities, KPIs, process map and playback, dotted chart, waiting time, drift, discovery and organization; other sections use every case. Matching describes recorded order only.','muted'));
     box.appendChild(el('div','Suggestions show up to 500 frequent activities. Enter an exact label to override a suggestion; matching is literal and an unknown label may match no cases.','muted'));
     const draft=state.follows.map(followRow);
     const rows=el('div');rows.id='owgCaseFilterRules';
@@ -1247,6 +1265,14 @@
     if(state.attr.attribute_range){const r=state.attr.attribute_range;rangeName.value=r.name;if(r.min!==undefined)rangeMin.value=r.min;if(r.max!==undefined)rangeMax.value=r.max;}
     const attrRow=el('div',null,'row');attrRow.style.alignItems='end';
     attrRow.append(field('Case attribute equals (name=value)',attrValue),field('Numeric case attribute',rangeName),field('From',rangeMin),field('Below',rangeMax));
+    // Endpoints and performance filters (Disco/Celonis): first or last activity, and case duration.
+    const startsWith=input('owgCaseFilterStartsWith','text','exact first activity');startsWith.maxLength=400;startsWith.value=state.attr.starts_with||'';
+    const endsWith=input('owgCaseFilterEndsWith','text','exact last activity');endsWith.maxLength=400;endsWith.value=state.attr.ends_with||'';
+    const durMin=input('owgCaseFilterDurationMin','number','hours');durMin.step='any';durMin.min='0';
+    const durMax=input('owgCaseFilterDurationMax','number','hours');durMax.step='any';durMax.min='0';
+    if(state.attr.duration){if(state.attr.duration.min!==undefined)durMin.value=state.attr.duration.min/3600;if(state.attr.duration.max!==undefined)durMax.value=state.attr.duration.max/3600;}
+    const endRow=el('div',null,'row');endRow.style.alignItems='end';
+    endRow.append(field('Case starts with',startsWith),field('Case ends with',endsWith),field('Case duration at least (hours)',durMin),field('Case duration below (hours)',durMax));
     function readAttr(){
       const out={},value=attrValue.value.trim();
       if(value){if(!value.includes('=')||!value.split('=')[0].trim())throw new Error('Write the case attribute as name=value.');out.attribute=value;}
@@ -1258,6 +1284,15 @@
         if((r.min!==undefined&&!Number.isFinite(r.min))||(r.max!==undefined&&!Number.isFinite(r.max)))throw new Error('Numeric range bounds must be finite numbers.');
         if(r.min!==undefined&&r.max!==undefined&&!(r.min<r.max))throw new Error('The lower bound must be below the upper bound.');
         out.attribute_range=r;}
+      for(const [key,node,what] of [['starts_with',startsWith,'first'],['ends_with',endsWith,'last']]){
+        const v=node.value;if(!v)continue;
+        if(/^[\p{White_Space}\u001c-\u001f]*$/u.test(v)||Array.from(v).length>200)throw new Error('Enter a '+what+' activity label of at most 200 characters.');
+        out[key]=v;}
+      if(durMin.value!==''||durMax.value!==''){
+        const d={};if(durMin.value!=='')d.min=Number(durMin.value)*3600;if(durMax.value!=='')d.max=Number(durMax.value)*3600;
+        if([d.min,d.max].some(v=>v!==undefined&&!(Number.isFinite(v)&&v>=0)))throw new Error('Case duration bounds must be zero or more hours.');
+        if(d.min!==undefined&&d.max!==undefined&&!(d.min<d.max))throw new Error('The shortest case duration must be below the longest.');
+        out.duration=d;}
       return out;
     }
     message.id='owgCaseFilterStatus';message.setAttribute('role','status');message.tabIndex=-1;
@@ -1292,7 +1327,7 @@
     clear.onclick=()=>{state.follows=[];state.attr={};state.caseActivity='';analyse().catch(error=>status(error.message));};
     render();
     const controls=el('div',null,'row');controls.append(add,apply,clear);
-    box.append(rows,field('Case contains exact activity',contains),containsLookup.wrap,attrRow,controls,message,filterSetBlock(activityNames));
+    box.append(rows,field('Case contains exact activity',contains),containsLookup.wrap,attrRow,endRow,controls,message,filterSetBlock(activityNames));
     return box;
   }
 
@@ -1310,8 +1345,8 @@
     async function refresh(){
       const r=await getJSON(base());if(generation!==state.generation)return;
       list.replaceChildren(r.filter_sets.length?table(['Filter','Rules','Notes',''],r.filter_sets.map(set=>{
-        const follows=set.cohort.follows||[],activity=set.cohort.activity||'',other=Object.keys(set.cohort).filter(k=>!['follows','attribute','attribute_range','activity'].includes(k));
-        const attr={...(set.cohort.attribute?{attribute:set.cohort.attribute}:{}),...(set.cohort.attribute_range?{attribute_range:set.cohort.attribute_range}:{})};
+        const follows=set.cohort.follows||[],activity=set.cohort.activity||'',other=Object.keys(set.cohort).filter(k=>!['follows','attribute','attribute_range','activity','starts_with','ends_with','duration'].includes(k));
+        const attr={...(set.cohort.attribute?{attribute:set.cohort.attribute}:{}),...(set.cohort.attribute_range?{attribute_range:set.cohort.attribute_range}:{}),...(set.cohort.starts_with?{starts_with:set.cohort.starts_with}:{}),...(set.cohort.ends_with?{ends_with:set.cohort.ends_with}:{}),...(set.cohort.duration?{duration:set.cohort.duration}:{})};
         const use=button('Apply','secondary');use.setAttribute('aria-label','Apply saved filter '+set.name);use.disabled=!(follows.length||Object.keys(attr).length||activity)||other.length>0;
         use.onclick=()=>{state.follows=follows;state.attr=attr;state.caseActivity=activity;analyse().catch(error=>status(error.message));};
         const del=button('Delete','secondary');del.setAttribute('aria-label','Delete saved filter '+set.name);
@@ -1320,7 +1355,7 @@
           ...(set.log_appended_since_saved?['Newer exports were appended since it was saved']:[]),
           ...(other.length?['Also filters by '+other.join(', ')+', which this panel cannot apply']:[])];
         const actions=el('span');actions.append(use,' ',del);
-        return [set.name,[...follows.map(followText),...(activity?['contains activity '+JSON.stringify(activity)]:[]),attr.attribute||'',attr.attribute_range?rangeText(attr.attribute_range):''].filter(Boolean).join('; ')||'—',notes.join('. ')||'—',actions];
+        return [set.name,[...follows.map(followText),...(activity?['contains activity '+JSON.stringify(activity)]:[]),attr.attribute||'',attr.attribute_range?rangeText(attr.attribute_range):'',attr.starts_with?'starts with '+JSON.stringify(attr.starts_with):'',attr.ends_with?'ends with '+JSON.stringify(attr.ends_with):'',attr.duration?durationText(attr.duration):''].filter(Boolean).join('; ')||'—',notes.join('. ')||'—',actions];
       })):el('div','No saved filters yet.','muted'));
     }
     save.onclick=async()=>{
@@ -3961,6 +3996,40 @@
           el('h4','Paths: share of cases'),table(['Path',r.baseline.name,r.comparison.name,'Difference'],pathRows),
           el('div',r.variants.shared_variants.toLocaleString()+' variants occur in both logs; they cover '+pct(r.variants.baseline_cases_in_shared_variants)+' of '+r.baseline.name+' cases and '+pct(r.variants.comparison_cases_in_shared_variants)+' of '+r.comparison.name+' cases.','muted'),
           el('div','* the 95% interval of the difference excludes zero. '+r.interpretation,'muted'));
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{run.disabled=false;}
+    };
+    return box;
+  }
+
+  // A differentially private process map that can be shared without revealing any single case.
+  function privateMapSection(){
+    const box=section('Share a private process map');box.id='owgPrivateMap';
+    box.appendChild(el('div','Creates a map of activities and the paths between them with calibrated random noise (differential privacy), so the result hardly changes whether or not any one case is in the log. It contains no case, time, resource or attribute, but activity names are shown as they are. Every map you create draws new noise and uses up privacy again. It covers every case of this log, not the case filter.','muted'));
+    const eps=input('owgPrivateMapEpsilon','number');eps.min='0.01';eps.max='10';eps.step='0.1';eps.value='1';
+    const k=input('owgPrivateMapK','number');k.min='1';k.max='100';k.step='1';k.value='10';
+    const run=button('Create private map','secondary');run.id='owgPrivateMapRun';
+    const row=el('div',null,'row');row.style.alignItems='end';
+    row.append(field('Privacy budget ε (smaller is more private)',eps),field('Most transitions counted per case',k),run);
+    const out=el('div');out.id='owgPrivateMapResults';out.setAttribute('role','status');
+    box.append(row,out);
+    run.onclick=async()=>{
+      const generation=state.generation;run.disabled=true;out.replaceChildren(el('div','Adding noise…','muted'));
+      try{
+        const body={epsilon:Number(eps.value),max_transitions_per_case:Number(k.value)};
+        if(!Number.isFinite(body.epsilon)||!Number.isInteger(body.max_transitions_per_case))throw new Error('Enter a number for ε and a whole number of transitions.');
+        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/private-map'+(state.caseType?'?case_type='+encodeURIComponent(state.caseType):''),
+          {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+        if(generation!==state.generation)return;
+        const p=r.privacy,own=r.owner_only_not_private;
+        const shared={...r};delete shared.owner_only_not_private;
+        const save=button('Download shareable map (JSON)','secondary');save.id='owgPrivateMapDownload';
+        save.onclick=()=>download(state.logId+'-private-map.json',JSON.stringify(shared,null,2),'application/json');
+        out.replaceChildren(
+          el('div','ε = '+p.epsilon+': '+r.edges.length+' paths and '+r.activities.length+' activities released. Noise scale '+p.noise.edge_scale+' on path counts; paths below '+p.release_threshold.edges+' are left out.','muted'),
+          el('div','Only you see this: '+Number(own.cases).toLocaleString()+' cases, '+Number(own.cases_clipped).toLocaleString()+' longer than the transition cap (a random part of those was counted). It is not in the download.','muted'),
+          table(['From','To','About'],r.edges.slice(0,40).map(e=>[e.from,e.to,Number(e.count).toLocaleString()])),
+          save,el('div',r.note,'muted'));
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
       finally{run.disabled=false;}
     };

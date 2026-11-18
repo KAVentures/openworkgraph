@@ -1838,6 +1838,41 @@ The same decision can be made up front for a CSV import or append with
 `naive_timestamp_offset=+01:00`. It is part of the transform and its digest, and the report counts
 the times read with the assumed offset.
 
+## Private process map (differential privacy)
+
+"Share a private process map" creates a directly-follows map that can be given to someone else
+without revealing any single case. It follows privacy-preserving process mining: Mannhardt et al.
+2019, the Libra and SaCoFa work of Elkoumy et al., and PM4Py's privacy module. The guarantee is
+ε-differential privacy with respect to adding or removing one case.
+
+1. **Bounded contribution.** Each case contributes at most `k` directly-follows pairs (default 10,
+   from 1 to 100) and `k + 1` activity occurrences. The pairs include `(start) → A` and `B → (end)`.
+   A longer case keeps a random subset, drawn anew for each export.
+2. **Laplace noise.** The budget ε (0.01–10, default 1) is split evenly:
+   - path counts get noise of scale `2k/ε`;
+   - activity counts get noise of scale `2(k+1)/ε`.
+
+   Noise is added to every possible pair over the log's activity labels, observed or not, so
+   whether an edge appears does not reveal that a case took it.
+3. **Release threshold.** Counts below the threshold are left out and the rest are rounded. By
+   default the threshold keeps the expected number of released pairs that no case took at 0.05 per
+   export, and likewise for activities. A fixed `threshold` can be given instead.
+
+The export contains activities, edges and approximate counts, and nothing else: no case
+identifiers, times, resources, attributes or durations.
+
+**Activity names are released as they are.** They come from the log's label set and the noise does
+not protect them. Rename labels that would themselves identify someone before sharing.
+
+**Repeated exports add up:** two exports at ε each spend 2ε in total. The owner also sees how many
+cases there are and how many exceeded the cap, to help choose `k`. That figure is not private, so
+it is kept out of the download (`owner_only_not_private`).
+
+`POST /v1/event-logs/{log_id}/private-map?case_type=` with
+`{"epsilon": 1, "max_transitions_per_case": 10, "threshold": null}`. It is a POST because each call
+draws fresh noise and spends budget. Dashboard session only. It covers every case of the log, not
+the case filter.
+
 ## Case filter and playback
 
 The **Case filter** keeps only cases whose recorded order matches every rule, like Disco's follower
@@ -1865,6 +1900,17 @@ every condition must hold, and they apply to the same views. Values that are not
 match a range. The inputs are validated before anything is sent. Saving the filter keeps the
 values and ranges with it.
 
+**Endpoints and case duration.** The case filter also keeps cases that start with, or end with,
+an exact activity, in recorded order (time, then event identifier). This is the endpoints filter of
+Disco and Celonis. It can also keep cases whose duration lies in a range: the time from the first to
+the last recorded event, at least the lower bound and below the upper bound. This is Disco's
+performance filter. The dashboard takes hours; the API takes seconds.
+
+The query parameters are `starts_with`, `ends_with`, `duration_min` and `duration_max`. In a JSON
+cohort they are `starts_with`, `ends_with` and `duration: {"min": s, "max": s}`. They combine with
+every other condition and apply to the same views. Saved filters keep them. A saved filter whose
+first or last activity is no longer in the log is flagged, like its follower rules.
+
 The case pickers inside individual sections take the same numeric range, under "Numeric case
 attribute", "From (inclusive)" and "Below (exclusive)". These are KPIs, the cohort benchmark and
 map comparison, the saved-graph comparison, case tags, saving cases as a log, case metrics and
@@ -1888,7 +1934,7 @@ replace one. They set exactly the finding's `attribute` or `attribute_range`.
 the same panel; applying it re-runs every filtered view at once. The API stores any case filter
 (`{"name": "...", "cohort": {"follows": [...], "started_from": "...", ...}}`, up to 50 per log,
 names unique regardless of case) as `openworkgraph.event-log-filter-set.v1`. The dashboard panel
-applies follower rules, case-attribute values and numeric ranges. A saved filter is re-applied to the log as it is now, so the listing says
+applies follower rules, case-attribute values, numeric ranges, endpoints and case duration. A saved filter is re-applied to the log as it is now, so the listing says
 when newer exports were appended after it was saved and names any activities it uses that the log
 does not contain. Saved filters are deleted with the log and never change events.
 
