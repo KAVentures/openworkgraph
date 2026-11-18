@@ -2005,3 +2005,39 @@ and authorizes nothing.
 
 `GET /v1/event-logs/{log_id}/automation-candidates?limit=&case_type=` plus the usual case-filter
 parameters; dashboard session only.
+
+## Performance spectrum
+
+The performance spectrum shows how long each step-to-step segment took, over calendar time. It
+follows Denisov, Fahland and van der Aalst (2018), as in ProM. A segment is "activity A directly
+followed by activity B" within a case. Every occurrence is drawn as a line from the moment A
+happened (top axis) to the moment B happened (bottom axis).
+
+This shows patterns a process map hides:
+- **Batching:** many lines meet at one point at the bottom, so work was released together.
+- **Overtaking:** lines cross, so later work finished before earlier work.
+- **Changes over time:** some periods are slower than others.
+
+For the 6 busiest segments (1–12), or the segments asked for, the result gives:
+
+| Field | Meaning |
+| --- | --- |
+| `duration_seconds` | 25th, 50th, 75th and 95th percentiles, mean and maximum. |
+| `bins` | For equal calendar periods by start time (2–100, default 30): occurrences per class and the median. |
+| `fifo_share` | Among occurrences in start order, the share that also finish no earlier than the one before. Pairs that start at the same instant are skipped. `null` when no two start at different times. |
+| `batched_share` | Share of occurrences that end at the same instant as at least two others of the segment. |
+| `lines` | A repeatable sample of at most 400 occurrences with start, end (seconds from `time_origin`) and class. `lines_sampled` says when it is a sample. |
+
+Each occurrence is put in a class against the segment's own percentiles:
+- `fast`: below the 25th percentile;
+- `normal`: between the 25th and 75th;
+- `slow`: above the 75th;
+- `very_slow`: above the 95th.
+
+Durations are the time between two recorded events, not working time. Overtaking and batching
+describe the log; they do not say why work waited or who caused it. The global case filter
+applies.
+
+`GET /v1/event-logs/{log_id}/performance-spectrum?top=&bins=&segment=A->B&case_type=` plus the
+case-filter parameters. Repeat `segment` for several segments (at most 12). Dashboard session
+only.
