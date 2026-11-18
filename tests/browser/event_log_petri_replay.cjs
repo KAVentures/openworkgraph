@@ -52,13 +52,25 @@ const path=require('node:path');
    assert((await out.locator('table').nth(1).textContent()).includes('Pay'));
    await out.locator('details summary').click();
    assert((await out.locator('details').textContent()).includes('Register → Pay → Close'));
+   // Alignments name exactly which step each non-fitting case skipped.
+   await page.locator('#owgPetriAlign').click();
+   await page.locator('#owgPetriAlignStatus').filter({hasText:'Alignment fitness 97.4%: 24 of 30 cases follow the net exactly'}).waitFor();
+   assert((await page.locator('#owgPetriAlignStatus').textContent()).includes('needs 0.2 extra or skipped steps'));
+   const aligned=page.locator('#owgPetriAlignResults');
+   const skippedTable=await aligned.locator('table').first().textContent();
+   assert(skippedTable.includes('Check')&&skippedTable.includes('6'),skippedTable);
+   assert((await aligned.locator('details').textContent()).includes('Register → −Check (skipped) → Pay → Close'));
+   await page.addScriptTag({content:axeSource});
+   const alignedAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgPetri'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
+   assert.deepEqual(alignedAudit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    await page.locator('#owgPetriFile').setInputFiles({name:'bad.pnml',mimeType:'application/xml',buffer:Buffer.from('<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "b">]><pnml/>')});
    await page.locator('#owgPetriRun').click();
    await page.locator('#owgPetriStatus').filter({hasText:'DOCTYPE'}).waitFor();
-   await page.addScriptTag({content:axeSource});
+   assert.equal(await page.locator('#owgPetriAlign').isDisabled(),true);
+   assert.equal(await page.locator('#owgPetriAlignResults').textContent(),'');
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgPetri'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Petri net replay browser acceptance passed: discovered net fits, uploaded strict net shows missing and remaining tokens, unsafe XML refused, WCAG audit.');
+   console.log('Petri net replay browser acceptance passed: discovered net fits, uploaded strict net shows missing and remaining tokens, alignments name the skipped step, unsafe XML refused, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});

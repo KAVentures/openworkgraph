@@ -2204,6 +2204,29 @@ problems in nets with duplicate labels or long silent paths.
 `POST /v1/event-logs/{log_id}/petri-net-replay` with the PNML file as the body, plus the
 case-filter parameters.
 
+### Step-by-step explanation (alignments)
+
+After a replay, **Explain each case step by step** aligns every variant on the same net (Adriansyah,
+2014; PM4Py's and ProM's alignment-based conformance). An alignment pairs the steps of a case with a
+complete run of the net. Each step is a *synchronous move* (the case did it and the net allowed it),
+a *log move* (the case did a step the net cannot explain there), a *model move* (the net needed a step
+the case skipped) or a free silent move. Log and model moves cost 1. A least-cost alignment is found
+by a shortest-path search over the case and the net together, so the result names exactly which
+steps were extra and which were skipped, without the over-counting token replay can show with
+duplicate labels or silent paths.
+
+Trace fitness is `1 − cost / (case length + visible steps in the net's shortest run)`, as in PM4Py.
+Log fitness divides the summed costs by the summed worst cases. The section lists the activities
+cases did where the net does not allow them, the activities the net required that cases skipped
+(both with case counts), and how each non-fitting variant is explained, e.g.
+`Register → −Check (skipped) → Pay → Close`. Each variant is aligned once. Up to 500 variants of at
+most 200 steps are aligned; the search has a per-variant and a total limit, and variants it cannot
+finish are listed as unaligned and left out of the fitness. When two explanations cost the same, one
+is shown.
+
+`POST /v1/event-logs/{log_id}/petri-net-alignments` with the PNML file as the body, plus the
+case-filter parameters. The net is not stored.
+
 ## Temporal profile
 
 **Temporal profile** (as in PM4Py and ProM) learns the usual time between every ordered pair of
