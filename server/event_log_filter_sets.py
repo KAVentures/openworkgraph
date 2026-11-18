@@ -31,7 +31,7 @@ def _name(value: Any) -> str:
 
 def _activities(cohort: dict[str, Any]) -> set[str]:
     named = {r[k] for r in cohort.get("follows", []) for k in ("from", "to")}
-    return named | ({cohort["activity"]} if cohort.get("activity") else set())
+    return named | {cohort[k] for k in ("activity", "starts_with", "ends_with") if cohort.get(k)}
 
 
 def _batches(conn, log_id: str) -> int:
