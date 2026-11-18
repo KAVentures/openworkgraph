@@ -60,6 +60,10 @@ with TestClient(app) as client:
     assert client.get(path, headers=bearer).status_code == 403
     r = client.get(path, headers=owner)
     assert r.status_code == 200 and r.json()["attributes"] == [], r.text
+    assert client.get(path + "?search=Region", headers=bearer).status_code == 403
+    assert client.get(path + "?search=Region", headers=owner).json()["names_total"] == 0
+    assert client.get(path + "?search=%20", headers=owner).status_code == 422
+
     assert client.get("/v1/event-logs/log_" + "0" * 16 + "/case-attribute-values", headers=owner).status_code == 422
 print("ok")
 '''
@@ -69,3 +73,30 @@ print("ok")
     done = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1], env=env,
                           capture_output=True, text=True, timeout=120)
     assert done.returncode == 0 and done.stdout.strip().endswith("ok"), f"stdout={done.stdout}\nstderr={done.stderr}"
+
+
+def test_search_finds_literal_keys_beyond_default_limit_and_keeps_json_finite():
+    traces = []
+    for case in range(6):
+        attributes = "".join(f'<string key="a{case}-{i:02d}" value="value"/>' for i in range(18))
+        nonfinite = "Infinity" if case % 2 else "NaN"
+        attributes += f'<string key="NonFinite" value="{nonfinite}"/>'
+        if case == 5:
+            attributes += '<string key="zTail%_Feature" value="present"/>'
+        traces.append(f'<trace><string key="concept:name" value="c{case}"/>{attributes}'
+                      '<event><string key="concept:name" value="A"/>'
+                      '<date key="time:timestamp" value="2024-01-01T00:00:00Z"/></event></trace>')
+    log = workspace.import_log(BytesIO(("<log>" + "".join(traces) + "</log>").encode()),
+                                name="wide attributes", source_format="xes")["log_id"]
+    initial = cav.values(log)
+    assert initial["names_total"] == 110 and initial["names_truncated"]
+    assert all(row["name"] != "zTail%_Feature" for row in initial["attributes"])
+    exact = cav.values(log, search="TAIL%_")
+    assert exact["names_total"] == 1 and not exact["names_truncated"]
+    assert exact["attributes"][0]["name"] == "zTail%_Feature"
+    assert exact["attributes"][0]["top_values"] == [{"value": "present", "cases": 1}]
+    finite_only = cav.values(log, search="NonFinite")["attributes"][0]
+    assert not finite_only["numeric"] and "min" not in finite_only and "max" not in finite_only
+    json.dumps(initial, allow_nan=False)
+    broad = cav.values(log, search="a")
+    assert broad["names_total"] > len(broad["attributes"]) == cav.MAX_SEARCH_NAMES

@@ -831,6 +831,65 @@
     }catch(_){/* suggestions are a convenience */}
   }
 
+  function caseAttributeSearch(attrValue,rangeName,rangeMin,rangeMax){
+    const panel=el('details');
+    panel.appendChild(el('summary','Find a case attribute'));
+    const query=input('owgCaseAttributeSearch','search','Part of an attribute name');query.maxLength=200;
+    const search=button('Search attributes','secondary');search.id='owgCaseAttributeSearchRun';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Attribute name to find',query),search);
+    const message=el('p');message.id='owgCaseAttributeSearchStatus';message.setAttribute('role','status');
+    const results=el('div');results.id='owgCaseAttributeSearchResults';
+    panel.append(row,message,results);
+    const generation=state.generation;
+    let request=0;
+    query.oninput=()=>{request++;search.disabled=false;results.replaceChildren();message.textContent='';};
+    search.onclick=async()=>{
+      const term=query.value.trim();
+      if(!term){message.textContent='Enter part of an attribute name.';query.focus();return;}
+      const ticket=++request;
+      search.disabled=true;message.textContent='Searching case attributes…';results.replaceChildren();
+      try{
+        const result=await getJSON(logPath('case-attribute-values',{search:term}));
+        if(generation!==state.generation||ticket!==request)return;
+        message.textContent=result.names_total
+          ? 'Showing '+result.attributes.length+' of '+result.names_total+' matching attributes.'+
+            (result.names_truncated?' Enter a more specific name to narrow the results.':'')
+          : 'No case attribute names match this search.';
+        for(const [index,attribute] of result.attributes.entries()){
+          const heading=el('h4',attribute.name);
+          const info=el('p',Number(attribute.cases).toLocaleString()+' cases have this attribute.'+
+            (attribute.numeric?' Numeric values range from '+attribute.min+' to '+attribute.max+'.':''),'muted');
+          const actions=el('div',null,'row');
+          if(attribute.numeric){
+            const useRange=button('Use for numeric range','secondary');
+            useRange.setAttribute('aria-label','Use '+attribute.name+' for numeric range');
+            useRange.onclick=()=>{
+              if(rangeName.value!==attribute.name){rangeMin.value='';rangeMax.value='';}
+              rangeName.value=attribute.name;rangeMin.focus();
+            };
+            actions.appendChild(useRange);
+          }
+          const choices=attribute.top_values.filter(item=>attribute.name.trim()===attribute.name&&
+            !attribute.name.includes('=')&&item.value.trim()===item.value&&
+            Array.from(attribute.name+'='+item.value).length<=200);
+          if(choices.length){
+            const values=select('owgCaseAttributeSearchValue'+index,choices.map(item=>[
+              item.value,item.value+' ('+item.cases+' cases)'
+            ]));
+            const useValue=button('Use value','secondary');
+            useValue.setAttribute('aria-label','Use value for '+attribute.name);
+            useValue.onclick=()=>{attrValue.value=attribute.name+'='+values.value;attrValue.focus();};
+            actions.append(field('Common values for '+attribute.name,values),useValue);
+          }
+          results.append(heading,info,actions);
+        }
+      }catch(error){if(generation===state.generation&&ticket===request)message.textContent=error.message;}
+      finally{if(ticket===request)search.disabled=false;}
+    };
+    query.onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();if(!search.disabled)search.click();}};
+    return panel;
+  }
+
   // Process cost from the user's own cost model: a price per activity execution and an optional hourly cost per open case.
   function costSection(activityNames){
     const box=section('Process cost');box.id='owgEventLogCosts';
@@ -1379,7 +1438,8 @@
     clear.onclick=()=>{state.follows=[];state.attr={};state.caseActivity='';analyse().catch(error=>status(error.message));};
     render();
     const controls=el('div',null,'row');controls.append(add,apply,clear);
-    box.append(rows,field('Case contains exact activity',contains),containsLookup.wrap,attrRow,endRow,controls,message,filterSetBlock(activityNames));
+    box.append(rows,field('Case contains exact activity',contains),containsLookup.wrap,attrRow,
+      caseAttributeSearch(attrValue,rangeName,rangeMin,rangeMax),endRow,controls,message,filterSetBlock(activityNames));
     return box;
   }
 

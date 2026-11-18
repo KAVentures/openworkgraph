@@ -48,8 +48,17 @@ const path=require('node:path');
    assert.equal(await page.locator('#owgEventLogCohortAAttribute').getAttribute('list'),'owgCaseAttributeValueSuggestions');
    assert.equal(await page.locator('#owgEventLogKpiCohortEventAttribute').getAttribute('list'),null);
    assert.equal(await page.locator('#owgEventLogKpiCohortRangeName').getAttribute('list'),'owgCaseAttributeNumericSuggestions','section range inputs get the numeric names');
-   // A suggested value works as typed.
-   await page.locator('#owgCaseFilterAttribute').fill('Region=EU');
+   // Search and select the common value before applying the filter.
+   await page.getByText('Find a case attribute',{exact:true}).click();
+   const lookup=page.locator('#owgCaseAttributeSearch');
+   await lookup.fill('AMOUN');await lookup.press('Enter');
+   await page.getByRole('button',{name:'Use amount for numeric range',exact:true}).click();
+   assert.equal(await page.locator('#owgCaseFilterRangeName').inputValue(),'amount');
+   await page.locator('#owgCaseFilterRangeName').fill('');
+   await lookup.fill('reg');await page.locator('#owgCaseAttributeSearchRun').click();
+   await page.getByLabel('Common values for Region').selectOption('EU');
+   await page.getByRole('button',{name:'Use value for Region',exact:true}).click();
+   assert.equal(await page.locator('#owgCaseFilterAttribute').inputValue(),'Region=EU');
    const [summary]=await Promise.all([page.waitForResponse(r=>/\/v1\/event-logs\/log_[0-9a-f]+\/summary(\?|$)/.test(r.url())),page.locator('#owgCaseFilterApply').click()]);
    assert.equal((await summary.json()).cases,4);
    await page.locator('#owgCaseFilterStatus').filter({hasText:'Active: Region=EU.'}).waitFor();
