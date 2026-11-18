@@ -1,0 +1,32 @@
+name: Workspace numeric case filter acceptance
+on:
+  pull_request:
+    paths:
+      - 'dashboard/event_log_workspace.js'
+      - 'server/event_log_cohorts.py'
+      - 'server/event_log_filter_sets.py'
+      - 'tests/js/event_log_active_numeric_filter.test.mjs'
+      - 'tests/browser/event_log_workspace_numeric_filter.cjs'
+      - 'tests/browser/process_logs_app.py'
+      - '.github/workflows/workspace-numeric-filter.yml'
+permissions:
+  contents: read
+jobs:
+  workspace-numeric-filter-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -e '.[dev,gateway]'
+      - run: python -m pytest -q tests/test_root_cause_numeric_ranges.py tests/test_event_log_cohorts.py tests/test_event_log_cases.py tests/test_event_log_filter_sets.py tests/test_event_log_playback_filters.py
+      - run: node --test tests/js/event_log_active_numeric_filter.test.mjs tests/js/event_log_numeric_cohort.test.mjs tests/js/event_log_playback_filters.test.mjs
+      - run: |
+          npm install --prefix "$RUNNER_TEMP/owg-browser" playwright@1.64.1 axe-core@4.10.3
+          node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install --with-deps chromium || node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install chromium
+      - run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_workspace_numeric_filter.cjs

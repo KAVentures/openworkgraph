@@ -85,7 +85,16 @@
     return response;
   }
   const getJSON=async path=>(await api(path)).json();
-  const logPath=(suffix,params)=>{const q=new URLSearchParams();for(const [key,value] of Object.entries(params||{})){if(Array.isArray(value))value.forEach(v=>q.append(key,v));else q.set(key,value!==null&&typeof value==='object'?JSON.stringify(value):value);}if(state.caseType)q.set('case_type',state.caseType);if(FILTERED.has(suffix)){if(state.follows.length)q.set('follows',JSON.stringify(state.follows));if(state.attr.attribute)q.set('attribute',state.attr.attribute);if(state.attr.attribute_range)q.set('attribute_range',JSON.stringify(state.attr.attribute_range));}const s=q.toString();return '/v1/event-logs/'+encodeURIComponent(state.logId)+'/'+suffix+(s?'?'+s:'');};
+  const logPath=(suffix,params)=>{
+    const q=new URLSearchParams(),args=FILTERED.has(suffix)?mergeActiveCohort(params||{},globalCohort()):{...(params||{})};
+    for(const [key,value] of Object.entries(args)){
+      if(key==='attribute_range'||key==='follows')q.set(key,JSON.stringify(value));
+      else if(Array.isArray(value))value.forEach(v=>q.append(key,v));
+      else q.set(key,value!==null&&typeof value==='object'?JSON.stringify(value):value);
+    }
+    if(state.caseType)q.set('case_type',state.caseType);
+    const search=q.toString();return '/v1/event-logs/'+encodeURIComponent(state.logId)+'/'+suffix+(search?'?'+search:'');
+  };
 
   function table(headers,rows){
     const wrap=el('div',null,'table-wrap');const t=el('table');const head=el('thead');const hr=el('tr');
@@ -605,7 +614,7 @@
       run.disabled=true;
       try{
         const cohort=filter.read();delete cohort.label;
-        if(filterOn())Object.assign(cohort,globalCohort());
+        if(filterOn())applyActiveCohort(cohort);
         if(!Object.keys(cohort).length)throw new Error('Choose which cases to copy.');
         const spec={name:name.value.trim(),cohort};if(state.caseType)spec.case_type=state.caseType;
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/derive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
@@ -959,7 +968,7 @@
       run.disabled=true;out.replaceChildren(el('div','Calculating…','muted'));
       try{
         const cohort=filters.read();
-        if(filterOn())Object.assign(cohort,globalCohort());
+        if(filterOn())applyActiveCohort(cohort);
         const first=metric.value==='duration_hours'
           ?{divide:[{field:'duration_seconds'},{literal:3600}]}
           :{field:metric.value};
@@ -1012,7 +1021,7 @@
     const detail=el('div');detail.id=prefix==='owgEventLogCases'?'owgEventLogCaseEvents':prefix+'Events';
     const controls=el('div',null,'row');controls.append(browse,reset,first,next);
     box.append(note,filters.node,el('div','Suggestions include up to 500 frequent activities. An exact label overrides the suggestion and is matched literally.','muted'),field('Exact activity to inspect',exactActivity),activityLookup.wrap,chosen,controls,message,list,detail);
-    let path=null,transition=null,spec=null,nextAfter=null,listing=0,opening=0,association=false;
+    let path=null,transition=null,spec=null,nextAfter=null,listing=0,opening=0,association=false,filterApplied=false;
     async function load(after){
       const ticket=++listing;first.disabled=true;next.disabled=true;browse.disabled=true;
       message.textContent='Loading cases…';
@@ -1021,7 +1030,7 @@
         const result=await (await api(queryPath('cases/query'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).json();
         if(!current()||ticket!==listing)return;
         nextAfter=result.next_after;
-        message.textContent=Number(result.selected_cases).toLocaleString()+' matching cases'+(spec.cohort.follows?' (case filter applied)':'')+'. Showing '+result.cases.length+' on this page.';
+        message.textContent=Number(result.selected_cases).toLocaleString()+' matching cases'+(filterApplied?' (case filter applied)':'')+'. Showing '+result.cases.length+' on this page.';
         list.replaceChildren(table(['Supplied case key','Events','Elapsed time','Equal-timestamp events'],result.cases.map(c=>{
           const open=button(c.case_id,'secondary');open.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%';
           open.setAttribute('aria-label','Open case '+c.case_id);open.onclick=()=>openCase(c.case_id);
@@ -1034,7 +1043,7 @@
     function start(){
       try{const cohort=filters.read();
         if(exactActivity.value){if(Array.from(exactActivity.value).length>200)throw new Error('Activity labels must have at most 200 characters.');cohort.activity=exactActivity.value;}
-        if(options.caseType===undefined&&filterOn())Object.assign(cohort,globalCohort());
+        if(options.caseType===undefined){applyActiveCohort(cohort);filterApplied=filterOn();}else filterApplied=false;
         if(association){chosen.textContent='All paths.';association=false;}
         spec={cohort,limit:30};if(path)spec.path=path;if(transition)spec.transition=transition;detail.replaceChildren();opening++;load(null);}
       catch(error){message.textContent=error.message;}
@@ -1073,7 +1082,7 @@
       start();box.scrollIntoView({block:'nearest'});
     },cohort(value){
       // This selection uses the full case notion, not the active workspace filter.
-      path=null;transition=null;association=true;spec={cohort:value,limit:30};
+      path=null;transition=null;association=true;filterApplied=false;spec={cohort:value,limit:30};
       chosen.textContent='Association cases: '+JSON.stringify(value)+'. This selection uses all cases in the current case notion. Browse cases uses the fields above instead.';
       detail.replaceChildren();opening++;load(null);box.scrollIntoView({block:'nearest'});
     }};
@@ -1150,6 +1159,30 @@
   }
   const followRow=rule=>({from:rule.from,to:rule.to,mode:(rule.negate?'not-':'')+rule.mode});
 
+  // Preserve all selected conditions. Incompatible numeric ranges fail closed
+  // instead of silently dropping either the operation or workspace constraint.
+  function mergeActiveCohort(cohort,active){
+    const result={...cohort};
+    if(active.follows)result.follows=active.follows;
+    if(active.attribute){
+      if(result.attribute&&result.attribute!==active.attribute)throw new Error('This operation selects a different case attribute from the active filter. Change one attribute to continue.');
+      result.attribute=active.attribute;
+    }
+    if(active.attribute_range){
+      const base=active.attribute_range,extra=result.attribute_range;
+      if(extra&&extra.name!==base.name)throw new Error('This operation has a different numeric attribute range from the active case filter. Clear one range to continue.');
+      const range={...base};
+      if(extra){
+        if(extra.min!==undefined)range.min=range.min===undefined?extra.min:Math.max(range.min,extra.min);
+        if(extra.max!==undefined)range.max=range.max===undefined?extra.max:Math.min(range.max,extra.max);
+      }
+      if(range.min!==undefined&&range.max!==undefined&&range.min>=range.max)throw new Error('The numeric ranges do not overlap. Change one range to continue.');
+      result.attribute_range=range;
+    }
+    return result;
+  }
+  function applyActiveCohort(cohort){Object.assign(cohort,mergeActiveCohort(cohort,globalCohort()));}
+
   function activityLabelLookup(exact,options){
     const lookupGeneration=state.generation,lookupLog=state.logId,activeCase=state.caseType;
     const lookupCase=options.caseType===undefined?activeCase:options.caseType;
@@ -1208,11 +1241,12 @@
     function readAttr(){
       const out={},value=attrValue.value.trim();
       if(value){if(!value.includes('=')||!value.split('=')[0].trim())throw new Error('Write the case attribute as name=value.');out.attribute=value;}
-      const name=rangeName.value.trim();
+      const name=rangeName.value.replace(/^[\p{White_Space}\u001c-\u001f]+|[\p{White_Space}\u001c-\u001f]+$/gu,'');
       if(name||rangeMin.value||rangeMax.value){
         if(!name)throw new Error('Name the numeric case attribute.');
         const r={name};if(rangeMin.value!=='')r.min=Number(rangeMin.value);if(rangeMax.value!=='')r.max=Number(rangeMax.value);
         if(r.min===undefined&&r.max===undefined)throw new Error('Give a lower bound, an upper bound or both.');
+        if((r.min!==undefined&&!Number.isFinite(r.min))||(r.max!==undefined&&!Number.isFinite(r.max)))throw new Error('Numeric range bounds must be finite numbers.');
         if(r.min!==undefined&&r.max!==undefined&&!(r.min<r.max))throw new Error('The lower bound must be below the upper bound.');
         out.attribute_range=r;}
       return out;
@@ -5695,6 +5729,6 @@
         (p.previous_window_coverage_after===null?'.':' and '+pct(p.previous_window_coverage_after)+' of the window before.'):null};
   }
 
-  window.__owgEventLogModel={simBatch,simPriorities,objectModelArcs,objectModelText,visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,refactorMetricGraph,savedMetricBundle,stageComparisonMetrics,activityComparisonMetrics,activityShareMetrics,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,analysisDraft,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths,packMapping,packGuess,packReportRows,monitoringRows,impactSpec,impactRows};
+  window.__owgEventLogModel={simBatch,simPriorities,objectModelArcs,objectModelText,visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,refactorMetricGraph,savedMetricBundle,stageComparisonMetrics,activityComparisonMetrics,activityShareMetrics,metricText,reasonText,followSpec,followText,mergeActiveCohort,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,analysisDraft,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths,packMapping,packGuess,packReportRows,monitoringRows,impactSpec,impactRows};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
