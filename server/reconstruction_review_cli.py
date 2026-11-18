@@ -137,10 +137,10 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("invalid group continuity evidence") from exc
         if len(encoded) > 65536:
             raise ValueError("unbounded group continuity evidence")
-    continuity_truncated = (_truncation_flag(response, "observed_group_continuity_truncated")
-                            or len(continuity) > 24)
-    identity_timelines_truncated = (_truncation_flag(response, "identity_timelines_truncated")
-                                    or len(identity_timelines) > 12)
+    continuity_flag = _truncation_flag(response, "observed_group_continuity_truncated")
+    identity_timelines_flag = _truncation_flag(response, "identity_timelines_truncated")
+    continuity_truncated = continuity_flag or len(continuity) > 24
+    identity_timelines_truncated = identity_timelines_flag or len(identity_timelines) > 12
     completeness_flags = (
         identity_timelines_truncated,
         _truncation_flag(response, "observed_pair_event_assignments_truncated"),
