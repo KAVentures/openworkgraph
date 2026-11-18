@@ -1251,7 +1251,7 @@
         out.attribute_range=r;}
       return out;
     }
-    message.id='owgCaseFilterStatus';message.setAttribute('role','status');
+    message.id='owgCaseFilterStatus';message.setAttribute('role','status');message.tabIndex=-1;
     const names=activityNames.slice(0,500).map(a=>[a,a]);
     function render(){
       rows.replaceChildren(...draft.map((rule,i)=>{
@@ -3263,10 +3263,29 @@
           casePanel.replaceChildren(el('div','Saved '+Number(r.copied.events).toLocaleString()+' events of '+Number(r.derived_from.cases_matched).toLocaleString()+' cases as “'+r.log.name+'”. This log is unchanged.'));}
         catch(error){casePanel.replaceChildren(el('div',error.message,'muted'));}
       };
-      if((a.cohort.attribute||a.cohort.attribute_range)&&!filterOn()){
+      if(a.cohort.attribute&&!filterOn()){
         const go=button('Filter','secondary');go.setAttribute('aria-label','Filter every view to the cases with '+label);
-        go.onclick=()=>{state.attr={...(a.cohort.attribute?{attribute:a.cohort.attribute}:{}),...(a.cohort.attribute_range?{attribute_range:a.cohort.attribute_range}:{})};analyse().catch(error=>status(error.message));};
-        wrap.appendChild(go);}
+        go.onclick=()=>{state.attr={attribute:a.cohort.attribute};analyse().catch(error=>status(error.message));};
+        wrap.appendChild(go);
+      }
+      if(a.cohort.attribute_range){
+        const go=button('Filter views','secondary');
+        go.setAttribute('aria-label','Filter views to '+a.feature.value+'; replace the case filter');
+        go.onclick=async()=>{
+          // Association counts are for the full case notion: explicitly replace,
+          // rather than silently intersect with, the old workspace filter.
+          state.follows=[];state.attr={attribute_range:{...a.cohort.attribute_range}};
+          const expected=state.generation+1;
+          try{
+            await analyse();
+            if(state.generation===expected){
+              const target=document.getElementById('owgCaseFilterStatus');
+              if(target){target.scrollIntoView({block:'nearest'});target.focus();}
+            }
+          }catch(error){status(error.message);}
+        };
+        wrap.appendChild(go);
+      }
       wrap.append(inspect,slowest,tag,save);return wrap;
     }
     run.onclick=async()=>{
@@ -3281,6 +3300,7 @@
         out.replaceChildren(
           el('div','Outcome in '+pct(r.outcome_rate)+' of '+Number(r.cases).toLocaleString()+' cases; '+Number(r.features_tested)+' features tested.','muted'),
           table(['Feature','Cases with it','Outcome with','Outcome without','Difference (95% CI)','Holds after correction','Its cases'],rows),
+          ...((r.associations||[]).some(a=>a.cohort?.attribute_range)?[el('div','Filter views replaces the current case filter with the selected numeric range. Save the current filter first to restore it afterward.','muted')]:[]),
           el('div',r.note||'These are associations in this log, not causes. A step can be a consequence of the outcome rather than its reason.','muted'),casePanel);
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
     };
