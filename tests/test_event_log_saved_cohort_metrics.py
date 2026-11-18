@@ -112,3 +112,11 @@ def test_saved_metric_evaluation_api_requires_session_and_rechecks_revocation(mo
         return {"metric": {"sum": "1"}}
     monkeypatch.setattr(saved, "evaluate", revoke)
     assert client.post(path, headers=headers, json={"cohort": {}}).status_code == 403
+
+
+def test_dashboard_evaluates_saved_revision_and_clears_it_on_manual_edit():
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[1] / "dashboard" / "event_log_workspace.js").read_text(encoding="utf-8")
+    assert "'/evaluate':'/cohort-metric'" in source
+    assert "const payload=savedId?{cohort}:{definition:{version:1,expression},cohort};" in source
+    assert "control.addEventListener('change',()=>{savedPicker.value='';});" in source
