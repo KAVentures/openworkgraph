@@ -4,7 +4,9 @@ Anomaly views in process mining tools (Celonis's and UiPath's outlier and anomal
 trace outlier plug-ins) point reviewers at the few cases worth opening. This module scores every
 case on a handful of transparent signals, each compared with the rest of the selection:
 
-* **rare path**: few other cases followed exactly the same sequence of activities;
+* **rare path**: few other cases followed exactly the same sequence of activities (under 1%, or none),
+  and paths that rare cover at most 5% of cases, so in a log where most paths are unique, being
+  unique is not unusual;
 * **unusually slow / unusually fast**: the case's duration (first to last event) is far from the
   usual, measured as a robust z-score of log-duration (median and MAD, so a few extreme cases do
   not hide each other);
@@ -30,6 +32,7 @@ FORMAT = "openworkgraph.event_log_unusual_cases.v1"
 MIN_CASES = 20
 RARE_PATH_SHARE = 0.01
 RARE_ACTIVITY_SHARE = 0.01
+RARE_PATH_COVERAGE = 0.05
 Z_FLAG = 3.0
 MAX_LIMIT = 200
 _MAD_SCALE = 1.4826
@@ -77,6 +80,13 @@ def unusual_cases(log_id: str, case_type: str | None = None, *, limit: int = 25,
         raise EventLogWorkspaceError(f"at least {MIN_CASES} cases are needed to say what is unusual; "
                                      f"this selection has {cases}")
     variants = Counter(tuple(path) for _, path, _ in rows)
+    # Cases on paths taken by at most n cases. A path is rare only if paths that rare cover few cases in
+    # total; in a log where most paths are unique, being unique is not unusual.
+    cases_at_or_below: dict[int, int] = {}
+    running = 0
+    for count, paths in sorted(Counter(variants.values()).items()):
+        running += count * paths
+        cases_at_or_below[count] = running
     activity_cases = Counter(a for _, path, _ in rows for a in set(path))
     log_durations = [math.log1p(max(d or 0.0, 0.0)) for _, _, d in rows]
     log_lengths = [math.log(len(path)) for _, path, _ in rows]
@@ -91,7 +101,8 @@ def unusual_cases(log_id: str, case_type: str | None = None, *, limit: int = 25,
     for (case_id, path, duration), log_d, log_n, rep in zip(rows, log_durations, log_lengths, repeats):
         reasons = []
         share = variants[tuple(path)] / cases
-        if share < RARE_PATH_SHARE or variants[tuple(path)] == 1:
+        taken = variants[tuple(path)]
+        if (share < RARE_PATH_SHARE or taken == 1) and cases_at_or_below[taken] / cases <= RARE_PATH_COVERAGE:
             strength = min(1.0, -math.log10(share) / 3)
             reasons.append({"signal": "rare_path", "strength": round(strength, 3),
                             "detail": f"{variants[tuple(path)]} of {cases} cases followed this exact path"})
@@ -131,7 +142,7 @@ def unusual_cases(log_id: str, case_type: str | None = None, *, limit: int = 25,
         "by_signal": dict(sorted(reason_cases.items(), key=lambda kv: (-kv[1], kv[0]))),
         "baseline": {"median_hours": median_hours, "median_events": median_events,
                      "distinct_paths": len(variants)},
-        "thresholds": {"rare_path_share": RARE_PATH_SHARE, "rare_activity_share": RARE_ACTIVITY_SHARE,
+        "thresholds": {"rare_path_share": RARE_PATH_SHARE, "rare_path_coverage": RARE_PATH_COVERAGE, "rare_activity_share": RARE_ACTIVITY_SHARE,
                        "robust_z": Z_FLAG},
         "top": top, "case_ids_included": include_case_ids,
         "method": ("each case is compared with the selection: path frequency, robust z-scores (median and MAD) of "

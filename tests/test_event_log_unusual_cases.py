@@ -82,3 +82,13 @@ def test_agents_get_case_ids_only_at_the_cases_level(tmp_path, monkeypatch):
     sharing.set_share(log, "cases")
     detailed = sharing.unusual_cases(log)
     assert detailed["top"][0]["case_id"] == "odd" and detailed["top"][0]["path"] == ["Open", "Escalate", "Close"]
+
+
+def test_unique_paths_are_not_unusual_when_most_paths_are_unique():
+    letters = "BCDEFGHIJK"
+    cases = [(f"v{i:02d}", [("A", 0), (letters[i % 10], 60), (letters[(i // 10) % 10], 120), ("Z", 180)])
+             for i in range(60)]
+    log = _import(cases)
+    r = uc.unusual_cases(log)
+    assert r["baseline"]["distinct_paths"] == 60
+    assert "rare_path" not in r["by_signal"]

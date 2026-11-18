@@ -2154,7 +2154,9 @@ plus the case-filter parameters. Agents with access to a shared log use `get_pro
 and anomaly views of Celonis and UiPath Process Mining do, and says why for each one. Every case is
 compared with the selection on transparent signals:
 
-- **Rare path**: under 1% of cases (or only this one) followed exactly the same activities.
+- **Rare path**: under 1% of cases (or only this one) followed exactly the same activities, and
+  paths that rare cover at most 5% of cases. In a log where most paths are unique, being unique is
+  not unusual and is not flagged.
 - **Unusually slow / fast**: the case's duration is at least 3 robust standard deviations from the
   usual, measured on log-duration with the median and median absolute deviation, so a few extreme
   cases do not hide each other.
