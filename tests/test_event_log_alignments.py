@@ -119,3 +119,17 @@ def test_deviation_causes_find_the_attribute_that_goes_with_deviating_cases(tmp_
     # A net every case fits (B can be skipped silently) has nothing to explain.
     fits = al.deviation_causes(log, _sequence_net(["A", "B", "C"], silent_skip=1))
     assert fits["non_fitting_paths"] == 0 and fits["associations"] == []
+
+
+def test_happy_path_net_from_the_most_common_variant():
+    log = _import([["A", "B", "C"]] * 6 + [["A", "C"]] * 3 + [["A", "B", "B", "C"]])
+    xml, meta = pnml.variant_pnml(log)
+    assert meta["path"] == ["A", "B", "C"] and meta["cases"] == 6 and meta["share"] == 0.6
+    r = al.alignments(log, xml.encode())
+    assert r["fitness"]["fitting_cases"] == 6
+    assert {m["activity"]: m["cases"] for m in r["model_moves"]} == {"B": 3}
+    assert {m["activity"]: m["cases"] for m in r["log_moves"]} == {"B": 1}
+    second, meta2 = pnml.variant_pnml(log, rank=2)
+    assert meta2["path"] == ["A", "C"]
+    with pytest.raises(EventLogWorkspaceError, match="only 3 distinct paths"):
+        pnml.variant_pnml(log, rank=4)

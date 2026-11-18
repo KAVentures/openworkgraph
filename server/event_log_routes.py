@@ -1804,6 +1804,21 @@ def event_log_model_discovery_pnml(request: Request, log_id: str, case_type: str
         "X-OWG-Petri-Net": f"places={meta['places']}; transitions={meta['transitions']}; silent={meta['silent_transitions']}"})
 
 
+@router.get("/v1/event-logs/{log_id}/variant.pnml")
+def event_log_variant_pnml(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                           rank: int = Query(default=1, ge=1, le=50), cohort: dict[str, Any] = Depends(_case_filter)):
+    """A sequence Petri net of the rank-th most common path (rank 1: the happy path)."""
+    from . import event_log_pnml as pnml
+    _require_dashboard(request)
+    try:
+        xml, meta = pnml.variant_pnml(log_id, case_type, rank=rank, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(xml, media_type="application/xml", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-path-{rank}.pnml"',
+        "X-OWG-Path-Cases": f"cases={meta['cases']}; share={meta['share']}"})
+
+
 @router.post("/v1/event-logs/{log_id}/model-discovery-draft")
 async def event_log_discovery_draft(request: Request, log_id: str):
     _require_dashboard(request)
