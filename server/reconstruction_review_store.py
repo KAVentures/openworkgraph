@@ -162,6 +162,8 @@ def save_reconstruction_review(
 ) -> dict[str, Any]:
     if grant.get("mode") != "all_saved" or not _retention_allowed():
         raise PermissionError("Saved review requires retained history and explicit all-saved grant")
+    if not isinstance(envelope, dict):
+        raise ValueError("review envelope must be an object")
     digest = envelope.get("evidence_sha256")
     annotations = envelope.get("annotations")
     if (not isinstance(digest, str) or len(digest) != 64
@@ -174,7 +176,10 @@ def save_reconstruction_review(
         "evidence_sha256": digest, "annotations": annotations,
         "expires_at": expires_at,
     }
-    payload = json.dumps(record, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    try:
+        payload = json.dumps(record, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
+        raise ValueError("invalid review annotation payload") from exc
     if len(payload) > _MAX_BYTES:
         raise ValueError("review exceeds private storage limit")
     with _store_guard():
