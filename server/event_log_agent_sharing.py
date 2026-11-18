@@ -343,6 +343,16 @@ def decision_rules(log_id: str, activity: str | None = None, case_type: str | No
     return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
 
 
+def temporal_profile(log_id: str, case_type: str | None = None, zeta: float = 3.0) -> dict[str, Any]:
+    """Usual times between activity pairs and how often they are broken (aggregates level, no case IDs)."""
+    require(log_id, "aggregates")
+    from . import event_log_temporal_profile as temporal
+    result = temporal.temporal_profile(log_id, case_type, zeta=max(0.5, min(float(zeta), 10.0)))
+    keep = ("case_notion", "cases", "zeta", "min_occurrences", "max_span_events", "profile_pairs", "pairs_checked",
+            "deviating_cases", "deviating_case_share", "pairs", "method", "caveat")
+    return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
+
+
 def slowest_cases(log_id: str, case_type: str | None = None, limit: int = 10) -> dict[str, Any]:
     require(log_id, "cases")
     from . import event_log_case_explain as case_explain
