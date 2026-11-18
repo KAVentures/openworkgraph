@@ -119,6 +119,31 @@ const pathModule = require("node:path");
       await alice.locator("#design").textContent(),
       /Evidence missing/,
     );
+    // Overlapping authenticated selections: a late first response must not
+    // replace the newer selection, even when both target the same process.
+    const selectionRacePage = await login("alice");
+    let releaseStaleRead;
+    let staleReadIntercepted;
+    const staleReadSeen = new Promise(resolve => { staleReadIntercepted = resolve; });
+    let processReads = 0;
+    await selectionRacePage.route(/\/v1\/human\/processes\/process_[^/?]+(?:\?.*)?$/, async route => {
+      processReads++;
+      if (processReads === 1) {
+        await new Promise(resolve => { releaseStaleRead = resolve; staleReadIntercepted(); });
+        const upstream = await route.fetch();
+        const data = await upstream.json();
+        data.process.title = "STALE RESPONSE MUST NOT RENDER";
+        await route.fulfill({ response: upstream, json: data });
+      } else await route.continue();
+    });
+    await selectionRacePage.getByRole("button", {name:"Shared support process · r1",exact:true}).click();
+    await staleReadSeen;
+    await selectionRacePage.getByRole("button", {name:"Shared support process · r1",exact:true}).click();
+    await selectionRacePage.locator("#selectedTitle").filter({hasText:"Shared support process · revision 1"}).waitFor();
+    releaseStaleRead();
+    await selectionRacePage.waitForTimeout(150);
+    assert.doesNotMatch(await selectionRacePage.locator("#selectedTitle").textContent(), /STALE RESPONSE/);
+    await selectionRacePage.close();
     // Browser acceptance of the real authenticated handoff preflight against the
     // synthetic Gateway. The packet is kept in Chromium, never posted to it.
     const handoffPublished = await (await handoffPublishedResponse).json();
@@ -146,8 +171,9 @@ const pathModule = require("node:path");
     });
     await setHandoffPacket(handoffPacket());
     await alice.locator("#handoffCheck").click();
-    await alice.locator("#handoffStatus").filter({hasText: "MATCH: Fresh authorized process revision"}).waitFor();
-    assert.match(await alice.locator("#handoffStatus").textContent(), /No packet checked|execution authorization remain unverified/i);
+    await alice.locator("#handoffStatus").filter({hasText: "REFUSED:"}).waitFor();
+    assert.match(await alice.locator("#handoffStatus").textContent(), /lacks independent design review/);
+    assert.match(await alice.locator("#handoffStatus").textContent(), /No execution authorization/i);
     assert.equal(uploadedHandoff, false, "review packet bytes must remain local");
     await setHandoffPacket(handoffPacket({revision: handoffProcess.revision + 1}));
     await alice.locator("#handoffCheck").click();
@@ -183,9 +209,9 @@ const pathModule = require("node:path");
     assert.equal((await recoveredRead).status(),200,
       "recovery must independently read the current authorized Gateway revision");
     await recoveredHandoffPage.locator("#handoffStatus")
-      .filter({hasText:"MATCH: Fresh authorized process revision"}).waitFor();
+      .filter({hasText:"REFUSED:"}).waitFor();
     assert.match(await recoveredHandoffPage.locator("#handoffStatus").textContent(),
-      /execution authorization remain unverified/i);
+      /lacks independent design review/i);
     assert.equal(uploadedHandoff,false,
       "neither denied nor recovered packet may be posted to Gateway");
 
@@ -372,6 +398,14 @@ const pathModule = require("node:path");
       .locator("#reviewState")
       .filter({ hasText: "Design review: reviewed design." })
       .waitFor();
+    // The real Gateway now reports independent review for this exact revision.
+    // Re-check from the owner's browser; the local packet is still never uploaded.
+    await setHandoffPacket(handoffPacket());
+    await alice.locator("#handoffCheck").click();
+    await alice.locator("#handoffStatus")
+      .filter({hasText:"MATCH: Fresh authorized, independently design-reviewed process revision"}).waitFor();
+    assert.match(await alice.locator("#handoffStatus").textContent(), /execution authorization remain unverified/);
+    assert.equal(uploadedHandoff, false);
     await bob
       .getByRole("button", {
         name: "Load reviewed improvement scenarios",
