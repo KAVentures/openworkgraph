@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
+from .event_log_cohort_export import MatchingExportFormat, export_matching_cases
 from . import event_log_analytics as analytics
 from . import event_log_variant_coverage as variant_coverage
 from . import event_log_duration_distribution as duration_distribution
@@ -562,18 +563,17 @@ def event_log_quality_batch_history_page(request: Request, log_id: str,
 
 
 @router.post("/v1/event-logs/{log_id}/export/matching-cases")
-async def export_event_log_matching_cases(request: Request, log_id: str):
-    from .event_log_cohort_export import export_matching_cases
-
+async def export_event_log_matching_cases(request: Request, log_id: str,
+                                          format: MatchingExportFormat = Query(default="csv")):
     _require_dashboard(request)
     spec = await _json_body(request, "matching-case export settings", strict=True, limit=32768)
 
     def prepare():
-        handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="", suffix=".csv",
+        handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="", suffix="." + _SUFFIX[format],
                                              dir=str(DATA_DIR), delete=False)
         try:
             with handle:
-                export_matching_cases(log_id, spec, handle)
+                export_matching_cases(log_id, spec, handle, export_format=format)
         except BaseException:
             os.unlink(handle.name)
             raise
@@ -583,7 +583,7 @@ async def export_event_log_matching_cases(request: Request, log_id: str):
         filename = await run_in_threadpool(prepare)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
-    return FileResponse(filename, media_type="text/csv", filename=f"{log_id}-matching-cases.csv",
+    return FileResponse(filename, media_type=_TYPES[format], filename=f"{log_id}-matching-cases.{_SUFFIX[format]}",
                         headers={"Cache-Control": "no-store"}, background=BackgroundTask(os.unlink, filename))
 
 

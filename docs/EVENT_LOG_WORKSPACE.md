@@ -270,7 +270,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `POST /v1/event-logs/timestamp-formats?column=...&delimiter=...` | Suggest a timestamp format from the start of a CSV file (body, at most 256 KB): `candidates` (each with `pattern`, `order`, `has_offset` and how the first value reads), `ambiguous`, `suggested`. Nothing is stored. Imports and appends take `timestamp_format=`. |
 | `POST /v1/event-logs/xlsx-to-csv?sheet=...` | Convert one worksheet of the `.xlsx` request body to CSV (`csv`, `sheet`, `sheets`, `rows`, `columns`, `date_columns`, `dates_have_no_offset`). Nothing is stored. |
 | `POST /v1/event-logs/{log_id}/delete` | Delete the log and every row that belongs to it. |
-| `POST /v1/event-logs/{log_id}/export/matching-cases` | Download a flat CSV of complete matching cases. Body contains `cohort` and optional `case_type`. |
+| `POST /v1/event-logs/{log_id}/export/matching-cases` | Download complete matching cases. Body contains `cohort` and optional `case_type`. Query `format` is `csv` (default), `csv-review`, `xes`, or `xes-attributes`. |
 | `POST /v1/event-logs/{log_id}/derive` | Save the cases matching a filter as a new log (below). |
 | `GET /v1/event-logs/{log_id}/quality` | Stored quality and mapping reports per import and append, plus current whole-log diagnostics (below). |
 | `GET /v1/event-logs/{log_id}/summary` | Events, cases, activities, time span and case-duration median/p90/mean. |
@@ -1261,11 +1261,14 @@ units and coverage; CSV exports remain numeric tables.
 
 ## Saving matching cases as a new log
 
-Use **Download matching cases as CSV** to download the original events of those
-cases directly. Filters use the selected case notion and the applied activity
-mapping. The CSV retains the original activity names and includes events
-collapsed by the mapping. It contains case IDs, activity names, timestamps, and
-resources. An empty filter or a filter with no matches produces an error.
+Use **Download matching cases** to download the original events directly.
+Filters use the selected case notion and the applied activity mapping. The export
+retains original activity names and includes events collapsed by the mapping.
+Choose exact CSV for interchange, spreadsheet review CSV for formula-like cells,
+or XES for one trace per selected case. **XES with retained attributes** includes
+static trace and event values. The XES projection follows the chosen case notion.
+Use OCEL when you need timed object attributes or relationships. An empty filter
+or a filter with no matches produces an error.
 
 **Save or export matching cases → Save as new log** (after **Analyse**), or
 `POST /v1/event-logs/{log_id}/derive` with
