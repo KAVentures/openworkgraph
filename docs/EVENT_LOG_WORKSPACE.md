@@ -2154,6 +2154,23 @@ the section offers 0.3, 0.5, 0.7 and 0.9) and when seen at least the chosen numb
 `GET /v1/event-logs/{log_id}/heuristics-net?dependency_threshold=&and_threshold=&min_occurrences=&all_connected=`
 plus the case-filter parameters. Agents with access to a shared log use `get_process_heuristics_net`.
 
+## Path explorer
+
+**Path explorer** walks the process one step at a time, as Celonis's Process Explorer and the variant
+trees of UiPath Process Mining and ProM do. It starts at the beginning of the cases and lists the
+activities that come first; choosing one shows what comes after it, and so on. For each next step it
+shows the number and share of cases that continue with it, the hours from the previous step (median
+and 90th percentile), the median hours from it to the case end, and how many cases end at this point
+(`(end)`). The path chosen so far is shown as a trail, with a button to step back.
+
+**From anywhere in the case** looks for the first place the chosen steps occur one right after
+another, instead of requiring the case to begin with them, which answers "what usually happens after
+Reject → Rework?". The explorer shows recorded order and timing, not why cases branch.
+
+`GET /v1/event-logs/{log_id}/next-steps?step=Open&step=Check&anchor=start` plus the case-filter
+parameters. Agents use `get_process_next_steps` (aggregates only) and call it again with a step
+appended to go deeper.
+
 ## Due dates
 
 **Due dates** checks whether the step that matters, such as *Pay invoice* or *Ship order*, happened
