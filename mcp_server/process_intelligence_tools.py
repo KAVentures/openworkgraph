@@ -151,6 +151,22 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"noise": float(noise), "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def get_process_model_quality(log_id: str, noise_levels: list[float] | None = None,
+                                  case_type: str | None = None) -> dict[str, Any]:
+        """How good the discovered process model of a shared log is at each noise level: fitness (can it replay
+        the cases), precision (does it allow little else), their F-score, generalization and simplicity, plus the
+        noise level with the best F-score. Use it to pick a noise level before asking for the model or its
+        footprints. Scores describe drafts against this log, not which model is right. Aggregates only.
+        """
+        params: dict[str, Any] = {"case_type": case_type}
+        if noise_levels is not None:
+            if (not isinstance(noise_levels, list) or not 1 <= len(noise_levels) <= 8
+                    or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 <= v < 1 for v in noise_levels)):
+                raise ToolError("noise_levels must be 1 to 8 shares from 0 up to (not including) 1")
+            params["levels"] = ",".join(str(float(v)) for v in noise_levels)
+        return _get("get_process_model_quality", f"/v1/process-intelligence/{_log(log_id)}/model-quality", params)
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_signals(log_id: str) -> dict[str, Any]:
         """The owner's signal rules on a shared log (KPI thresholds, case and compliance conditions) and their
         last evaluated state: triggered or not, the measured value or matching cases, and whether the owner

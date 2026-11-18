@@ -62,6 +62,7 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 | `get_process_temporal_profile` | For each ordered pair of activities, the mean and standard deviation of the time between them and how many occurrences deviate by more than `zeta` standard deviations, slower or faster (aggregates level, no case IDs). See "Temporal profile" in EVENT_LOG_WORKSPACE.md. |
 | `get_process_heuristics_net` | The heuristics-miner model: arrows whose dependency is at or above `dependency_threshold`, splits and joins marked AND or XOR, and self- and two-step loops (aggregates level). See "Heuristics net" in EVENT_LOG_WORKSPACE.md. |
 | `get_process_footprints` | Footprint matrices (→, ←, ||, #) from the recorded cases and from the discovered model, the share of cells that agree, and the orderings only the log has (with case counts) or only the model allows (aggregates level). See "Footprints" in EVENT_LOG_WORKSPACE.md. |
+| `get_process_model_quality` | Fitness, precision, their F-score, generalization and simplicity of the discovered net at several noise levels (default 0, 0.1, 0.2, 0.3, 0.5), and the level with the best F-score, to choose a noise level before asking for the model (aggregates level). See "Model quality" in EVENT_LOG_WORKSPACE.md. |
 
 | `tag_process_cases` | Adds an `agent: ` tag with a note to cases (cases level and the tag permission). |
 

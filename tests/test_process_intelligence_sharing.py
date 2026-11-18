@@ -59,6 +59,9 @@ def test_sharing_levels_and_revocation():
     assert net["cases"] == 12 and {e["from"] for e in net["edges"]} >= {"Receive", "Approve"}
     prints = sharing.footprints(log)
     assert prints["cases"] == 12 and prints["conformance"]["cells"] == len(prints["activities"]) ** 2
+    quality = sharing.model_quality(log, levels="0,0.3")
+    assert [r["noise"] for r in quality["levels"]] == [0.0, 0.3] and quality["levels"][0]["fitness"] == 1.0
+    assert quality["best_f_score_noise"] in {0.0, 0.3} and "case_id" not in str(quality)
     profile = sharing.temporal_profile(log)
     assert profile["cases"] == 12 and "top_cases" not in profile and "case_id" not in str(profile)
     rc = sharing.root_cause(log, "duration_over", hours=24)
@@ -252,7 +255,7 @@ PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_root_
                  "explain_process_case", "get_slowest_process_cases", "tag_process_cases",
                  "get_process_automation_candidates", "get_process_signals", "get_process_decision_rules",
                  "get_process_temporal_profile", "get_process_heuristics_net",
-                 "get_process_footprints"}
+                 "get_process_footprints", "get_process_model_quality"}
 
 
 def test_mcp_tools_are_listed_only_when_a_log_is_shared(tmp_path):

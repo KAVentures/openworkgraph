@@ -374,6 +374,16 @@ def footprints(log_id: str, case_type: str | None = None, noise: float = 0.2) ->
     return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
 
 
+def model_quality(log_id: str, case_type: str | None = None, levels: str | None = None) -> dict[str, Any]:
+    """Fitness, precision, generalization and simplicity of the discovered net by noise level (aggregates)."""
+    require(log_id, "aggregates")
+    from . import event_log_model_quality as mq
+    result = mq.model_quality(log_id, case_type, levels=levels)
+    keep = ("case_notion", "cases", "cases_excluded", "variants", "levels", "best_f_score_noise", "definitions",
+            "method", "caveat")
+    return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
+
+
 def slowest_cases(log_id: str, case_type: str | None = None, limit: int = 10) -> dict[str, Any]:
     require(log_id, "cases")
     from . import event_log_case_explain as case_explain

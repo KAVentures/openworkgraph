@@ -916,6 +916,17 @@ async def event_log_petri_net_alignments(request: Request, log_id: str,
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.get("/v1/event-logs/{log_id}/model-quality")
+def event_log_model_quality(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                            levels: str | None = Query(default=None, max_length=100),
+                            activities: float = Query(default=1.0, gt=0, le=1),
+                            cohort: dict = Depends(_case_filter)):
+    """Fitness, precision, generalization and simplicity of the discovered net at several noise levels."""
+    from . import event_log_model_quality as quality
+    _require_dashboard(request)
+    return _respond(quality.model_quality, log_id, case_type, levels=levels, activities=activities, cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/variants")
 def event_log_variants(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                        limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):
