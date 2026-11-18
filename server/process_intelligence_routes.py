@@ -201,6 +201,13 @@ async def agent_insights(request: Request, log_id: str, sla_hours: float | None 
     return await _answer(sharing.insights, log_id, case_type, sla_hours, limit)
 
 
+@router.get("/v1/process-intelligence/{log_id}/model-deviation-causes")
+async def agent_model_deviation_causes(request: Request, log_id: str, noise: float = Query(default=0.2, ge=0, lt=1),
+                                       case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.model_deviation_causes, log_id, case_type, noise)
+
+
 @router.get("/v1/process-intelligence/{log_id}/signals")
 async def agent_signals(request: Request, log_id: str):
     _require_agent_access(request)

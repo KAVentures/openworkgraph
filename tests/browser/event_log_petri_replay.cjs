@@ -63,6 +63,11 @@ const path=require('node:path');
    // Cases i%5===0 skip Check; they alternate months, so each month has 3 non-fitting cases of 15.
    const months=await page.locator('#owgPetriAlignMonths').textContent();
    assert(months.includes('2024-011580%97.4%')&&months.includes('2024-021580%97.4%'),months);
+   // Root causes of the deviation: the six cases without Check are the deviating ones.
+   await page.locator('#owgPetriCauses').click();
+   await page.locator('#owgPetriCausesResults').filter({hasText:'6 of 30 cases deviate'}).waitFor();
+   const causes=await page.locator('#owgPetriCausesResults').textContent();
+   assert(causes.includes('activity: Check')&&causes.includes('not causes'),causes);
    await page.addScriptTag({content:axeSource});
    const alignedAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgPetri'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(alignedAudit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
@@ -74,6 +79,6 @@ const path=require('node:path');
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgPetri'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Petri net replay browser acceptance passed: discovered net fits, uploaded strict net shows missing and remaining tokens, alignments name the skipped step, unsafe XML refused, WCAG audit.');
+   console.log('Petri net replay browser acceptance passed: discovered net fits, uploaded strict net shows missing and remaining tokens, alignments name the skipped step, deviation root causes, unsafe XML refused, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});

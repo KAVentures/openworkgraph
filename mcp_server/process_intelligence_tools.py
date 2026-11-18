@@ -265,6 +265,18 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"sla_hours": sla_hours, "limit": limit, "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def get_process_deviation_causes(log_id: str, noise: float = 0.2, case_type: str | None = None) -> dict[str, Any]:
+        """Which case attributes and activities go with cases that depart from a shared log's discovered process
+        model: risk differences with 95% intervals and a Bonferroni check, for the outcome "the case followed a
+        path the optimal alignment found non-fitting". Use after get_process_deviations. Associations, not
+        causes. Aggregates only, no case IDs.
+        """
+        if isinstance(noise, bool) or not isinstance(noise, (int, float)) or not 0 <= noise < 1:
+            raise ToolError("noise must be a share from 0 up to (not including) 1")
+        return _get("get_process_deviation_causes", f"/v1/process-intelligence/{_log(log_id)}/model-deviation-causes",
+                    {"noise": float(noise), "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_signals(log_id: str) -> dict[str, Any]:
         """The owner's signal rules on a shared log (KPI thresholds, case and compliance conditions) and their
         last evaluated state: triggered or not, the measured value or matching cases, and whether the owner

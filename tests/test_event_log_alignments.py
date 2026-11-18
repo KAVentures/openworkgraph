@@ -92,3 +92,30 @@ def test_fitness_by_case_start_month():
     assert months == [{"month": "2024-01", "cases": 4, "fitting_case_share": 1.0, "fitness": 1.0},
                       {"month": "2024-02", "cases": 4, "fitting_case_share": 0.5,
                        "fitness": round(1 - 2 / (2 * 6 + 2 * 5), 4)}]
+
+
+def test_deviation_causes_find_the_attribute_that_goes_with_deviating_cases(tmp_path):
+    from io import BytesIO
+    from server import event_log_case_attributes as case_attributes
+    from server import event_log_workspace as workspace
+    rows, table = ["case,activity,time"], ["id,channel"]
+    for i in range(40):
+        web = i % 2 == 0
+        # Web cases skip B in 3 of 4; branch cases always follow the net.
+        steps = ["A", "C"] if web and i % 8 != 0 else ["A", "B", "C"]
+        for j, a in enumerate(steps):
+            rows.append(f"c{i},{a},2024-01-{1 + i % 28:02d}T0{j}:00:{i % 60:02d}Z")
+        table.append(f"c{i},{'web' if web else 'branch'}")
+    log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="dc", source_format="csv",
+                               mapping={"case_column": "case", "activity_column": "activity",
+                                        "timestamp_column": "time"})["log_id"]
+    (tmp_path / "channels.csv").write_text("\n".join(table) + "\n")
+    case_attributes.add(log, tmp_path / "channels.csv", id_column="id", columns=["channel"])
+    r = al.deviation_causes(log, _sequence_net(["A", "B", "C"]))
+    assert r["cases"] == 40 and r["fitting_cases"] == 25 and r["non_fitting_paths"] == 1
+    assert r["outcome_cases"] == 15 and r["outcome"]["kind"] == "variant_in"
+    web = next(a for a in r["associations"] if a["feature"]["value"] == "channel=web")
+    assert web["outcome_rate_with"] == 0.75 and web["outcome_rate_without"] == 0 and web["holds_after_bonferroni"]
+    # A net every case fits (B can be skipped silently) has nothing to explain.
+    fits = al.deviation_causes(log, _sequence_net(["A", "B", "C"], silent_skip=1))
+    assert fits["non_fitting_paths"] == 0 and fits["associations"] == []
