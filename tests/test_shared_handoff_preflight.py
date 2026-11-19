@@ -110,3 +110,22 @@ def test_packet_inspection_rejects_inflight_identity_and_credential_changes():
     assert block.index("identityTicket!==identityGeneration") < block.index("const p=packet?.process;")
     assert block.rindex("identityTicket!==identityGeneration") > block.index('const current=await call(')
     assert block.rindex("identityTicket!==identityGeneration") < block.index('$("handoffReview").disabled=false;')
+
+
+def test_review_submission_revalidates_inspected_handoff_before_post():
+    """An inspected handoff cannot be reviewed after revocation or revision drift."""
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split("async function review(decision) {", 1)[1].split('$("approve").onclick', 1)[0]
+    assert 'if (inspectedHandoff) {' in block
+    assert 'const current=await call("/v1/human/processes/"+encodeURIComponent(pinned.workflow_id));' in block
+    for guard in (
+        "ticket!==handoffGeneration", "identityTicket!==identityGeneration",
+        "credential!==authorizedCredential", "selected!==chosen",
+        'current.review?.status!=="reviewed_design"',
+        "current.latest_revision!==pinned.revision",
+        "current.process.content_sha256!==pinned.content_sha256",
+        "record.content_sha256!==pinned.content_sha256",
+    ):
+        assert guard in block
+    assert block.index("const current=await call(") < block.index('"/reviews"')
+    assert 'resetHandoff("REFUSED: Reviewed handoff is no longer current or authorized.' in block
