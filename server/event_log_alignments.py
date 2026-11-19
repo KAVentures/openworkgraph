@@ -333,4 +333,64 @@ def conformance_of(pnml: bytes, paths: list[tuple[list[str], int]]) -> dict[str,
             "alignment_fitness": round(1 - cost_sum / worst_sum, 4) if worst_sum else None}
 
 
-__all__ = ["alignments", "deviation_causes", "case_alignment", "reference_net", "conformance_of", "FORMAT"]
+MAX_EXPORT_CASES = 200_000
+
+
+def _cell(value: Any) -> str:
+    """CSV cell safe to open in a spreadsheet: a leading formula character is neutralized."""
+    text = "" if value is None else str(value)
+    return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
+
+
+def non_fitting_cases_csv(log_id: str, pnml: bytes, case_type: str | None = None, *,
+                          cohort: dict[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
+    """Every case whose path does not fit the net, one row each, for follow-up outside OWG: case ID, its
+    activities, alignment fitness, and the steps it added or skipped. Distinct paths are aligned once."""
+    import csv
+    import io
+    net = reference_net(pnml)
+    labels = {label for label in net["transitions"].values() if label is not None}
+    shortest = _align(net, (), labels, MAX_STATES_PER_VARIANT)[0]["cost"]
+
+    def run(conn):
+        rows = conn.execute("""SELECT case_id, list(activity ORDER BY ts, event_id) FROM ce GROUP BY case_id
+            ORDER BY case_id""").fetchall()
+        return {"rows": rows}
+
+    rows = workspace._query_filtered(log_id, case_type, cohort, run)["rows"]
+    by_path: dict[tuple, dict[str, Any] | None] = {}
+    remaining = MAX_STATES_TOTAL
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(["case_id", "activities", "alignment_fitness", "extra_steps", "skipped_steps"])
+    written = unaligned = 0
+    for case_id, path in rows:
+        trace = tuple(path)
+        if trace not in by_path:
+            if len(trace) > MAX_TRACE_LENGTH or remaining <= 0:
+                by_path[trace] = None
+            else:
+                result, used = _align(net, trace, labels, min(MAX_STATES_PER_VARIANT, remaining))
+                remaining -= used
+                by_path[trace] = None if result is None or result["cost"] is None else result
+        result = by_path[trace]
+        if result is None:
+            unaligned += 1
+            continue
+        if result["cost"] == 0:
+            continue
+        if written >= MAX_EXPORT_CASES:
+            break
+        steps = result["steps"]
+        worst = len(trace) + shortest
+        writer.writerow([_cell(case_id), _cell(" > ".join(trace)),
+                         round(1 - result["cost"] / worst, 4) if worst else 1.0,
+                         _cell(" > ".join(st[0] for st in steps if st[2] == LOG)),
+                         _cell(" > ".join(st[1] for st in steps if st[2] == MODEL))])
+        written += 1
+    return out.getvalue(), {"cases": len(rows), "non_fitting_cases": written, "unaligned_cases": unaligned,
+                            "truncated": written >= MAX_EXPORT_CASES}
+
+
+__all__ = ["alignments", "deviation_causes", "case_alignment", "reference_net", "conformance_of",
+           "non_fitting_cases_csv", "FORMAT"]

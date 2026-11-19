@@ -942,6 +942,30 @@ async def event_log_petri_net_alignments(request: Request, log_id: str,
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/petri-net-alignments/cases.csv")
+async def event_log_non_fitting_cases_csv(request: Request, log_id: str,
+                                          case_type: str | None = Query(default=None, max_length=200),
+                                          cohort: dict[str, Any] = Depends(_case_filter)):
+    """Each case that does not fit the PNML net sent as the body, as spreadsheet-safe CSV. Not stored."""
+    from . import event_log_alignments as aligned
+    from . import event_log_petri_replay as petri
+    _require_dashboard(request)
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > petri.MAX_BYTES:
+            raise HTTPException(413, "the Petri net file is larger than 2 MB")
+    try:
+        text, meta = await run_in_threadpool(aligned.non_fitting_cases_csv, log_id, bytes(body), case_type,
+                                             cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(text, media_type="text/csv; charset=utf-8", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-non-fitting-cases.csv"',
+        "X-OWG-Non-Fitting": f"cases={meta['non_fitting_cases']}; unaligned={meta['unaligned_cases']}; "
+                             f"truncated={str(meta['truncated']).lower()}"})
+
+
 @router.get("/v1/event-logs/{log_id}/model-quality")
 def event_log_model_quality(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                             levels: str | None = Query(default=None, max_length=100),
