@@ -4617,6 +4617,7 @@
       save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;prepareCompany.disabled=true;
     }
     function useMetric(metric){
+      if(running)throw new Error('Wait for the current analysis to finish or cancel it before changing this draft.');
       if(metrics.some(m=>m.name===metric.name))throw new Error('This analysis already has a metric named '+metric.name+'.');
       if(metrics.length>=4)throw new Error('Use at most 4 case metrics.');
       if(metric.kind==='arithmetic')for(const o of [metric.left,metric.right])if(o.kind==='metric'&&!metrics.some(m=>m.name===o.name))throw new Error('Add earlier metric '+o.name+' first.');
@@ -4627,6 +4628,7 @@
         const edit=button('Edit','secondary');edit.setAttribute('aria-label','Edit metric '+m.name);
         edit.onclick=()=>{try{populateMetric(m);editingMetric=m.name;mUpdate.disabled=false;message.textContent='Editing '+m.name+'. Update the selected metric to apply changes; the saved analysis remains unchanged.';}catch(error){message.textContent=error.message;}};
         const rm=button('Remove','secondary');rm.setAttribute('aria-label','Remove metric '+m.name);rm.onclick=()=>{
+        if(running){message.textContent='Wait for the current analysis to finish or cancel it before changing this draft.';return;}
         const dependent=metrics.find(x=>x.kind==='arithmetic'&&[x.left,x.right].some(o=>o.kind==='metric'&&o.name===m.name));
         if(dependent){message.textContent='Remove dependent metric '+dependent.name+' first.';return;}
         metrics.splice(i,1);if(editingMetric===m.name){editingMetric=null;mUpdate.disabled=true;}renderMetrics();invalidateMetricResult();};item.append(edit,rm);return item;}));
@@ -4852,6 +4854,7 @@
     mAdd.onclick=()=>{try{useMetric(readMetric());message.textContent='Metric added; choose it under Measure.';}catch(error){message.textContent=error.message;}};
     mUpdate.onclick=()=>{
       try{
+        if(running)throw new Error('Wait for the current analysis to finish or cancel it before changing this draft.');
         const index=metrics.findIndex(m=>m.name===editingMetric);
         if(index<0)throw new Error('Select a metric to edit first.');
         const next=readMetric(),old=editingMetric;
@@ -4869,6 +4872,7 @@
     };
     function addStageComparison(relative){
       try{
+        if(running)throw new Error('Wait for the current analysis to finish or cancel it before changing this draft.');
         const proposed=stageComparisonMetrics(readMetric(),relative);
         if(metrics.length+proposed.length>4)throw new Error('A stage comparison needs '+(relative?'four':'three')+' free metric slots (four maximum). Remove other metrics first.');
         const existing=new Set(metrics.map(m=>m.name));
@@ -4887,6 +4891,7 @@
     mCompareRelative.onclick=()=>addStageComparison(true);
     mCompareActivities.onclick=()=>{
       try{
+        if(running)throw new Error('Wait for the current analysis to finish or cancel it before changing this draft.');
         const proposed=activityComparisonMetrics(readMetric(),mCompareActivityA.value,mCompareActivityB.value);
         if(metrics.length+proposed.length>4)
           throw new Error('An activity comparison needs three free metric slots (four maximum). Remove other metrics first.');
@@ -4902,6 +4907,7 @@
     };
     mCompareShare.onclick=()=>{
       try{
+        if(running)throw new Error('Wait for the current analysis to finish or cancel it before changing this draft.');
         const proposed=activityShareMetrics(readMetric());
         if(metrics.length+proposed.length>4)
           throw new Error('An activity fraction needs three free metric slots (four maximum). Remove other metrics first.');
