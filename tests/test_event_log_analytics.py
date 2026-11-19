@@ -656,3 +656,52 @@ def test_literal_labels_remain_distinct_in_conformance_and_resource_kpis():
         assert metrics["automation"]["automated_events"] == 1
         assert analytics.kpis(log_id, cohort={"resource": resource})["cases"] == 1
     assert analytics.kpis(log_id, cohort={"activity": "Review "})["cases"] == 1
+
+
+def test_source_bound_analysis_api_lineage_auth_and_budget(tmp_path):
+    """HTTP contract: same aggregate, distinct source; authentication and fail-closed budget."""
+    code = r'''
+from fastapi.testclient import TestClient
+from server.secure_app import app
+from server import local_auth, process_discovery_provenance as provenance
+
+with TestClient(app) as client:
+    session = {"Authorization": "OWG-Session " + local_auth.create_dashboard_session()}
+    def imported(case):
+        body = ("case,activity,time,who\\n" +
+                f"{case},Start,2024-01-01T00:00:00Z,bot\\n" +
+                f"{case},Finish,2024-01-01T01:00:00Z,bot\\n").encode()
+        response = client.post(
+            "/v1/event-logs/import?format=csv&name=source&case_column=case&activity_column=activity&timestamp_column=time&resource_column=who",
+            content=body, headers={**session, "Content-Type": "text/csv",
+                                    "X-OWG-Local-Storage-Confirmed": "true"})
+        assert response.status_code == 200, response.text
+        return response.json()["log_id"]
+    first, second = imported("case-one"), imported("case-two")
+    def analyze(log_id, headers):
+        return client.post(f"/v1/event-logs/{log_id}/analysis-source-bound",
+                           json={}, headers=headers)
+    assert analyze(first, {}).status_code in (401, 403)
+    a, b = analyze(first, session), analyze(second, session)
+    assert a.status_code == b.status_code == 200, (a.text, b.text)
+    assert len(a.json()["source_content_sha256"]) == 64
+    assert a.json()["source_content_sha256"] != b.json()["source_content_sha256"]
+    assert a.headers["cache-control"] == "no-store"
+    old_limit = provenance.MAX_SOURCE_ROWS
+    try:
+        provenance.MAX_SOURCE_ROWS = 0
+        denied = analyze(first, session)
+        assert denied.status_code == 422, denied.text
+        assert "fingerprint budget" in denied.text
+    finally:
+        provenance.MAX_SOURCE_ROWS = old_limit
+'''
+    env = os.environ.copy()
+    env.update({
+        "WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"),
+        "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth"),
+        "WORKFLOW_OBSERVER_CONFIG": str(tmp_path / "config.json"),
+    })
+    result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env,
+                            capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, f"stdout={result.stdout}\\nstderr={result.stderr}"
