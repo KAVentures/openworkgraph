@@ -2154,6 +2154,26 @@ applies.
 `GET /v1/event-logs/{log_id}/performance-spectrum?top=&bins=&segment=A->B&case_type=` plus the
 case-filter parameters. Repeat `segment` for several segments (at most 12). Dashboard session
 only.
+## Temporal profile
+
+**Temporal profile** (as in PM4Py and ProM) learns the usual time between every ordered pair of
+activities in a case, not just neighbours: for *Order → Invoice* it records the mean and standard
+deviation of the time from the order to the invoice, whatever happened in between. A case
+deviates on a pair when its time is more than *zeta* standard deviations from the mean (default 3;
+the section offers 2, 3, 4 and 6). This catches cases whose steps each look normal but that took
+far too long, or suspiciously little time, overall between two points.
+
+- Pairs are taken up to 50 events apart within a case.
+- A pair is checked only when it occurs at least `min_occurrences` times (default 5) and its times vary.
+- The section lists the pairs most often outside their usual time (with the allowed range and how many
+  were slower or faster) and the cases with most unusual timings, each with its strongest one.
+- The profile is learned from the same cases it checks, so a few extreme cases widen it; read the
+  results as timings to review, not errors. The case filter applies.
+
+`GET /v1/event-logs/{log_id}/temporal-profile?zeta=&min_occurrences=&case_type=` plus the case-filter
+parameters. Agents with access to a shared log get the pair figures, without case IDs, through
+`get_process_temporal_profile`.
+
 ## Decision rules (decision mining)
 
 Decision mining finds the points where cases take different routes and learns which recorded

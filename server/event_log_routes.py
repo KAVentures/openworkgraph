@@ -852,6 +852,17 @@ def event_log_decision_rules(request: Request, log_id: str,
     return _respond(decisions.analyse, log_id, decision_activity, case_type, max_depth=max_depth, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/temporal-profile")
+def event_log_temporal_profile(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                               zeta: float = Query(default=3.0, ge=0.5, le=10),
+                               min_occurrences: int = Query(default=5, ge=2, le=10_000),
+                               cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_temporal_profile as temporal
+    _require_dashboard(request)
+    return _respond(temporal.temporal_profile, log_id, case_type, zeta=zeta, min_occurrences=min_occurrences,
+                    cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/variants")
 def event_log_variants(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                        limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):

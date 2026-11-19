@@ -124,6 +124,13 @@ async def agent_decision_rules(request: Request, log_id: str, activity: str | No
     return await _answer(sharing.decision_rules, log_id, activity, case_type, max_depth)
 
 
+@router.get("/v1/process-intelligence/{log_id}/temporal-profile")
+async def agent_temporal_profile(request: Request, log_id: str, zeta: float = Query(default=3.0, ge=0.5, le=10),
+                                 case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.temporal_profile, log_id, case_type, zeta)
+
+
 @router.get("/v1/process-intelligence/{log_id}/signals")
 async def agent_signals(request: Request, log_id: str):
     _require_agent_access(request)
