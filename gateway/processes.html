@@ -2193,16 +2193,41 @@
           );
         }
 
+        let inspectedHandoff=null;
         function resetHandoff(message="No packet checked.") {
           handoffGeneration++;
+          inspectedHandoff=null;
           $("handoffStatus").textContent=message;
           $("handoffReview").disabled=true;
         }
-        $("handoffReview").addEventListener("click",()=>{
-          if($("handoffReview").disabled||!selected||!credential||!$("handoffConsent").checked)return;
-          $("revisionReview").scrollIntoView({block:"start"});
-          $("comment").focus();
-        });
+        $("handoffReview").addEventListener("click",()=>run(async()=>{
+          if($("handoffReview").disabled||!selected||!credential||!$("handoffConsent").checked||!inspectedHandoff)return;
+          const ticket=handoffGeneration, chosen=selected, inspected=inspectedHandoff;
+          $("handoffReview").disabled=true;
+          $("handoffStatus").textContent="Rechecking current authorization and revision before review…";
+          try {
+            const current=await call("/v1/human/processes/"+encodeURIComponent(inspected.workflow_id));
+            if(ticket!==handoffGeneration||selected!==chosen||!$("handoffConsent").checked)return;
+            if(!current?.process||current.archived||current.viewing_historical_revision||
+               current.process.workflow_id!==inspected.workflow_id||
+               current.process.revision!==inspected.revision||
+               current.latest_revision!==inspected.revision||
+               current.process.content_sha256!==inspected.content_sha256||
+               current.review?.status!=="reviewed_design"||
+               chosen.viewing_historical_revision||chosen.archived||
+               chosen.process?.revision!==inspected.revision||
+               chosen.process?.content_sha256!==inspected.content_sha256){
+              resetHandoff("REFUSED: Process changed or access/review was withdrawn. Reopen latest revision and inspect again.");
+              return;
+            }
+            $("handoffStatus").textContent="Current authorization and revision rechecked. Human review only; no execution authorization.";
+            $("handoffReview").disabled=false;
+            $("revisionReview").scrollIntoView({block:"start"});
+            $("comment").focus();
+          }catch(_){
+            if(ticket===handoffGeneration)resetHandoff("REFUSED: Could not revalidate authorized revision. Sign in and inspect again.");
+          }
+        }));
         $("handoffPacket").addEventListener("change",()=>{ $("handoffConsent").checked=false; resetHandoff("Packet changed. Reauthorize inspection."); });
         $("handoffConsent").addEventListener("change",()=>resetHandoff("Authorization changed. Check again."));
         $("handoffClear").addEventListener("click",()=>{
@@ -2250,6 +2275,7 @@
               return;
             }
             $("handoffStatus").textContent="MATCH: Fresh authorized, independently design-reviewed process revision "+p.revision+" and SHA-256 match. Eligible only for further human review. Consent, owner approval, source access, retention and execution authorization remain unverified.";
+            inspectedHandoff={workflow_id:p.workflow_id,revision:p.revision,content_sha256:p.content_sha256};
             $("handoffReview").disabled=false;
           }catch(_){if(ticket===handoffGeneration)fail("Fresh authenticated read failed or access was withdrawn.");}
         }));
