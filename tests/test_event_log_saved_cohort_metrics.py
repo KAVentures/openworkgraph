@@ -130,3 +130,13 @@ def test_saved_metric_digest_is_stable_and_sensitive_to_expression():
     changed = {"version": 1, "expression": {"field": "event_count"}}
     assert saved._definition_digest(first) == saved._definition_digest(reordered)
     assert saved._definition_digest(first) != saved._definition_digest(changed)
+
+
+def test_dashboard_rejects_saved_revision_drift_and_shows_verified_digest():
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[1] / "dashboard" / "event_log_workspace.js").read_text(encoding="utf-8")
+    assert "data.saved_metric.definition_sha256!==selected.definition_sha256" in source
+    assert "data.saved_metric.metric_id!==savedId" in source
+    assert "Saved metric revision changed. Reload saved expressions and calculate again." in source
+    assert "Saved definition SHA-256: " in source
+    assert "await loadSaved();" in source
