@@ -4262,6 +4262,7 @@
 
   function petriReplaySection(){
     const box=section('Check against a Petri net');box.id='owgPetri';
+    const netsBase=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/reference-nets';
     box.appendChild(el('div','Replay the recorded cases on a Petri net from ProM, PM4Py, Apromore or another tool (a .pnml file), or on the net discovered here. Tokens that are missing or left behind show where the cases and the net disagree. The file is read for this check and not stored.','muted'));
     const file=input('owgPetriFile','file');file.accept='.pnml,application/xml,text/xml';
     const run=button('Replay on this net','secondary');run.id='owgPetriRun';
@@ -4278,6 +4279,32 @@
     const alertMessage=el('div',null,'muted');alertMessage.id='owgPetriAlertMessage';alertMessage.setAttribute('role','status');alertMessage.setAttribute('aria-live','polite');
     const alertRow=el('div',null,'row');alertRow.style.alignItems='end';alertRow.append(field('Signal when cases not fitting this net are',alertShare),field('Among cases',alertWindow),alertSave);
     box.append(row,statusLine,out,aligned,alertRow,alertMessage);
+    // Reference nets saved with this log: keep the net just checked, or check again against a saved one.
+    const savedPick=select('owgPetriSaved',[]);const savedRun=button('Replay on saved net','secondary');savedRun.id='owgPetriSavedRun';
+    const savedDelete=button('Delete saved net','secondary');savedDelete.id='owgPetriSavedDelete';
+    const saveName=input('owgPetriSaveName','text','e.g. Target process 2025');saveName.maxLength=120;saveName.autocomplete='off';
+    const saveRun=button('Save this net','secondary');saveRun.id='owgPetriSave';saveRun.disabled=true;
+    const savedMessage=el('div',null,'muted');savedMessage.id='owgPetriSavedMessage';savedMessage.setAttribute('role','status');savedMessage.setAttribute('aria-live','polite');
+    const savedRow=el('div',null,'row');savedRow.style.alignItems='end';savedRow.append(field('Saved reference nets',savedPick),savedRun,savedDelete,field('Save the net just checked as',saveName),saveRun);
+    box.append(savedRow,savedMessage);
+    const refreshSaved=async()=>{try{const r=await getJSON(netsBase());
+        savedPick.replaceChildren(...r.nets.map(n=>{const o=document.createElement('option');o.value=n.net_id;o.textContent=n.name+' ('+n.transitions+' transitions)';return o;}));
+        savedRun.disabled=savedDelete.disabled=!r.nets.length;if(!r.nets.length){const o=document.createElement('option');o.value='';o.textContent='(none saved yet)';savedPick.appendChild(o);}}
+      catch(error){savedMessage.textContent=error.message;}};
+    refreshSaved();
+    savedRun.onclick=async()=>{if(!savedPick.value)return;
+      try{const response=await api(netsBase()+'/'+encodeURIComponent(savedPick.value)+'.pnml');await replay(await response.text(),savedPick.selectedOptions[0].textContent.replace(/ \(\d+ transitions\)$/,''));}
+      catch(error){statusLine.textContent=error.message;}};
+    savedDelete.onclick=async()=>{if(!savedPick.value||!window.confirm('Delete the saved net “'+savedPick.selectedOptions[0].textContent+'”?'))return;
+      try{await api(netsBase()+'/'+encodeURIComponent(savedPick.value)+'/delete',{method:'POST'});savedMessage.textContent='Saved net deleted.';await refreshSaved();}
+      catch(error){savedMessage.textContent=error.message;}};
+    saveRun.onclick=async()=>{if(!lastNet)return;
+      if(!saveName.value.trim()){savedMessage.textContent='Enter a name for the net.';return;}
+      saveRun.disabled=true;
+      try{await api(netsBase(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:saveName.value.trim(),pnml:lastNet.body})});
+        savedMessage.textContent='Saved “'+saveName.value.trim()+'” with this log.';saveName.value='';await refreshSaved();}
+      catch(error){savedMessage.textContent=error.message;}
+      finally{saveRun.disabled=!lastNet;}};
     const pct=x=>Math.round((x||0)*1000)/10+'%';
     let lastNet=null;
     const replay=async(body,label)=>{
@@ -4301,7 +4328,7 @@
           more.appendChild(table(['Variant','Cases','Fitness','Missing','Remaining'],r.non_fitting_variants.map(v=>[v.path.join(' → '),Number(v.cases).toLocaleString(),pct(v.fitness),String(v.missing_tokens),String(v.remaining_tokens)])));out.appendChild(more);}
         out.appendChild(el('div',r.caveat,'muted'));
       }catch(error){statusLine.textContent=error.message;}
-      finally{run.disabled=own.disabled=happy.disabled=false;align.disabled=alertSave.disabled=!lastNet;}};
+      finally{run.disabled=own.disabled=happy.disabled=false;align.disabled=alertSave.disabled=saveRun.disabled=!lastNet;}};
     alertSave.onclick=async()=>{
       if(!lastNet)return;
       if(lastNet.body.length>60000){alertMessage.textContent='This net is too large to keep with a signal (over 60,000 characters).';return;}

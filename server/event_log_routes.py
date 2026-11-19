@@ -922,6 +922,48 @@ async def event_log_petri_net_replay(request: Request, log_id: str,
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.get("/v1/event-logs/{log_id}/reference-nets")
+def event_log_reference_nets(request: Request, log_id: str):
+    """Reference nets saved with this log (names and sizes, not contents)."""
+    from . import event_log_reference_nets as nets
+    _require_dashboard(request)
+    return _respond(nets.listing, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/reference-nets")
+async def event_log_save_reference_net(request: Request, log_id: str):
+    """Save a PNML net under a name: {"name": …, "pnml": …}."""
+    from . import event_log_reference_nets as nets
+    _require_dashboard(request)
+    spec = await _json_body(request, "reference net", strict=True, limit=2_300_000)
+    if not isinstance(spec, dict) or set(spec) - {"name", "pnml"}:
+        raise HTTPException(422, "send name and pnml")
+    try:
+        result = await run_in_threadpool(nets.save, log_id, spec.get("name"), spec.get("pnml"))
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/v1/event-logs/{log_id}/reference-nets/{net_id}.pnml")
+def event_log_reference_net_pnml(request: Request, log_id: str, net_id: str):
+    from . import event_log_reference_nets as nets
+    _require_dashboard(request)
+    try:
+        name, xml = nets.get(log_id, net_id)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(404, str(exc)) from None
+    return Response(xml, media_type="application/xml", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{net_id}.pnml"'})
+
+
+@router.post("/v1/event-logs/{log_id}/reference-nets/{net_id}/delete")
+def event_log_delete_reference_net(request: Request, log_id: str, net_id: str):
+    from . import event_log_reference_nets as nets
+    _require_dashboard(request)
+    return _respond(nets.delete, log_id, net_id)
+
+
 @router.post("/v1/event-logs/{log_id}/petri-net-alignments")
 async def event_log_petri_net_alignments(request: Request, log_id: str,
                                          case_type: str | None = Query(default=None, max_length=200),

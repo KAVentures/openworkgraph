@@ -79,6 +79,12 @@ const path=require('node:path');
    await page.addScriptTag({content:axeSource});
    const alignedAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgPetri'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(alignedAudit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
+   // Keep the strict net as a reference and check against it again from the saved list.
+   await page.locator('#owgPetriSaveName').fill('Strict target');await page.locator('#owgPetriSave').click();
+   await page.locator('#owgPetriSavedMessage').filter({hasText:'Saved “Strict target” with this log.'}).waitFor();
+   await page.locator('#owgPetriSaved').selectOption({label:'Strict target (4 transitions)'});
+   await page.locator('#owgPetriSavedRun').click();
+   await page.locator('#owgPetriStatus').filter({hasText:'on Strict target: 24 of 30 cases'}).waitFor();
    await page.locator('#owgPetriFile').setInputFiles({name:'bad.pnml',mimeType:'application/xml',buffer:Buffer.from('<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "b">]><pnml/>')});
    await page.locator('#owgPetriRun').click();
    await page.locator('#owgPetriStatus').filter({hasText:'DOCTYPE'}).waitFor();
@@ -91,6 +97,6 @@ const path=require('node:path');
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgPetri'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Petri net replay browser acceptance passed: discovered net fits, uploaded strict net shows missing and remaining tokens, alignments name the skipped step, deviation root causes, unsafe XML refused, most common path as reference, conformance signal, WCAG audit.');
+   console.log('Petri net replay browser acceptance passed: discovered net fits, uploaded strict net shows missing and remaining tokens, alignments name the skipped step, deviation root causes, unsafe XML refused, most common path as reference, conformance signal, saved reference net, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});
