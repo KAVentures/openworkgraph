@@ -158,3 +158,16 @@ def test_review_submission_rejects_confirmation_or_comment_drift_during_revalida
     assert 'comment: confirmedComment,' in block
     assert block.index('const current=await call(') < block.index('$("comment").value!==confirmedComment')
     assert block.index('$("comment").value!==confirmedComment') < block.index('"/reviews"')
+
+
+def test_review_authorization_read_failure_invalidates_inspected_packet():
+    """Denied or unavailable Gateway read cannot retain a reusable inspected handoff."""
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split("async function review(decision) {", 1)[1].split('$("approve").onclick', 1)[0]
+    assert 'current=await call("/v1/human/processes/"+encodeURIComponent(pinned.workflow_id));' in block
+    assert 'catch (error)' in block
+    assert 'ticket===handoffGeneration && identityTicket===identityGeneration' in block
+    assert 'credential===authorizedCredential && selected===chosen' in block
+    assert 'resetHandoff("REFUSED: Authorization read failed.' in block
+    assert 'throw error;' in block
+    assert block.index('resetHandoff("REFUSED: Authorization read failed.') < block.index('"/reviews"')
