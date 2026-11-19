@@ -270,7 +270,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `POST /v1/event-logs/timestamp-formats?column=...&delimiter=...` | Suggest a timestamp format from the start of a CSV file (body, at most 256 KB): `candidates` (each with `pattern`, `order`, `has_offset` and how the first value reads), `ambiguous`, `suggested`. Nothing is stored. Imports and appends take `timestamp_format=`. |
 | `POST /v1/event-logs/xlsx-to-csv?sheet=...` | Convert one worksheet of the `.xlsx` request body to CSV (`csv`, `sheet`, `sheets`, `rows`, `columns`, `date_columns`, `dates_have_no_offset`). Nothing is stored. |
 | `POST /v1/event-logs/{log_id}/delete` | Delete the log and every row that belongs to it. |
-| `POST /v1/event-logs/{log_id}/export/matching-cases` | Download a flat CSV of complete matching cases. Body contains `cohort` and optional `case_type`. |
+| `POST /v1/event-logs/{log_id}/export/matching-cases` | Download complete matching cases. Body contains `cohort` and optional `case_type`. Query `format` is `csv` (default), `csv-review`, `xes`, or `xes-attributes`. |
 | `POST /v1/event-logs/{log_id}/derive` | Save the cases matching a filter as a new log (below). |
 | `GET /v1/event-logs/{log_id}/quality` | Stored quality and mapping reports per import and append, plus current whole-log diagnostics (below). |
 | `GET /v1/event-logs/{log_id}/summary` | Events, cases, activities, time span and case-duration median/p90/mean. |
@@ -1058,9 +1058,12 @@ profiles.
 - Every case keeps at most 32 attribute names, stored and timed, so the log
   still exports as OCEL.
 - Events and the log's content digests do not change. Each upload is recorded
-  with its columns, counts and the SHA-256 of the file. Removing an upload
-  deletes those attribute names from every case of that object type. It
-  cannot restore values that an overwrite replaced.
+  with its columns, counts and the SHA-256 of the file. New uploads keep their
+  prior cell values locally for undo. Undo restores overwritten values and
+  removes new values only in the cases that this upload changed. If a newer
+  upload changed any of those cells, undo that newer upload first. Older uploads
+  without prior-value records cannot be undone. Deleting the log removes its
+  upload history and prior values.
 
 | Route | Purpose |
 | --- | --- |
@@ -1148,6 +1151,38 @@ No per-person duration, waiting time, speed, ranking or performance score is cal
 not even on handover edges. Handover counts say who touched a case next, not who was
 responsible or how well anyone worked. One million events are analysed in seconds
 (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_organization.py`).
+
+### Roles
+
+"Discover roles" groups resources that perform a similar mix of activities. This is organizational
+role mining, as in Song and van der Aalst (2008), PM4Py's role discovery and ProM's organizational
+miner.
+
+1. Each resource's activity counts are compared with the Pearson correlation.
+2. Starting from one group per resource, the two groups whose summed profiles correlate most are
+   merged.
+3. Merging repeats while the correlation is at least the threshold (default 0.65, as in PM4Py;
+   `threshold` must be above 0 and below 1).
+
+Each role lists:
+- its members;
+- its events;
+- its activity mix (the top eight activities with their shares);
+- the activities that only this role performs.
+
+The 200 most active resources and the 200 most frequent activities are considered.
+The view reports the number of events with resource labels, resources and
+activities represented out of the available totals. An activity is listed as
+exclusive only when every recorded resource performing it in the selected cases
+belongs to that role, including checks against resources excluded by the limit.
+Adjust **Role similarity threshold** and rerun to compare groupings. Resources are
+pseudonymous ("Resource 01", numbered by event count) unless names are asked for. Roles describe
+recorded work, not job titles, responsibilities or how well anyone worked. No duration, speed,
+ranking or score of any person is computed.
+
+`GET /v1/event-logs/{log_id}/roles?threshold=&names=pseudonymous|shown&case_type=` plus the
+case-filter parameters. Dashboard session only.
+
 ## Signals
 
 Signals are saved conditions you check a log against. This is local, signal-only parity with
@@ -1279,11 +1314,14 @@ units and coverage; CSV exports remain numeric tables.
 
 ## Saving matching cases as a new log
 
-Use **Download matching cases as CSV** to download the original events of those
-cases directly. Filters use the selected case notion and the applied activity
-mapping. The CSV retains the original activity names and includes events
-collapsed by the mapping. It contains case IDs, activity names, timestamps, and
-resources. An empty filter or a filter with no matches produces an error.
+Use **Download matching cases** to download the original events directly.
+Filters use the selected case notion and the applied activity mapping. The export
+retains original activity names and includes events collapsed by the mapping.
+Choose exact CSV for interchange, spreadsheet review CSV for formula-like cells,
+or XES for one trace per selected case. **XES with retained attributes** includes
+static trace and event values. The XES projection follows the chosen case notion.
+Use OCEL when you need timed object attributes or relationships. An empty filter
+or a filter with no matches produces an error.
 
 **Save or export matching cases → Save as new log** (after **Analyse**), or
 `POST /v1/event-logs/{log_id}/derive` with
@@ -1365,6 +1403,12 @@ hand.
   another failed attempt updates its error. Missing or unsettled files wait
   until they are present and settled. Automatic runs do not retry failures and
   report them separately from files already appended.
+- **Review failures** lists outstanding failures in pages of 50, including
+  older failures outside the feed's latest-20 summary, and lets you retry one
+  content hash at a time. A renamed file still matches; a changed, missing or
+  unsettled file cannot be retried under its old hash. Pages can change while
+  other runs or retries occur. Listing is bounded, but finding the selected
+  content still scans and hashes matching settled files in the folder.
 - Each run appends at most 20 files. Files in the folder are never changed or
   deleted.
 - "Run every day" schedules the feed on the local scheduler (job kind
@@ -1376,6 +1420,8 @@ hand.
 | `POST /v1/event-logs/{log_id}/feeds` | `{"folder": "/abs/path", "pattern": "*.csv", "confirm_folder_reads": true}` |
 | `GET /v1/event-logs/{log_id}/feeds` | Feeds with counts and the 20 latest file results. |
 | `POST /v1/event-logs/feeds/{feed_id}/retry-failed` | Retry only previously failed, unchanged settled content; owner session and local-storage confirmation required. |
+| `GET /v1/event-logs/feeds/{feed_id}/failures?after=...` | Page up to 50 outstanding failed content hashes. |
+| `POST /v1/event-logs/feeds/{feed_id}/retry-failed/{sha256}` | Retry one outstanding hash; owner session and local-storage confirmation required. |
 | `POST /v1/event-logs/feeds/{feed_id}/run` | Append new files now. Requires `X-OWG-Local-Storage-Confirmed: true`. |
 | `POST /v1/event-logs/feeds/{feed_id}/delete` | Delete the feed and its schedule. Appended events stay. |
 
@@ -1953,7 +1999,12 @@ After an analysis, every case-attribute input suggests what the log contains. `n
 offer each attribute's 20 most common values with their case counts, and numeric-range inputs offer
 the numeric attributes with their minimum and maximum. This covers the global filter and the
 pickers inside sections. The suggestions come from
-`GET /v1/event-logs/{log_id}/case-attribute-values?case_type=...`
+Use **Find a case attribute** in the workspace case filter to search by part of
+a case attribute name, including names outside the initial suggestion list.
+Search returns up to 20 names and reports the total. Choose a common value or a
+numeric field to populate the filter before applying it.
+
+`GET /v1/event-logs/{log_id}/case-attribute-values?case_type=...&search=...`
 (`openworkgraph.event-log-case-attribute-values.v1`): up to 100 attribute names per case notion,
 each with its case count, distinct values, whether it is numeric (90% or more of its values are
 numbers) and its top values, skipping values longer than 100 characters. Nothing is stored.
@@ -2435,10 +2486,15 @@ parameters. Agents with access to a shared log get the pair figures, without cas
 
 Decision mining finds the points where cases take different routes and learns which recorded
 data goes with each route. ProM's decision miner, PM4Py, Celonis and SAP Signavio offer the same
-analysis.
+analysis. The numeric rules use the full precision of the scored split.
+A rule condition with `includes_missing` also matches an absent attribute.
+A numeric condition with `includes_non_numeric` also matches unusable numbers.
 
 1. **Decision points.** These are activities after which cases continue to at least two different
-   next activities, or end (`(end)`). Each branch must be seen at least 5 times.
+   next activities, or end. Each branch must be seen at least 5 times. Completion
+   normally appears as `(end)`. If a literal activity uses that label, the result
+   picks a distinct `terminal_label`. Branches and rules flag completion using
+   `next_is_terminal`.
 2. **Data known at the decision.** The rules use two kinds of data:
    - the case's attributes (`case.*`);
    - the latest non-empty value of every event attribute recorded on the case at or before the

@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
+from .event_log_cohort_export import MatchingExportFormat, export_matching_cases
 from . import event_log_analytics as analytics
 from . import event_log_variant_coverage as variant_coverage
 from . import event_log_duration_distribution as duration_distribution
@@ -475,6 +476,22 @@ async def retry_failed_event_log_feed_files(request: Request, feed_id: str):
     return await run_in_threadpool(_respond, folder_feeds.run, feed_id, retry_failed=True)
 
 
+@router.get("/v1/event-logs/feeds/{feed_id}/failures")
+def list_event_log_feed_failures(request: Request, feed_id: str, after: str = Query(default="", max_length=64)):
+    from . import event_log_folder_feeds as folder_feeds
+    _require_dashboard(request)
+    return _respond(folder_feeds.failures, feed_id, after=after)
+
+
+@router.post("/v1/event-logs/feeds/{feed_id}/retry-failed/{sha256}")
+async def retry_one_event_log_feed_file(request: Request, feed_id: str, sha256: str):
+    from . import event_log_folder_feeds as folder_feeds
+    _require_dashboard(request)
+    if request.headers.get("x-owg-local-storage-confirmed") != "true":
+        raise HTTPException(403, "Explicit confirmation to store these events on this computer is required")
+    return await run_in_threadpool(_respond, folder_feeds.run, feed_id, retry_failed=True, retry_hash=sha256)
+
+
 @router.post("/v1/event-logs/{log_id}/case-attributes")
 async def add_case_attributes(
     request: Request, log_id: str,
@@ -547,6 +564,15 @@ def event_log_quality_overview(request: Request, log_id: str):
     return _respond(quality.overview, log_id)
 
 
+@router.get("/v1/event-logs/{log_id}/quality/attribute-coverage")
+def event_log_quality_attribute_coverage(request: Request, log_id: str,
+        offset: int = Query(default=0, ge=0, le=2_147_483_647),
+        revision: int | None = Query(default=None, ge=0, le=2_147_483_647)):
+    from . import event_log_quality_coverage
+    _require_dashboard(request)
+    return _respond(event_log_quality_coverage.page, log_id, offset, revision)
+
+
 @router.get("/v1/event-logs/{log_id}/quality/batch-history")
 def event_log_quality_batch_history(request: Request, log_id: str):
     _require_dashboard(request)
@@ -562,18 +588,17 @@ def event_log_quality_batch_history_page(request: Request, log_id: str,
 
 
 @router.post("/v1/event-logs/{log_id}/export/matching-cases")
-async def export_event_log_matching_cases(request: Request, log_id: str):
-    from .event_log_cohort_export import export_matching_cases
-
+async def export_event_log_matching_cases(request: Request, log_id: str,
+                                          format: MatchingExportFormat = Query(default="csv")):
     _require_dashboard(request)
     spec = await _json_body(request, "matching-case export settings", strict=True, limit=32768)
 
     def prepare():
-        handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="", suffix=".csv",
+        handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="", suffix="." + _SUFFIX[format],
                                              dir=str(DATA_DIR), delete=False)
         try:
             with handle:
-                export_matching_cases(log_id, spec, handle)
+                export_matching_cases(log_id, spec, handle, export_format=format)
         except BaseException:
             os.unlink(handle.name)
             raise
@@ -583,7 +608,7 @@ async def export_event_log_matching_cases(request: Request, log_id: str):
         filename = await run_in_threadpool(prepare)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
-    return FileResponse(filename, media_type="text/csv", filename=f"{log_id}-matching-cases.csv",
+    return FileResponse(filename, media_type=_TYPES[format], filename=f"{log_id}-matching-cases.{_SUFFIX[format]}",
                         headers={"Cache-Control": "no-store"}, background=BackgroundTask(os.unlink, filename))
 
 
@@ -720,11 +745,12 @@ def event_log_summary(request: Request, log_id: str, case_type: str | None = Que
 
 @router.get("/v1/event-logs/{log_id}/case-attribute-values")
 def event_log_case_attribute_values(request: Request, log_id: str,
-                                    case_type: str | None = Query(default=None, max_length=200)):
+                                    case_type: str | None = Query(default=None, max_length=200),
+                                    search: str | None = Query(default=None, min_length=1, max_length=200)):
     """Case attribute names, numeric ranges and common values, to suggest case-filter inputs."""
     from . import event_log_case_attribute_values as case_attribute_values
     _require_dashboard(request)
-    return _respond(case_attribute_values.values, log_id, case_type)
+    return _respond(case_attribute_values.values, log_id, case_type, search=search)
 
 
 @router.post("/v1/event-logs/{log_id}/attribute-profile")
@@ -1215,6 +1241,16 @@ def event_log_drift(request: Request, log_id: str, case_type: str | None = Query
     _require_dashboard(request)
     return _respond(drift.drift, log_id, case_type, window=window, window_cases=window_cases, min_cases=min_cases,
                     cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/roles")
+def event_log_roles(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                    threshold: float = Query(default=0.65, gt=0, lt=1),
+                    names: str = Query(default="pseudonymous", max_length=20),
+                    cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_roles as roles
+    _require_dashboard(request)
+    return _respond(roles.roles, log_id, case_type, threshold=threshold, names=names, cohort=cohort)
 
 
 @router.get("/v1/event-logs/{log_id}/organization")

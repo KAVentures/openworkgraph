@@ -142,6 +142,16 @@ with TestClient(app) as client:
     assert imported.status_code == 200, imported.text
     path = f"/v1/event-logs/{imported.json()['log_id']}/derive"
     body = {"name": "only A", "cohort": {"activity": "A"}}
+    export = f"/v1/event-logs/{imported.json()['log_id']}/export/matching-cases"
+    cohort = {"cohort": {"activity": "A"}}
+    assert client.post(export + "?format=xes-attributes", json=cohort, headers=bearer).status_code == 403
+    for fmt, suffix in (("csv-review", ".review.csv"), ("xes", ".xes"), ("xes-attributes", ".xes")):
+        response = client.post(export + "?format=" + fmt, json=cohort, headers=owner)
+        assert response.status_code == 200, response.text
+        assert response.headers["content-disposition"].endswith(suffix + '"')
+        assert response.headers["cache-control"] == "no-store"
+    assert client.post(export + "?format=ocel", json=cohort, headers=owner).status_code == 422
+
     assert client.post(path, json=body, headers=bearer).status_code == 403
     made = client.post(path, json=body, headers=owner)
     assert made.status_code == 200, made.text
@@ -178,3 +188,40 @@ def test_matching_case_export_uses_the_mapping_but_writes_complete_original_trac
     for cohort in ({}, {"label": "only"}, {"activity": "Absent"}):
         with pytest.raises(workspace.EventLogWorkspaceError):
             export_matching_cases(log, {"cohort": cohort}, StringIO())
+
+
+def test_matching_xes_projection_preserves_only_selected_trace_attributes():
+    from shared.event_log_formats import read_xes
+    from server.event_log_cohort_export import export_matching_cases
+
+    text = """<log>
+      <trace><string key="concept:name" value="=included"/>
+        <string key="region" value="A &amp; B"/>
+        <event><string key="concept:name" value="Open"/>
+          <date key="time:timestamp" value="2024-01-01T00:00:00Z"/>
+          <string key="lifecycle:transition" value="start"/>
+        </event>
+        <event><string key="concept:name" value="Close"/>
+          <date key="time:timestamp" value="2024-01-01T00:01:00Z"/>
+          <string key="lifecycle:transition" value="complete"/>
+        </event>
+      </trace>
+      <trace><string key="concept:name" value="excluded"/>
+        <string key="region" value="PRIVATE_REGION"/>
+        <event><string key="concept:name" value="Open"/>
+          <date key="time:timestamp" value="2024-01-01T00:00:00Z"/></event>
+      </trace></log>"""
+    log = workspace.import_log(BytesIO(text.encode()), name="xes sample", source_format="xes")["log_id"]
+    spec = {"cohort": {"activity": "Close"}}
+    rich, plain, review, exact = (StringIO(newline="") for _ in range(4))
+    for fmt, out in (("xes-attributes", rich), ("xes", plain), ("csv-review", review), ("csv", exact)):
+        export_matching_cases(log, spec, out, export_format=fmt)
+        assert "excluded" not in out.getvalue() and "PRIVATE_REGION" not in out.getvalue()
+    trace, first, last = list(read_xes(BytesIO(rich.getvalue().encode())))
+    assert trace.object_id == "=included" and trace.attributes == {"region": "A & B"}
+    assert first.attributes == {"lifecycle:transition": "start"}
+    assert last.attributes == {"lifecycle:transition": "complete"}
+    assert all(row.attributes == {} for row in read_xes(BytesIO(plain.getvalue().encode())))
+    assert list(csv.reader(StringIO(exact.getvalue())))[1][0] == "=included"
+    assert list(csv.reader(StringIO(review.getvalue())))[1][0] == "'=included"
+    assert len(workspace.list_logs()["logs"]) == 1

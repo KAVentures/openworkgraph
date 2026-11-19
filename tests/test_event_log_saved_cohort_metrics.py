@@ -89,7 +89,9 @@ def test_saved_metric_evaluation_is_log_scoped_and_rejects_deleted(monkeypatch, 
         saved.evaluate(other, item["metric_id"], {})
     assert not calls
     result = saved.evaluate(first, item["metric_id"], {"activity": "Review"}, "case")
-    assert result["saved_metric"] == {"metric_id": item["metric_id"], "name": "Events"}
+    assert result["saved_metric"] == {"metric_id": item["metric_id"], "name": "Events",
+                                      "definition_sha256": item["definition_sha256"]}
+    assert len(result["saved_metric"]["definition_sha256"]) == 64
     assert calls[0][1]["cohort"] == {"activity": "Review"}
     assert calls[0][2] == "case"
     saved.delete(first, item["metric_id"])
@@ -120,3 +122,21 @@ def test_dashboard_evaluates_saved_revision_and_clears_it_on_manual_edit():
     assert "'/evaluate':'/cohort-metric'" in source
     assert "const payload=savedId?{cohort}:{definition:{version:1,expression},cohort};" in source
     assert "control.addEventListener('change',()=>{savedPicker.value='';});" in source
+
+
+def test_saved_metric_digest_is_stable_and_sensitive_to_expression():
+    first = {"version": 1, "expression": {"op": "add", "args": [{"field": "event_count"}, {"literal": 2}]}}
+    reordered = {"expression": {"args": [{"field": "event_count"}, {"literal": 2}], "op": "add"}, "version": 1}
+    changed = {"version": 1, "expression": {"field": "event_count"}}
+    assert saved._definition_digest(first) == saved._definition_digest(reordered)
+    assert saved._definition_digest(first) != saved._definition_digest(changed)
+
+
+def test_dashboard_rejects_saved_revision_drift_and_shows_verified_digest():
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[1] / "dashboard" / "event_log_workspace.js").read_text(encoding="utf-8")
+    assert "data.saved_metric.definition_sha256!==selected.definition_sha256" in source
+    assert "data.saved_metric.metric_id!==savedId" in source
+    assert "Saved metric revision changed. Reload saved expressions and calculate again." in source
+    assert "Saved definition SHA-256: " in source
+    assert "await loadSaved();" in source

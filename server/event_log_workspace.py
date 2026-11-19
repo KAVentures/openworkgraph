@@ -103,6 +103,11 @@ CREATE TABLE IF NOT EXISTS event_log_feed_files (
 CREATE TABLE IF NOT EXISTS case_attribute_uploads (
   log_id VARCHAR NOT NULL, upload_id VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL, record VARCHAR NOT NULL
 );
+CREATE TABLE IF NOT EXISTS case_attribute_upload_changes (
+  log_id VARCHAR NOT NULL, upload_id VARCHAR NOT NULL, upload_order BIGINT NOT NULL,
+  object_id VARCHAR NOT NULL, column_name VARCHAR NOT NULL,
+  previous_present BOOLEAN NOT NULL, previous_value JSON, applied_value JSON NOT NULL
+);
 CREATE TABLE IF NOT EXISTS event_log_agent_run_sources (
     log_id VARCHAR PRIMARY KEY, include_model_calls BOOLEAN NOT NULL, created_at TIMESTAMP NOT NULL,
     last_refreshed_at TIMESTAMP);
@@ -749,7 +754,7 @@ def delete_log(log_id: str) -> dict[str, Any]:
                 from .jira_retained_profiles import forget_dataset
                 forget_dataset(conn, log_id)
                 for table in ("object_relationships", "event_source_keys", "event_source_namespaces", "discovery_snapshots", "log_appends", "log_quality", "quarantine", "quarantine_decisions", "filter_sets",
-                              "domain_pack_installs", "cohort_metric_definitions", "metric_definitions", "saved_analyses", "signal_snoozes", "signal_reviews", "signal_transitions", "signal_rules", "case_tags", "case_attribute_uploads", "event_log_agent_shares", "event_log_agent_tag_grants", "event_log_agent_run_sources", "cost_models", "event_objects", "events", "objects",
+                              "domain_pack_installs", "cohort_metric_definitions", "metric_definitions", "saved_analyses", "signal_snoozes", "signal_reviews", "signal_transitions", "signal_rules", "case_tags", "case_attribute_upload_changes", "case_attribute_uploads", "event_log_agent_shares", "event_log_agent_tag_grants", "event_log_agent_run_sources", "cost_models", "event_objects", "events", "objects",
                               "object_attribute_values",
                               "logs"):
                     conn.execute(f"DELETE FROM {table} WHERE log_id = ?", [log_id])
@@ -941,24 +946,29 @@ def _case_export_rows(log_id, case_type, *, include_trace_attributes=False):
                 cursor = conn.execute(query, [log_id, notion, log_id, notion])
             else:
                 cursor = conn.execute(_CASE_EVENTS + " ORDER BY case_id, ts, event_id", [log_id, notion])
-            current, bucket, trace_attributes = None, [], {}
-            while batch := cursor.fetchmany(10_000):
-                for case_id, activity, ts, resource, event_id, attributes, *trace in batch:
-                    if case_id != current:
-                        if current is not None:
-                            yield current, bucket, trace_attributes
-                            bucket = []
-                        current = case_id
-                        trace_attributes = json.loads(trace[0] or "{}") if trace else {}
-                    if event_id is None:
-                        continue  # retain an empty trace in the attribute export
-                    bucket.append({"case_id": case_id, "activity": activity,
-                                   "timestamp": ts.replace(tzinfo=timezone.utc), "resource": resource,
-                                   "event_id": event_id, "attributes": json.loads(attributes or "{}")})
-            if current is not None:
-                yield current, bucket, trace_attributes
+            yield from _group_export_cursor(cursor)
         finally:
             conn.close()
+
+
+def _group_export_cursor(cursor):
+    """Read an ordered event projection one case at a time."""
+    current, bucket, trace_attributes = None, [], {}
+    while batch := cursor.fetchmany(10_000):
+        for case_id, activity, ts, resource, event_id, attributes, *trace in batch:
+            if case_id != current:
+                if current is not None:
+                    yield current, bucket, trace_attributes
+                    bucket = []
+                current = case_id
+                trace_attributes = json.loads(trace[0] or "{}") if trace else {}
+            if event_id is None:
+                continue  # retain an empty trace in the attribute export
+            bucket.append({"case_id": case_id, "activity": activity,
+                           "timestamp": ts.replace(tzinfo=timezone.utc), "resource": resource,
+                           "event_id": event_id, "attributes": json.loads(attributes or "{}")})
+    if current is not None:
+        yield current, bucket, trace_attributes
 
 
 def export_log(log_id: str, export_format: str, out: IO[str], case_type: str | None = None) -> None:
