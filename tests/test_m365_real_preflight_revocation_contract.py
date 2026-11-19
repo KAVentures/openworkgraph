@@ -191,3 +191,61 @@ def test_expired_real_grant_blocks_graph_and_private_evidence(
         module.preflight(**args)
     assert transport.requests == []
     assert not report.exists()
+
+
+def test_sequential_real_identity_and_folder_preflight_rechecks_grant_between_requests(
+        tmp_path, monkeypatch):
+    """One consented operator preflight cannot reuse authorization after revocation.
+
+    Both production Graph HTTP adapters run with a fake authenticated transport.
+    Revocation between the identity and folder reads must prevent the second
+    provider request and must not produce folder evidence.
+    """
+    grant = tmp_path / "grant.json"
+    grant.write_text("{}")
+    identity_report = tmp_path / "identity.json"
+    folder_report = tmp_path / "folder.json"
+    calls = []
+    allowed = {"value": True}
+
+    class TwoEndpointTransport:
+        def open(self, req, timeout):
+            assert timeout == 15
+            assert req.get_header("Authorization") == "Bearer token"
+            calls.append(req.full_url)
+            if "mailFolders" in req.full_url:
+                payload = {"id": "folder-id", "displayName": "Inbox",
+                           "childFolderCount": 0, "totalItemCount": 2}
+            else:
+                payload = {"id": "provider-id",
+                           "userPrincipalName": "user@example.org",
+                           "mail": "user@example.org"}
+            return Response(req.full_url, payload)
+
+    def recheck(*args):
+        if not allowed["value"]:
+            raise PermissionError("revoked")
+
+    for module in (identity, folder):
+        monkeypatch.setattr(module, "_scope", lambda *args: "a" * 64)
+        monkeypatch.setattr(module, "_delta_private_parent", lambda p: None)
+        monkeypatch.setattr(module, "_grant", recheck)
+        monkeypatch.setattr(module, "_exclusive_private",
+                            lambda p, data: Path(p).write_bytes(data))
+
+    transport = TwoEndpointTransport()
+    common = dict(tenant="tenant", mailbox="mailbox", folder="folder-id",
+                  grant_file=grant, token="token", consent_graph_read=True,
+                  consent_private_report=True, opener=transport)
+    observed = identity.preflight(**common, output=identity_report,
+                                  expected_address="user@example.org")
+    assert observed["mailbox_identifier_matched"] is True
+    assert identity_report.exists()
+    assert len(calls) == 1
+
+    allowed["value"] = False
+    with pytest.raises((PermissionError, ValueError)):
+        folder.preflight(**common, output=folder_report)
+    assert len(calls) == 1
+    assert not folder_report.exists()
+    assert "token" not in identity_report.read_text()
