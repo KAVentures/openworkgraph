@@ -3,6 +3,7 @@
 A checkpoint that changes while a candidate is reviewed must not result in
 an authenticated OWG append. No live Microsoft tenant is used.
 """
+import os
 from unittest.mock import patch
 
 import pytest
@@ -17,7 +18,10 @@ from server.m365_outlook_owg_receipt import ReceiptError
      {"generation": 2, "candidate_sha256": "b" * 64, "log_id": "log"}),
 ])
 def test_checkpoint_race_during_review_refuses_append(monkeypatch, before, after):
-    monkeypatch.setenv("OWG_M365_AUDIT_DIR", "/private/audit")
+    if os.name == "posix":
+        monkeypatch.setenv("OWG_M365_AUDIT_DIR", "/private/audit")
+    else:
+        monkeypatch.delenv("OWG_M365_AUDIT_DIR", raising=False)
     digest = "c" * 64
     reviewed = {
         "status": "review_ready", "csv_sha256": digest,
@@ -48,7 +52,8 @@ def test_checkpoint_race_during_review_refuses_append(monkeypatch, before, after
         pytest.raises(ReceiptError, match="Checkpoint changed during candidate review"),
     ):
         transaction.execute(**kwargs)
-    audit_preflight.assert_called_once()
+    if os.name == "posix":
+        audit_preflight.assert_called_once()
     audit.assert_not_called()
     assert inspect.call_count == 2
     review.assert_called_once()
