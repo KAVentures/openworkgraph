@@ -247,11 +247,18 @@ async def granted_reviewed_case_context(request: Request, response: Response):
         snapshot = await asyncio.to_thread(list_case_declarations, scope)
     except (CaseDeclarationError, OSError) as exc:
         raise HTTPException(503, "reviewed case context unavailable") from None
+    # Pin the exact approved grant incarnation, not just any current token
+    # that authenticates for the same case after revocation or replacement.
+    def current_grant():
+        current = grants.authenticate(request.headers.get("authorization"), identity["work_item_ref"])
+        return bool(current and current.get("grant_id") == identity.get("grant_id")
+                    and current.get("agent") == identity.get("agent")
+                    and current.get("source_scope") == scope
+                    and current.get("context_approved") is True)
+
     # Recheck both independent permissions after reading: source connection,
     # owner review, offer generation and grant revocation can change in flight.
-    if await asyncio.to_thread(_source_scope) != scope or not grants.authenticate(
-        request.headers.get("authorization"), identity["work_item_ref"]
-    ):
+    if await asyncio.to_thread(_source_scope) != scope or not current_grant():
         raise HTTPException(409, "source or grant changed during context read")
     item = next((entry for entry in snapshot["items"] if
                  entry["work_item_ref"] == identity["work_item_ref"]), None)
@@ -265,9 +272,7 @@ async def granted_reviewed_case_context(request: Request, response: Response):
         latest = await asyncio.to_thread(list_case_declarations, scope)
     except (CaseDeclarationError, OSError):
         raise HTTPException(503, "reviewed case context unavailable") from None
-    if latest != snapshot or await asyncio.to_thread(_source_scope) != scope or not grants.authenticate(
-        request.headers.get("authorization"), identity["work_item_ref"]
-    ):
+    if latest != snapshot or await asyncio.to_thread(_source_scope) != scope or not current_grant():
         raise HTTPException(409, "review or grant changed during context read")
     # Edit tokens are owner-only compare-and-swap capabilities; never give
     # them to an agent. No provider reads or business success assertions.
@@ -332,13 +337,24 @@ async def granted_reviewed_case_context(request: Request, response: Response):
             ordered.append({"work_item_ref": node, "review_state": "currently_reviewed",
                             "provider_state": "unknown", "outcome_verified": False})
     walk(identity["work_item_ref"])
-    # Do not let an asynchronous permission check be the last operation before
-    # disclosure: grant and source consent must still be current at return.
-    if await asyncio.to_thread(_source_scope) != scope or not grants.authenticate(
-        request.headers.get("authorization"), identity["work_item_ref"]
-    ):
-        raise HTTPException(409, "source or grant changed during dependency projection")
-    safe = {key: value for key, value in item.items() if key not in ("edit_token", "scope_ref")}
+    # Re-read reviewed facts after graph projection: an owner may withdraw
+    # approval or retention may expire while the dependency chain is built.
+    try:
+        final_snapshot = await asyncio.to_thread(list_case_declarations, scope)
+    except (CaseDeclarationError, OSError):
+        raise HTTPException(503, "reviewed case context unavailable") from None
+    if (final_snapshot != snapshot or await asyncio.to_thread(_source_scope) != scope
+            or not current_grant()):
+        raise HTTPException(409, "review, source or grant changed during dependency projection")
+    # Future owner-only columns must never be implicitly exported to agents.
+    agent_fields = frozenset({
+        "work_item_ref", "revision", "goal_code", "expected_outcome_code",
+        "depends_on_work_item_refs", "created_at", "updated_at", "expires_at",
+        "provenance", "source_state", "expected_outcome_verified",
+        "business_obligation_verified", "customer_outcome_verified",
+        "agent_execution_authorized",
+    })
+    safe = {key: value for key, value in item.items() if key in agent_fields}
     return {"format": "openworkgraph.granted-reviewed-case-context.v1",
             "dependency_review": dependency_review,
             "transitive_dependency_review": ordered,
