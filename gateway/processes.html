@@ -266,7 +266,7 @@
     <section id="selected" hidden>
       <h2 id="selectedTitle"></h2>
       <p id="selectedMeta"></p>
-      <fieldset id="handoffPreflight"><legend>Authenticated handoff freshness</legend><p>Local review-only packet; only its workflow ID is used for a fresh authorized Gateway read. Matching is not consent, owner approval, source permission or execution authority.</p><label>Evidence handoff packet (JSON) <input id="handoffPacket" type="file" accept=".json,application/json"></label><label><input id="handoffConsent" type="checkbox"> I explicitly authorize inspecting this local review-only packet against the latest process revision using my current Gateway access. This does not authorize execution or source reads.</label><button id="handoffCheck" type="button">Check latest authorized revision</button><button id="handoffClear" type="button">Clear check</button><button id="handoffReview" type="button" disabled>Continue to revision review</button><output id="handoffStatus" role="status" aria-live="polite">No packet checked.</output></fieldset>
+      <fieldset id="handoffPreflight"><legend>Authenticated handoff freshness</legend><p>Local review-only packet; only its workflow ID is used for a fresh authorized Gateway read. Matching is not consent, owner approval, source permission or execution authority.</p><label>Evidence handoff packet (JSON) <input id="handoffPacket" type="file" accept=".json,application/json"></label><label><input id="handoffConsent" type="checkbox"> I explicitly authorize inspecting this local review-only packet against the latest process revision using my current Gateway access. This does not authorize execution or source reads.</label><button id="handoffCheck" type="button">Check latest authorized revision</button><button id="handoffClear" type="button">Clear check</button><button id="handoffRefresh" type="button">Reopen latest authorized revision</button><button id="handoffReview" type="button" disabled>Continue to revision review</button><output id="handoffStatus" role="status" aria-live="polite">No packet checked.</output></fieldset>
 
       <button id="revise" disabled>Edit selected design</button>
       <div id="design"></div>
@@ -2282,6 +2282,17 @@
                credential===authorizedCredential&&selected===chosen)
               resetHandoff("REFUSED: Could not revalidate authorized revision. Sign in and inspect again.");
           }
+        }));
+        // Recovery is an authenticated read, not a shortcut around consent or review.
+        // open() renders the latest revision and clears any previous packet inspection.
+        $("handoffRefresh").addEventListener("click",()=>run(async()=>{
+          if(!selected||!credential)throw new Error("Sign in and select a shared process first.");
+          const workflowId=selected.process?.workflow_id;
+          if(!workflowId)throw new Error("Select a saved process first.");
+          $("handoffConsent").checked=false;
+          resetHandoff("Reopening latest authorized revision. A new inspection is required.");
+          await open(workflowId);
+          $("handoffStatus").textContent="Latest authorized revision reopened. Select the packet, authorize inspection and check again.";
         }));
         $("handoffPacket").addEventListener("change",()=>{ $("handoffConsent").checked=false; resetHandoff("Packet changed. Reauthorize inspection."); });
         $("handoffConsent").addEventListener("change",()=>resetHandoff("Authorization changed. Check again."));
