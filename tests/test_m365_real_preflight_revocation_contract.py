@@ -203,8 +203,8 @@ def test_sequential_real_identity_and_folder_preflight_rechecks_grant_between_re
     """
     grant = tmp_path / "grant.json"
     grant.write_text("{}")
-    identity_report = tmp_path / "identity.json"
-    folder_report = tmp_path / "folder.json"
+    identity_report = tmp_path / "mailbox-identity-sequential.json"
+    folder_report = tmp_path / "folder-preflight-sequential.json"
     calls = []
     allowed = {"value": True}
 
