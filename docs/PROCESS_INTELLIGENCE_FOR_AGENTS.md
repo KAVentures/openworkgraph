@@ -73,6 +73,9 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 | `align_process_case` | One case's optimal alignment on the discovered net: extra steps, skipped steps and fitness, step by step (cases level only). See "Explain a case". |
 | `get_process_brief` | **Start here.** One bounded briefing: the overview (size, timing, KPIs, top paths, top insights), the discovered model at its best noise level (fitness, precision, F-score), the steps cases most often add or skip against it, unusual-case counts by reason, and suggested next tools. Parts that cannot be computed are listed in `parts_unavailable` (aggregates level). |
 | `get_process_model_change` | How the discovered model differs before and after a date (default: the median case start): changed footprint relations between activities, activities in only one period, and the cross-fit of each period's cases on the other period's model (aggregates level). See "Model change" in EVENT_LOG_WORKSPACE.md. |
+| `compare_process_models` | The same comparison between two groups chosen by case attribute values ("region=EU" vs "region=US"): differing orderings, activities only one group has, and cross-fit of each group on the other's model (aggregates level). |
+| `compare_process_cases` | Two cases side by side: aligned steps (shared or only in one), hours from each start, and where the second fell furthest behind (cases level only). |
+| `get_process_activity_profile` | One activity from every side: share of cases, repeats, what comes before and after (with median gaps), time into the case, weekday and hour, and case durations with and without it (aggregates level). |
 
 | `tag_process_cases` | Adds an `agent: ` tag with a note to cases (cases level and the tag permission). |
 

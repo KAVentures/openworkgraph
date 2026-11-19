@@ -124,6 +124,7 @@ def build(log_id: str, case_type: str | None = None, cohort: dict[str, Any] | No
         "costs": _costs(log_id, case_type, cohort),
         "insights": _insights(log_id, case_type, cohort, sla_seconds),
         "adherence": _adherence(log_id, case_type, cohort),
+        "story": _story(log_id, case_type, cohort),
         "interpretation": _CAVEAT,
     }
 
@@ -150,6 +151,14 @@ def _insight_section(found: dict[str, Any] | None) -> str:
 <ol class="insights">{items}</ol>
 <p class="meta">{escape(found["interpretation"])}</p>
 """
+
+
+def _story(log_id: str, case_type: str | None, cohort: dict[str, Any] | None) -> list[str] | None:
+    from . import event_log_story as story
+    try:
+        return [s["text"] for s in story.story(log_id, case_type, cohort=cohort)["sentences"]]
+    except workspace.EventLogWorkspaceError:
+        return None
 
 
 ADHERENCE_NOISE = 0.2
@@ -288,6 +297,7 @@ generated {escape(data["generated_at"])}</p>
 {filter_html}
 <div class="tiles">{tile_html}</div>
 <p class="caveat">{escape(data["interpretation"])}</p>
+{('<h2>In plain words</h2><ul>' + "".join(f"<li>{escape(t)}</li>" for t in data["story"]) + '</ul>') if data.get("story") else ''}
 {_insight_section(data.get("insights"))}
 <h2>Most frequent variants</h2>
 <p class="meta">The {len(variants["variants"])} most frequent of {_num(variants["distinct_variants"])} variants cover {coverage} of cases.</p>

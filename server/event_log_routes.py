@@ -1041,6 +1041,48 @@ def event_log_model_change(request: Request, log_id: str, split: str | None = Qu
     return _respond(change.model_change, log_id, case_type, split=split, noise=noise, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/model-comparison")
+def event_log_model_comparison(request: Request, log_id: str, group_a: str = Query(min_length=3, max_length=400),
+                               group_b: str = Query(min_length=3, max_length=400),
+                               noise: float = Query(default=0.2, ge=0, lt=1),
+                               case_type: str | None = Query(default=None, max_length=200),
+                               cohort: dict = Depends(_case_filter)):
+    """The discovered models of two groups of cases (case attribute values) compared."""
+    from . import event_log_model_change as change
+    _require_dashboard(request)
+    return _respond(change.model_comparison, log_id, group_a, group_b, case_type, noise=noise, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/story")
+def event_log_story(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                    cohort: dict = Depends(_case_filter)):
+    """The process in plain words: sentences filled from computed figures, each linked to its analysis."""
+    from . import event_log_story as story
+    _require_dashboard(request)
+    return _respond(story.story, log_id, case_type, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/case-compare")
+def event_log_case_compare(request: Request, log_id: str, case_a: str = Query(min_length=1, max_length=500),
+                           case_b: str = Query(min_length=1, max_length=500),
+                           case_type: str | None = Query(default=None, max_length=200)):
+    """Two cases side by side: shared steps, steps only one has, and where the second fell behind."""
+    from . import event_log_case_compare as compare
+    _require_dashboard(request)
+    return _respond(compare.compare_cases, log_id, case_a, case_b, case_type)
+
+
+@router.get("/v1/event-logs/{log_id}/activity-profile")
+def event_log_activity_profile(request: Request, log_id: str,
+                               profile_activity: str = Query(min_length=1, max_length=500),
+                               case_type: str | None = Query(default=None, max_length=200),
+                               cohort: dict = Depends(_case_filter)):
+    """One activity from every side. ``profile_activity`` names it: ``activity`` is the case filter."""
+    from . import event_log_activity_profile as profile
+    _require_dashboard(request)
+    return _respond(profile.activity_profile, log_id, profile_activity, case_type, cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/variants")
 def event_log_variants(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                        limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):

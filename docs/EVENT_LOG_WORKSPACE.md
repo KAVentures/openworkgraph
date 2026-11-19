@@ -376,11 +376,21 @@ copies, or the two given as `older` and `newer`. A change can come from
 appended events, an applied activity mapping or edited prices as much as from
 the process itself.
 
-The report also has a **Model fit and adherence** section: every case is aligned with the process
+It opens with the same **In plain words** summary as the dashboard. The report also has a
+**Model fit and adherence** section: every case is aligned with the process
 model discovered from the same cases (noise 20%), giving the alignment fitness, the share of cases
 that follow the model exactly, the steps most often skipped or done where the model does not allow
 them, how the most common non-fitting paths are explained, and, when cases span several months,
 fitness by the month cases started. The section is left out when the model cannot be computed.
+
+## In plain words
+
+**Summarize in plain words**, at the top of the results, writes a short summary of the selection: its
+size and period, how long a typical case takes, the most common path, how many cases repeat
+activities, how well cases follow the discovered model (and which step is most often skipped or out
+of place), the top two automatic insights, and how many cases stand out. No language model is used:
+each sentence is filled from a computed figure, and **Show** jumps to the analysis behind it.
+`GET /v1/event-logs/{log_id}/story` plus the case-filter parameters.
 
 ## Finding an analysis
 
@@ -2217,6 +2227,17 @@ the section offers 0.3, 0.5, 0.7 and 0.9) and when seen at least the chosen numb
 `GET /v1/event-logs/{log_id}/heuristics-net?dependency_threshold=&and_threshold=&min_occurrences=&all_connected=`
 plus the case-filter parameters. Agents with access to a shared log use `get_process_heuristics_net`.
 
+## Activity profile
+
+**Activity profile** shows one activity from every side, like the activity views of Celonis and
+Disco: how many cases have it and how many repeat it, what usually comes before and after it with the
+median gap, how far into the case it first happens, how often it occurs on each weekday and hour
+(UTC), and how long cases with it take compared with cases without it. A longer duration with the
+step is an association, not proof that the step causes it.
+
+`GET /v1/event-logs/{log_id}/activity-profile?profile_activity=Check` plus the case-filter
+parameters (`activity` there is the case filter). Agents use `get_process_activity_profile`.
+
 ## Path explorer
 
 **Path explorer** walks the process one step at a time, as Celonis's Process Explorer and the variant
@@ -2251,6 +2272,12 @@ first occurrence of the activity in each case is compared with its due date:
 
 A table by due month shows whether adherence is changing, and the most late cases are listed. The
 report says how often deadlines were met, not why.
+
+**Alert me** saves the same check as a **due-date signal**: it holds when more than the chosen
+number of open cases are past their due date. Signals can also watch the late share among cases where
+the activity happened (`"metric": "late_share"`, a fraction). The rule is
+`{"kind": "due_date", "activity": …, "due_attribute": … or "due_days": …, "metric":
+"open_overdue_cases" | "late_share", "operator": "above" | "below", "threshold": …}`.
 
 `GET /v1/event-logs/{log_id}/due-dates?due_activity=Pay&due_attribute=due` (or `due_days=30`,
 optionally `early_days=7`) plus the case-filter parameters, in which `activity` keeps cases that
@@ -2322,6 +2349,15 @@ as a change in the work.
 
 `GET /v1/event-logs/{log_id}/model-change?split=2024-03-01&noise=0.2` plus the other case-filter
 parameters. Agents use `get_process_model_change` (aggregates only).
+
+**Compare groups** in the same section runs the comparison between two groups of cases chosen by
+case attribute values, such as `region=EU` and `region=US`, as Celonis compares org units (a value
+no case attribute has is looked up in the cases' event attributes instead): the
+orderings that differ, activities only one group has, and how well each group's cases fit the other
+group's model. Each group needs at least 10 cases, and an attribute case filter cannot be combined
+with the groups. Groups can also differ in case mix and in how their systems record events.
+`GET /v1/event-logs/{log_id}/model-comparison?group_a=region=EU&group_b=region=US`; agents use
+`compare_process_models`.
 
 ## Model quality
 
@@ -2443,6 +2479,12 @@ is shown.
 case-filter parameters. The net is not stored.
 Agents with access to a shared log use `get_process_deviations`, which aligns the cases on the
 discovered net at a chosen noise level (aggregates only, no case IDs).
+
+**Compare with case** in **Explain a case** puts the explained case next to another one: their
+steps aligned (shared steps line up; steps only one case has stand out), the hours from each
+case's start to every step, and between which shared steps the second case fell furthest behind.
+`GET /v1/event-logs/{log_id}/case-compare?case_a=…&case_b=…`; agents with cases-level access use
+`compare_process_cases`.
 
 **Explain a case** also aligns the chosen case on the discovered model (noise 20%) and says what it
 skipped and which steps it did where the model does not allow them.

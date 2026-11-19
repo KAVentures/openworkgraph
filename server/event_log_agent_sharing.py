@@ -518,6 +518,29 @@ def model_change(log_id: str, case_type: str | None = None, split: str | None = 
             "format": FORMAT, "log_id": log_id}
 
 
+def model_comparison(log_id: str, group_a: str, group_b: str, case_type: str | None = None,
+                     noise: float = 0.2) -> dict[str, Any]:
+    """The discovered models of two attribute-defined groups compared (aggregates level)."""
+    require(log_id, "aggregates")
+    from . import event_log_model_change as mc
+    return {**mc.model_comparison(log_id, group_a, group_b, case_type, noise=max(0.0, min(float(noise), 0.95))),
+            "format": FORMAT, "log_id": log_id}
+
+
+def compare_cases(log_id: str, case_a: str, case_b: str, case_type: str | None = None) -> dict[str, Any]:
+    """Two cases side by side (cases level only)."""
+    require(log_id, "cases")
+    from . import event_log_case_compare as cc
+    return {**cc.compare_cases(log_id, case_a, case_b, case_type), "format": FORMAT, "log_id": log_id}
+
+
+def activity_profile(log_id: str, activity: str, case_type: str | None = None) -> dict[str, Any]:
+    """One activity from every side (aggregates level)."""
+    require(log_id, "aggregates")
+    from . import event_log_activity_profile as ap
+    return {**ap.activity_profile(log_id, activity, case_type), "format": FORMAT, "log_id": log_id}
+
+
 def slowest_cases(log_id: str, case_type: str | None = None, limit: int = 10) -> dict[str, Any]:
     require(log_id, "cases")
     from . import event_log_case_explain as case_explain

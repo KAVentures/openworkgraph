@@ -317,6 +317,46 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"split": split, "noise": float(noise), "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def compare_process_models(log_id: str, group_a: str, group_b: str, noise: float = 0.2,
+                               case_type: str | None = None) -> dict[str, Any]:
+        """Compare how two groups of cases in a shared log run, each chosen by a case attribute value written as
+        "attribute=value" (for example group_a="region=EU", group_b="region=US"): activity orderings that differ
+        between their discovered models, activities only one group has, and how well each group's cases fit the
+        other group's model. Recorded behaviour only; groups also differ in case mix. Aggregates only.
+        """
+        for name, value in (("group_a", group_a), ("group_b", group_b)):
+            if not isinstance(value, str) or "=" not in value:
+                raise ToolError(f"{name} must look like attribute=value")
+        if isinstance(noise, bool) or not isinstance(noise, (int, float)) or not 0 <= noise < 1:
+            raise ToolError("noise must be a share from 0 up to (not including) 1")
+        return _get("compare_process_models", f"/v1/process-intelligence/{_log(log_id)}/model-comparison",
+                    {"group_a": group_a, "group_b": group_b, "noise": float(noise), "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def compare_process_cases(log_id: str, case_a: str, case_b: str, case_type: str | None = None) -> dict[str, Any]:
+        """Put two cases of a shared log side by side, e.g. a slow case against a normal one: their steps aligned
+        (shared, only in case_a, only in case_b), the hours from each case's start to every step, and between
+        which shared steps case_b fell furthest behind. Needs a log shared at the cases level. Describes two
+        recorded cases; a difference is not a cause.
+        """
+        for name, value in (("case_a", case_a), ("case_b", case_b)):
+            if not isinstance(value, str) or not value:
+                raise ToolError(f"{name} must be a case ID")
+        return _get("compare_process_cases", f"/v1/process-intelligence/{_log(log_id)}/case-compare",
+                    {"case_a": case_a, "case_b": case_b, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_process_activity_profile(log_id: str, activity: str, case_type: str | None = None) -> dict[str, Any]:
+        """One activity of a shared log from every side: how many cases have it and how often it repeats, what
+        usually comes before and after it (with median gaps), how long into a case it first happens, when in the
+        week and day it occurs, and case durations with and without it. Associations, not causes. Aggregates only.
+        """
+        if not isinstance(activity, str) or not activity:
+            raise ToolError("activity must name an activity")
+        return _get("get_process_activity_profile", f"/v1/process-intelligence/{_log(log_id)}/activity-profile",
+                    {"profile_activity": activity, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_signals(log_id: str) -> dict[str, Any]:
         """The owner's signal rules on a shared log (KPI thresholds, case and compliance conditions) and their
         last evaluated state: triggered or not, the measured value or matching cases, and whether the owner
