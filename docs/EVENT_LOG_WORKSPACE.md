@@ -376,6 +376,12 @@ copies, or the two given as `older` and `newer`. A change can come from
 appended events, an applied activity mapping or edited prices as much as from
 the process itself.
 
+## Finding an analysis
+
+The results page has many analysis sections. **Find an analysis**, at the top of the results, lists
+them all; typing filters the list by section name and description (for example "conformance",
+"funnel" or "stand out"), and choosing one scrolls to it and moves keyboard focus to its heading.
+
 ## Where to look first (automatic insights)
 
 After **Analyse**, **Where to look first** lists up to six findings, ranked by the
