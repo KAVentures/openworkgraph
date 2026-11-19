@@ -595,6 +595,7 @@
           processOpenGeneration++;
           resetHandoff("Session cleared. Recheck after sign-in.");
           $("handoffPacket").value="";
+          $("handoffConsent").checked=false;
           identityGeneration++;
           if(releaseBusy){operation++;busy=false;}
           repository.clear();
@@ -1730,7 +1731,8 @@
           note("Opened exact saved revision " + data.process.revision + ".");
         }
         function render(data) {
-          resetHandoff("Process selection changed. Check latest revision.");
+          $("handoffConsent").checked=false;
+          resetHandoff("Process selection changed. Reauthorize inspection.");
           repository.select(data);
           benefits.select(data);
           valueMeasurements.select(data);
