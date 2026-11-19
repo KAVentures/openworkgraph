@@ -474,3 +474,80 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def score_source_event_cohort(response: dict[str, Any], source_labels: list[dict[str, Any]]) -> dict[str, Any]:
+    """Measure a complete, externally labeled source-event cohort.
+
+    Unlike reviewer scoring, the denominator includes events with no surfaced
+    reconstruction assignment. Labels MUST be prepared independently before
+    predictions are inspected; this function cannot authenticate that fact.
+    The caller must also verify that the source-event inventory is exhaustive.
+    No automatic held-out or real-world accuracy claim is made.
+    """
+    queue = build_review_queue(response)
+    if queue["coverage_incomplete"]:
+        raise ValueError("truncated reconstruction evidence cannot be evaluated")
+    if not isinstance(source_labels, list) or not source_labels or len(source_labels) > 4096:
+        raise ValueError("source event labels must be a nonempty bounded list")
+    predictions = {(row["window"], row["event_id"]): {
+        json.dumps(pair, separators=(",", ":")) for pair in row["candidate_resource_pairs"]
+    } for row in queue["event_reviews"]}
+    truth: dict[tuple[str, str], set[str]] = {}
+    for label in source_labels:
+        if not isinstance(label, dict):
+            raise ValueError("invalid source event label")
+        window, event_id = label.get("window"), label.get("event_id")
+        if (not isinstance(window, str) or not window or len(window) > 128
+                or not isinstance(event_id, str) or not event_id or len(event_id) > 120):
+            raise ValueError("invalid source event identity")
+        key = (window, event_id)
+        if key in truth:
+            raise ValueError("duplicate source event label")
+        pairs = label.get("true_resource_pairs")
+        if not isinstance(pairs, list) or len(pairs) > MAX_PAIRS:
+            raise ValueError("invalid source ground truth")
+        canonical = set()
+        for pair in pairs:
+            if not isinstance(pair, list) or len(pair) != 2:
+                raise ValueError("invalid source pair")
+            if any(not isinstance(identity, list) or len(identity) != 3 or any(
+                not isinstance(part, str) or not part or len(part) > 256 for part in identity
+            ) for identity in pair) or pair[0] == pair[1]:
+                raise ValueError("invalid source pair identity")
+            canonical.add(json.dumps(sorted(pair), separators=(",", ":")))
+        if len(canonical) != len(pairs):
+            raise ValueError("duplicate source ground truth pair")
+        truth[key] = canonical
+    if not set(predictions).issubset(truth):
+        raise ValueError("source inventory omits surfaced prediction events")
+    tp = fp = fn = missed_events = negative_events = contaminated_negative_events = 0
+    for key, expected in truth.items():
+        predicted = predictions.get(key, set())
+        tp += len(predicted & expected)
+        fp += len(predicted - expected)
+        fn += len(expected - predicted)
+        missed_events += bool(expected and not predicted)
+        negative_events += not expected
+        contaminated_negative_events += bool(not expected and predicted)
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    return {
+        "source_events_labeled": len(truth),
+        "source_events_without_surfaced_predictions": len(set(truth) - set(predictions)),
+        "positive_source_events_without_predictions": missed_events,
+        "true_positive_pairs": tp, "false_positive_pairs": fp, "false_negative_pairs": fn,
+        "precision": precision, "recall": recall,
+        "f1": 2 * precision * recall / (precision + recall) if precision + recall else 0.0,
+        "negative_source_events": negative_events,
+        "negative_source_events_with_false_links": contaminated_negative_events,
+        "negative_false_link_rate": (
+            contaminated_negative_events / negative_events if negative_events else None
+        ),
+        "source_event_inventory_exhaustiveness_verified": False,
+        "independent_labels_verified": False,
+        "held_out_verified": False,
+        "real_work_accuracy_claim": False,
+        "evaluation_scope": "caller_supplied_source_event_inventory",
+        "evidence_sha256": queue["evidence_sha256"],
+    }
