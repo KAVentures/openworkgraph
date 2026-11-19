@@ -612,6 +612,45 @@ async def export_event_log_matching_cases(request: Request, log_id: str,
                         headers={"Cache-Control": "no-store"}, background=BackgroundTask(os.unlink, filename))
 
 
+def _anonymized(log_id: str, case_type: str | None, cohort: dict[str, Any], min_cases: int, time_mode: str,
+                resource_mode: str, summary_only: bool) -> dict[str, Any]:
+    from . import event_log_anonymized_export as anonymized
+    try:
+        return anonymized.anonymized_export(log_id, case_type, min_cases=min_cases, time_mode=time_mode,
+                                            resource_mode=resource_mode, cohort=cohort, summary_only=summary_only)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
+@router.get("/v1/event-logs/{log_id}/anonymized-export")
+def event_log_anonymized_export_summary(request: Request, log_id: str,
+                                        case_type: str | None = Query(default=None, max_length=200),
+                                        min_cases: int = Query(default=5, ge=2, le=1000),
+                                        time_mode: str = Query(default="relative", pattern="^(exact|day|relative)$"),
+                                        resource_mode: str = Query(default="drop", pattern="^(drop|pseudonymize)$"),
+                                        cohort: dict = Depends(_case_filter)):
+    """What an anonymized export would keep and remove, without the data."""
+    _require_dashboard(request)
+    result = _anonymized(log_id, case_type, cohort, min_cases, time_mode, resource_mode, True)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/v1/event-logs/{log_id}/anonymized-export.csv")
+def event_log_anonymized_export_csv(request: Request, log_id: str,
+                                    case_type: str | None = Query(default=None, max_length=200),
+                                    min_cases: int = Query(default=5, ge=2, le=1000),
+                                    time_mode: str = Query(default="relative", pattern="^(exact|day|relative)$"),
+                                    resource_mode: str = Query(default="drop", pattern="^(drop|pseudonymize)$"),
+                                    cohort: dict = Depends(_case_filter)):
+    """The anonymized log as CSV: rare paths suppressed, new case IDs, coarser time, no attributes. Not stored."""
+    _require_dashboard(request)
+    result = _anonymized(log_id, case_type, cohort, min_cases, time_mode, resource_mode, False)
+    return Response(result["csv"], media_type="text/csv; charset=utf-8", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-anonymized.csv"',
+        "X-OWG-Anonymized": f"cases={result['cases_kept']}; suppressed={result['cases_suppressed']}; "
+                            f"min_cases={result['min_cases']}"})
+
+
 @router.post("/v1/event-logs/{log_id}/derive")
 async def derive_event_log(request: Request, log_id: str):
     """Save the cases matching a filter as a new event log; the source log is unchanged."""
