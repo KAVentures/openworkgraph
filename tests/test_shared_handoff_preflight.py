@@ -181,3 +181,16 @@ def test_failed_review_navigation_cannot_invalidate_newer_session():
     assert "if(ticket===handoffGeneration&&identityTicket===identityGeneration&&" in block
     assert "credential===authorizedCredential&&selected===chosen)" in block
     assert block.index("credential===authorizedCredential&&selected===chosen)") < block.index('resetHandoff("REFUSED: Could not revalidate authorized revision.')
+
+
+def test_stale_review_authorization_response_does_not_clear_new_handoff():
+    """An old Gateway read must not invalidate a later session or inspection."""
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split("async function review(decision) {", 1)[1].split('$("approve").onclick', 1)[0]
+    stale = "if(ticket!==handoffGeneration||identityTicket!==identityGeneration||"
+    assert stale in block
+    assert "credential!==authorizedCredential||selected!==chosen)return;" in block
+    assert block.index(stale) < block.index('resetHandoff("REFUSED: Reviewed handoff is no longer current')
+    # Server-side revision/review denial still invalidates the CURRENT inspection.
+    assert 'current.review?.status!=="reviewed_design"' in block
+    assert 'current.process.content_sha256!==pinned.content_sha256' in block
