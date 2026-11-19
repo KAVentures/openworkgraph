@@ -974,6 +974,26 @@ def event_log_next_steps(request: Request, log_id: str, step: list[str] = Query(
     return _respond(explorer.next_steps, log_id, step, case_type, anchor=anchor, cohort=cohort)
 
 
+@router.post("/v1/event-logs/{log_id}/petri-net-deviation-causes")
+async def event_log_petri_net_deviation_causes(request: Request, log_id: str,
+                                               case_type: str | None = Query(default=None, max_length=200),
+                                               cohort: dict[str, Any] = Depends(_case_filter)):
+    """Case features associated with deviating from a PNML net sent as the body (at most 2 MB). Not stored."""
+    from . import event_log_alignments as aligned
+    from . import event_log_petri_replay as petri
+    _require_dashboard(request)
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > petri.MAX_BYTES:
+            raise HTTPException(413, "the Petri net file is larger than 2 MB")
+    try:
+        result = await run_in_threadpool(aligned.deviation_causes, log_id, bytes(body), case_type, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/v1/event-logs/{log_id}/variants")
 def event_log_variants(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                        limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):

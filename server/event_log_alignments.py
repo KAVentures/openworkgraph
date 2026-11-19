@@ -115,7 +115,7 @@ def _align(net: dict[str, Any], trace: tuple[str, ...], labels: set[str], budget
 
 
 def alignments(log_id: str, pnml: bytes, case_type: str | None = None, *,
-               cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+               cohort: dict[str, Any] | None = None, _all_non_fitting: bool = False) -> dict[str, Any]:
     net = parse_pnml(pnml)
     labels = {label for label in net["transitions"].values() if label is not None}
 
@@ -202,7 +202,9 @@ def alignments(log_id: str, pnml: bytes, case_type: str | None = None, *,
         order = sorted(times, key=lambda a: (-in_cases[a], -times[a], a))
         return [{"activity": a, "cases": in_cases[a], "times": times[a]} for a in order[:TOP_DEVIATIONS]]
 
+    extra = {"_non_fitting_paths": [v["path"] for v in variants]} if _all_non_fitting else {}
     return {
+        **extra,
         "format": FORMAT, "log_id": log_id, "case_notion": data.get("case_notion"),
         "net": {"places": len(net["places"]), "transitions": len(net["transitions"]),
                 "silent_transitions": sum(1 for v in net["transitions"].values() if v is None),
@@ -232,4 +234,23 @@ def alignments(log_id: str, pnml: bytes, case_type: str | None = None, *,
     }
 
 
-__all__ = ["alignments", "FORMAT"]
+def deviation_causes(log_id: str, pnml: bytes, case_type: str | None = None, *,
+                     cohort: dict[str, Any] | None = None, limit: int = 30) -> dict[str, Any]:
+    """Which case features go with cases that deviate from the net: root-cause associations with the
+    outcome "the case followed a path the alignment found non-fitting"."""
+    from . import event_log_analytics as analytics
+    aligned = alignments(log_id, pnml, case_type, cohort=cohort, _all_non_fitting=True)
+    paths = aligned.pop("_non_fitting_paths")
+    summary = {"format": FORMAT + "+causes", "log_id": log_id, "cases": aligned["cases"],
+               "fitting_cases": aligned["fitness"]["fitting_cases"], "non_fitting_paths": len(paths),
+               "unaligned": aligned["unaligned"]}
+    if not paths:
+        return {**summary, "associations": [], "note": "every aligned case fits the net, so nothing deviates"}
+    causes = analytics.root_cause(log_id, "variant_in", case_type, variants=paths, cohort=cohort, limit=limit)
+    return {**summary, **{k: v for k, v in causes.items() if k not in ("log",)},
+            "outcome_meaning": "the case followed a path that does not fit the net",
+            "caveat": ("Associations with deviating cases, not causes. Activities are listed too: a case with an "
+                       "extra or rare step often deviates because of that step.")}
+
+
+__all__ = ["alignments", "deviation_causes", "FORMAT"]

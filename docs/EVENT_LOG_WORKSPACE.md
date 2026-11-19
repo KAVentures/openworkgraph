@@ -2353,6 +2353,19 @@ case-filter parameters. The net is not stored.
 Agents with access to a shared log use `get_process_deviations`, which aligns the cases on the
 discovered net at a chosen noise level (aggregates only, no case IDs).
 
+### What goes with the deviations
+
+After the step-by-step explanation, **What goes with these deviations?** runs root-cause analysis
+with the outcome "the case followed a path that does not fit the net" (Celonis's conformance checker
+shows the same for violations). Case attributes, activities and attribute ranges are tested as risk
+differences with Newcombe 95% intervals and a Bonferroni check over the features tested, under the
+same case filter as the alignment. Activities appear too: a case with an extra or rare step often
+deviates because of that step. These are associations, not causes.
+
+`POST /v1/event-logs/{log_id}/petri-net-deviation-causes` with the PNML file as the body, plus the
+case-filter parameters. Root-cause analysis also accepts the outcome `variant_in` with a list of
+paths when called directly. Agents use `get_process_deviation_causes` on the discovered net.
+
 ## Temporal profile
 
 **Temporal profile** (as in PM4Py and ProM) learns the usual time between every ordered pair of

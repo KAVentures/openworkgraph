@@ -24,6 +24,7 @@
   FILTERED.add('next-steps');
   FILTERED.add('petri-net-replay');
   FILTERED.add('petri-net-alignments');
+  FILTERED.add('petri-net-deviation-causes');
 
   const el=(tag,text,cls)=>{
     const node=document.createElement(tag);
@@ -4016,6 +4017,22 @@
         if(r.non_fitting_variants.length){const more=document.createElement('details');more.open=true;more.appendChild(el('summary','How each non-fitting variant is explained ('+r.non_fitting_variants.length+' of '+r.non_fitting_variants_total+')'));
           more.appendChild(table(['Variant','Cases','Fitness','Explanation'],r.non_fitting_variants.map(v=>[v.path.join(' → '),Number(v.cases).toLocaleString(),pct(v.fitness),v.alignment.map(step).join(' → ')])));aligned.appendChild(more);}
         aligned.appendChild(el('div',r.caveat,'muted'));
+        if(r.non_fitting_variants.length){
+          const why=button('What goes with these deviations?','secondary');why.id='owgPetriCauses';
+          const causes=el('div');causes.id='owgPetriCausesResults';causes.setAttribute('role','status');causes.setAttribute('aria-live','polite');
+          aligned.append(why,causes);
+          why.onclick=async()=>{
+            if(generation!==state.generation)return;why.disabled=true;causes.replaceChildren(el('div','Comparing deviating and fitting cases…','muted'));
+            try{
+              const c=await (await api(logPath('petri-net-deviation-causes',{}),{method:'POST',headers:{'Content-Type':'application/xml'},body:net.body})).json();
+              if(generation!==state.generation)return;
+              const pts=x=>(x>0?'+':'')+(x*100).toFixed(1)+' pts';
+              const list=(c.associations||[]).slice(0,15);
+              causes.replaceChildren(el('div',Number(c.outcome_cases||0).toLocaleString()+' of '+Number(c.cases).toLocaleString()+' cases deviate; '+Number(c.features_tested||0)+' case features tested.'+(list.length?'':' None goes with deviating cases in this log.'),'muted'));
+              if(list.length)causes.appendChild(table(['Feature','Cases with it','Deviate with','Deviate without','Difference (95% CI)','Holds after correction'],list.map(a=>[a.feature.kind+': '+a.feature.value,Number(a.cases_with_feature).toLocaleString(),pct(a.outcome_rate_with),pct(a.outcome_rate_without),pts(a.risk_difference)+' ['+(a.ci95[0]*100).toFixed(1)+', '+(a.ci95[1]*100).toFixed(1)+']',a.holds_after_bonferroni?'Yes':'No'])));
+              causes.appendChild(el('div',c.caveat||c.note||'','muted'));
+            }catch(error){causes.replaceChildren(el('div',error.message,'muted'));}
+            finally{why.disabled=false;}};}
       }catch(error){status.textContent=error.message;}
       finally{run.disabled=own.disabled=false;align.disabled=!lastNet;}};
     run.onclick=async()=>{const chosen=file.files&&file.files[0];if(!chosen){statusLine.textContent='Choose a .pnml file first.';return;}

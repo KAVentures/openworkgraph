@@ -450,6 +450,18 @@ def insights(log_id: str, case_type: str | None = None, sla_hours: float | None 
     return {**log_insights.insights(log_id, spec), "format": FORMAT, "log_id": log_id}
 
 
+def model_deviation_causes(log_id: str, case_type: str | None = None, noise: float = 0.2) -> dict[str, Any]:
+    """Case features associated with deviating from the discovered net (aggregates level)."""
+    require(log_id, "aggregates")
+    from . import event_log_alignments as al
+    from . import event_log_pnml as pnml
+    noise = max(0.0, min(float(noise), 0.95))
+    xml, meta = pnml.discovered_pnml(log_id, case_type, noise=noise)
+    result = al.deviation_causes(log_id, xml.encode(), case_type)
+    return {**result, "format": FORMAT, "log_id": log_id, "noise": noise,
+            "process_model_sha256": meta.get("process_model_sha256")}
+
+
 def slowest_cases(log_id: str, case_type: str | None = None, limit: int = 10) -> dict[str, Any]:
     require(log_id, "cases")
     from . import event_log_case_explain as case_explain
