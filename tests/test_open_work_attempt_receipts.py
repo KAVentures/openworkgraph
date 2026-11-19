@@ -237,3 +237,42 @@ def test_expired_receipt_cleanup_rejects_invalid_policy_without_deleting(tmp_pat
             purge_expired_receipts(
                 path, tenant="org", actor="alice", older_than_days=invalid)
     assert len(list_receipts(path, tenant="org", actor="alice", attempt="run")) == 1
+
+
+def test_retention_overwrites_deleted_receipt_bytes_not_only_sql_rows(tmp_path):
+    """SQLite secure_delete must erase receipt evidence from freed pages."""
+    import sqlite3
+    from datetime import datetime, timezone
+    from server.open_work_attempt_receipts import purge_expired_receipts
+
+    path = tmp_path / "receipts.sqlite"
+    marker = "sensitive_event_OWG_ERASURE_7f3d9b42"
+    append_receipt(
+        str(path), tenant="org", actor="alice", attempt="run",
+        verdict={"status": "verified_provider_event", "event_id": marker,
+                 "provider_operation": "unknown", "customer_outcome": "unknown"},
+    )
+    assert marker.encode() in path.read_bytes()
+    with sqlite3.connect(path) as db:
+        db.execute("UPDATE attempt_receipts SET checked_at=? WHERE tenant=? AND actor=?",
+                   ("2026-11-01T00:00:00+00:00", "org", "alice"))
+    assert purge_expired_receipts(
+        str(path), tenant="org", actor="alice", older_than_days=7,
+        now=datetime(2026, 11, 18, tzinfo=timezone.utc),
+    ) == 1
+    assert list_receipts(str(path), tenant="org", actor="alice", attempt="run") == []
+    assert marker.encode() not in path.read_bytes()
+
+
+def test_consent_revocation_overwrites_receipt_bytes(tmp_path):
+    """Actor revocation must not leave provider event IDs in SQLite free space."""
+    path = tmp_path / "receipts.sqlite"
+    marker = "sensitive_event_OWG_REVOKE_2d91e4f7"
+    append_receipt(
+        str(path), tenant="org", actor="alice", attempt="run",
+        verdict={"status": "verified_provider_event", "event_id": marker,
+                 "provider_operation": "unknown", "customer_outcome": "unknown"},
+    )
+    assert marker.encode() in path.read_bytes()
+    assert purge_scope(str(path), tenant="org", actor="alice") == 1
+    assert marker.encode() not in path.read_bytes()
