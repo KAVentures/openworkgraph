@@ -158,3 +158,70 @@ def test_real_delta_two_round_http_resume_requires_import_approval(tmp_path):
     assert result["checkpoint_advanced"] is False
     assert json.loads(candidate2.read_text())["cursor_url"] == cursor2
     assert "Bearer token" not in candidate1.read_text() + candidate2.read_text()
+
+
+def test_real_delta_revocation_between_graph_pages_refuses_resume_and_artifacts(tmp_path):
+    """A revoked grant must stop the *next* authenticated GET, not just publication.
+
+    Uses the real delta HTTP adapter with a transport that revokes the local
+    grant after the first provider-shaped page. No cursor or CSV may escape.
+    """
+    from server.m365_outlook_delta import DeltaError, export_delta
+
+    folder = "selected-folder"
+    base = "https://graph.microsoft.com/v1.0/me/mailFolders/" + folder + "/messages/delta"
+    next_page = base + "?%24skiptoken=second-page"
+    grant = tmp_path / "grant.json"
+    scope = {
+        "version": 1, "enabled": True, "consented": True,
+        "tenant_scope": "tenant", "mailbox_scope": "mailbox", "folder_id": folder,
+    }
+    grant.write_text(json.dumps(scope))
+    grant.chmod(0o600)
+
+    class Response:
+        status = 200
+        headers = {"Content-Type": "application/json"}
+
+        def __init__(self, url):
+            self.url = url
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def geturl(self):
+            return self.url
+
+        def read(self, limit):
+            assert limit == 128 * 1024 + 1
+            # Revocation occurs while the first response is in flight.
+            grant.write_text(json.dumps({**scope, "enabled": False}))
+            return json.dumps({"value": [], "@odata.nextLink": next_page}).encode()
+
+    class Transport:
+        def __init__(self):
+            self.requests = []
+
+        def open(self, req, timeout):
+            assert timeout == 15
+            assert req.get_header("Authorization") == "Bearer token"
+            self.requests.append(req.full_url)
+            if len(self.requests) != 1:
+                pytest.fail("Revoked grant authorized another Graph request")
+            return Response(req.full_url)
+
+    transport = Transport()
+    output, candidate = tmp_path / "round.csv", tmp_path / "round.json"
+    with pytest.raises(DeltaError, match="grant"):
+        export_delta(
+            tenant="tenant", mailbox="mailbox", folder_id=folder,
+            grant_file=grant, output=output, candidate=candidate,
+            token="token", consent_read=True, consent_export=True,
+            opener=transport,
+        )
+    assert len(transport.requests) == 1
+    assert not output.exists()
+    assert not candidate.exists()
