@@ -19,6 +19,7 @@
   FILTERED.add('heuristics-net');
   FILTERED.add('footprints');
   FILTERED.add('model-quality');
+  FILTERED.add('similar-cases');
   FILTERED.add('model-change');
   FILTERED.add('model-comparison');
   FILTERED.add('funnel');
@@ -31,7 +32,6 @@
   FILTERED.add('petri-net-alignments');
   FILTERED.add('variant.pnml');
   FILTERED.add('petri-net-deviation-causes');
-  FILTERED.add('similar-cases');
 
   const el=(tag,text,cls)=>{
     const node=document.createElement(tag);
