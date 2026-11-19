@@ -217,6 +217,36 @@ class ExplicitAnnotationScoreTests(unittest.TestCase):
         self.assertFalse(score["held_out_verified"])
         self.assertFalse(score["real_work_accuracy_claim"])
 
+    def test_adversarial_interleaved_cases_and_unrelated_shared_event_expose_contamination(self):
+        # Synthetic case truth is specified independently of the proposed
+        # assignments: shared is an interruption, not evidence for either case.
+        # This measures pair-level leakage on this fixture only, not held-out
+        # accuracy or real-world cross-case contamination.
+        data = payload([pair("A", "F", ["a1", "shared"]),
+                        pair("B", "G", ["b1", "shared"])])
+        rows = build_review_queue(data)["event_reviews"]
+        truth = {
+            "a1": [pair("A", "F", ["a1"])["resource_pointers"]],
+            "b1": [pair("B", "G", ["b1"])["resource_pointers"]],
+            "shared": [],
+        }
+        labels = [{"window": row["window"], "event_id": row["event_id"],
+                   "true_resource_pairs": [
+                       [[p["provider"], p["resource_kind"], p["resource_ref"]] for p in pair_pointers]
+                       for pair_pointers in truth[row["event_id"]]]}
+                  for row in rows]
+        score = score_review_annotations(data, labels)
+        self.assertEqual((score["true_positive_pairs"], score["false_positive_pairs"],
+                          score["false_negative_pairs"]), (2, 2, 0))
+        self.assertAlmostEqual(score["precision"], 0.5)
+        self.assertAlmostEqual(score["recall"], 1.0)
+        self.assertAlmostEqual(score["f1"], 2 / 3)
+        self.assertEqual(score["ambiguous_annotated_events"], 1)
+        self.assertEqual([row["event_id"] for row in score["event_disagreements"]], ["shared"])
+        self.assertFalse(score["cross_case_contamination_measured"])
+        self.assertFalse(score["held_out_verified"])
+        self.assertFalse(score["real_work_accuracy_claim"])
+
     def test_ambiguous_assignment_counts_false_positive_not_silent_case_merge(self):
         data = payload([pair("A", "F", ["shared"]), pair("B", "G", ["shared"])])
         row = build_review_queue(data)["event_reviews"][0]
