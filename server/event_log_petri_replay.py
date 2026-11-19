@@ -182,9 +182,11 @@ def _replay(net: dict[str, Any], trace: tuple[str, ...], by_label: dict[str, lis
     missing_at: Counter = Counter()
     problem_transitions: Counter = Counter()
     unknown: list[str] = []
+    fired: Counter = Counter()
 
     def fire(t: str) -> None:
         nonlocal produced, consumed, missing
+        fired[t] += 1
         for p, n in net["pre"][t].items():
             if marking[p] < n:
                 missing += n - marking[p]
@@ -234,7 +236,7 @@ def _replay(net: dict[str, Any], trace: tuple[str, ...], by_label: dict[str, lis
     return {"fits": missing == 0 and remaining == 0 and not unknown, "fitness": fitness,
             "missing": missing, "remaining": remaining, "consumed": consumed, "produced": produced,
             "missing_at": missing_at, "remaining_at": remaining_at,
-            "problem_transitions": problem_transitions, "unknown": unknown}
+            "problem_transitions": problem_transitions, "unknown": unknown, "fired": fired}
 
 
 def _reachable_labels(net: dict[str, Any], marking: Counter) -> set[str]:

@@ -374,6 +374,32 @@ def footprints(log_id: str, case_type: str | None = None, noise: float = 0.2) ->
     return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
 
 
+def model_quality(log_id: str, case_type: str | None = None, levels: str | None = None) -> dict[str, Any]:
+    """Fitness, precision, generalization and simplicity of the discovered net by noise level (aggregates)."""
+    require(log_id, "aggregates")
+    from . import event_log_model_quality as mq
+    result = mq.model_quality(log_id, case_type, levels=levels)
+    keep = ("case_notion", "cases", "cases_excluded", "variants", "levels", "best_f_score_noise", "definitions",
+            "method", "caveat")
+    return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
+
+
+def model_deviations(log_id: str, case_type: str | None = None, noise: float = 0.2) -> dict[str, Any]:
+    """Optimal alignments of the log on its discovered net: which steps are extra or skipped (aggregates)."""
+    require(log_id, "aggregates")
+    from . import event_log_alignments as al
+    from . import event_log_pnml as pnml
+    noise = max(0.0, min(float(noise), 0.95))
+    xml, meta = pnml.discovered_pnml(log_id, case_type, noise=noise)
+    result = al.alignments(log_id, xml.encode(), case_type)
+    keep = ("case_notion", "cases", "cases_excluded", "variants", "fitness", "deviation_cost", "log_moves",
+            "model_moves", "activities_not_in_net", "non_fitting_variants", "non_fitting_variants_total",
+            "unaligned", "method", "caveat")
+    return {"format": FORMAT, "log_id": log_id, "noise": noise,
+            "process_model_sha256": meta.get("process_model_sha256"),
+            **{k: result[k] for k in keep if k in result}}
+
+
 def slowest_cases(log_id: str, case_type: str | None = None, limit: int = 10) -> dict[str, Any]:
     require(log_id, "cases")
     from . import event_log_case_explain as case_explain

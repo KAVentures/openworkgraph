@@ -2148,6 +2148,28 @@ the section offers 0.3, 0.5, 0.7 and 0.9) and when seen at least the chosen numb
 `GET /v1/event-logs/{log_id}/heuristics-net?dependency_threshold=&and_threshold=&min_occurrences=&all_connected=`
 plus the case-filter parameters. Agents with access to a shared log use `get_process_heuristics_net`.
 
+## Model quality
+
+**Model quality** discovers the model at several noise levels (by default 0, 10%, 20%, 30% and 50%),
+converts each draft to a Petri net as the PNML export does, and scores it on the four quality
+dimensions of process mining (Buijs, van Dongen and van der Aalst, 2012), as PM4Py's evaluation
+does:
+
+- **Fitness**: token-replay fitness of the recorded cases, as in **Check against a Petri net**.
+- **Precision**: ETConformance, one minus the share of escaping edges.
+- **F-score**: the harmonic mean of fitness and precision.
+- **Generalization**: `1 − mean over transitions of 1/√(times fired)`, where a transition never fired
+  counts as 1. Parts of the net that few cases use score low.
+- **Simplicity**: `1 / (1 + max(0, mean arcs per node − 2))`.
+
+The noise level with the highest F-score is marked; on a tie the simpler net, then the lower noise.
+Noise 0 keeps every observed path, which usually maximizes fitness at the cost of precision and
+simplicity. The scores compare drafts against this log; they help choose the noise setting but do
+not say which model is right. Up to eight levels can be scored at once.
+
+`GET /v1/event-logs/{log_id}/model-quality?levels=0,0.1,0.2&activities=1` plus the case-filter
+parameters. Agents with access to a shared log use `get_process_model_quality` (aggregates only).
+
 ## Footprints
 
 **Footprints** (the footprint matrices of van der Aalst's *Process Mining*, PM4Py's footprints
@@ -2226,6 +2248,8 @@ is shown.
 
 `POST /v1/event-logs/{log_id}/petri-net-alignments` with the PNML file as the body, plus the
 case-filter parameters. The net is not stored.
+Agents with access to a shared log use `get_process_deviations`, which aligns the cases on the
+discovered net at a chosen noise level (aggregates only, no case IDs).
 
 ## Temporal profile
 
