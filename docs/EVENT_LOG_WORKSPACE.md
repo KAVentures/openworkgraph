@@ -2252,6 +2252,12 @@ first occurrence of the activity in each case is compared with its due date:
 A table by due month shows whether adherence is changing, and the most late cases are listed. The
 report says how often deadlines were met, not why.
 
+**Alert me** saves the same check as a **due-date signal**: it holds when more than the chosen
+number of open cases are past their due date. Signals can also watch the late share among cases where
+the activity happened (`"metric": "late_share"`, a fraction). The rule is
+`{"kind": "due_date", "activity": …, "due_attribute": … or "due_days": …, "metric":
+"open_overdue_cases" | "late_share", "operator": "above" | "below", "threshold": …}`.
+
 `GET /v1/event-logs/{log_id}/due-dates?due_activity=Pay&due_attribute=due` (or `due_days=30`,
 optionally `early_days=7`) plus the case-filter parameters, in which `activity` keeps cases that
 contain an activity. Agents use `get_process_due_dates`; case IDs only for

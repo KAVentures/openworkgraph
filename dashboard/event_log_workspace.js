@@ -3959,7 +3959,22 @@
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activity that is due',activity),field('Due date',mode),attributeField,daysField,field('Early window',early),run);
     const statusLine=el('div',null,'muted');statusLine.id='owgDueStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgDueResults';
-    box.append(row,statusLine,out);
+    const alertCount=input('owgDueAlertCount','number');alertCount.min='0';alertCount.step='1';alertCount.value='0';
+    const alertSave=button('Alert me','secondary');alertSave.id='owgDueAlertSave';
+    const alertMessage=el('div',null,'muted');alertMessage.id='owgDueAlertMessage';alertMessage.setAttribute('role','status');alertMessage.setAttribute('aria-live','polite');
+    const alertRow=el('div',null,'row');alertRow.style.alignItems='end';alertRow.append(field('Signal when open overdue cases are more than',alertCount),alertSave);
+    box.append(row,statusLine,out,alertRow,alertMessage);
+    alertSave.onclick=async()=>{
+      const when={kind:'due_date',activity:activity.value,metric:'open_overdue_cases',operator:'above',threshold:Math.max(0,Math.floor(Number(alertCount.value)||0))};
+      if(mode.value==='attribute'){if(!attribute.value.trim()){alertMessage.textContent='Enter the name of the due-date attribute.';return;}when.due_attribute=attribute.value.trim();}
+      else{if(!(Number(days.value)>0)){alertMessage.textContent='Enter a number of days above 0.';return;}when.due_days=Number(days.value);}
+      const sig={name:('Overdue '+activity.value).slice(0,120),when};if(state.caseType)sig.case_type=state.caseType;
+      alertSave.disabled=true;
+      try{await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/signals',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sig)});
+        document.querySelectorAll('#owgEventLogSignals').forEach(node=>node.dispatchEvent(new CustomEvent('owg-signals-changed')));
+        alertMessage.textContent='Saved as a signal. Use Check signals to evaluate it; it counts open cases past their due date each time.';}
+      catch(error){alertMessage.textContent=error.message;}
+      finally{alertSave.disabled=false;}};
     const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
     const names={on_time:'On time',early:'Early',late:'Late',open_overdue:'Open, overdue',open_not_due:'Open, not yet due',no_due_date:'No due date',unreadable_due_date:'Unreadable due date'};
     run.onclick=async()=>{
@@ -6380,6 +6395,7 @@
         del.onclick=async()=>{try{await api(base()+'/'+encodeURIComponent(rule.rule_id)+'/delete',{method:'POST'});message.textContent='Signal deleted.';await refresh();}catch(error){message.textContent=error.message;}};
         const w=rule.when;const text=w.kind==='kpi'?w.metric.replace(/_/g,' ')+' '+w.operator+' '+w.threshold
           :w.kind==='conformance'?w.metric.replace(/_/g,' ')+' on '+w.net_name+' '+w.operator+' '+w.threshold+(w.recent_days?' (cases started in the last '+w.recent_days+' days)':'')
+          :w.kind==='due_date'?(w.metric==='open_overdue_cases'?'open cases overdue for '+w.activity:'late share of '+w.activity)+' '+w.operator+' '+w.threshold+(w.due_attribute?' (due: '+w.due_attribute+')':' (due '+w.due_days+' days after start)')
           :w.kind==='compliance'?'compliance rule'+(w.rule&&w.rule.kind?': '+String(w.rule.kind).replace(/_/g,' '):'')
           :w.condition.replace(/_/g,' ')+(w.activity?' '+w.activity:'')+(w.seconds?' '+duration(w.seconds):'');
         return [rule.name,text,del];})):el('div','No saved signals yet.','muted'));
@@ -6405,8 +6421,8 @@
           el('div',r.triggered+' of '+r.signals.length+' signals hold now.','muted'),
           table(['Signal','Holds','Value or matching cases','New since last check','Example cases'],r.signals.map(sig=>[
             sig.name,sig.triggered?'yes':'no',
-            sig.when.kind==='conformance'?(sig.value===null?'—':pct(sig.value)+' of '+Number(sig.conformance.cases).toLocaleString()+' cases'):sig.when.kind==='kpi'?(sig.value===null?'—':sig.when.metric.endsWith('_rate')?pct(sig.value):sig.when.metric==='case_count'?Number(sig.value).toLocaleString():duration(sig.value)):Number(sig.matching_cases).toLocaleString()+' cases',
-            (sig.when.kind==='kpi'||sig.when.kind==='conformance')?(sig.changed_since_last_evaluation?'changed':'—'):newCaseChange(sig),
+            sig.when.kind==='due_date'?(sig.value===null?'—':sig.when.metric==='late_share'?pct(sig.value)+' late':Number(sig.value).toLocaleString()+' overdue'):sig.when.kind==='conformance'?(sig.value===null?'—':pct(sig.value)+' of '+Number(sig.conformance.cases).toLocaleString()+' cases'):sig.when.kind==='kpi'?(sig.value===null?'—':sig.when.metric.endsWith('_rate')?pct(sig.value):sig.when.metric==='case_count'?Number(sig.value).toLocaleString():duration(sig.value)):Number(sig.matching_cases).toLocaleString()+' cases',
+            (sig.when.kind==='kpi'||sig.when.kind==='conformance'||sig.when.kind==='due_date')?(sig.changed_since_last_evaluation?'changed':'—'):newCaseChange(sig),
             (sig.evidence_cases||[]).slice(0,5).map(c=>c.case_id+(sig.when.condition==='open_longer_than'&&c.age_since_first_event_seconds!==undefined?
               ' (age '+duration(c.age_since_first_event_seconds)+', idle '+duration(c.idle_since_last_event_seconds)+')':'')).join(', ')])),
           el('div',r.interpretation,'muted'));

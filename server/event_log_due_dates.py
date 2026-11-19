@@ -61,43 +61,31 @@ def _quantiles(values: list[float]) -> dict[str, float | None]:
     return {"median": q(0.5), "p90": q(0.9), "max": round(ordered[-1], 2)}
 
 
-def due_dates(log_id: str, activity: str, case_type: str | None = None, *, due_attribute: str | None = None,
-              due_days: float | None = None, early_days: float | None = None, include_case_ids: bool = True,
-              cohort: dict[str, Any] | None = None) -> dict[str, Any]:
-    if not isinstance(activity, str) or not activity or len(activity) > 500:
-        raise EventLogWorkspaceError("choose the activity that has a due date")
-    if (due_attribute is None) == (due_days is None):
-        raise EventLogWorkspaceError("give either a due-date attribute or a number of days after the case starts")
-    if due_attribute is not None and (not isinstance(due_attribute, str) or not due_attribute or len(due_attribute) > 200):
-        raise EventLogWorkspaceError("the due-date attribute must be a name")
-    for name, value in (("due_days", due_days), ("early_days", early_days)):
-        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
-                                  or not 0 < value <= MAX_DAYS):
-            raise EventLogWorkspaceError(f"{name} must be a number of days from above 0 to {MAX_DAYS}")
+def collect(conn, log_id: str, activity: str, due_attribute: str | None, table: str = "ce") -> dict[str, Any]:
+    """Per case: start, first occurrence of ``activity``, and the raw due-date value, from ``table``."""
+    if table not in ("ce", "rc"):
+        raise ValueError("unknown case-event table")
+    cases = conn.execute(f"""SELECT case_id, min(ts), min(ts) FILTER (WHERE activity = ?) FROM {table}
+        GROUP BY case_id""", [activity]).fetchall()
+    log_end = conn.execute(f"SELECT max(ts) FROM {table}").fetchone()[0]
+    has_activity = conn.execute(f"SELECT count(*) FROM {table} WHERE activity = ?", [activity]).fetchone()[0]
+    raw: dict[str, Any] = {}
+    if due_attribute is not None:
+        path = '$."' + due_attribute.replace('"', '\\"') + '"'
+        for case_id, value in conn.execute(f"""SELECT case_id, arg_min(v, (ts, event_id)) FROM (
+              SELECT case_id, ts, event_id, json_extract_string(attributes, ?) AS v FROM {table})
+            WHERE v IS NOT NULL AND trim(v) <> '' GROUP BY case_id""", [path]).fetchall():
+            raw[case_id] = value
+        for object_id, attributes in conn.execute(f"""SELECT object_id, attributes FROM objects
+            WHERE log_id = ? AND object_id IN (SELECT DISTINCT case_id FROM {table})""", [log_id]).fetchall():
+            value = json.loads(attributes or "{}").get(due_attribute)
+            if value not in (None, ""):
+                raw[object_id] = value    # a case attribute wins over an event attribute
+    return {"cases_rows": cases, "log_end": log_end, "has_activity": has_activity, "raw_due": raw}
 
-    def run(conn):
-        cases = conn.execute("""SELECT case_id, min(ts), min(ts) FILTER (WHERE activity = ?) FROM ce
-            GROUP BY case_id""", [activity]).fetchall()
-        log_end = conn.execute("SELECT max(ts) FROM ce").fetchone()[0]
-        has_activity = conn.execute("SELECT count(*) FROM ce WHERE activity = ?", [activity]).fetchone()[0]
-        raw: dict[str, Any] = {}
-        if due_attribute is not None:
-            path = '$."' + due_attribute.replace('"', '\\"') + '"'
-            for case_id, value in conn.execute("""SELECT case_id, arg_min(v, (ts, event_id)) FROM (
-                  SELECT case_id, ts, event_id, json_extract_string(attributes, ?) AS v FROM ce)
-                WHERE v IS NOT NULL AND trim(v) <> '' GROUP BY case_id""", [path]).fetchall():
-                raw[case_id] = value
-            for object_id, attributes in conn.execute("""SELECT object_id, attributes FROM objects
-                WHERE log_id = ? AND object_id IN (SELECT DISTINCT case_id FROM ce)""", [log_id]).fetchall():
-                value = json.loads(attributes or "{}").get(due_attribute)
-                if value not in (None, ""):
-                    raw[object_id] = value    # a case attribute wins over an event attribute
-        return {"cases_rows": cases, "log_end": log_end, "has_activity": has_activity, "raw_due": raw}
 
-    data = workspace._query_filtered(log_id, case_type, cohort, run)
-    rows, log_end, raw_due = data.pop("cases_rows"), data.pop("log_end"), data.pop("raw_due")
-    if not data.pop("has_activity"):
-        raise EventLogWorkspaceError(f"no case in this selection has the activity {activity!r}")
+def classify(rows, raw_due: dict[str, Any], log_end, *, due_days: float | None, early_days: float | None):
+    """Group each case as on time, early, late, open overdue, open not due, or without a usable due date."""
     groups: Counter = Counter()
     days_late: list[float] = []
     days_early: list[float] = []
@@ -128,6 +116,32 @@ def due_dates(log_id: str, activity: str, case_type: str | None = None, *, due_a
             group = "on_time"
         groups[group] += 1
         months.setdefault(due.strftime("%Y-%m"), Counter())[group] += 1
+    return groups, days_late, days_early, months, late_cases
+
+
+def due_dates(log_id: str, activity: str, case_type: str | None = None, *, due_attribute: str | None = None,
+              due_days: float | None = None, early_days: float | None = None, include_case_ids: bool = True,
+              cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not isinstance(activity, str) or not activity or len(activity) > 500:
+        raise EventLogWorkspaceError("choose the activity that has a due date")
+    if (due_attribute is None) == (due_days is None):
+        raise EventLogWorkspaceError("give either a due-date attribute or a number of days after the case starts")
+    if due_attribute is not None and (not isinstance(due_attribute, str) or not due_attribute or len(due_attribute) > 200):
+        raise EventLogWorkspaceError("the due-date attribute must be a name")
+    for name, value in (("due_days", due_days), ("early_days", early_days)):
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
+                                  or not 0 < value <= MAX_DAYS):
+            raise EventLogWorkspaceError(f"{name} must be a number of days from above 0 to {MAX_DAYS}")
+
+    def run(conn):
+        return collect(conn, log_id, activity, due_attribute)
+
+    data = workspace._query_filtered(log_id, case_type, cohort, run)
+    rows, log_end, raw_due = data.pop("cases_rows"), data.pop("log_end"), data.pop("raw_due")
+    if not data.pop("has_activity"):
+        raise EventLogWorkspaceError(f"no case in this selection has the activity {activity!r}")
+    groups, days_late, days_early, months, late_cases = classify(rows, raw_due, log_end, due_days=due_days,
+                                                                  early_days=early_days)
     evaluated = sum(groups[g] for g in ("on_time", "early", "late", "open_overdue", "open_not_due"))
     decided = groups["on_time"] + groups["early"] + groups["late"]
     late_cases.sort(key=lambda c: (-c[0], str(c[1])))
@@ -165,4 +179,4 @@ def due_dates(log_id: str, activity: str, case_type: str | None = None, *, due_a
     }
 
 
-__all__ = ["due_dates", "FORMAT"]
+__all__ = ["due_dates", "collect", "classify", "FORMAT"]
