@@ -253,6 +253,12 @@ def run(feed_id: str, *, now: float | None = None, retry_failed: bool = False, r
                     continue
                 try:
                     info = entry.stat(follow_symlinks=False)
+                    # Windows DirEntry metadata may be stale after a writer updates
+                    # timestamps (including the test's settled-file fixture).
+                    # Re-stat by path there; keep DirEntry.stat for permission
+                    # failures and do not follow symlinks during either check.
+                    if os.name == "nt":
+                        info = (folder / entry.name).lstat()
                 except FileNotFoundError:
                     scan_deferred += 1
                     continue  # removed during enumeration
