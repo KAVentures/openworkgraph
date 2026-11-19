@@ -1032,11 +1032,22 @@
         const response=await api(url.pathname+url.search,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
         const data=await response.json();
         if(t!==turn||generation!==state.generation||logId!==state.logId||caseType!==state.caseType)return;
+        const selected=savedId?savedEntries.find(entry=>entry.metric_id===savedId):null;
+        // Never present a result as the selected saved revision if it changed
+        // between the picker load and evaluation. Re-select and recalculate.
+        if(savedId&&(!selected||!data.saved_metric||
+           data.saved_metric.metric_id!==savedId||
+           data.saved_metric.definition_sha256!==selected.definition_sha256)){
+          out.replaceChildren(el('div','Saved metric revision changed. Reload saved expressions and calculate again.','muted'));
+          await loadSaved();
+          return;
+        }
         const m=data.metric||{};
         out.replaceChildren(
           el('div',String(m.rows??0)+' matching cases; '+String(m.null??0)+' missing values.','muted'),
           table(['Average','Minimum','Maximum','Sum','Values'],[[m.mean??'—',m.min??'—',m.max??'—',m.sum??'—',String(m.non_null??0)]]),
-          el('div','Complete cohort: '+(data.complete_cohort?'yes':'no')+'. No raw cases returned.','muted')
+          el('div','Complete cohort: '+(data.complete_cohort?'yes':'no')+'. No raw cases returned.','muted'),
+          ...(selected?[el('div','Saved definition SHA-256: '+selected.definition_sha256,'muted')]:[])
         );
       }catch(error){
         if(t===turn&&generation===state.generation)out.replaceChildren(el('div',error.message,'muted'));
