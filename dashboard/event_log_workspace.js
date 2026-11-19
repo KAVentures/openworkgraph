@@ -621,15 +621,29 @@
   // Save the cases matching a filter as a new saved log, to analyse or compare a slice on its own.
   function deriveSection(activityNames){
     const box=section('Save or export matching cases');box.id='owgEventLogDerive';
-    box.appendChild(el('div','Save matching cases as a new log or download their original events as a flat CSV. The CSV includes case IDs, activity names, timestamps and resources. Saved copies start without the source log’s activity mapping, saved filters, signals and quality reports.','muted'));
+    box.appendChild(el('div','Save matching cases as a new log or download their original events in CSV or XES. Saved copies start without the source log’s activity mapping, saved filters, signals and quality reports.','muted'));
     const filter=cohortFields('owgDeriveCohort','Cases to include',activityNames);
     const name=input('owgDeriveName','text');name.maxLength=120;name.autocomplete='off';
     const current=state.logs.find(l=>l.log_id===state.logId);name.value=((current&&current.name)||'Log')+' (subset)';
     const run=button('Save as new log','secondary');run.id='owgDeriveRun';
-    const download=button('Download matching cases as CSV','secondary');download.id='owgDeriveExport';
+    const formats=select('owgDeriveExportFormat',[['csv','CSV (exact interchange)'],['csv-review','CSV for spreadsheet review'],
+      ['xes','XES'],['xes-attributes','XES with retained attributes']]);
+    const download=button('Download matching cases','secondary');download.id='owgDeriveExport';
+    const formatNote=el('p',null,'muted');
+    function describeFormat(){
+      formatNote.textContent={
+        'csv':'Includes case IDs, activity names, timestamps and resources.',
+        'csv-review':'Changes formula-like cells for spreadsheet review. Use exact CSV for re-import.',
+        'xes':'Includes one trace per matching case with activity names, timestamps and resources.',
+        'xes-attributes':'Also includes retained trace and event attribute values. Use OCEL for timed object attributes and relationships.'
+      }[formats.value];
+    }
+    formats.onchange=describeFormat;describeFormat();
     const out=el('div');out.id='owgDeriveResult';out.setAttribute('role','status');
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('New log name',name),run);
-    box.append(filter.node,row,download,out);
+    const exportRow=el('div',null,'row');exportRow.style.alignItems='end';
+    exportRow.append(field('Matching case export format',formats),download);
+    box.append(filter.node,row,exportRow,formatNote,out);
     const generation=state.generation;
     function selectedCases(missingFilter){
       const cohort=filter.read();delete cohort.label;
@@ -638,17 +652,18 @@
       return state.caseType?{cohort,case_type:state.caseType}:{cohort};
     }
     download.onclick=async()=>{
-      const logId=state.logId;
+      const logId=state.logId,format=formats.value;
+      const extension=format==='csv-review'?'review.csv':format.startsWith('xes')?'xes':'csv';
       download.disabled=true;
       try{
         const spec=selectedCases('Choose which cases to export.');
         out.textContent='Preparing matching cases…';
-        const response=await api('/v1/event-logs/'+encodeURIComponent(logId)+'/export/matching-cases',{
+        const response=await api('/v1/event-logs/'+encodeURIComponent(logId)+'/export/matching-cases?'+new URLSearchParams({format}),{
           method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)});
         const blob=await response.blob();
         if(generation!==state.generation||!box.isConnected)return;
         const url=URL.createObjectURL(blob);
-        const link=el('a');link.href=url;link.download=logId+'-matching-cases.csv';
+        const link=el('a');link.href=url;link.download=logId+'-matching-cases.'+extension;
         document.body.appendChild(link);link.click();link.remove();
         setTimeout(()=>URL.revokeObjectURL(url),1000);
         out.textContent='Matching cases exported.';
@@ -1036,11 +1051,22 @@
         const response=await api(url.pathname+url.search,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
         const data=await response.json();
         if(t!==turn||generation!==state.generation||logId!==state.logId||caseType!==state.caseType)return;
+        const selected=savedId?savedEntries.find(entry=>entry.metric_id===savedId):null;
+        // Never present a result as the selected saved revision if it changed
+        // between the picker load and evaluation. Re-select and recalculate.
+        if(savedId&&(!selected||!data.saved_metric||
+           data.saved_metric.metric_id!==savedId||
+           data.saved_metric.definition_sha256!==selected.definition_sha256)){
+          out.replaceChildren(el('div','Saved metric revision changed. Reload saved expressions and calculate again.','muted'));
+          await loadSaved();
+          return;
+        }
         const m=data.metric||{};
         out.replaceChildren(
           el('div',String(m.rows??0)+' matching cases; '+String(m.null??0)+' missing values.','muted'),
           table(['Average','Minimum','Maximum','Sum','Values'],[[m.mean??'—',m.min??'—',m.max??'—',m.sum??'—',String(m.non_null??0)]]),
-          el('div','Complete cohort: '+(data.complete_cohort?'yes':'no')+'. No raw cases returned.','muted')
+          el('div','Complete cohort: '+(data.complete_cohort?'yes':'no')+'. No raw cases returned.','muted'),
+          ...(selected?[el('div','Saved definition SHA-256: '+selected.definition_sha256,'muted')]:[])
         );
       }catch(error){
         if(t===turn&&generation===state.generation)out.replaceChildren(el('div',error.message,'muted'));
@@ -4665,20 +4691,28 @@
     const legend=el('legend','Case metrics (optional)');metricBox.append(legend,el('div','Define up to four values per case, then choose a measure. Numeric event statistics use only observed finite values; choose available or require all matching rows, optionally one activity and a first or last completed stage. Compare first and last completed stages adds three metrics atomically; fractional first-to-last change adds four, including (last minus first) divided by first, and selects a dimensionless ratio (2 means +200%, not 2%). A zero first-stage value leaves relative change unknown. Compare two distinct activities adds A, B, and signed B minus A as three ordinary metrics; absent or invalid matching values remain unknown. Compare a selected activity with the whole case using Total and Only this activity: the selected total divided by all recorded totals is a ratio, not a guaranteed 0–100% share. Missing selected values or zero whole-case totals remain unknown. Clear stage boundaries and the single-activity filter before comparing. Unfinished stages are not completed. Times are in seconds; declared units are never converted. Arithmetic uses earlier metrics or typed constants; ratio means dimensionless. Add/subtract need identical units; division by zero is missing. Saved arithmetic templates can add their saved dependencies together, but conflicting or missing definitions are refused atomically. Editing a metric name updates its dependent arithmetic and selected measures in the draft; rerun before saving or exporting. Save an analysis to retain all definitions together.','muted'),metricRow,metricList,library);
     const readMetric=()=>caseMetric({kind:mKind.value,name:mName.value,from:mFrom.value,to:mTo.value,fromOccurrence:mFromOcc.value,toOccurrence:mToOcc.value,activity:mActivity.value,attribute:mAttribute.value,unit:mUnit.value,statistic:mStatistic.value,missingPolicy:mMissing.value,statActivity:mStatActivity.value,stageFrom:mStageFrom.value,stageTo:mStageTo.value,stageOccurrence:mStageOccurrence.value,operation:mOperation.value,
       ...Object.fromEntries(Object.entries(operands).flatMap(([side,controls])=>Object.entries(controls).map(([key,node])=>[side+key[0].toUpperCase()+key.slice(1),node.value])))});
+    // A changed metric draft cannot reuse an earlier result or its export/share grants.
+    // Invalidate synchronously, including when a dependent metric is removed.
+    function invalidateMetricResult(){
+      resetSharing();last=null;lastSpec=null;out.replaceChildren();exports.enable(false);
+      save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;prepareCompany.disabled=true;
+    }
     function useMetric(metric){
+      if(running)throw new Error('Wait for the current analysis to finish or cancel it before changing this draft.');
       if(metrics.some(m=>m.name===metric.name))throw new Error('This analysis already has a metric named '+metric.name+'.');
       if(metrics.length>=4)throw new Error('Use at most 4 case metrics.');
       if(metric.kind==='arithmetic')for(const o of [metric.left,metric.right])if(o.kind==='metric'&&!metrics.some(m=>m.name===o.name))throw new Error('Add earlier metric '+o.name+' first.');
-      metrics.push(metric);renderMetrics();
+      metrics.push(metric);renderMetrics();invalidateMetricResult();
     }
     function renderMetrics(){
       metricList.replaceChildren(...metrics.map((m,i)=>{const item=el('div',metricText(m)+' ');
         const edit=button('Edit','secondary');edit.setAttribute('aria-label','Edit metric '+m.name);
         edit.onclick=()=>{try{populateMetric(m);editingMetric=m.name;mUpdate.disabled=false;message.textContent='Editing '+m.name+'. Update the selected metric to apply changes; the saved analysis remains unchanged.';}catch(error){message.textContent=error.message;}};
         const rm=button('Remove','secondary');rm.setAttribute('aria-label','Remove metric '+m.name);rm.onclick=()=>{
+        if(running){message.textContent='Wait for the current analysis to finish or cancel it before changing this draft.';return;}
         const dependent=metrics.find(x=>x.kind==='arithmetic'&&[x.left,x.right].some(o=>o.kind==='metric'&&o.name===m.name));
         if(dependent){message.textContent='Remove dependent metric '+dependent.name+' first.';return;}
-        metrics.splice(i,1);if(editingMetric===m.name){editingMetric=null;mUpdate.disabled=true;}renderMetrics();};item.append(edit,rm);return item;}));
+        metrics.splice(i,1);if(editingMetric===m.name){editingMetric=null;mUpdate.disabled=true;}renderMetrics();invalidateMetricResult();};item.append(edit,rm);return item;}));
       for(const controls of Object.values(operands)){
         const keep=controls.metric.value;setOptions(controls.metric,metrics.length?metrics.map(m=>[m.name,m.name]):[['','(add an earlier metric)']]);
         if(metrics.some(m=>m.name===keep))controls.metric.value=keep;
@@ -4901,6 +4935,7 @@
     mAdd.onclick=()=>{try{useMetric(readMetric());message.textContent='Metric added; choose it under Measure.';}catch(error){message.textContent=error.message;}};
     mUpdate.onclick=()=>{
       try{
+        if(running)throw new Error('Wait for the current analysis to finish or cancel it before changing this draft.');
         const index=metrics.findIndex(m=>m.name===editingMetric);
         if(index<0)throw new Error('Select a metric to edit first.');
         const next=readMetric(),old=editingMetric;
@@ -4918,12 +4953,13 @@
     };
     function addStageComparison(relative){
       try{
+        if(running)throw new Error('Wait for the current analysis to finish or cancel it before changing this draft.');
         const proposed=stageComparisonMetrics(readMetric(),relative);
         if(metrics.length+proposed.length>4)throw new Error('A stage comparison needs '+(relative?'four':'three')+' free metric slots (four maximum). Remove other metrics first.');
         const existing=new Set(metrics.map(m=>m.name));
         if(proposed.some(m=>existing.has(m.name)))throw new Error('A comparison metric name already exists. Choose a different base name.');
         // Validate the entire batch before mutation; no half-added comparisons.
-        metrics.push(...proposed);renderMetrics();
+        metrics.push(...proposed);renderMetrics();invalidateMetricResult();
         // Case metrics cannot be measured at the event level.
         level.value='cases';sync();
         measure1.value='avg:metric:'+proposed[proposed.length-1].name;measure2.value='';
@@ -4936,6 +4972,7 @@
     mCompareRelative.onclick=()=>addStageComparison(true);
     mCompareActivities.onclick=()=>{
       try{
+        if(running)throw new Error('Wait for the current analysis to finish or cancel it before changing this draft.');
         const proposed=activityComparisonMetrics(readMetric(),mCompareActivityA.value,mCompareActivityB.value);
         if(metrics.length+proposed.length>4)
           throw new Error('An activity comparison needs three free metric slots (four maximum). Remove other metrics first.');
@@ -4943,7 +4980,7 @@
         if(proposed.some(m=>existing.has(m.name)))
           throw new Error('An activity comparison metric name already exists. Choose a different base name.');
         // Validate the entire batch before mutation, including dependency order.
-        metrics.push(...proposed);renderMetrics();
+        metrics.push(...proposed);renderMetrics();invalidateMetricResult();
         level.value='cases';sync();
         measure1.value='avg:metric:'+proposed[2].name;measure2.value='';
         message.textContent='Added activity A, activity B, and signed B minus A metrics. Missing activity values remain unknown, never zero.';
@@ -4951,6 +4988,7 @@
     };
     mCompareShare.onclick=()=>{
       try{
+        if(running)throw new Error('Wait for the current analysis to finish or cancel it before changing this draft.');
         const proposed=activityShareMetrics(readMetric());
         if(metrics.length+proposed.length>4)
           throw new Error('An activity fraction needs three free metric slots (four maximum). Remove other metrics first.');
@@ -4958,7 +4996,7 @@
         if(proposed.some(m=>existing.has(m.name)))
           throw new Error('An activity fraction metric name already exists. Choose a different base name.');
         // The numerator, denominator and typed division are one atomic addition.
-        metrics.push(...proposed);renderMetrics();
+        metrics.push(...proposed);renderMetrics();invalidateMetricResult();
         level.value='cases';sync();
         measure1.value='avg:metric:'+proposed[2].name;measure2.value='';
         message.textContent='Added selected activity total, whole-case total and their fraction. Missing values and zero denominators remain unknown; signed totals may produce ratios outside 0–1.';

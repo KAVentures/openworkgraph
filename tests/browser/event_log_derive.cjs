@@ -62,6 +62,7 @@ const path=require('node:path');
    const objects=[{id:'order-1',type:'order'},{id:'item-1',type:'item'},{id:'item-2',type:'item'}];
    const ocel={objectTypes:[],eventTypes:[],objects,events:[{
      id:'event-1',type:'Open',time:'2024-04-01T00:00:00Z',
+     attributes:[{name:'lifecycle:transition',value:'complete'}],
      relationships:objects.map(object=>({objectId:object.id,qualifier:''}))
    }]};
    await page.locator('#owgEventLogFile').setInputFiles({name:'linked.jsonocel',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(ocel))});
@@ -72,6 +73,18 @@ const path=require('node:path');
    await page.locator('#owgEventLogCaseType').selectOption('order');
    await page.locator('#owgEventLogAnalyze').click();
    await page.locator('#owgDeriveCohortActivity').selectOption('Open');
+   await page.locator('#owgDeriveExportFormat').selectOption('xes-attributes');
+   const [xesFile]=await Promise.all([page.waitForEvent('download'),page.locator('#owgDeriveExport').click()]);
+   assert.match(xesFile.suggestedFilename(),/matching-cases\.xes$/);
+   const xml=await fs.readFile(await xesFile.path(),'utf8');
+   assert.match(xml,/key="concept:name" value="order-1"/);
+   assert.match(xml,/key="lifecycle:transition" value="complete"/);
+   assert.doesNotMatch(xml,/item-1|item-2/);
+   await page.locator('#owgDeriveExportFormat').selectOption('csv-review');
+   const [reviewFile]=await Promise.all([page.waitForEvent('download'),page.locator('#owgDeriveExport').click()]);
+   assert.match(reviewFile.suggestedFilename(),/matching-cases\.review\.csv$/);
+   assert.match(await fs.readFile(await reviewFile.path(),'utf8'),/^case_id_review,activity_review,/);
+
    await page.locator('#owgDeriveName').fill('Order subset');
    await page.locator('#owgDeriveRun').click();
    await page.locator('#owgDeriveOpen').click();

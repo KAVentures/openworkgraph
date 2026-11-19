@@ -941,24 +941,29 @@ def _case_export_rows(log_id, case_type, *, include_trace_attributes=False):
                 cursor = conn.execute(query, [log_id, notion, log_id, notion])
             else:
                 cursor = conn.execute(_CASE_EVENTS + " ORDER BY case_id, ts, event_id", [log_id, notion])
-            current, bucket, trace_attributes = None, [], {}
-            while batch := cursor.fetchmany(10_000):
-                for case_id, activity, ts, resource, event_id, attributes, *trace in batch:
-                    if case_id != current:
-                        if current is not None:
-                            yield current, bucket, trace_attributes
-                            bucket = []
-                        current = case_id
-                        trace_attributes = json.loads(trace[0] or "{}") if trace else {}
-                    if event_id is None:
-                        continue  # retain an empty trace in the attribute export
-                    bucket.append({"case_id": case_id, "activity": activity,
-                                   "timestamp": ts.replace(tzinfo=timezone.utc), "resource": resource,
-                                   "event_id": event_id, "attributes": json.loads(attributes or "{}")})
-            if current is not None:
-                yield current, bucket, trace_attributes
+            yield from _group_export_cursor(cursor)
         finally:
             conn.close()
+
+
+def _group_export_cursor(cursor):
+    """Read an ordered event projection one case at a time."""
+    current, bucket, trace_attributes = None, [], {}
+    while batch := cursor.fetchmany(10_000):
+        for case_id, activity, ts, resource, event_id, attributes, *trace in batch:
+            if case_id != current:
+                if current is not None:
+                    yield current, bucket, trace_attributes
+                    bucket = []
+                current = case_id
+                trace_attributes = json.loads(trace[0] or "{}") if trace else {}
+            if event_id is None:
+                continue  # retain an empty trace in the attribute export
+            bucket.append({"case_id": case_id, "activity": activity,
+                           "timestamp": ts.replace(tzinfo=timezone.utc), "resource": resource,
+                           "event_id": event_id, "attributes": json.loads(attributes or "{}")})
+    if current is not None:
+        yield current, bucket, trace_attributes
 
 
 def export_log(log_id: str, export_format: str, out: IO[str], case_type: str | None = None) -> None:
