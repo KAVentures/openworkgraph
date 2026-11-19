@@ -5090,12 +5090,12 @@
     async function verifiedAnalysisExport(){
       if(running||!last||!lastSpec||generation!==state.generation)throw new Error('Run and review the analysis before exporting.');
       const selected=last,spec=lastSpec,selectedGeneration=state.generation,request=++exportAttempt;
-      const response=await api(base()+'/analysis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)});
+      const response=await api(base()+'/analysis-source-bound',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)});
       const current=await response.json();
       if(request!==exportAttempt||selectedGeneration!==state.generation||selected!==last||spec!==lastSpec||running)
         throw new Error('Analysis changed during export. Run and review it again.');
       const stable=r=>JSON.stringify([r.columns,r.rows,r.units,r.matching,r.rows_truncated,r.metrics,r.non_finite_results_withheld]);
-      if(stable(current)!==stable(selected)){
+      if(!selected.source_content_sha256||!current.source_content_sha256||current.source_content_sha256!==selected.source_content_sha256||stable(current)!==stable(selected)){
         invalidateMetricResult();
         throw new Error('Saved-log data or analysis results changed. Run and review the analysis again before downloading.');
       }
@@ -5225,11 +5225,15 @@
           }
           if(!current()||cancelRequested)return;
           if(status.state!=='succeeded')throw new Error(status.state==='timed_out'?'Analysis reached its deadline; no partial result was returned.':status.state==='cancelled'?'Analysis cancelled; no result was returned.':status.error||'Analysis failed; no partial result was returned.');
-          r=await(await api(job+'/result',{signal:AbortSignal.timeout(10000)})).json();
+          // The job result has no atomic source fingerprint. Recompute under the
+          // same lock as the digest before showing a result that can be exported.
+          // A changed source between job completion and this read is reflected
+          // in the newly reviewed result, never silently attributed to the job.
+          r=await(await api(base()+'/analysis-source-bound',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
           if(cancelRequested||!current())return;
         }else{
           message.textContent='Analysis running…';
-          r=await (await api(base()+'/analysis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+          r=await (await api(base()+'/analysis-source-bound',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
           if(!current())return;
         }
       }catch(error){if(current())message.textContent=error.message;return;}
