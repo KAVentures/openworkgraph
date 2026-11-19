@@ -691,3 +691,84 @@ def test_saved_review_preserves_explicit_incomplete_timeline_flag(monkeypatch):
     monkeypatch.setattr(history_routes, "read_saved_reconstruction_review",
                         lambda grant, generation, digest: None)
     assert b'"saved": null' in history_routes.get_saved_reconstruction_review().body
+
+
+def test_authenticated_http_reconstruction_scores_interleaved_cases_without_confirming_identity(monkeypatch):
+    """Exercise the actual HTTP read + scoring entrypoints and engine scorer.
+
+    The independent synthetic truth intentionally labels the interruption as
+    unrelated to either case. This tests disagreement propagation through the
+    product boundary, not held-out reconstruction accuracy.
+    """
+    import json
+    from server import work_resumption
+    from server.reconstruction_review_cli import build_review_queue
+
+    state = _setup(monkeypatch)
+
+    def observed_pair(issue, file_ref, current, earlier=None):
+        return {
+            "resource_pointers": [
+                {"provider": "github", "resource_kind": "issue", "resource_ref": issue},
+                {"provider": "local_file", "resource_kind": "file", "resource_ref": file_ref},
+            ],
+            "current_evidence_event_ids": current,
+            "earlier_corroborations": earlier or [],
+            "assignment_status": "observed_same_event_pair",
+            "proves_same_case": False,
+        }
+
+    source = {
+        "derived": True, "authoritative": False,
+        "saved_history_access": "all_saved",
+        "coverage": {"scan_truncated": False},
+        "observed_pair_event_assignments": [
+            observed_pair("case-A", "file-A", ["a-return", "interruption"],
+                          [{"session_started_at": "2026-11-01T09:00:00Z",
+                            "evidence_event_ids": ["a-before"]}]),
+            observed_pair("case-B", "file-B", ["b-between", "interruption"]),
+        ],
+    }
+    monkeypatch.setattr(work_resumption, "resumption_candidates",
+                        lambda connection, *, lease, run_started_at=None: source)
+
+    read = history_routes.get_reconstruction_review()
+    assert read.headers["cache-control"] == "no-store"
+    observed = json.loads(read.body)
+    queue = build_review_queue(source)
+    assert observed["review"]["evidence_sha256"] == queue["evidence_sha256"]
+    assert queue["ambiguous_event_reviews_count"] == 1
+
+    # Truth is fixed independently of the proposed pairs, including an
+    # explicit negative interruption and a resumed earlier-session event.
+    truth = {
+        ("earlier:2026-11-01T09:00:00+00:00", "a-before"): [
+            [["github", "issue", "case-A"], ["local_file", "file", "file-A"]]],
+        ("current", "a-return"): [
+            [["github", "issue", "case-A"], ["local_file", "file", "file-A"]]],
+        ("current", "b-between"): [
+            [["github", "issue", "case-B"], ["local_file", "file", "file-B"]]],
+        ("current", "interruption"): [],
+    }
+    assert {(row["window"], row["event_id"]) for row in queue["event_reviews"]} == set(truth)
+    request = history_routes.ReconstructionReviewSubmission(
+        evidence_sha256=queue["evidence_sha256"],
+        annotations=[{"window": window, "event_id": event_id, "true_resource_pairs": pairs}
+                     for (window, event_id), pairs in truth.items()],
+    )
+    scored = history_routes.score_reconstruction_review_submission(request)
+    assert scored.headers["cache-control"] == "no-store"
+    result = json.loads(scored.body)
+    assert (result["true_positive_pairs"], result["false_positive_pairs"],
+            result["false_negative_pairs"]) == (3, 2, 0)
+    assert result["explicit_negative_events_with_false_links"] == 1
+    assert [row["event_id"] for row in result["event_disagreements"]] == ["interruption"]
+    assert result["held_out_verified"] is False
+    assert result["cross_case_contamination_measured"] is False
+    assert result["real_work_accuracy_claim"] is False
+
+    # A grant revoked after the read must deny the same evidence and labels.
+    state["grant"] = {"mode": "off"}
+    with pytest.raises(HTTPException) as error:
+        history_routes.score_reconstruction_review_submission(request)
+    assert error.value.status_code == 403
