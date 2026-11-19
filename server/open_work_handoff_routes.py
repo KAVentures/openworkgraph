@@ -295,7 +295,7 @@ async def granted_reviewed_case_context(request: Request, response: Response):
     # explicitly unknown. Reject malformed/cyclic reviewed graphs rather than
     # returning a misleading partial dependency chain.
     import re
-    ref_pattern = re.compile(r"owg:w:[0-9a-f]{32}\\Z")
+    ref_pattern = re.compile(r"owg:w:[0-9a-f]{32}\Z")
     reviewed_edges = {}
     for entry in snapshot["items"]:
         node = entry.get("work_item_ref")
