@@ -479,6 +479,36 @@ where columns kept from a CSV import live; values are compared as stored text).
 dashboard downloads the result as JSON or CSV; CSV cells that could be read as
 spreadsheet formulas are prefixed with `'`.
 
+### Breakdown table
+
+**Breakdown table** shows case figures by one or two dimensions, like a pivot
+table (a small process cube). Choose what goes in the rows and, optionally, in
+the columns:
+
+* a built-in dimension: the month or weekday the case started, or its first
+  or last activity;
+* a case attribute (`attribute:<name>`, as the case filter reads it);
+* an event attribute (`event_attribute:<name>`, the first non-empty value
+  recorded in the case; columns kept from a CSV import are event attributes).
+
+Every cell gives the number of cases, their share of the selection, the median
+and 90th-percentile duration, events per case and the rework rate (cases that
+repeat an activity). With **Share doing an activity**, it also gives the share
+of cases that do the chosen activity. The table ends with an **All** column
+and row, the totals for each value.
+
+At most 30 row values and 12 column values are shown. For a time dimension
+the latest values are kept; otherwise the most common. The rest are grouped
+as `(other)`, and cases with no value as `(missing)`. Cells with fewer than 5
+cases are marked `*`, because one case moves their figures a lot. The table
+honours the case filter.
+
+`GET /v1/event-logs/{log_id}/breakdown?rows=…&columns=…&with_activity=…`
+(plus `case_type` and the case-filter parameters) returns the cells and
+totals. `GET /v1/event-logs/{log_id}/breakdown/dimensions` lists the
+dimensions available in the log. Both need the dashboard session. A
+difference between cells describes the recorded cases, not a cause.
+
 ### Process cost
 
 The log records what happened, not what it cost. **Process cost** applies your
