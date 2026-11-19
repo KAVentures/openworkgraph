@@ -225,3 +225,75 @@ def test_real_delta_revocation_between_graph_pages_refuses_resume_and_artifacts(
     assert len(transport.requests) == 1
     assert not output.exists()
     assert not candidate.exists()
+
+
+def test_real_delta_resume_after_revocation_preserves_prior_checkpoint_evidence(tmp_path):
+    """A previously exported cursor is not a grant to resume after revocation.
+
+    Exercise the production HTTP adapter: even an explicitly approved second
+    round cannot make another Graph request after the scoped grant is disabled.
+    The first round's immutable evidence must remain intact.
+    """
+    from server.m365_outlook_delta import DeltaError, export_delta
+    from urllib.parse import quote
+
+    folder = "selected-folder"
+    base = "https://graph.microsoft.com/v1.0/me/mailFolders/" + folder + "/messages/delta"
+    initial = base + "?%24select=" + quote(
+        "id,receivedDateTime,lastModifiedDateTime,isRead", safe="") + "&%24top=25"
+    cursor = base + "?%24deltatoken=approved-first-round"
+    grant = tmp_path / "grant.json"
+    scope = {
+        "version": 1, "enabled": True, "consented": True,
+        "tenant_scope": "tenant", "mailbox_scope": "mailbox", "folder_id": folder,
+    }
+    grant.write_text(json.dumps(scope))
+    grant.chmod(0o600)
+
+    class Response:
+        status = 200
+        headers = {"Content-Type": "application/json"}
+
+        def __init__(self, url):
+            self.url = url
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def geturl(self):
+            return self.url
+
+        def read(self, limit):
+            return json.dumps({"value": [], "@odata.deltaLink": cursor}).encode()
+
+    class Transport:
+        def __init__(self):
+            self.requests = []
+
+        def open(self, req, timeout):
+            self.requests.append(req.full_url)
+            return Response(req.full_url)
+
+    first = Transport()
+    args = dict(tenant="tenant", mailbox="mailbox", folder_id=folder,
+                grant_file=grant, token="token", consent_read=True,
+                consent_export=True)
+    csv1, candidate1 = tmp_path / "first.csv", tmp_path / "first.json"
+    export_delta(**args, output=csv1, candidate=candidate1, opener=first)
+    assert first.requests == [initial]
+    original_csv, original_candidate = csv1.read_bytes(), candidate1.read_bytes()
+
+    grant.write_text(json.dumps({**scope, "enabled": False}))
+    second = Transport()
+    csv2, candidate2 = tmp_path / "second.csv", tmp_path / "second.json"
+    with pytest.raises(DeltaError, match="grant"):
+        export_delta(**args, output=csv2, candidate=candidate2,
+                     previous_candidate=candidate1,
+                     confirm_previous_import=True, opener=second)
+    assert second.requests == []
+    assert not csv2.exists() and not candidate2.exists()
+    assert csv1.read_bytes() == original_csv
+    assert candidate1.read_bytes() == original_candidate
