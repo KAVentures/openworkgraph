@@ -31,7 +31,8 @@ def _log():
 
 def _drop(folder: Path, name: str, text: str, age: float = 600):
     path = folder / name
-    path.write_text(text, encoding="utf-8")
+    # Write deterministic fixture bytes on Windows rather than CRLF-normalizing text.
+    path.write_bytes(text.encode("utf-8"))
     old = time.time() - age
     os.utime(path, (old, old))
     return path
