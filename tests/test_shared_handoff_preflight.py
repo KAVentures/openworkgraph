@@ -59,3 +59,15 @@ def test_handoff_match_never_grants_execution_or_source_access():
     assert 'execution_authorized!==false' in block
     assert 'Eligible only for further human review.' in block
     assert 'Consent, owner approval, source access, retention and execution authorization remain unverified.' in block
+
+
+def test_verified_handoff_only_navigates_to_existing_revision_review():
+    html = PAGE.read_text(encoding="utf-8")
+    assert 'id="handoffReview" type="button" disabled' in html
+    assert 'id="revisionReview">Revision review' in html
+    assert '$("handoffReview").disabled=true;' in html
+    assert '$("handoffReview").disabled=false;' in html
+    assert 'if($("handoffReview").disabled||!selected||!credential||!$("handoffConsent").checked)return;' in html
+    assert '$("revisionReview").scrollIntoView({block:"start"});' in html
+    assert '$("comment").focus();' in html
+    assert html.index('$("handoffReview").disabled=false;') > html.index('current.review?.status!=="reviewed_design"')
