@@ -131,3 +131,17 @@ def test_review_submission_revalidates_inspected_handoff_before_post():
         assert guard in block
     assert block.index("const current=await call(") < block.index('"/reviews"')
     assert 'resetHandoff("REFUSED: Reviewed handoff is no longer current or authorized.' in block
+
+
+
+def test_delayed_review_response_cannot_restore_another_session_or_process():
+    """A successful POST must not repaint the UI after sign-out or selection drift."""
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split("async function review(decision) {", 1)[1].split('$("approve").onclick', 1)[0]
+    assert "const reviewIdentity=identityGeneration, reviewCredential=credential;" in block
+    assert "const reviewSelection=selected;" in block
+    assert "const reviewResult=await call(" in block
+    assert "reviewIdentity!==identityGeneration||reviewCredential!==credential||" in block
+    assert "selected!==reviewSelection)return;" in block
+    assert block.index("const reviewResult=await call(") < block.index("selected!==reviewSelection)return;")
+    assert block.index("selected!==reviewSelection)return;") < block.index("render(reviewResult);")
