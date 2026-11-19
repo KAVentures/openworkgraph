@@ -376,6 +376,12 @@ copies, or the two given as `older` and `newer`. A change can come from
 appended events, an applied activity mapping or edited prices as much as from
 the process itself.
 
+The report also has a **Model fit and adherence** section: every case is aligned with the process
+model discovered from the same cases (noise 20%), giving the alignment fitness, the share of cases
+that follow the model exactly, the steps most often skipped or done where the model does not allow
+them, how the most common non-fitting paths are explained, and, when cases span several months,
+fitness by the month cases started. The section is left out when the model cannot be computed.
+
 ## Finding an analysis
 
 The results page has many analysis sections. **Find an analysis**, at the top of the results, lists
