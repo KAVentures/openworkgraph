@@ -161,15 +161,24 @@ const pathModule = require("node:path");
         ...overrides,
       },
     });
-    const setHandoffPacket = async packet => alice.locator("#handoffPacket").setInputFiles({
-      name: "local-review.json", mimeType: "application/json",
-      buffer: Buffer.from(JSON.stringify(packet)),
-    });
+    const setHandoffPacket = async packet => {
+      await alice.locator("#handoffPacket").setInputFiles({
+        name: "local-review.json", mimeType: "application/json",
+        buffer: Buffer.from(JSON.stringify(packet)),
+      });
+      assert.equal(await alice.locator("#handoffConsent").isChecked(), false,
+        "changing the packet revokes prior inspection consent");
+      await alice.locator("#handoffConsent").check();
+    };
     let uploadedHandoff = false;
     alice.on("request", request => {
       if (request.method() !== "GET" && request.postData()?.includes("openworkgraph.evidence-handoff-review.v1")) uploadedHandoff = true;
     });
     await setHandoffPacket(handoffPacket());
+    await alice.locator("#handoffConsent").uncheck();
+    await alice.locator("#handoffCheck").click();
+    assert.match(await alice.locator("#handoffStatus").textContent(), /Explicit authorization/);
+    await alice.locator("#handoffConsent").check();
     await alice.locator("#handoffCheck").click();
     await alice.locator("#handoffStatus").filter({hasText: "REFUSED:"}).waitFor();
     assert.match(await alice.locator("#handoffStatus").textContent(), /lacks independent design review/);
@@ -187,6 +196,7 @@ const pathModule = require("node:path");
       name:"denied-review.json", mimeType:"application/json",
       buffer:Buffer.from(JSON.stringify(handoffPacket())),
     });
+    await deniedHandoffPage.locator("#handoffConsent").check();
     const detailUrl = "**/v1/human/processes/" + handoffProcess.workflow_id;
     await deniedHandoffPage.route(detailUrl, async route => route.continue({headers:{...route.request().headers(),authorization:"Bearer no-process"}}), {times:1});
     await deniedHandoffPage.locator("#handoffCheck").click();
@@ -202,6 +212,7 @@ const pathModule = require("node:path");
       name:"recovered-review.json",mimeType:"application/json",
       buffer:Buffer.from(JSON.stringify(handoffPacket())),
     });
+    await recoveredHandoffPage.locator("#handoffConsent").check();
     const recoveredRead = recoveredHandoffPage.waitForResponse(response =>
       response.request().method()==="GET" &&
       new URL(response.url()).pathname==="/v1/human/processes/"+handoffProcess.workflow_id);
@@ -225,6 +236,7 @@ const pathModule = require("node:path");
       name:"expired-review.json",mimeType:"application/json",
       buffer:Buffer.from(JSON.stringify(handoffPacket())),
     });
+    await expiredHandoffPage.locator("#handoffConsent").check();
     await expiredHandoffPage.route(detailUrl, async route => route.continue({headers:{...route.request().headers(),authorization:"Bearer expired-session"}}), {times:1});
     await expiredHandoffPage.locator("#handoffCheck").click();
     await expiredHandoffPage.locator("#handoffStatus").filter({hasText:/REFUSED:|Session cleared/}).waitFor({state:"attached"});
@@ -240,6 +252,7 @@ const pathModule = require("node:path");
       name:"drift-review.json",mimeType:"application/json",
       buffer:Buffer.from(JSON.stringify(handoffPacket())),
     });
+    await driftHandoffPage.locator("#handoffConsent").check();
     await driftHandoffPage.route(detailUrl, async route => {
       const response=await route.fetch();
       const latest=await response.json();
@@ -263,6 +276,7 @@ const pathModule = require("node:path");
       name:"race-review.json",mimeType:"application/json",
       buffer:Buffer.from(JSON.stringify(handoffPacket())),
     });
+    await racePage.locator("#handoffConsent").check();
     let releaseHandoffRead;
     const heldHandoffRead = new Promise(resolve => {releaseHandoffRead=resolve;});
     await racePage.route(detailUrl, async route => {
