@@ -264,12 +264,7 @@ def run(feed_id: str, *, now: float | None = None, retry_failed: bool = False, r
                 if not fnmatch.fnmatch(entry.name, feed["pattern"]):
                     continue
                 try:
-                    # Real Windows DirEntry metadata can be stale after a producer
-                    # adjusts timestamps; retain stat() for synthetic entry tests.
-                    if os.name == "nt" and isinstance(entry, os.DirEntry):
-                        info = (folder / entry.name).stat(follow_symlinks=False)
-                    else:
-                        info = entry.stat(follow_symlinks=False)
+                    info = entry.stat(follow_symlinks=False)
                 except FileNotFoundError:
                     scan_deferred += 1
                     continue  # removed during enumeration
