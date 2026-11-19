@@ -745,11 +745,12 @@ def event_log_summary(request: Request, log_id: str, case_type: str | None = Que
 
 @router.get("/v1/event-logs/{log_id}/case-attribute-values")
 def event_log_case_attribute_values(request: Request, log_id: str,
-                                    case_type: str | None = Query(default=None, max_length=200)):
+                                    case_type: str | None = Query(default=None, max_length=200),
+                                    search: str | None = Query(default=None, min_length=1, max_length=200)):
     """Case attribute names, numeric ranges and common values, to suggest case-filter inputs."""
     from . import event_log_case_attribute_values as case_attribute_values
     _require_dashboard(request)
-    return _respond(case_attribute_values.values, log_id, case_type)
+    return _respond(case_attribute_values.values, log_id, case_type, search=search)
 
 
 @router.post("/v1/event-logs/{log_id}/attribute-profile")

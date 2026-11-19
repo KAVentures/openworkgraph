@@ -14,24 +14,33 @@ from . import event_log_workspace as workspace
 
 FORMAT = "openworkgraph.event-log-case-attribute-values.v1"
 MAX_NAMES = 100
+MAX_SEARCH_NAMES = 20
 TOP_VALUES = 20
 MAX_VALUE = 100
 
 
-def values(log_id: str, case_type: str | None = None) -> dict[str, Any]:
+def values(log_id: str, case_type: str | None = None, *, search: str | None = None) -> dict[str, Any]:
+    if search is not None and (not isinstance(search, str) or not 1 <= len(search) <= 200 or not search.strip()):
+        raise workspace.EventLogWorkspaceError("Enter a case attribute name to search")
+    limit = MAX_NAMES if search is None else MAX_SEARCH_NAMES
+
     def run(conn):
-        conn.execute(f"""CREATE OR REPLACE TEMP TABLE cav AS
-            SELECT o.object_id AS case_id, kv.key AS k, kv.value AS v, try_cast(kv.value AS DOUBLE) AS x
-            FROM objects o JOIN (SELECT DISTINCT case_id FROM ce) c ON c.case_id = o.object_id,
-              unnest(map_entries(json_transform(o.attributes, '"MAP(VARCHAR, VARCHAR)"'))) AS m(kv)
-            WHERE o.log_id = ?""", [log_id])
+        conn.execute("""CREATE TEMP TABLE cav AS
+            SELECT case_id, k, v, CASE WHEN isfinite(x) THEN x END AS x FROM (
+                SELECT o.object_id AS case_id, kv.key AS k, kv.value AS v, try_cast(kv.value AS DOUBLE) AS x
+                FROM objects o SEMI JOIN ce ON ce.case_id = o.object_id,
+                  unnest(map_entries(json_transform(o.attributes, '"MAP(VARCHAR, VARCHAR)"'))) AS m(kv)
+                WHERE o.log_id = ? AND (? IS NULL OR contains(lower(kv.key), lower(?)))
+            )""", [log_id, search, search])
         cases = conn.execute("SELECT count(DISTINCT case_id) FROM ce").fetchone()[0]
-        names = conn.execute(f"""SELECT k, count(DISTINCT case_id), count(*), count(x), count(DISTINCT v), min(x), max(x)
-            FROM cav GROUP BY k ORDER BY count(DISTINCT case_id) DESC, k LIMIT {MAX_NAMES + 1}""").fetchall()
-        top = conn.execute(f"""SELECT k, v, n FROM (
+        names = conn.execute("""SELECT k, count(DISTINCT case_id) AS covered, count(*), count(x),
+            count(DISTINCT v), min(x), max(x), count(*) OVER()
+            FROM cav GROUP BY k ORDER BY covered DESC, k LIMIT ?""", [limit]).fetchall()
+        top = conn.execute("""SELECT k, v, n FROM (
               SELECT k, v, count(DISTINCT case_id) AS n,
                      row_number() OVER (PARTITION BY k ORDER BY count(DISTINCT case_id) DESC, v) AS r
-              FROM cav WHERE length(v) <= {MAX_VALUE} GROUP BY k, v) WHERE r <= {TOP_VALUES}""").fetchall()
+              FROM cav WHERE k IN (SELECT unnest(?)) AND length(v) <= ? GROUP BY k, v)
+              WHERE r <= ?""", [[row[0] for row in names], MAX_VALUE, TOP_VALUES]).fetchall() if names else []
         return {"cases": cases, "names": names, "top": top}
 
     data = workspace._query(log_id, case_type, run)
@@ -39,13 +48,14 @@ def values(log_id: str, case_type: str | None = None) -> dict[str, Any]:
     for k, v, n in data["top"]:
         by_name.setdefault(k, []).append({"value": v, "cases": n})
     attributes = []
-    for k, with_cases, rows, numeric_rows, distinct, lo, hi in data["names"][:MAX_NAMES]:
+    for k, with_cases, rows, numeric_rows, distinct, lo, hi, _ in data["names"]:
         numeric = rows > 0 and numeric_rows >= 0.9 * rows
         attributes.append({
             "name": k, "cases": with_cases, "distinct_values": distinct, "numeric": numeric,
             **({"min": lo, "max": hi} if numeric else {}),
             "top_values": sorted(by_name.get(k, []), key=lambda t: (-t["cases"], t["value"])),
         })
+    total = data["names"][0][-1] if data["names"] else 0
     return {"format": FORMAT, "case_notion": data["case_notion"], "cases": data["cases"],
-            "attributes": attributes, "names_truncated": len(data["names"]) > MAX_NAMES,
+            "attributes": attributes, "names_total": total, "names_truncated": total > len(attributes),
             "interpretation": "Case attributes as recorded on the cases; suggestions for filters, not validated categories."}

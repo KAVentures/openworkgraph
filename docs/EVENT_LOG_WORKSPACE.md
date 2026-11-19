@@ -1981,7 +1981,12 @@ After an analysis, every case-attribute input suggests what the log contains. `n
 offer each attribute's 20 most common values with their case counts, and numeric-range inputs offer
 the numeric attributes with their minimum and maximum. This covers the global filter and the
 pickers inside sections. The suggestions come from
-`GET /v1/event-logs/{log_id}/case-attribute-values?case_type=...`
+Use **Find a case attribute** in the workspace case filter to search by part of
+a case attribute name, including names outside the initial suggestion list.
+Search returns up to 20 names and reports the total. Choose a common value or a
+numeric field to populate the filter before applying it.
+
+`GET /v1/event-logs/{log_id}/case-attribute-values?case_type=...&search=...`
 (`openworkgraph.event-log-case-attribute-values.v1`): up to 100 attribute names per case notion,
 each with its case count, distinct values, whether it is numeric (90% or more of its values are
 numbers) and its top values, skipping values longer than 100 characters. Nothing is stored.
