@@ -2269,7 +2269,9 @@
             $("revisionReview").scrollIntoView({block:"start"});
             $("comment").focus();
           }catch(_){
-            if(ticket===handoffGeneration)resetHandoff("REFUSED: Could not revalidate authorized revision. Sign in and inspect again.");
+            if(ticket===handoffGeneration&&identityTicket===identityGeneration&&
+               credential===authorizedCredential&&selected===chosen)
+              resetHandoff("REFUSED: Could not revalidate authorized revision. Sign in and inspect again.");
           }
         }));
         $("handoffPacket").addEventListener("change",()=>{ $("handoffConsent").checked=false; resetHandoff("Packet changed. Reauthorize inspection."); });
