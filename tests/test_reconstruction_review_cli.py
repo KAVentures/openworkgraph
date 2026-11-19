@@ -1263,3 +1263,49 @@ class ExplicitNegativeReviewMetricTests(unittest.TestCase):
         self.assertEqual(result["explicit_negative_false_link_rate"], 1.0)
         self.assertFalse(result["missed_source_events_measured"])
         self.assertFalse(result["cross_case_contamination_measured"])
+
+
+class CompleteSourceCohortTests(unittest.TestCase):
+    """Synthetic adversarial tests, not an independently verified holdout."""
+
+    def test_unlisted_positive_events_count_as_false_negatives(self):
+        from server.reconstruction_review_cli import score_source_event_cohort
+        source = payload([pair("A", "F", ["observed"])])
+        candidate = build_review_queue(source)["event_reviews"][0]["candidate_resource_pairs"][0]
+        labels = [
+            {"window": "current", "event_id": "observed", "true_resource_pairs": [candidate]},
+            {"window": "current", "event_id": "missed", "true_resource_pairs": [candidate]},
+            {"window": "current", "event_id": "interruption", "true_resource_pairs": []},
+        ]
+        score = score_source_event_cohort(source, labels)
+        self.assertEqual(score["true_positive_pairs"], 1)
+        self.assertEqual(score["false_negative_pairs"], 1)
+        self.assertEqual(score["source_events_without_surfaced_predictions"], 2)
+        self.assertEqual(score["positive_source_events_without_predictions"], 1)
+        self.assertEqual(score["recall"], 0.5)
+        self.assertFalse(score["held_out_verified"])
+        self.assertFalse(score["source_event_inventory_exhaustiveness_verified"])
+
+    def test_cross_case_negative_link_is_counted_and_missing_inventory_rejected(self):
+        from server.reconstruction_review_cli import score_source_event_cohort
+        source = payload([pair("A", "F", ["cross_case"])])
+        labels = [{"window": "current", "event_id": "cross_case", "true_resource_pairs": []}]
+        score = score_source_event_cohort(source, labels)
+        self.assertEqual(score["false_positive_pairs"], 1)
+        self.assertEqual(score["negative_source_events_with_false_links"], 1)
+        self.assertEqual(score["negative_false_link_rate"], 1.0)
+        with self.assertRaisesRegex(ValueError, "omits surfaced"):
+            score_source_event_cohort(source, [
+                {"window": "current", "event_id": "other", "true_resource_pairs": []}
+            ])
+        with self.assertRaisesRegex(ValueError, "duplicate source"):
+            score_source_event_cohort(source, labels + labels)
+
+    def test_truncated_source_cannot_be_scored(self):
+        from server.reconstruction_review_cli import score_source_event_cohort
+        source = payload([pair("A", "F", ["e1"])])
+        source["coverage"]["scan_truncated"] = True
+        with self.assertRaisesRegex(ValueError, "truncated"):
+            score_source_event_cohort(source, [
+                {"window": "current", "event_id": "e1", "true_resource_pairs": []}
+            ])
