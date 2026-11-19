@@ -302,6 +302,7 @@
     const button=root.querySelector('#reconstructionCohortScore');
     const output=root.querySelector('#reconstructionCohortMetrics');
     const epoch=reconstructionRequestEpoch;
+    const submittedLabels=root.querySelector('#reconstructionCohortLabels').value;
     button.disabled=true;
     output.textContent='Scoring source-event inventory…';
     try{
@@ -313,6 +314,10 @@
         body:JSON.stringify({evidence_sha256:reconstructionEvidence.evidence_sha256,source_labels:labels})});
       const result=await response.json().catch(()=>({}));
       if(epoch!==reconstructionRequestEpoch)return;
+      if(root.querySelector('#reconstructionCohortLabels').value!==submittedLabels){
+        output.textContent='Source labels changed while scoring. Submit the current inventory again.';
+        return;
+      }
       if(!response.ok)throw new Error('Cohort scoring rejected (HTTP '+response.status+'). Reload evidence and check inventory.');
       output.textContent=JSON.stringify(result,null,2)+'\\nIndependent labeling and exhaustive source coverage are NOT verified.';
     }catch(error){if(epoch===reconstructionRequestEpoch)output.textContent=String(error.message||error);}
