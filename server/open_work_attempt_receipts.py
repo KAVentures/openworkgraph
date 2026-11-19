@@ -59,6 +59,13 @@ def _connect(path: str):
         raise ValueError("unsupported receipt rollback journal")
     db = sqlite3.connect(str(target), timeout=5)
     db.execute("PRAGMA busy_timeout=5000")
+    # SQLite DELETE otherwise leaves sensitive receipt values in freelist pages.
+    # Enable overwrite-on-delete on every connection, including old journals.
+    # Do not treat row disappearance alone as secure retention erasure.
+    db.execute("PRAGMA secure_delete=ON")
+    if db.execute("PRAGMA secure_delete").fetchone()[0] != 1:
+        db.close()
+        raise ValueError("receipt journal secure deletion unavailable")
     if db.execute("PRAGMA journal_mode").fetchone()[0].lower() != "delete":
         db.close()
         raise ValueError("unsupported receipt journal mode")

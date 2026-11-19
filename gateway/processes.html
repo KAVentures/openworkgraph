@@ -266,7 +266,7 @@
     <section id="selected" hidden>
       <h2 id="selectedTitle"></h2>
       <p id="selectedMeta"></p>
-      <fieldset id="handoffPreflight"><legend>Authenticated handoff freshness</legend><p>Local review-only packet; only its workflow ID is used for a fresh authorized Gateway read. Matching is not consent, owner approval, source permission or execution authority.</p><label>Evidence handoff packet (JSON) <input id="handoffPacket" type="file" accept=".json,application/json"></label><button id="handoffCheck" type="button">Check latest authorized revision</button><button id="handoffClear" type="button">Clear check</button><output id="handoffStatus" role="status" aria-live="polite">No packet checked.</output></fieldset>
+      <fieldset id="handoffPreflight"><legend>Authenticated handoff freshness</legend><p>Local review-only packet; only its workflow ID is used for a fresh authorized Gateway read. Matching is not consent, owner approval, source permission or execution authority.</p><label>Evidence handoff packet (JSON) <input id="handoffPacket" type="file" accept=".json,application/json"></label><label><input id="handoffConsent" type="checkbox"> I explicitly authorize inspecting this local review-only packet against the latest process revision using my current Gateway access. This does not authorize execution or source reads.</label><button id="handoffCheck" type="button">Check latest authorized revision</button><button id="handoffClear" type="button">Clear check</button><output id="handoffStatus" role="status" aria-live="polite">No packet checked.</output></fieldset>
 
       <button id="revise" disabled>Edit selected design</button>
       <div id="design"></div>
@@ -595,6 +595,7 @@
           processOpenGeneration++;
           resetHandoff("Session cleared. Recheck after sign-in.");
           $("handoffPacket").value="";
+          $("handoffConsent").checked=false;
           identityGeneration++;
           if(releaseBusy){operation++;busy=false;}
           repository.clear();
@@ -1730,7 +1731,8 @@
           note("Opened exact saved revision " + data.process.revision + ".");
         }
         function render(data) {
-          resetHandoff("Process selection changed. Check latest revision.");
+          $("handoffConsent").checked=false;
+          resetHandoff("Process selection changed. Reauthorize inspection.");
           repository.select(data);
           benefits.select(data);
           valueMeasurements.select(data);
@@ -2195,9 +2197,11 @@
           handoffGeneration++;
           $("handoffStatus").textContent=message;
         }
-        $("handoffPacket").addEventListener("change",()=>resetHandoff("Packet changed. Check again."));
+        $("handoffPacket").addEventListener("change",()=>{ $("handoffConsent").checked=false; resetHandoff("Packet changed. Reauthorize inspection."); });
+        $("handoffConsent").addEventListener("change",()=>resetHandoff("Authorization changed. Check again."));
         $("handoffClear").addEventListener("click",()=>{
           $("handoffPacket").value="";
+          $("handoffConsent").checked=false;
           resetHandoff();
         });
         $("handoffCheck").addEventListener("click",()=>run(async()=>{
@@ -2205,10 +2209,11 @@
           const ticket=handoffGeneration, file=$("handoffPacket").files[0], chosen=selected;
           const fail=reason=>{if(ticket===handoffGeneration)$("handoffStatus").textContent="REFUSED: "+reason+" No execution authorization.";};
           if(!chosen||!credential||!file){fail("Sign in, select a shared process and a packet.");return;}
+          if(!$("handoffConsent").checked){fail("Explicit authorization to inspect this packet is required.");return;}
           if(file.size>262144){fail("Packet exceeds 256 KiB.");return;}
           let packet;
           try{packet=JSON.parse(await file.text());}catch(_){fail("Invalid packet JSON.");return;}
-          if(ticket!==handoffGeneration||selected!==chosen)return;
+          if(ticket!==handoffGeneration||selected!==chosen||!$("handoffConsent").checked)return;
           const p=packet?.process;
           if(packet?.format!=="openworkgraph.evidence-handoff-review.v1"||
              packet.scope!=="human_review_only"||packet.execution_authorized!==false||
@@ -2221,7 +2226,7 @@
           if(p.workflow_id!==chosen.process?.workflow_id){fail("Packet workflow differs from selected process.");return;}
           try{
             const current=await call("/v1/human/processes/"+encodeURIComponent(p.workflow_id));
-            if(ticket!==handoffGeneration||selected!==chosen)return;
+            if(ticket!==handoffGeneration||selected!==chosen||!$("handoffConsent").checked)return;
             if(!current?.process||current.process.workflow_id!==p.workflow_id||
                current.archived||current.viewing_historical_revision||
                current.process.revision!==p.revision||
