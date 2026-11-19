@@ -2291,7 +2291,10 @@
           if(!workflowId)throw new Error("Select a saved process first.");
           $("handoffConsent").checked=false;
           resetHandoff("Reopening latest authorized revision. A new inspection is required.");
+          const identityTicket=identityGeneration;
           await open(workflowId);
+          if(identityTicket!==identityGeneration||!selected||
+             selected.process?.workflow_id!==workflowId)return;
           $("handoffStatus").textContent="Latest authorized revision reopened. Select the packet, authorize inspection and check again.";
         }));
         $("handoffPacket").addEventListener("change",()=>{ $("handoffConsent").checked=false; resetHandoff("Packet changed. Reauthorize inspection."); });
