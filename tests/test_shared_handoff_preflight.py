@@ -172,3 +172,12 @@ def test_review_authorization_read_failure_invalidates_inspected_packet():
     assert 'resetHandoff("REFUSED: Authorization read failed.' in block
     assert 'throw error;' in block
     assert block.index('resetHandoff("REFUSED: Authorization read failed.') < block.index('"/reviews"')
+
+
+def test_failed_review_navigation_cannot_invalidate_newer_session():
+    """A rejected old Gateway request must not clear a newly selected identity/process."""
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split('$("handoffReview").addEventListener("click",', 1)[1].split('$("handoffPacket").addEventListener', 1)[0]
+    assert "if(ticket===handoffGeneration&&identityTicket===identityGeneration&&" in block
+    assert "credential===authorizedCredential&&selected===chosen)" in block
+    assert block.index("credential===authorizedCredential&&selected===chosen)") < block.index('resetHandoff("REFUSED: Could not revalidate authorized revision.')
