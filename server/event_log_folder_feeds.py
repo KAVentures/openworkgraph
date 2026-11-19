@@ -51,6 +51,8 @@ MAX_FILES_PER_RUN = 20
 SETTLE_SECONDS = 60
 _PATTERN = re.compile(r"^[A-Za-z0-9 _.*?\[\]-]{1,80}\.(csv|tsv|txt)$", re.IGNORECASE)
 _FEED_ID = re.compile(r"^feed_[0-9a-f]{16}$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+FAILURE_PAGE_SIZE = 50
 
 
 def _now() -> str:
@@ -199,10 +201,37 @@ def _snapshot(path: Path, expected: os.stat_result):
         yield digest.hexdigest(), size, snapshot
 
 
-def run(feed_id: str, *, now: float | None = None, retry_failed: bool = False) -> dict[str, Any]:
+def failures(feed_id: str, *, after: str = "") -> dict[str, Any]:
+    """Page distinct outstanding failures without returning file contents."""
+    if not isinstance(after, str) or (after and not _SHA256.fullmatch(after)):
+        raise EventLogWorkspaceError("invalid failure page cursor")
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            _feed(conn, feed_id)
+            rows = conn.execute("""WITH latest AS (
+                SELECT name, sha256, bytes, processed_at, outcome, detail,
+                    row_number() OVER (PARTITION BY sha256 ORDER BY (outcome = 'appended') DESC, processed_at DESC, name) AS rank
+                FROM event_log_feed_files WHERE feed_id = ?)
+                SELECT name, sha256, bytes, processed_at, detail FROM latest
+                WHERE rank = 1 AND outcome = 'failed' AND sha256 > ? ORDER BY sha256 LIMIT ?""",
+                [feed_id, after, FAILURE_PAGE_SIZE + 1]).fetchall()
+        finally:
+            conn.close()
+    more = len(rows) > FAILURE_PAGE_SIZE
+    shown = rows[:FAILURE_PAGE_SIZE]
+    return {"format": FORMAT, "feed_id": feed_id,
+            "failures": [{"name": n, "sha256": sha, "bytes": size, "processed_at": stamp.isoformat() + "Z",
+                          **json.loads(detail)} for n, sha, size, stamp, detail in shown],
+            "next_after": shown[-1][1] if more else None}
+
+
+def run(feed_id: str, *, now: float | None = None, retry_failed: bool = False, retry_hash: str | None = None) -> dict[str, Any]:
     """Append new files, or explicitly retry only previously failed content."""
     if type(retry_failed) is not bool:
         raise EventLogWorkspaceError("retry_failed must be a boolean")
+    if retry_hash is not None and (not retry_failed or not isinstance(retry_hash, str) or not _SHA256.fullmatch(retry_hash)):
+        raise EventLogWorkspaceError("retry hash must be a SHA-256 for a failed file")
     feed = get(feed_id)
     folder = Path(feed["folder"])
     if not folder.is_dir():
@@ -226,6 +255,9 @@ def run(feed_id: str, *, now: float | None = None, retry_failed: bool = False) -
             break
         try:
             with _snapshot(path, info) as (sha, size, snapshot), workspace._LOCK:
+                if retry_hash is not None and sha != retry_hash:
+                    skipped_new += 1
+                    continue
                 conn = workspace._connect()
                 try:
                     # Recheck under the append lock: another run may have won,
@@ -237,12 +269,16 @@ def run(feed_id: str, *, now: float | None = None, retry_failed: bool = False) -
                     conn.close()
                 if retry_failed and not prior:
                     skipped_new += 1
+                    if retry_hash is not None:
+                        break
                     continue
                 if prior and (not retry_failed or prior[0] == 'appended'):
                     if prior[0] == 'appended':
                         already += 1
                     else:
                         previously_failed += 1
+                    if retry_hash is not None:
+                        break
                     continue
                 if retry_failed and sha in attempted:
                     duplicate_failed += 1
@@ -292,6 +328,8 @@ def run(feed_id: str, *, now: float | None = None, retry_failed: bool = False) -
             results.append({"name": name, "outcome": "failed", "error": str(exc)[:300]})
             continue
         results.append({"name": name, "outcome": outcome, **detail})
+        if retry_hash is not None:
+            break
     appended = [r for r in results if r["outcome"] == "appended"]
     return {"format": FORMAT, "feed_id": feed_id, "log_id": feed["log_id"], "ran_at": _now(),
             "files_appended": len(appended), "files_failed": len(results) - len(appended),

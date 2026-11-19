@@ -1385,6 +1385,12 @@ hand.
   another failed attempt updates its error. Missing or unsettled files wait
   until they are present and settled. Automatic runs do not retry failures and
   report them separately from files already appended.
+- **Review failures** lists outstanding failures in pages of 50, including
+  older failures outside the feed's latest-20 summary, and lets you retry one
+  content hash at a time. A renamed file still matches; a changed, missing or
+  unsettled file cannot be retried under its old hash. Pages can change while
+  other runs or retries occur. Listing is bounded, but finding the selected
+  content still scans and hashes matching settled files in the folder.
 - Each run appends at most 20 files. Files in the folder are never changed or
   deleted.
 - "Run every day" schedules the feed on the local scheduler (job kind
@@ -1396,6 +1402,8 @@ hand.
 | `POST /v1/event-logs/{log_id}/feeds` | `{"folder": "/abs/path", "pattern": "*.csv", "confirm_folder_reads": true}` |
 | `GET /v1/event-logs/{log_id}/feeds` | Feeds with counts and the 20 latest file results. |
 | `POST /v1/event-logs/feeds/{feed_id}/retry-failed` | Retry only previously failed, unchanged settled content; owner session and local-storage confirmation required. |
+| `GET /v1/event-logs/feeds/{feed_id}/failures?after=...` | Page up to 50 outstanding failed content hashes. |
+| `POST /v1/event-logs/feeds/{feed_id}/retry-failed/{sha256}` | Retry one outstanding hash; owner session and local-storage confirmation required. |
 | `POST /v1/event-logs/feeds/{feed_id}/run` | Append new files now. Requires `X-OWG-Local-Storage-Confirmed: true`. |
 | `POST /v1/event-logs/feeds/{feed_id}/delete` | Delete the feed and its schedule. Appended events stay. |
 
