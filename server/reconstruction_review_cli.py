@@ -522,14 +522,33 @@ def score_source_event_cohort(response: dict[str, Any], source_labels: list[dict
     if not set(predictions).issubset(truth):
         raise ValueError("source inventory omits surfaced prediction events")
     tp = fp = fn = missed_events = negative_events = contaminated_negative_events = 0
-    for key, expected in truth.items():
+    per_window: dict[str, dict[str, int]] = {}
+    disagreements: list[dict[str, Any]] = []
+    for key, expected in sorted(truth.items()):
         predicted = predictions.get(key, set())
-        tp += len(predicted & expected)
-        fp += len(predicted - expected)
-        fn += len(expected - predicted)
+        correct, extra, missing = predicted & expected, predicted - expected, expected - predicted
+        tp += len(correct)
+        fp += len(extra)
+        fn += len(missing)
         missed_events += bool(expected and not predicted)
         negative_events += not expected
         contaminated_negative_events += bool(not expected and predicted)
+        counts = per_window.setdefault(key[0], {"events": 0, "tp": 0, "fp": 0, "fn": 0,
+                                                 "negative_events": 0, "negative_false_link_events": 0})
+        counts["events"] += 1
+        counts["tp"] += len(correct)
+        counts["fp"] += len(extra)
+        counts["fn"] += len(missing)
+        counts["negative_events"] += not expected
+        counts["negative_false_link_events"] += bool(not expected and predicted)
+        if extra or missing:
+            disagreements.append({
+                "window": key[0], "event_id": key[1],
+                "false_positive_resource_pairs": [json.loads(p) for p in sorted(extra)],
+                "false_negative_resource_pairs": [json.loads(p) for p in sorted(missing)],
+                "explicit_negative_event": not expected,
+                "prediction_missing": key not in predictions,
+            })
     precision = tp / (tp + fp) if tp + fp else 0.0
     recall = tp / (tp + fn) if tp + fn else 0.0
     return {
@@ -539,6 +558,9 @@ def score_source_event_cohort(response: dict[str, Any], source_labels: list[dict
         "true_positive_pairs": tp, "false_positive_pairs": fp, "false_negative_pairs": fn,
         "precision": precision, "recall": recall,
         "f1": 2 * precision * recall / (precision + recall) if precision + recall else 0.0,
+        "per_window_counts": per_window,
+        "event_disagreements": disagreements,
+        "event_disagreements_are_label_comparisons_not_confirmed_cases": True,
         "negative_source_events": negative_events,
         "negative_source_events_with_false_links": contaminated_negative_events,
         "negative_false_link_rate": (
