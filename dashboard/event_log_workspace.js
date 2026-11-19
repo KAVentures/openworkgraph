@@ -15,6 +15,7 @@
   const FILTERED=new Set(['automation-candidates','summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','performance-spectrum','waiting-time','drift','model-discovery','organization','report.html','decision-points','decision-rules']);
   FILTERED.add('roles');
   FILTERED.add('model-discovery.pnml');
+  FILTERED.add('temporal-profile');
 
   const el=(tag,text,cls)=>{
     const node=document.createElement(tag);
@@ -619,15 +620,29 @@
   // Save the cases matching a filter as a new saved log, to analyse or compare a slice on its own.
   function deriveSection(activityNames){
     const box=section('Save or export matching cases');box.id='owgEventLogDerive';
-    box.appendChild(el('div','Save matching cases as a new log or download their original events as a flat CSV. The CSV includes case IDs, activity names, timestamps and resources. Saved copies start without the source log’s activity mapping, saved filters, signals and quality reports.','muted'));
+    box.appendChild(el('div','Save matching cases as a new log or download their original events in CSV or XES. Saved copies start without the source log’s activity mapping, saved filters, signals and quality reports.','muted'));
     const filter=cohortFields('owgDeriveCohort','Cases to include',activityNames);
     const name=input('owgDeriveName','text');name.maxLength=120;name.autocomplete='off';
     const current=state.logs.find(l=>l.log_id===state.logId);name.value=((current&&current.name)||'Log')+' (subset)';
     const run=button('Save as new log','secondary');run.id='owgDeriveRun';
-    const download=button('Download matching cases as CSV','secondary');download.id='owgDeriveExport';
+    const formats=select('owgDeriveExportFormat',[['csv','CSV (exact interchange)'],['csv-review','CSV for spreadsheet review'],
+      ['xes','XES'],['xes-attributes','XES with retained attributes']]);
+    const download=button('Download matching cases','secondary');download.id='owgDeriveExport';
+    const formatNote=el('p',null,'muted');
+    function describeFormat(){
+      formatNote.textContent={
+        'csv':'Includes case IDs, activity names, timestamps and resources.',
+        'csv-review':'Changes formula-like cells for spreadsheet review. Use exact CSV for re-import.',
+        'xes':'Includes one trace per matching case with activity names, timestamps and resources.',
+        'xes-attributes':'Also includes retained trace and event attribute values. Use OCEL for timed object attributes and relationships.'
+      }[formats.value];
+    }
+    formats.onchange=describeFormat;describeFormat();
     const out=el('div');out.id='owgDeriveResult';out.setAttribute('role','status');
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('New log name',name),run);
-    box.append(filter.node,row,download,out);
+    const exportRow=el('div',null,'row');exportRow.style.alignItems='end';
+    exportRow.append(field('Matching case export format',formats),download);
+    box.append(filter.node,row,exportRow,formatNote,out);
     const generation=state.generation;
     function selectedCases(missingFilter){
       const cohort=filter.read();delete cohort.label;
@@ -636,17 +651,18 @@
       return state.caseType?{cohort,case_type:state.caseType}:{cohort};
     }
     download.onclick=async()=>{
-      const logId=state.logId;
+      const logId=state.logId,format=formats.value;
+      const extension=format==='csv-review'?'review.csv':format.startsWith('xes')?'xes':'csv';
       download.disabled=true;
       try{
         const spec=selectedCases('Choose which cases to export.');
         out.textContent='Preparing matching cases…';
-        const response=await api('/v1/event-logs/'+encodeURIComponent(logId)+'/export/matching-cases',{
+        const response=await api('/v1/event-logs/'+encodeURIComponent(logId)+'/export/matching-cases?'+new URLSearchParams({format}),{
           method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)});
         const blob=await response.blob();
         if(generation!==state.generation||!box.isConnected)return;
         const url=URL.createObjectURL(blob);
-        const link=el('a');link.href=url;link.download=logId+'-matching-cases.csv';
+        const link=el('a');link.href=url;link.download=logId+'-matching-cases.'+extension;
         document.body.appendChild(link);link.click();link.remove();
         setTimeout(()=>URL.revokeObjectURL(url),1000);
         out.textContent='Matching cases exported.';
@@ -799,6 +815,7 @@
     results.appendChild(deriveSection(names));
     results.appendChild(dottedSection());
     results.appendChild(spectrumSection());
+    results.appendChild(temporalProfileSection());
     results.appendChild(waitingSection());
     results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity),inspection));
     results.appendChild(organizationSection());
@@ -1615,22 +1632,27 @@
   // Decision mining: which recorded data goes with which branch after an activity.
   function decisionSection(){
     const box=section('Decision rules');box.id='owgDecisions';
+    const branch=row=>row.next+(row.next_is_terminal?' · case completion':'');
     box.appendChild(el('div','Find the activities after which cases go different ways, then learn which recorded data goes with each branch. Only data recorded at or before the decision is used. Rules are associations in this log, checked on held-out cases, not the business rule.','muted'));
     const find=button('Find decision points','secondary');find.id='owgDecisionFind';
     const points=el('div');points.id='owgDecisionPoints';points.setAttribute('role','status');
     const out=el('div');out.id='owgDecisionResults';out.setAttribute('role','status');
     box.append(find,points,out);
     const pct=x=>Math.round(x*100)+'%';
-    const cond=c=>c.attribute+' '+({'==':'is','!=':'is not','>=':'≥','<':'<'}[c.op])+' '+(typeof c.value==='number'?Number(c.value).toLocaleString():'“'+c.value+'”');
+    const cond=c=>{
+      const value=typeof c.value==='number'?String(c.value):'“'+c.value+'”';
+      const comparison=c.attribute+' '+({'==':'is','!=':'is not','>=':'≥','<':'<'}[c.op])+' '+value;
+      return c.includes_missing?'('+comparison+' or missing'+(c.includes_non_numeric?' or nonnumeric':'')+')':comparison;
+    };
     const learn=async(activity)=>{out.replaceChildren(el('div','Learning rules for '+activity+'…','muted'));
       try{
         const r=await getJSON(logPath('decision-rules',{decision_activity:activity}));
-        const head=el('div','After '+activity+': '+r.branches.map(b=>b.next+' '+pct(b.share)).join(', ')+' ('+Number(r.occurrences).toLocaleString()+' occurrences'+(r.occurrences_capped?', the first '+Number(r.occurrences_used).toLocaleString()+' used':'')+').','muted');
+        const head=el('div','After '+activity+': '+r.branches.map(b=>branch(b)+' '+pct(b.share)).join(', ')+' ('+Number(r.occurrences).toLocaleString()+' occurrences'+(r.occurrences_capped?', the first '+Number(r.occurrences_used).toLocaleString()+' used':'')+').','muted');
         if(!r.rules.length){out.replaceChildren(head,el('div',r.note,'muted'));return;}
         const e=r.evaluation,parts=[];
         if('holdout_accuracy' in e)parts.push('Held-out accuracy '+pct(e.holdout_accuracy)+' on '+e.holdout_occurrences+' occurrences, against '+pct(e.majority_baseline_accuracy)+' for always predicting “'+e.majority_baseline+'”.'+(e.beats_baseline?'':' The rules do not beat that baseline; treat them as noise.'));
         else parts.push(e.note);
-        const rows=r.rules.map(rule=>[rule.conditions.length?rule.conditions.map(cond).join(' and '):'(all occurrences)',rule.next,pct(rule.confidence),String(rule.training_occurrences)]);
+        const rows=r.rules.map(rule=>[rule.conditions.length?rule.conditions.map(cond).join(' and '):'(all occurrences)',branch(rule),pct(rule.confidence),String(rule.training_occurrences)]);
         out.replaceChildren(head,el('div',parts.join(' '),'muted'),
           table(['When','Then usually','Confidence','Training occurrences'],rows),
           el('div','Most informative data: '+(r.feature_importance.length?r.feature_importance.slice(0,5).map(f=>f.attribute+' '+pct(f.share)).join(', '):'none')+'.','muted'),
@@ -1642,7 +1664,7 @@
         if(!r.decision_points.length){points.replaceChildren(el('div','No activity is followed by two or more branches seen at least '+r.min_branch_occurrences+' times each.','muted'));return;}
         points.replaceChildren(table(['Activity','Occurrences','Branches',''],r.decision_points.map(p=>{
           const go=button('Learn rules','secondary');go.setAttribute('aria-label','Learn rules after '+p.activity);go.onclick=()=>learn(p.activity);
-          return [p.activity,Number(p.occurrences).toLocaleString(),p.branches.slice(0,4).map(b=>b.next+' '+pct(b.share)).join(', ')+(p.branches.length>4?', …':''),go];})));
+          return [p.activity,Number(p.occurrences).toLocaleString(),p.branches.slice(0,4).map(b=>branch(b)+' '+pct(b.share)).join(', ')+(p.branches.length>4?', …':''),go];})));
       }catch(error){points.replaceChildren(el('div',error.message,'muted'));}
       finally{find.disabled=false;}};
     return box;
@@ -1672,6 +1694,7 @@
         const wrap=el('div',null,'row');
         const run=button('Run now','secondary');run.setAttribute('aria-label','Run feed for '+f.folder);
         const retry=button('Retry failed files','secondary');retry.setAttribute('aria-label','Retry failed files for '+f.folder);retry.disabled=!f.files_failed;
+        const review=button('Review failures','secondary');review.setAttribute('aria-label','Review failures for '+f.folder);review.disabled=!f.files_failed;
         const schedule=button('Run every day','secondary');schedule.setAttribute('aria-label','Run feed for '+f.folder+' every day');
         const remove=button('Delete feed','secondary');remove.setAttribute('aria-label','Delete feed for '+f.folder);
         run.onclick=async()=>{run.disabled=true;out.replaceChildren(el('div','Reading the folder\u2026','muted'));
@@ -1682,6 +1705,28 @@
           try{const r2=await (await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/retry-failed',{method:'POST',headers:{'X-OWG-Local-Storage-Confirmed':'true'}})).json();
             out.replaceChildren(el('div',describe(r2)+' Only unchanged failed files were retried; new files are left for Run now.'+(!r2.files_appended&&!r2.files_failed?' No matching failed files were ready; they may have changed, been removed or still be settling.':'')+(r2.events_added?' Analyse again to include them.':'')),...(r2.files||[]).filter(file=>file.outcome==='failed').map(file=>el('div',file.name+': '+file.error,'muted')));render(await getJSON(base));}
           catch(error){out.replaceChildren(el('div',error.message,'muted'));retry.disabled=false;}};
+        const failures=el('div');failures.setAttribute('role','status');let failureTurn=0;
+        async function failurePage(after){
+          const turn=++failureTurn;failures.replaceChildren(el('div','Loading failures…','muted'));
+          try{
+            const q=new URLSearchParams();if(after)q.set('after',after);
+            const page=await getJSON('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/failures'+(q.toString()?'?'+q:''));
+            if(generation!==state.generation||turn!==failureTurn||!wrap.isConnected)return;
+            const rows=page.failures.map(item=>{
+              const one=button('Retry this file','secondary');one.setAttribute('aria-label','Retry failed file '+item.name+' ('+item.sha256.slice(0,12)+')');
+              one.onclick=async()=>{one.disabled=true;out.replaceChildren(el('div','Retrying selected failed content…','muted'));
+                try{const result=await (await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/retry-failed/'+encodeURIComponent(item.sha256),{method:'POST',headers:{'X-OWG-Local-Storage-Confirmed':'true'}})).json();
+                  if(generation!==state.generation)return;
+                  out.replaceChildren(el('div',describe(result)+' Only the selected content was considered.'+(result.files.length||result.files_already_appended?'':' The selected content is not currently ready or available.')+(result.events_added?' Analyse again to include them.':'')),...(result.files||[]).filter(file=>file.outcome==='failed').map(file=>el('div',file.name+': '+file.error,'muted')));const updated=await getJSON(base);if(generation===state.generation)render(updated);}
+                catch(error){if(generation===state.generation){out.replaceChildren(el('div',error.message,'muted'));one.disabled=false;}}};
+              return [item.name,item.processed_at,item.error||'Unknown error',one];
+            });
+            const first=button('First failures','secondary');first.disabled=!after;first.onclick=()=>failurePage('');
+            const next=button('Next failures','secondary');next.disabled=!page.next_after;next.onclick=()=>failurePage(page.next_after);
+            failures.replaceChildren(rows.length?table(['File','Last failure (UTC)','Error',''],rows):el('div','No outstanding failures on this page.','muted'),first,next,el('div','Pages can change as files are retried. Retry matches unchanged content, including renamed files.','muted'));
+          }catch(error){if(generation===state.generation&&turn===failureTurn)failures.replaceChildren(el('div',error.message,'muted'));}
+        }
+        review.onclick=()=>failurePage('');
         schedule.onclick=async()=>{if(!window.confirm('Read '+f.folder+' and append new files every day while OpenWorkGraph is running?'))return;
           try{await api('/v1/schedules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'event_log_folder_feed',target_id:f.feed_id,interval_minutes:1440,confirm_scheduled_runs:true})});
             out.replaceChildren(el('div','Scheduled daily. Manage it under scheduled jobs.'));}
@@ -1689,7 +1734,7 @@
         remove.onclick=async()=>{if(!window.confirm('Delete this feed? Events already appended stay in the log.'))return;
           try{await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/delete',{method:'POST'});out.replaceChildren(el('div','Feed deleted.'));render(await getJSON(base));}
           catch(error){out.replaceChildren(el('div',error.message,'muted'));}};
-        wrap.append(run,retry,schedule,remove);
+        wrap.append(run,retry,review,schedule,remove,failures);
         const latest=f.recent_files[0];
         return [f.folder,f.pattern,Number(f.files_appended).toLocaleString(),Number(f.files_failed).toLocaleString(),
           latest?latest.name+' \u2014 '+(latest.outcome==='appended'?Number(latest.added_events).toLocaleString()+' events added'+(latest.warning?' · '+latest.warning:''):'not appended: '+latest.error):'\u2014',wrap];})));
@@ -1744,8 +1789,8 @@
   // Columns from a separate case table (customer, region, amount...) joined onto the cases by id.
   function caseAttributeSection(){
     const box=section('Case attributes from a table');box.id='owgCaseAttributes';
-    box.appendChild(el('div','Add columns such as region, segment or contract value from a separate CSV keyed by case ID. They become case attributes for filters, root cause and attribute profiles. Events are not changed, and an upload can be removed again.','muted'));
-    const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/case-attributes';
+    box.appendChild(el('div','Add columns such as region, segment or contract value from a separate CSV keyed by case ID. They become case attributes for filters, root cause and attribute profiles. You can undo new uploads to restore the previous values of the cases they changed.','muted'));
+    const base='/v1/event-logs/'+encodeURIComponent(state.logId)+'/case-attributes';
     const list=el('div');list.id='owgCaseAttributeUploads';list.setAttribute('role','status');
     const file=input('owgCaseAttributeFile','file');file.accept='.csv,.tsv,.txt';
     const delimiter=select('owgCaseAttributeDelimiter',[[',','Comma'],[';','Semicolon'],['t','Tab'],['|','Pipe']]);
@@ -1777,12 +1822,19 @@
     const render=r=>{
       if(!r.uploads.length){list.replaceChildren(el('div','No case attributes added yet.','muted'));return;}
       list.replaceChildren(table(['Added','Columns','Cases updated','Rows not in this log','Cases without a row',''],r.uploads.map(u=>{
-        const remove=button('Remove','secondary');remove.setAttribute('aria-label','Remove '+u.columns.join(', '));
-        remove.onclick=async()=>{if(!window.confirm('Remove '+u.columns.join(', ')+' from every case?'))return;
-          try{const r2=await (await api(base()+'/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({upload_id:u.upload_id})})).json();
-            out.replaceChildren(el('div','Removed '+r2.removed_columns.join(', ')+' from '+Number(r2.cases_changed).toLocaleString()+' cases.'));render(await getJSON(base()));}
-          catch(error){out.replaceChildren(el('div',error.message,'muted'));}};
-        return [String(u.added_at).slice(0,16).replace('T',' '),u.columns.join(', '),Number(u.cases_updated).toLocaleString(),Number(u.rows_not_in_log).toLocaleString(),Number(u.cases_without_row).toLocaleString(),remove];})));
+        const remove=button('Undo upload','secondary');remove.setAttribute('aria-label','Undo upload for '+u.columns.join(', '));
+        remove.onclick=async()=>{
+          if(!window.confirm('Undo this upload for '+u.columns.join(', ')+' and restore the previous values?'))return;
+          remove.disabled=true;
+          try{
+            const r2=await (await api(base+'/remove',{method:'POST',headers:{'Content-Type':'application/json'},
+              body:JSON.stringify({upload_id:u.upload_id})})).json();
+            out.textContent='Undid '+r2.removed_columns.join(', ')+' in '+Number(r2.cases_changed).toLocaleString()+' cases.';
+            render(await getJSON(base));
+          }catch(error){out.textContent=error.message;remove.disabled=false;}
+        };
+        const action=u.undo_supported?remove:el('span','Undo unavailable for this older upload','muted');
+        return [String(u.added_at).slice(0,16).replace('T',' '),u.columns.join(', '),Number(u.cases_updated).toLocaleString(),Number(u.rows_not_in_log).toLocaleString(),Number(u.cases_without_row).toLocaleString(),action];})));
     };
     add.onclick=async()=>{
       const q=new URLSearchParams({id_column:idColumn.value,delimiter:delimiter.value});
@@ -1790,12 +1842,12 @@
       if(state.caseType)q.set('object_type',state.caseType);if(replace.checked)q.set('replace','true');
       add.disabled=true;out.replaceChildren(el('div','Adding…','muted'));
       try{
-        const r=await (await api(base()+'?'+q,{method:'POST',body:file.files[0],headers:{'Content-Type':'text/csv','X-OWG-Local-Storage-Confirmed':'true'}})).json();
+        const r=await (await api(base+'?'+q,{method:'POST',body:file.files[0],headers:{'Content-Type':'text/csv','X-OWG-Local-Storage-Confirmed':'true'}})).json();
         out.replaceChildren(el('div','Added '+r.columns.join(', ')+' to '+Number(r.cases_updated).toLocaleString()+' cases. '+Number(r.rows_not_in_log).toLocaleString()+' rows matched no case; '+Number(r.cases_without_row).toLocaleString()+' cases had no row.'));
-        consent.checked=false;render(await getJSON(base()));
+        consent.checked=false;render(await getJSON(base));
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));ready();}
     };
-    getJSON(base()).then(r=>{if(generation===state.generation)render(r);}).catch(error=>list.replaceChildren(el('div',error.message,'muted')));
+    getJSON(base).then(r=>{if(generation===state.generation)render(r);}).catch(error=>list.replaceChildren(el('div',error.message,'muted')));
     return box;
   }
 
@@ -3695,6 +3747,33 @@
     return box;
   }
 
+  function temporalProfileSection(){
+    const box=section('Temporal profile');box.id='owgTemporal';
+    box.appendChild(el('div','For every pair of activities in a case, even far apart, the usual time from the first to the second. Cases whose time is more than the chosen number of standard deviations from the usual one are listed: unusual timings to review, not errors.','muted'));
+    const zeta=select('owgTemporalZeta',[['3','3 standard deviations'],['2','2 standard deviations'],['4','4 standard deviations'],['6','6 standard deviations']]);
+    const run=button('Check timings','secondary');run.id='owgTemporalRun';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Flag times beyond',zeta),run);
+    const statusLine=el('div',null,'muted');statusLine.id='owgTemporalStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgTemporalResults';
+    box.append(row,statusLine,out);
+    run.onclick=async()=>{
+      const generation=state.generation;run.disabled=true;statusLine.textContent='Checking…';out.replaceChildren();
+      try{
+        const r=await getJSON(logPath('temporal-profile',{zeta:zeta.value}));
+        if(generation!==state.generation)return;
+        if(!r.profile_pairs){statusLine.textContent='No pair of activities occurs often enough, with varying times, to check.';return;}
+        statusLine.textContent=r.deviating_cases.toLocaleString()+' of '+r.cases.toLocaleString()+' cases ('+Math.round((r.deviating_case_share||0)*100)+'%) have at least one unusual timing across '+r.profile_pairs+' checked pairs.'+(r.cases_before_filter?' Filtered from '+Number(r.cases_before_filter).toLocaleString()+' cases.':'');
+        const pairs=r.pairs.filter(p=>p.deviations).slice(0,15);
+        if(pairs.length){out.appendChild(el('h4','Pairs most often outside their usual time'));
+          out.appendChild(table(['From','To','Usual time','Allowed range','Outside','Slower','Faster'],pairs.map(p=>[p.from,p.to,duration(p.mean_seconds),duration(p.allowed_seconds[0])+'–'+duration(p.allowed_seconds[1]),p.deviations+' of '+p.occurrences,String(p.slower),String(p.faster)])));}
+        if(r.top_cases.length){out.appendChild(el('h4','Cases with most unusual timings'));
+          out.appendChild(table(['Case','Unusual pairs','Strongest','Took','Usual'],r.top_cases.map(c=>[c.case_id,String(c.deviations),c.strongest.from+' → '+c.strongest.to+' ('+c.strongest.standard_deviations+' sd)',duration(c.strongest.seconds),duration(c.strongest.mean_seconds)])));}
+        out.appendChild(el('div',r.caveat,'muted'));
+      }catch(error){statusLine.textContent=error.message;}
+      finally{run.disabled=false;}};
+    return box;
+  }
+
   function dottedSection(){
     const box=section('Events over time');box.id='owgDots';
     box.appendChild(el('div','A dotted chart: each row is a case and each dot an event at its recorded time, coloured by activity. Use calendar time to see waves, batches and backlogs, or time since each case started to compare how cases unfold.','muted'));
@@ -4164,30 +4243,45 @@
     const names=input('owgEventLogOrgNames','checkbox');namesLabel.append(names,document.createTextNode(' Show resource names from the log'));
     const run=button('Show handovers','secondary');run.id='owgEventLogOrgRun';
     const rolesRun=button('Discover roles','secondary');rolesRun.id='owgEventLogRolesRun';
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(namesLabel,run,rolesRun);
+    const threshold=input('owgEventLogRolesThreshold','number');threshold.value='0.65';threshold.min='0.01';threshold.max='0.99';threshold.step='0.01';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(namesLabel,run,field('Role similarity threshold',threshold),rolesRun);
     const out=el('div');out.id='owgEventLogOrgResults';out.setAttribute('role','status');
     box.append(row,out);
+    let request=0;
+    names.addEventListener('change',()=>{request++;out.replaceChildren();});
+    threshold.addEventListener('input',()=>{request++;out.replaceChildren();});
     rolesRun.onclick=async()=>{
-      const generation=state.generation;
+      const generation=state.generation,ticket=++request;
       try{
         rolesRun.disabled=true;out.replaceChildren(el('div','Grouping resources by the activities they perform…','muted'));
-        const r=await getJSON(logPath('roles',{names:names.checked?'shown':'pseudonymous'}));
-        if(generation!==state.generation)return;
-        if(!r.roles.length){out.replaceChildren(el('div','This log has no resource column values to analyse.','muted'));return;}
+        const cutoff=Number(threshold.value);
+        if(!(cutoff>0&&cutoff<1))throw new Error('Choose a role similarity threshold above 0 and below 1.');
+        const r=await getJSON(logPath('roles',{names:names.checked?'shown':'pseudonymous',threshold:cutoff}));
+        if(generation!==state.generation||ticket!==request)return;
+        if(!r.roles.length){
+          out.textContent=r.coverage.events_with_resource
+            ? 'No events fall within both the resource and activity analysis limits. Try a narrower case filter.'
+            : 'No events in the selected cases have a resource label.';
+          return;
+        }
         out.replaceChildren(
-          el('div',r.roles.length+' roles from '+r.coverage.resources+' resources whose activity mixes correlate at '+r.threshold+' or more.'+(r.coverage.resources_truncated?' Only the 200 most active resources are grouped.':''),'muted'),
+          el('p',r.roles.length+' roles from '+r.coverage.resources_represented+' resources whose activity mixes correlate at '+r.threshold+' or more.','muted'),
+          el('p','Coverage: '+Number(r.coverage.events_represented).toLocaleString()+' of '+
+            Number(r.coverage.events_with_resource).toLocaleString()+' events with a resource, '+
+            Number(r.coverage.resources_represented).toLocaleString()+' of '+Number(r.coverage.resources).toLocaleString()+' resources, and '+
+            Number(r.coverage.activities_represented).toLocaleString()+' of '+Number(r.coverage.activities).toLocaleString()+' activities.','muted'),
           table(['Role','Members','Events','Main activities','Only this role'],r.roles.map(x=>[x.role,x.members.join(', '),Number(x.events).toLocaleString(),
             x.activity_mix.slice(0,4).map(a=>a.activity+' '+Math.round(a.share*100)+'%').join(', '),x.exclusive_activities.join(', ')||'\u2014'])),
-          el('div',r.interpretation,'muted'));
-      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+          el('div','“Only this role” checks every resource label in the selected cases. '+r.interpretation,'muted'));
+      }catch(error){if(generation===state.generation&&ticket===request)out.textContent=error.message;}
       finally{rolesRun.disabled=false;}
     };
     run.onclick=async()=>{
-      const generation=state.generation;
+      const generation=state.generation,ticket=++request;
       try{
         out.replaceChildren(el('div','Reading resources…','muted'));
         const r=await getJSON(logPath('organization',{names:names.checked?'shown':'pseudonymous'}));
-        if(generation!==state.generation)return;
+        if(generation!==state.generation||ticket!==request)return;
         if(!r.resources.length){out.replaceChildren(el('div','This log has no resource column values to analyse.','muted'));return;}
         const m=r.activity_resource_matrix;
         out.replaceChildren(
@@ -4196,7 +4290,7 @@
           table(['Resources','Shared cases'],r.working_together.slice(0,25).map(w=>[w.resources.join(' + '),Number(w.shared_cases).toLocaleString()])),
           table(['Activity',...m.resources.slice(0,10)],m.activities.slice(0,15).map((a,i)=>[a,...m.events[i].slice(0,10).map(n=>n?Number(n).toLocaleString():'')])),
           el('div',r.interpretation+(r.working_together_excluded_cases?' '+r.working_together_excluded_cases+' cases with very many resources are left out of shared-case pairs.':''),'muted'));
-      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      }catch(error){if(generation===state.generation&&ticket===request)out.textContent=error.message;}
     };
     return box;
   }
@@ -4617,6 +4711,7 @@
       save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;prepareCompany.disabled=true;
     }
     function useMetric(metric){
+      if(running)throw new Error('Wait for the current analysis to finish or cancel it before changing this draft.');
       if(metrics.some(m=>m.name===metric.name))throw new Error('This analysis already has a metric named '+metric.name+'.');
       if(metrics.length>=4)throw new Error('Use at most 4 case metrics.');
       if(metric.kind==='arithmetic')for(const o of [metric.left,metric.right])if(o.kind==='metric'&&!metrics.some(m=>m.name===o.name))throw new Error('Add earlier metric '+o.name+' first.');
@@ -4627,6 +4722,7 @@
         const edit=button('Edit','secondary');edit.setAttribute('aria-label','Edit metric '+m.name);
         edit.onclick=()=>{try{populateMetric(m);editingMetric=m.name;mUpdate.disabled=false;message.textContent='Editing '+m.name+'. Update the selected metric to apply changes; the saved analysis remains unchanged.';}catch(error){message.textContent=error.message;}};
         const rm=button('Remove','secondary');rm.setAttribute('aria-label','Remove metric '+m.name);rm.onclick=()=>{
+        if(running){message.textContent='Wait for the current analysis to finish or cancel it before changing this draft.';return;}
         const dependent=metrics.find(x=>x.kind==='arithmetic'&&[x.left,x.right].some(o=>o.kind==='metric'&&o.name===m.name));
         if(dependent){message.textContent='Remove dependent metric '+dependent.name+' first.';return;}
         metrics.splice(i,1);if(editingMetric===m.name){editingMetric=null;mUpdate.disabled=true;}renderMetrics();invalidateMetricResult();};item.append(edit,rm);return item;}));
@@ -4852,6 +4948,7 @@
     mAdd.onclick=()=>{try{useMetric(readMetric());message.textContent='Metric added; choose it under Measure.';}catch(error){message.textContent=error.message;}};
     mUpdate.onclick=()=>{
       try{
+        if(running)throw new Error('Wait for the current analysis to finish or cancel it before changing this draft.');
         const index=metrics.findIndex(m=>m.name===editingMetric);
         if(index<0)throw new Error('Select a metric to edit first.');
         const next=readMetric(),old=editingMetric;
@@ -4869,6 +4966,7 @@
     };
     function addStageComparison(relative){
       try{
+        if(running)throw new Error('Wait for the current analysis to finish or cancel it before changing this draft.');
         const proposed=stageComparisonMetrics(readMetric(),relative);
         if(metrics.length+proposed.length>4)throw new Error('A stage comparison needs '+(relative?'four':'three')+' free metric slots (four maximum). Remove other metrics first.');
         const existing=new Set(metrics.map(m=>m.name));
@@ -4887,6 +4985,7 @@
     mCompareRelative.onclick=()=>addStageComparison(true);
     mCompareActivities.onclick=()=>{
       try{
+        if(running)throw new Error('Wait for the current analysis to finish or cancel it before changing this draft.');
         const proposed=activityComparisonMetrics(readMetric(),mCompareActivityA.value,mCompareActivityB.value);
         if(metrics.length+proposed.length>4)
           throw new Error('An activity comparison needs three free metric slots (four maximum). Remove other metrics first.');
@@ -4902,6 +5001,7 @@
     };
     mCompareShare.onclick=()=>{
       try{
+        if(running)throw new Error('Wait for the current analysis to finish or cancel it before changing this draft.');
         const proposed=activityShareMetrics(readMetric());
         if(metrics.length+proposed.length>4)
           throw new Error('An activity fraction needs three free metric slots (four maximum). Remove other metrics first.');

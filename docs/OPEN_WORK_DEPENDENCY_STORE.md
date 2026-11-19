@@ -38,3 +38,17 @@ Still required before production use: invoke reconciliation only inside the
 existing source-scoped authenticated declaration lifecycle; bind the actor to
 a real authorized session; purge on disconnection/revocation/retention; test
 the cross-store failure/retry path and end-to-end browser/agent behavior.
+
+
+### Revocation erasure boundary
+
+The durable dependency SQLite connection enables and verifies
+`PRAGMA secure_delete=ON` before reading or writing owner-declared edges.
+Actor and source-scope purges therefore overwrite deleted SQLite cell content,
+rather than merely removing SQL-visible rows. Tests inspect database bytes
+after both actor and source revocation and ensure unrelated actors retain their
+edges. This protects the local dependency mirror only; it does not claim
+cryptographic erasure from filesystem snapshots, backups, storage wear leveling,
+or independently retained provider evidence. Revocation still requires the
+authenticated route to invoke the appropriate purge and fail closed when
+cleanup cannot complete.

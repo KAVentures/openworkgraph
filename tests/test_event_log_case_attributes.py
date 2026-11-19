@@ -135,6 +135,7 @@ def test_deleting_the_log_deletes_uploads(tmp_path):
         conn = workspace._connect()
         try:
             assert conn.execute("SELECT count(*) FROM case_attribute_uploads").fetchone()[0] == 0
+            assert conn.execute("SELECT count(*) FROM case_attribute_upload_changes").fetchone()[0] == 0
         finally:
             conn.close()
 
@@ -173,3 +174,56 @@ print("ok")
     done = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1], env=env,
                           capture_output=True, text=True, timeout=120)
     assert done.returncode == 0 and done.stdout.strip().endswith("ok"), f"stdout={done.stdout}\nstderr={done.stderr}"
+
+
+
+def test_undo_restores_previous_values_and_leaves_unmodified_cases(tmp_path):
+    log = _log()
+    conn = workspace._connect()
+    try:
+        conn.execute("UPDATE objects SET attributes=? WHERE log_id=? AND object_id='c0'",
+                     [json.dumps({"Region": 7, "Segment": None, "Other": True}), log])
+        conn.execute("UPDATE objects SET attributes=? WHERE log_id=? AND object_id='c1'",
+                     [json.dumps({"Region": "untouched"}), log])
+    finally:
+        conn.close()
+    old = _attributes(log)
+    upload = case_attributes.add(log, _table(tmp_path, "id,Region,Segment\nc0,EU,retail\nc2,US,\n"),
+                                 id_column="id", columns=["Region", "Segment"], replace=True)
+    assert case_attributes.remove(log, {"upload_id": upload["upload_id"]})["cases_changed"] == 2
+    assert _attributes(log) == old
+
+
+def test_newer_overlap_blocks_undo_even_if_value_is_the_same(tmp_path):
+    log = _log()
+    first = case_attributes.add(log, _table(tmp_path, "id,Region,Channel\nc0,EU,web\n"),
+                                id_column="id", columns=["Region", "Channel"])
+    second = case_attributes.add(log, _table(tmp_path, "id,Region\nc0,EU\nc1,US\n"),
+                                 id_column="id", columns=["Region"], replace=True)
+    before = _attributes(log)
+    with pytest.raises(workspace.EventLogWorkspaceError, match="newer upload"):
+        case_attributes.remove(log, {"upload_id": first["upload_id"]})
+    assert _attributes(log) == before
+    case_attributes.remove(log, {"upload_id": first["upload_id"], "columns": ["Channel"]})
+    case_attributes.remove(log, {"upload_id": second["upload_id"]})
+    assert _attributes(log)["c0"] == {"Region": "EU"}
+    assert _attributes(log)["c1"] == {}
+    case_attributes.remove(log, {"upload_id": first["upload_id"]})
+    assert _attributes(log)["c0"] == {}
+
+
+def test_legacy_upload_cannot_remove_values_without_provenance(tmp_path):
+    log = _log()
+    record = case_attributes.add(log, _table(tmp_path, "id,Region\nc0,EU\n"),
+                                 id_column="id", columns=["Region"])
+    record.pop("undo_supported")
+    conn = workspace._connect()
+    try:
+        conn.execute("DELETE FROM case_attribute_upload_changes WHERE log_id=?", [log])
+        conn.execute("UPDATE case_attribute_uploads SET record=? WHERE log_id=?", [json.dumps(record), log])
+    finally:
+        conn.close()
+    assert case_attributes.uploads(log)["uploads"][0]["undo_supported"] is False
+    with pytest.raises(workspace.EventLogWorkspaceError, match="older upload"):
+        case_attributes.remove(log, {"upload_id": record["upload_id"]})
+    assert _attributes(log)["c0"] == {"Region": "EU"}
