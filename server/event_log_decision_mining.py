@@ -56,7 +56,8 @@ def _check_depth(depth: Any) -> int:
 
 
 _STEPS = """CREATE OR REPLACE TEMP TABLE dm AS SELECT case_id, activity, ts, event_id, attributes,
-      coalesce(lead(activity) OVER w, ?) AS next, row_number() OVER w AS pos
+      coalesce(lead(activity) OVER w, ?) AS next, row_number() OVER w AS pos,
+      coalesce(lag(ts) OVER w = ts, false) OR coalesce(lead(ts) OVER w = ts, false) AS ordering_uncertain
     FROM ce WINDOW w AS (PARTITION BY case_id ORDER BY ts, event_id)"""
 
 
@@ -83,16 +84,17 @@ def decision_points(log_id: str, case_type: str | None = None, *,
     def run(conn):
         terminal_label = _terminal_label(conn)
         conn.execute(_STEPS, [terminal_label])
-        rows = conn.execute("""SELECT activity, next, count(*), count(DISTINCT case_id) FROM dm
+        rows = conn.execute("""SELECT activity, next, count(*), count(DISTINCT case_id),
+            count(*) FILTER (WHERE ordering_uncertain) FROM dm
             GROUP BY 1, 2 ORDER BY 1, 3 DESC, 2""").fetchall()
         cases = conn.execute("SELECT count(DISTINCT case_id) FROM ce").fetchone()[0]
         return {"rows": rows, "cases": cases, "terminal_label": terminal_label}
 
     data = workspace._query_filtered(log_id, case_type, cohort, run)
     terminal = data["terminal_label"]
-    grouped: dict[str, list[tuple[str, int, int]]] = {}
-    for activity, nxt, n, cases in data.pop("rows"):
-        grouped.setdefault(activity, []).append((nxt, n, cases))
+    grouped: dict[str, list[tuple[str, int, int, int]]] = {}
+    for activity, nxt, n, cases, uncertain in data.pop("rows"):
+        grouped.setdefault(activity, []).append((nxt, n, cases, uncertain))
     points = []
     for activity, branches in grouped.items():
         kept = [b for b in branches if b[1] >= MIN_BRANCH_OCCURRENCES]
@@ -100,9 +102,10 @@ def decision_points(log_id: str, case_type: str | None = None, *,
             continue
         total = sum(b[1] for b in branches)
         points.append({"activity": activity, "occurrences": total,
+                       "ordering_uncertain_occurrences": sum(branch[3] for branch in branches),
                        "branches": [{"next": nxt, "next_is_terminal": nxt == terminal,
                                      "occurrences": n, "cases": c, "share": round(n / total, 4)}
-                                    for nxt, n, c in branches],
+                                    for nxt, n, c, _ in branches],
                        "rare_branch_occurrences": total - sum(b[1] for b in kept)})
     points.sort(key=lambda p: (-p["occurrences"], p["activity"]))
     return {"format": FORMAT, **{k: v for k, v in data.items()},
@@ -276,11 +279,12 @@ def analyse(log_id: str, activity: str, case_type: str | None = None, *, max_dep
     def run(conn):
         terminal_label = _terminal_label(conn)
         conn.execute(_STEPS, [terminal_label])
-        total = conn.execute("SELECT count(*) FROM dm WHERE activity = ?", [activity]).fetchone()[0]
+        total, uncertain = conn.execute("""SELECT count(*), count(*) FILTER (WHERE ordering_uncertain)
+            FROM dm WHERE activity = ?""", [activity]).fetchone()
         # Latest value of each event attribute at or before the decision event, plus the case's attributes.
         rows = conn.execute("""
-            WITH d AS (SELECT case_id, pos, next FROM dm WHERE activity = $a ORDER BY hash(case_id), pos
-                       LIMIT $cap),
+            WITH d AS (SELECT case_id, pos, next FROM dm WHERE activity = $a AND NOT ordering_uncertain
+                       ORDER BY hash(case_id), case_id, pos LIMIT $cap),
             ev AS (SELECT d.case_id, d.pos, kv.key AS k, kv.value AS v, e.pos AS epos
                    FROM d JOIN dm e ON e.case_id = d.case_id AND e.pos <= d.pos,
                      unnest(map_entries(json_transform(coalesce(e.attributes, '{}'),
@@ -293,10 +297,10 @@ def analyse(log_id: str, activity: str, case_type: str | None = None, *, max_dep
               LEFT JOIN latest USING (case_id, pos)
               LEFT JOIN objects o ON o.log_id = $log AND o.object_id = d.case_id""",
                             {"a": activity, "cap": MAX_OCCURRENCES, "log": log_id}).fetchall()
-        return {"rows": rows, "total": total, "terminal_label": terminal_label}
+        return {"rows": rows, "total": total, "uncertain": uncertain, "terminal_label": terminal_label}
 
     data = workspace._query_filtered(log_id, case_type, cohort, run)
-    raw, total = data.pop("rows"), data.pop("total")
+    raw, total, uncertain = data.pop("rows"), data.pop("total"), data.pop("uncertain")
     if not total:
         raise EventLogWorkspaceError("this activity does not occur in the selected cases")
     samples = []
@@ -316,7 +320,9 @@ def analyse(log_id: str, activity: str, case_type: str | None = None, *, max_dep
     terminal = data["terminal_label"]
     branch_counts = Counter(s["y"] for s in samples)
     base = {"format": FORMAT, **data, "activity": activity, "occurrences": total,
-            "occurrences_used": len(samples), "occurrences_capped": total > len(samples),
+            "occurrences_used": len(samples), "occurrences_capped": total - uncertain > len(samples),
+            "ordering_uncertain_occurrences_excluded": uncertain,
+            "ordering_basis": "exclude_decisions_sharing_a_timestamp_with_an_adjacent_event",
             "branches": [{"next": k, "next_is_terminal": k == terminal,
                           "occurrences": v, "share": round(v / len(samples), 4)}
                          for k, v in sorted(branch_counts.items(), key=lambda kv: (-kv[1], kv[0]))],
@@ -326,8 +332,10 @@ def analyse(log_id: str, activity: str, case_type: str | None = None, *, max_dep
                                            "recorded at or before the decision event (event.*)"),
             "caveat": ("Rules describe associations in this log, not the business rule or its cause, and "
                        "authorize nothing. Case attributes carry no time and may have been set after the decision.")}
+    if not samples:
+        return {**base, "rules": [], "note": "all decision occurrences share a timestamp with an adjacent event"}
     if len(branch_counts) < 2:
-        return {**base, "rules": [], "note": "every occurrence continues the same way, so there is no decision here"}
+        return {**base, "rules": [], "note": "every usable occurrence continues the same way, so there is no decision here"}
     train = [s for s in samples if s["train"]]
     test = [s for s in samples if not s["train"]]
     features = _features(train)

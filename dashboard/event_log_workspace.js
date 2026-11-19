@@ -1562,7 +1562,12 @@
     const learn=async(activity)=>{out.replaceChildren(el('div','Learning rules for '+activity+'…','muted'));
       try{
         const r=await getJSON(logPath('decision-rules',{decision_activity:activity}));
-        const head=el('div','After '+activity+': '+r.branches.map(b=>branch(b)+' '+pct(b.share)).join(', ')+' ('+Number(r.occurrences).toLocaleString()+' occurrences'+(r.occurrences_capped?', the first '+Number(r.occurrences_used).toLocaleString()+' used':'')+').','muted');
+        const excluded=Number(r.ordering_uncertain_occurrences_excluded||0);
+        const branches=r.branches.map(b=>branch(b)+' '+pct(b.share)).join(', ')||'No usable branches';
+        const head=el('div','After '+activity+': '+branches+'. '+Number(r.occurrences).toLocaleString()+
+          ' occurrences, '+Number(r.occurrences_used).toLocaleString()+' used.'+
+          (excluded?' Excluded '+excluded.toLocaleString()+' '+(excluded===1?'occurrence that shares':'occurrences that share')+' a timestamp with an adjacent event.':'')+
+          (r.occurrences_capped?' The remaining eligible sample reached the analysis limit.':''),'muted');
         if(!r.rules.length){out.replaceChildren(head,el('div',r.note,'muted'));return;}
         const e=r.evaluation,parts=[];
         if('holdout_accuracy' in e)parts.push('Held-out accuracy '+pct(e.holdout_accuracy)+' on '+e.holdout_occurrences+' occurrences, against '+pct(e.majority_baseline_accuracy)+' for always predicting “'+e.majority_baseline+'”.'+(e.beats_baseline?'':' The rules do not beat that baseline; treat them as noise.'));
@@ -1577,9 +1582,9 @@
       try{
         const r=await getJSON(logPath('decision-points'));
         if(!r.decision_points.length){points.replaceChildren(el('div','No activity is followed by two or more branches seen at least '+r.min_branch_occurrences+' times each.','muted'));return;}
-        points.replaceChildren(table(['Activity','Occurrences','Branches',''],r.decision_points.map(p=>{
+        points.replaceChildren(table(['Activity','Occurrences','Timestamp ties','Branches',''],r.decision_points.map(p=>{
           const go=button('Learn rules','secondary');go.setAttribute('aria-label','Learn rules after '+p.activity);go.onclick=()=>learn(p.activity);
-          return [p.activity,Number(p.occurrences).toLocaleString(),p.branches.slice(0,4).map(b=>branch(b)+' '+pct(b.share)).join(', ')+(p.branches.length>4?', …':''),go];})));
+          return [p.activity,Number(p.occurrences).toLocaleString(),Number(p.ordering_uncertain_occurrences||0).toLocaleString(),p.branches.slice(0,4).map(b=>branch(b)+' '+pct(b.share)).join(', ')+(p.branches.length>4?', …':''),go];})));
       }catch(error){points.replaceChildren(el('div',error.message,'muted'));}
       finally{find.disabled=false;}};
     return box;

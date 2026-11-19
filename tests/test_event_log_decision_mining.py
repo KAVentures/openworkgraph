@@ -70,6 +70,31 @@ def test_decision_points_list_branches():
     assert set(branches) == {"Manager approval", "Auto approve"} and sum(branches.values()) == 200
 
 
+def test_tied_decisions_are_disclosed_and_excluded_from_training_and_holdout():
+    rows = ["case,activity,time,amount,label"]
+    for i in range(160):
+        amount = i % 2
+        label = "ordered" if i < 150 else "tied"
+        rows.append(f"c{i},Receive,2024-03-01T08:00:00Z,{amount},{label}")
+        decision_hour = "08" if 150 <= i < 155 else "09"
+        result_hour = "09" if i >= 155 else "10"
+        rows.append(f"c{i},Check,2024-03-01T{decision_hour}:00:00Z,,")
+        rows.append(f"c{i},{'Big' if amount else 'Small'},2024-03-01T{result_hour}:00:00Z,,")
+    log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="timestamp ties", source_format="csv",
+        mapping={**MAPPING, "resource_column": "", "attribute_columns": ["amount", "label"]})["log_id"]
+    point = next(p for p in decisions.decision_points(log)["decision_points"] if p["activity"] == "Check")
+    assert point["occurrences"] == 160 and point["ordering_uncertain_occurrences"] == 10
+    result = decisions.analyse(log, "Check")
+    assert result["occurrences"] == 160 and result["occurrences_used"] == 150
+    assert result["ordering_uncertain_occurrences_excluded"] == 10 and not result["occurrences_capped"]
+    assert result["evaluation"]["holdout_accuracy"] == 1
+    assert sum(branch["occurrences"] for branch in result["branches"]) == 150
+    all_tied = decisions.analyse(log, "Check", cohort={"event_attribute": "label=tied"})
+    assert all_tied["occurrences"] == all_tied["ordering_uncertain_occurrences_excluded"] == 10
+    assert all_tied["occurrences_used"] == 0 and not all_tied["occurrences_capped"]
+    assert all_tied["rules"] == all_tied["branches"] == []
+
+
 def test_rule_recovers_threshold_without_later_data():
     log = _log()
     result = decisions.analyse(log, "Check")

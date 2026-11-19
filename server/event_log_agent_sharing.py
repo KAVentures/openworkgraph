@@ -338,7 +338,7 @@ def decision_rules(log_id: str, activity: str | None = None, case_type: str | No
     else:
         result = decisions.analyse(log_id, activity, case_type, max_depth=max(1, min(int(max_depth), 4)))
         keep = ("case_notion", "activity", "occurrences", "occurrences_used", "occurrences_capped", "terminal_label", "branches",
-                "method", "features_known_at_decision", "max_depth", "features", "feature_importance", "rules",
+                "ordering_uncertain_occurrences_excluded", "ordering_basis", "method", "features_known_at_decision", "max_depth", "features", "feature_importance", "rules",
                 "evaluation", "learned_anything", "note", "caveat")
     return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
 
