@@ -150,9 +150,10 @@ def execute(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
                             consent_local_append=True,
                             confirm_candidate_reviewed=True,
                             expected_review_csv_sha256=expected_review_csv_sha256)
-    audit("append", appended)
     if type(appended) is not dict or appended.get("status") != "receipt_persisted":
         raise UncertainReceipt("Append outcome uncertain")
+    # An untrusted adapter result cannot establish a verified append audit receipt.
+    audit("append", appended)
     handoff = cycle.handoff(**shared, journal_dir=Path(journal_dir),
                             handoff_dir=Path(handoff_dir),
                             successor_label=successor_label,
