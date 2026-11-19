@@ -2444,6 +2444,13 @@ Celonis's happy-path views do. `GET /v1/event-logs/{log_id}/variant.pnml?rank=1`
 (`rank` 1 to 50 picks a less common path) with the share of cases that follow it in the
 `X-OWG-Path-Cases` header.
 
+**Save this net** keeps the net just checked as a named **reference net** with the log (at most 20
+per log), and **Replay on saved net** checks the current selection against a saved one again, as
+target-process libraries in Celonis and ProM's model collections do. Saved nets are checked when
+saved (safe XML, a reachable final marking), listed by name and size, and deleted with the log.
+`GET /v1/event-logs/{log_id}/reference-nets`, `POST …/reference-nets` with `{"name", "pnml"}`,
+`GET …/reference-nets/{net_id}.pnml` and `POST …/reference-nets/{net_id}/delete`.
+
 **Alert me** keeps the net that was just replayed (uploaded, discovered or the most common path) as a
 **conformance signal**: it holds when the share of cases that do not fit that net is above the
 chosen limit, among all cases or those started in the last 7 or 30 days of the log. The signal keeps
