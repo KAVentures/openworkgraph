@@ -131,6 +131,21 @@ async def agent_temporal_profile(request: Request, log_id: str, zeta: float = Qu
     return await _answer(sharing.temporal_profile, log_id, case_type, zeta)
 
 
+@router.get("/v1/process-intelligence/{log_id}/heuristics-net")
+async def agent_heuristics_net(request: Request, log_id: str,
+                               dependency_threshold: float = Query(default=0.5, ge=0, le=1),
+                               case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.heuristics_net, log_id, case_type, dependency_threshold)
+
+
+@router.get("/v1/process-intelligence/{log_id}/footprints")
+async def agent_footprints(request: Request, log_id: str, noise: float = Query(default=0.2, ge=0, lt=1),
+                           case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.footprints, log_id, case_type, noise)
+
+
 @router.get("/v1/process-intelligence/{log_id}/signals")
 async def agent_signals(request: Request, log_id: str):
     _require_agent_access(request)

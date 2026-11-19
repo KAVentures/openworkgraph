@@ -2173,6 +2173,48 @@ applies.
 `GET /v1/event-logs/{log_id}/performance-spectrum?top=&bins=&segment=A->B&case_type=` plus the
 case-filter parameters. Repeat `segment` for several segments (at most 12). Dashboard session
 only.
+## Heuristics net
+
+**Heuristics net** (the heuristics miner of ProM and PM4Py, after Weijters and Ribeiro's Flexible
+Heuristics Miner) draws a model that tolerates noise. It keeps an arrow *a → b* only when *a* is
+directly followed by *b* clearly more often than the reverse:
+dependency = (|a>b| − |b>a|) / (|a>b| + |b>a| + 1), kept at or above the threshold (default 0.5;
+the section offers 0.3, 0.5, 0.7 and 0.9) and when seen at least the chosen number of times.
+
+- **Self-loops** use |a>a| / (|a>a| + 1); **two-step loops** (*a b a*) are found from *a b a* patterns
+  so that *a ⇄ b* is not dropped as two-way noise.
+- **All connected** (default): every activity keeps its best incoming and outgoing arrow even below
+  the threshold, unless it always starts or always ends a case.
+- **Splits and joins:** two branches *b* and *c* after *a* are **AND** (parallel) when
+  (|b>c| + |c>b|) / (|a>b| + |a>c| + 1) is at least 0.65, otherwise **XOR** (choice); joins likewise.
+- The section draws the arrows, lists splits, joins and loops, and every arrow with its dependency
+  and why it was kept. Logs with more than 64 activities need an activity mapping or a case filter
+  first. The case filter applies.
+
+`GET /v1/event-logs/{log_id}/heuristics-net?dependency_threshold=&and_threshold=&min_occurrences=&all_connected=`
+plus the case-filter parameters. Agents with access to a shared log use `get_process_heuristics_net`.
+
+## Footprints
+
+**Footprints** (the footprint matrices of van der Aalst's *Process Mining*, PM4Py's footprints
+discovery and conformance, ProM's footprint comparison) classify every ordered pair of activities:
+`→` when the first is directly followed by the second somewhere and never the other way round, `←`
+for the mirror, `||` when both orders occur (or the model runs them in parallel) and `#` when
+neither does.
+
+The matrix is built twice: from the recorded cases, and from the process tree the model discovery
+drafts (the same draft exported as BPMN and PNML), over the activities that model shows. The
+**Footprints** section reports the share of cells that agree (footprint fitness), lists each
+ordering only the log has with how many cases took it, each ordering only the model allows, and
+start or end activities only the log has, and shows the full matrix with disagreeing cells marked.
+The *Model* choice is the discovery noise filter: at 0 the model keeps every ordering it can.
+
+Footprints compare order only: not frequency, timing or how often a loop repeats. A disagreement
+shows where the draft and the recorded cases differ, not which one is right.
+
+`GET /v1/event-logs/{log_id}/footprints?noise=&activities=` plus the case-filter parameters. Agents
+with access to a shared log use `get_process_footprints` (aggregates only).
+
 ## Temporal profile
 
 **Temporal profile** (as in PM4Py and ProM) learns the usual time between every ordered pair of

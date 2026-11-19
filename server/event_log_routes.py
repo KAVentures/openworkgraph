@@ -879,6 +879,29 @@ def event_log_temporal_profile(request: Request, log_id: str, case_type: str | N
                     cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/heuristics-net")
+def event_log_heuristics_net(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                             dependency_threshold: float = Query(default=0.5, ge=0, le=1),
+                             and_threshold: float = Query(default=0.65, ge=0, le=1),
+                             min_occurrences: int = Query(default=1, ge=1, le=1_000_000),
+                             all_connected: bool = Query(default=True),
+                             cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_heuristics_miner as heuristics
+    _require_dashboard(request)
+    return _respond(heuristics.heuristics_net, log_id, case_type, dependency_threshold=dependency_threshold,
+                    and_threshold=and_threshold, min_occurrences=min_occurrences, all_connected=all_connected,
+                    cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/footprints")
+def event_log_footprints(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                         noise: float = Query(default=0.2, ge=0, lt=1), activities: float = Query(default=1.0, gt=0, le=1),
+                         cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_footprints as footprints
+    _require_dashboard(request)
+    return _respond(footprints.footprints, log_id, case_type, noise=noise, activities=activities, cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/variants")
 def event_log_variants(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                        limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):

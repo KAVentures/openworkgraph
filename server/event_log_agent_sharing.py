@@ -353,6 +353,27 @@ def temporal_profile(log_id: str, case_type: str | None = None, zeta: float = 3.
     return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
 
 
+def heuristics_net(log_id: str, case_type: str | None = None, dependency_threshold: float = 0.5) -> dict[str, Any]:
+    """The heuristics-miner dependency graph with AND/XOR splits and loops (aggregates level)."""
+    require(log_id, "aggregates")
+    from . import event_log_heuristics_miner as heuristics
+    result = heuristics.heuristics_net(log_id, case_type,
+                                       dependency_threshold=max(0.0, min(float(dependency_threshold), 1.0)))
+    keep = ("case_notion", "cases", "parameters", "activities", "start", "end", "start_activities",
+            "end_activities", "edges", "splits", "joins", "loops", "coverage", "note")
+    return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
+
+
+def footprints(log_id: str, case_type: str | None = None, noise: float = 0.2) -> dict[str, Any]:
+    """Log and discovered-model footprint matrices and where they disagree (aggregates level)."""
+    require(log_id, "aggregates")
+    from . import event_log_footprints as fp
+    result = fp.footprints(log_id, case_type, noise=max(0.0, min(float(noise), 0.95)))
+    keep = ("case_notion", "cases", "activities", "settings", "conformance", "start_activities", "end_activities",
+            "differences", "differences_total", "matrix", "legend", "method", "caveat")
+    return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
+
+
 def slowest_cases(log_id: str, case_type: str | None = None, limit: int = 10) -> dict[str, Any]:
     require(log_id, "cases")
     from . import event_log_case_explain as case_explain
