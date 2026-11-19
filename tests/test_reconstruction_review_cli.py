@@ -1301,6 +1301,36 @@ class CompleteSourceCohortTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate source"):
             score_source_event_cohort(source, labels + labels)
 
+    def test_source_cohort_disagreements_remain_event_scoped_across_interleaving(self):
+        from server.reconstruction_review_cli import score_source_event_cohort
+        source = payload([
+            pair("case-A", "shared", ["a-before", "a-after"]),
+            pair("case-B", "shared", ["b-between"]),
+        ])
+        rows = {r["event_id"]: r for r in build_review_queue(source)["event_reviews"]}
+        labels = [
+            {"window": "current", "event_id": "a-before",
+             "true_resource_pairs": rows["a-before"]["candidate_resource_pairs"]},
+            {"window": "current", "event_id": "b-between", "true_resource_pairs": []},
+            {"window": "current", "event_id": "a-after",
+             "true_resource_pairs": rows["a-after"]["candidate_resource_pairs"]},
+            {"window": "current", "event_id": "missed",
+             "true_resource_pairs": rows["b-between"]["candidate_resource_pairs"]},
+        ]
+        score = score_source_event_cohort(source, labels)
+        self.assertEqual((score["true_positive_pairs"], score["false_positive_pairs"],
+                          score["false_negative_pairs"]), (2, 1, 1))
+        self.assertEqual(score["per_window_counts"]["current"]["events"], 4)
+        self.assertEqual(score["per_window_counts"]["current"]["negative_false_link_events"], 1)
+        disagreements = {r["event_id"]: r for r in score["event_disagreements"]}
+        self.assertEqual(set(disagreements), {"b-between", "missed"})
+        self.assertTrue(disagreements["b-between"]["explicit_negative_event"])
+        self.assertFalse(disagreements["b-between"]["prediction_missing"])
+        self.assertTrue(disagreements["missed"]["prediction_missing"])
+        self.assertEqual(len(disagreements["missed"]["false_negative_resource_pairs"]), 1)
+        self.assertTrue(score["event_disagreements_are_label_comparisons_not_confirmed_cases"])
+        self.assertFalse(score["held_out_verified"])
+
     def test_truncated_source_cannot_be_scored(self):
         from server.reconstruction_review_cli import score_source_event_cohort
         source = payload([pair("A", "F", ["e1"])])
