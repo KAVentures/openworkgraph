@@ -17,7 +17,7 @@ from server.m365_outlook_owg_receipt import ReceiptError
      {"generation": 2, "candidate_sha256": "b" * 64, "log_id": "log"}),
 ])
 def test_checkpoint_race_during_review_refuses_append(monkeypatch, before, after):
-    monkeypatch.delenv("OWG_M365_AUDIT_DIR", raising=False)
+    monkeypatch.setenv("OWG_M365_AUDIT_DIR", "/private/audit")
     digest = "c" * 64
     reviewed = {
         "status": "review_ready", "csv_sha256": digest,
@@ -40,12 +40,16 @@ def test_checkpoint_race_during_review_refuses_append(monkeypatch, before, after
     with (
         patch.object(transaction, "inspect_checkpoint", side_effect=[before, after]) as inspect,
         patch.object(transaction.cycle, "review", return_value=reviewed) as review,
+        patch.object(transaction, "record_operator_phase") as audit,
+        patch.object(transaction, "preflight_operator_audit") as audit_preflight,
         patch.object(transaction.cycle, "append") as append,
         patch.object(transaction.cycle, "handoff") as handoff,
         patch.object(transaction.cycle, "checkpoint_commit") as commit,
         pytest.raises(ReceiptError, match="Checkpoint changed during candidate review"),
     ):
         transaction.execute(**kwargs)
+    audit_preflight.assert_called_once()
+    audit.assert_not_called()
     assert inspect.call_count == 2
     review.assert_called_once()
     append.assert_not_called()
