@@ -335,6 +335,10 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
     if len(labels) != len(observed):
         raise ValueError("all surfaced review events require explicit labels")
     tp = fp = fn = ambiguous = 0
+    # Separately count explicitly negative (no true pair) events. These are
+    # interruption/rejection probes, not verified cross-case contamination.
+    negative_events = negative_events_with_false_links = 0
+    false_positive_events = false_negative_events = 0
     # Window-level counts reveal regressions hidden by aggregate accuracy.
     by_window: dict[str, dict[str, int]] = {}
     by_ambiguity: dict[str, dict[str, int]] = {
@@ -349,6 +353,11 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
         tp += correct
         fp += extra
         fn += missed
+        false_positive_events += bool(extra)
+        false_negative_events += bool(missed)
+        if not true_pairs:
+            negative_events += 1
+            negative_events_with_false_links += bool(extra)
         ambiguous += row["review_status"] == "ambiguous_multiple_pairs"
         if extra or missed:
             # Exact event/window provenance lets an authorized reviewer inspect
@@ -396,6 +405,14 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
         "unannotated_events": len(observed) - len(labels),
         "ambiguous_annotated_events": ambiguous,
         "true_positive_pairs": tp, "false_positive_pairs": fp, "false_negative_pairs": fn,
+        "false_positive_events": false_positive_events,
+        "false_negative_events": false_negative_events,
+        "explicit_negative_events": negative_events,
+        "explicit_negative_events_with_false_links": negative_events_with_false_links,
+        "explicit_negative_false_link_rate": (
+            negative_events_with_false_links / negative_events if negative_events else None
+        ),
+        "explicit_negative_metrics_are_reviewer_labels_not_held_out": True,
         "precision": precision, "recall": recall,
         "per_window_counts": {window: by_window[window] for window in sorted(by_window)},
         "per_window_metrics": per_window_metrics,
