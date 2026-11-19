@@ -2036,6 +2036,8 @@
         return [t.tag,Number(t.cases).toLocaleString(),Number(t.cases_with_note).toLocaleString(),String(t.last_tagged_at).slice(0,16).replace('T',' '),wrap];})));
     };
     getJSON(base()).then(r=>{if(generation===state.generation)render(r);}).catch(error=>list.replaceChildren(el('div',error.message,'muted')));
+    // Cases tagged from other sections (for example unusual cases) appear here without a reload.
+    box.addEventListener('owg-tags-changed',()=>{getJSON(base()).then(r=>{if(generation===state.generation)render(r);}).catch(()=>{});});
     add.onclick=async()=>{
       add.disabled=true;
       try{
@@ -4098,6 +4100,23 @@
           b.onclick=()=>{const field=document.querySelector('#owgCaseExplainId'),go=document.querySelector('#owgCaseExplainRun');if(!field||!go)return;field.value=id;go.click();document.querySelector('#owgCaseExplain').scrollIntoView({block:'start'});};
           tr.cells[5].appendChild(b);});
         out.appendChild(t);
+        // Tag the listed cases, so the "tag" case filter can focus every analysis on them.
+        const ids=r.top.map(c=>String(c.case_id));
+        const tagName=input('owgUnusualTagName','text');tagName.value='unusual';tagName.maxLength=60;tagName.autocomplete='off';
+        const tagRun=button('Tag these '+ids.length+' cases','secondary');tagRun.id='owgUnusualTag';
+        const tagMessage=el('div',null,'muted');tagMessage.id='owgUnusualTagMessage';tagMessage.setAttribute('role','status');tagMessage.setAttribute('aria-live','polite');
+        const tagRow=el('div',null,'row');tagRow.style.alignItems='end';tagRow.append(field('Tag',tagName),tagRun);
+        out.append(tagRow,tagMessage);
+        tagRun.onclick=async()=>{
+          if(!tagName.value.trim()){tagMessage.textContent='Enter a tag.';return;}
+          tagRun.disabled=true;
+          try{
+            const spec={tag:tagName.value.trim(),note:'listed as unusual',case_ids:ids.slice(0,1000)};if(state.caseType)spec.case_type=state.caseType;
+            const t2=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/case-tags',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+            document.querySelectorAll('#owgCaseTags').forEach(node=>node.dispatchEvent(new CustomEvent('owg-tags-changed')));
+            tagMessage.textContent='Tagged '+Number(t2.tagged).toLocaleString()+' cases “'+t2.tag+'”. Use the tag in the case filter to focus every analysis on them.';
+          }catch(error){tagMessage.textContent=error.message;}
+          finally{tagRun.disabled=false;}};
         out.appendChild(el('div',r.caveat,'muted'));
       }catch(error){statusLine.textContent=error.message;}
       finally{run.disabled=false;}};

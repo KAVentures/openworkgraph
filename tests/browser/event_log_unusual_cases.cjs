@@ -50,6 +50,9 @@ const path=require('node:path');
    assert(status.includes('Rare activity 1')&&status.includes('Rare path 1')&&status.includes('Unusually slow 1'),status);
    const cells=await page.locator('#owgUnusualResults tbody tr').first().locator('td').allTextContents();
    assert.equal(cells[0],'t30');assert(cells[2].includes('Rare activity: contains Escalate (1 cases)'),cells[2]);
+   await page.locator('#owgUnusualTag').click();
+   await page.locator('#owgUnusualTagMessage').filter({hasText:'Tagged 1 cases “unusual”.'}).waitFor();
+   await page.locator('#owgCaseTags').filter({hasText:'unusual'}).waitFor();
    await page.locator('#owgUnusualResults button[aria-label="Explain case t30"]').click();
    assert.equal(await page.locator('#owgCaseExplainId').inputValue(),'t30');
    await page.locator('#owgCaseExplainResult').filter({hasText:/\S/}).waitFor();
@@ -63,6 +66,6 @@ const path=require('node:path');
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgUnusual'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Unusual cases browser acceptance passed: the escalated case is found with its reasons, Explain opens it, the analysis navigator finds and focuses it, WCAG audit.');
+   console.log('Unusual cases browser acceptance passed: the escalated case is found with its reasons, Explain opens it, tagged for filtering, the analysis navigator finds and focuses it, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});
