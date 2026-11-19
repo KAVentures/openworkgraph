@@ -4874,7 +4874,7 @@
         const existing=new Set(metrics.map(m=>m.name));
         if(proposed.some(m=>existing.has(m.name)))throw new Error('A comparison metric name already exists. Choose a different base name.');
         // Validate the entire batch before mutation; no half-added comparisons.
-        metrics.push(...proposed);renderMetrics();invalidateMetricResult();invalidateMetricResult();invalidateMetricResult();invalidateMetricResult();
+        metrics.push(...proposed);renderMetrics();invalidateMetricResult();
         // Case metrics cannot be measured at the event level.
         level.value='cases';sync();
         measure1.value='avg:metric:'+proposed[proposed.length-1].name;measure2.value='';
@@ -4894,7 +4894,7 @@
         if(proposed.some(m=>existing.has(m.name)))
           throw new Error('An activity comparison metric name already exists. Choose a different base name.');
         // Validate the entire batch before mutation, including dependency order.
-        metrics.push(...proposed);renderMetrics();
+        metrics.push(...proposed);renderMetrics();invalidateMetricResult();
         level.value='cases';sync();
         measure1.value='avg:metric:'+proposed[2].name;measure2.value='';
         message.textContent='Added activity A, activity B, and signed B minus A metrics. Missing activity values remain unknown, never zero.';
@@ -4909,7 +4909,7 @@
         if(proposed.some(m=>existing.has(m.name)))
           throw new Error('An activity fraction metric name already exists. Choose a different base name.');
         // The numerator, denominator and typed division are one atomic addition.
-        metrics.push(...proposed);renderMetrics();
+        metrics.push(...proposed);renderMetrics();invalidateMetricResult();
         level.value='cases';sync();
         measure1.value='avg:metric:'+proposed[2].name;measure2.value='';
         message.textContent='Added selected activity total, whole-case total and their fraction. Missing values and zero denominators remain unknown; signed totals may produce ratios outside 0–1.';
