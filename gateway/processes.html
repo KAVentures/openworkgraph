@@ -2062,6 +2062,8 @@
                credential!==authorizedCredential||selected!==chosen||
                !$("handoffConsent").checked||!current?.process||
                current.archived||current.viewing_historical_revision||
+               chosen.archived||chosen.viewing_historical_revision||
+               current.process.workflow_id!==pinned.workflow_id||
                current.latest_revision!==pinned.revision||
                current.process.revision!==pinned.revision||
                current.process.content_sha256!==pinned.content_sha256||
