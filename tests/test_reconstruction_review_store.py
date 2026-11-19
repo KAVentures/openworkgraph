@@ -520,3 +520,18 @@ print("DELETED", flush=True)
             if child is not None and child.poll() is None:
                 child.kill()
                 child.communicate(timeout=5)
+
+
+def test_grant_revoked_during_atomic_replace_removes_saved_labels(local_store, monkeypatch):
+    """Changing history access during persistence must not leave review labels."""
+    grant = {"mode": "all_saved"}
+    original_replace = store.os.replace
+
+    def revoke_during_replace(src, dst):
+        original_replace(src, dst)
+        grant["mode"] = "none"
+
+    monkeypatch.setattr(store.os, "replace", revoke_during_replace)
+    with pytest.raises(PermissionError, match="consent or retention was revoked"):
+        store.save_reconstruction_review(grant, 1, _envelope())
+    assert not local_store.exists()
