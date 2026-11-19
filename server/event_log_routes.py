@@ -1004,6 +1004,17 @@ def event_log_case_alignment(request: Request, log_id: str, case_id: str = Query
     return _respond(aligned.case_alignment, log_id, case_id, case_type, noise=noise)
 
 
+@router.get("/v1/event-logs/{log_id}/model-change")
+def event_log_model_change(request: Request, log_id: str, split: str | None = Query(default=None, max_length=64),
+                           noise: float = Query(default=0.2, ge=0, lt=1),
+                           case_type: str | None = Query(default=None, max_length=200),
+                           cohort: dict = Depends(_case_filter)):
+    """How the discovered model differs before and after a date: orderings, activities and cross-fit."""
+    from . import event_log_model_change as change
+    _require_dashboard(request)
+    return _respond(change.model_change, log_id, case_type, split=split, noise=noise, cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/variants")
 def event_log_variants(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                        limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):

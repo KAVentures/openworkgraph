@@ -223,6 +223,14 @@ async def agent_brief(request: Request, log_id: str, sla_hours: float | None = Q
     return await _answer(sharing.brief, log_id, case_type, sla_hours)
 
 
+@router.get("/v1/process-intelligence/{log_id}/model-change")
+async def agent_model_change(request: Request, log_id: str, split: str | None = Query(default=None, max_length=64),
+                             noise: float = Query(default=0.2, ge=0, lt=1),
+                             case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.model_change, log_id, case_type, split, noise)
+
+
 @router.get("/v1/process-intelligence/{log_id}/signals")
 async def agent_signals(request: Request, log_id: str):
     _require_agent_access(request)

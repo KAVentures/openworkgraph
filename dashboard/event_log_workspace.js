@@ -18,6 +18,7 @@
   FILTERED.add('heuristics-net');
   FILTERED.add('footprints');
   FILTERED.add('model-quality');
+  FILTERED.add('model-change');
   FILTERED.add('funnel');
   FILTERED.add('unusual-cases');
   FILTERED.add('due-dates');
@@ -816,6 +817,7 @@
     results.appendChild(unusualCasesSection());
     results.appendChild(funnelSection(names));
     results.appendChild(modelQualitySection());
+    results.appendChild(modelChangeSection());
     results.appendChild(footprintsSection());
     results.appendChild(petriReplaySection());
     results.appendChild(temporalProfileSection());
@@ -3908,6 +3910,41 @@
         t.querySelector('tbody').querySelectorAll('tr').forEach((tr,i)=>{const bar=el('div');bar.setAttribute('aria-hidden','true');bar.style.cssText='height:4px;background:currentColor;opacity:.35;margin-top:4px;width:'+Math.round((r.steps[i].share_of_first_step||0)*100)+'%';tr.cells[1].appendChild(bar);});
         out.appendChild(t);
         out.appendChild(el('div',r.caveat,'muted'));
+      }catch(error){statusLine.textContent=error.message;}
+      finally{run.disabled=false;}};
+    return box;
+  }
+
+  function modelChangeSection(){
+    const box=section('Model change');box.id='owgModelChange';
+    box.appendChild(el('div','How the discovered model differs before and after a date: which activities now follow each other differently, which activities are new or gone, and how well each period\'s cases fit the other period\'s model.','muted'));
+    const split=input('owgModelChangeSplit','date');
+    const noise=select('owgModelChangeNoise',[['0.2','Leave out paths under 20% (default)'],['0','Keep every path'],['0.4','Leave out paths under 40%']]);
+    const run=button('Compare periods','secondary');run.id='owgModelChangeRun';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Split at (empty: median case start)',split),field('Models',noise),run);
+    const statusLine=el('div',null,'muted');statusLine.id='owgModelChangeStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgModelChangeResults';
+    box.append(row,statusLine,out);
+    const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
+    run.onclick=async()=>{
+      const generation=state.generation;run.disabled=true;statusLine.textContent='Discovering both periods…';out.replaceChildren();
+      try{
+        const params={noise:noise.value};if(split.value)params.split=split.value+'T00:00:00Z';
+        const r=await getJSON(logPath('model-change',params));
+        if(generation!==state.generation)return;
+        const c=r.cross_fit,drop=r.fitness_drop_on_earlier_model;
+        statusLine.textContent='Split at '+r.split.slice(0,10)+(r.split_chosen==='given'?'':' (median case start)')+': '+Number(r.periods.before.cases).toLocaleString()+' cases before, '+Number(r.periods.after.cases).toLocaleString()+' after. '+r.orderings.changed+' of '+r.orderings.pairs_compared+' activity orderings changed. Later cases fit the earlier model '+pct(c.after_cases_on_before_model.fitness)+', against '+pct(c.before_cases_on_before_model.fitness)+' for the earlier cases'+(drop!==null?(drop>0.02?' — the way the work runs changed.':' — little change in how the work runs.'):'.');
+        const a=r.activities;
+        if(a.only_before.length||a.only_after.length)out.appendChild(el('div',(a.only_after.length?'New after the split: '+a.only_after.join(', ')+'. ':'')+(a.only_before.length?'Gone after the split: '+a.only_before.join(', ')+'.':'')));
+        if(r.changes.length){out.appendChild(el('h4','Orderings that changed'));
+          out.appendChild(table(['Activity','Activity','Before','After'],r.changes.map(x=>[x.from,x.to,x.before,x.after])));}
+        out.appendChild(el('h4','Cross-fit'));
+        out.appendChild(table(['Cases','Model','Alignment fitness','Follow it exactly'],[
+          ['Before','Before',pct(c.before_cases_on_before_model.fitness),pct(c.before_cases_on_before_model.fitting_case_share)],
+          ['After','Before',pct(c.after_cases_on_before_model.fitness),pct(c.after_cases_on_before_model.fitting_case_share)],
+          ['After','After',pct(c.after_cases_on_after_model.fitness),pct(c.after_cases_on_after_model.fitting_case_share)],
+          ['Before','After',pct(c.before_cases_on_after_model.fitness),pct(c.before_cases_on_after_model.fitting_case_share)]]));
+        out.appendChild(el('div','→: the first is followed by the second; ←: the reverse; ||: both orders or in parallel; #: not directly related. '+r.caveat,'muted'));
       }catch(error){statusLine.textContent=error.message;}
       finally{run.disabled=false;}};
     return box;

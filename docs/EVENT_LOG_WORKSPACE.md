@@ -2253,6 +2253,25 @@ step.
 `GET /v1/event-logs/{log_id}/funnel?step=A&step=B&within_hours=24` plus the case-filter
 parameters. Agents with access to a shared log use `get_process_funnel` (aggregates only).
 
+## Model change
+
+**Model change** shows how the discovered process model differs before and after a date, as ProM's
+model comparison and Celonis's process comparison do; concept drift says *when* behaviour changed,
+this says *how*. Cases are split by when they started (by default at the median case start), a
+model is discovered for each period at the chosen noise level, and the section shows:
+
+- the pairs of activities whose ordering relation changed (→, ←, || or #, as in **Footprints**);
+- activities that only one period's model has;
+- **cross-fit**: each period's cases aligned on both models. When the later cases fit the earlier
+  model clearly worse than the earlier cases did, the way the work runs has changed.
+
+Each period needs at least 10 cases; a start-date case filter cannot be combined with the split.
+Both models are drafts from their own cases, and a change in how events are recorded looks the same
+as a change in the work.
+
+`GET /v1/event-logs/{log_id}/model-change?split=2024-03-01&noise=0.2` plus the other case-filter
+parameters. Agents use `get_process_model_change` (aggregates only).
+
 ## Model quality
 
 **Model quality** discovers the model at several noise levels (by default 0, 10%, 20%, 30% and 50%),

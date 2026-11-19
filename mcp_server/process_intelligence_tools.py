@@ -304,6 +304,19 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"case_id": case_id, "noise": float(noise), "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def get_process_model_change(log_id: str, split: str | None = None, noise: float = 0.2,
+                                 case_type: str | None = None) -> dict[str, Any]:
+        """How a shared log's discovered process model differs before and after a date (ISO; default: the median
+        case start): which activity orderings changed (footprint relations), which activities appear in only one
+        period, and how well each period's cases fit the other period's model. Use after concept drift to see what
+        changed. Drafts from recorded events, not causes. Aggregates only.
+        """
+        if isinstance(noise, bool) or not isinstance(noise, (int, float)) or not 0 <= noise < 1:
+            raise ToolError("noise must be a share from 0 up to (not including) 1")
+        return _get("get_process_model_change", f"/v1/process-intelligence/{_log(log_id)}/model-change",
+                    {"split": split, "noise": float(noise), "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_signals(log_id: str) -> dict[str, Any]:
         """The owner's signal rules on a shared log (KPI thresholds, case and compliance conditions) and their
         last evaluated state: triggered or not, the measured value or matching cases, and whether the owner
