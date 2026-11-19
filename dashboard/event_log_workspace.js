@@ -620,15 +620,29 @@
   // Save the cases matching a filter as a new saved log, to analyse or compare a slice on its own.
   function deriveSection(activityNames){
     const box=section('Save or export matching cases');box.id='owgEventLogDerive';
-    box.appendChild(el('div','Save matching cases as a new log or download their original events as a flat CSV. The CSV includes case IDs, activity names, timestamps and resources. Saved copies start without the source log’s activity mapping, saved filters, signals and quality reports.','muted'));
+    box.appendChild(el('div','Save matching cases as a new log or download their original events in CSV or XES. Saved copies start without the source log’s activity mapping, saved filters, signals and quality reports.','muted'));
     const filter=cohortFields('owgDeriveCohort','Cases to include',activityNames);
     const name=input('owgDeriveName','text');name.maxLength=120;name.autocomplete='off';
     const current=state.logs.find(l=>l.log_id===state.logId);name.value=((current&&current.name)||'Log')+' (subset)';
     const run=button('Save as new log','secondary');run.id='owgDeriveRun';
-    const download=button('Download matching cases as CSV','secondary');download.id='owgDeriveExport';
+    const formats=select('owgDeriveExportFormat',[['csv','CSV (exact interchange)'],['csv-review','CSV for spreadsheet review'],
+      ['xes','XES'],['xes-attributes','XES with retained attributes']]);
+    const download=button('Download matching cases','secondary');download.id='owgDeriveExport';
+    const formatNote=el('p',null,'muted');
+    function describeFormat(){
+      formatNote.textContent={
+        'csv':'Includes case IDs, activity names, timestamps and resources.',
+        'csv-review':'Changes formula-like cells for spreadsheet review. Use exact CSV for re-import.',
+        'xes':'Includes one trace per matching case with activity names, timestamps and resources.',
+        'xes-attributes':'Also includes retained trace and event attribute values. Use OCEL for timed object attributes and relationships.'
+      }[formats.value];
+    }
+    formats.onchange=describeFormat;describeFormat();
     const out=el('div');out.id='owgDeriveResult';out.setAttribute('role','status');
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('New log name',name),run);
-    box.append(filter.node,row,download,out);
+    const exportRow=el('div',null,'row');exportRow.style.alignItems='end';
+    exportRow.append(field('Matching case export format',formats),download);
+    box.append(filter.node,row,exportRow,formatNote,out);
     const generation=state.generation;
     function selectedCases(missingFilter){
       const cohort=filter.read();delete cohort.label;
@@ -637,17 +651,18 @@
       return state.caseType?{cohort,case_type:state.caseType}:{cohort};
     }
     download.onclick=async()=>{
-      const logId=state.logId;
+      const logId=state.logId,format=formats.value;
+      const extension=format==='csv-review'?'review.csv':format.startsWith('xes')?'xes':'csv';
       download.disabled=true;
       try{
         const spec=selectedCases('Choose which cases to export.');
         out.textContent='Preparing matching cases…';
-        const response=await api('/v1/event-logs/'+encodeURIComponent(logId)+'/export/matching-cases',{
+        const response=await api('/v1/event-logs/'+encodeURIComponent(logId)+'/export/matching-cases?'+new URLSearchParams({format}),{
           method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)});
         const blob=await response.blob();
         if(generation!==state.generation||!box.isConnected)return;
         const url=URL.createObjectURL(blob);
-        const link=el('a');link.href=url;link.download=logId+'-matching-cases.csv';
+        const link=el('a');link.href=url;link.download=logId+'-matching-cases.'+extension;
         document.body.appendChild(link);link.click();link.remove();
         setTimeout(()=>URL.revokeObjectURL(url),1000);
         out.textContent='Matching cases exported.';
