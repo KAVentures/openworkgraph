@@ -216,6 +216,13 @@ async def agent_case_alignment(request: Request, log_id: str, case_id: str = Que
     return await _answer(sharing.case_alignment, log_id, case_id, case_type, noise)
 
 
+@router.get("/v1/process-intelligence/{log_id}/brief")
+async def agent_brief(request: Request, log_id: str, sla_hours: float | None = Query(default=None, gt=0),
+                      case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.brief, log_id, case_type, sla_hours)
+
+
 @router.get("/v1/process-intelligence/{log_id}/signals")
 async def agent_signals(request: Request, log_id: str):
     _require_agent_access(request)
