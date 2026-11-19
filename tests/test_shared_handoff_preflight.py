@@ -26,7 +26,7 @@ def test_handoff_preflight_reads_fresh_authorized_process_without_upload():
     assert 'current.archived' in block
     assert 'current.review?.status!=="reviewed_design"' in block
     assert "lacks independent design review of this revision" in block
-    assert 'ticket!==handoffGeneration||identityTicket!==identityGeneration||credential!==authorizedCredential||selected!==chosen' in block
+    assert 'ticket!==handoffGeneration||identityTicket!==identityGeneration||\n               credential!==authorizedCredential||selected!==chosen' in block
     assert 'execution_authorized!==false' in block
     assert 'source_read_authorized!==false' in block
 
