@@ -125,7 +125,6 @@ def execute(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
     checked = cycle.review(candidate=Path(candidate), consent_local_read=True, **scope)
     # Only validated, digest-matched review evidence may enter the audit trail.
     _verified_review(checked, expected_review_csv_sha256)
-    audit("review", checked)
     # Refuse a stale predecessor BEFORE the first append. The checkpoint
     # commit still performs its authoritative exclusive-create CAS after
     # authenticated membership verification; this is only an early guard.
@@ -140,6 +139,9 @@ def execute(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
           or predecessor["candidate_sha256"] != expected_previous_candidate_sha256
           or predecessor["log_id"] != log_id):
         raise ReceiptError("Stale or different predecessor checkpoint; append refused")
+    # Only record review evidence after the checkpoint race guard passes.
+    # A stale review must not leave a misleading accepted-review audit entry.
+    audit("review", checked)
     shared = dict(**scope, log_id=log_id, confirm_log_id=confirm_log_id,
                   candidate=Path(candidate), csv_path=Path(csv_path),
                   receipt_file=Path(receipt_file), port=port, session=session)
