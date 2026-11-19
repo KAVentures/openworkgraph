@@ -20,6 +20,8 @@
   FILTERED.add('model-quality');
   FILTERED.add('funnel');
   FILTERED.add('unusual-cases');
+  FILTERED.add('due-dates');
+  FILTERED.add('next-steps');
   FILTERED.add('petri-net-replay');
   FILTERED.add('petri-net-alignments');
 
@@ -807,6 +809,8 @@
     results.appendChild(dottedSection());
     results.appendChild(spectrumSection());
     results.appendChild(heuristicsSection());
+    results.appendChild(pathExplorerSection());
+    results.appendChild(dueDatesSection(names));
     results.appendChild(unusualCasesSection());
     results.appendChild(funnelSection(names));
     results.appendChild(modelQualitySection());
@@ -3752,6 +3756,83 @@
         const more=document.createElement('details');more.appendChild(el('summary','All arrows'));
         more.appendChild(table(['From','To','Transitions','Dependency','Kept because'],arrows.map(e=>[e.from,e.to,Number(e.transition_count).toLocaleString(),String(e.dependency),({threshold:'above threshold',best_connection:'best connection',short_loop:'short loop'})[e.kept_by]||e.kept_by])));
         out.append(more,el('div',r.note,'muted'));
+      }catch(error){statusLine.textContent=error.message;}
+      finally{run.disabled=false;}};
+    return box;
+  }
+
+  function pathExplorerSection(){
+    const box=section('Path explorer');box.id='owgPaths';
+    box.appendChild(el('div','Walk the process one step at a time: see which activities come next, in how many cases and how fast, then choose one to go deeper.','muted'));
+    const anywhere=document.createElement('input');anywhere.type='checkbox';anywhere.id='owgPathsAnywhere';
+    const anywhereLabel=el('label',' From anywhere in the case, not only its start');anywhereLabel.prepend(anywhere);
+    const start=button('Explore from the start','secondary');start.id='owgPathsStart';
+    const back=button('Back one step','secondary');back.id='owgPathsBack';back.disabled=true;
+    const row=el('div',null,'row');row.style.alignItems='center';row.append(start,back,anywhereLabel);
+    const trail=el('div');trail.id='owgPathsTrail';
+    const statusLine=el('div',null,'muted');statusLine.id='owgPathsStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgPathsResults';
+    box.append(row,trail,statusLine,out);
+    let path=[];
+    const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
+    const hrs=x=>x===null||x===undefined?'—':(x<48?(Math.round(x*10)/10)+' h':(Math.round(x/24*10)/10)+' d');
+    const show=async()=>{
+      if(anywhere.checked&&!path.length){statusLine.textContent='Choose a first step from the start, then look for it anywhere.';anywhere.checked=false;}
+      const generation=state.generation;start.disabled=back.disabled=true;statusLine.textContent='Following cases…';out.replaceChildren();
+      trail.textContent=path.length?'Path: '+(anywhere.checked?'… → ':'(start) → ')+path.join(' → '):'';
+      try{
+        const r=await getJSON(logPath('next-steps',{step:path,anchor:anywhere.checked?'anywhere':'start'}));
+        if(generation!==state.generation)return;
+        statusLine.textContent=(path.length?Number(r.cases_at_point).toLocaleString()+' cases ('+pct(r.share_of_cases)+') reach this point'+(r.hours_to_reach_point?', in a median '+hrs(r.hours_to_reach_point.median):'')+'.':Number(r.cases).toLocaleString()+' cases start with these activities.')+(r.next_total>r.next.length?' Showing the '+r.next.length+' most common of '+r.next_total+' next steps.':'');
+        if(!r.next.length)return;
+        const t=table(['Next','Cases','Share','From previous (median)','To case end (median)',''],r.next.map(x=>[x.activity,Number(x.cases).toLocaleString(),pct(x.share),x.hours_from_previous?hrs(x.hours_from_previous.median):'—',x.hours_to_case_end?hrs(x.hours_to_case_end.median):'—','']));
+        t.querySelector('tbody').querySelectorAll('tr').forEach((tr,i)=>{const x=r.next[i];
+          const bar=el('div');bar.setAttribute('aria-hidden','true');bar.style.cssText='height:4px;background:currentColor;opacity:.35;margin-top:4px;width:'+Math.round((x.share||0)*100)+'%';tr.cells[2].appendChild(bar);
+          if(!x.is_end){const go=button('Go to '+x.activity,'secondary');go.onclick=()=>{path=[...path,x.activity];show();};tr.cells[5].appendChild(go);}});
+        out.appendChild(t);
+      }catch(error){statusLine.textContent=error.message;}
+      finally{start.disabled=false;back.disabled=!path.length;}};
+    start.onclick=()=>{path=[];anywhere.checked=false;show();};
+    back.onclick=()=>{path=path.slice(0,-1);if(!path.length)anywhere.checked=false;show();};
+    anywhere.onchange=()=>{if(path.length)show();else if(anywhere.checked){anywhere.checked=false;statusLine.textContent='Choose a first step from the start, then look for it anywhere.';}};
+    return box;
+  }
+
+  function dueDatesSection(activityNames){
+    const box=section('Due dates');box.id='owgDue';
+    box.appendChild(el('div','Did the step that matters (a payment, a shipment) happen by the date it was due? The due date comes from an attribute such as a payment due date column, or is a fixed number of days after the case started.','muted'));
+    const activity=select('owgDueActivity',activityNames.slice(0,500).map(a=>[a,a]));
+    if(activityNames.length)activity.value=activityNames[activityNames.length-1];
+    const mode=select('owgDueMode',[['attribute','From an attribute'],['days','Days after the case starts']]);
+    const attribute=input('owgDueAttribute','text','e.g. due_date');attribute.maxLength=200;attribute.autocomplete='off';
+    const days=input('owgDueDays','number');days.min='0.01';days.step='any';days.value='30';
+    const early=select('owgDueEarly',[['','No early window'],['3','Early if more than 3 days before'],['7','Early if more than 7 days before'],['14','Early if more than 14 days before']]);
+    const attributeField=field('Due-date attribute',attribute),daysField=field('Days after start',days);
+    const sync=()=>{attributeField.hidden=mode.value!=='attribute';daysField.hidden=mode.value!=='days';};mode.onchange=sync;sync();
+    const run=button('Check due dates','secondary');run.id='owgDueRun';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activity that is due',activity),field('Due date',mode),attributeField,daysField,field('Early window',early),run);
+    const statusLine=el('div',null,'muted');statusLine.id='owgDueStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgDueResults';
+    box.append(row,statusLine,out);
+    const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
+    const names={on_time:'On time',early:'Early',late:'Late',open_overdue:'Open, overdue',open_not_due:'Open, not yet due',no_due_date:'No due date',unreadable_due_date:'Unreadable due date'};
+    run.onclick=async()=>{
+      const params={due_activity:activity.value};
+      if(mode.value==='attribute'){if(!attribute.value.trim()){statusLine.textContent='Enter the name of the due-date attribute.';out.replaceChildren();return;}params.due_attribute=attribute.value.trim();}
+      else{if(!(Number(days.value)>0)){statusLine.textContent='Enter a number of days above 0.';out.replaceChildren();return;}params.due_days=days.value;}
+      if(early.value)params.early_days=early.value;
+      const generation=state.generation;run.disabled=true;statusLine.textContent='Checking due dates…';out.replaceChildren();
+      try{
+        const r=await getJSON(logPath('due-dates',params));
+        if(generation!==state.generation)return;
+        const g=r.groups;
+        statusLine.textContent=r.activity+' happened on time in '+pct(r.on_time_share_of_done)+' of the cases where it happened ('+Number(g.on_time).toLocaleString()+' on time, '+Number(g.late).toLocaleString()+' late'+(r.early_days?', '+Number(g.early).toLocaleString()+' early':'')+'). '+Number(g.open_overdue).toLocaleString()+' open cases are overdue.'+(r.days_late.median!==null?' Late cases were a median '+r.days_late.median+' days late.':'')+((g.no_due_date+g.unreadable_due_date)?' '+Number(g.no_due_date+g.unreadable_due_date).toLocaleString()+' cases have no readable due date.':'');
+        out.appendChild(table(['Group','Cases'],Object.keys(names).filter(k=>g[k]||k==='on_time'||k==='late').map(k=>[names[k],Number(g[k]).toLocaleString()])));
+        if(r.by_due_month.length>1){out.appendChild(el('h4','By due month'));
+          out.appendChild(table(['Due month','Due','On time','Late','Open, overdue','On time of done'],r.by_due_month.map(m=>[m.due_month,String(m.due),String(m.on_time),String(m.late),String(m.open_overdue),pct(m.on_time_share_of_done)])));}
+        if(r.most_late_cases&&r.most_late_cases.length){const more=document.createElement('details');more.appendChild(el('summary','Most late cases ('+r.most_late_cases.length+')'));
+          more.appendChild(table(['Case','Days late','Done','Due'],r.most_late_cases.map(c=>[String(c.case_id),String(c.days_late),c.done_at.replace('T',' ').slice(0,16),c.due_at.replace('T',' ').slice(0,16)])));out.appendChild(more);}
+        out.appendChild(el('div',r.caveat,'muted'));
       }catch(error){statusLine.textContent=error.message;}
       finally{run.disabled=false;}};
     return box;

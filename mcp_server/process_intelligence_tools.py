@@ -210,6 +210,44 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"limit": limit, "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def get_process_due_dates(log_id: str, activity: str, due_attribute: str | None = None,
+                              due_days: float | None = None, early_days: float | None = None,
+                              case_type: str | None = None) -> dict[str, Any]:
+        """Due-date adherence in a shared log: whether `activity` (e.g. a payment or shipment) happened by each
+        case's due date, taken from a case or event attribute (`due_attribute`) or a fixed number of days after
+        the case started (`due_days`); give exactly one. Returns on-time, early (with `early_days`), late and
+        still-open (overdue or not yet due) counts, days late, and a trend by due month. Case IDs of the latest
+        late cases only for logs shared at the cases level. Says how often deadlines were met, not why.
+        """
+        if not isinstance(activity, str) or not activity:
+            raise ToolError("activity must name an activity")
+        if (due_attribute is None) == (due_days is None):
+            raise ToolError("give either due_attribute or due_days")
+        for name, value in (("due_days", due_days), ("early_days", early_days)):
+            if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0):
+                raise ToolError(f"{name} must be a positive number of days")
+        return _get("get_process_due_dates", f"/v1/process-intelligence/{_log(log_id)}/due-dates",
+                    {"due_activity": activity, "due_attribute": due_attribute, "due_days": due_days,
+                     "early_days": early_days, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_process_next_steps(log_id: str, steps: list[str] | None = None, anchor: str = "start",
+                               case_type: str | None = None) -> dict[str, Any]:
+        """Walk a shared log's process one step at a time: after `steps` (empty = the start of the cases), which
+        activities come next, in how many cases, the hours from the last step to each (median, p90) and from each
+        to the case end, and how many cases end there. anchor="start" means cases that begin with `steps`;
+        anchor="anywhere" finds the first place the steps occur one right after another. Call again with a next
+        step appended to go deeper. Order and timing only, not why cases branch. Aggregates only.
+        """
+        steps = steps or []
+        if not isinstance(steps, list) or len(steps) > 30 or any(not isinstance(s, str) or not s for s in steps):
+            raise ToolError("steps must be up to 30 activity names")
+        if anchor not in ("start", "anywhere"):
+            raise ToolError("anchor must be start or anywhere")
+        return _get("get_process_next_steps", f"/v1/process-intelligence/{_log(log_id)}/next-steps",
+                    {"step": steps, "anchor": anchor, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_signals(log_id: str) -> dict[str, Any]:
         """The owner's signal rules on a shared log (KPI thresholds, case and compliance conditions) and their
         last evaluated state: triggered or not, the measured value or matching cases, and whether the owner
