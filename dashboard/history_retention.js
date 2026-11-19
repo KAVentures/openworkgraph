@@ -185,6 +185,9 @@
     const root=document.querySelector('#reconstructionWorkbench');if(!root)return;
     root.querySelector('#reconstructionEvents').replaceChildren();
     root.querySelector('#reconstructionMetrics').textContent='';
+    root.querySelector('#reconstructionCohortMetrics').textContent='';
+    root.querySelector('#reconstructionCohortLabels').value='';
+    root.querySelector('#reconstructionCohortScore').disabled=true;
     root.querySelector('#reconstructionProvenance')?.remove();
     root.querySelector('#reconstructionScore').disabled=true;
     root.querySelector('#reconstructionSave').disabled=true;
