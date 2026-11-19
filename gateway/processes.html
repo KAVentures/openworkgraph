@@ -2203,11 +2203,13 @@
         $("handoffReview").addEventListener("click",()=>run(async()=>{
           if($("handoffReview").disabled||!selected||!credential||!$("handoffConsent").checked||!inspectedHandoff)return;
           const ticket=handoffGeneration, chosen=selected, inspected=inspectedHandoff;
+          const identityTicket=identityGeneration, authorizedCredential=credential;
           $("handoffReview").disabled=true;
           $("handoffStatus").textContent="Rechecking current authorization and revision before review…";
           try {
             const current=await call("/v1/human/processes/"+encodeURIComponent(inspected.workflow_id));
-            if(ticket!==handoffGeneration||selected!==chosen||!$("handoffConsent").checked)return;
+            if(ticket!==handoffGeneration||identityTicket!==identityGeneration||
+               credential!==authorizedCredential||selected!==chosen||!$("handoffConsent").checked)return;
             if(!current?.process||current.archived||current.viewing_historical_revision||
                current.process.workflow_id!==inspected.workflow_id||
                current.process.revision!==inspected.revision||
