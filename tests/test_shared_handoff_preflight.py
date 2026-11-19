@@ -125,6 +125,8 @@ def test_review_submission_revalidates_inspected_handoff_before_post():
         "current.latest_revision!==pinned.revision",
         "current.process.content_sha256!==pinned.content_sha256",
         "record.content_sha256!==pinned.content_sha256",
+        "chosen.archived||chosen.viewing_historical_revision",
+        "current.process.workflow_id!==pinned.workflow_id",
     ):
         assert guard in block
     assert block.index("const current=await call(") < block.index('"/reviews"')
