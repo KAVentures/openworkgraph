@@ -1152,7 +1152,12 @@ Each role lists:
 - its activity mix (the top eight activities with their shares);
 - the activities that only this role performs.
 
-The 200 most active resources and the 200 most frequent activities are considered. Resources are
+The 200 most active resources and the 200 most frequent activities are considered.
+The view reports the number of events with resource labels, resources and
+activities represented out of the available totals. An activity is listed as
+exclusive only when every recorded resource performing it in the selected cases
+belongs to that role, including checks against resources excluded by the limit.
+Adjust **Role similarity threshold** and rerun to compare groupings. Resources are
 pseudonymous ("Resource 01", numbered by event count) unless names are asked for. Roles describe
 recorded work, not job titles, responsibilities or how well anyone worked. No duration, speed,
 ranking or score of any person is computed.

@@ -4215,30 +4215,45 @@
     const names=input('owgEventLogOrgNames','checkbox');namesLabel.append(names,document.createTextNode(' Show resource names from the log'));
     const run=button('Show handovers','secondary');run.id='owgEventLogOrgRun';
     const rolesRun=button('Discover roles','secondary');rolesRun.id='owgEventLogRolesRun';
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(namesLabel,run,rolesRun);
+    const threshold=input('owgEventLogRolesThreshold','number');threshold.value='0.65';threshold.min='0.01';threshold.max='0.99';threshold.step='0.01';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(namesLabel,run,field('Role similarity threshold',threshold),rolesRun);
     const out=el('div');out.id='owgEventLogOrgResults';out.setAttribute('role','status');
     box.append(row,out);
+    let request=0;
+    names.addEventListener('change',()=>{request++;out.replaceChildren();});
+    threshold.addEventListener('input',()=>{request++;out.replaceChildren();});
     rolesRun.onclick=async()=>{
-      const generation=state.generation;
+      const generation=state.generation,ticket=++request;
       try{
         rolesRun.disabled=true;out.replaceChildren(el('div','Grouping resources by the activities they perform…','muted'));
-        const r=await getJSON(logPath('roles',{names:names.checked?'shown':'pseudonymous'}));
-        if(generation!==state.generation)return;
-        if(!r.roles.length){out.replaceChildren(el('div','This log has no resource column values to analyse.','muted'));return;}
+        const cutoff=Number(threshold.value);
+        if(!(cutoff>0&&cutoff<1))throw new Error('Choose a role similarity threshold above 0 and below 1.');
+        const r=await getJSON(logPath('roles',{names:names.checked?'shown':'pseudonymous',threshold:cutoff}));
+        if(generation!==state.generation||ticket!==request)return;
+        if(!r.roles.length){
+          out.textContent=r.coverage.events_with_resource
+            ? 'No events fall within both the resource and activity analysis limits. Try a narrower case filter.'
+            : 'No events in the selected cases have a resource label.';
+          return;
+        }
         out.replaceChildren(
-          el('div',r.roles.length+' roles from '+r.coverage.resources+' resources whose activity mixes correlate at '+r.threshold+' or more.'+(r.coverage.resources_truncated?' Only the 200 most active resources are grouped.':''),'muted'),
+          el('p',r.roles.length+' roles from '+r.coverage.resources_represented+' resources whose activity mixes correlate at '+r.threshold+' or more.','muted'),
+          el('p','Coverage: '+Number(r.coverage.events_represented).toLocaleString()+' of '+
+            Number(r.coverage.events_with_resource).toLocaleString()+' events with a resource, '+
+            Number(r.coverage.resources_represented).toLocaleString()+' of '+Number(r.coverage.resources).toLocaleString()+' resources, and '+
+            Number(r.coverage.activities_represented).toLocaleString()+' of '+Number(r.coverage.activities).toLocaleString()+' activities.','muted'),
           table(['Role','Members','Events','Main activities','Only this role'],r.roles.map(x=>[x.role,x.members.join(', '),Number(x.events).toLocaleString(),
             x.activity_mix.slice(0,4).map(a=>a.activity+' '+Math.round(a.share*100)+'%').join(', '),x.exclusive_activities.join(', ')||'\u2014'])),
-          el('div',r.interpretation,'muted'));
-      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+          el('div','“Only this role” checks every resource label in the selected cases. '+r.interpretation,'muted'));
+      }catch(error){if(generation===state.generation&&ticket===request)out.textContent=error.message;}
       finally{rolesRun.disabled=false;}
     };
     run.onclick=async()=>{
-      const generation=state.generation;
+      const generation=state.generation,ticket=++request;
       try{
         out.replaceChildren(el('div','Reading resources…','muted'));
         const r=await getJSON(logPath('organization',{names:names.checked?'shown':'pseudonymous'}));
-        if(generation!==state.generation)return;
+        if(generation!==state.generation||ticket!==request)return;
         if(!r.resources.length){out.replaceChildren(el('div','This log has no resource column values to analyse.','muted'));return;}
         const m=r.activity_resource_matrix;
         out.replaceChildren(
@@ -4247,7 +4262,7 @@
           table(['Resources','Shared cases'],r.working_together.slice(0,25).map(w=>[w.resources.join(' + '),Number(w.shared_cases).toLocaleString()])),
           table(['Activity',...m.resources.slice(0,10)],m.activities.slice(0,15).map((a,i)=>[a,...m.events[i].slice(0,10).map(n=>n?Number(n).toLocaleString():'')])),
           el('div',r.interpretation+(r.working_together_excluded_cases?' '+r.working_together_excluded_cases+' cases with very many resources are left out of shared-case pairs.':''),'muted'));
-      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      }catch(error){if(generation===state.generation&&ticket===request)out.textContent=error.message;}
     };
     return box;
   }
