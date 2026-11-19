@@ -2332,6 +2332,14 @@ Celonis's happy-path views do. `GET /v1/event-logs/{log_id}/variant.pnml?rank=1`
 (`rank` 1 to 50 picks a less common path) with the share of cases that follow it in the
 `X-OWG-Path-Cases` header.
 
+**Alert me** keeps the net that was just replayed (uploaded, discovered or the most common path) as a
+**conformance signal**: it holds when the share of cases that do not fit that net is above the
+chosen limit, among all cases or those started in the last 7 or 30 days of the log. The signal keeps
+its own copy of the net (at most 60,000 characters), so later checks compare new cases with the same
+reference even after the discovered model changes. Signals can also use the alignment fitness
+(`metric: "alignment_fitness"`, usually with `operator: "below"`) and `minimum_cases`. Checking
+signals aligns each distinct path once; agents listing signals see the rule without the net.
+
 ### Step-by-step explanation (alignments)
 
 After a replay, **Explain each case step by step** aligns every variant on the same net (Adriansyah,

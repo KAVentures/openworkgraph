@@ -3981,11 +3981,16 @@
     const statusLine=el('div',null,'muted');statusLine.id='owgPetriStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgPetriResults';
     const aligned=el('div');aligned.id='owgPetriAlignResults';
-    box.append(row,statusLine,out,aligned);
+    const alertShare=select('owgPetriAlertShare',[['0.1','more than 10%'],['0.2','more than 20%'],['0.05','more than 5%'],['0.3','more than 30%']]);
+    const alertWindow=select('owgPetriAlertWindow',[['30','started in the last 30 days'],['7','started in the last 7 days'],['','in the whole log']]);
+    const alertSave=button('Alert me','secondary');alertSave.id='owgPetriAlertSave';alertSave.disabled=true;
+    const alertMessage=el('div',null,'muted');alertMessage.id='owgPetriAlertMessage';alertMessage.setAttribute('role','status');alertMessage.setAttribute('aria-live','polite');
+    const alertRow=el('div',null,'row');alertRow.style.alignItems='end';alertRow.append(field('Signal when cases not fitting this net are',alertShare),field('Among cases',alertWindow),alertSave);
+    box.append(row,statusLine,out,aligned,alertRow,alertMessage);
     const pct=x=>Math.round((x||0)*1000)/10+'%';
     let lastNet=null;
     const replay=async(body,label)=>{
-      const generation=state.generation;run.disabled=own.disabled=happy.disabled=align.disabled=true;aligned.replaceChildren();lastNet=null;statusLine.textContent='Replaying on '+label+'…';out.replaceChildren();
+      const generation=state.generation;run.disabled=own.disabled=happy.disabled=align.disabled=alertSave.disabled=true;aligned.replaceChildren();alertMessage.textContent='';lastNet=null;statusLine.textContent='Replaying on '+label+'…';out.replaceChildren();
       try{
         const r=await (await api(logPath('petri-net-replay',{}),{method:'POST',headers:{'Content-Type':'application/xml'},body})).json();
         if(generation!==state.generation)return;
@@ -4005,7 +4010,19 @@
           more.appendChild(table(['Variant','Cases','Fitness','Missing','Remaining'],r.non_fitting_variants.map(v=>[v.path.join(' → '),Number(v.cases).toLocaleString(),pct(v.fitness),String(v.missing_tokens),String(v.remaining_tokens)])));out.appendChild(more);}
         out.appendChild(el('div',r.caveat,'muted'));
       }catch(error){statusLine.textContent=error.message;}
-      finally{run.disabled=own.disabled=happy.disabled=false;align.disabled=!lastNet;}};
+      finally{run.disabled=own.disabled=happy.disabled=false;align.disabled=alertSave.disabled=!lastNet;}};
+    alertSave.onclick=async()=>{
+      if(!lastNet)return;
+      if(lastNet.body.length>60000){alertMessage.textContent='This net is too large to keep with a signal (over 60,000 characters).';return;}
+      const when={kind:'conformance',net_name:lastNet.label.slice(0,200),pnml:lastNet.body,metric:'non_fitting_share',operator:'above',threshold:Number(alertShare.value)};
+      if(alertWindow.value)when.recent_days=Number(alertWindow.value);
+      const sig={name:('Cases not fitting '+lastNet.label).slice(0,120),when};if(state.caseType)sig.case_type=state.caseType;
+      alertSave.disabled=true;
+      try{await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/signals',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sig)});
+        document.querySelectorAll('#owgEventLogSignals').forEach(node=>node.dispatchEvent(new CustomEvent('owg-signals-changed')));
+        alertMessage.textContent='Saved as a signal with a copy of this net. Use Check signals to evaluate it now; it keeps checking the same net as the log grows.';}
+      catch(error){alertMessage.textContent=error.message;}
+      finally{alertSave.disabled=!lastNet;}};
     const step=s=>s.move==='sync'?s.log:s.move==='log'?'+'+s.log+' (not in the net here)':'−'+s.model+' (skipped)';
     align.onclick=async()=>{
       if(!lastNet||lastNet.generation!==state.generation){align.disabled=true;return;}
@@ -6073,7 +6090,10 @@
       rules.replaceChildren(r.rules.length?table(['Signal','Rule',''],r.rules.map(rule=>{
         const del=button('Delete','secondary');del.setAttribute('aria-label','Delete signal '+rule.name);
         del.onclick=async()=>{try{await api(base()+'/'+encodeURIComponent(rule.rule_id)+'/delete',{method:'POST'});message.textContent='Signal deleted.';await refresh();}catch(error){message.textContent=error.message;}};
-        const w=rule.when;const text=w.kind==='kpi'?w.metric.replace(/_/g,' ')+' '+w.operator+' '+w.threshold:w.condition.replace(/_/g,' ')+(w.activity?' '+w.activity:'')+(w.seconds?' '+duration(w.seconds):'');
+        const w=rule.when;const text=w.kind==='kpi'?w.metric.replace(/_/g,' ')+' '+w.operator+' '+w.threshold
+          :w.kind==='conformance'?w.metric.replace(/_/g,' ')+' on '+w.net_name+' '+w.operator+' '+w.threshold+(w.recent_days?' (cases started in the last '+w.recent_days+' days)':'')
+          :w.kind==='compliance'?'compliance rule'+(w.rule&&w.rule.kind?': '+String(w.rule.kind).replace(/_/g,' '):'')
+          :w.condition.replace(/_/g,' ')+(w.activity?' '+w.activity:'')+(w.seconds?' '+duration(w.seconds):'');
         return [rule.name,text,del];})):el('div','No saved signals yet.','muted'));
       evaluate.disabled=!r.rules.length;
       await refreshInbox();
@@ -6097,8 +6117,8 @@
           el('div',r.triggered+' of '+r.signals.length+' signals hold now.','muted'),
           table(['Signal','Holds','Value or matching cases','New since last check','Example cases'],r.signals.map(sig=>[
             sig.name,sig.triggered?'yes':'no',
-            sig.when.kind==='kpi'?(sig.value===null?'—':sig.when.metric.endsWith('_rate')?pct(sig.value):sig.when.metric==='case_count'?Number(sig.value).toLocaleString():duration(sig.value)):Number(sig.matching_cases).toLocaleString()+' cases',
-            sig.when.kind==='kpi'?(sig.changed_since_last_evaluation?'changed':'—'):newCaseChange(sig),
+            sig.when.kind==='conformance'?(sig.value===null?'—':pct(sig.value)+' of '+Number(sig.conformance.cases).toLocaleString()+' cases'):sig.when.kind==='kpi'?(sig.value===null?'—':sig.when.metric.endsWith('_rate')?pct(sig.value):sig.when.metric==='case_count'?Number(sig.value).toLocaleString():duration(sig.value)):Number(sig.matching_cases).toLocaleString()+' cases',
+            (sig.when.kind==='kpi'||sig.when.kind==='conformance')?(sig.changed_since_last_evaluation?'changed':'—'):newCaseChange(sig),
             (sig.evidence_cases||[]).slice(0,5).map(c=>c.case_id+(sig.when.condition==='open_longer_than'&&c.age_since_first_event_seconds!==undefined?
               ' (age '+duration(c.age_since_first_event_seconds)+', idle '+duration(c.idle_since_last_event_seconds)+')':'')).join(', ')])),
           el('div',r.interpretation,'muted'));
@@ -6106,6 +6126,8 @@
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
     };
     refresh().catch(error=>{message.textContent=error.message;});
+    // Signals saved from other sections (e.g. a Petri net conformance alert) appear without a reload.
+    box.addEventListener('owg-signals-changed',()=>{refresh().catch(error=>{message.textContent=error.message;});});
     return box;
   }
 
