@@ -133,6 +133,7 @@
 
   // ------------------------------------------------------------------ Privacy tab
 
+  let refreshScheduleList = () => {};
   function ensurePrivacyTab() {
     if ($('#tab-privacy')) return;
     const tabs = $('.tabs'), main = $('main');
@@ -145,7 +146,7 @@
     tab.setAttribute('aria-selected', 'false');
     tab.textContent = 'Privacy';
     tabs.insertBefore(tab, $('#tab-settings') || null);
-    tab.addEventListener('click', () => { window.activateTab?.('privacy'); refreshPrivacy(); });
+    tab.addEventListener('click', () => { window.activateTab?.('privacy'); refreshPrivacy(); refreshScheduleList(); });
 
     const panel = document.createElement('section');
     panel.className = 'tabpanel';
@@ -1185,16 +1186,23 @@
         throw new Error('Enter a timezone and two different valid 24-hour quiet-hour times.');
       return windowSpec;
     };
+    let scheduleRefreshEpoch = 0;
     const refreshSchedules = async () => {
+      const epoch = ++scheduleRefreshEpoch;
       const state = await api('/v1/schedules').catch(() => null);
-      if (!scheduleList || !state) return;
+      if (!scheduleList || !state || epoch !== scheduleRefreshEpoch) return;
       scheduleList.replaceChildren();
       for (const item of state.schedules || []) {
         const line = document.createElement('div');
         line.className = 'pv-row pv-sub';
         const text = document.createElement('span');
+        const kindLabel = {retained_jira_profile: 'Jira profile ', event_log_signals: 'Signals for ',
+          event_log_report: 'Event log report for ', event_log_folder_feed: 'Folder feed '};
+        const partialLabel = {'partial:more_files_pending': 'more matching files need checking',
+          'partial:files_not_ready': 'some matching files are not ready',
+          'partial:more_files_pending_and_not_ready': 'more files need checking and some are not ready'};
         text.textContent = (item.kind === 'local_backup' ? 'Unencrypted local backup'
-          : (item.kind === 'retained_jira_profile' ? 'Jira profile ' : 'Signals for ') + item.target_id) +
+          : (kindLabel[item.kind] || 'Scheduled job ') + item.target_id) +
           ' · every ' + item.interval_minutes + ' min · ' + (item.enabled ? 'next ' + String(item.next_run_at || '').slice(0, 16).replace('T', ' ')
           : (item.paused_reason === 'signal_rules_changed_requires_reapproval' ? 'paused: saved signal rules changed'
             : (item.paused_reason ? 'paused after repeated failures' : 'paused'))) +
@@ -1204,7 +1212,7 @@
           (item.quiet_hours ? ' · quiet ' + item.quiet_hours.start + '–' + item.quiet_hours.end +
             ' ' + item.quiet_hours.timezone + (item.quiet_hours_active ? ' (now)' : '') : '') +
           (item.last_deferred_until ? ' · last quiet deferral until ' + String(item.last_deferred_until).slice(0, 16).replace('T',' ') + ' UTC' : '') +
-          (item.last_result ? ' · last: ' + item.last_result : '');
+          (item.last_result ? ' · last: ' + (partialLabel[item.last_result] || item.last_result) : '');
         const toggle = document.createElement('button');
         toggle.type = 'button'; toggle.className = 'secondary'; toggle.textContent = item.enabled ? 'Pause' : 'Resume';
         const rulesNeedReview = item.kind === 'event_log_signals' &&
@@ -1315,6 +1323,7 @@
       } catch (error) { if (scheduleStatus) scheduleStatus.textContent = error.message || 'Could not add the schedule.'; }
       refreshSchedules();
     };
+    refreshScheduleList = refreshSchedules;
     refreshSchedules();
     const semanticStatus = panel.querySelector('#pvSemanticStatus');
     const showSemantic = state => { if (semanticStatus && state) semanticStatus.textContent = state.enabled ? 'On: ' + state.model + ' at ' + state.base_url : 'Off.'; };

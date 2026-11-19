@@ -1353,7 +1353,10 @@ hand.
   deleted.
 - "Run every day" schedules the feed on the local scheduler (job kind
   `event_log_folder_feed`). Deleting the feed or the log removes the feed, its
-  file records and its schedule.
+  file records and its schedule. A scheduled run is labelled partial when
+  files are not ready or additional matching files still need checking; it
+  remains enabled and checks again at its normal interval. Partial status is
+  not evidence that the folder or the source system is fully up to date.
 
 | Route | Purpose |
 | --- | --- |

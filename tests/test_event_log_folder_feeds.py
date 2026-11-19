@@ -733,3 +733,57 @@ def test_unresolvable_home_is_a_readable_validation_error(monkeypatch):
 def test_invalid_surrogate_in_folder_is_rejected():
     with pytest.raises(workspace.EventLogWorkspaceError, match='absolute path'):
         feeds._folder('/tmp/\ud800')
+
+
+def test_scheduled_feed_reports_unsettled_content_as_partial_then_recovers(tmp_path):
+    log = _log()
+    folder = tmp_path / 'exports'
+    folder.mkdir()
+    feed = feeds.create(log, {'folder': str(folder), 'confirm_folder_reads': True})
+    path = _drop(folder, 'pending.csv', HEADER + 'o2;Create;03/03/2024 10:00\n', age=5)
+    assert feeds.run_scheduled(feed['feed_id']) == ('partial:files_not_ready', 0.0)
+    assert workspace.summary(log)['events'] == 2
+    old = time.time() - 600
+    os.utime(path, (old, old))
+    assert feeds.run_scheduled(feed['feed_id']) == ('succeeded:1_files_appended', 0.0)
+    assert workspace.summary(log)['events'] == 3
+
+
+def test_scheduler_keeps_partial_feed_enabled_and_records_partial_status(tmp_path):
+    log = _log()
+    folder = tmp_path / 'exports'
+    folder.mkdir()
+    feed = feeds.create(log, {'folder': str(folder), 'confirm_folder_reads': True})
+    _drop(folder, 'pending.csv', HEADER + 'o2;Create;03/03/2024 10:00\n', age=5)
+    job = scheduler.create('event_log_folder_feed', feed['feed_id'], interval_minutes=60, confirm_scheduled_runs=True)
+    stored = scheduler._read()
+    stored['schedules'][job['schedule_id']]['consecutive_failures'] = 4
+    scheduler._write(stored)
+    due = time.time() + 7200
+    assert scheduler.run_due(now=due)[0]['outcome'] == 'partial:files_not_ready'
+    saved = scheduler.status()['schedules'][0]
+    assert saved['schedule_id'] == job['schedule_id']
+    assert saved['last_result'] == 'partial:files_not_ready'
+    assert saved['enabled'] is True and saved['consecutive_failures'] == 0
+
+
+def test_scheduled_feed_reports_unchecked_backlog_at_batch_limit(tmp_path):
+    log = _log()
+    folder = tmp_path / 'exports'
+    folder.mkdir()
+    feed = feeds.create(log, {'folder': str(folder), 'confirm_folder_reads': True})
+    for i in range(feeds.MAX_FILES_PER_RUN + 1):
+        _drop(folder, f'{i:02}.csv', HEADER + f'o{i+10};Create;03/03/2024 10:00\n', age=1000-i)
+    assert feeds.run_scheduled(feed['feed_id']) == ('partial:more_files_pending', 0.0)
+    assert workspace.summary(log)['events'] == 22
+    assert feeds.run_scheduled(feed['feed_id']) == ('succeeded:1_files_appended', 0.0)
+    assert workspace.summary(log)['events'] == 23
+
+
+def test_scheduled_feed_discloses_both_partial_conditions(monkeypatch):
+    monkeypatch.setattr(feeds, 'run', lambda _feed_id: {
+        'files_failed': 0, 'files_unreadable': 0, 'files_previously_failed': 0,
+        'more_files_waiting': True, 'files_still_being_written': 1,
+        'files_appended': 20, 'files': [],
+    })
+    assert feeds.run_scheduled('feed_' + '0'*16) == ('partial:more_files_pending_and_not_ready', 0.0)
