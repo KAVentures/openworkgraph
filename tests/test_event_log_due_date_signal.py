@@ -52,3 +52,27 @@ def test_bad_due_date_rules():
                  {"activity": "Pay", "due_days": 3, "metric": "late_share", "threshold": 2}):
         with pytest.raises(EventLogWorkspaceError):
             signals.add_rule(log, {"name": "x", "when": {"kind": "due_date", **when}})
+
+
+def test_scorecard_by_month():
+    from io import BytesIO as _B
+    rows = ["case,activity,time,due"]
+    # January: 4 cases, 1 late. February: 4 cases, 3 late.
+    for month, late in (("01", 1), ("02", 3)):
+        for i in range(4):
+            due = f"2024-{month}-05" if i < late else f"2024-{month}-20"
+            rows += [f"m{month}c{i},Invoice,2024-{month}-01T09:00:00Z,{due}", f"m{month}c{i},Pay,2024-{month}-10T09:00:00Z,"]
+    log = workspace.import_log(_B("\n".join(rows).encode()), name="sc", source_format="csv", mapping=MAPPING)["log_id"]
+    signals.add_rule(log, {"name": "Late payments", "when": {
+        "kind": "due_date", "activity": "Pay", "due_attribute": "due", "metric": "late_share", "threshold": 0.5}})
+    signals.add_rule(log, {"name": "Slow", "when": {
+        "kind": "kpi", "metric": "median_throughput_seconds", "operator": "above", "threshold": 3600}})
+    signals.add_rule(log, {"name": "Has pay", "when": {"kind": "cases", "condition": "contains_activity", "activity": "Pay"}})
+    r = signals.scorecard(log)
+    assert r["months"] == ["2024-01", "2024-02"] and [row["name"] for row in r["rows"]] == ["Late payments", "Slow"]
+    late = r["rows"][0]["months"]
+    assert [(m["month"], m["value"], m["holds"]) for m in late] == [("2024-01", 0.25, False), ("2024-02", 0.75, True)]
+    assert all(m["holds"] for m in r["rows"][1]["months"])
+    assert signals.list_rules(log)["rules"][0]["last_evaluated_at"] is None   # read-only
+    with pytest.raises(EventLogWorkspaceError):
+        signals.scorecard(log, months=0)

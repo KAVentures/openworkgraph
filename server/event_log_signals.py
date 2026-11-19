@@ -374,4 +374,76 @@ def evaluate(log_id: str) -> dict[str, Any]:
     }
 
 
-__all__ = ["add_rule", "delete_rule", "evaluate", "list_rules"]
+MAX_SCORECARD_MONTHS = 24
+
+
+def _value(conn, log_id: str, when: Any) -> float | None:
+    """The measured value of a KPI, conformance or due-date condition over the cases in ``rc``/``sc``."""
+    if isinstance(when, KpiCondition):
+        return _measure(conn, when)
+    if isinstance(when, ConformanceCondition):
+        from . import event_log_alignments as alignments
+        paths = conn.execute("""SELECT path, count(*) FROM (
+              SELECT list(activity ORDER BY ts, event_id) AS path FROM rc GROUP BY case_id) GROUP BY path""").fetchall()
+        return alignments.conformance_of(when.pnml.encode(), paths)[when.metric] if paths else None
+    if isinstance(when, DueDateCondition):
+        from . import event_log_due_dates as due_dates
+        got = due_dates.collect(conn, log_id, when.activity, when.due_attribute, table="rc")
+        groups = due_dates.classify(got["cases_rows"], got["raw_due"], got["log_end"],
+                                    due_days=when.due_days, early_days=None)[0]
+        if when.metric == "open_overdue_cases":
+            return float(groups["open_overdue"])
+        done = groups["on_time"] + groups["early"] + groups["late"]
+        return round(groups["late"] / done, 4) if done else None
+    return None
+
+
+def scorecard(log_id: str, months: int = 6) -> dict[str, Any]:
+    """Each value-based signal (KPI, conformance, due date) month by month, by when cases started, with
+    whether its condition held that month. Read-only: it records no state and never changes a review."""
+    if isinstance(months, bool) or not isinstance(months, int) or not 1 <= months <= MAX_SCORECARD_MONTHS:
+        raise workspace.EventLogWorkspaceError(f"months must be 1 to {MAX_SCORECARD_MONTHS}")
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            info = workspace._check_log(conn, log_id)
+            rules = conn.execute("SELECT rule_id, definition FROM signal_rules WHERE log_id = ? "
+                                 "ORDER BY created_at, rule_id", [log_id]).fetchall()
+            rows, month_keys = [], None
+            for rule_id, definition in rules:
+                rule = SignalRule.model_validate_json(definition)
+                if not isinstance(rule.when, (KpiCondition, ConformanceCondition, DueDateCondition)):
+                    continue
+                notion = workspace._case_type(conn, log_id, rule.case_type)
+                conn.execute(f"CREATE OR REPLACE TEMP TABLE ce AS {workspace._CASE_EVENTS}", [log_id, notion])
+                cohorts.restrict(conn, cohorts.parse_cohort(rule.cohort), log_id, table="rc_all")
+                starts = conn.execute("""SELECT strftime(date_trunc('month', started), '%Y-%m') AS m, count(*)
+                    FROM (SELECT case_id, min(ts) AS started FROM rc_all GROUP BY case_id) GROUP BY m ORDER BY m""").fetchall()
+                keys = [m for m, _ in starts][-months:]
+                month_keys = sorted(set(month_keys or []) | set(keys))[-months:]
+                values = []
+                for month, cases in starts:
+                    if month not in keys:
+                        continue
+                    conn.execute("""CREATE OR REPLACE TEMP TABLE rc AS SELECT * FROM rc_all WHERE case_id IN (
+                        SELECT case_id FROM rc_all GROUP BY case_id
+                        HAVING strftime(date_trunc('month', min(ts)), '%Y-%m') = ?)""", [month])
+                    conn.execute(_PER_CASE)
+                    value = _value(conn, log_id, rule.when)
+                    holds = None if value is None else (value > rule.when.threshold if rule.when.operator == "above"
+                                                        else value < rule.when.threshold)
+                    values.append({"month": month, "cases": cases, "value": value, "holds": holds})
+                when = {k: v for k, v in rule.when.model_dump().items() if k != "pnml"}
+                rows.append({"rule_id": rule_id, "name": rule.name, "when": when, "months": values})
+        finally:
+            conn.close()
+    return {
+        "log": info, "months": month_keys or [], "rows": rows,
+        "skipped_kinds": "case-matching and compliance signals count matching cases now and are not shown by month",
+        "interpretation": ("Each month holds the cases that started in it. A month where a signal holds met the rule's "
+                           "condition then; recent months may still have open cases."),
+        **workspace.DESCRIPTIVE_ONLY,
+    }
+
+
+__all__ = ["add_rule", "delete_rule", "evaluate", "list_rules", "scorecard"]

@@ -541,6 +541,15 @@ def activity_profile(log_id: str, activity: str, case_type: str | None = None) -
     return {**ap.activity_profile(log_id, activity, case_type), "format": FORMAT, "log_id": log_id}
 
 
+def signal_scorecard(log_id: str, months: int = 6) -> dict[str, Any]:
+    """The owner's value-based signals month by month (aggregates level, read-only)."""
+    require(log_id, "aggregates")
+    from . import event_log_signals as sig
+    result = sig.scorecard(log_id, max(1, min(int(months), 24)))
+    return {"format": FORMAT, "log_id": log_id, "months": result["months"], "rows": result["rows"],
+            "interpretation": result["interpretation"]}
+
+
 def slowest_cases(log_id: str, case_type: str | None = None, limit: int = 10) -> dict[str, Any]:
     require(log_id, "cases")
     from . import event_log_case_explain as case_explain
