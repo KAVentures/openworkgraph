@@ -31,7 +31,8 @@ def _log():
 
 def _drop(folder: Path, name: str, text: str, age: float = 600):
     path = folder / name
-    path.write_text(text, encoding="utf-8")
+    # Preserve exact fixture bytes on Windows (text mode converts LF to CRLF).
+    path.write_bytes(text.encode("utf-8"))
     old = time.time() - age
     os.utime(path, (old, old))
     return path
@@ -132,6 +133,13 @@ with TestClient(app) as client:
     assert client.post(f"/v1/event-logs/feeds/{feed_id}/run", headers=owner).status_code == 403
     assert client.post(f"/v1/event-logs/feeds/{feed_id}/retry-failed", headers=bearer).status_code == 403
     assert client.post(f"/v1/event-logs/feeds/{feed_id}/retry-failed", headers=owner).status_code == 403
+    assert client.get(f"/v1/event-logs/feeds/{feed_id}/failures", headers=bearer).status_code == 403
+    failure_page = client.get(f"/v1/event-logs/feeds/{feed_id}/failures", headers=owner)
+    assert failure_page.status_code == 200 and failure_page.headers['cache-control'] == 'no-store'
+    assert failure_page.json()['failures'] == []
+    assert client.get(f"/v1/event-logs/feeds/{feed_id}/failures?after=bad", headers=owner).status_code == 422
+    assert client.post(f"/v1/event-logs/feeds/{feed_id}/retry-failed/" + '0'*64, headers=owner).status_code == 403
+    assert client.post(f"/v1/event-logs/feeds/{feed_id}/retry-failed/bad", headers=store).status_code == 422
     r = client.post(f"/v1/event-logs/feeds/{feed_id}/run", headers=store)
     assert r.status_code == 200 and r.json()["events_added"] == 1, r.text
     assert client.post(f"/v1/event-logs/feeds/{feed_id}/retry-failed", headers=store).json()["files_appended"] == 0
@@ -414,3 +422,92 @@ def test_retry_committed_before_quality_failure_is_not_replayed(tmp_path, monkey
     listed = feeds.feeds(log)['feeds'][0]
     assert (listed['files_appended'], listed['files_failed'], len(listed['recent_files'])) == (1, 0, 1)
     assert workspace.summary(log)['events'] == 3
+
+
+def test_failure_pages_are_bounded_distinct_and_scoped(tmp_path):
+    import json
+    log = _log()
+    folder = tmp_path / 'exports'
+    folder.mkdir()
+    feed = feeds.create(log, {'folder': str(folder), 'confirm_folder_reads': True})
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            for i in range(105):
+                conn.execute('INSERT INTO event_log_feed_files VALUES (?, ?, ?, ?, ?, now(), ?, ?)',
+                    [log, feed['feed_id'], f'{i}.csv', f'{i:064x}', 12, 'failed', json.dumps({'error': 'bad'})])
+            # An earlier failure with a later successful receipt is not outstanding.
+            conn.execute('INSERT INTO event_log_feed_files VALUES (?, ?, ?, ?, ?, now(), ?, ?)',
+                [log, feed['feed_id'], 'done.csv', f'{0:064x}', 12, 'appended', json.dumps({'added_events': 1})])
+        finally:
+            conn.close()
+    first = feeds.failures(feed['feed_id'])
+    second = feeds.failures(feed['feed_id'], after=first['next_after'])
+    third = feeds.failures(feed['feed_id'], after=second['next_after'])
+    assert [len(p['failures']) for p in (first, second, third)] == [50, 50, 4]
+    all_hashes = [f['sha256'] for p in (first, second, third) for f in p['failures']]
+    assert all_hashes == sorted(set(all_hashes)) and f'{0:064x}' not in all_hashes
+    assert third['next_after'] is None
+    with pytest.raises(workspace.EventLogWorkspaceError, match='cursor'):
+        feeds.failures(feed['feed_id'], after="' OR 1=1 --")
+    with pytest.raises(workspace.EventLogWorkspaceError, match='unknown feed'):
+        feeds.failures('feed_' + '0'*16)
+
+
+def test_retry_selected_hash_leaves_other_failures_and_new_files(tmp_path, monkeypatch):
+    import hashlib
+    log = _log()
+    folder = tmp_path / 'exports'
+    folder.mkdir()
+    feed = feeds.create(log, {'folder': str(folder), 'confirm_folder_reads': True})
+    first = HEADER + 'o2;Create;03/03/2024 10:00\n'
+    second = HEADER + 'o3;Create;04/03/2024 10:00\n'
+    _drop(folder, 'first.csv', first)
+    _drop(folder, 'second.csv', second)
+    append = workspace.append_log
+    def unavailable(*args, **kwargs):
+        raise workspace.EventLogWorkspaceError('temporary failure')
+    monkeypatch.setattr(workspace, 'append_log', unavailable)
+    assert feeds.run(feed['feed_id'])['files_failed'] == 2
+    monkeypatch.setattr(workspace, 'append_log', append)
+    _drop(folder, 'new.csv', HEADER + 'o4;Create;05/03/2024 10:00\n')
+    (folder / 'second.csv').rename(folder / 'renamed.csv')
+    wanted = hashlib.sha256(second.encode()).hexdigest()
+    result = feeds.run(feed['feed_id'], retry_failed=True, retry_hash=wanted)
+    assert (result['files_appended'], result['events_added']) == (1, 1)
+    assert result['files'][0]['name'] == 'renamed.csv'
+    remaining = feeds.failures(feed['feed_id'])['failures']
+    assert [item['sha256'] for item in remaining] == [hashlib.sha256(first.encode()).hexdigest()]
+    assert workspace.summary(log)['events'] == 3
+    assert feeds.run(feed['feed_id'], retry_failed=True, retry_hash=wanted)['files_appended'] == 0
+    with pytest.raises(workspace.EventLogWorkspaceError, match='SHA-256'):
+        feeds.run(feed['feed_id'], retry_failed=True, retry_hash='bad')
+    with pytest.raises(workspace.EventLogWorkspaceError, match='SHA-256'):
+        feeds.run(feed['feed_id'], retry_hash=wanted)
+
+
+def test_selected_retry_reaches_failure_beyond_bulk_run_limit(tmp_path):
+    import hashlib
+    import json
+    log = _log()
+    folder = tmp_path / 'exports'
+    folder.mkdir()
+    feed = feeds.create(log, {'folder': str(folder), 'confirm_folder_reads': True})
+    hashes = []
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            for i in range(feeds.MAX_FILES_PER_RUN + 5):
+                content = HEADER + f'o{i+10};Create;03/03/2024 10:00\n'
+                name = f'{i:02}.csv'
+                _drop(folder, name, content, age=1000-i)
+                sha = hashlib.sha256(content.encode()).hexdigest()
+                hashes.append(sha)
+                conn.execute('INSERT INTO event_log_feed_files VALUES (?, ?, ?, ?, ?, now(), ?, ?)',
+                    [log, feed['feed_id'], name, sha, len(content), 'failed', json.dumps({'error':'old failure'})])
+        finally:
+            conn.close()
+    result = feeds.run(feed['feed_id'], retry_failed=True, retry_hash=hashes[-1])
+    assert result['files_appended'] == 1 and result['files'][0]['name'] == '24.csv'
+    assert workspace.summary(log)['events'] == 3
+    assert len(feeds.failures(feed['feed_id'])['failures']) == 24
