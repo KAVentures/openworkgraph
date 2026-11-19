@@ -254,6 +254,28 @@ class ReviewedTransactionTests(unittest.TestCase):
                     if phase == "append":
                         handoff.assert_not_called()
 
+    def test_malformed_append_receipt_cannot_claim_verified_append_audit(self):
+        """Malformed post-append evidence requires manual reconciliation."""
+        if os.name != "posix":
+            self.skipTest("Private audit writer is POSIX-only")
+        reviewed = {"status": "review_ready", "csv_sha256": DIGEST,
+                    "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}
+        phases = []
+        with patch.dict(os.environ, {"OWG_M365_AUDIT_DIR": "/audit"}), \
+             patch.object(tx, "preflight_operator_audit"), \
+             patch.object(tx, "record_operator_phase",
+                          side_effect=lambda phase, result, **kwargs: phases.append(phase)), \
+             patch.object(tx, "inspect_checkpoint", return_value=None), \
+             patch.object(tx.cycle, "review", return_value=reviewed), \
+             patch.object(tx.cycle, "append", return_value={"status": "unknown"}), \
+             patch.object(tx.cycle, "handoff") as handoff, \
+             patch.object(tx.cycle, "checkpoint_commit") as checkpoint:
+            with self.assertRaises(UncertainReceipt):
+                tx.execute(**inputs())
+        self.assertEqual(phases, ["review"])
+        handoff.assert_not_called()
+        checkpoint.assert_not_called()
+
     def test_malformed_checkpoint_receipt_is_uncertain_not_success(self):
         reviewed = {"status": "review_ready", "csv_sha256": DIGEST,
                     "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}
