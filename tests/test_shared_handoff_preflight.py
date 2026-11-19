@@ -206,3 +206,24 @@ def test_successful_review_consumes_inspected_handoff_before_render():
     assert block.index('selected!==reviewSelection)return;') < block.index('resetHandoff("Review decision recorded.')
     assert block.index('resetHandoff("Review decision recorded.') < block.index('render(reviewResult);')
     assert block.index('render(reviewResult);') < block.index('note(\n            "Design review recorded')
+
+
+def test_handoff_recovery_reopens_latest_using_authenticated_gateway_and_requires_new_consent():
+    """Stale/denied handoff recovery must not reuse a previously inspected packet."""
+    html = PAGE.read_text(encoding="utf-8")
+    assert 'id="handoffRefresh" type="button"' in html
+    block = html.split('$("handoffRefresh").addEventListener("click",', 1)[1].split('$("handoffPacket").addEventListener', 1)[0]
+    assert 'if(!selected||!credential)' in block
+    assert 'const workflowId=selected.process?.workflow_id;' in block
+    assert '$("handoffConsent").checked=false;' in block
+    assert 'resetHandoff("Reopening latest authorized revision.' in block
+    assert 'await open(workflowId);' in block
+    assert 'identityTicket!==identityGeneration' in block
+    assert 'selected.process?.workflow_id!==workflowId' in block
+    assert block.index('resetHandoff(') < block.index('await open(workflowId);')
+    # open() performs a fresh authenticated API read and renders the returned revision.
+    opener = html.split('async function open(id, revision) {', 1)[1].split('function render(data)', 1)[0]
+    assert 'const data = await call(' in opener
+    assert '"/v1/human/processes/" + encodeURIComponent(id) + params' in opener
+    assert 'render(data);' in opener
+    assert 'if (openTicket !== processOpenGeneration || identityTicket !== identityGeneration) return;' in opener
