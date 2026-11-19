@@ -1187,3 +1187,51 @@ class CrossCaseContaminationScoringTests(unittest.TestCase):
         result = score_review_annotations(source, labels)
         self.assertEqual(result["false_positive_pairs"], 1)
         self.assertFalse(result["held_out_verified"])
+
+
+class IndependentlySpecifiedSyntheticTruthTests(unittest.TestCase):
+    """Fixed synthetic truth is specified before looking at proposed pair rows.
+
+    This is deliberately NOT a human-labeled or independently held-out cohort.
+    It protects the measurement path against self-labeling and silent bridges.
+    """
+
+    def test_interleaved_interruptions_score_false_links_by_session(self):
+        # The observation plan deliberately includes an interruption that
+        # falsely bridges both cases, plus a legitimate later resumption.
+        earlier = [{"session_started_at": "2026-11-01T09:00:00Z",
+                    "evidence_event_ids": ["a-before"]}]
+        source = payload([
+            pair("case-A", "file-A", ["a-return", "interruption"], earlier),
+            pair("case-B", "file-B", ["b-between", "interruption"]),
+        ])
+        # Ground truth is declared separately from the reconstruction output.
+        truth = {
+            ("earlier:2026-11-01T09:00:00+00:00", "a-before"): [
+                [["github", "issue", "case-A"], ["local_file", "file", "file-A"]]],
+            ("current", "a-return"): [
+                [["github", "issue", "case-A"], ["local_file", "file", "file-A"]]],
+            ("current", "b-between"): [
+                [["github", "issue", "case-B"], ["local_file", "file", "file-B"]]],
+            ("current", "interruption"): [],
+        }
+        queue = build_review_queue(source)
+        self.assertEqual({(r["window"], r["event_id"]) for r in queue["event_reviews"]},
+                         set(truth))
+        labels = [{"window": window, "event_id": event,
+                   "true_resource_pairs": pairs}
+                  for (window, event), pairs in truth.items()]
+        measured = score_review_annotations(source, labels)
+        self.assertEqual((measured["true_positive_pairs"],
+                          measured["false_positive_pairs"],
+                          measured["false_negative_pairs"]), (3, 2, 0))
+        self.assertAlmostEqual(measured["precision"], 3 / 5)
+        self.assertAlmostEqual(measured["recall"], 1.0)
+        self.assertAlmostEqual(measured["f1"], 0.75)
+        self.assertEqual([r["event_id"] for r in measured["event_disagreements"]],
+                         ["interruption"])
+        self.assertEqual(queue["ambiguous_event_reviews_count"], 1)
+        self.assertTrue(queue["no_case_identity_inferred"])
+        self.assertFalse(measured["held_out_verified"])
+        self.assertFalse(measured["cross_case_contamination_measured"])
+        self.assertFalse(measured["real_work_accuracy_claim"])
