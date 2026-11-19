@@ -101,7 +101,11 @@ def _number(value: Any) -> float | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        return float(value) if math.isfinite(value) else None
+        try:
+            x = float(value)
+        except OverflowError:
+            return None
+        return x if math.isfinite(x) else None
     if isinstance(value, str):
         try:
             x = float(value.strip())
@@ -176,7 +180,12 @@ def _numeric_best(rows, name, counts, parent, min_leaf):
             continue
         gain = parent - (n_yes * _gini(+yes) + n_no * _gini(+no)) / total
         if gain > best_gain + 1e-12:
-            best, best_gain = {"feature": name, "op": ">=", "value": round((x_prev + x) / 2, 6)}, gain
+            # The emitted threshold must reproduce the partition that won.
+            # Halving first avoids overflow. If rounding lands at the lower
+            # endpoint, the upper observed value is an exact boundary.
+            midpoint = x_prev / 2 + x / 2
+            threshold = midpoint if x_prev < midpoint <= x else x
+            best, best_gain = {"feature": name, "op": ">=", "value": threshold}, gain
     return best, best_gain
 
 
@@ -224,9 +233,14 @@ def _predict(node, sample) -> str:
 
 
 def _condition(split: dict[str, Any], holds: bool) -> dict[str, Any]:
-    if split["op"] == "==":
-        return {"attribute": split["feature"], "op": "==" if holds else "!=", "value": split["value"]}
-    return {"attribute": split["feature"], "op": ">=" if holds else "<", "value": split["value"]}
+    categorical = split["op"] == "=="
+    op = ("==" if holds else "!=") if categorical else (">=" if holds else "<")
+    condition = {"attribute": split["feature"], "op": op, "value": split["value"]}
+    if not holds:
+        condition["includes_missing"] = True
+        if not categorical:
+            condition["includes_non_numeric"] = True
+    return condition
 
 
 def _rules(node, path=()) -> list[dict[str, Any]]:
