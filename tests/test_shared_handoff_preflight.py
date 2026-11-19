@@ -67,7 +67,22 @@ def test_verified_handoff_only_navigates_to_existing_revision_review():
     assert 'id="revisionReview">Revision review' in html
     assert '$("handoffReview").disabled=true;' in html
     assert '$("handoffReview").disabled=false;' in html
-    assert 'if($("handoffReview").disabled||!selected||!credential||!$("handoffConsent").checked)return;' in html
+    assert 'if($("handoffReview").disabled||!selected||!credential||!$("handoffConsent").checked||!inspectedHandoff)return;' in html
     assert '$("revisionReview").scrollIntoView({block:"start"});' in html
     assert '$("comment").focus();' in html
     assert html.index('$("handoffReview").disabled=false;') > html.index('current.review?.status!=="reviewed_design"')
+
+
+def test_review_navigation_revalidates_fresh_authorized_revision_and_fails_closed():
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split('let inspectedHandoff=null;', 1)[1].split('$("handoffPacket").addEventListener', 1)[0]
+    assert 'inspectedHandoff=null;' in block
+    assert 'const current=await call("/v1/human/processes/"+encodeURIComponent(inspected.workflow_id));' in block
+    assert 'current.latest_revision!==inspected.revision' in block
+    assert 'current.process.content_sha256!==inspected.content_sha256' in block
+    assert 'current.review?.status!=="reviewed_design"' in block
+    assert 'ticket!==handoffGeneration||selected!==chosen||!$("handoffConsent").checked' in block
+    assert 'resetHandoff("REFUSED: Process changed or access/review was withdrawn.' in block
+    assert 'resetHandoff("REFUSED: Could not revalidate authorized revision.' in block
+    assert block.index('const current=await call(') < block.index('$("revisionReview").scrollIntoView')
+    assert 'inspectedHandoff={workflow_id:p.workflow_id,revision:p.revision,content_sha256:p.content_sha256};' in html
