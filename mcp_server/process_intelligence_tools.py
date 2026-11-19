@@ -139,6 +139,18 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"dependency_threshold": float(dependency_threshold), "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def get_process_footprints(log_id: str, noise: float = 0.2, case_type: str | None = None) -> dict[str, Any]:
+        """Footprint comparison of a shared log: for every pair of activities, whether one directly follows the
+        other (→), both orders occur (||) or neither (#), once from the recorded cases and once from the discovered
+        model, with the orderings only the log has (and how many cases took them) or only the model allows.
+        Ordering only, not frequency or timing. Aggregates only, no case IDs.
+        """
+        if isinstance(noise, bool) or not isinstance(noise, (int, float)) or not 0 <= noise < 1:
+            raise ToolError("noise must be a share from 0 up to (not including) 1")
+        return _get("get_process_footprints", f"/v1/process-intelligence/{_log(log_id)}/footprints",
+                    {"noise": float(noise), "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_signals(log_id: str) -> dict[str, Any]:
         """The owner's signal rules on a shared log (KPI thresholds, case and compliance conditions) and their
         last evaluated state: triggered or not, the measured value or matching cases, and whether the owner
