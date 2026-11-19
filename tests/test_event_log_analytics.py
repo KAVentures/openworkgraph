@@ -680,7 +680,7 @@ with TestClient(app) as client:
     first, second = imported("case-one"), imported("case-two")
     def analyze(log_id, headers):
         return client.post(f"/v1/event-logs/{log_id}/analysis-source-bound",
-                           json={}, headers=headers)
+                           json={"level": "cases", "measures": [{"fn": "cases"}]}, headers=headers)
     assert analyze(first, {}).status_code in (401, 403)
     a, b = analyze(first, session), analyze(second, session)
     assert a.status_code == b.status_code == 200, (a.text, b.text)
