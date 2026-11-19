@@ -208,6 +208,14 @@ async def agent_model_deviation_causes(request: Request, log_id: str, noise: flo
     return await _answer(sharing.model_deviation_causes, log_id, case_type, noise)
 
 
+@router.get("/v1/process-intelligence/{log_id}/case-alignment")
+async def agent_case_alignment(request: Request, log_id: str, case_id: str = Query(min_length=1, max_length=500),
+                               noise: float = Query(default=0.2, ge=0, lt=1),
+                               case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.case_alignment, log_id, case_id, case_type, noise)
+
+
 @router.get("/v1/process-intelligence/{log_id}/signals")
 async def agent_signals(request: Request, log_id: str):
     _require_agent_access(request)
