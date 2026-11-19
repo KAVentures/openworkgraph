@@ -994,6 +994,16 @@ async def event_log_petri_net_deviation_causes(request: Request, log_id: str,
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.get("/v1/event-logs/{log_id}/case-alignment")
+def event_log_case_alignment(request: Request, log_id: str, case_id: str = Query(min_length=1, max_length=500),
+                             noise: float = Query(default=0.2, ge=0, lt=1),
+                             case_type: str | None = Query(default=None, max_length=200)):
+    """How one case departs from the discovered model: its optimal alignment, extra and skipped steps."""
+    from . import event_log_alignments as aligned
+    _require_dashboard(request)
+    return _respond(aligned.case_alignment, log_id, case_id, case_type, noise=noise)
+
+
 @router.get("/v1/event-logs/{log_id}/variants")
 def event_log_variants(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                        limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):
@@ -1802,6 +1812,21 @@ def event_log_model_discovery_pnml(request: Request, log_id: str, case_type: str
     return Response(xml, media_type="application/xml", headers={
         "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-discovered.pnml"',
         "X-OWG-Petri-Net": f"places={meta['places']}; transitions={meta['transitions']}; silent={meta['silent_transitions']}"})
+
+
+@router.get("/v1/event-logs/{log_id}/variant.pnml")
+def event_log_variant_pnml(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                           rank: int = Query(default=1, ge=1, le=50), cohort: dict[str, Any] = Depends(_case_filter)):
+    """A sequence Petri net of the rank-th most common path (rank 1: the happy path)."""
+    from . import event_log_pnml as pnml
+    _require_dashboard(request)
+    try:
+        xml, meta = pnml.variant_pnml(log_id, case_type, rank=rank, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(xml, media_type="application/xml", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-path-{rank}.pnml"',
+        "X-OWG-Path-Cases": f"cases={meta['cases']}; share={meta['share']}"})
 
 
 @router.post("/v1/event-logs/{log_id}/model-discovery-draft")

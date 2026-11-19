@@ -119,3 +119,35 @@ def test_deviation_causes_find_the_attribute_that_goes_with_deviating_cases(tmp_
     # A net every case fits (B can be skipped silently) has nothing to explain.
     fits = al.deviation_causes(log, _sequence_net(["A", "B", "C"], silent_skip=1))
     assert fits["non_fitting_paths"] == 0 and fits["associations"] == []
+
+
+def test_happy_path_net_from_the_most_common_variant():
+    log = _import([["A", "B", "C"]] * 6 + [["A", "C"]] * 3 + [["A", "B", "B", "C"]])
+    xml, meta = pnml.variant_pnml(log)
+    assert meta["path"] == ["A", "B", "C"] and meta["cases"] == 6 and meta["share"] == 0.6
+    r = al.alignments(log, xml.encode())
+    assert r["fitness"]["fitting_cases"] == 6
+    assert {m["activity"]: m["cases"] for m in r["model_moves"]} == {"B": 3}
+    assert {m["activity"]: m["cases"] for m in r["log_moves"]} == {"B": 1}
+    second, meta2 = pnml.variant_pnml(log, rank=2)
+    assert meta2["path"] == ["A", "C"]
+    with pytest.raises(EventLogWorkspaceError, match="only 3 distinct paths"):
+        pnml.variant_pnml(log, rank=4)
+
+
+def test_one_case_aligned_on_the_discovered_or_given_net(tmp_path, monkeypatch):
+    from server import event_log_agent_sharing as sharing
+    log = _import([["A", "B", "C"]] * 8 + [["A", "C"]])
+    r = al.case_alignment(log, "c8", noise=0.5)
+    assert r["path"] == ["A", "C"] and r["aligned"] and r["skipped_steps"] == ["B"] and not r["fits"]
+    given = al.case_alignment(log, "c0", pnml=_sequence_net(["A", "C"]))
+    assert given["extra_steps"] == ["B"] and given["model"] == {"uploaded": True}
+    with pytest.raises(EventLogWorkspaceError, match="no case"):
+        al.case_alignment(log, "nope")
+    monkeypatch.setenv("WORKFLOW_OBSERVER_AUTH_DIR", str(tmp_path / "auth"))
+    (tmp_path / "auth").mkdir()
+    sharing.set_share(log, "aggregates")
+    with pytest.raises(sharing.NotShared):
+        sharing.case_alignment(log, "c8")
+    sharing.set_share(log, "cases")
+    assert sharing.case_alignment(log, "c8", noise=0.5)["skipped_steps"] == ["B"]

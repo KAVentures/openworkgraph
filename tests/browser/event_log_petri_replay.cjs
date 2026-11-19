@@ -76,9 +76,13 @@ const path=require('node:path');
    await page.locator('#owgPetriStatus').filter({hasText:'DOCTYPE'}).waitFor();
    assert.equal(await page.locator('#owgPetriAlign').isDisabled(),true);
    assert.equal(await page.locator('#owgPetriAlignResults').textContent(),'');
+   // The most common path (Register, Check, Pay, Close; 24 of 30 cases) as the reference model.
+   await page.locator('#owgPetriHappy').click();
+   await page.locator('#owgPetriStatus').filter({hasText:'on the most common path (followed by 80% of cases): 24 of 30 cases'}).waitFor();
+   assert.equal(await page.locator('#owgPetriAlign').isDisabled(),false);
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgPetri'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Petri net replay browser acceptance passed: discovered net fits, uploaded strict net shows missing and remaining tokens, alignments name the skipped step, deviation root causes, unsafe XML refused, WCAG audit.');
+   console.log('Petri net replay browser acceptance passed: discovered net fits, uploaded strict net shows missing and remaining tokens, alignments name the skipped step, deviation root causes, unsafe XML refused, most common path as reference, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});

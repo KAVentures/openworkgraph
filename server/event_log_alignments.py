@@ -253,4 +253,46 @@ def deviation_causes(log_id: str, pnml: bytes, case_type: str | None = None, *,
                        "extra or rare step often deviates because of that step.")}
 
 
-__all__ = ["alignments", "deviation_causes", "FORMAT"]
+def case_alignment(log_id: str, case_id: str, case_type: str | None = None, *, noise: float = 0.2,
+                   pnml: bytes | None = None) -> dict[str, Any]:
+    """How one case departs from a net: the discovered net at ``noise`` unless a PNML net is given."""
+    from . import event_log_pnml as pnml_export
+    if not isinstance(case_id, str) or not case_id or len(case_id) > 500:
+        raise EventLogWorkspaceError("give a case ID")
+    meta: dict[str, Any] = {}
+    if pnml is None:
+        if isinstance(noise, bool) or not isinstance(noise, (int, float)) or not 0 <= noise < 1:
+            raise EventLogWorkspaceError("noise must be a share from 0 up to 1")
+        xml, meta = pnml_export.discovered_pnml(log_id, case_type, noise=float(noise))
+        pnml = xml.encode()
+    net = parse_pnml(pnml)
+    labels = {label for label in net["transitions"].values() if label is not None}
+
+    def run(conn):
+        return {"path": conn.execute("SELECT list(activity ORDER BY ts, event_id) FROM ce WHERE case_id = ?",
+                                     [case_id]).fetchone()[0]}
+
+    path = workspace._query(log_id, case_type, run)["path"]
+    if not path:
+        raise EventLogWorkspaceError("no case with that ID in this log")
+    if len(path) > MAX_TRACE_LENGTH:
+        raise EventLogWorkspaceError(f"the case has more than {MAX_TRACE_LENGTH} events")
+    empty, _ = _align(net, (), labels, MAX_STATES_PER_VARIANT)
+    if empty is None or empty["cost"] is None:
+        raise EventLogWorkspaceError("the net cannot reach its final marking from its initial marking")
+    result, _ = _align(net, tuple(path), labels, MAX_STATES_PER_VARIANT * 5)
+    base = {"format": FORMAT + "+case", "log_id": log_id, "case_id": case_id, "path": list(path),
+            "model": {"noise": noise} if meta else {"uploaded": True},
+            "process_model_sha256": meta.get("process_model_sha256")}
+    if result is None or result["cost"] is None:
+        return {**base, "aligned": False, "note": "the search limit was reached before an alignment was found"}
+    steps = [{"log": s[0], "model": s[1], "move": s[2]} for s in result["steps"] if s[2] != SILENT]
+    worst = len(path) + empty["cost"]
+    return {**base, "aligned": True, "cost": result["cost"], "fits": result["cost"] == 0,
+            "fitness": round(1 - result["cost"] / worst, 4) if worst else 1.0,
+            "extra_steps": [s["log"] for s in steps if s["move"] == LOG],
+            "skipped_steps": [s["model"] for s in steps if s["move"] == MODEL],
+            "alignment": steps}
+
+
+__all__ = ["alignments", "deviation_causes", "case_alignment", "FORMAT"]

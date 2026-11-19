@@ -277,6 +277,20 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"noise": float(noise), "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def align_process_case(log_id: str, case_id: str, noise: float = 0.2, case_type: str | None = None) -> dict[str, Any]:
+        """How one case of a shared log departs from its discovered process model: the optimal alignment step by
+        step, the steps it did that the model does not allow there and the steps the model requires that it
+        skipped, with its alignment fitness. Needs a log shared at the cases level; pair with
+        explain_process_case for timing. A deviation is a difference from a draft model, not an error.
+        """
+        if not isinstance(case_id, str) or not case_id:
+            raise ToolError("case_id must be a case ID")
+        if isinstance(noise, bool) or not isinstance(noise, (int, float)) or not 0 <= noise < 1:
+            raise ToolError("noise must be a share from 0 up to (not including) 1")
+        return _get("align_process_case", f"/v1/process-intelligence/{_log(log_id)}/case-alignment",
+                    {"case_id": case_id, "noise": float(noise), "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_signals(log_id: str) -> dict[str, Any]:
         """The owner's signal rules on a shared log (KPI thresholds, case and compliance conditions) and their
         last evaluated state: triggered or not, the measured value or matching cases, and whether the owner

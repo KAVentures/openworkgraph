@@ -24,6 +24,7 @@
   FILTERED.add('next-steps');
   FILTERED.add('petri-net-replay');
   FILTERED.add('petri-net-alignments');
+  FILTERED.add('variant.pnml');
   FILTERED.add('petri-net-deviation-causes');
 
   const el=(tag,text,cls)=>{
@@ -1757,7 +1758,14 @@
         if(r.repeated_activities.length)lines.push(el('div','Repeated: '+r.repeated_activities.map(a=>a.activity+' ×'+a.times).join(', ')+'.'));
         if(r.uncommon_activities.length)lines.push(el('div','Uncommon steps (in under 10% of cases): '+r.uncommon_activities.join(', ')+'.'));
         const rows=r.gaps.map(g=>[g.from+' → '+g.to,duration(g.gap_seconds),g.typical_gap_seconds===null?'too few cases':duration(g.typical_gap_seconds),g.excess_seconds>0?'+'+duration(g.excess_seconds):'—']);
-        out.replaceChildren(...lines,table(['Step','This case','Typical (median)','Above typical'],rows),el('div',r.interpretation,'muted'));
+        const model=el('div',null,'muted');model.id='owgCaseExplainModel';
+        out.replaceChildren(...lines,model,table(['Step','This case','Typical (median)','Above typical'],rows),el('div',r.interpretation,'muted'));
+        const q=new URLSearchParams({case_id:id,noise:'0.2'});if(state.caseType)q.set('case_type',state.caseType);
+        getJSON('/v1/event-logs/'+encodeURIComponent(state.logId)+'/case-alignment?'+q).then(a=>{
+          if(generation!==state.generation||!a.aligned)return;
+          const parts=[];if(a.skipped_steps.length)parts.push('skipped '+a.skipped_steps.join(', '));if(a.extra_steps.length)parts.push('did '+a.extra_steps.join(', ')+' where the model does not allow it');
+          model.textContent='Against the discovered model: '+(a.fits?'this case follows it exactly.':parts.join('; ')+' (alignment fitness '+pct(a.fitness)+').');
+        }).catch(()=>{});
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
       finally{run.disabled=false;}
     };
@@ -3967,8 +3975,9 @@
     const file=input('owgPetriFile','file');file.accept='.pnml,application/xml,text/xml';
     const run=button('Replay on this net','secondary');run.id='owgPetriRun';
     const own=button('Replay on the discovered net','secondary');own.id='owgPetriDiscovered';
+    const happy=button('Check against the most common path','secondary');happy.id='owgPetriHappy';
     const align=button('Explain each case step by step','secondary');align.id='owgPetriAlign';align.disabled=true;
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Petri net (.pnml)',file),run,own,align);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Petri net (.pnml)',file),run,own,happy,align);
     const statusLine=el('div',null,'muted');statusLine.id='owgPetriStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgPetriResults';
     const aligned=el('div');aligned.id='owgPetriAlignResults';
@@ -3976,7 +3985,7 @@
     const pct=x=>Math.round((x||0)*1000)/10+'%';
     let lastNet=null;
     const replay=async(body,label)=>{
-      const generation=state.generation;run.disabled=own.disabled=align.disabled=true;aligned.replaceChildren();lastNet=null;statusLine.textContent='Replaying on '+label+'…';out.replaceChildren();
+      const generation=state.generation;run.disabled=own.disabled=happy.disabled=align.disabled=true;aligned.replaceChildren();lastNet=null;statusLine.textContent='Replaying on '+label+'…';out.replaceChildren();
       try{
         const r=await (await api(logPath('petri-net-replay',{}),{method:'POST',headers:{'Content-Type':'application/xml'},body})).json();
         if(generation!==state.generation)return;
@@ -3996,7 +4005,7 @@
           more.appendChild(table(['Variant','Cases','Fitness','Missing','Remaining'],r.non_fitting_variants.map(v=>[v.path.join(' → '),Number(v.cases).toLocaleString(),pct(v.fitness),String(v.missing_tokens),String(v.remaining_tokens)])));out.appendChild(more);}
         out.appendChild(el('div',r.caveat,'muted'));
       }catch(error){statusLine.textContent=error.message;}
-      finally{run.disabled=own.disabled=false;align.disabled=!lastNet;}};
+      finally{run.disabled=own.disabled=happy.disabled=false;align.disabled=!lastNet;}};
     const step=s=>s.move==='sync'?s.log:s.move==='log'?'+'+s.log+' (not in the net here)':'−'+s.model+' (skipped)';
     align.onclick=async()=>{
       if(!lastNet||lastNet.generation!==state.generation){align.disabled=true;return;}
@@ -4038,6 +4047,11 @@
     run.onclick=async()=>{const chosen=file.files&&file.files[0];if(!chosen){statusLine.textContent='Choose a .pnml file first.';return;}
       if(chosen.size>2*1024*1024){statusLine.textContent='The Petri net file is larger than 2 MB.';return;}
       await replay(await chosen.text(),chosen.name);};
+    happy.onclick=async()=>{
+      try{statusLine.textContent='Building the most common path…';const response=await api(logPath('variant.pnml',{rank:'1'}));
+        const share=/share=([0-9.]+)/.exec(response.headers.get('X-OWG-Path-Cases')||'');
+        await replay(await response.text(),'the most common path'+(share?' (followed by '+Math.round(Number(share[1])*1000)/10+'% of cases)':''));}
+      catch(error){statusLine.textContent=error.message;}};
     own.onclick=async()=>{
       try{statusLine.textContent='Discovering…';const xml=await (await api(logPath('model-discovery.pnml',{noise:'0'}))).text();await replay(xml,'the discovered net (every path kept)');}
       catch(error){statusLine.textContent=error.message;}};

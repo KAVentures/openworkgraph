@@ -2325,6 +2325,13 @@ problems in nets with duplicate labels or long silent paths.
 `POST /v1/event-logs/{log_id}/petri-net-replay` with the PNML file as the body, plus the
 case-filter parameters.
 
+**Check against the most common path** builds a sequence net of the most common path (the "happy
+path") and runs the same replay on it, so fitness, precision, the step-by-step explanation and
+**What goes with these deviations?** all compare cases with the usual way the work is done, as
+Celonis's happy-path views do. `GET /v1/event-logs/{log_id}/variant.pnml?rank=1` returns that net
+(`rank` 1 to 50 picks a less common path) with the share of cases that follow it in the
+`X-OWG-Path-Cases` header.
+
 ### Step-by-step explanation (alignments)
 
 After a replay, **Explain each case step by step** aligns every variant on the same net (Adriansyah,
@@ -2352,6 +2359,11 @@ is shown.
 case-filter parameters. The net is not stored.
 Agents with access to a shared log use `get_process_deviations`, which aligns the cases on the
 discovered net at a chosen noise level (aggregates only, no case IDs).
+
+**Explain a case** also aligns the chosen case on the discovered model (noise 20%) and says what it
+skipped and which steps it did where the model does not allow them.
+`GET /v1/event-logs/{log_id}/case-alignment?case_id=…&noise=0.2`; agents with cases-level access use
+`align_process_case`.
 
 ### What goes with the deviations
 
