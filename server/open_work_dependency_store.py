@@ -59,6 +59,13 @@ def _connect(path: str) -> sqlite3.Connection:
         raise ValueError("unsafe dependency database rollback journal")
     db = sqlite3.connect(str(p), timeout=5)
     db.execute("PRAGMA busy_timeout=5000")
+    # Deletion and grant revocation must erase SQLite free-page payloads, not
+    # merely hide rows from SELECT. Enable before creating or reading records;
+    # fail closed if an existing database cannot honor this guarantee.
+    db.execute("PRAGMA secure_delete=ON")
+    if db.execute("PRAGMA secure_delete").fetchone()[0] != 1:
+        db.close()
+        raise ValueError("secure dependency deletion unavailable")
     if db.execute("PRAGMA journal_mode").fetchone()[0].lower() != "delete":
         db.close()
         raise ValueError("unsupported dependency database journal mode")
