@@ -3960,7 +3960,7 @@
     box.appendChild(el('div','Case figures by one or two dimensions, like a pivot table: choose what goes in the rows and, optionally, the columns. Less common values are grouped as (other); cells with fewer than 5 cases are marked *.','muted'));
     const builtIn=[['start_month','Month the case started'],['start_weekday','Weekday the case started'],['start_activity','First activity'],['end_activity','Last activity']];
     const rowsPick=select('owgBreakdownRows',builtIn),colsPick=select('owgBreakdownColumns',[['','(none)'],...builtIn]);colsPick.value='end_activity';
-    const measures=[['cases','Cases'],['share','Share of cases'],['median_hours','Median duration'],['p90_hours','90th percentile duration'],['rework_rate','Rework rate'],['events_per_case','Events per case'],['with_activity_share','Share doing an activity']];
+    const measures=[['cases','Cases'],['share','Share of cases'],['median_hours','Median duration'],['p90_hours','90th percentile duration'],['rework_rate','Share of cases with rework'],['events_per_case','Events per case'],['with_activity_share','Share doing an activity']];
     const measurePick=select('owgBreakdownMeasure',measures);
     const activityPick=select('owgBreakdownActivity',activityNames.slice(0,500).map(a=>[a,a]));
     const activityField=field('Activity',activityPick);activityField.hidden=true;
