@@ -772,3 +772,23 @@ def test_authenticated_http_reconstruction_scores_interleaved_cases_without_conf
     with pytest.raises(HTTPException) as error:
         history_routes.score_reconstruction_review_submission(request)
     assert error.value.status_code == 403
+
+
+def test_save_revocation_does_not_echo_private_permission_error(monkeypatch):
+    """A revoked grant must not leak private event/source text through HTTP 403."""
+    _setup(monkeypatch)
+    from server import work_resumption
+    from server.history_routes import ReconstructionReviewSubmission
+
+    def revoked(*args, **kwargs):
+        raise PermissionError("revoked: private event id and source content")
+
+    monkeypatch.setattr(work_resumption, "score_live_reconstruction_review", revoked)
+    monkeypatch.setattr(history_routes, "save_reconstruction_review",
+                        lambda *args, **kwargs: pytest.fail("saved after revocation"))
+    request = ReconstructionReviewSubmission(evidence_sha256="a" * 64, annotations=[])
+    with pytest.raises(HTTPException) as error:
+        history_routes.save_reconstruction_review_submission(request)
+    assert error.value.status_code == 403
+    assert error.value.detail == "History access changed during review"
+    assert "private" not in error.value.detail
