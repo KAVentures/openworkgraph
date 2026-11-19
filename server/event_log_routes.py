@@ -1062,6 +1062,16 @@ def event_log_story(request: Request, log_id: str, case_type: str | None = Query
     return _respond(story.story, log_id, case_type, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/case-compare")
+def event_log_case_compare(request: Request, log_id: str, case_a: str = Query(min_length=1, max_length=500),
+                           case_b: str = Query(min_length=1, max_length=500),
+                           case_type: str | None = Query(default=None, max_length=200)):
+    """Two cases side by side: shared steps, steps only one has, and where the second fell behind."""
+    from . import event_log_case_compare as compare
+    _require_dashboard(request)
+    return _respond(compare.compare_cases, log_id, case_a, case_b, case_type)
+
+
 @router.get("/v1/event-logs/{log_id}/variants")
 def event_log_variants(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                        limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):

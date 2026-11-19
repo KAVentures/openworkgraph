@@ -333,6 +333,19 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"group_a": group_a, "group_b": group_b, "noise": float(noise), "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def compare_process_cases(log_id: str, case_a: str, case_b: str, case_type: str | None = None) -> dict[str, Any]:
+        """Put two cases of a shared log side by side, e.g. a slow case against a normal one: their steps aligned
+        (shared, only in case_a, only in case_b), the hours from each case's start to every step, and between
+        which shared steps case_b fell furthest behind. Needs a log shared at the cases level. Describes two
+        recorded cases; a difference is not a cause.
+        """
+        for name, value in (("case_a", case_a), ("case_b", case_b)):
+            if not isinstance(value, str) or not value:
+                raise ToolError(f"{name} must be a case ID")
+        return _get("compare_process_cases", f"/v1/process-intelligence/{_log(log_id)}/case-compare",
+                    {"case_a": case_a, "case_b": case_b, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_signals(log_id: str) -> dict[str, Any]:
         """The owner's signal rules on a shared log (KPI thresholds, case and compliance conditions) and their
         last evaluated state: triggered or not, the measured value or matching cases, and whether the owner

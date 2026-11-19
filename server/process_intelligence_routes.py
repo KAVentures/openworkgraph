@@ -240,6 +240,14 @@ async def agent_model_comparison(request: Request, log_id: str, group_a: str = Q
     return await _answer(sharing.model_comparison, log_id, group_a, group_b, case_type, noise)
 
 
+@router.get("/v1/process-intelligence/{log_id}/case-compare")
+async def agent_case_compare(request: Request, log_id: str, case_a: str = Query(min_length=1, max_length=500),
+                             case_b: str = Query(min_length=1, max_length=500),
+                             case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.compare_cases, log_id, case_a, case_b, case_type)
+
+
 @router.get("/v1/process-intelligence/{log_id}/signals")
 async def agent_signals(request: Request, log_id: str):
     _require_agent_access(request)

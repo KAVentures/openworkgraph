@@ -527,6 +527,13 @@ def model_comparison(log_id: str, group_a: str, group_b: str, case_type: str | N
             "format": FORMAT, "log_id": log_id}
 
 
+def compare_cases(log_id: str, case_a: str, case_b: str, case_type: str | None = None) -> dict[str, Any]:
+    """Two cases side by side (cases level only)."""
+    require(log_id, "cases")
+    from . import event_log_case_compare as cc
+    return {**cc.compare_cases(log_id, case_a, case_b, case_type), "format": FORMAT, "log_id": log_id}
+
+
 def slowest_cases(log_id: str, case_type: str | None = None, limit: int = 10) -> dict[str, Any]:
     require(log_id, "cases")
     from . import event_log_case_explain as case_explain

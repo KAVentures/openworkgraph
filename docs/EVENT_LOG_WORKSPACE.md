@@ -2469,6 +2469,12 @@ case-filter parameters. The net is not stored.
 Agents with access to a shared log use `get_process_deviations`, which aligns the cases on the
 discovered net at a chosen noise level (aggregates only, no case IDs).
 
+**Compare with case** in **Explain a case** puts the explained case next to another one: their
+steps aligned (shared steps line up; steps only one case has stand out), the hours from each
+case's start to every step, and between which shared steps the second case fell furthest behind.
+`GET /v1/event-logs/{log_id}/case-compare?case_a=…&case_b=…`; agents with cases-level access use
+`compare_process_cases`.
+
 **Explain a case** also aligns the chosen case on the discovered model (noise 20%) and says what it
 skipped and which steps it did where the model does not allow them.
 `GET /v1/event-logs/{log_id}/case-alignment?case_id=…&noise=0.2`; agents with cases-level access use

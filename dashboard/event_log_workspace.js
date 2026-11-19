@@ -1885,8 +1885,27 @@
     const run=button('Explain case','secondary');run.id='owgCaseExplainRun';
     const slowList=el('div');slowList.id='owgCaseExplainSlowest';
     const out=el('div');out.id='owgCaseExplainResult';out.setAttribute('role','status');out.setAttribute('aria-live','polite');
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Case',caseId),run);
-    box.append(slowList,row,out);
+    const other=input('owgCaseCompareId','text','another case ID');other.maxLength=500;other.autocomplete='off';
+    const compare=button('Compare with case','secondary');compare.id='owgCaseCompareRun';
+    const compared=el('div');compared.id='owgCaseCompareResult';compared.setAttribute('role','status');compared.setAttribute('aria-live','polite');
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Case',caseId),run,field('Compare with',other),compare);
+    box.append(slowList,row,out,compared);
+    compare.onclick=async()=>{
+      const a=caseId.value.trim(),b=other.value.trim();
+      if(!a||!b){compared.replaceChildren(el('div','Enter both case IDs.','muted'));return;}
+      compare.disabled=true;
+      try{
+        const q=new URLSearchParams({case_a:a,case_b:b});if(state.caseType)q.set('case_type',state.caseType);
+        const r=await getJSON('/v1/event-logs/'+encodeURIComponent(state.logId)+'/case-compare?'+q);
+        if(generation!==state.generation)return;
+        const h=x=>x===null?'—':(x<48?(Math.round(x*10)/10)+' h':(Math.round(x/24*10)/10)+' d');
+        const kind={both:'both',only_a:'only '+r.case_a.case_id,only_b:'only '+r.case_b.case_id};
+        compared.replaceChildren(
+          el('div','Case '+r.case_a.case_id+' took '+h(r.case_a.hours)+' over '+r.case_a.events+' events; case '+r.case_b.case_id+' took '+h(r.case_b.hours)+' over '+r.case_b.events+'. '+r.shared_steps+' steps are shared.'+(r.largest_gap_growth?' Case '+r.case_b.case_id+' fell furthest behind between '+r.largest_gap_growth.from+' and '+r.largest_gap_growth.to+' (+'+h(r.largest_gap_growth.extra_hours)+').':'')),
+          table(['Step','In',r.case_a.case_id+' (from start)',r.case_b.case_id+' (from start)'],r.steps.map(x=>[x.activity,kind[x.kind],h(x.a_hours_from_start),h(x.b_hours_from_start)])),
+          el('div',r.caveat,'muted'));
+      }catch(error){compared.replaceChildren(el('div',error.message,'muted'));}
+      finally{compare.disabled=false;}};
     const generation=state.generation;
     const base='/v1/event-logs/'+encodeURIComponent(state.logId)+'/cases/';
     const post=(path,body)=>api(base+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
