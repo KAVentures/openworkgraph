@@ -18,6 +18,8 @@
   FILTERED.add('heuristics-net');
   FILTERED.add('footprints');
   FILTERED.add('model-quality');
+  FILTERED.add('funnel');
+  FILTERED.add('unusual-cases');
   FILTERED.add('petri-net-replay');
   FILTERED.add('petri-net-alignments');
 
@@ -805,6 +807,8 @@
     results.appendChild(dottedSection());
     results.appendChild(spectrumSection());
     results.appendChild(heuristicsSection());
+    results.appendChild(unusualCasesSection());
+    results.appendChild(funnelSection(names));
     results.appendChild(modelQualitySection());
     results.appendChild(footprintsSection());
     results.appendChild(petriReplaySection());
@@ -3724,6 +3728,72 @@
         const more=document.createElement('details');more.appendChild(el('summary','All arrows'));
         more.appendChild(table(['From','To','Transitions','Dependency','Kept because'],arrows.map(e=>[e.from,e.to,Number(e.transition_count).toLocaleString(),String(e.dependency),({threshold:'above threshold',best_connection:'best connection',short_loop:'short loop'})[e.kept_by]||e.kept_by])));
         out.append(more,el('div',r.note,'muted'));
+      }catch(error){statusLine.textContent=error.message;}
+      finally{run.disabled=false;}};
+    return box;
+  }
+
+  function unusualCasesSection(){
+    const box=section('Unusual cases');box.id='owgUnusual';
+    box.appendChild(el('div','Cases that stand out from the rest of this selection, each with the reasons: a rare path, unusually slow or fast, unusually many events, heavy rework, or an activity almost no other case has. Unusual is not wrong; this is a list to look at.','muted'));
+    const limit=select('owgUnusualLimit',[['25','Top 25'],['50','Top 50'],['100','Top 100']]);
+    const run=button('Find unusual cases','secondary');run.id='owgUnusualRun';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Show',limit),run);
+    const statusLine=el('div',null,'muted');statusLine.id='owgUnusualStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgUnusualResults';
+    box.append(row,statusLine,out);
+    const label={rare_path:'Rare path',unusually_slow:'Unusually slow',unusually_fast:'Unusually fast',unusually_long:'Unusually many events',heavy_rework:'Heavy rework',rare_activity:'Rare activity'};
+    run.onclick=async()=>{
+      const generation=state.generation;run.disabled=true;statusLine.textContent='Comparing cases…';out.replaceChildren();
+      try{
+        const r=await getJSON(logPath('unusual-cases',{limit:limit.value}));
+        if(generation!==state.generation)return;
+        const counts=Object.entries(r.by_signal).map(([k,n])=>label[k]+' '+Number(n).toLocaleString()).join(', ');
+        statusLine.textContent=Number(r.unusual_cases).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases stand out'+(counts?' ('+counts+')':'')+'. The median case takes '+r.baseline.median_hours+' h and has '+r.baseline.median_events+' events.';
+        if(!r.top.length)return;
+        const t=table(['Case','Score','Why','Events','Hours',''],r.top.map(c=>[String(c.case_id),String(c.score),c.reasons.map(x=>label[x.signal]+': '+x.detail).join('; '),String(c.events),String(c.hours),'']));
+        t.querySelector('tbody').querySelectorAll('tr').forEach((tr,i)=>{const id=String(r.top[i].case_id);const b=button('Explain','secondary');b.setAttribute('aria-label','Explain case '+id);
+          b.onclick=()=>{const field=document.querySelector('#owgCaseExplainId'),go=document.querySelector('#owgCaseExplainRun');if(!field||!go)return;field.value=id;go.click();document.querySelector('#owgCaseExplain').scrollIntoView({block:'start'});};
+          tr.cells[5].appendChild(b);});
+        out.appendChild(t);
+        out.appendChild(el('div',r.caveat,'muted'));
+      }catch(error){statusLine.textContent=error.message;}
+      finally{run.disabled=false;}};
+    return box;
+  }
+
+  function funnelSection(activityNames){
+    const box=section('Milestone funnel');box.id='owgFunnel';
+    box.appendChild(el('div','Choose activities in order to see how many cases reach each one after the previous ones, how long that takes, and what the cases that stopped did last. Other activities may happen in between.','muted'));
+    const options=[['','(choose an activity)'],...activityNames.slice(0,500).map(a=>[a,a])];
+    const steps=el('div',null,'row');steps.style.alignItems='end';steps.id='owgFunnelSteps';
+    const pickers=[];
+    const addStep=()=>{if(pickers.length>=8)return;const n=pickers.length+1;const pick=select('owgFunnelStep'+n,options);
+      if(activityNames[n-1])pick.value=activityNames[n-1];pickers.push(pick);steps.appendChild(field('Step '+n,pick));more.disabled=pickers.length>=8;};
+    const more=button('Add step','secondary');more.id='owgFunnelAdd';more.onclick=addStep;
+    const windowPick=select('owgFunnelWindow',[['','No time limit'],['24','Within 24 hours of the previous step'],['168','Within 7 days'],['720','Within 30 days']]);
+    const run=button('Show funnel','secondary');run.id='owgFunnelRun';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Conversion window',windowPick),more,run);
+    const statusLine=el('div',null,'muted');statusLine.id='owgFunnelStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgFunnelResults';
+    box.append(steps,row,statusLine,out);
+    for(let i=0;i<3;i++)addStep();
+    const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
+    const hrs=x=>x===null||x===undefined?'—':(x<48?(Math.round(x*10)/10)+' h':(Math.round(x/24*10)/10)+' d');
+    run.onclick=async()=>{
+      const chosen=pickers.map(p=>p.value).filter(Boolean);
+      if(chosen.length<2){statusLine.textContent='Choose at least two steps.';out.replaceChildren();return;}
+      const generation=state.generation;run.disabled=true;statusLine.textContent='Following cases…';out.replaceChildren();
+      try{
+        const params={step:chosen};if(windowPick.value)params.within_hours=windowPick.value;
+        const r=await getJSON(logPath('funnel',params));
+        if(generation!==state.generation)return;
+        const first=r.steps[0],last=r.steps[r.steps.length-1];
+        statusLine.textContent=Number(last.cases).toLocaleString()+' of '+Number(first.cases).toLocaleString()+' cases that reached '+first.activity+' went on to reach '+last.activity+' ('+pct(r.completed.share_of_first_step)+'), in a median '+hrs(r.completed.hours_first_to_last.median)+'.'+(r.largest_drop?' The largest drop is before step '+r.largest_drop.to_step+' ('+Number(r.largest_drop.cases).toLocaleString()+' cases).':'');
+        const t=table(['Step','Reached','Of step 1','From previous','Dropped','Median time from previous','Stopped cases did last'],r.steps.map(x=>[x.step+'. '+x.activity,Number(x.cases).toLocaleString(),pct(x.share_of_first_step),x.step===1?'—':pct(x.conversion_from_previous),x.step===1?'—':Number(x.dropped_after_previous).toLocaleString()+(x.stopped_cases_possibly_open?' ('+x.stopped_cases_possibly_open+' possibly open)':''),x.step===1?'—':hrs(x.hours_from_previous.median),x.step===1?'—':(x.stopped_cases_last_activity.map(a=>a.activity+' ('+a.cases+')').join(', ')||'—')]));
+        t.querySelector('tbody').querySelectorAll('tr').forEach((tr,i)=>{const bar=el('div');bar.setAttribute('aria-hidden','true');bar.style.cssText='height:4px;background:currentColor;opacity:.35;margin-top:4px;width:'+Math.round((r.steps[i].share_of_first_step||0)*100)+'%';tr.cells[1].appendChild(bar);});
+        out.appendChild(t);
+        out.appendChild(el('div',r.caveat,'muted'));
       }catch(error){statusLine.textContent=error.message;}
       finally{run.disabled=false;}};
     return box;

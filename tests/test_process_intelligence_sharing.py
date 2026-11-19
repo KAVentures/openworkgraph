@@ -65,6 +65,8 @@ def test_sharing_levels_and_revocation():
     deviations = sharing.model_deviations(log, noise=0)
     assert deviations["cases"] == 12 and deviations["fitness"]["log"] == 1.0 and deviations["log_moves"] == []
     assert "case_id" not in str(deviations) and deviations["process_model_sha256"]
+    funnel = sharing.funnel(log, ["Receive", "Pay"])
+    assert funnel["cases"] == 12 and funnel["steps"][0]["activity"] == "Receive" and "case_id" not in str(funnel)
     profile = sharing.temporal_profile(log)
     assert profile["cases"] == 12 and "top_cases" not in profile and "case_id" not in str(profile)
     rc = sharing.root_cause(log, "duration_over", hours=24)
@@ -259,7 +261,8 @@ PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_root_
                  "get_process_automation_candidates", "get_process_signals", "get_process_decision_rules",
                  "get_process_temporal_profile", "get_process_heuristics_net",
                  "get_process_footprints", "get_process_model_quality",
-                 "get_process_deviations"}
+                 "get_process_deviations", "get_process_funnel",
+                 "get_unusual_process_cases"}
 
 
 def test_mcp_tools_are_listed_only_when_a_log_is_shared(tmp_path):

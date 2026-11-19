@@ -927,6 +927,27 @@ def event_log_model_quality(request: Request, log_id: str, case_type: str | None
     return _respond(quality.model_quality, log_id, case_type, levels=levels, activities=activities, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/funnel")
+def event_log_funnel(request: Request, log_id: str, step: list[str] = Query(default=[], max_length=500),
+                     within_hours: float | None = Query(default=None, gt=0),
+                     case_type: str | None = Query(default=None, max_length=200),
+                     cohort: dict = Depends(_case_filter)):
+    """How many cases reach each chosen step in order, the time between steps and where the rest stopped."""
+    from . import event_log_funnel as funnel
+    _require_dashboard(request)
+    return _respond(funnel.funnel, log_id, step, case_type, within_hours=within_hours, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/unusual-cases")
+def event_log_unusual_cases(request: Request, log_id: str, limit: int = Query(default=25, ge=1, le=200),
+                            case_type: str | None = Query(default=None, max_length=200),
+                            cohort: dict = Depends(_case_filter)):
+    """Cases that stand out (rare path, unusual duration or length, heavy rework, rare activity) and why."""
+    from . import event_log_unusual_cases as unusual
+    _require_dashboard(request)
+    return _respond(unusual.unusual_cases, log_id, case_type, limit=limit, cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/variants")
 def event_log_variants(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                        limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):

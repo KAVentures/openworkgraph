@@ -180,6 +180,36 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"noise": float(noise), "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def get_process_funnel(log_id: str, steps: list[str], within_hours: float | None = None,
+                           case_type: str | None = None) -> dict[str, Any]:
+        """Milestone funnel of a shared log: for 2 to 8 activities in order, how many cases reached each step
+        after the previous ones, the conversion from the previous step, the hours between steps (median, p90),
+        and what cases that stopped did last. within_hours optionally counts a step only within that many hours
+        of the previous one. Shows how far cases got, not why. Aggregates only, no case IDs.
+        """
+        if not isinstance(steps, list) or not 2 <= len(steps) <= 8 or any(not isinstance(s, str) or not s for s in steps):
+            raise ToolError("steps must be 2 to 8 activity names")
+        if within_hours is not None and (isinstance(within_hours, bool) or not isinstance(within_hours, (int, float))
+                                         or within_hours <= 0):
+            raise ToolError("within_hours must be a positive number")
+        params: dict[str, Any] = {"step": steps, "case_type": case_type}
+        if within_hours is not None:
+            params["within_hours"] = float(within_hours)
+        return _get("get_process_funnel", f"/v1/process-intelligence/{_log(log_id)}/funnel", params)
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_unusual_process_cases(log_id: str, limit: int = 25, case_type: str | None = None) -> dict[str, Any]:
+        """Cases of a shared log that stand out from the rest, each with its reasons: a rare path, unusually slow
+        or fast, unusually many events, heavy rework, or an activity almost no other case has, measured against
+        the log (robust z-scores and frequencies). Case IDs and paths appear only for logs shared at the cases
+        level; follow up with explain_process_case. Unusual is not wrong: this ranks cases for a look.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
+            raise ToolError("limit must be 1 to 50")
+        return _get("get_unusual_process_cases", f"/v1/process-intelligence/{_log(log_id)}/unusual-cases",
+                    {"limit": limit, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_signals(log_id: str) -> dict[str, Any]:
         """The owner's signal rules on a shared log (KPI thresholds, case and compliance conditions) and their
         last evaluated state: triggered or not, the measured value or matching cases, and whether the owner
