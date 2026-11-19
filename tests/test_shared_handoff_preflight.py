@@ -145,3 +145,16 @@ def test_delayed_review_response_cannot_restore_another_session_or_process():
     assert "selected!==reviewSelection)return;" in block
     assert block.index("const reviewResult=await call(") < block.index("selected!==reviewSelection)return;")
     assert block.index("selected!==reviewSelection)return;") < block.index("render(reviewResult);")
+
+
+def test_review_submission_rejects_confirmation_or_comment_drift_during_revalidation():
+    """The decision and human confirmation cannot change during the API read."""
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split("async function review(decision) {", 1)[1].split('$("approve").onclick', 1)[0]
+    assert 'const confirmedReview = $("reviewConfirm").checked;' in block
+    assert 'const confirmedComment = $("comment").value;' in block
+    assert '!$("reviewConfirm").checked||!confirmedReview' in block
+    assert '$("comment").value!==confirmedComment' in block
+    assert 'comment: confirmedComment,' in block
+    assert block.index('const current=await call(') < block.index('$("comment").value!==confirmedComment')
+    assert block.index('$("comment").value!==confirmedComment') < block.index('"/reviews"')
