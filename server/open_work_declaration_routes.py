@@ -1556,6 +1556,28 @@ async def _load_review_triage(scope: str, payload: dict[str, Any]):
         provider_histories.append(provider)
         human_histories.append(human)
         await _recheck_source(scope)
+    # The two journals are separate SQLite stores. A provider dispute or human
+    # correction can land between reads. Re-read both bounded selections and
+    # refuse mixed-era evidence. This is not a global atomic snapshot.
+    for index, (child, child_signature, child_guard) in enumerate(targets):
+        try:
+            await asyncio.to_thread(root_guard)
+            provider_again = await asyncio.to_thread(
+                read_operation_evidence, child, child_signature,
+                scope=scope, secret=secret, guard=child_guard,
+            )
+            await _recheck_source(scope)
+            human_again = await asyncio.to_thread(
+                read_human_outcomes, child, child_signature,
+                scope=scope, secret=secret, guard=child_guard,
+            )
+            await asyncio.to_thread(root_guard)
+            if (provider_again != provider_histories[index]
+                    or human_again != human_histories[index]):
+                raise CaseDeclarationError("outcome evidence changed during cross-store review")
+        except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+            raise _safe_error(exc) from None
+        await _recheck_source(scope)
     try:
         await asyncio.to_thread(root_guard)
         result = compose_outcome_evidence_triage(

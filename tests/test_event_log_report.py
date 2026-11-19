@@ -139,3 +139,24 @@ def test_report_leads_with_where_to_look_first():
     # Logs too small for insights simply leave the section out.
     data["insights"] = {"findings": [], "interpretation": ""}
     assert "Where to look first" not in report.render(data)
+
+
+def test_report_shows_model_fit_and_adherence(tmp_path, monkeypatch):
+    from io import BytesIO
+    from server import event_log_report as rep
+    from server import event_log_workspace as ws
+    monkeypatch.setattr(ws, "DATA_DIR", tmp_path / "adherence")
+    (tmp_path / "adherence").mkdir()
+    rows = ["case,activity,time"]
+    for i in range(20):
+        steps = ["Open", "Check", "Close"] if i % 10 else ["Open", "Close"]
+        for j, a in enumerate(steps):
+            rows.append(f"c{i},{a},2024-0{1 + i % 2}-{1 + i:02d}T0{j}:00:00Z")
+    log = ws.import_log(BytesIO("\n".join(rows).encode()), name="r", source_format="csv",
+                        mapping={"case_column": "case", "activity_column": "activity", "timestamp_column": "time"})["log_id"]
+    data = rep.build(log)
+    assert data["adherence"]["cases"] == 20 and data["adherence"]["fitness"]["fitting_cases"] == 18
+    html = rep.render(data)
+    assert "Model fit and adherence" in html and "90.0%" in html and "−Check" in html
+    assert "In plain words" in html and "The log has 20 cases" in html
+    assert "<script" not in html.lower()

@@ -50,6 +50,19 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         return _get("list_process_logs", "/v1/process-intelligence/logs")
 
     @mcp.tool(annotations=_READ_ONLY)
+    def get_process_brief(log_id: str, sla_hours: float | None = None, case_type: str | None = None) -> dict[str, Any]:
+        """Start here: one compact briefing on a shared log. Size, timing and KPIs, the most common paths, the top
+        automatic insights, how well the discovered model fits at its best noise level, the steps cases most often
+        add or skip compared with it, how many cases stand out and why, and which tools to call next. Parts that
+        cannot be computed are listed in parts_unavailable. Aggregates only; describes records, not causes.
+        """
+        if sla_hours is not None and (isinstance(sla_hours, bool) or not isinstance(sla_hours, (int, float))
+                                      or sla_hours <= 0):
+            raise ToolError("sla_hours must be a positive number")
+        return _get("get_process_brief", f"/v1/process-intelligence/{_log(log_id)}/brief",
+                    {"sla_hours": sla_hours, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_overview(log_id: str, case_type: str | None = None, sla_hours: float | None = None) -> dict[str, Any]:
         """Overview of a shared process: case counts, durations, KPIs, top variants and automatic insights.
 
@@ -123,6 +136,225 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
             raise ToolError("zeta must be a number from 0.5 to 10")
         return _get("get_process_temporal_profile", f"/v1/process-intelligence/{_log(log_id)}/temporal-profile",
                     {"zeta": float(zeta), "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_process_heuristics_net(log_id: str, dependency_threshold: float = 0.5,
+                                   case_type: str | None = None) -> dict[str, Any]:
+        """Heuristics-miner model of a shared log: arrows kept only where one activity follows another clearly
+        more often than the reverse (dependency at or above the threshold), with each split and join marked AND
+        (branches occur in both orders) or XOR (one or the other), and self- and two-step loops. Inferred from
+        recorded order, not a modelled process.
+        """
+        if isinstance(dependency_threshold, bool) or not isinstance(dependency_threshold, (int, float)) \
+                or not 0 <= dependency_threshold <= 1:
+            raise ToolError("dependency_threshold must be a number from 0 to 1")
+        return _get("get_process_heuristics_net", f"/v1/process-intelligence/{_log(log_id)}/heuristics-net",
+                    {"dependency_threshold": float(dependency_threshold), "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_process_footprints(log_id: str, noise: float = 0.2, case_type: str | None = None) -> dict[str, Any]:
+        """Footprint comparison of a shared log: for every pair of activities, whether one directly follows the
+        other (→), both orders occur (||) or neither (#), once from the recorded cases and once from the discovered
+        model, with the orderings only the log has (and how many cases took them) or only the model allows.
+        Ordering only, not frequency or timing. Aggregates only, no case IDs.
+        """
+        if isinstance(noise, bool) or not isinstance(noise, (int, float)) or not 0 <= noise < 1:
+            raise ToolError("noise must be a share from 0 up to (not including) 1")
+        return _get("get_process_footprints", f"/v1/process-intelligence/{_log(log_id)}/footprints",
+                    {"noise": float(noise), "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_process_model_quality(log_id: str, noise_levels: list[float] | None = None,
+                                  case_type: str | None = None) -> dict[str, Any]:
+        """How good the discovered process model of a shared log is at each noise level: fitness (can it replay
+        the cases), precision (does it allow little else), their F-score, generalization and simplicity, plus the
+        noise level with the best F-score. Use it to pick a noise level before asking for the model or its
+        footprints. Scores describe drafts against this log, not which model is right. Aggregates only.
+        """
+        params: dict[str, Any] = {"case_type": case_type}
+        if noise_levels is not None:
+            if (not isinstance(noise_levels, list) or not 1 <= len(noise_levels) <= 8
+                    or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 <= v < 1 for v in noise_levels)):
+                raise ToolError("noise_levels must be 1 to 8 shares from 0 up to (not including) 1")
+            params["levels"] = ",".join(str(float(v)) for v in noise_levels)
+        return _get("get_process_model_quality", f"/v1/process-intelligence/{_log(log_id)}/model-quality", params)
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_process_deviations(log_id: str, noise: float = 0.2, case_type: str | None = None) -> dict[str, Any]:
+        """Exactly where the recorded cases of a shared log depart from its discovered process model, from optimal
+        alignments: the steps cases took that the model does not allow there, the steps the model requires that
+        cases skipped (each with case counts), alignment fitness, and how each non-fitting variant is explained
+        step by step. Pick the noise level with get_process_model_quality first. A deviation is a difference from a
+        draft model, not a verified error. Aggregates only, no case IDs.
+        """
+        if isinstance(noise, bool) or not isinstance(noise, (int, float)) or not 0 <= noise < 1:
+            raise ToolError("noise must be a share from 0 up to (not including) 1")
+        return _get("get_process_deviations", f"/v1/process-intelligence/{_log(log_id)}/model-deviations",
+                    {"noise": float(noise), "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_process_funnel(log_id: str, steps: list[str], within_hours: float | None = None,
+                           case_type: str | None = None) -> dict[str, Any]:
+        """Milestone funnel of a shared log: for 2 to 8 activities in order, how many cases reached each step
+        after the previous ones, the conversion from the previous step, the hours between steps (median, p90),
+        and what cases that stopped did last. within_hours optionally counts a step only within that many hours
+        of the previous one. Shows how far cases got, not why. Aggregates only, no case IDs.
+        """
+        if not isinstance(steps, list) or not 2 <= len(steps) <= 8 or any(not isinstance(s, str) or not s for s in steps):
+            raise ToolError("steps must be 2 to 8 activity names")
+        if within_hours is not None and (isinstance(within_hours, bool) or not isinstance(within_hours, (int, float))
+                                         or within_hours <= 0):
+            raise ToolError("within_hours must be a positive number")
+        params: dict[str, Any] = {"step": steps, "case_type": case_type}
+        if within_hours is not None:
+            params["within_hours"] = float(within_hours)
+        return _get("get_process_funnel", f"/v1/process-intelligence/{_log(log_id)}/funnel", params)
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_unusual_process_cases(log_id: str, limit: int = 25, case_type: str | None = None) -> dict[str, Any]:
+        """Cases of a shared log that stand out from the rest, each with its reasons: a rare path, unusually slow
+        or fast, unusually many events, heavy rework, or an activity almost no other case has, measured against
+        the log (robust z-scores and frequencies). Case IDs and paths appear only for logs shared at the cases
+        level; follow up with explain_process_case. Unusual is not wrong: this ranks cases for a look.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
+            raise ToolError("limit must be 1 to 50")
+        return _get("get_unusual_process_cases", f"/v1/process-intelligence/{_log(log_id)}/unusual-cases",
+                    {"limit": limit, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_process_due_dates(log_id: str, activity: str, due_attribute: str | None = None,
+                              due_days: float | None = None, early_days: float | None = None,
+                              case_type: str | None = None) -> dict[str, Any]:
+        """Due-date adherence in a shared log: whether `activity` (e.g. a payment or shipment) happened by each
+        case's due date, taken from a case or event attribute (`due_attribute`) or a fixed number of days after
+        the case started (`due_days`); give exactly one. Returns on-time, early (with `early_days`), late and
+        still-open (overdue or not yet due) counts, days late, and a trend by due month. Case IDs of the latest
+        late cases only for logs shared at the cases level. Says how often deadlines were met, not why.
+        """
+        if not isinstance(activity, str) or not activity:
+            raise ToolError("activity must name an activity")
+        if (due_attribute is None) == (due_days is None):
+            raise ToolError("give either due_attribute or due_days")
+        for name, value in (("due_days", due_days), ("early_days", early_days)):
+            if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0):
+                raise ToolError(f"{name} must be a positive number of days")
+        return _get("get_process_due_dates", f"/v1/process-intelligence/{_log(log_id)}/due-dates",
+                    {"due_activity": activity, "due_attribute": due_attribute, "due_days": due_days,
+                     "early_days": early_days, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_process_next_steps(log_id: str, steps: list[str] | None = None, anchor: str = "start",
+                               case_type: str | None = None) -> dict[str, Any]:
+        """Walk a shared log's process one step at a time: after `steps` (empty = the start of the cases), which
+        activities come next, in how many cases, the hours from the last step to each (median, p90) and from each
+        to the case end, and how many cases end there. anchor="start" means cases that begin with `steps`;
+        anchor="anywhere" finds the first place the steps occur one right after another. Call again with a next
+        step appended to go deeper. Order and timing only, not why cases branch. Aggregates only.
+        """
+        steps = steps or []
+        if not isinstance(steps, list) or len(steps) > 30 or any(not isinstance(s, str) or not s for s in steps):
+            raise ToolError("steps must be up to 30 activity names")
+        if anchor not in ("start", "anywhere"):
+            raise ToolError("anchor must be start or anywhere")
+        return _get("get_process_next_steps", f"/v1/process-intelligence/{_log(log_id)}/next-steps",
+                    {"step": steps, "anchor": anchor, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_process_insights(log_id: str, sla_hours: float | None = None, limit: int = 8,
+                             case_type: str | None = None) -> dict[str, Any]:
+        """Where to look first in a shared log: ranked automatic findings (slow step-to-step gaps, repeated
+        activities, costly detours, the long tail of slow cases, how spread the paths are, whether newer cases
+        are slower, and SLA breaches when sla_hours is given), each with its numbers, the share of cases it
+        touches and the case filter that reproduces it. A good first call before the other process tools.
+        Descriptive pointers, not causes. Aggregates only, no case IDs.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 30:
+            raise ToolError("limit must be 1 to 30")
+        if sla_hours is not None and (isinstance(sla_hours, bool) or not isinstance(sla_hours, (int, float))
+                                      or sla_hours <= 0):
+            raise ToolError("sla_hours must be a positive number")
+        return _get("get_process_insights", f"/v1/process-intelligence/{_log(log_id)}/insights",
+                    {"sla_hours": sla_hours, "limit": limit, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_process_deviation_causes(log_id: str, noise: float = 0.2, case_type: str | None = None) -> dict[str, Any]:
+        """Which case attributes and activities go with cases that depart from a shared log's discovered process
+        model: risk differences with 95% intervals and a Bonferroni check, for the outcome "the case followed a
+        path the optimal alignment found non-fitting". Use after get_process_deviations. Associations, not
+        causes. Aggregates only, no case IDs.
+        """
+        if isinstance(noise, bool) or not isinstance(noise, (int, float)) or not 0 <= noise < 1:
+            raise ToolError("noise must be a share from 0 up to (not including) 1")
+        return _get("get_process_deviation_causes", f"/v1/process-intelligence/{_log(log_id)}/model-deviation-causes",
+                    {"noise": float(noise), "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def align_process_case(log_id: str, case_id: str, noise: float = 0.2, case_type: str | None = None) -> dict[str, Any]:
+        """How one case of a shared log departs from its discovered process model: the optimal alignment step by
+        step, the steps it did that the model does not allow there and the steps the model requires that it
+        skipped, with its alignment fitness. Needs a log shared at the cases level; pair with
+        explain_process_case for timing. A deviation is a difference from a draft model, not an error.
+        """
+        if not isinstance(case_id, str) or not case_id:
+            raise ToolError("case_id must be a case ID")
+        if isinstance(noise, bool) or not isinstance(noise, (int, float)) or not 0 <= noise < 1:
+            raise ToolError("noise must be a share from 0 up to (not including) 1")
+        return _get("align_process_case", f"/v1/process-intelligence/{_log(log_id)}/case-alignment",
+                    {"case_id": case_id, "noise": float(noise), "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_process_model_change(log_id: str, split: str | None = None, noise: float = 0.2,
+                                 case_type: str | None = None) -> dict[str, Any]:
+        """How a shared log's discovered process model differs before and after a date (ISO; default: the median
+        case start): which activity orderings changed (footprint relations), which activities appear in only one
+        period, and how well each period's cases fit the other period's model. Use after concept drift to see what
+        changed. Drafts from recorded events, not causes. Aggregates only.
+        """
+        if isinstance(noise, bool) or not isinstance(noise, (int, float)) or not 0 <= noise < 1:
+            raise ToolError("noise must be a share from 0 up to (not including) 1")
+        return _get("get_process_model_change", f"/v1/process-intelligence/{_log(log_id)}/model-change",
+                    {"split": split, "noise": float(noise), "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def compare_process_models(log_id: str, group_a: str, group_b: str, noise: float = 0.2,
+                               case_type: str | None = None) -> dict[str, Any]:
+        """Compare how two groups of cases in a shared log run, each chosen by a case attribute value written as
+        "attribute=value" (for example group_a="region=EU", group_b="region=US"): activity orderings that differ
+        between their discovered models, activities only one group has, and how well each group's cases fit the
+        other group's model. Recorded behaviour only; groups also differ in case mix. Aggregates only.
+        """
+        for name, value in (("group_a", group_a), ("group_b", group_b)):
+            if not isinstance(value, str) or "=" not in value:
+                raise ToolError(f"{name} must look like attribute=value")
+        if isinstance(noise, bool) or not isinstance(noise, (int, float)) or not 0 <= noise < 1:
+            raise ToolError("noise must be a share from 0 up to (not including) 1")
+        return _get("compare_process_models", f"/v1/process-intelligence/{_log(log_id)}/model-comparison",
+                    {"group_a": group_a, "group_b": group_b, "noise": float(noise), "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def compare_process_cases(log_id: str, case_a: str, case_b: str, case_type: str | None = None) -> dict[str, Any]:
+        """Put two cases of a shared log side by side, e.g. a slow case against a normal one: their steps aligned
+        (shared, only in case_a, only in case_b), the hours from each case's start to every step, and between
+        which shared steps case_b fell furthest behind. Needs a log shared at the cases level. Describes two
+        recorded cases; a difference is not a cause.
+        """
+        for name, value in (("case_a", case_a), ("case_b", case_b)):
+            if not isinstance(value, str) or not value:
+                raise ToolError(f"{name} must be a case ID")
+        return _get("compare_process_cases", f"/v1/process-intelligence/{_log(log_id)}/case-compare",
+                    {"case_a": case_a, "case_b": case_b, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_process_activity_profile(log_id: str, activity: str, case_type: str | None = None) -> dict[str, Any]:
+        """One activity of a shared log from every side: how many cases have it and how often it repeats, what
+        usually comes before and after it (with median gaps), how long into a case it first happens, when in the
+        week and day it occurs, and case durations with and without it. Associations, not causes. Aggregates only.
+        """
+        if not isinstance(activity, str) or not activity:
+            raise ToolError("activity must name an activity")
+        return _get("get_process_activity_profile", f"/v1/process-intelligence/{_log(log_id)}/activity-profile",
+                    {"profile_activity": activity, "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_signals(log_id: str) -> dict[str, Any]:
