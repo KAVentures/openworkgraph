@@ -26,7 +26,7 @@ def test_handoff_preflight_reads_fresh_authorized_process_without_upload():
     assert 'current.archived' in block
     assert 'current.review?.status!=="reviewed_design"' in block
     assert "lacks independent design review of this revision" in block
-    assert 'ticket!==handoffGeneration||selected!==chosen' in block
+    assert 'ticket!==handoffGeneration||identityTicket!==identityGeneration||credential!==authorizedCredential||selected!==chosen' in block
     assert 'execution_authorized!==false' in block
     assert 'source_read_authorized!==false' in block
 
@@ -39,7 +39,7 @@ def test_handoff_preflight_invalidates_on_session_and_selection_changes():
     assert 'handoffPacket").addEventListener("change",()=>{ $("handoffConsent").checked=false; resetHandoff(' in html
     assert 'handoffConsent").addEventListener("change",()=>resetHandoff(' in html
     assert 'if(!$("handoffConsent").checked){fail("Explicit authorization to inspect this packet is required.");return;}' in html
-    assert 'ticket!==handoffGeneration||selected!==chosen||!$("handoffConsent").checked' in html
+    assert 'ticket!==handoffGeneration||identityTicket!==identityGeneration||\n               credential!==authorizedCredential||selected!==chosen||!$("handoffConsent").checked' in html
     assert 'Consent, owner approval, source access, retention and execution authorization remain unverified.' in html
 
 
@@ -81,7 +81,7 @@ def test_review_navigation_revalidates_fresh_authorized_revision_and_fails_close
     assert 'current.latest_revision!==inspected.revision' in block
     assert 'current.process.content_sha256!==inspected.content_sha256' in block
     assert 'current.review?.status!=="reviewed_design"' in block
-    assert 'ticket!==handoffGeneration||selected!==chosen||!$("handoffConsent").checked' in block
+    assert 'ticket!==handoffGeneration||identityTicket!==identityGeneration||\n               credential!==authorizedCredential||selected!==chosen||!$("handoffConsent").checked' in block
     assert 'resetHandoff("REFUSED: Process changed or access/review was withdrawn.' in block
     assert 'resetHandoff("REFUSED: Could not revalidate authorized revision.' in block
     assert block.index('const current=await call(') < block.index('$("revisionReview").scrollIntoView')
