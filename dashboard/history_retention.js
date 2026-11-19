@@ -167,10 +167,11 @@
     if(!panel||document.querySelector('#reconstructionWorkbench'))return;
     const card=document.createElement('div');
     card.className='card';card.id='reconstructionWorkbench';
-    card.innerHTML='<h2>Reconstruction evidence review</h2><p class="muted">Requires an explicit all-saved AI history grant. Candidate pairs are observations, not confirmed cases. Labels remain in this tab unless explicitly saved locally for one hour under the current evidence and history grant. Scores cover only surfaced candidate pairs. Reviewers can add missed true pairs for surfaced events, but unseen events cannot be labeled here; complete case recall, case accuracy and held-out performance are not measured.</p><button type="button" id="reconstructionLoad">Load current evidence</button><div id="reconstructionStatus" role="status" aria-live="polite"></div><div id="reconstructionEvents"></div><button type="button" id="reconstructionScore" disabled>Score explicitly reviewed events</button><button type="button" id="reconstructionSave" disabled>Save reviewed labels locally (1 hour)</button><button type="button" id="reconstructionForget">Delete saved labels</button><pre id="reconstructionMetrics" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>';
+    card.innerHTML='<h2>Reconstruction evidence review</h2><p class="muted">Requires an explicit all-saved AI history grant. Candidate pairs are observations, not confirmed cases. Labels remain in this tab unless explicitly saved locally for one hour under the current evidence and history grant. Scores cover only surfaced candidate pairs. Reviewers can add missed true pairs for surfaced events, but unseen events cannot be labeled here; complete case recall, case accuracy and held-out performance are not measured.</p><button type="button" id="reconstructionLoad">Load current evidence</button><div id="reconstructionStatus" role="status" aria-live="polite"></div><div id="reconstructionEvents"></div><button type="button" id="reconstructionScore" disabled>Score explicitly reviewed events</button><button type="button" id="reconstructionSave" disabled>Save reviewed labels locally (1 hour)</button><button type="button" id="reconstructionForget">Delete saved labels</button><pre id="reconstructionMetrics" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre><details><summary>Score a complete source-event cohort (advanced)</summary><p class="muted">Paste an externally labeled JSON array of source events, including negative and missed events. This does not certify independent labels, complete source coverage or held-out accuracy. Labels are sent only to the local authenticated scorer and are not saved.</p><label for="reconstructionCohortLabels">Source-event labels (JSON array)</label><textarea id="reconstructionCohortLabels" rows="5" spellcheck="false" autocomplete="off"></textarea><button type="button" id="reconstructionCohortScore" disabled>Score source-event cohort</button><pre id="reconstructionCohortMetrics" role="status" aria-live="polite" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>';
     panel.appendChild(card);
     card.querySelector('#reconstructionLoad').addEventListener('click',loadReconstructionEvidence);
     card.querySelector('#reconstructionScore').addEventListener('click',scoreReconstructionEvidence);
+    card.querySelector('#reconstructionCohortScore').addEventListener('click',scoreReconstructionSourceCohort);
     card.querySelector('#reconstructionSave').addEventListener('click',saveReconstructionLabels);
     card.querySelector('#reconstructionForget').addEventListener('click',deleteReconstructionLabels);
   }
@@ -204,6 +205,8 @@
       if(!review||!Array.isArray(review.event_reviews)||!review.evidence_sha256)
         throw new Error('Invalid reconstruction evidence');
       reconstructionEvidence=review;
+      root.querySelector('#reconstructionCohortScore').disabled=false;
+      root.querySelector('#reconstructionCohortMetrics').textContent='';
       // Display actual scan boundaries and interruption timelines as inert text.
       // This is observed provenance, not evidence of a confirmed case.
       const provenance=document.createElement('details');
@@ -289,6 +292,28 @@
         ?'Source coverage is incomplete; scoring is disabled.'
         :reconstructionChoices.length>192?'More than 192 surfaced events; scoring is unavailable for this bounded review. Narrow the evidence window.':review.event_reviews_count+' surfaced events ('+(review.ambiguous_event_reviews_count||0)+' ambiguous multi-pair events). Review candidate and missed true pairs explicitly; absent events are not evaluated.';
     }catch(error){if(epoch===reconstructionRequestEpoch)clearReconstructionEvidence(String(error.message||error));}
+  }
+  async function scoreReconstructionSourceCohort(){
+    const root=document.querySelector('#reconstructionWorkbench');
+    if(!root||!reconstructionEvidence)return;
+    const button=root.querySelector('#reconstructionCohortScore');
+    const output=root.querySelector('#reconstructionCohortMetrics');
+    const epoch=reconstructionRequestEpoch;
+    button.disabled=true;
+    output.textContent='Scoring source-event inventory…';
+    try{
+      const labels=JSON.parse(root.querySelector('#reconstructionCohortLabels').value);
+      if(!Array.isArray(labels)||labels.length<1||labels.length>4096)throw new Error('Provide 1–4096 labeled source events.');
+      await window.__owgAuthReady;
+      const response=await fetch('/v1/history/reconstruction-review/source-cohort-score',{
+        method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({evidence_sha256:reconstructionEvidence.evidence_sha256,source_labels:labels})});
+      const result=await response.json().catch(()=>({}));
+      if(epoch!==reconstructionRequestEpoch)return;
+      if(!response.ok)throw new Error('Cohort scoring rejected (HTTP '+response.status+'). Reload evidence and check inventory.');
+      output.textContent=JSON.stringify(result,null,2)+'\\nIndependent labeling and exhaustive source coverage are NOT verified.';
+    }catch(error){if(epoch===reconstructionRequestEpoch)output.textContent=String(error.message||error);}
+    finally{if(epoch===reconstructionRequestEpoch)button.disabled=false;}
   }
   async function scoreReconstructionEvidence(){
     const root=document.querySelector('#reconstructionWorkbench');
