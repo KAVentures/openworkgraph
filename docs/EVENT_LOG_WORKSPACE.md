@@ -2148,6 +2148,31 @@ the section offers 0.3, 0.5, 0.7 and 0.9) and when seen at least the chosen numb
 `GET /v1/event-logs/{log_id}/heuristics-net?dependency_threshold=&and_threshold=&min_occurrences=&all_connected=`
 plus the case-filter parameters. Agents with access to a shared log use `get_process_heuristics_net`.
 
+## Unusual cases
+
+**Unusual cases** ranks the cases that stand out from the rest of the selection, as the outlier
+and anomaly views of Celonis and UiPath Process Mining do, and says why for each one. Every case is
+compared with the selection on transparent signals:
+
+- **Rare path**: under 1% of cases (or only this one) followed exactly the same activities, and
+  paths that rare cover at most 5% of cases. In a log where most paths are unique, being unique is
+  not unusual and is not flagged.
+- **Unusually slow / fast**: the case's duration is at least 3 robust standard deviations from the
+  usual, measured on log-duration with the median and median absolute deviation, so a few extreme
+  cases do not hide each other.
+- **Unusually many events**: the same test on the number of events.
+- **Heavy rework**: the same test on the number of repeated activities (at least two).
+- **Rare activity**: the case contains an activity found in under 1% of cases, or in no other case.
+
+Each signal adds 0.25 to 1 to the score; robust-z signals grow from 0.25 at the threshold to 1 at
+twice it. The list shows the top cases with their reasons, the median case for comparison, and an
+**Explain** button that opens the case in **Explain a case**. At least 20 cases are needed. Unusual
+is not wrong: rare paths and long durations are often legitimate.
+
+`GET /v1/event-logs/{log_id}/unusual-cases?limit=25` plus the case-filter parameters. Agents use
+`get_unusual_process_cases`; case IDs and paths are included only for logs shared at the cases
+level.
+
 ## Milestone funnel
 
 **Milestone funnel** follows cases through 2 to 8 activities you choose, in order, as Celonis's
