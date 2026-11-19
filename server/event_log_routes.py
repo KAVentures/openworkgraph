@@ -109,17 +109,31 @@ def _case_filter(started_from: str = Query(default="", max_length=64),
                  starts_with: str = Query(default="", max_length=200),
                  ends_with: str = Query(default="", max_length=200),
                  duration_min: float | None = Query(default=None, ge=0, le=10 ** 10),
-                 duration_max: float | None = Query(default=None, ge=0, le=10 ** 10)) -> dict[str, Any]:
+                 duration_max: float | None = Query(default=None, ge=0, le=10 ** 10),
+                 ended_from: str = Query(default="", max_length=64),
+                 ended_before: str = Query(default="", max_length=64),
+                 events_min: int | None = Query(default=None, ge=1, le=10 ** 9),
+                 events_max: int | None = Query(default=None, ge=1, le=10 ** 9),
+                 path_cases_min: int | None = Query(default=None, ge=1, le=10 ** 9),
+                 path_cases_max: int | None = Query(default=None, ge=1, le=10 ** 9),
+                 rework: bool | None = Query(default=None)) -> dict[str, Any]:
     """The case filter shared by analysis views; ``follows`` is a JSON list of follower rules.
 
     ``starts_with``/``ends_with`` keep cases whose first/last activity is the given one; ``duration_min``
-    (inclusive) and ``duration_max`` (exclusive) bound the case duration in seconds.
+    (inclusive) and ``duration_max`` (exclusive) bound the case duration in seconds. ``ended_from``/
+    ``ended_before`` bound the last event's time; ``events_min``/``events_max`` the events per case and
+    ``path_cases_min``/``path_cases_max`` how many cases share the case's exact path (all inclusive);
+    ``rework`` keeps cases that repeat an activity (true) or that repeat none (false).
     """
     cohort: dict[str, Any] = {"started_from": started_from, "started_before": started_before, "resource": resource,
                               "activity": activity, "attribute": attribute, "event_attribute": event_attribute,
                               "tag": tag, "starts_with": starts_with, "ends_with": ends_with}
     if duration_min is not None or duration_max is not None:
         cohort["duration"] = {k: v for k, v in (("min", duration_min), ("max", duration_max)) if v is not None}
+    cohort.update({"ended_from": ended_from, "ended_before": ended_before, "rework": rework})
+    for key, low, high in (("events", events_min, events_max), ("path_cases", path_cases_min, path_cases_max)):
+        if low is not None or high is not None:
+            cohort[key] = {k: v for k, v in (("min", low), ("max", high)) if v is not None}
     if follows:
         try:
             cohort["follows"] = json.loads(follows)

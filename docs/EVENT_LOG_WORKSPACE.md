@@ -2000,6 +2000,27 @@ cohort they are `starts_with`, `ends_with` and `duration: {"min": s, "max": s}`.
 every other condition and apply to the same views. Saved filters keep them. A saved filter whose
 first or last activity is no longer in the log is flagged, like its follower rules.
 
+**End time, events, path frequency and rework.** Four more filters follow Disco's timeframe,
+performance and variation filters:
+
+* **Case ended**: the last recorded event is on or after one date and/or before another
+  (`ended_from`, `ended_before`; timezone-qualified ISO times in the API, dates in the
+  dashboard). This complements the start-period filter, for example to keep cases that finished
+  last month.
+* **Events per case**: at least and/or at most a number of recorded events (`events_min`,
+  `events_max`; both inclusive).
+* **Path frequency**: keeps cases whose exact path (sequence of activities) is followed by at
+  least and/or at most a number of cases (`path_cases_min`, `path_cases_max`; both inclusive).
+  "At least 10" keeps the mainstream paths; "at most 2" keeps the rare ones. The count is taken
+  over all cases under the case notion, before the other filters apply, so it does not change
+  when another filter is added.
+* **Rework**: `rework=true` keeps cases that repeat at least one activity; `rework=false` keeps
+  cases that repeat none.
+
+In a JSON cohort they are `ended_from`, `ended_before`, `events: {"min": n, "max": n}`,
+`path_cases: {"min": n, "max": n}` and `rework: true|false`. They combine with every other
+condition, apply to the same views, and are kept by saved filters.
+
 The case pickers inside individual sections take the same numeric range, under "Numeric case
 attribute", "From (inclusive)" and "Below (exclusive)". These are KPIs, the cohort benchmark and
 map comparison, the saved-graph comparison, case tags, saving cases as a log, case metrics and
