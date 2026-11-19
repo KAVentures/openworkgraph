@@ -2241,6 +2241,14 @@
                current.review?.status!=="reviewed_design"){
               fail("Current authorized process is archived, changed, inaccessible, mismatched or lacks independent design review of this revision.");return;
             }
+            // Inspection may fetch the latest revision while the UI still shows
+            // an older one. Never enable navigation into a mismatched review form.
+            if(chosen.viewing_historical_revision||chosen.archived||
+               chosen.process.revision!==p.revision||
+               chosen.process.content_sha256!==p.content_sha256){
+              fail("The displayed review form is not the inspected latest revision. Open the latest revision and reauthorize inspection.");
+              return;
+            }
             $("handoffStatus").textContent="MATCH: Fresh authorized, independently design-reviewed process revision "+p.revision+" and SHA-256 match. Eligible only for further human review. Consent, owner approval, source access, retention and execution authorization remain unverified.";
             $("handoffReview").disabled=false;
           }catch(_){if(ticket===handoffGeneration)fail("Fresh authenticated read failed or access was withdrawn.");}
