@@ -382,6 +382,15 @@ that follow the model exactly, the steps most often skipped or done where the mo
 them, how the most common non-fitting paths are explained, and, when cases span several months,
 fitness by the month cases started. The section is left out when the model cannot be computed.
 
+## In plain words
+
+**Summarize in plain words**, at the top of the results, writes a short summary of the selection: its
+size and period, how long a typical case takes, the most common path, how many cases repeat
+activities, how well cases follow the discovered model (and which step is most often skipped or out
+of place), the top two automatic insights, and how many cases stand out. No language model is used:
+each sentence is filled from a computed figure, and **Show** jumps to the analysis behind it.
+`GET /v1/event-logs/{log_id}/story` plus the case-filter parameters.
+
 ## Finding an analysis
 
 The results page has many analysis sections. **Find an analysis**, at the top of the results, lists

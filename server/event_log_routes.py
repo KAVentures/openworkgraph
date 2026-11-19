@@ -1053,6 +1053,15 @@ def event_log_model_comparison(request: Request, log_id: str, group_a: str = Que
     return _respond(change.model_comparison, log_id, group_a, group_b, case_type, noise=noise, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/story")
+def event_log_story(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                    cohort: dict = Depends(_case_filter)):
+    """The process in plain words: sentences filled from computed figures, each linked to its analysis."""
+    from . import event_log_story as story
+    _require_dashboard(request)
+    return _respond(story.story, log_id, case_type, cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/variants")
 def event_log_variants(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                        limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):

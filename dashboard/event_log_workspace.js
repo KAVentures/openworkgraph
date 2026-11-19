@@ -24,6 +24,7 @@
   FILTERED.add('funnel');
   FILTERED.add('unusual-cases');
   FILTERED.add('due-dates');
+  FILTERED.add('story');
   FILTERED.add('next-steps');
   FILTERED.add('petri-net-replay');
   FILTERED.add('petri-net-alignments');
@@ -851,12 +852,36 @@
     results.appendChild(domainPackSection());
     results.appendChild(costSection(names));
     results.prepend(analysisNavigator(results));
+    results.prepend(storySection());
     attachCaseAttributeSuggestions(generation);
     status('');
   }
 
   // A searchable list of the analysis sections below, so a long results page can be navigated by name.
   // Buttons rather than links: the page hash carries the dashboard session.
+  // The log in plain words, on request: each sentence comes from a computed figure and links to its section.
+  function storySection(){
+    const box=document.createElement('section');box.id='owgStory';box.style.marginTop='12px';box.setAttribute('aria-label','Summary in plain words');
+    const run=button('Summarize in plain words','secondary');run.id='owgStoryRun';
+    const out=el('div');out.id='owgStoryText';out.setAttribute('role','status');out.setAttribute('aria-live','polite');
+    box.append(run,out);
+    run.onclick=async()=>{
+      const generation=state.generation;run.disabled=true;out.replaceChildren(el('div','Summarizing…','muted'));
+      try{
+        const r=await getJSON(logPath('story',{}));
+        if(generation!==state.generation)return;
+        const list=el('ul');list.style.margin='6px 0';
+        r.sentences.forEach(sn=>{const li=el('li',sn.text);
+          const target=sn.section&&document.getElementById(sn.section);
+          if(target){const go=button('Show','secondary');go.style.marginLeft='6px';go.setAttribute('aria-label','Show the analysis: '+sn.text.slice(0,60));
+            go.onclick=()=>{target.scrollIntoView({block:'start'});const h=target.querySelector('h3');if(h){h.tabIndex=-1;h.focus({preventScroll:true});}};li.appendChild(go);}
+          list.appendChild(li);});
+        out.replaceChildren(list,el('div',r.caveat,'muted'));
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{run.disabled=false;}};
+    return box;
+  }
+
   function analysisNavigator(results){
     const nav=document.createElement('nav');nav.id='owgAnalysisNav';nav.setAttribute('aria-label','Analyses');nav.style.marginTop='12px';
     const sections=[...results.children].filter(box=>box.firstElementChild&&box.firstElementChild.tagName==='H3');

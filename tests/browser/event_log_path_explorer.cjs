@@ -34,6 +34,11 @@ const path=require('node:path');
    await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Imported 43 events'}).waitFor();
    await page.locator('#owgEventLogAnalyze').click();
+   // The plain-words summary: figures from this log, and a Show button that jumps to the path explorer.
+   await page.locator('#owgStoryRun').click();
+   await page.locator('#owgStoryText').filter({hasText:'The log has 12 cases with 43 events across 6 activities'}).waitFor();
+   await page.locator('#owgStoryText li',{hasText:'The most common path'}).getByRole('button',{name:/Show the analysis/}).click();
+   assert.equal(await page.evaluate(()=>document.activeElement.textContent),'Path explorer');
    const box=page.locator('#owgPaths');await box.waitFor();await box.scrollIntoViewIfNeeded();
    const rowsText=async()=>(await page.locator('#owgPathsResults tbody tr').allTextContents()).join('|');
    await page.locator('#owgPathsStart').click();
@@ -57,6 +62,6 @@ const path=require('node:path');
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgPaths'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Path explorer browser acceptance passed: start, two levels down with shares, back, anywhere anchor, WCAG audit.');
+   console.log('Path explorer browser acceptance passed: start, two levels down with shares, back, anywhere anchor, plain-words summary, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});
