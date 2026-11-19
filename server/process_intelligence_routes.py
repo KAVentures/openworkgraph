@@ -124,6 +124,113 @@ async def agent_decision_rules(request: Request, log_id: str, activity: str | No
     return await _answer(sharing.decision_rules, log_id, activity, case_type, max_depth)
 
 
+@router.get("/v1/process-intelligence/{log_id}/temporal-profile")
+async def agent_temporal_profile(request: Request, log_id: str, zeta: float = Query(default=3.0, ge=0.5, le=10),
+                                 case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.temporal_profile, log_id, case_type, zeta)
+
+
+@router.get("/v1/process-intelligence/{log_id}/heuristics-net")
+async def agent_heuristics_net(request: Request, log_id: str,
+                               dependency_threshold: float = Query(default=0.5, ge=0, le=1),
+                               case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.heuristics_net, log_id, case_type, dependency_threshold)
+
+
+@router.get("/v1/process-intelligence/{log_id}/footprints")
+async def agent_footprints(request: Request, log_id: str, noise: float = Query(default=0.2, ge=0, lt=1),
+                           case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.footprints, log_id, case_type, noise)
+
+
+@router.get("/v1/process-intelligence/{log_id}/model-quality")
+async def agent_model_quality(request: Request, log_id: str, levels: str | None = Query(default=None, max_length=100),
+                              case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.model_quality, log_id, case_type, levels)
+
+
+@router.get("/v1/process-intelligence/{log_id}/model-deviations")
+async def agent_model_deviations(request: Request, log_id: str, noise: float = Query(default=0.2, ge=0, lt=1),
+                                 case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.model_deviations, log_id, case_type, noise)
+
+
+@router.get("/v1/process-intelligence/{log_id}/funnel")
+async def agent_funnel(request: Request, log_id: str, step: list[str] = Query(default=[], max_length=500),
+                       within_hours: float | None = Query(default=None, gt=0),
+                       case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.funnel, log_id, step, case_type, within_hours)
+
+
+@router.get("/v1/process-intelligence/{log_id}/unusual-cases")
+async def agent_unusual_cases(request: Request, log_id: str, limit: int = Query(default=25, ge=1, le=50),
+                              case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.unusual_cases, log_id, case_type, limit)
+
+
+@router.get("/v1/process-intelligence/{log_id}/due-dates")
+async def agent_due_dates(request: Request, log_id: str, due_activity: str = Query(min_length=1, max_length=500),
+                          due_attribute: str | None = Query(default=None, max_length=200),
+                          due_days: float | None = Query(default=None, gt=0),
+                          early_days: float | None = Query(default=None, gt=0),
+                          case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.due_dates, log_id, due_activity, case_type, due_attribute, due_days, early_days)
+
+
+@router.get("/v1/process-intelligence/{log_id}/next-steps")
+async def agent_next_steps(request: Request, log_id: str, step: list[str] = Query(default=[], max_length=500),
+                           anchor: str = Query(default="start", max_length=20),
+                           case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.next_steps, log_id, step, case_type, anchor)
+
+
+@router.get("/v1/process-intelligence/{log_id}/insights")
+async def agent_insights(request: Request, log_id: str, sla_hours: float | None = Query(default=None, gt=0),
+                         limit: int = Query(default=8, ge=1, le=30),
+                         case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.insights, log_id, case_type, sla_hours, limit)
+
+
+@router.get("/v1/process-intelligence/{log_id}/model-deviation-causes")
+async def agent_model_deviation_causes(request: Request, log_id: str, noise: float = Query(default=0.2, ge=0, lt=1),
+                                       case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.model_deviation_causes, log_id, case_type, noise)
+
+
+@router.get("/v1/process-intelligence/{log_id}/case-alignment")
+async def agent_case_alignment(request: Request, log_id: str, case_id: str = Query(min_length=1, max_length=500),
+                               noise: float = Query(default=0.2, ge=0, lt=1),
+                               case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.case_alignment, log_id, case_id, case_type, noise)
+
+
+@router.get("/v1/process-intelligence/{log_id}/brief")
+async def agent_brief(request: Request, log_id: str, sla_hours: float | None = Query(default=None, gt=0),
+                      case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.brief, log_id, case_type, sla_hours)
+
+
+@router.get("/v1/process-intelligence/{log_id}/model-change")
+async def agent_model_change(request: Request, log_id: str, split: str | None = Query(default=None, max_length=64),
+                             noise: float = Query(default=0.2, ge=0, lt=1),
+                             case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.model_change, log_id, case_type, split, noise)
+
+
 @router.get("/v1/process-intelligence/{log_id}/signals")
 async def agent_signals(request: Request, log_id: str):
     _require_agent_access(request)

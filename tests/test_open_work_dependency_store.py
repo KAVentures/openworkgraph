@@ -387,3 +387,38 @@ def test_dependency_store_rejects_dangling_rollback_journal_symlink(tmp_path):
     with pytest.raises(ValueError, match="rollback journal"):
         declare_dependency(**kwargs)
     assert journal.is_symlink()
+
+
+def test_revoked_dependency_identity_erased_from_database_bytes(tmp_path):
+    """Revocation must remove retained SQLite cell payload, not only SQL rows."""
+    from server.open_work_dependency_store import purge_scope
+    path = tmp_path / "erasure.sqlite"
+    scope = "revoked_" + "x" * 100
+    actor = "actor_" + "y" * 100
+    case_id = "case_" + "z" * 100
+    prerequisite = "prerequisite_" + "q" * 100
+    assert declare_dependency(str(path), scope=scope, actor=actor,
+                              case_id=case_id, prerequisite=prerequisite)
+    assert case_id.encode() in path.read_bytes()
+    assert purge_scope(str(path), scope=scope) == 1
+    assert dependency_context(str(path), scope=scope, actor=actor,
+                              case_id=case_id)["direct"] == []
+    raw = path.read_bytes()
+    for value in (scope, actor, case_id, prerequisite):
+        assert value.encode() not in raw
+
+
+def test_actor_revocation_erases_only_own_dependency_payload(tmp_path):
+    path = tmp_path / "actor-erasure.sqlite"
+    removed = "removed_" + "r" * 100
+    retained = "retained_" + "s" * 100
+    assert declare_dependency(str(path), scope="tenant", actor="alice",
+                              case_id=removed, prerequisite="approval")
+    assert declare_dependency(str(path), scope="tenant", actor="bob",
+                              case_id=retained, prerequisite="approval")
+    assert purge_actor(str(path), scope="tenant", actor="alice") == 1
+    raw = path.read_bytes()
+    assert removed.encode() not in raw
+    assert retained.encode() in raw
+    assert dependency_context(str(path), scope="tenant", actor="bob",
+                              case_id=retained)["direct"] == ["approval"]

@@ -32,6 +32,7 @@ const path=require('node:path');
   await page.locator('#owgEventLogExportFormat').selectOption('sourcecsv');
   const [exact]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogExport').click()]);
   const exactText=await fs.readFile(await exact.path(),'utf8');assert.match(exactText,/crm,=event,crm,=case, =1\+1/);
+  const previousLog=await page.locator('#owgEventLogPick').inputValue();
   const xes='<log><trace><string key="concept:name" value="case-1"/><string key="region" value="north"/><event>'+
     '<string key="concept:name" value="Review"/><date key="time:timestamp" value="2026-01-01T00:00:00Z"/>'+
     '<string key="lifecycle:transition" value="complete"/></event></trace></log>';
@@ -40,6 +41,8 @@ const path=require('node:path');
   await page.locator('#owgEventLogConsent').check();
   await page.locator('#owgEventLogImport').click();
   await page.locator('#owgEventLogStatus').filter({hasText:'Imported 1 events'}).waitFor();
+  await page.waitForFunction(previous=>document.querySelector('#owgEventLogPick').value!==previous&&
+    document.querySelector('#owgEventLogCaseType').value==='case',previousLog);
   await page.locator('#owgEventLogExportFormat').selectOption('xes-attributes');
   await page.locator('#owgEventLogStatus').filter({hasText:'Includes retained trace and event attribute values'}).waitFor();
   const [attributeExport]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogExport').click()]);
