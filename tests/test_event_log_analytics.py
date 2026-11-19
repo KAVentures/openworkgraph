@@ -686,6 +686,12 @@ with TestClient(app) as client:
     assert a.status_code == b.status_code == 200, (a.text, b.text)
     assert len(a.json()["source_content_sha256"]) == 64
     assert a.json()["source_content_sha256"] != b.json()["source_content_sha256"]
+    # Case identifiers differ, but aggregate cohort counts and durations are equal.
+    # A result-only freshness check cannot distinguish these two sources.
+    assert a.json()["rows"] == b.json()["rows"]
+    assert a.json()["columns"] == b.json()["columns"]
+    assert a.json()["units"] == b.json()["units"]
+    assert analyze(first, session).json()["source_content_sha256"] == a.json()["source_content_sha256"]
     assert a.headers["cache-control"] == "no-store"
     old_limit = provenance.MAX_SOURCE_ROWS
     try:
