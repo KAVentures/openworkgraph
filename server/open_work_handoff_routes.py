@@ -288,9 +288,61 @@ async def granted_reviewed_case_context(request: Request, response: Response):
          "provider_state": "unknown", "outcome_verified": False}
         for ref in dependencies
     ]
+    # A bounded, read-only transitive projection gives an authorized agent
+    # actionable prerequisite ordering without copying owner-only declarations,
+    # treating edges as source facts, or granting authority over other cases.
+    # Only currently reviewed records participate; absent prerequisites remain
+    # explicitly unknown. Reject malformed/cyclic reviewed graphs rather than
+    # returning a misleading partial dependency chain.
+    import re
+    ref_pattern = re.compile(r"owg:w:[0-9a-f]{32}\\Z")
+    reviewed_edges = {}
+    for entry in snapshot["items"]:
+        node = entry.get("work_item_ref")
+        if not isinstance(node, str) or not ref_pattern.fullmatch(node) or node in reviewed_edges:
+            raise HTTPException(503, "reviewed dependency graph unavailable")
+        edges = entry.get("depends_on_work_item_refs", [])
+        if (not isinstance(edges, list) or len(edges) > 8 or
+            any(not isinstance(edge, str) or not ref_pattern.fullmatch(edge) for edge in edges) or
+            len(set(edges)) != len(edges)):
+            raise HTTPException(503, "reviewed dependency graph unavailable")
+        reviewed_edges[node] = edges
+    visited = set()
+    visiting = set()
+    ordered = []
+    def walk(node):
+        if node in visiting:
+            raise HTTPException(503, "reviewed dependency graph unavailable")
+        if node in visited:
+            return
+        if len(visited) + len(visiting) >= 32:
+            raise HTTPException(503, "reviewed dependency graph exceeds bounded context")
+        visiting.add(node)
+        for prerequisite in reviewed_edges.get(node, []):
+            if prerequisite in reviewed_edges:
+                walk(prerequisite)
+            elif prerequisite not in visited:
+                visited.add(prerequisite)
+                ordered.append({"work_item_ref": prerequisite,
+                                "review_state": "unknown_or_not_retained",
+                                "provider_state": "unknown", "outcome_verified": False})
+        visiting.remove(node)
+        visited.add(node)
+        if node != identity["work_item_ref"]:
+            ordered.append({"work_item_ref": node, "review_state": "currently_reviewed",
+                            "provider_state": "unknown", "outcome_verified": False})
+    walk(identity["work_item_ref"])
+    # Do not let an asynchronous permission check be the last operation before
+    # disclosure: grant and source consent must still be current at return.
+    if await asyncio.to_thread(_source_scope) != scope or not grants.authenticate(
+        request.headers.get("authorization"), identity["work_item_ref"]
+    ):
+        raise HTTPException(409, "source or grant changed during dependency projection")
     safe = {key: value for key, value in item.items() if key not in ("edit_token", "scope_ref")}
     return {"format": "openworkgraph.granted-reviewed-case-context.v1",
             "dependency_review": dependency_review,
+            "transitive_dependency_review": ordered,
+            "transitive_dependencies_bounded": True,
             "case": safe, "source_state": "unknown_until_explicit_recheck",
             "provider_receipt_verified": False, "customer_outcome_verified": False,
             "agent_execution_authorized": False, "source_read_performed": False}
