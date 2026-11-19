@@ -2240,13 +2240,14 @@
         $("handoffCheck").addEventListener("click",()=>run(async()=>{
           resetHandoff("Checking latest authorized process…");
           const ticket=handoffGeneration, file=$("handoffPacket").files[0], chosen=selected;
+          const identityTicket=identityGeneration, authorizedCredential=credential;
           const fail=reason=>{if(ticket===handoffGeneration)$("handoffStatus").textContent="REFUSED: "+reason+" No execution authorization.";};
           if(!chosen||!credential||!file){fail("Sign in, select a shared process and a packet.");return;}
           if(!$("handoffConsent").checked){fail("Explicit authorization to inspect this packet is required.");return;}
           if(file.size>262144){fail("Packet exceeds 256 KiB.");return;}
           let packet;
           try{packet=JSON.parse(await file.text());}catch(_){fail("Invalid packet JSON.");return;}
-          if(ticket!==handoffGeneration||selected!==chosen||!$("handoffConsent").checked)return;
+          if(ticket!==handoffGeneration||identityTicket!==identityGeneration||credential!==authorizedCredential||selected!==chosen||!$("handoffConsent").checked)return;
           const p=packet?.process;
           if(packet?.format!=="openworkgraph.evidence-handoff-review.v1"||
              packet.scope!=="human_review_only"||packet.execution_authorized!==false||
@@ -2259,7 +2260,7 @@
           if(p.workflow_id!==chosen.process?.workflow_id){fail("Packet workflow differs from selected process.");return;}
           try{
             const current=await call("/v1/human/processes/"+encodeURIComponent(p.workflow_id));
-            if(ticket!==handoffGeneration||selected!==chosen||!$("handoffConsent").checked)return;
+            if(ticket!==handoffGeneration||identityTicket!==identityGeneration||credential!==authorizedCredential||selected!==chosen||!$("handoffConsent").checked)return;
             if(!current?.process||current.process.workflow_id!==p.workflow_id||
                current.archived||current.viewing_historical_revision||
                current.process.revision!==p.revision||
