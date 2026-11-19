@@ -2075,19 +2075,24 @@
               throw new Error("Reviewed handoff changed; reopen latest revision and inspect again.");
             }
           }
-          render(
-            await call(
-              "/v1/human/processes/" + record.workflow_id + "/reviews",
-              {
-                revision: record.revision,
-                content_sha256: record.content_sha256,
-                expected_review_number: selected.your_review_number,
-                decision,
-                comment: $("comment").value,
-                user_confirmed: true,
-              },
-            ),
+          // Do not let an old review response repopulate a different user's
+          // session or a newly selected process after the POST is in flight.
+          const reviewIdentity=identityGeneration, reviewCredential=credential;
+          const reviewSelection=selected;
+          const reviewResult=await call(
+            "/v1/human/processes/" + record.workflow_id + "/reviews",
+            {
+              revision: record.revision,
+              content_sha256: record.content_sha256,
+              expected_review_number: reviewSelection.your_review_number,
+              decision,
+              comment: $("comment").value,
+              user_confirmed: true,
+            },
           );
+          if(reviewIdentity!==identityGeneration||reviewCredential!==credential||
+             selected!==reviewSelection)return;
+          render(reviewResult);
           note(
             "Design review recorded against the exact revision and content hash.",
           );
