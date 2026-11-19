@@ -789,3 +789,43 @@ def test_malformed_review_refused_before_append_or_checkpoint(monkeypatch, inval
         )
     append.assert_not_called()
     checkpoint.assert_not_called()
+
+
+@pytest.mark.parametrize("route_name,adapter_name,arguments,adapter_result", [
+    ("operator_reviewed_commit", "server.m365_outlook_reviewed_transaction.execute",
+     {"reviewed_csv_sha256": FIRST, **COMMIT_APPROVALS},
+     {"status": "checkpoint_committed", "generation": 1}),
+    ("operator_next_round_prepare", "server.m365_next_round_review.prepare",
+     {"expected_generation": 1, "expected_previous_candidate_sha256": FIRST,
+      **EXTRACT_APPROVALS},
+     {"status": "operator_review_required", "reviewed_csv_sha256": SECOND,
+      "proposed_generation": 2, "event_snapshots": 1,
+      "removal_markers_for_review": 0}),
+    ("operator_recovery_triage", "server.m365_outlook_recovery_triage.triage",
+     {"consent_local_read": True, "confirm_removals_reviewed": True},
+     {"status": "receipt_verified"}),
+])
+def test_dashboard_session_revoked_during_operator_operation_never_discloses_result(
+        monkeypatch, route_name, adapter_name, arguments, adapter_result):
+    """A valid entry session can expire during an authenticated operation.
+
+    The adapter may already have written a receipt or private candidate;
+    the dashboard must not disclose the result or silently retry it.
+    """
+    from server import m365_operator_audit_routes as routes
+
+    configure(monkeypatch)
+    with (
+        patch("server.m365_operator_audit_routes.dashboard_session_valid",
+              side_effect=[True, False]) as valid,
+        patch(adapter_name, return_value=adapter_result) as adapter,
+    ):
+        with pytest.raises(HTTPException) as error:
+            getattr(routes, route_name)(request(), **arguments)
+        assert error.value.status_code == 409
+        assert "Do not retry" in str(error.value.detail)
+        assert FIRST not in str(error.value.detail)
+        assert SECOND not in str(error.value.detail)
+        assert "secret-" not in str(error.value.detail)
+        adapter.assert_called_once()
+        assert valid.call_count == 2
