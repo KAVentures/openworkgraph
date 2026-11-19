@@ -266,7 +266,7 @@
     <section id="selected" hidden>
       <h2 id="selectedTitle"></h2>
       <p id="selectedMeta"></p>
-      <fieldset id="handoffPreflight"><legend>Authenticated handoff freshness</legend><p>Local review-only packet; only its workflow ID is used for a fresh authorized Gateway read. Matching is not consent, owner approval, source permission or execution authority.</p><label>Evidence handoff packet (JSON) <input id="handoffPacket" type="file" accept=".json,application/json"></label><label><input id="handoffConsent" type="checkbox"> I explicitly authorize inspecting this local review-only packet against the latest process revision using my current Gateway access. This does not authorize execution or source reads.</label><button id="handoffCheck" type="button">Check latest authorized revision</button><button id="handoffClear" type="button">Clear check</button><output id="handoffStatus" role="status" aria-live="polite">No packet checked.</output></fieldset>
+      <fieldset id="handoffPreflight"><legend>Authenticated handoff freshness</legend><p>Local review-only packet; only its workflow ID is used for a fresh authorized Gateway read. Matching is not consent, owner approval, source permission or execution authority.</p><label>Evidence handoff packet (JSON) <input id="handoffPacket" type="file" accept=".json,application/json"></label><label><input id="handoffConsent" type="checkbox"> I explicitly authorize inspecting this local review-only packet against the latest process revision using my current Gateway access. This does not authorize execution or source reads.</label><button id="handoffCheck" type="button">Check latest authorized revision</button><button id="handoffClear" type="button">Clear check</button><button id="handoffReview" type="button" disabled>Continue to revision review</button><output id="handoffStatus" role="status" aria-live="polite">No packet checked.</output></fieldset>
 
       <button id="revise" disabled>Edit selected design</button>
       <div id="design"></div>
@@ -308,7 +308,7 @@
       </fieldset>
       <div class="grid">
         <fieldset>
-          <legend>Revision review</legend>
+          <legend id="revisionReview">Revision review</legend>
           <p id="reviewState"></p>
           <div id="reviews"></div>
           <label
@@ -2196,7 +2196,13 @@
         function resetHandoff(message="No packet checked.") {
           handoffGeneration++;
           $("handoffStatus").textContent=message;
+          $("handoffReview").disabled=true;
         }
+        $("handoffReview").addEventListener("click",()=>{
+          if($("handoffReview").disabled||!selected||!credential||!$("handoffConsent").checked)return;
+          $("revisionReview").scrollIntoView({block:"start"});
+          $("comment").focus();
+        });
         $("handoffPacket").addEventListener("change",()=>{ $("handoffConsent").checked=false; resetHandoff("Packet changed. Reauthorize inspection."); });
         $("handoffConsent").addEventListener("change",()=>resetHandoff("Authorization changed. Check again."));
         $("handoffClear").addEventListener("click",()=>{
@@ -2236,6 +2242,7 @@
               fail("Current authorized process is archived, changed, inaccessible, mismatched or lacks independent design review of this revision.");return;
             }
             $("handoffStatus").textContent="MATCH: Fresh authorized, independently design-reviewed process revision "+p.revision+" and SHA-256 match. Eligible only for further human review. Consent, owner approval, source access, retention and execution authorization remain unverified.";
+            $("handoffReview").disabled=false;
           }catch(_){if(ticket===handoffGeneration)fail("Fresh authenticated read failed or access was withdrawn.");}
         }));
       })();
