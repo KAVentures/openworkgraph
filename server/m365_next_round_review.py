@@ -81,8 +81,17 @@ def prepare(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
         expected_review_csv_sha256=digest,
         expected_previous_candidate_sha256=expected_previous_candidate_sha256,
         consent_local_read=True)
-    if proposal["proposed_generation"] != expected_generation + 1:
-        raise ReceiptError("Concurrent checkpoint transition")
+    if (type(proposal) is not dict
+            or proposal.get("status") != "review_ready_for_explicit_commit"
+            or type(proposal.get("proposed_generation")) is not int
+            or proposal["proposed_generation"] != expected_generation + 1
+            or type(proposal.get("checkpoint_predecessor_generation")) is not int
+            or proposal["checkpoint_predecessor_generation"] != expected_generation
+            or type(proposal.get("reviewed_event_snapshots")) is not int
+            or proposal["reviewed_event_snapshots"] != checked["event_snapshots"]
+            or type(proposal.get("removal_markers_for_review")) is not int
+            or proposal["removal_markers_for_review"] != checked["removal_markers_for_review"]):
+        raise ReceiptError("Invalid or concurrent checkpoint review preflight")
     # The preflight is read-only, not a lock. Refuse to present a review
     # as current if another operator committed while it was running.
     current = inspect_checkpoint(
