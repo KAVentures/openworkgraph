@@ -17,6 +17,7 @@
   FILTERED.add('model-discovery.pnml');
   FILTERED.add('temporal-profile');
   FILTERED.add('heuristics-net');
+  FILTERED.add('footprints');
 
   const el=(tag,text,cls)=>{
     const node=document.createElement(tag);
@@ -802,6 +803,7 @@
     results.appendChild(dottedSection());
     results.appendChild(spectrumSection());
     results.appendChild(heuristicsSection());
+    results.appendChild(footprintsSection());
     results.appendChild(temporalProfileSection());
     results.appendChild(waitingSection());
     results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity),inspection));
@@ -3718,6 +3720,37 @@
         const more=document.createElement('details');more.appendChild(el('summary','All arrows'));
         more.appendChild(table(['From','To','Transitions','Dependency','Kept because'],arrows.map(e=>[e.from,e.to,Number(e.transition_count).toLocaleString(),String(e.dependency),({threshold:'above threshold',best_connection:'best connection',short_loop:'short loop'})[e.kept_by]||e.kept_by])));
         out.append(more,el('div',r.note,'muted'));
+      }catch(error){statusLine.textContent=error.message;}
+      finally{run.disabled=false;}};
+    return box;
+  }
+
+  function footprintsSection(){
+    const box=section('Footprints');box.id='owgFootprints';
+    box.appendChild(el('div','For every pair of activities, whether one directly follows the other (→), both orders occur (||) or neither (#): once from the recorded cases and once from the discovered model draft. Cells where they differ show orderings the model leaves out or allows without any case taking them.','muted'));
+    const noise=select('owgFootprintsNoise',[['0.2','Model drops orderings under 20% (default)'],['0','Model keeps every ordering'],['0.4','Model drops orderings under 40%']]);
+    const run=button('Compare footprints','secondary');run.id='owgFootprintsRun';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Model',noise),run);
+    const statusLine=el('div',null,'muted');statusLine.id='owgFootprintsStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgFootprintsResults';
+    box.append(row,statusLine,out);
+    run.onclick=async()=>{
+      const generation=state.generation;run.disabled=true;statusLine.textContent='Comparing…';out.replaceChildren();
+      try{
+        const r=await getJSON(logPath('footprints',{noise:noise.value}));
+        if(generation!==state.generation)return;
+        const c=r.conformance;
+        statusLine.textContent=Math.round((c.footprint_fitness||0)*100)+'% of '+c.cells+' cells agree across '+r.activities.length+' activities in '+Number(r.cases).toLocaleString()+' cases; '+c.log_pairs_not_in_model+' orderings only in the log, '+c.model_pairs_not_in_log+' only in the model.'+(r.cases_before_filter?' Filtered from '+Number(r.cases_before_filter).toLocaleString()+' cases.':'');
+        if(r.differences.length){out.appendChild(el('h4','Where log and model differ'));
+          out.appendChild(table(['From','To','Seen in','Cases','Log','Model'],r.differences.map(d=>[d.from,d.to,d.kind==='in_log_not_in_model'?'Log only':'Model only',Number(d.cases).toLocaleString(),d.log,d.model])));}
+        const extra=[['Start',r.start_activities.log_only],['End',r.end_activities.log_only]].filter(([,v])=>v.length);
+        if(extra.length)out.appendChild(el('div',extra.map(([k,v])=>k+' activities only in the log: '+v.join(', ')).join('. ')+'.','muted'));
+        const grid=document.createElement('details');grid.appendChild(el('summary','Footprint matrix (log / model)'));
+        const t=table(['',...r.activities],r.matrix.map(row=>[row.activity,...row.cells.map(x=>x.log===x.model?x.log:x.log+' / '+x.model)]));
+        t.id='owgFootprintsMatrix';
+        r.matrix.forEach((row,i)=>row.cells.forEach((x,j)=>{if(x.log!==x.model){const cell=t.querySelector('tbody').rows[i].cells[j+1];cell.style.fontWeight='600';cell.setAttribute('aria-label',row.activity+' to '+r.activities[j]+': log '+x.log+', model '+x.model+' (differs)');}}));
+        grid.appendChild(t);
+        out.append(grid,el('div',r.caveat,'muted'));
       }catch(error){statusLine.textContent=error.message;}
       finally{run.disabled=false;}};
     return box;
