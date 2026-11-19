@@ -129,7 +129,7 @@ const path=require('node:path');
   const downloads=[];
   page.on('download',download=>downloads.push(download.suggestedFilename()));
   await page.locator('#owgAnalysisJson').click();
-  await page.locator('#owgAnalysisMessage').filter({hasText:'Saved-log data or analysis results changed'}).waitFor({timeout:30000});
+  await page.locator('#owgAnalysisStatus').filter({hasText:'Saved-log data or analysis results changed'}).waitFor({timeout:30000});
   assert.equal(revalidationSeen,true,'download must revalidate through authenticated saved-log API');
   assert.deepEqual(downloads,[],'changed recomputation must not trigger JSON download');
   assert.equal(await page.locator('#owgAnalysisCsv').isDisabled(),true,'stale CSV must also be disabled');
