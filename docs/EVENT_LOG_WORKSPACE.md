@@ -411,6 +411,9 @@ Logs with fewer than 5 cases get no findings. Insights are descriptive: they
 show where recorded time and repetition concentrate, not why. A 300,000-event
 log takes about half a second.
 
+Agents with access to a shared log read the same findings with `get_process_insights`
+(aggregates only).
+
 ## Analytics
 
 The dashboard card **Large event logs** (Evidence tab) offers all of the
@@ -1120,6 +1123,9 @@ between the resources named in the log's resource column:
 
 - `handover_of_work`: consecutive events in a case performed by different resources, with
   handover and case counts;
+- `subcontracting`: work that passes from one resource to another and straight back (one
+  resource's event, then another's, then the first one's again), as in PM4Py's subcontracting
+  metric, with occurrence and case counts;
 - `working_together`: pairs of resources that both touched the same cases;
 - `activity_resource_matrix`: event counts per activity and resource;
 - `resources`: events, cases and distinct activities per resource. Resources listed in
