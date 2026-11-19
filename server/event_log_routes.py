@@ -1041,6 +1041,18 @@ def event_log_model_change(request: Request, log_id: str, split: str | None = Qu
     return _respond(change.model_change, log_id, case_type, split=split, noise=noise, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/model-comparison")
+def event_log_model_comparison(request: Request, log_id: str, group_a: str = Query(min_length=3, max_length=400),
+                               group_b: str = Query(min_length=3, max_length=400),
+                               noise: float = Query(default=0.2, ge=0, lt=1),
+                               case_type: str | None = Query(default=None, max_length=200),
+                               cohort: dict = Depends(_case_filter)):
+    """The discovered models of two groups of cases (case attribute values) compared."""
+    from . import event_log_model_change as change
+    _require_dashboard(request)
+    return _respond(change.model_comparison, log_id, group_a, group_b, case_type, noise=noise, cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/variants")
 def event_log_variants(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                        limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):

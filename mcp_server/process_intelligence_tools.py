@@ -317,6 +317,22 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"split": split, "noise": float(noise), "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def compare_process_models(log_id: str, group_a: str, group_b: str, noise: float = 0.2,
+                               case_type: str | None = None) -> dict[str, Any]:
+        """Compare how two groups of cases in a shared log run, each chosen by a case attribute value written as
+        "attribute=value" (for example group_a="region=EU", group_b="region=US"): activity orderings that differ
+        between their discovered models, activities only one group has, and how well each group's cases fit the
+        other group's model. Recorded behaviour only; groups also differ in case mix. Aggregates only.
+        """
+        for name, value in (("group_a", group_a), ("group_b", group_b)):
+            if not isinstance(value, str) or "=" not in value:
+                raise ToolError(f"{name} must look like attribute=value")
+        if isinstance(noise, bool) or not isinstance(noise, (int, float)) or not 0 <= noise < 1:
+            raise ToolError("noise must be a share from 0 up to (not including) 1")
+        return _get("compare_process_models", f"/v1/process-intelligence/{_log(log_id)}/model-comparison",
+                    {"group_a": group_a, "group_b": group_b, "noise": float(noise), "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_signals(log_id: str) -> dict[str, Any]:
         """The owner's signal rules on a shared log (KPI thresholds, case and compliance conditions) and their
         last evaluated state: triggered or not, the measured value or matching cases, and whether the owner

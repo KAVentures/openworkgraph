@@ -20,6 +20,7 @@
   FILTERED.add('footprints');
   FILTERED.add('model-quality');
   FILTERED.add('model-change');
+  FILTERED.add('model-comparison');
   FILTERED.add('funnel');
   FILTERED.add('unusual-cases');
   FILTERED.add('due-dates');
@@ -4052,15 +4053,43 @@
   function modelChangeSection(){
     const box=section('Model change');box.id='owgModelChange';
     box.appendChild(el('div','How the discovered model differs before and after a date: which activities now follow each other differently, which activities are new or gone, and how well each period\'s cases fit the other period\'s model.','muted'));
+    const mode=select('owgModelChangeMode',[['periods','Before and after a date'],['groups','Two groups of cases']]);
+    const groupA=input('owgModelChangeCohortAAttribute','text','e.g. region=EU');groupA.maxLength=400;groupA.autocomplete='off';
+    const groupB=input('owgModelChangeCohortBAttribute','text','e.g. region=US');groupB.maxLength=400;groupB.autocomplete='off';
     const split=input('owgModelChangeSplit','date');
     const noise=select('owgModelChangeNoise',[['0.2','Leave out paths under 20% (default)'],['0','Keep every path'],['0.4','Leave out paths under 40%']]);
     const run=button('Compare periods','secondary');run.id='owgModelChangeRun';
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Split at (empty: median case start)',split),field('Models',noise),run);
+    const splitField=field('Split at (empty: median case start)',split),aField=field('Group A (attribute=value)',groupA),bField=field('Group B (attribute=value)',groupB);
+    const sync=()=>{splitField.hidden=mode.value!=='periods';aField.hidden=bField.hidden=mode.value!=='groups';};mode.onchange=sync;sync();
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Compare',mode),splitField,aField,bField,field('Models',noise),run);
     const statusLine=el('div',null,'muted');statusLine.id='owgModelChangeStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgModelChangeResults';
     box.append(row,statusLine,out);
     const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
     run.onclick=async()=>{
+      if(mode.value==='groups'){
+        if(!groupA.value.includes('=')||!groupB.value.includes('=')){statusLine.textContent='Enter both groups as attribute=value.';out.replaceChildren();return;}
+        const generation=state.generation;run.disabled=true;statusLine.textContent='Discovering both groups…';out.replaceChildren();
+        try{
+          const r=await getJSON(logPath('model-comparison',{group_a:groupA.value.trim(),group_b:groupB.value.trim(),noise:noise.value}));
+          if(generation!==state.generation)return;
+          const c=r.cross_fit,A=r.groups.a,B=r.groups.b;
+          statusLine.textContent=A.filter+' ('+Number(A.cases).toLocaleString()+' cases) against '+B.filter+' ('+Number(B.cases).toLocaleString()+'): '+r.orderings.changed+' of '+r.orderings.pairs_compared+' activity orderings differ. '+B.filter+' cases fit the '+A.filter+' model '+pct(c.b_cases_on_a_model.fitness)+', against '+pct(c.a_cases_on_a_model.fitness)+' for its own cases.';
+          const a=r.activities;
+          if(a.only_a.length||a.only_b.length)out.appendChild(el('div',(a.only_a.length?'Only in '+A.filter+': '+a.only_a.join(', ')+'. ':'')+(a.only_b.length?'Only in '+B.filter+': '+a.only_b.join(', ')+'.':'')));
+          if(r.differences.length){out.appendChild(el('h4','Orderings that differ'));
+            out.appendChild(table(['Activity','Activity',A.filter,B.filter],r.differences.map(x=>[x.from,x.to,x.a,x.b])));}
+          out.appendChild(el('h4','Cross-fit'));
+          out.appendChild(table(['Cases','Model','Alignment fitness','Follow it exactly'],[
+            [A.filter,A.filter,pct(c.a_cases_on_a_model.fitness),pct(c.a_cases_on_a_model.fitting_case_share)],
+            [B.filter,A.filter,pct(c.b_cases_on_a_model.fitness),pct(c.b_cases_on_a_model.fitting_case_share)],
+            [B.filter,B.filter,pct(c.b_cases_on_b_model.fitness),pct(c.b_cases_on_b_model.fitting_case_share)],
+            [A.filter,B.filter,pct(c.a_cases_on_b_model.fitness),pct(c.a_cases_on_b_model.fitting_case_share)]]));
+          out.appendChild(el('div',r.caveat,'muted'));
+        }catch(error){statusLine.textContent=error.message;}
+        finally{run.disabled=false;}
+        return;
+      }
       const generation=state.generation;run.disabled=true;statusLine.textContent='Discovering both periods…';out.replaceChildren();
       try{
         const params={noise:noise.value};if(split.value)params.split=split.value+'T00:00:00Z';

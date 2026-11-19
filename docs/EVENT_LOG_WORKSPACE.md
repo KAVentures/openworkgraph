@@ -2323,6 +2323,15 @@ as a change in the work.
 `GET /v1/event-logs/{log_id}/model-change?split=2024-03-01&noise=0.2` plus the other case-filter
 parameters. Agents use `get_process_model_change` (aggregates only).
 
+**Compare groups** in the same section runs the comparison between two groups of cases chosen by
+case attribute values, such as `region=EU` and `region=US`, as Celonis compares org units (a value
+no case attribute has is looked up in the cases' event attributes instead): the
+orderings that differ, activities only one group has, and how well each group's cases fit the other
+group's model. Each group needs at least 10 cases, and an attribute case filter cannot be combined
+with the groups. Groups can also differ in case mix and in how their systems record events.
+`GET /v1/event-logs/{log_id}/model-comparison?group_a=region=EU&group_b=region=US`; agents use
+`compare_process_models`.
+
 ## Model quality
 
 **Model quality** discovers the model at several noise levels (by default 0, 10%, 20%, 30% and 50%),

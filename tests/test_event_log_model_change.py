@@ -55,3 +55,24 @@ def test_median_split_and_refusals():
         mc.model_change(log, split="soon")
     with pytest.raises(EventLogWorkspaceError, match="start-date filter"):
         mc.model_change(log, split="2024-02-15", cohort={"started_from": "2024-01-01T00:00:00Z"})
+
+
+def test_two_groups_by_case_attribute(tmp_path):
+    from server import event_log_case_attributes as case_attributes
+    log = _log()
+    table = tmp_path / "regions.csv"
+    table.write_text("id,region\n" + "".join(f"a{i},EU\n" for i in range(20)) + "".join(f"b{i},US\n" for i in range(20)))
+    case_attributes.add(log, table, id_column="id", columns=["region"])
+    r = mc.model_comparison(log, "region=EU", "region=US", noise=0)
+    assert r["groups"]["a"] == {"filter": "region=EU", "cases": 20, "matched_by": "case_attribute"}
+    assert r["groups"]["b"]["cases"] == 20
+    assert r["activities"]["only_b"] == ["Notify"]
+    diff = {(d["from"], d["to"]): (d["a"], d["b"]) for d in r["differences"]}
+    assert diff[("Approve", "Check")] == ("←", "→")
+    assert r["cross_fit"]["a_cases_on_a_model"]["fitness"] == 1.0 and r["fitness_gap_on_a_model"] > 0
+    with pytest.raises(EventLogWorkspaceError, match="attribute=value"):
+        mc.model_comparison(log, "EU", "region=US")
+    with pytest.raises(EventLogWorkspaceError, match="two different"):
+        mc.model_comparison(log, "region=EU", "region=EU")
+    with pytest.raises(EventLogWorkspaceError, match="at least 10 cases"):
+        mc.model_comparison(log, "region=EU", "region=APAC")
