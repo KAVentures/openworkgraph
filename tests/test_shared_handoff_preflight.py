@@ -98,3 +98,15 @@ def test_review_navigation_rejects_inflight_identity_and_credential_changes():
     assert block.index('const current=await call(') < block.index('identityTicket!==identityGeneration')
     assert block.index('identityTicket!==identityGeneration') < block.index('$("revisionReview").scrollIntoView')
     assert 'resetHandoff("REFUSED: Could not revalidate authorized revision.' in block
+
+
+def test_packet_inspection_rejects_inflight_identity_and_credential_changes():
+    """A packet read started under an old login must not enable review navigation."""
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split('$("handoffCheck").addEventListener("click",', 1)[1].split("      })();", 1)[0]
+    assert "const identityTicket=identityGeneration, authorizedCredential=credential;" in block
+    assert block.count("identityTicket!==identityGeneration") >= 2
+    assert block.count("credential!==authorizedCredential") >= 2
+    assert block.index("identityTicket!==identityGeneration") < block.index("const p=packet?.process;")
+    assert block.rindex("identityTicket!==identityGeneration") > block.index('const current=await call(')
+    assert block.rindex("identityTicket!==identityGeneration") < block.index('$("handoffReview").disabled=false;')
