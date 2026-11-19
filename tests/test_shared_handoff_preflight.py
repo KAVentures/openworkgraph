@@ -117,7 +117,8 @@ def test_review_submission_revalidates_inspected_handoff_before_post():
     html = PAGE.read_text(encoding="utf-8")
     block = html.split("async function review(decision) {", 1)[1].split('$("approve").onclick', 1)[0]
     assert 'if (inspectedHandoff) {' in block
-    assert 'const current=await call("/v1/human/processes/"+encodeURIComponent(pinned.workflow_id));' in block
+    assert 'current=await call("/v1/human/processes/"+encodeURIComponent(pinned.workflow_id));' in block
+    assert "let current;" in block
     for guard in (
         "ticket!==handoffGeneration", "identityTicket!==identityGeneration",
         "credential!==authorizedCredential", "selected!==chosen",
@@ -129,7 +130,7 @@ def test_review_submission_revalidates_inspected_handoff_before_post():
         "current.process.workflow_id!==pinned.workflow_id",
     ):
         assert guard in block
-    assert block.index("const current=await call(") < block.index('"/reviews"')
+    assert block.index("current=await call(") < block.index('"/reviews"')
     assert 'resetHandoff("REFUSED: Reviewed handoff is no longer current or authorized.' in block
 
 
@@ -156,7 +157,7 @@ def test_review_submission_rejects_confirmation_or_comment_drift_during_revalida
     assert '!$("reviewConfirm").checked||!confirmedReview' in block
     assert '$("comment").value!==confirmedComment' in block
     assert 'comment: confirmedComment,' in block
-    assert block.index('const current=await call(') < block.index('$("comment").value!==confirmedComment')
+    assert block.index('current=await call(') < block.index('$("comment").value!==confirmedComment')
     assert block.index('$("comment").value!==confirmedComment') < block.index('"/reviews"')
 
 
