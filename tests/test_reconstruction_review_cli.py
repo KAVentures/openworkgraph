@@ -1233,5 +1233,33 @@ class IndependentlySpecifiedSyntheticTruthTests(unittest.TestCase):
         self.assertEqual(queue["ambiguous_event_reviews_count"], 1)
         self.assertTrue(queue["no_case_identity_inferred"])
         self.assertFalse(measured["held_out_verified"])
+        self.assertEqual(measured["explicit_negative_events"], 1)
+        self.assertEqual(measured["explicit_negative_events_with_false_links"], 1)
+        self.assertEqual(measured["explicit_negative_false_link_rate"], 1.0)
+        self.assertEqual(measured["false_positive_events"], 1)
+        self.assertEqual(measured["false_negative_events"], 0)
+        self.assertTrue(measured["explicit_negative_metrics_are_reviewer_labels_not_held_out"])
         self.assertFalse(measured["cross_case_contamination_measured"])
         self.assertFalse(measured["real_work_accuracy_claim"])
+
+
+class ExplicitNegativeReviewMetricTests(unittest.TestCase):
+    def test_no_negative_labels_reports_undefined_rate_not_zero(self):
+        source = payload([pair("A", "F", ["e1"])])
+        labels = [{"window": "current", "event_id": "e1",
+                   "true_resource_pairs": [[["github", "issue", "A"],
+                                            ["local_file", "file", "F"]]]}]
+        result = score_review_annotations(source, labels)
+        self.assertEqual(result["explicit_negative_events"], 0)
+        self.assertIsNone(result["explicit_negative_false_link_rate"])
+        self.assertFalse(result["held_out_verified"])
+
+    def test_negative_event_with_candidate_is_counted_as_false_link(self):
+        source = payload([pair("A", "F", ["e1"])])
+        labels = [{"window": "current", "event_id": "e1", "true_resource_pairs": []}]
+        result = score_review_annotations(source, labels)
+        self.assertEqual(result["explicit_negative_events"], 1)
+        self.assertEqual(result["explicit_negative_events_with_false_links"], 1)
+        self.assertEqual(result["explicit_negative_false_link_rate"], 1.0)
+        self.assertFalse(result["missed_source_events_measured"])
+        self.assertFalse(result["cross_case_contamination_measured"])
