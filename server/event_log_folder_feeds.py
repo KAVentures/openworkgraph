@@ -264,7 +264,9 @@ def run(feed_id: str, *, now: float | None = None, retry_failed: bool = False, r
                 if not fnmatch.fnmatch(entry.name, feed["pattern"]):
                     continue
                 try:
-                    info = entry.stat(follow_symlinks=False)
+                    # Use fresh file metadata: Windows scandir entries can retain stale
+                    # modified times after a producer or test adjusts timestamps.
+                    info = (folder / entry.name).stat(follow_symlinks=False)
                 except FileNotFoundError:
                     scan_deferred += 1
                     continue  # removed during enumeration
