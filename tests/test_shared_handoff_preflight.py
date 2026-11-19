@@ -194,3 +194,15 @@ def test_stale_review_authorization_response_does_not_clear_new_handoff():
     # Server-side revision/review denial still invalidates the CURRENT inspection.
     assert 'current.review?.status!=="reviewed_design"' in block
     assert 'current.process.content_sha256!==pinned.content_sha256' in block
+
+
+def test_successful_review_consumes_inspected_handoff_before_render():
+    """A completed human decision must not leave a reusable inspected packet."""
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split("async function review(decision) {", 1)[1].split('$("approve").onclick', 1)[0]
+    assert 'if (inspectedHandoff) {' in block
+    assert 'resetHandoff("Review decision recorded. Reinspect' in block
+    assert '$("handoffConsent").checked = false;' in block
+    assert block.index('selected!==reviewSelection)return;') < block.index('resetHandoff("Review decision recorded.')
+    assert block.index('resetHandoff("Review decision recorded.') < block.index('render(reviewResult);')
+    assert block.index('render(reviewResult);') < block.index('note(\n            "Design review recorded')
