@@ -2169,6 +2169,64 @@ shows where the draft and the recorded cases differ, not which one is right.
 `GET /v1/event-logs/{log_id}/footprints?noise=&activities=` plus the case-filter parameters. Agents
 with access to a shared log use `get_process_footprints` (aggregates only).
 
+## Check against a Petri net (PNML import and token replay)
+
+ProM, PM4Py, Apromore, WoPeD and most academic tools exchange models as Petri nets in PNML. The
+**Check against a Petri net** section reads such a file (at most 2 MB; not stored) and replays the
+recorded cases on it with token-based replay (Rozinat and van der Aalst, 2008), as PM4Py's
+`token_based_replay` does. Each case starts from the net's initial marking and fires the
+transition labelled with each activity. Silent (invisible) transitions fire when a bounded search
+finds them enabling the next step or reaching the final marking; otherwise the missing tokens are
+created and counted. At the end the final marking is consumed and any tokens left are counted as
+remaining.
+
+Fitness is `½(1 − missing/consumed) + ½(1 − remaining/produced)`, for each case and over the whole
+log. The section lists the places where tokens went missing or were left behind, the steps taken
+when the net did not allow them, activities the net does not have (skipped and counted), net
+transitions no case took, and the variants that do not fit.
+
+**Precision** (ETConformance, Muñoz-Gama and Carmona, 2010; PM4Py's `precision_token_based_replay`)
+asks the opposite question: how much more the net allows than the cases did. For each prefix of
+the recorded cases that replays without problems, the activities the net allows next, directly or
+after silent transitions, are compared with the activities cases actually took next. Those no case
+took are escaping edges. Precision is one minus the escaping share, weighted by how many cases
+share each prefix. A net that allows anything in any order (a "flower") fits every case but has low
+precision. The section lists the most common escaping edges. *Replay on the discovered net* runs the
+same check on the net that **Process model discovery** exports, discovered with every observed
+path kept (noise 0).
+
+Transitions are matched to activities by their exact label. Silent transitions are those marked
+with ProM's and PM4Py's `$invisible$` tool-specific flag. When the file declares no final marking,
+cases are expected to end with one token on each place nothing consumes from. XML with a DOCTYPE
+or entity declaration is refused. Token replay does not measure precision and can over-count
+problems in nets with duplicate labels or long silent paths.
+
+`POST /v1/event-logs/{log_id}/petri-net-replay` with the PNML file as the body, plus the
+case-filter parameters.
+
+### Step-by-step explanation (alignments)
+
+After a replay, **Explain each case step by step** aligns every variant on the same net (Adriansyah,
+2014; PM4Py's and ProM's alignment-based conformance). An alignment pairs the steps of a case with a
+complete run of the net. Each step is a *synchronous move* (the case did it and the net allowed it),
+a *log move* (the case did a step the net cannot explain there), a *model move* (the net needed a step
+the case skipped) or a free silent move. Log and model moves cost 1. A least-cost alignment is found
+by a shortest-path search over the case and the net together, so the result names exactly which
+steps were extra and which were skipped, without the over-counting token replay can show with
+duplicate labels or silent paths.
+
+Trace fitness is `1 − cost / (case length + visible steps in the net's shortest run)`, as in PM4Py.
+Log fitness divides the summed costs by the summed worst cases. The section lists the activities
+cases did where the net does not allow them, the activities the net required that cases skipped
+(both with case counts), and how each non-fitting variant is explained, e.g.
+`Register → −Check (skipped) → Pay → Close`. Each variant is aligned once. Up to 500 variants of at
+most 200 steps are aligned; the search has a per-variant and a total limit, and variants it cannot
+finish are listed as unaligned and left out of the fitness. When two explanations cost the same, one
+is shown.
+
+`POST /v1/event-logs/{log_id}/petri-net-alignments` with the PNML file as the body, plus the
+case-filter parameters. The net is not stored.
+
 ## Temporal profile
 
 **Temporal profile** (as in PM4Py and ProM) learns the usual time between every ordered pair of

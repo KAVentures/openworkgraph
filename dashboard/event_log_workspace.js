@@ -17,6 +17,8 @@
   FILTERED.add('temporal-profile');
   FILTERED.add('heuristics-net');
   FILTERED.add('footprints');
+  FILTERED.add('petri-net-replay');
+  FILTERED.add('petri-net-alignments');
 
   const el=(tag,text,cls)=>{
     const node=document.createElement(tag);
@@ -803,6 +805,7 @@
     results.appendChild(spectrumSection());
     results.appendChild(heuristicsSection());
     results.appendChild(footprintsSection());
+    results.appendChild(petriReplaySection());
     results.appendChild(temporalProfileSection());
     results.appendChild(waitingSection());
     results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity),inspection));
@@ -3752,6 +3755,71 @@
         out.append(grid,el('div',r.caveat,'muted'));
       }catch(error){statusLine.textContent=error.message;}
       finally{run.disabled=false;}};
+    return box;
+  }
+
+  function petriReplaySection(){
+    const box=section('Check against a Petri net');box.id='owgPetri';
+    box.appendChild(el('div','Replay the recorded cases on a Petri net from ProM, PM4Py, Apromore or another tool (a .pnml file), or on the net discovered here. Tokens that are missing or left behind show where the cases and the net disagree. The file is read for this check and not stored.','muted'));
+    const file=input('owgPetriFile','file');file.accept='.pnml,application/xml,text/xml';
+    const run=button('Replay on this net','secondary');run.id='owgPetriRun';
+    const own=button('Replay on the discovered net','secondary');own.id='owgPetriDiscovered';
+    const align=button('Explain each case step by step','secondary');align.id='owgPetriAlign';align.disabled=true;
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Petri net (.pnml)',file),run,own,align);
+    const statusLine=el('div',null,'muted');statusLine.id='owgPetriStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgPetriResults';
+    const aligned=el('div');aligned.id='owgPetriAlignResults';
+    box.append(row,statusLine,out,aligned);
+    const pct=x=>Math.round((x||0)*1000)/10+'%';
+    let lastNet=null;
+    const replay=async(body,label)=>{
+      const generation=state.generation;run.disabled=own.disabled=align.disabled=true;aligned.replaceChildren();lastNet=null;statusLine.textContent='Replaying on '+label+'…';out.replaceChildren();
+      try{
+        const r=await (await api(logPath('petri-net-replay',{}),{method:'POST',headers:{'Content-Type':'application/xml'},body})).json();
+        if(generation!==state.generation)return;
+        lastNet={body,label,generation};
+        const f=r.fitness;
+        statusLine.textContent='Fitness '+pct(f.log)+' on '+label+': '+Number(f.fitting_cases).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases ('+pct(f.fitting_case_share)+') replay without missing or remaining tokens.'+(r.precision.precision!==null?' Precision '+pct(r.precision.precision)+'.':'')+' The net has '+r.net.places+' places and '+r.net.transitions+' transitions ('+r.net.silent_transitions+' silent).'+(r.cases_excluded?' '+Number(r.cases_excluded).toLocaleString()+' cases beyond the length or variant limit were left out.':'');
+        if(!r.net.final_marking_declared)out.appendChild(el('div','The file declares no final marking, so cases are expected to end with one token on each place nothing consumes from.','muted'));
+        if(r.places.length){out.appendChild(el('h4','Places where tokens went missing or were left behind'));
+          out.appendChild(table(['Place','Missing tokens','Remaining tokens'],r.places.map(p=>[p.place,Number(p.missing).toLocaleString(),Number(p.remaining).toLocaleString()])));}
+        if(r.transitions_fired_without_tokens.length){out.appendChild(el('h4','Steps taken when the net did not allow them'));
+          out.appendChild(table(['Transition','Times'],r.transitions_fired_without_tokens.map(t=>[t.transition,Number(t.times).toLocaleString()])));}
+        if(r.precision.escaping_edges.length){out.appendChild(el('h4','Steps the net allows that no case took'));
+          out.appendChild(table(['After','Net also allows','Cases at that point'],r.precision.escaping_edges.map(e=>[e.after===null?'(case start)':e.after,e.net_also_allows,Number(e.cases).toLocaleString()])));}
+        if(r.activities_not_in_net.length)out.appendChild(el('div','Activities the net does not have (skipped): '+r.activities_not_in_net.map(a=>a.activity+' ('+a.cases+' cases)').join(', ')+'.','muted'));
+        if(r.net_labels_never_seen.length)out.appendChild(el('div','Net transitions no case took: '+r.net_labels_never_seen.join(', ')+'.','muted'));
+        if(r.non_fitting_variants.length){const more=document.createElement('details');more.appendChild(el('summary','Variants that do not fit ('+r.non_fitting_variants.length+')'));
+          more.appendChild(table(['Variant','Cases','Fitness','Missing','Remaining'],r.non_fitting_variants.map(v=>[v.path.join(' → '),Number(v.cases).toLocaleString(),pct(v.fitness),String(v.missing_tokens),String(v.remaining_tokens)])));out.appendChild(more);}
+        out.appendChild(el('div',r.caveat,'muted'));
+      }catch(error){statusLine.textContent=error.message;}
+      finally{run.disabled=own.disabled=false;align.disabled=!lastNet;}};
+    const step=s=>s.move==='sync'?s.log:s.move==='log'?'+'+s.log+' (not in the net here)':'−'+s.model+' (skipped)';
+    align.onclick=async()=>{
+      if(!lastNet||lastNet.generation!==state.generation){align.disabled=true;return;}
+      const generation=state.generation,net=lastNet;run.disabled=own.disabled=align.disabled=true;
+      const status=el('div','Aligning each variant on '+net.label+'…','muted');status.id='owgPetriAlignStatus';status.setAttribute('role','status');status.setAttribute('aria-live','polite');
+      aligned.replaceChildren(el('h4','Step-by-step explanation (alignments)'),status);
+      try{
+        const r=await (await api(logPath('petri-net-alignments',{}),{method:'POST',headers:{'Content-Type':'application/xml'},body:net.body})).json();
+        if(generation!==state.generation)return;
+        const f=r.fitness;
+        status.textContent='Alignment fitness '+pct(f.log)+': '+Number(f.fitting_cases).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases follow the net exactly. On average a case needs '+r.deviation_cost.per_case+' extra or skipped steps to fit.'+(r.unaligned.variants?' '+r.unaligned.variants+' variants ('+Number(r.unaligned.cases).toLocaleString()+' cases) were too long to align within the search limit.':'');
+        if(r.log_moves.length){aligned.appendChild(el('h4','Steps the cases took that the net does not allow there'));
+          aligned.appendChild(table(['Activity','Cases','Times'],r.log_moves.map(m=>[m.activity,Number(m.cases).toLocaleString(),Number(m.times).toLocaleString()])));}
+        if(r.model_moves.length){aligned.appendChild(el('h4','Steps the net requires that the cases skipped'));
+          aligned.appendChild(table(['Activity','Cases','Times'],r.model_moves.map(m=>[m.activity,Number(m.cases).toLocaleString(),Number(m.times).toLocaleString()])));}
+        if(r.non_fitting_variants.length){const more=document.createElement('details');more.open=true;more.appendChild(el('summary','How each non-fitting variant is explained ('+r.non_fitting_variants.length+' of '+r.non_fitting_variants_total+')'));
+          more.appendChild(table(['Variant','Cases','Fitness','Explanation'],r.non_fitting_variants.map(v=>[v.path.join(' → '),Number(v.cases).toLocaleString(),pct(v.fitness),v.alignment.map(step).join(' → ')])));aligned.appendChild(more);}
+        aligned.appendChild(el('div',r.caveat,'muted'));
+      }catch(error){status.textContent=error.message;}
+      finally{run.disabled=own.disabled=false;align.disabled=!lastNet;}};
+    run.onclick=async()=>{const chosen=file.files&&file.files[0];if(!chosen){statusLine.textContent='Choose a .pnml file first.';return;}
+      if(chosen.size>2*1024*1024){statusLine.textContent='The Petri net file is larger than 2 MB.';return;}
+      await replay(await chosen.text(),chosen.name);};
+    own.onclick=async()=>{
+      try{statusLine.textContent='Discovering…';const xml=await (await api(logPath('model-discovery.pnml',{noise:'0'}))).text();await replay(xml,'the discovered net (every path kept)');}
+      catch(error){statusLine.textContent=error.message;}};
     return box;
   }
 

@@ -877,6 +877,45 @@ def event_log_footprints(request: Request, log_id: str, case_type: str | None = 
     return _respond(footprints.footprints, log_id, case_type, noise=noise, activities=activities, cohort=cohort)
 
 
+@router.post("/v1/event-logs/{log_id}/petri-net-replay")
+async def event_log_petri_net_replay(request: Request, log_id: str,
+                                     case_type: str | None = Query(default=None, max_length=200),
+                                     cohort: dict[str, Any] = Depends(_case_filter)):
+    """Replay the log on a PNML Petri net sent as the request body (at most 2 MB). The net is not stored."""
+    from . import event_log_petri_replay as petri
+    _require_dashboard(request)
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > petri.MAX_BYTES:
+            raise HTTPException(413, "the Petri net file is larger than 2 MB")
+    try:
+        result = await run_in_threadpool(petri.replay, log_id, bytes(body), case_type, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/petri-net-alignments")
+async def event_log_petri_net_alignments(request: Request, log_id: str,
+                                         case_type: str | None = Query(default=None, max_length=200),
+                                         cohort: dict[str, Any] = Depends(_case_filter)):
+    """Optimal alignments of each variant on a PNML Petri net sent as the body (at most 2 MB). Not stored."""
+    from . import event_log_alignments as aligned
+    from . import event_log_petri_replay as petri
+    _require_dashboard(request)
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > petri.MAX_BYTES:
+            raise HTTPException(413, "the Petri net file is larger than 2 MB")
+    try:
+        result = await run_in_threadpool(aligned.alignments, log_id, bytes(body), case_type, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/v1/event-logs/{log_id}/variants")
 def event_log_variants(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                        limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):
