@@ -668,9 +668,9 @@ from server import local_auth, process_discovery_provenance as provenance
 with TestClient(app) as client:
     session = {"Authorization": "OWG-Session " + local_auth.create_dashboard_session()}
     def imported(case):
-        body = ("case,activity,time,who\\n" +
-                f"{case},Start,2024-01-01T00:00:00Z,bot\\n" +
-                f"{case},Finish,2024-01-01T01:00:00Z,bot\\n").encode()
+        body = ("case,activity,time,who\n" +
+                f"{case},Start,2024-01-01T00:00:00Z,bot\n" +
+                f"{case},Finish,2024-01-01T01:00:00Z,bot\n").encode()
         response = client.post(
             "/v1/event-logs/import?format=csv&name=source&case_column=case&activity_column=activity&timestamp_column=time&resource_column=who",
             content=body, headers={**session, "Content-Type": "text/csv",
@@ -704,4 +704,4 @@ with TestClient(app) as client:
     })
     result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env,
                             capture_output=True, text=True, timeout=120)
-    assert result.returncode == 0, f"stdout={result.stdout}\\nstderr={result.stderr}"
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
