@@ -1742,6 +1742,7 @@
     const columns=select('owgCaseAttributeColumns',[]);columns.multiple=true;columns.size=4;
     const replace=input('owgCaseAttributeReplace','checkbox');
     const consent=input('owgCaseAttributeConsent','checkbox');
+    const preview=button('Preview upload','secondary');preview.id='owgCaseAttributePreview';preview.disabled=true;
     const add=button('Add to cases','secondary');add.id='owgCaseAttributeAdd';add.disabled=true;
     const out=el('div');out.id='owgCaseAttributeResult';out.setAttribute('role','status');
     const row=el('div',null,'row');row.style.alignItems='end';
@@ -1750,18 +1751,32 @@
     const replaceLabel=el('label',' Overwrite values the cases already have');replaceLabel.prepend(replace);
     const consentLabel=el('label',' Store these values with the log on this computer');consentLabel.prepend(consent);
     checks.append(replaceLabel,consentLabel);
-    box.append(list,row,checks,add,out);
-    const ready=()=>{add.disabled=!(file.files&&file.files[0]&&idColumn.value&&columns.selectedOptions.length&&consent.checked);};
+    box.append(list,row,checks,preview,add,out);
+    let reviewed=null,revision=0,busy=false;
+    const ready=()=>{
+      const complete=!!(file.files?.[0]&&idColumn.value&&columns.selectedOptions.length);
+      preview.disabled=busy||!complete;
+      add.disabled=busy||!complete||!consent.checked||reviewed?.can_apply===false;
+    };
+    function invalidatePreview(){
+      revision++;
+      if(reviewed)out.textContent='Upload settings changed. Preview again to review the updated selection.';
+      reviewed=null;
+      ready();
+    }
     const readHeader=async()=>{
-      const chosen=file.files&&file.files[0];setOptions(idColumn,[]);setOptions(columns,[]);ready();if(!chosen)return;
+      invalidatePreview();const turn=revision;
+      const chosen=file.files?.[0];setOptions(idColumn,[]);setOptions(columns,[]);ready();if(!chosen)return;
       const header=csvHeader(await chosen.slice(0,65536).text(),delimiter.value==='t'?'\t':delimiter.value);
+      if(turn!==revision)return;
       setOptions(idColumn,header.map(c=>[c,c]));
       idColumn.value=header.find(c=>/case|order|ticket|^id$/i.test(c))||header[0]||'';
       const others=()=>setOptions(columns,header.filter(c=>c!==idColumn.value).map(c=>[c,c]));
-      others();idColumn.onchange=()=>{others();ready();};ready();
+      others();idColumn.onchange=()=>{others();invalidatePreview();};ready();
     };
     file.onchange=()=>{consent.checked=false;readHeader();};delimiter.onchange=readHeader;
-    for(const control of [columns,consent])control.addEventListener('change',ready);
+    for(const control of [columns,replace])control.addEventListener('change',invalidatePreview);
+    consent.addEventListener('change',ready);
     const generation=state.generation;
     const render=r=>{
       if(!r.uploads.length){list.replaceChildren(el('div','No case attributes added yet.','muted'));return;}
@@ -1780,16 +1795,46 @@
         const action=u.undo_supported?remove:el('span','Undo unavailable for this older upload','muted');
         return [String(u.added_at).slice(0,16).replace('T',' '),u.columns.join(', '),Number(u.cases_updated).toLocaleString(),Number(u.rows_not_in_log).toLocaleString(),Number(u.cases_without_row).toLocaleString(),action];})));
     };
-    add.onclick=async()=>{
+    function uploadQuery(){
       const q=new URLSearchParams({id_column:idColumn.value,delimiter:delimiter.value});
       [...columns.selectedOptions].forEach(o=>q.append('column',o.value));
-      if(state.caseType)q.set('object_type',state.caseType);if(replace.checked)q.set('replace','true');
-      add.disabled=true;out.replaceChildren(el('div','Adding…','muted'));
+      if(state.caseType)q.set('object_type',state.caseType);
+      if(replace.checked)q.set('replace','true');
+      return q;
+    }
+    preview.onclick=async()=>{
+      const q=uploadQuery(),turn=revision;
+      q.set('preview','true');busy=true;ready();out.textContent='Checking the case table…';
+      try{
+        const result=await (await api(base+'?'+q,{method:'POST',body:file.files[0],
+          headers:{'Content-Type':'text/csv'}})).json();
+        if(generation!==state.generation||turn!==revision)return;
+        reviewed=result;
+        const totals=el('p',Number(result.cases_updated).toLocaleString()+' matching cases, '+
+          Number(result.rows_not_in_log).toLocaleString()+' unmatched rows, and '+
+          Number(result.rows_without_id).toLocaleString()+' rows without a case ID.');
+        const counts=table(['Column','Values supplied','Existing cells to overwrite'],result.columns.map(name=>[
+          name,Number(result.values_added[name]).toLocaleString(),Number(result.values_to_overwrite[name]).toLocaleString()
+        ]));
+        let explanation='Ready to apply with storage confirmation.';
+        if(!result.cases_updated)explanation='No case with a supplied value matched.';
+        else if(result.cases_over_attribute_limit)explanation='Some cases would exceed the attribute limit. Choose fewer columns.';
+        else if(!result.can_apply)explanation='Select overwrite and preview again to review replacing the existing values.';
+        out.replaceChildren(totals,counts,el('p',explanation,'muted'));
+      }catch(error){if(generation===state.generation&&turn===revision)out.textContent=error.message;}
+      finally{busy=false;ready();}
+    };
+    add.onclick=async()=>{
+      const q=uploadQuery();
+      if(reviewed)q.set('expected_preview_sha256',reviewed.preview_sha256);
+      busy=true;ready();out.textContent='Adding…';
       try{
         const r=await (await api(base+'?'+q,{method:'POST',body:file.files[0],headers:{'Content-Type':'text/csv','X-OWG-Local-Storage-Confirmed':'true'}})).json();
-        out.replaceChildren(el('div','Added '+r.columns.join(', ')+' to '+Number(r.cases_updated).toLocaleString()+' cases. '+Number(r.rows_not_in_log).toLocaleString()+' rows matched no case; '+Number(r.cases_without_row).toLocaleString()+' cases had no row.'));
-        consent.checked=false;render(await getJSON(base));
-      }catch(error){out.replaceChildren(el('div',error.message,'muted'));ready();}
+        if(generation!==state.generation)return;
+        out.textContent='Added '+r.columns.join(', ')+' to '+Number(r.cases_updated).toLocaleString()+' cases. '+Number(r.rows_not_in_log).toLocaleString()+' rows matched no case; '+Number(r.cases_without_row).toLocaleString()+' cases had no row.';
+        reviewed=null;consent.checked=false;render(await getJSON(base));
+      }catch(error){if(generation===state.generation)out.textContent=error.message;}
+      finally{busy=false;ready();}
     };
     getJSON(base).then(r=>{if(generation===state.generation)render(r);}).catch(error=>list.replaceChildren(el('div',error.message,'muted')));
     return box;

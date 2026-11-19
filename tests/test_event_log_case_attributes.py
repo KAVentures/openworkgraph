@@ -159,7 +159,15 @@ with TestClient(app) as client:
     body = b"id,Region\nc0,EU\nc1,US\n"
     assert client.post(path + "?id_column=id&column=Region", content=body, headers=bearer).status_code == 403
     assert client.post(path + "?id_column=id&column=Region", content=body, headers=owner).status_code == 403
-    r = client.post(path + "?id_column=id&column=Region", content=body, headers=store)
+    query = "?id_column=id&column=Region"
+    assert client.post(path + query + "&preview=true", content=body, headers=bearer).status_code == 403
+    reviewed = client.post(path + query + "&preview=true", content=body, headers=owner)
+    assert reviewed.status_code == 200 and reviewed.json()["cases_updated"] == 2
+    assert client.get(path, headers=owner).json()["uploads"] == []
+    query += "&expected_preview_sha256=" + reviewed.json()["preview_sha256"]
+    assert client.post(path + query, content=body, headers=owner).status_code == 403
+
+    r = client.post(path + query, content=body, headers=store)
     assert r.status_code == 200 and r.json()["cases_updated"] == 2, r.text
     assert client.post(path + "?id_column=id&column=Region", content=body, headers=store).status_code == 422
     listed = client.get(path, headers=owner).json()["uploads"]
@@ -227,3 +235,32 @@ def test_legacy_upload_cannot_remove_values_without_provenance(tmp_path):
     with pytest.raises(workspace.EventLogWorkspaceError, match="older upload"):
         case_attributes.remove(log, {"upload_id": record["upload_id"]})
     assert _attributes(log)["c0"] == {"Region": "EU"}
+
+
+def test_preview_counts_overwrites_and_prevents_stale_apply(tmp_path):
+    log = _log()
+    kwargs = {"id_column": "id", "columns": ["Region"]}
+    case_attributes.add(log, _table(tmp_path, "id,Region\nc0,SENSITIVE_OLD\n"), **kwargs)
+    candidate = _table(tmp_path, "id,Region\nc0,SENSITIVE_NEW\nc1,APAC\nz,Unmatched\n", "candidate.csv")
+    before = _attributes(log)
+    blocked = case_attributes.add(log, candidate, preview=True, **kwargs)
+    assert not blocked["can_apply"] and blocked["values_to_overwrite"] == {"Region": 1}
+    reviewed = case_attributes.add(log, candidate, preview=True, replace=True, **kwargs)
+    assert reviewed["can_apply"] and reviewed["cases_updated"] == 2 and reviewed["rows_not_in_log"] == 1
+    assert reviewed["values_added"] == {"Region": 2}
+    assert "SENSITIVE" not in json.dumps(reviewed) and _attributes(log) == before
+    assert len(case_attributes.uploads(log)["uploads"]) == 1
+
+    changed_file = _table(tmp_path, "id,Region\nc0,CHANGED\nc1,APAC\nz,Unmatched\n", "changed.csv")
+    with pytest.raises(workspace.EventLogWorkspaceError, match="Preview the upload again"):
+        case_attributes.add(log, changed_file, replace=True, expected_preview_sha256=reviewed["preview_sha256"], **kwargs)
+    assert _attributes(log) == before
+
+    case_attributes.add(log, _table(tmp_path, "id,Region\nc0,CHANGED\n"), replace=True, **kwargs)
+    with pytest.raises(workspace.EventLogWorkspaceError, match="Preview the upload again"):
+        case_attributes.add(log, candidate, replace=True, expected_preview_sha256=reviewed["preview_sha256"], **kwargs)
+    assert _attributes(log)["c0"] == {"Region": "CHANGED"}
+    refreshed = case_attributes.add(log, candidate, preview=True, replace=True, **kwargs)
+    record = case_attributes.add(log, candidate, replace=True,
+                                 expected_preview_sha256=refreshed["preview_sha256"], **kwargs)
+    assert record["cases_updated"] == 2 and _attributes(log)["c0"] == {"Region": "SENSITIVE_NEW"}
