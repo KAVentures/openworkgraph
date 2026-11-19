@@ -503,7 +503,7 @@
         const result=await getJSON(endpoint);
         if(capability===capabilityVersion){nativeReady=result.native_case_selection_configured===true;sync();}
         if(request!==version)return;
-        message.textContent=result.configured&&basis.value==='native_issue_keys'&&!nativeReady?'An administrator must separately authorize native issue-key ingestion.':result.configured?'Ready for explicitly confirmed manual reads. A successful read is historical coverage, not verified completeness.':'An administrator must configure the separate retained Jira opt-in and OAuth read scopes. No credentials are entered here.';
+        message.textContent=result.configured&&basis.value==='native_issue_keys'&&!nativeReady?'An administrator must separately authorize native issue-key ingestion.':result.configured?'Profiles can be read manually or scheduled separately. A successful read is historical coverage, not verified completeness.':'An administrator must configure the separate retained Jira opt-in and OAuth read scopes. No credentials are entered here.';
         out.replaceChildren();
         for(const profile of result.profiles){
           const item=el('div',null,'card');item.dataset.profileId=profile.profile_id;
