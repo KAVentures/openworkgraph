@@ -963,6 +963,17 @@ def event_log_due_dates(request: Request, log_id: str, due_activity: str = Query
                     early_days=early_days, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/next-steps")
+def event_log_next_steps(request: Request, log_id: str, step: list[str] = Query(default=[], max_length=500),
+                         anchor: str = Query(default="start", max_length=20),
+                         case_type: str | None = Query(default=None, max_length=200),
+                         cohort: dict = Depends(_case_filter)):
+    """After a sequence of steps (from the case start or anywhere), which activities come next and how fast."""
+    from . import event_log_path_explorer as explorer
+    _require_dashboard(request)
+    return _respond(explorer.next_steps, log_id, step, case_type, anchor=anchor, cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/variants")
 def event_log_variants(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                        limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):

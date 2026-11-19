@@ -429,6 +429,14 @@ def due_dates(log_id: str, activity: str, case_type: str | None = None, due_attr
     return {**result, "format": FORMAT, "log_id": log_id}
 
 
+def next_steps(log_id: str, steps: list[str] | None = None, case_type: str | None = None,
+               anchor: str = "start") -> dict[str, Any]:
+    """Path explorer: what happens after a sequence of steps (aggregates level)."""
+    require(log_id, "aggregates")
+    from . import event_log_path_explorer as px
+    return {**px.next_steps(log_id, steps, case_type, anchor=anchor), "format": FORMAT, "log_id": log_id}
+
+
 def slowest_cases(log_id: str, case_type: str | None = None, limit: int = 10) -> dict[str, Any]:
     require(log_id, "cases")
     from . import event_log_case_explain as case_explain
