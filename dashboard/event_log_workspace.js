@@ -14,6 +14,8 @@
   // Views that honour the workspace case filter; every other section uses all cases.
   const FILTERED=new Set(['automation-candidates','summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','performance-spectrum','waiting-time','drift','model-discovery','organization','report.html','decision-points','decision-rules']);
   FILTERED.add('roles');
+  FILTERED.add('anonymized-export');
+  FILTERED.add('anonymized-export.csv');
   FILTERED.add('model-discovery.pnml');
   FILTERED.add('temporal-profile');
   FILTERED.add('heuristics-net');
@@ -31,8 +33,6 @@
   FILTERED.add('petri-net-alignments');
   FILTERED.add('variant.pnml');
   FILTERED.add('petri-net-deviation-causes');
-  FILTERED.add('anonymized-export');
-  FILTERED.add('anonymized-export.csv');
 
   const el=(tag,text,cls)=>{
     const node=document.createElement(tag);
