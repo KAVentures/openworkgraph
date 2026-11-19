@@ -388,7 +388,9 @@ def save_reconstruction_review_submission(request: ReconstructionReviewSubmissio
             clear_saved_reconstruction_review()
             raise PermissionError("History access changed during review")
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+        # Authorization callbacks may carry private event/source details. Never
+        # echo exception text to an authenticated (but now revoked) caller.
+        raise HTTPException(status_code=403, detail="History access changed during review") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="Invalid reconstruction review submission") from exc
     return Response(content=json.dumps(saved), media_type="application/json",
