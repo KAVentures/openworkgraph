@@ -86,3 +86,15 @@ def test_review_navigation_revalidates_fresh_authorized_revision_and_fails_close
     assert 'resetHandoff("REFUSED: Could not revalidate authorized revision.' in block
     assert block.index('const current=await call(') < block.index('$("revisionReview").scrollIntoView')
     assert 'inspectedHandoff={workflow_id:p.workflow_id,revision:p.revision,content_sha256:p.content_sha256};' in html
+
+
+def test_review_navigation_rejects_inflight_identity_and_credential_changes():
+    """An old authenticated response must not navigate under a new session."""
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split('$("handoffReview").addEventListener("click",', 1)[1].split('$("handoffPacket").addEventListener', 1)[0]
+    assert 'const identityTicket=identityGeneration, authorizedCredential=credential;' in block
+    assert 'identityTicket!==identityGeneration' in block
+    assert 'credential!==authorizedCredential' in block
+    assert block.index('const current=await call(') < block.index('identityTicket!==identityGeneration')
+    assert block.index('identityTicket!==identityGeneration') < block.index('$("revisionReview").scrollIntoView')
+    assert 'resetHandoff("REFUSED: Could not revalidate authorized revision.' in block
