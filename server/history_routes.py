@@ -326,6 +326,49 @@ def score_reconstruction_review_submission(request: ReconstructionReviewSubmissi
                     headers={"Cache-Control": "no-store"})
 
 
+class ReconstructionSourceCohortSubmission(BaseModel):
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$", min_length=64, max_length=64)
+    source_labels: list[dict[str, Any]] = Field(min_length=1, max_length=4096)
+
+
+@app.post("/v1/history/reconstruction-review/source-cohort-score")
+def score_reconstruction_source_cohort(request: ReconstructionSourceCohortSubmission) -> Response:
+    """Score caller labels against fresh authorized evidence, never certify independence."""
+    import hmac
+    from shared.history_policy import history_generation
+    from .work_resumption import resumption_candidates
+    from .reconstruction_review_cli import build_review_queue, score_source_event_cohort
+
+    grant = active_ai_history_access()
+    if grant.get("mode") != "all_saved":
+        raise HTTPException(status_code=403, detail="Explicit all-saved history access required")
+    generation = history_generation()
+
+    def still_authorized() -> bool:
+        return active_ai_history_access() == grant and history_generation() == generation
+
+    try:
+        with connect() as connection:
+            result = resumption_candidates(connection, lease=grant)
+        review_result = {**result, "identity_timelines_truncated": (
+            result.get("identity_timelines_truncated", False)
+            or len(result.get("identity_timelines", [])) > 12
+        )}
+        queue = build_review_queue(review_result)
+        if not hmac.compare_digest(queue["evidence_sha256"], request.evidence_sha256):
+            raise ValueError("stale review evidence")
+        scored = score_source_event_cohort(review_result, request.source_labels)
+        payload = json.dumps(scored, allow_nan=False)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="History access changed during evaluation") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid reconstruction cohort") from exc
+    if not still_authorized():
+        raise HTTPException(status_code=403, detail="History access changed during evaluation")
+    return Response(content=payload, media_type="application/json",
+                    headers={"Cache-Control": "no-store"})
+
+
 @app.get("/v1/history/reconstruction-review/saved")
 def get_saved_reconstruction_review() -> Response:
     """Resume only labels whose current source evidence and grant still match."""
