@@ -158,4 +158,5 @@ def test_report_shows_model_fit_and_adherence(tmp_path, monkeypatch):
     assert data["adherence"]["cases"] == 20 and data["adherence"]["fitness"]["fitting_cases"] == 18
     html = rep.render(data)
     assert "Model fit and adherence" in html and "90.0%" in html and "−Check" in html
+    assert "In plain words" in html and "The log has 20 cases" in html
     assert "<script" not in html.lower()
