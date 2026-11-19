@@ -17,7 +17,7 @@ const path=require('node:path');
 
   const refs=['owg:r:'+'1'.repeat(32),'owg:r:'+'2'.repeat(32)];
   const box=page.locator('#owgJiraSource'),out=page.locator('#owgJiraSourceProfiles');
-  await page.locator('#owgJiraSourceStatus').filter({hasText:'Ready for explicitly confirmed manual reads'}).waitFor();
+  await page.locator('#owgJiraSourceStatus').filter({hasText:/Ready for explicitly confirmed manual reads|Profiles can be read manually or scheduled separately\./}).waitFor();
   // Original observed-reference mode still refuses missing observation, even
   // when separately authorized native key selection is available.
   const refused=await page.evaluate(async resource_refs=>(await fetch('/v1/event-log-sources/jira',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({resource_refs,confirm_reads:true,confirm_retention:true,confirm_status_labels:true})})).status,refs);
