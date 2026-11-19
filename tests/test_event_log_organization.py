@@ -53,6 +53,8 @@ def test_handover_and_working_together_are_pseudonymous_by_default():
         {"from": "Resource 02", "to": "Resource 01", "handovers": 1, "cases": 1},
         {"from": "Resource 04", "to": "Resource 01", "handovers": 1, "cases": 1}]
     assert result["cases_with_handover"] == 3
+    # c1: alice → bob → alice.
+    assert result["subcontracting"] == [{"from": "Resource 01", "to": "Resource 02", "times": 1, "cases": 1}]
     assert result["working_together"] == [{"resources": ["Resource 01", "Resource 02"], "shared_cases": 2},
                                           {"resources": ["Resource 01", "Resource 04"], "shared_cases": 1}]
     matrix = result["activity_resource_matrix"]
