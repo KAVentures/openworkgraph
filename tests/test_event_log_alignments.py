@@ -72,3 +72,23 @@ def test_unreachable_final_marking_and_bad_files_are_refused():
         al.alignments(log, dead)
     with pytest.raises(EventLogWorkspaceError, match="DOCTYPE"):
         al.alignments(log, b'<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "b">]><pnml/>')
+
+
+def test_fitness_by_case_start_month():
+    from io import BytesIO
+    from server import event_log_workspace as workspace
+    rows = ["case,activity,time"]
+    # January: every case fits; February: half skip B.
+    for i in range(4):
+        for j, a in enumerate(["A", "B", "C"]):
+            rows.append(f"j{i},{a},2024-01-{10 + i:02d}T0{j}:00:00Z")
+    for i in range(4):
+        for j, a in enumerate(["A", "C"] if i % 2 else ["A", "B", "C"]):
+            rows.append(f"f{i},{a},2024-02-{10 + i:02d}T0{j}:00:00Z")
+    log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="m", source_format="csv",
+                               mapping={"case_column": "case", "activity_column": "activity",
+                                        "timestamp_column": "time"})["log_id"]
+    months = al.alignments(log, _sequence_net(["A", "B", "C"]))["by_month"]
+    assert months == [{"month": "2024-01", "cases": 4, "fitting_case_share": 1.0, "fitness": 1.0},
+                      {"month": "2024-02", "cases": 4, "fitting_case_share": 0.5,
+                       "fitness": round(1 - 2 / (2 * 6 + 2 * 5), 4)}]

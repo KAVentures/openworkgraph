@@ -26,7 +26,7 @@ const path=require('node:path');
    // 30 orders: Register, Check, Pay, Close; 6 skip Check.
    const rows=['case,activity,time,who'];
    for(let i=0;i<30;i++){const steps=['Register',...(i%5===0?[]:['Check']),'Pay','Close'];
-     steps.forEach((a,j)=>rows.push(`c${i},${a},2024-01-01T${String(j).padStart(2,'0')}:${String(i).padStart(2,'0')}:00Z,ana`));}
+     steps.forEach((a,j)=>rows.push(`c${i},${a},2024-0${1+i%2}-01T${String(j).padStart(2,'0')}:${String(i).padStart(2,'0')}:00Z,ana`));}
    await page.locator('#owgEventLogFile').setInputFiles({name:'orders.csv',mimeType:'text/csv',buffer:Buffer.from(rows.join('\n'))});
    await page.waitForFunction(()=>document.querySelector('#owgEventLogCase').options.length===4);
    await page.locator('#owgEventLogResource').selectOption('who');
@@ -57,9 +57,12 @@ const path=require('node:path');
    await page.locator('#owgPetriAlignStatus').filter({hasText:'Alignment fitness 97.4%: 24 of 30 cases follow the net exactly'}).waitFor();
    assert((await page.locator('#owgPetriAlignStatus').textContent()).includes('needs 0.2 extra or skipped steps'));
    const aligned=page.locator('#owgPetriAlignResults');
-   const skippedTable=await aligned.locator('table').first().textContent();
+   const skippedTable=await aligned.locator('table').nth(1).textContent();
    assert(skippedTable.includes('Check')&&skippedTable.includes('6'),skippedTable);
    assert((await aligned.locator('details').textContent()).includes('Register → −Check (skipped) → Pay → Close'));
+   // Cases i%5===0 skip Check; they alternate months, so each month has 3 non-fitting cases of 15.
+   const months=await page.locator('#owgPetriAlignMonths').textContent();
+   assert(months.includes('2024-011580%97.4%')&&months.includes('2024-021580%97.4%'),months);
    await page.addScriptTag({content:axeSource});
    const alignedAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgPetri'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(alignedAudit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);

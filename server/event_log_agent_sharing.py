@@ -392,7 +392,7 @@ def model_deviations(log_id: str, case_type: str | None = None, noise: float = 0
     noise = max(0.0, min(float(noise), 0.95))
     xml, meta = pnml.discovered_pnml(log_id, case_type, noise=noise)
     result = al.alignments(log_id, xml.encode(), case_type)
-    keep = ("case_notion", "cases", "cases_excluded", "variants", "fitness", "deviation_cost", "log_moves",
+    keep = ("case_notion", "cases", "cases_excluded", "variants", "fitness", "by_month", "deviation_cost", "log_moves",
             "model_moves", "activities_not_in_net", "non_fitting_variants", "non_fitting_variants_total",
             "unaligned", "method", "caveat")
     return {"format": FORMAT, "log_id": log_id, "noise": noise,

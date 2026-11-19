@@ -36,6 +36,7 @@ MAX_STATES_PER_VARIANT = 20_000
 MAX_STATES_TOTAL = 1_000_000
 TOP_VARIANTS = 20
 TOP_DEVIATIONS = 30
+MAX_MONTHS = 120
 SYNC, LOG, MODEL, SILENT = "sync", "log", "model", "silent"
 
 
@@ -123,10 +124,17 @@ def alignments(log_id: str, pnml: bytes, case_type: str | None = None, *,
               SELECT list(activity ORDER BY ts, event_id) AS path FROM ce GROUP BY case_id HAVING count(*) <= ?)
             GROUP BY path ORDER BY cases DESC, path LIMIT ?""", [MAX_TRACE_LENGTH, MAX_VARIANTS]).fetchall()
         total = conn.execute("SELECT count(DISTINCT case_id) FROM ce").fetchone()[0]
-        return {"rows": rows, "cases_total": total}
+        months = conn.execute("""WITH c AS (
+              SELECT list(activity ORDER BY ts, event_id) AS path, min(ts) AS started FROM ce GROUP BY case_id
+              HAVING count(*) <= ?),
+            v AS (SELECT path, count(*) AS cases FROM c GROUP BY path ORDER BY cases DESC, path LIMIT ?)
+            SELECT c.path, strftime(date_trunc('month', c.started), '%Y-%m') AS month, count(*)
+            FROM c JOIN v ON c.path = v.path GROUP BY 1, 2""", [MAX_TRACE_LENGTH, MAX_VARIANTS]).fetchall()
+        return {"rows": rows, "cases_total": total, "months": months}
 
     data = workspace._query_filtered(log_id, case_type, cohort, run)
     rows = data.pop("rows")
+    by_path_month = data.pop("months")
     if not rows:
         raise EventLogWorkspaceError("No cases are available to align in this selection")
     empty, used = _align(net, (), labels, MAX_STATES_PER_VARIANT)
@@ -143,6 +151,7 @@ def alignments(log_id: str, pnml: bytes, case_type: str | None = None, *,
     model_moves: Counter = Counter()
     model_move_cases: Counter = Counter()
     variants, unaligned = [], []
+    aligned_cost: dict[tuple, tuple[int, int]] = {}
     for path, n in rows:
         trace = tuple(path)
         result, used = (None, 0) if remaining <= 0 else _align(net, trace, labels, min(MAX_STATES_PER_VARIANT, remaining))
@@ -152,6 +161,7 @@ def alignments(log_id: str, pnml: bytes, case_type: str | None = None, *,
             continue
         cost = result["cost"]
         worst = len(trace) + shortest_run
+        aligned_cost[trace] = (cost, worst)
         fitness = 1 - cost / worst if worst else 1.0
         cases += n
         cost_sum += cost * n
@@ -172,6 +182,19 @@ def alignments(log_id: str, pnml: bytes, case_type: str | None = None, *,
         variants.append({"path": list(trace), "cases": n, "cost": cost, "fitness": round(fitness, 4),
                          "alignment": [{"log": s[0], "model": s[1], "move": s[2]} for s in steps if s[2] != SILENT]})
     variants.sort(key=lambda v: (-v["cases"], v["fitness"]))
+    month_totals: dict[str, list[int]] = {}
+    for path, month, n in by_path_month:
+        if tuple(path) not in aligned_cost:
+            continue
+        cost, worst = aligned_cost[tuple(path)]
+        totals = month_totals.setdefault(month, [0, 0, 0, 0])
+        totals[0] += n
+        totals[1] += n if cost == 0 else 0
+        totals[2] += cost * n
+        totals[3] += worst * n
+    by_month = [{"month": m, "cases": t[0], "fitting_case_share": round(t[1] / t[0], 4),
+                 "fitness": round(1 - t[2] / t[3], 4) if t[3] else None}
+                for m, t in sorted(month_totals.items())][-MAX_MONTHS:]
     unaligned_cases = sum(u["cases"] for u in unaligned)
     observed = {a for path, _ in rows for a in path}
 
@@ -192,6 +215,7 @@ def alignments(log_id: str, pnml: bytes, case_type: str | None = None, *,
                     "average_case": round(fitness_sum / cases, 4) if cases else None,
                     "fitting_cases": fitting_cases,
                     "fitting_case_share": round(fitting_cases / cases, 4) if cases else None},
+        "by_month": by_month,
         "deviation_cost": {"total": cost_sum, "per_case": round(cost_sum / cases, 4) if cases else None},
         "log_moves": deviations(log_moves, log_move_cases),
         "model_moves": deviations(model_moves, model_move_cases),

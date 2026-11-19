@@ -825,8 +825,32 @@
     results.appendChild(complianceSection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(domainPackSection());
     results.appendChild(costSection(names));
+    results.prepend(analysisNavigator(results));
     attachCaseAttributeSuggestions(generation);
     status('');
+  }
+
+  // A searchable list of the analysis sections below, so a long results page can be navigated by name.
+  // Buttons rather than links: the page hash carries the dashboard session.
+  function analysisNavigator(results){
+    const nav=document.createElement('nav');nav.id='owgAnalysisNav';nav.setAttribute('aria-label','Analyses');nav.style.marginTop='12px';
+    const sections=[...results.children].filter(box=>box.firstElementChild&&box.firstElementChild.tagName==='H3');
+    const search=input('owgAnalysisNavSearch','search','e.g. conformance, funnel, cost');search.autocomplete='off';
+    const count=el('div',null,'muted');count.id='owgAnalysisNavCount';count.setAttribute('role','status');count.setAttribute('aria-live','polite');
+    const list=el('ul');list.id='owgAnalysisNavList';list.style.cssText='display:flex;flex-wrap:wrap;gap:4px 8px;list-style:none;padding:0;margin:6px 0 0';
+    const items=sections.map((box,i)=>{
+      const heading=box.firstElementChild,title=heading.textContent.trim();
+      if(!heading.id)heading.id='owgAnalysisHeading'+i;heading.tabIndex=-1;
+      const go=button(title,'secondary');go.style.fontSize='12px';
+      go.onclick=()=>{box.scrollIntoView({block:'start'});heading.focus({preventScroll:true});};
+      const li=el('li');li.appendChild(go);list.appendChild(li);
+      return {li,text:(title+' '+(box.querySelector('.muted')?.textContent||'')).toLowerCase()};});
+    const show=()=>{const words=search.value.toLowerCase().split(/\s+/).filter(Boolean);let shown=0;
+      items.forEach(item=>{const on=words.every(w=>item.text.includes(w));item.li.hidden=!on;shown+=on?1:0;});
+      count.textContent=words.length?shown+' of '+items.length+' analyses match.':items.length+' analyses on this page.';};
+    search.oninput=show;
+    nav.append(field('Find an analysis',search),count,list);show();
+    return nav;
   }
 
   // Suggest case attributes (from the import or a joined case table) in every case-attribute input:
@@ -3902,6 +3926,8 @@
         if(generation!==state.generation)return;
         const f=r.fitness;
         status.textContent='Alignment fitness '+pct(f.log)+': '+Number(f.fitting_cases).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases follow the net exactly. On average a case needs '+r.deviation_cost.per_case+' extra or skipped steps to fit.'+(r.unaligned.variants?' '+r.unaligned.variants+' variants ('+Number(r.unaligned.cases).toLocaleString()+' cases) were too long to align within the search limit.':'');
+        if(r.by_month.length>1){aligned.appendChild(el('h4','Fitness by month the cases started'));
+          const t=table(['Month','Cases','Follow the net exactly','Alignment fitness'],r.by_month.map(m=>[m.month,Number(m.cases).toLocaleString(),pct(m.fitting_case_share),pct(m.fitness)]));t.id='owgPetriAlignMonths';aligned.appendChild(t);}
         if(r.log_moves.length){aligned.appendChild(el('h4','Steps the cases took that the net does not allow there'));
           aligned.appendChild(table(['Activity','Cases','Times'],r.log_moves.map(m=>[m.activity,Number(m.cases).toLocaleString(),Number(m.times).toLocaleString()])));}
         if(r.model_moves.length){aligned.appendChild(el('h4','Steps the net requires that the cases skipped'));

@@ -376,6 +376,12 @@ copies, or the two given as `older` and `newer`. A change can come from
 appended events, an applied activity mapping or edited prices as much as from
 the process itself.
 
+## Finding an analysis
+
+The results page has many analysis sections. **Find an analysis**, at the top of the results, lists
+them all; typing filters the list by section name and description (for example "conformance",
+"funnel" or "stand out"), and choosing one scrolls to it and moves keyboard focus to its heading.
+
 ## Where to look first (automatic insights)
 
 After **Analyse**, **Where to look first** lists up to six findings, ranked by the
@@ -2288,7 +2294,10 @@ Trace fitness is `1 − cost / (case length + visible steps in the net's shortes
 Log fitness divides the summed costs by the summed worst cases. The section lists the activities
 cases did where the net does not allow them, the activities the net required that cases skipped
 (both with case counts), and how each non-fitting variant is explained, e.g.
-`Register → −Check (skipped) → Pay → Close`. Each variant is aligned once. Up to 500 variants of at
+`Register → −Check (skipped) → Pay → Close`. When the cases start in more than one month, a
+**fitness by month** table shows, for each month the cases started, how many follow the net exactly
+and the alignment fitness, so a change in adherence over time (for example after a process change)
+is visible. Each variant is aligned once. Up to 500 variants of at
 most 200 steps are aligned; the search has a per-variant and a total limit, and variants it cannot
 finish are listed as unaligned and left out of the fitness. When two explanations cost the same, one
 is shown.
