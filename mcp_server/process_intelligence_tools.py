@@ -357,6 +357,17 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"profile_activity": activity, "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def get_process_signal_scorecard(log_id: str, months: int = 6) -> dict[str, Any]:
+        """The owner's value-based signals on a shared log (KPI thresholds, conformance and due-date rules) month by
+        month, by when cases started: each month's value and whether the rule's condition held. Read-only; it never
+        evaluates or reviews signals. Use it to see whether a problem is new or improving. Aggregates only.
+        """
+        if isinstance(months, bool) or not isinstance(months, int) or not 1 <= months <= 24:
+            raise ToolError("months must be 1 to 24")
+        return _get("get_process_signal_scorecard", f"/v1/process-intelligence/{_log(log_id)}/signal-scorecard",
+                    {"months": months})
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_signals(log_id: str) -> dict[str, Any]:
         """The owner's signal rules on a shared log (KPI thresholds, case and compliance conditions) and their
         last evaluated state: triggered or not, the measured value or matching cases, and whether the owner

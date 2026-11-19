@@ -256,6 +256,12 @@ async def agent_activity_profile(request: Request, log_id: str,
     return await _answer(sharing.activity_profile, log_id, profile_activity, case_type)
 
 
+@router.get("/v1/process-intelligence/{log_id}/signal-scorecard")
+async def agent_signal_scorecard(request: Request, log_id: str, months: int = Query(default=6, ge=1, le=24)):
+    _require_agent_access(request)
+    return await _answer(sharing.signal_scorecard, log_id, months)
+
+
 @router.get("/v1/process-intelligence/{log_id}/signals")
 async def agent_signals(request: Request, log_id: str):
     _require_agent_access(request)

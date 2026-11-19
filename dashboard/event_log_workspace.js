@@ -6508,6 +6508,21 @@
     refresh().catch(error=>{message.textContent=error.message;});
     // Signals saved from other sections (e.g. a Petri net conformance alert) appear without a reload.
     box.addEventListener('owg-signals-changed',()=>{refresh().catch(error=>{message.textContent=error.message;});});
+    // Month-by-month scorecard of the value-based signals (read-only).
+    const scoreRun=button('Scorecard by month','secondary');scoreRun.id='owgSignalScorecardRun';
+    const scoreOut=el('div');scoreOut.id='owgSignalScorecard';scoreOut.setAttribute('role','status');scoreOut.setAttribute('aria-live','polite');
+    box.append(scoreRun,scoreOut);
+    scoreRun.onclick=async()=>{
+      scoreRun.disabled=true;scoreOut.replaceChildren(el('div','Computing each month…','muted'));
+      try{
+        const r=await getJSON(base()+'/scorecard?months=6');if(generation!==state.generation)return;
+        if(!r.rows.length){scoreOut.replaceChildren(el('div','No KPI, conformance or due-date signals to show by month.','muted'));return;}
+        const fmt=(row,v)=>{if(v===null||v===undefined)return '—';const m=row.when.metric||'';
+          return (m.endsWith('_rate')||m.endsWith('_share')||m==='alignment_fitness')?Math.round(v*1000)/10+'%':m.endsWith('_seconds')?duration(v):Number(v).toLocaleString();};
+        scoreOut.replaceChildren(table(['Signal',...r.months],r.rows.map(row=>[row.name,...r.months.map(m=>{const cell=row.months.find(x=>x.month===m);
+          return cell?fmt(row,cell.value)+(cell.holds===true?' (holds)':''):'—';})])),el('div',r.interpretation,'muted'));
+      }catch(error){scoreOut.replaceChildren(el('div',error.message,'muted'));}
+      finally{scoreRun.disabled=false;}};
     return box;
   }
 

@@ -2452,6 +2452,12 @@ reference even after the discovered model changes. Signals can also use the alig
 (`metric: "alignment_fitness"`, usually with `operator: "below"`) and `minimum_cases`. Checking
 signals aligns each distinct path once; agents listing signals see the rule without the net.
 
+**Scorecard by month**, in the Signals section, shows every KPI, conformance and due-date signal
+month by month, like a KPI cockpit: for the cases that started in each of the last 6 months, the
+signal's value and whether its condition held. It is read-only and never changes a signal's state or
+review. Case-matching and compliance signals are not shown by month.
+`GET /v1/event-logs/{log_id}/signals/scorecard?months=6`; agents use `get_process_signal_scorecard`.
+
 ### Step-by-step explanation (alignments)
 
 After a replay, **Explain each case step by step** aligns every variant on the same net (Adriansyah,

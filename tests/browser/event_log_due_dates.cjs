@@ -57,10 +57,13 @@ const path=require('node:path');
    await page.locator('#owgSignalEvaluate').scrollIntoViewIfNeeded();await page.locator('#owgSignalEvaluate').click();
    const dueSignal=page.locator('tr',{hasText:'Overdue Pay'}).filter({hasText:'2 overdue'});
    await dueSignal.first().waitFor();assert.match(await dueSignal.first().textContent(),/yes/);
+   await page.locator('#owgSignalScorecardRun').click();
+   await page.locator('#owgSignalScorecard tbody').filter({hasText:'Overdue Pay'}).waitFor();
+   assert.match(await page.locator('#owgSignalScorecard').textContent(),/2024-01.*Overdue Pay.*\(holds\)/s);
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgDue'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Due dates browser acceptance passed: attribute due dates with on-time, late and overdue cases, most late cases, days-after-start mode, overdue signal, WCAG audit.');
+   console.log('Due dates browser acceptance passed: attribute due dates with on-time, late and overdue cases, most late cases, days-after-start mode, overdue signal, monthly scorecard, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});
