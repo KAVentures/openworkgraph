@@ -25,6 +25,7 @@
   FILTERED.add('unusual-cases');
   FILTERED.add('due-dates');
   FILTERED.add('story');
+  FILTERED.add('activity-profile');
   FILTERED.add('next-steps');
   FILTERED.add('petri-net-replay');
   FILTERED.add('petri-net-alignments');
@@ -830,6 +831,7 @@
     results.appendChild(dottedSection());
     results.appendChild(spectrumSection());
     results.appendChild(heuristicsSection());
+    results.appendChild(activityProfileSection(names));
     results.appendChild(pathExplorerSection());
     results.appendChild(dueDatesSection(names));
     results.appendChild(unusualCasesSection());
@@ -3946,6 +3948,36 @@
         const more=document.createElement('details');more.appendChild(el('summary','All arrows'));
         more.appendChild(table(['From','To','Transitions','Dependency','Kept because'],arrows.map(e=>[e.from,e.to,Number(e.transition_count).toLocaleString(),String(e.dependency),({threshold:'above threshold',best_connection:'best connection',short_loop:'short loop'})[e.kept_by]||e.kept_by])));
         out.append(more,el('div',r.note,'muted'));
+      }catch(error){statusLine.textContent=error.message;}
+      finally{run.disabled=false;}};
+    return box;
+  }
+
+  function activityProfileSection(activityNames){
+    const box=section('Activity profile');box.id='owgActivityProfile';
+    box.appendChild(el('div','One activity from every side: how often it happens and repeats, what comes before and after it, when in the week and day, and how long cases with it take.','muted'));
+    const pick=select('owgActivityProfilePick',activityNames.slice(0,500).map(a=>[a,a]));
+    const run=button('Show profile','secondary');run.id='owgActivityProfileRun';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activity',pick),run);
+    const statusLine=el('div',null,'muted');statusLine.id='owgActivityProfileStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgActivityProfileResults';
+    box.append(row,statusLine,out);
+    const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
+    const hrs=x=>x===null||x===undefined?'—':(x<48?(Math.round(x*10)/10)+' h':(Math.round(x/24*10)/10)+' d');
+    run.onclick=async()=>{
+      const generation=state.generation;run.disabled=true;statusLine.textContent='Profiling…';out.replaceChildren();
+      try{
+        const r=await getJSON(logPath('activity-profile',{profile_activity:pick.value}));
+        if(generation!==state.generation)return;
+        const c=r.case_hours;
+        statusLine.textContent=r.activity+' happens in '+Number(r.cases_with_activity).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases ('+pct(r.share_of_cases)+'), '+r.occurrences_per_case+' times per case on average; '+pct(r.repeat_share)+' of those cases repeat it. Cases with it take a median '+hrs(c.with_activity.median)+', without it '+hrs(c.without_activity.median)+'.';
+        const side=(title,list)=>{out.appendChild(el('h4',title));out.appendChild(table(['Activity','Times','Share','Median gap'],list.map(n=>[n.activity,Number(n.times).toLocaleString(),pct(n.share),hrs(n.median_hours)])));};
+        side('Comes after',r.comes_after);side('Comes before',r.comes_before);
+        out.appendChild(el('h4','When it happens'));
+        out.appendChild(table(['Weekday','Times'],r.by_weekday.map(d=>[d.day,Number(d.times).toLocaleString()])));
+        const busy=r.by_hour.filter(h=>h.times).sort((a,b)=>b.times-a.times).slice(0,3).map(h=>String(h.hour).padStart(2,'0')+':00 ('+h.times+')');
+        if(busy.length)out.appendChild(el('div','Busiest hours (UTC): '+busy.join(', ')+'.'));
+        out.appendChild(el('div',r.caveat,'muted'));
       }catch(error){statusLine.textContent=error.message;}
       finally{run.disabled=false;}};
     return box;

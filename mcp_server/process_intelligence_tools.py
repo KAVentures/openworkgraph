@@ -346,6 +346,17 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"case_a": case_a, "case_b": case_b, "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def get_process_activity_profile(log_id: str, activity: str, case_type: str | None = None) -> dict[str, Any]:
+        """One activity of a shared log from every side: how many cases have it and how often it repeats, what
+        usually comes before and after it (with median gaps), how long into a case it first happens, when in the
+        week and day it occurs, and case durations with and without it. Associations, not causes. Aggregates only.
+        """
+        if not isinstance(activity, str) or not activity:
+            raise ToolError("activity must name an activity")
+        return _get("get_process_activity_profile", f"/v1/process-intelligence/{_log(log_id)}/activity-profile",
+                    {"profile_activity": activity, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_signals(log_id: str) -> dict[str, Any]:
         """The owner's signal rules on a shared log (KPI thresholds, case and compliance conditions) and their
         last evaluated state: triggered or not, the measured value or matching cases, and whether the owner

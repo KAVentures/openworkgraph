@@ -248,6 +248,14 @@ async def agent_case_compare(request: Request, log_id: str, case_a: str = Query(
     return await _answer(sharing.compare_cases, log_id, case_a, case_b, case_type)
 
 
+@router.get("/v1/process-intelligence/{log_id}/activity-profile")
+async def agent_activity_profile(request: Request, log_id: str,
+                                 profile_activity: str = Query(min_length=1, max_length=500),
+                                 case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.activity_profile, log_id, profile_activity, case_type)
+
+
 @router.get("/v1/process-intelligence/{log_id}/signals")
 async def agent_signals(request: Request, log_id: str):
     _require_agent_access(request)

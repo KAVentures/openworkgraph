@@ -2227,6 +2227,17 @@ the section offers 0.3, 0.5, 0.7 and 0.9) and when seen at least the chosen numb
 `GET /v1/event-logs/{log_id}/heuristics-net?dependency_threshold=&and_threshold=&min_occurrences=&all_connected=`
 plus the case-filter parameters. Agents with access to a shared log use `get_process_heuristics_net`.
 
+## Activity profile
+
+**Activity profile** shows one activity from every side, like the activity views of Celonis and
+Disco: how many cases have it and how many repeat it, what usually comes before and after it with the
+median gap, how far into the case it first happens, how often it occurs on each weekday and hour
+(UTC), and how long cases with it take compared with cases without it. A longer duration with the
+step is an association, not proof that the step causes it.
+
+`GET /v1/event-logs/{log_id}/activity-profile?profile_activity=Check` plus the case-filter
+parameters (`activity` there is the case filter). Agents use `get_process_activity_profile`.
+
 ## Path explorer
 
 **Path explorer** walks the process one step at a time, as Celonis's Process Explorer and the variant
