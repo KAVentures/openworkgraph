@@ -167,6 +167,19 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         return _get("get_process_model_quality", f"/v1/process-intelligence/{_log(log_id)}/model-quality", params)
 
     @mcp.tool(annotations=_READ_ONLY)
+    def get_process_deviations(log_id: str, noise: float = 0.2, case_type: str | None = None) -> dict[str, Any]:
+        """Exactly where the recorded cases of a shared log depart from its discovered process model, from optimal
+        alignments: the steps cases took that the model does not allow there, the steps the model requires that
+        cases skipped (each with case counts), alignment fitness, and how each non-fitting variant is explained
+        step by step. Pick the noise level with get_process_model_quality first. A deviation is a difference from a
+        draft model, not a verified error. Aggregates only, no case IDs.
+        """
+        if isinstance(noise, bool) or not isinstance(noise, (int, float)) or not 0 <= noise < 1:
+            raise ToolError("noise must be a share from 0 up to (not including) 1")
+        return _get("get_process_deviations", f"/v1/process-intelligence/{_log(log_id)}/model-deviations",
+                    {"noise": float(noise), "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_signals(log_id: str) -> dict[str, Any]:
         """The owner's signal rules on a shared log (KPI thresholds, case and compliance conditions) and their
         last evaluated state: triggered or not, the measured value or matching cases, and whether the owner

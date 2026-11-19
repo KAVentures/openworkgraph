@@ -2248,6 +2248,8 @@ is shown.
 
 `POST /v1/event-logs/{log_id}/petri-net-alignments` with the PNML file as the body, plus the
 case-filter parameters. The net is not stored.
+Agents with access to a shared log use `get_process_deviations`, which aligns the cases on the
+discovered net at a chosen noise level (aggregates only, no case IDs).
 
 ## Temporal profile
 
