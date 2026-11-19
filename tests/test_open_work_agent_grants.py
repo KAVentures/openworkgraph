@@ -363,3 +363,66 @@ def test_granted_context_rejects_mid_read_revocation(setup, monkeypatch):
                               headers={"Authorization": "Bearer " + grant["token"]})
     assert response.status_code == 409
     assert calls["count"] == 2
+
+
+def test_granted_agent_receives_bounded_transitive_reviewed_chain(setup, monkeypatch):
+    from server import open_work_declaration_routes as declarations
+    from server import open_work_case_declarations as case_store
+    scope = "owg:scope:" + "c" * 32
+    third = "owg:w:" + "d" * 32
+    unknown = "owg:w:" + "e" * 32
+    monkeypatch.setattr(declarations, "_source_scope", lambda: scope)
+    issued = grants.issue(REF, "agent-a", 1, confirmed=True,
+                          source_scope=scope, context_approved=True)
+    monkeypatch.setattr(case_store, "list_case_declarations", lambda _: {
+        "items": [
+            {"work_item_ref": REF, "depends_on_work_item_refs": [OTHER],
+             "edit_token": "root-secret"},
+            {"work_item_ref": OTHER, "depends_on_work_item_refs": [third],
+             "edit_token": "other-secret", "goal_code": "private-goal"},
+            {"work_item_ref": third, "depends_on_work_item_refs": [unknown],
+             "edit_token": "third-secret"},
+        ]
+    })
+    app = FastAPI()
+    app.include_router(router)
+    headers = {"Authorization": "Bearer " + issued["token"]}
+    with TestClient(app) as client:
+        response = client.get("/v1/open-work/dispatch/granted/case-context", headers=headers)
+        assert response.status_code == 200, response.text
+        body = response.json()
+        chain = body["transitive_dependency_review"]
+        assert [entry["work_item_ref"] for entry in chain] == [unknown, third, OTHER]
+        assert chain[0]["review_state"] == "unknown_or_not_retained"
+        assert all(entry["provider_state"] == "unknown" and not entry["outcome_verified"]
+                   for entry in chain)
+        assert "private-goal" not in response.text
+        assert "secret" not in response.text
+        assert not body["agent_execution_authorized"]
+        assert grants.revoke(issued["grant_id"])
+        assert client.get("/v1/open-work/dispatch/granted/case-context",
+                          headers=headers).status_code == 401
+
+
+def test_granted_agent_dependency_cycle_fails_closed(setup, monkeypatch):
+    from server import open_work_declaration_routes as declarations
+    from server import open_work_case_declarations as case_store
+    scope = "owg:scope:" + "c" * 32
+    monkeypatch.setattr(declarations, "_source_scope", lambda: scope)
+    issued = grants.issue(REF, "agent-a", 1, confirmed=True,
+                          source_scope=scope, context_approved=True)
+    monkeypatch.setattr(case_store, "list_case_declarations", lambda _: {
+        "items": [
+            {"work_item_ref": REF, "depends_on_work_item_refs": [OTHER]},
+            {"work_item_ref": OTHER, "depends_on_work_item_refs": [REF],
+             "edit_token": "must-not-leak"},
+        ]
+    })
+    app = FastAPI()
+    app.include_router(router)
+    with TestClient(app) as client:
+        response = client.get("/v1/open-work/dispatch/granted/case-context",
+                              headers={"Authorization": "Bearer " + issued["token"]})
+    assert response.status_code == 503
+    assert OTHER not in response.text
+    assert "must-not-leak" not in response.text
