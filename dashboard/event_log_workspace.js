@@ -349,9 +349,12 @@
       importButton.disabled=true;status('Importing '+chosen.name+'…');
       try{
         const log=await (await api('/v1/event-logs/import?'+q,{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream','X-OWG-Local-Storage-Confirmed':'true'}})).json();
-        status('Imported '+Number(log.events).toLocaleString()+' events'+(log.rejected_events?' ('+Number(log.rejected_events).toLocaleString()+' rejected: '+reasonText(log.quality&&log.quality.rejected_by_reason)+')':'')+'.'+relationshipText(log.object_relationships)+identityText(log.source_identity)+tieText(log.quality)+keptText(log.quality));
+        const done='Imported '+Number(log.events).toLocaleString()+' events'+(log.rejected_events?' ('+Number(log.rejected_events).toLocaleString()+' rejected: '+reasonText(log.quality&&log.quality.rejected_by_reason)+')':'')+'.'+relationshipText(log.object_relationships)+identityText(log.source_identity)+tieText(log.quality)+keptText(log.quality);
         consent.checked=false;keep.checked=false;file.value='';name.value='';
+        // Report the import only once the new log is selected. Selecting it starts a new generation and
+        // clears the results, so an analysis started before that would be dropped and never shown.
         await refreshLogs(log.log_id);
+        status(done);
       }catch(error){status(error.message);}finally{refreshImport();}
     };
     sampleButton.onclick=async()=>{
