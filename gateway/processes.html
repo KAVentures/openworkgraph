@@ -2051,6 +2051,28 @@
           if (!$("reviewConfirm").checked)
             throw new Error("Review this exact saved revision first.");
           const record = selected.process;
+          // A handoff-inspected revision must remain independently reviewed and
+          // authorized at submission time, not merely when review was opened.
+          if (inspectedHandoff) {
+            const ticket=handoffGeneration, identityTicket=identityGeneration;
+            const authorizedCredential=credential, chosen=selected;
+            const pinned=inspectedHandoff;
+            const current=await call("/v1/human/processes/"+encodeURIComponent(pinned.workflow_id));
+            if(ticket!==handoffGeneration||identityTicket!==identityGeneration||
+               credential!==authorizedCredential||selected!==chosen||
+               !$("handoffConsent").checked||!current?.process||
+               current.archived||current.viewing_historical_revision||
+               current.latest_revision!==pinned.revision||
+               current.process.revision!==pinned.revision||
+               current.process.content_sha256!==pinned.content_sha256||
+               current.review?.status!=="reviewed_design"||
+               record.workflow_id!==pinned.workflow_id||
+               record.revision!==pinned.revision||
+               record.content_sha256!==pinned.content_sha256) {
+              resetHandoff("REFUSED: Reviewed handoff is no longer current or authorized. Inspect again.");
+              throw new Error("Reviewed handoff changed; reopen latest revision and inspect again.");
+            }
+          }
           render(
             await call(
               "/v1/human/processes/" + record.workflow_id + "/reviews",
