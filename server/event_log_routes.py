@@ -1072,6 +1072,17 @@ def event_log_case_compare(request: Request, log_id: str, case_a: str = Query(mi
     return _respond(compare.compare_cases, log_id, case_a, case_b, case_type)
 
 
+@router.get("/v1/event-logs/{log_id}/similar-cases")
+def event_log_similar_cases(request: Request, log_id: str, case_id: str = Query(min_length=1, max_length=500),
+                            limit: int = Query(default=10, ge=1, le=50),
+                            case_type: str | None = Query(default=None, max_length=200),
+                            cohort: dict = Depends(_case_filter)):
+    """The cases whose path is closest to ``case_id``, what they did differently and how long they took."""
+    from . import event_log_similar_cases as similar
+    _require_dashboard(request)
+    return _respond(similar.similar_cases, log_id, case_id, case_type, limit=limit, cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/activity-profile")
 def event_log_activity_profile(request: Request, log_id: str,
                                profile_activity: str = Query(min_length=1, max_length=500),

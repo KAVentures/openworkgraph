@@ -1135,6 +1135,35 @@ API:
 Both need the dashboard session. Gaps are elapsed time between recorded
 events, not measured work or verified waiting.
 
+### Similar cases
+
+**Find similar cases** (in *Explain a case*) lists the ten recorded cases
+whose path is closest to the case entered. It answers "have we seen this
+before, and how did it go?".
+
+* **Distance** counts the steps that only one of the two paths has, after
+  matching equal activities in order. This is the same alignment as *Compare
+  with case*, so each row's **Compare** button lines the two cases up step by
+  step.
+* **Similarity** is `1 - distance / (events in both cases)`: 100% for the
+  same path, 0% when no step is shared.
+* Cases at the same distance are ordered by how close their duration is to the
+  chosen case's.
+* **Differences** list activities the similar case does more often (`+`) or
+  less often (`−`) than the chosen case. "Same steps, other order" means only
+  the order differs.
+
+The summary gives how many cases follow exactly the same path, and the median
+duration of the cases listed against the chosen case's own duration. The
+search honours the case filter, but the chosen case itself is found even if
+the filter leaves it out. Each distinct path is compared once. Paths that
+cannot be closer than the ones already found are skipped, and at most 20,000
+paths are compared. Cases with more than 500 events are not compared.
+
+`GET /v1/event-logs/{log_id}/similar-cases?case_id=…&limit=10` (1 to 50, plus
+`case_type` and the case-filter parameters) needs the dashboard session.
+Similar recorded paths do not mean the cases had the same cause or outcome.
+
 ## Organizational mining (handovers)
 
 `GET /v1/event-logs/{log_id}/organization` (dashboard session only) describes how work moves
