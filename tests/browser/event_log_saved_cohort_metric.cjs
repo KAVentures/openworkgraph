@@ -110,6 +110,30 @@ const path=require('node:path');
   await page.waitForFunction(() => [...document.querySelectorAll('#owgCohortMetricSaved option')].some(option => option.textContent.includes('Browser acceptance duration')), null, {timeout:60000});
   await page.locator('#owgCohortMetricSaved').selectOption(savedId);
   assert.equal(await page.locator('#owgCohortMetricField').inputValue(),'duration_seconds');
+  // Ordinary analysis downloads must not release a cached result if the
+  // authenticated saved-log recomputation changes after operator review.
+  await page.locator('#owgAnalysisBackground').uncheck();
+  await page.locator('#owgAnalysisRun').click();
+  await page.locator('#owgAnalysisJson').waitFor({state:'visible',timeout:60000});
+  await page.waitForFunction(()=>!document.querySelector('#owgAnalysisJson').disabled,null,{timeout:60000});
+  const analysisPath='/v1/event-logs/'+encodeURIComponent(logId)+'/analysis';
+  let revalidationSeen=false;
+  const changedAnalysis=async route=>{
+    revalidationSeen=true;
+    const original=await route.fetch();
+    const body=await original.json();
+    body.columns=[...(body.columns||[]),'unexpected_source_revision'];
+    await route.fulfill({response:original,contentType:'application/json',body:JSON.stringify(body)});
+  };
+  await page.route('**'+analysisPath,changedAnalysis);
+  const downloads=[];
+  page.on('download',download=>downloads.push(download.suggestedFilename()));
+  await page.locator('#owgAnalysisJson').click();
+  await page.waitForFunction(()=>document.querySelector('#owgAnalysisJson').disabled,null,{timeout:30000});
+  assert.equal(revalidationSeen,true,'download must revalidate through authenticated saved-log API');
+  assert.deepEqual(downloads,[],'changed recomputation must not trigger JSON download');
+  assert.equal(await page.locator('#owgAnalysisCsv').isDisabled(),true,'stale CSV must also be disabled');
+  await page.unroute('**'+analysisPath,changedAnalysis);
   await page.locator('#owgCohortMetricDelete').click();
   await page.locator('#owgCohortMetricSaved option').filter({hasText:'Browser acceptance duration'}).waitFor({state:'detached',timeout:60000});
   assert.deepEqual(errors,[]);
