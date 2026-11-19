@@ -1895,11 +1895,23 @@
     return box;
   }
 
-  function exportButtons(prefix,getResult,csvRows){
+  function exportButtons(prefix,getResult,csvRows,verifyBeforeDownload,onError){
     const json=button('Download JSON','secondary');json.id=prefix+'Json';json.disabled=true;
     const csv=button('Download CSV','secondary');csv.id=prefix+'Csv';csv.disabled=true;
-    json.onclick=()=>{const r=getResult();if(r)download(prefix+'.json',JSON.stringify(r,null,2),'application/json');};
-    csv.onclick=()=>{const r=getResult();if(r)download(prefix+'.csv',toCSV(csvRows(r)),'text/csv');};
+    let exporting=false;
+    const exportOne=async(format)=>{
+      if(exporting)return;
+      exporting=true;json.disabled=true;csv.disabled=true;
+      try{
+        const r=verifyBeforeDownload?await verifyBeforeDownload():getResult();
+        if(!r)return;
+        if(format==='json')download(prefix+'.json',JSON.stringify(r,null,2),'application/json');
+        else download(prefix+'.csv',toCSV(csvRows(r)),'text/csv');
+      }catch(error){if(onError)onError(error);else throw error;}
+      finally{exporting=false;const available=!!getResult();json.disabled=!available;csv.disabled=!available;}
+    };
+    json.onclick=()=>exportOne('json');
+    csv.onclick=()=>exportOne('csv');
     const row=el('div',null,'row');row.append(json,csv);
     return {node:row,enable:on=>{json.disabled=!on;csv.disabled=!on;}};
   }
@@ -4941,7 +4953,25 @@
         }
       }
     };
-    const exports=exportButtons('owgAnalysis',()=>last,r=>[r.columns,...r.rows]);
+    // Ordinary JSON/CSV exports are source-bound too: recompute under the saved-log
+    // API lock immediately before download. Never release a cached result if its
+    // data or metric coverage changed since the user reviewed it.
+    let exportAttempt=0;
+    async function verifiedAnalysisExport(){
+      if(running||!last||!lastSpec||generation!==state.generation)throw new Error('Run and review the analysis before exporting.');
+      const selected=last,spec=lastSpec,selectedGeneration=state.generation,request=++exportAttempt;
+      const response=await api(base()+'/analysis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)});
+      const current=await response.json();
+      if(request!==exportAttempt||selectedGeneration!==state.generation||selected!==last||spec!==lastSpec||running)
+        throw new Error('Analysis changed during export. Run and review it again.');
+      const stable=r=>JSON.stringify([r.columns,r.rows,r.units,r.matching,r.rows_truncated,r.metrics,r.non_finite_results_withheld]);
+      if(stable(current)!==stable(selected)){
+        invalidateMetricResult();
+        throw new Error('Saved-log data or analysis results changed. Run and review the analysis again before downloading.');
+      }
+      return current;
+    }
+    const exports=exportButtons('owgAnalysis',()=>last,r=>[r.columns,...r.rows],verifiedAnalysisExport,error=>{message.textContent=error.message;});
     box.append(field('Run as a cancellable local job',background),
       el('p','Local jobs have a two-minute deadline including queue time. They use the log when execution starts; results are static. Results expire after ten minutes or restart. Leaving this view stops polling; work may continue until its deadline. Nothing is uploaded.','muted'),
       row,metricBox,message,out,exports.node,prepareShare,prepareCases,prepareCompany,sharing,saveRow,savedList);
