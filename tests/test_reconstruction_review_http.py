@@ -792,3 +792,63 @@ def test_save_revocation_does_not_echo_private_permission_error(monkeypatch):
     assert error.value.status_code == 403
     assert error.value.detail == "History access changed during review"
     assert "private" not in error.value.detail
+
+
+def _cohort_request():
+    return history_routes.ReconstructionSourceCohortSubmission(
+        evidence_sha256="a" * 64,
+        source_labels=[{"window": "current", "event_id": "e1", "true_resource_pairs": []}],
+    )
+
+
+def test_source_cohort_route_checks_consent_before_database(monkeypatch):
+    _setup(monkeypatch, grant={"mode": "off"})
+    monkeypatch.setattr(history_routes, "connect", lambda: pytest.fail("unauthorized database read"))
+    with pytest.raises(HTTPException) as error:
+        history_routes.score_reconstruction_source_cohort(_cohort_request())
+    assert error.value.status_code == 403
+
+
+def test_source_cohort_route_binds_fresh_digest_and_disclaims_holdout(monkeypatch):
+    _setup(monkeypatch)
+    from server import work_resumption, reconstruction_review_cli
+    monkeypatch.setattr(work_resumption, "resumption_candidates",
+                        lambda connection, *, lease: {"derived": True})
+    monkeypatch.setattr(reconstruction_review_cli, "build_review_queue",
+                        lambda result: {"evidence_sha256": "a" * 64})
+    monkeypatch.setattr(reconstruction_review_cli, "score_source_event_cohort",
+                        lambda result, labels: {"held_out_verified": False,
+                                                "independent_labels_verified": False})
+    response = history_routes.score_reconstruction_source_cohort(_cohort_request())
+    assert response.headers["cache-control"] == "no-store"
+    assert b'"held_out_verified": false' in response.body
+
+
+def test_source_cohort_route_rejects_stale_digest_without_scoring(monkeypatch):
+    _setup(monkeypatch)
+    from server import work_resumption, reconstruction_review_cli
+    monkeypatch.setattr(work_resumption, "resumption_candidates",
+                        lambda connection, *, lease: {"derived": True})
+    monkeypatch.setattr(reconstruction_review_cli, "build_review_queue",
+                        lambda result: {"evidence_sha256": "b" * 64})
+    monkeypatch.setattr(reconstruction_review_cli, "score_source_event_cohort",
+                        lambda *args: pytest.fail("scored stale evidence"))
+    with pytest.raises(HTTPException) as error:
+        history_routes.score_reconstruction_source_cohort(_cohort_request())
+    assert error.value.status_code == 422
+
+
+def test_source_cohort_route_denies_revocation_after_scoring(monkeypatch):
+    state = _setup(monkeypatch)
+    from server import work_resumption, reconstruction_review_cli
+    monkeypatch.setattr(work_resumption, "resumption_candidates",
+                        lambda connection, *, lease: {"derived": True})
+    monkeypatch.setattr(reconstruction_review_cli, "build_review_queue",
+                        lambda result: {"evidence_sha256": "a" * 64})
+    def score(result, labels):
+        state["generation"] += 1
+        return {"held_out_verified": False}
+    monkeypatch.setattr(reconstruction_review_cli, "score_source_event_cohort", score)
+    with pytest.raises(HTTPException) as error:
+        history_routes.score_reconstruction_source_cohort(_cohort_request())
+    assert error.value.status_code == 403
