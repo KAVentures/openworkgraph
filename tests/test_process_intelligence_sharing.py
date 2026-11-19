@@ -71,6 +71,11 @@ def test_sharing_levels_and_revocation():
     assert after["cases_at_point"] == 12 and after["next"][0]["activity"] == "Approve"
     why = sharing.model_deviation_causes(log, noise=0)
     assert why["non_fitting_paths"] == 0 and why["associations"] == [] and "case_id" not in str(why)
+    start = sharing.brief(log, sla_hours=24)
+    assert start["cases"] == 12 and start["model"]["best_noise"] is not None and "adherence" in start
+    # 12 cases is below the 20 that unusual cases need: reported, not silently skipped.
+    assert "unusual" not in start and "at least 20 cases" in start["parts_unavailable"]["unusual"]
+    assert "case_id" not in str(start) and start["next_tools"][0]["tool"] == "get_process_insights"
     found = sharing.insights(log, sla_hours=24)
     assert found["cases"] == 12 and found["findings"] and "case_id" not in str(found)
     assert any(f["kind"] == "sla_breaches" for f in found["findings"])
@@ -276,7 +281,8 @@ PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_root_
                  "get_process_next_steps",
                  "get_process_insights",
                  "get_process_deviation_causes",
-                 "align_process_case"}
+                 "align_process_case",
+                 "get_process_brief"}
 
 
 def test_mcp_tools_are_listed_only_when_a_log_is_shared(tmp_path):

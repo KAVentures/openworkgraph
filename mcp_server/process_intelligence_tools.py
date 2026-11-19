@@ -50,6 +50,19 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         return _get("list_process_logs", "/v1/process-intelligence/logs")
 
     @mcp.tool(annotations=_READ_ONLY)
+    def get_process_brief(log_id: str, sla_hours: float | None = None, case_type: str | None = None) -> dict[str, Any]:
+        """Start here: one compact briefing on a shared log. Size, timing and KPIs, the most common paths, the top
+        automatic insights, how well the discovered model fits at its best noise level, the steps cases most often
+        add or skip compared with it, how many cases stand out and why, and which tools to call next. Parts that
+        cannot be computed are listed in parts_unavailable. Aggregates only; describes records, not causes.
+        """
+        if sla_hours is not None and (isinstance(sla_hours, bool) or not isinstance(sla_hours, (int, float))
+                                      or sla_hours <= 0):
+            raise ToolError("sla_hours must be a positive number")
+        return _get("get_process_brief", f"/v1/process-intelligence/{_log(log_id)}/brief",
+                    {"sla_hours": sla_hours, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_overview(log_id: str, case_type: str | None = None, sla_hours: float | None = None) -> dict[str, Any]:
         """Overview of a shared process: case counts, durations, KPIs, top variants and automatic insights.
 

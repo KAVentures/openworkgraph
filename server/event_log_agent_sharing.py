@@ -247,6 +247,45 @@ def overview(log_id: str, case_type: str | None = None, sla_hours: float | None 
     }
 
 
+def brief(log_id: str, case_type: str | None = None, sla_hours: float | None = None) -> dict[str, Any]:
+    """One bounded briefing for an agent starting on a log: the overview, how well the discovered model fits
+    at its best noise level, where cases depart from it, how many cases stand out, and which tools to call
+    next. Every part is aggregates level; a part that cannot be computed is reported, not skipped silently."""
+    result: dict[str, Any] = {"format": FORMAT, "log_id": log_id, **overview(log_id, case_type, sla_hours)}
+    parts_unavailable: dict[str, str] = {}
+    try:
+        quality = model_quality(log_id, case_type, levels="0,0.1,0.2,0.3")
+        best = quality.get("best_f_score_noise")
+        level = next((lv for lv in quality["levels"] if lv["noise"] == best), None)
+        result["model"] = {"best_noise": best, **({k: level[k] for k in ("fitness", "precision", "f_score",
+                           "generalization", "simplicity", "places", "transitions")} if level else {})}
+        if best is not None:
+            dev = model_deviations(log_id, case_type, best)
+            result["adherence"] = {"alignment_fitness": dev["fitness"]["log"],
+                                   "fitting_case_share": dev["fitness"]["fitting_case_share"],
+                                   "extra_steps": dev["log_moves"][:5], "skipped_steps": dev["model_moves"][:5]}
+    except EventLogWorkspaceError as exc:
+        parts_unavailable["model"] = str(exc)
+    try:
+        unusual = unusual_cases(log_id, case_type, limit=1)
+        result["unusual"] = {"cases": unusual["unusual_cases"], "share": unusual["unusual_share"],
+                             "by_signal": unusual["by_signal"]}
+    except EventLogWorkspaceError as exc:
+        parts_unavailable["unusual"] = str(exc)
+    result["parts_unavailable"] = parts_unavailable
+    result["next_tools"] = [
+        {"tool": "get_process_insights", "for": "every ranked finding with the case filter that reproduces it"},
+        {"tool": "get_process_deviations", "for": "the step-by-step explanation of non-fitting variants"},
+        {"tool": "get_process_deviation_causes", "for": "case attributes that go with deviating cases"},
+        {"tool": "get_process_next_steps", "for": "walking the process one step at a time"},
+        {"tool": "get_process_root_cause", "for": "what goes with slow, reworked or other outcomes"},
+        {"tool": "get_unusual_process_cases", "for": "the cases that stand out and why"},
+    ]
+    result["interpretation"] = ("A starting summary of recorded events, not a diagnosis. Model figures describe a "
+                                "draft discovered from this log; deviations and outliers are not errors.")
+    return result
+
+
 def root_cause(log_id: str, outcome: str, case_type: str | None = None, hours: float | None = None,
                activity: str | None = None) -> dict[str, Any]:
     require(log_id, "aggregates")
