@@ -2060,7 +2060,15 @@
             const ticket=handoffGeneration, identityTicket=identityGeneration;
             const authorizedCredential=credential, chosen=selected;
             const pinned=inspectedHandoff;
-            const current=await call("/v1/human/processes/"+encodeURIComponent(pinned.workflow_id));
+            let current;
+            try {
+              current=await call("/v1/human/processes/"+encodeURIComponent(pinned.workflow_id));
+            } catch (error) {
+              if(ticket===handoffGeneration && identityTicket===identityGeneration &&
+                 credential===authorizedCredential && selected===chosen)
+                resetHandoff("REFUSED: Authorization read failed. Sign in, reopen the latest revision and inspect again.");
+              throw error;
+            }
             if(ticket!==handoffGeneration||identityTicket!==identityGeneration||
                credential!==authorizedCredential||selected!==chosen||
                !$("reviewConfirm").checked||!confirmedReview||
