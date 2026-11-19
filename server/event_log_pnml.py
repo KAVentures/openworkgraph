@@ -139,4 +139,36 @@ def discovered_pnml(log_id: str, case_type: str | None = None, *, noise: float =
     return to_pnml(net, name), meta
 
 
-__all__ = ["tree_to_net", "to_pnml", "discovered_pnml"]
+
+MAX_VARIANT_RANK = 50
+
+
+def variant_pnml(log_id: str, case_type: str | None = None, *, rank: int = 1,
+                 cohort: dict[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
+    """A sequence net of the ``rank``-th most common path (the "happy path" for rank 1), for checking every
+    case against it with replay, alignments and deviation causes."""
+    from . import event_log_workspace as workspace
+    if isinstance(rank, bool) or not isinstance(rank, int) or not 1 <= rank <= MAX_VARIANT_RANK:
+        raise workspace.EventLogWorkspaceError(f"rank must be 1 to {MAX_VARIANT_RANK}")
+
+    def run(conn):
+        rows = conn.execute("""SELECT path, count(*) AS cases FROM (
+              SELECT list(activity ORDER BY ts, event_id) AS path FROM ce GROUP BY case_id)
+            GROUP BY path ORDER BY cases DESC, path LIMIT ?""", [rank]).fetchall()
+        total = conn.execute("SELECT count(DISTINCT case_id) FROM ce").fetchone()[0]
+        return {"rows": rows, "total": total}
+
+    data = workspace._query_filtered(log_id, case_type, cohort, run)
+    rows = data["rows"]
+    if len(rows) < rank:
+        raise workspace.EventLogWorkspaceError(f"this selection has only {len(rows)} distinct paths")
+    path, cases = rows[rank - 1]
+    if len(path) > 500:
+        raise workspace.EventLogWorkspaceError("that path is longer than 500 steps")
+    net = tree_to_net({"op": "seq", "children": [{"op": "activity", "activity": a} for a in path]})
+    name = f"{data['log']['name']} path #{rank}"[:200]
+    meta = {"places": len(net["places"]), "transitions": len(net["transitions"]), "silent_transitions": 0,
+            "path": list(path), "cases": cases, "share": round(cases / data["total"], 4) if data["total"] else None}
+    return to_pnml(net, name), meta
+
+__all__ = ["tree_to_net", "to_pnml", "discovered_pnml", "variant_pnml"]
