@@ -295,4 +295,42 @@ def case_alignment(log_id: str, case_id: str, case_type: str | None = None, *, n
             "alignment": steps}
 
 
-__all__ = ["alignments", "deviation_causes", "case_alignment", "FORMAT"]
+def reference_net(pnml: bytes) -> dict[str, Any]:
+    """Parse a net to keep as a reference and check its final marking can be reached."""
+    net = parse_pnml(pnml)
+    labels = {label for label in net["transitions"].values() if label is not None}
+    empty, _ = _align(net, (), labels, MAX_STATES_PER_VARIANT)
+    if empty is None or empty["cost"] is None:
+        raise EventLogWorkspaceError("the net cannot reach its final marking from its initial marking")
+    return net
+
+
+def conformance_of(pnml: bytes, paths: list[tuple[list[str], int]]) -> dict[str, Any]:
+    """Share of cases not fitting a net and their alignment fitness, for (path, cases) pairs."""
+    net = reference_net(pnml)
+    labels = {label for label in net["transitions"].values() if label is not None}
+    shortest = _align(net, (), labels, MAX_STATES_PER_VARIANT)[0]["cost"]
+    remaining = MAX_STATES_TOTAL
+    cases = non_fitting = unaligned = 0
+    cost_sum = worst_sum = 0
+    for path, n in sorted(paths, key=lambda p: -p[1])[:MAX_VARIANTS]:
+        trace = tuple(path)
+        if len(trace) > MAX_TRACE_LENGTH or remaining <= 0:
+            unaligned += n
+            continue
+        result, used = _align(net, trace, labels, min(MAX_STATES_PER_VARIANT, remaining))
+        remaining -= used
+        if result is None or result["cost"] is None:
+            unaligned += n
+            continue
+        cases += n
+        non_fitting += n if result["cost"] else 0
+        cost_sum += result["cost"] * n
+        worst_sum += (len(trace) + shortest) * n
+    unaligned += sum(n for _, n in sorted(paths, key=lambda p: -p[1])[MAX_VARIANTS:])
+    return {"cases": cases, "non_fitting_cases": non_fitting, "unaligned_cases": unaligned,
+            "non_fitting_share": round(non_fitting / cases, 4) if cases else None,
+            "alignment_fitness": round(1 - cost_sum / worst_sum, 4) if worst_sum else None}
+
+
+__all__ = ["alignments", "deviation_causes", "case_alignment", "reference_net", "conformance_of", "FORMAT"]

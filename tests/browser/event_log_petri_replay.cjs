@@ -68,6 +68,14 @@ const path=require('node:path');
    await page.locator('#owgPetriCausesResults').filter({hasText:'6 of 30 cases deviate'}).waitFor();
    const causes=await page.locator('#owgPetriCausesResults').textContent();
    assert(causes.includes('activity: Check')&&causes.includes('not causes'),causes);
+   // Keep this net as a conformance signal: 6 of 30 cases (20%) do not fit, above the 10% limit.
+   await page.locator('#owgPetriAlertShare').selectOption('0.1');await page.locator('#owgPetriAlertWindow').selectOption('');
+   await page.locator('#owgPetriAlertSave').click();
+   await page.locator('#owgPetriAlertMessage').filter({hasText:'Saved as a signal with a copy of this net.'}).waitFor();
+   await page.locator('#owgSignalEvaluate').scrollIntoViewIfNeeded();await page.locator('#owgSignalEvaluate').click();
+   const signalRow=page.locator('tr',{hasText:'Cases not fitting strict.pnml'}).filter({hasText:'20.0% of 30 cases'});
+   await signalRow.first().waitFor();
+   assert.match(await signalRow.first().textContent(),/yes/);
    await page.addScriptTag({content:axeSource});
    const alignedAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgPetri'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(alignedAudit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
@@ -83,6 +91,6 @@ const path=require('node:path');
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgPetri'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Petri net replay browser acceptance passed: discovered net fits, uploaded strict net shows missing and remaining tokens, alignments name the skipped step, deviation root causes, unsafe XML refused, most common path as reference, WCAG audit.');
+   console.log('Petri net replay browser acceptance passed: discovered net fits, uploaded strict net shows missing and remaining tokens, alignments name the skipped step, deviation root causes, unsafe XML refused, most common path as reference, conformance signal, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});

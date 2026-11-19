@@ -293,7 +293,7 @@ def signals(log_id: str) -> dict[str, Any]:
         rule = _json.loads(definition)
         state = _json.loads(last_state) if last_state else {}
         review = states.get(rule_id, {})
-        item = {"rule_id": rule_id, "name": rule.get("name"), "condition": rule.get("when"),
+        item = {"rule_id": rule_id, "name": rule.get("name"), "condition": {k: v for k, v in (rule.get("when") or {}).items() if k != "pnml"},
                 "case_type": rule.get("case_type"), "filtered": bool(rule.get("cohort")),
                 "status": review.get("status", "not_evaluated"), "triggered": review.get("triggered"),
                 "evaluated_at": review.get("evaluated_at"), "reviewed_by_owner": review.get("status") == "acknowledged"}
