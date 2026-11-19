@@ -2069,9 +2069,11 @@
                 resetHandoff("REFUSED: Authorization read failed. Sign in, reopen the latest revision and inspect again.");
               throw error;
             }
+            // An old request must never invalidate a newer identity, process,
+            // or separately inspected packet. Abort without touching new state.
             if(ticket!==handoffGeneration||identityTicket!==identityGeneration||
-               credential!==authorizedCredential||selected!==chosen||
-               !$("reviewConfirm").checked||!confirmedReview||
+               credential!==authorizedCredential||selected!==chosen)return;
+            if(!$("reviewConfirm").checked||!confirmedReview||
                $("comment").value!==confirmedComment||
                !$("handoffConsent").checked||!current?.process||
                current.archived||current.viewing_historical_revision||
