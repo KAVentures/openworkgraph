@@ -2051,6 +2051,9 @@
           if (!$("reviewConfirm").checked)
             throw new Error("Review this exact saved revision first.");
           const record = selected.process;
+          // Pin human confirmation and text across the async authorization read.
+          const confirmedReview = $("reviewConfirm").checked;
+          const confirmedComment = $("comment").value;
           // A handoff-inspected revision must remain independently reviewed and
           // authorized at submission time, not merely when review was opened.
           if (inspectedHandoff) {
@@ -2060,6 +2063,8 @@
             const current=await call("/v1/human/processes/"+encodeURIComponent(pinned.workflow_id));
             if(ticket!==handoffGeneration||identityTicket!==identityGeneration||
                credential!==authorizedCredential||selected!==chosen||
+               !$("reviewConfirm").checked||!confirmedReview||
+               $("comment").value!==confirmedComment||
                !$("handoffConsent").checked||!current?.process||
                current.archived||current.viewing_historical_revision||
                chosen.archived||chosen.viewing_historical_revision||
@@ -2086,7 +2091,7 @@
               content_sha256: record.content_sha256,
               expected_review_number: reviewSelection.your_review_number,
               decision,
-              comment: $("comment").value,
+              comment: confirmedComment,
               user_confirmed: true,
             },
           );
