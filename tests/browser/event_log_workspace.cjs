@@ -952,11 +952,25 @@ const path=require('node:path');
    assert.equal(await page.locator('#owgAnalysisCaseConsent').isChecked(),false);
    assert.ok(!JSON.stringify(downloadedCompany).includes('"resource"'),'no raw resource content');
    // An older prepare response cannot re-open a sharing preview after a new analysis runs.
-   let releaseSharing,sharingHeld;const sharingSeen=new Promise(resolve=>sharingHeld=resolve);
-   await page.route('**/analysis-sharing-preview',async route=>{const response=await route.fetch();sharingHeld();await new Promise(resolve=>releaseSharing=resolve);await route.fulfill({response});},{times:1});
+   let releaseSharing,sharingHeld,sharingSettled,sharingDeliveryError;
+   const sharingSeen=new Promise(resolve=>sharingHeld=resolve);
+   const sharingFinished=new Promise(resolve=>sharingSettled=resolve);
+   await page.route('**/analysis-sharing-preview',async route=>{
+     const response=await route.fetch();
+     sharingHeld();
+     await new Promise(resolve=>releaseSharing=resolve);
+     try { await route.fulfill({response}); }
+     catch(error) { sharingDeliveryError=error; }
+     finally { sharingSettled(); }
+   },{times:1});
    await page.locator('#owgAnalysisPrepareShare').click();await sharingSeen;
    const rerunSeen=page.waitForResponse(r=>r.url().endsWith('/analysis'));await page.locator('#owgAnalysisRun').click();await rerunSeen;
-   const staleSharingResponse=page.waitForResponse(r=>r.url().endsWith('/analysis-sharing-preview'));releaseSharing();await staleSharingResponse;
+   // Re-running analysis may cancel the old request rather than deliver its response.
+   // Either outcome must leave the stale preview hidden. Do not require a response event
+   // after the app has correctly invalidated the request.
+   releaseSharing();await sharingFinished;
+   if(sharingDeliveryError)assert.match(String(sharingDeliveryError),/abort|cancel|closed|intercept|not found|already handled/i,
+     'only a canceled stale request may prevent its response from being delivered');
    await page.waitForTimeout(50);assert.equal(await page.locator('#owgAnalysisSharingPreview').isHidden(),true);
    await page.locator('#owgAnalysisName').fill('Rework split');await page.locator('#owgAnalysisSave').click();
    await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis saved.'}).waitFor();
