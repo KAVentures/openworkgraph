@@ -323,7 +323,8 @@ def test_concurrent_review_mutations_are_serialized_and_lost_response_stays_fail
     assert "let reviewMutationInFlight = false;" in html
     assert 'if (reviewMutationInFlight) throw new Error(' in block
     assert "reviewMutationInFlight = true;" in block
-    assert "reviewResult=await call(" in block
+    assert "const reviewResult=await call(" in block
+    assert block.index("reviewMutationInFlight = true;") < block.index("current=await call(")
     assert "reviewMutationInFlight = false;" in block
     assert block.index("reviewMutationInFlight = true;") < block.index('"/reviews"')
     assert block.index("reviewMutationInFlight = false;") > block.index('"/reviews"')
