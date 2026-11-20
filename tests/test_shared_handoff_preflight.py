@@ -237,3 +237,15 @@ def test_recovery_completion_rejects_superseding_open_of_same_process():
     assert "recoveryOpenTicket!==processOpenGeneration" in block
     assert block.index("await open(workflowId);") < block.index("recoveryOpenTicket!==processOpenGeneration")
     assert block.index("recoveryOpenTicket!==processOpenGeneration") < block.index("Latest authorized revision reopened.")
+
+
+def test_denied_recovery_reports_failure_only_for_current_identity_and_open():
+    """Denied Gateway reads cannot appear to have reopened an authorized revision."""
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split('$("handoffRefresh").addEventListener("click",', 1)[1].split('$("handoffPacket").addEventListener', 1)[0]
+    assert 'try {\n            await open(workflowId);' in block
+    assert 'recoveryOpenTicket===processOpenGeneration' in block
+    assert 'identityTicket===identityGeneration' in block
+    assert 'REFUSED: Could not reopen an authorized revision.' in block
+    assert block.index('REFUSED: Could not reopen') < block.index('throw error;')
+    assert block.index('throw error;') < block.index('Latest authorized revision reopened.')
