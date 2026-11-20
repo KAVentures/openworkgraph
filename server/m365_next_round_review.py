@@ -88,7 +88,12 @@ def prepare(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
     if (type(digest) is not str or len(digest) != 64
             or any(ch not in "0123456789abcdef" for ch in digest)):
         raise ReceiptError("Invalid candidate review digest")
-    # A provider summary and independently parsed candidate must agree before\n    # transaction preflight observes either as review-ready evidence.\n    if (checked["event_snapshots"] != extracted["event_snapshots"]\n            or checked["removal_markers_for_review"] != extracted["removal_markers_for_review"]):\n        raise ReceiptError("Extracted candidate review count mismatch")\n    proposal = transaction.preflight(
+    # A provider summary and independently parsed candidate must agree before
+    # transaction preflight observes either as review-ready evidence.
+    if (checked["event_snapshots"] != extracted["event_snapshots"]
+            or checked["removal_markers_for_review"] != extracted["removal_markers_for_review"]):
+        raise ReceiptError("Extracted candidate review count mismatch")
+    proposal = transaction.preflight(
         **scope, log_id=log_id, confirm_log_id=confirm_log_id,
         candidate=Path(candidate), ledger_dir=Path(ledger_dir),
         expected_review_csv_sha256=digest,
