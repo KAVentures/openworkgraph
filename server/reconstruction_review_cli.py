@@ -507,6 +507,11 @@ def score_source_event_cohort(response: dict[str, Any], source_labels: list[dict
         if (not isinstance(window, str) or not window or len(window) > 128
                 or not isinstance(event_id, str) or not event_id or len(event_id) > 120):
             raise ValueError("invalid source event identity")
+        # Unsurfaced earlier observations must still use canonical UTC windows.
+        # Fabricated session labels must not inflate false-negative counts.
+        if window != "current":
+            if not window.startswith("earlier:") or _session_window(window[len("earlier:"):]) != window:
+                raise ValueError("noncanonical source event window")
         previous_window = event_windows.setdefault(event_id, window)
         if previous_window != window:
             raise ValueError("source event ID reused across windows")
