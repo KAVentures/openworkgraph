@@ -188,3 +188,37 @@ def test_uncertain_mutation_never_retries_or_reports_success(failure_phase):
         "handoff": ["append", "handoff"],
         "checkpoint": ["append", "handoff", "checkpoint"],
     }[failure_phase]
+
+
+@pytest.mark.parametrize("field", ["provider_requests", "owg_writes"])
+def test_next_round_rejects_boolean_preflight_side_effect_counts(field):
+    """A boolean is not a trustworthy integer count of provider/OWG effects."""
+    state = dict(generation=1, candidate_sha256=A, log_id="log")
+    proposal = dict(status="review_ready_for_explicit_commit",
+                    proposed_generation=2, checkpoint_predecessor_generation=1,
+                    reviewed_event_snapshots=2, removal_markers_for_review=1,
+                    reviewed_csv_sha256=B,
+                    manual_review_and_separate_commit_required=True,
+                    provider_requests=0, owg_writes=0,
+                    checkpoint_advanced=False, automatic_retry_allowed=False)
+    proposal[field] = False  # False == 0 in Python, but not a valid audit count.
+    with (patch.object(next_round, "inspect_checkpoint", return_value=state),
+          patch.object(next_round.cycle, "extract",
+                       return_value=dict(event_snapshots=2, removal_markers_for_review=1)),
+          patch.object(next_round.cycle, "review", return_value=_review(B)),
+          patch.object(next_round.transaction, "preflight", return_value=proposal)):
+        with pytest.raises(transaction.ReceiptError, match="Invalid or concurrent"):
+            next_round.prepare(
+                **_scope(), previous_candidate=Path("/private/old.json"),
+                previous_csv=Path("/private/old.csv"),
+                receipt_file=Path("/private/receipt"),
+                journal_dir=Path("/private/journal"),
+                handoff_dir=Path("/private/handoff"),
+                successor_label="next", output=Path("/private/next.csv"),
+                candidate=Path("/private/next.json"),
+                expected_generation=1,
+                expected_previous_candidate_sha256=A,
+                token="fake-contract-token", consent_local_read=True,
+                consent_delta_read=True, consent_local_export=True,
+                confirm_previous_removals_reviewed=True,
+                require_event_membership=True)
