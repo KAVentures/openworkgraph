@@ -262,3 +262,13 @@ def test_review_submission_consumes_inspection_before_uncertain_post():
     assert block.index('$("handoffConsent").checked=false;') < block.index('const reviewResult=await call(')
     assert 'if (submittedInspectedHandoff)' in block
     assert 'render(reviewResult);' in block
+
+
+def test_stale_packet_read_failure_cannot_overwrite_new_identity_or_selection():
+    """A failed old packet read cannot report denial in a newer session."""
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split('$("handoffCheck").addEventListener("click",', 1)[1]
+    assert 'const identityTicket=identityGeneration, authorizedCredential=credential;' in block
+    assert 'ticket===handoffGeneration&&identityTicket===identityGeneration' in block
+    assert 'credential===authorizedCredential&&selected===chosen' in block
+    assert 'catch(_){fail("Fresh authenticated read failed or access was withdrawn.");}' in block
