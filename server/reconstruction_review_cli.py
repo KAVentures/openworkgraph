@@ -521,7 +521,7 @@ def score_source_event_cohort(response: dict[str, Any], source_labels: list[dict
         truth[key] = canonical
     if not set(predictions).issubset(truth):
         raise ValueError("source inventory omits surfaced prediction events")
-    tp = fp = fn = missed_events = negative_events = contaminated_negative_events = 0
+    tp = fp = fn = missed_events = negative_events = contaminated_negative_events = false_link_events = 0
     per_window: dict[str, dict[str, int]] = {}
     disagreements: list[dict[str, Any]] = []
     for key, expected in sorted(truth.items()):
@@ -530,15 +530,17 @@ def score_source_event_cohort(response: dict[str, Any], source_labels: list[dict
         tp += len(correct)
         fp += len(extra)
         fn += len(missing)
+        false_link_events += bool(extra)
         missed_events += bool(expected and not predicted)
         negative_events += not expected
         contaminated_negative_events += bool(not expected and predicted)
         counts = per_window.setdefault(key[0], {"events": 0, "tp": 0, "fp": 0, "fn": 0,
-                                                 "negative_events": 0, "negative_false_link_events": 0})
+                                                 "negative_events": 0, "negative_false_link_events": 0, "false_link_events": 0})
         counts["events"] += 1
         counts["tp"] += len(correct)
         counts["fp"] += len(extra)
         counts["fn"] += len(missing)
+        counts["false_link_events"] += bool(extra)
         counts["negative_events"] += not expected
         counts["negative_false_link_events"] += bool(not expected and predicted)
         if extra or missing:
@@ -561,6 +563,8 @@ def score_source_event_cohort(response: dict[str, Any], source_labels: list[dict
         "per_window_counts": per_window,
         "event_disagreements": disagreements,
         "event_disagreements_are_label_comparisons_not_confirmed_cases": True,
+        "source_events_with_false_links": false_link_events,
+        "source_event_false_link_rate": false_link_events / len(truth),
         "negative_source_events": negative_events,
         "negative_source_events_with_false_links": contaminated_negative_events,
         "negative_false_link_rate": (
