@@ -86,35 +86,6 @@ def test_cohort_dimensions_and_errors():
         bd.breakdown(log, "start_month", with_activity="Z")
 
 
-def test_owner_only_routes(tmp_path):
-    code = r'''
-from fastapi.testclient import TestClient
-from server.secure_app import app
-from server import local_auth
-doc = "case,activity,time,team\n" + "".join(f"c{i},A,2024-01-0{i+1}T00:00:00Z,{'red' if i%2 else 'blue'}\nc{i},B,2024-01-0{i+1}T0{i+1}:00:00Z,\n" for i in range(6))
-with TestClient(app) as client:
-    owner={'Authorization':'OWG-Session '+local_auth.create_dashboard_session()}
-    bearer={'Authorization':'Bearer '+local_auth.ensure_api_token()}
-    made=client.post('/v1/event-logs/import?format=csv&name=q&case_column=case&activity_column=activity&timestamp_column=time&attribute_column=team',
-        content=doc.encode(),headers={**owner,'x-owg-local-storage-confirmed':'true'})
-    assert made.status_code==200,made.text
-    base='/v1/event-logs/'+made.json()['log_id']+'/breakdown'
-    assert client.get(base+'?rows=start_month').status_code in (401,403)
-    assert client.get(base+'/dimensions',headers=bearer).status_code in (401,403)
-    d=client.get(base+'/dimensions',headers=owner)
-    assert d.status_code==200 and 'event_attribute:team' in [x['dimension'] for x in d.json()['dimensions']], d.text
-    r=client.get(base+'?rows=event_attribute:team&columns=end_activity',headers=owner)
-    assert r.status_code==200 and r.headers['cache-control']=='no-store', r.text
-    assert {c['row']:c['cases'] for c in r.json()['cells']}=={'blue':3,'red':3}
-    f=client.get(base+'?rows=event_attribute:team&activity=B',headers=owner)
-    assert f.status_code==200 and f.json()['cases']==6
-    assert client.get(base+'?rows=bogus',headers=owner).status_code==422
-    assert client.get(base,headers=owner).status_code==422
-'''
-    env = {**os.environ, 'WORKFLOW_OBSERVER_DATA': str(tmp_path / 'data'), 'WORKFLOW_OBSERVER_AUTH_DIR': str(tmp_path / 'auth')}
-    subprocess.run([sys.executable, '-c', code], env=env, check=True, timeout=60)
-
-
 def test_tag_rework_and_duration_band_dimensions():
     from server import event_log_case_tags as case_tags
     log = _import()
@@ -149,3 +120,33 @@ def test_duration_bands_are_ordered():
                                mapping={k: v for k, v in MAPPING.items() if k != "attribute_columns"})["log_id"]
     r = bd.breakdown(log, "duration_band")
     assert r["row_values"] == ["under 1 hour", "1 to 24 hours", "1 to 7 days", "7 to 30 days", "30 days or more"]
+
+
+def test_owner_only_routes(tmp_path):
+    code = r'''
+from fastapi.testclient import TestClient
+from server.secure_app import app
+from server import local_auth
+doc = "case,activity,time,team\n" + "".join(f"c{i},A,2024-01-0{i+1}T00:00:00Z,{'red' if i%2 else 'blue'}\nc{i},B,2024-01-0{i+1}T0{i+1}:00:00Z,\n" for i in range(6))
+with TestClient(app) as client:
+    owner={'Authorization':'OWG-Session '+local_auth.create_dashboard_session()}
+    bearer={'Authorization':'Bearer '+local_auth.ensure_api_token()}
+    made=client.post('/v1/event-logs/import?format=csv&name=q&case_column=case&activity_column=activity&timestamp_column=time&attribute_column=team',
+        content=doc.encode(),headers={**owner,'x-owg-local-storage-confirmed':'true'})
+    assert made.status_code==200,made.text
+    base='/v1/event-logs/'+made.json()['log_id']+'/breakdown'
+    assert client.get(base+'?rows=start_month').status_code in (401,403)
+    assert client.get(base+'/dimensions',headers=bearer).status_code in (401,403)
+    d=client.get(base+'/dimensions',headers=owner)
+    assert d.status_code==200 and 'event_attribute:team' in [x['dimension'] for x in d.json()['dimensions']], d.text
+    r=client.get(base+'?rows=event_attribute:team&columns=end_activity',headers=owner)
+    assert r.status_code==200 and r.headers['cache-control']=='no-store', r.text
+    assert {c['row']:c['cases'] for c in r.json()['cells']}=={'blue':3,'red':3}
+    f=client.get(base+'?rows=event_attribute:team&activity=B',headers=owner)
+    assert f.status_code==200 and f.json()['cases']==6
+    assert client.get(base+'?rows=bogus',headers=owner).status_code==422
+    assert client.get(base,headers=owner).status_code==422
+'''
+    env = {**os.environ, 'WORKFLOW_OBSERVER_DATA': str(tmp_path / 'data'), 'WORKFLOW_OBSERVER_AUTH_DIR': str(tmp_path / 'auth')}
+    subprocess.run([sys.executable, '-c', code], env=env, check=True, timeout=60)
+
