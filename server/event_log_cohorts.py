@@ -18,7 +18,8 @@ from .event_log_workspace import EventLogWorkspaceError
 
 _SEP = workspace._SEP
 _KEYS = {"label", "started_from", "started_before", "resource", "activity", "attribute", "attribute_range", "event_attribute", "tag",
-         "follows", "variants", "duration", "starts_with", "ends_with"}
+         "follows", "variants", "duration", "starts_with", "ends_with", "ended_from", "ended_before", "events",
+         "path_cases", "rework"}
 MAX_FOLLOW_RULES = 5
 MAX_COHORT_VARIANTS = 500
 MAX_VARIANT_LENGTH = 1000
@@ -39,11 +40,11 @@ def parse_cohort(spec: Any) -> dict[str, Any]:
     if not isinstance(spec, dict) or set(spec) - _KEYS:
         raise EventLogWorkspaceError(
             "cohort accepts label, started_from, started_before, resource, activity, attribute, attribute_range, event_attribute, "
-            "tag, follows, variants, duration, starts_with, ends_with")
+            "tag, follows, variants, duration, starts_with, ends_with, ended_from, ended_before, events, path_cases, rework")
     cohort: dict[str, Any] = {}
     if spec.get("label") not in (None, ""):
         cohort["label"] = _short(spec["label"], "label")[:80]
-    for key in ("started_from", "started_before"):
+    for key in ("started_from", "started_before", "ended_from", "ended_before"):
         if spec.get(key) not in (None, ""):
             stamp = parse_timestamp(spec[key])
             if stamp is None:
@@ -69,8 +70,17 @@ def parse_cohort(spec: Any) -> dict[str, Any]:
         cohort["duration"] = _parse_duration(spec["duration"])
     if spec.get("variants") not in (None, []):
         cohort["variants"] = _parse_variants(spec["variants"])
+    for key, what in (("events", "events"), ("path_cases", "path_cases")):
+        if spec.get(key) not in (None, {}, ""):
+            cohort[key] = _parse_count(spec[key], what)
+    if spec.get("rework") not in (None, ""):
+        if not isinstance(spec["rework"], bool):
+            raise EventLogWorkspaceError("cohort rework must be true (cases that repeat an activity) or false")
+        cohort["rework"] = spec["rework"]
     if "started_from" in cohort and "started_before" in cohort and cohort["started_from"] >= cohort["started_before"]:
         raise EventLogWorkspaceError("cohort period is empty")
+    if "ended_from" in cohort and "ended_before" in cohort and cohort["ended_from"] >= cohort["ended_before"]:
+        raise EventLogWorkspaceError("cohort end period is empty")
     return cohort
 
 
@@ -122,6 +132,25 @@ def _parse_duration(spec: Any) -> dict[str, float]:
     return bounds
 
 
+def _parse_count(spec: Any, what: str) -> dict[str, int]:
+    """A whole-number range, both ends inclusive: events per case, or cases that share the case's path."""
+    if not isinstance(spec, dict) or set(spec) - {"min", "max"}:
+        raise EventLogWorkspaceError(f"cohort {what} is {{min, max}}")
+    bounds: dict[str, int] = {}
+    for key in ("min", "max"):
+        value = spec.get(key)
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 10 ** 9:
+            raise EventLogWorkspaceError(f"cohort {what} {key} must be a whole number from 1 to 1000000000")
+        bounds[key] = value
+    if not bounds:
+        raise EventLogWorkspaceError(f"cohort {what} needs min, max or both")
+    if "min" in bounds and "max" in bounds and bounds["min"] > bounds["max"]:
+        raise EventLogWorkspaceError(f"cohort {what} min must not be above max")
+    return bounds
+
+
 def _parse_range(spec: Any) -> dict[str, Any]:
     """A numeric case-attribute range: ``min`` inclusive, ``max`` exclusive, either may be omitted."""
     if not isinstance(spec, dict) or set(spec) - {"name", "min", "max"}:
@@ -145,11 +174,11 @@ def _parse_range(spec: Any) -> dict[str, Any]:
 def describe(cohort: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for key, value in cohort.items():
-        if key in ("started_from", "started_before"):
+        if key in ("started_from", "started_before", "ended_from", "ended_before"):
             out[key] = value.isoformat() + "Z"
         elif key in ("attribute", "event_attribute"):
             out[key] = f"{value[0]}={value[1]}"
-        elif key in ("attribute_range", "duration"):
+        elif key in ("attribute_range", "duration", "events", "path_cases"):
             out[key] = dict(value)
         else:
             out[key] = value
@@ -214,6 +243,30 @@ def _predicate(cohort: dict[str, Any], log_id: str) -> tuple[str, list[Any]]:
             clauses.append(f"""case_id IN (SELECT case_id FROM ce GROUP BY case_id
                 HAVING {pick}(activity, (ts, event_id)) = ?)""")
             params.append(cohort[key])
+    if "ended_from" in cohort or "ended_before" in cohort:
+        # Timeframe filter on when the case's last recorded event happened.
+        having = (["max(ts) >= ?"] if "ended_from" in cohort else []) + (["max(ts) < ?"] if "ended_before" in cohort else [])
+        clauses.append(f"case_id IN (SELECT case_id FROM ce GROUP BY case_id HAVING {' AND '.join(having)})")
+        params += [cohort[k] for k in ("ended_from", "ended_before") if k in cohort]
+    if "events" in cohort:
+        # Number of recorded events in the case, both ends inclusive.
+        e = cohort["events"]
+        having = (["count(*) >= ?"] if "min" in e else []) + (["count(*) <= ?"] if "max" in e else [])
+        clauses.append(f"case_id IN (SELECT case_id FROM ce GROUP BY case_id HAVING {' AND '.join(having)})")
+        params += [e[k] for k in ("min", "max") if k in e]
+    if "rework" in cohort:
+        # Cases that repeat at least one activity (or, with false, that repeat none).
+        clauses.append(f"""case_id {'IN' if cohort['rework'] else 'NOT IN'} (SELECT case_id FROM ce GROUP BY case_id
+            HAVING count(*) > count(DISTINCT activity))""")
+    if "path_cases" in cohort:
+        # Disco-style variation filter: how many cases follow exactly this case's path, counted over all
+        # cases under the case notion before the other filters apply. Both ends inclusive.
+        p = cohort["path_cases"]
+        cond = (["n >= ?"] if "min" in p else []) + (["n <= ?"] if "max" in p else [])
+        clauses.append(f"""case_id IN (SELECT case_id FROM (SELECT case_id, count(*) OVER (PARTITION BY path) AS n
+            FROM (SELECT case_id, string_agg(activity, '{_SEP}' ORDER BY ts, event_id) AS path FROM ce GROUP BY case_id))
+            WHERE {' AND '.join(cond)})""")
+        params += [p[k] for k in ("min", "max") if k in p]
     if "variants" in cohort:
         clauses.append(f"""case_id IN (SELECT case_id FROM ce GROUP BY case_id
             HAVING string_agg(activity, '{_SEP}' ORDER BY ts, event_id) IN (SELECT unnest(?)))""")

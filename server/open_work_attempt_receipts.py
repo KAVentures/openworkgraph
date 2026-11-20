@@ -77,6 +77,38 @@ def _connect(path: str):
         customer_outcome TEXT NOT NULL
     )""")
     db.execute("CREATE INDEX IF NOT EXISTS attempt_receipts_scope ON attempt_receipts(tenant,actor,attempt,id)")
+    # A pre-existing SQLite file is untrusted even when its path is safe.
+    # Reject substituted tables/views/triggers, added columns, foreign keys,
+    # and alternate indexes before any actor-scoped read or write.
+    expected_columns = (
+        ("id", "INTEGER", 0, 1),
+        ("tenant", "TEXT", 1, 0), ("actor", "TEXT", 1, 0),
+        ("attempt", "TEXT", 1, 0), ("checked_at", "TEXT", 1, 0),
+        ("status", "TEXT", 1, 0), ("reason", "TEXT", 0, 0),
+        ("event_id", "TEXT", 0, 0),
+        ("provider_operation", "TEXT", 1, 0),
+        ("customer_outcome", "TEXT", 1, 0),
+    )
+    columns = db.execute("PRAGMA table_xinfo(attempt_receipts)").fetchall()
+    actual = tuple((row[1], row[2].upper(), row[3], row[5]) for row in columns)
+    objects = db.execute(
+        "SELECT type,name,tbl_name FROM sqlite_master "
+        "WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name"
+    ).fetchall()
+    expected_objects = [
+        ("index", "attempt_receipts_scope", "attempt_receipts"),
+        ("table", "attempt_receipts", "attempt_receipts"),
+    ]
+    indexes = db.execute("PRAGMA index_list(attempt_receipts)").fetchall()
+    index_columns = db.execute("PRAGMA index_info(attempt_receipts_scope)").fetchall()
+    if (actual != expected_columns or
+        any(row[4] is not None or row[6] != 0 for row in columns) or
+        objects != expected_objects or len(indexes) != 1 or
+        indexes[0][1] != "attempt_receipts_scope" or indexes[0][2] != 0 or
+        tuple(row[2] for row in index_columns) != ("tenant", "actor", "attempt", "id") or
+        db.execute("PRAGMA foreign_key_list(attempt_receipts)").fetchone() is not None):
+        db.close()
+        raise ValueError("incompatible receipt journal schema")
     return db
 
 

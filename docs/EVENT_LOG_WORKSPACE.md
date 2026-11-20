@@ -479,6 +479,36 @@ where columns kept from a CSV import live; values are compared as stored text).
 dashboard downloads the result as JSON or CSV; CSV cells that could be read as
 spreadsheet formulas are prefixed with `'`.
 
+### Breakdown table
+
+**Breakdown table** shows case figures by one or two dimensions, like a pivot
+table (a small process cube). Choose what goes in the rows and, optionally, in
+the columns:
+
+* a built-in dimension: the month or weekday the case started, or its first
+  or last activity;
+* a case attribute (`attribute:<name>`, as the case filter reads it);
+* an event attribute (`event_attribute:<name>`, the first non-empty value
+  recorded in the case; columns kept from a CSV import are event attributes).
+
+Every cell gives the number of cases, their share of the selection, the median
+and 90th-percentile duration, events per case and the rework rate (cases that
+repeat an activity). With **Share doing an activity**, it also gives the share
+of cases that do the chosen activity. The table ends with an **All** column
+and row, the totals for each value.
+
+At most 30 row values and 12 column values are shown. For a time dimension
+the latest values are kept; otherwise the most common. The rest are grouped
+as `(other)`, and cases with no value as `(missing)`. Cells with fewer than 5
+cases are marked `*`, because one case moves their figures a lot. The table
+honours the case filter.
+
+`GET /v1/event-logs/{log_id}/breakdown?rows=…&columns=…&with_activity=…`
+(plus `case_type` and the case-filter parameters) returns the cells and
+totals. `GET /v1/event-logs/{log_id}/breakdown/dimensions` lists the
+dimensions available in the log. Both need the dashboard session. A
+difference between cells describes the recorded cases, not a cause.
+
 ### Process cost
 
 The log records what happened, not what it cost. **Process cost** applies your
@@ -1135,6 +1165,35 @@ API:
 Both need the dashboard session. Gaps are elapsed time between recorded
 events, not measured work or verified waiting.
 
+### Similar cases
+
+**Find similar cases** (in *Explain a case*) lists the ten recorded cases
+whose path is closest to the case entered. It answers "have we seen this
+before, and how did it go?".
+
+* **Distance** counts the steps that only one of the two paths has, after
+  matching equal activities in order. This is the same alignment as *Compare
+  with case*, so each row's **Compare** button lines the two cases up step by
+  step.
+* **Similarity** is `1 - distance / (events in both cases)`: 100% for the
+  same path, 0% when no step is shared.
+* Cases at the same distance are ordered by how close their duration is to the
+  chosen case's.
+* **Differences** list activities the similar case does more often (`+`) or
+  less often (`−`) than the chosen case. "Same steps, other order" means only
+  the order differs.
+
+The summary gives how many cases follow exactly the same path, and the median
+duration of the cases listed against the chosen case's own duration. The
+search honours the case filter, but the chosen case itself is found even if
+the filter leaves it out. Each distinct path is compared once. Paths that
+cannot be closer than the ones already found are skipped, and at most 20,000
+paths are compared. Cases with more than 500 events are not compared.
+
+`GET /v1/event-logs/{log_id}/similar-cases?case_id=…&limit=10` (1 to 50, plus
+`case_type` and the case-filter parameters) needs the dashboard session.
+Similar recorded paths do not mean the cases had the same cause or outcome.
+
 ## Organizational mining (handovers)
 
 `GET /v1/event-logs/{log_id}/organization` (dashboard session only) describes how work moves
@@ -1352,6 +1411,38 @@ under the chosen case notion and the source's activity mapping.
 * **The new log:** counts against the 50-log limit. It can be analysed,
   exported, compared with the source (see *Comparing two logs*) or deleted like
   any other log.
+
+### Anonymized export
+
+**Anonymized export** (after **Analyse**) downloads the cases as a CSV meant
+to leave this computer, for example for a consultant or a benchmark, with
+less that points back to people. It honours the case filter.
+
+* **Rare paths are left out.** A case is kept only when at least the chosen
+  number of cases (2 to 1000, default 5) follow exactly the same sequence of
+  activities. Activities that only occur on rare paths disappear with them.
+* **Case IDs are replaced** by `C000001`, `C000002`, … in a random order, so
+  the file cannot be joined back to the source system by ID or row order.
+* **Time is coarsened.** *Relative* (default) moves each case to start at
+  midnight on the first day of the month it started and keeps the gaps between
+  its events; *day* keeps only each event's date (the `step` column keeps the
+  order); *exact* keeps timestamps.
+* **Resources** are left out (default) or replaced by `Resource 01`, … in a
+  random order.
+* **Attributes are never exported.** Columns: `case_id`, `step`, `activity`,
+  `timestamp` and, if chosen, `resource`. Cells that would start a spreadsheet
+  formula are prefixed with `'`.
+
+**Check what is kept** shows the counts first; nothing is stored.
+`GET /v1/event-logs/{log_id}/anonymized-export` returns that summary and
+`GET /v1/event-logs/{log_id}/anonymized-export.csv` the file (header
+`X-OWG-Anonymized`), both with `min_cases`, `time_mode`
+(`relative|day|exact`), `resource_mode` (`drop|pseudonymize`), `case_type` and
+the case-filter parameters. At most 1,000,000 events are exported at once.
+This lowers the chance that a case can be singled out; it is not a guarantee.
+Durations, dates and activity names can still identify a case to someone who
+knows it, so review the file before sharing it. For a map with formal
+guarantees, see *Private process map (differential privacy)*.
 
 ## Appending newer exports
 
@@ -2000,6 +2091,27 @@ cohort they are `starts_with`, `ends_with` and `duration: {"min": s, "max": s}`.
 every other condition and apply to the same views. Saved filters keep them. A saved filter whose
 first or last activity is no longer in the log is flagged, like its follower rules.
 
+**End time, events, path frequency and rework.** Four more filters follow Disco's timeframe,
+performance and variation filters:
+
+* **Case ended**: the last recorded event is on or after one date and/or before another
+  (`ended_from`, `ended_before`; timezone-qualified ISO times in the API, dates in the
+  dashboard). This complements the start-period filter, for example to keep cases that finished
+  last month.
+* **Events per case**: at least and/or at most a number of recorded events (`events_min`,
+  `events_max`; both inclusive).
+* **Path frequency**: keeps cases whose exact path (sequence of activities) is followed by at
+  least and/or at most a number of cases (`path_cases_min`, `path_cases_max`; both inclusive).
+  "At least 10" keeps the mainstream paths; "at most 2" keeps the rare ones. The count is taken
+  over all cases under the case notion, before the other filters apply, so it does not change
+  when another filter is added.
+* **Rework**: `rework=true` keeps cases that repeat at least one activity; `rework=false` keeps
+  cases that repeat none.
+
+In a JSON cohort they are `ended_from`, `ended_before`, `events: {"min": n, "max": n}`,
+`path_cases: {"min": n, "max": n}` and `rework: true|false`. They combine with every other
+condition, apply to the same views, and are kept by saved filters.
+
 The case pickers inside individual sections take the same numeric range, under "Numeric case
 attribute", "From (inclusive)" and "Below (exclusive)". These are KPIs, the cohort benchmark and
 map comparison, the saved-graph comparison, case tags, saving cases as a log, case metrics and
@@ -2302,7 +2414,8 @@ compared with the selection on transparent signals:
 
 Each signal adds 0.25 to 1 to the score; robust-z signals grow from 0.25 at the threshold to 1 at
 twice it. The list shows the top cases with their reasons, the median case for comparison, and an
-**Explain** button that opens the case in **Explain a case**. At least 20 cases are needed. Unusual
+**Explain** button that opens the case in **Explain a case**. **Tag these cases** tags the listed cases (`unusual`
+by default) in **Case tags**, so the `tag` case filter can focus every other analysis on them. At least 20 cases are needed. Unusual
 is not wrong: rare paths and long durations are often legitimate.
 
 `GET /v1/event-logs/{log_id}/unusual-cases?limit=25` plus the case-filter parameters. Agents use
@@ -2514,7 +2627,15 @@ same case filter as the alignment. Activities appear too: a case with an extra o
 deviates because of that step. These are associations, not causes.
 
 `POST /v1/event-logs/{log_id}/petri-net-deviation-causes` with the PNML file as the body, plus the
-case-filter parameters. Root-cause analysis also accepts the outcome `variant_in` with a list of
+case-filter parameters.
+
+**Download non-fitting cases (CSV)** lists every case that does not fit the net, one row each, for
+follow-up in another tool: case ID, its activities, alignment fitness, the steps it added and the
+steps it skipped. Cells starting with a formula character are prefixed with `'` so the file is safe
+to open in a spreadsheet; at most 200,000 cases are written, and cases too long to align are left
+out and counted in the `X-OWG-Non-Fitting` header.
+`POST /v1/event-logs/{log_id}/petri-net-alignments/cases.csv` with the PNML file as the body, plus
+the case-filter parameters. The net is not stored. Root-cause analysis also accepts the outcome `variant_in` with a list of
 paths when called directly. Agents use `get_process_deviation_causes` on the discovered net.
 
 ## Temporal profile
