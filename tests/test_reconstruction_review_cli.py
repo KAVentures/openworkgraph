@@ -1362,6 +1362,21 @@ class CompleteSourceCohortTests(unittest.TestCase):
         self.assertEqual(score["false_positive_pairs"], 1)
         self.assertFalse(score["held_out_verified"])
 
+    def test_cross_window_duplicate_source_id_cannot_inflate_denominator(self):
+        from server.reconstruction_review_cli import score_source_event_cohort
+        source = payload([pair("A", "F", ["observed"])])
+        candidate = build_review_queue(source)["event_reviews"][0]["candidate_resource_pairs"][0]
+        # The same source observation cannot be scored twice by placing an
+        # otherwise missed event in a different session window.
+        labels = [
+            {"window": "current", "event_id": "observed",
+             "true_resource_pairs": [candidate]},
+            {"window": "earlier:2026-11-19T09:00:00+00:00", "event_id": "observed",
+             "true_resource_pairs": [candidate]},
+        ]
+        with self.assertRaisesRegex(ValueError, "reused across windows"):
+            score_source_event_cohort(source, labels)
+
     def test_truncated_source_cannot_be_scored(self):
         from server.reconstruction_review_cli import score_source_event_cohort
         source = payload([pair("A", "F", ["e1"])])
