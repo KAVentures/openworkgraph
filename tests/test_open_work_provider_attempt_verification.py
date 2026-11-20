@@ -96,3 +96,29 @@ def test_event_time_must_be_consistent_with_independent_provider_read():
             events=[dict(base, occurred_at=timestamp)]))
         assert result["reason"] == "invalid_event_time"
         assert result["customer_outcome"] == "unknown"
+
+
+def test_grant_rechecked_after_provider_read():
+    checks = []
+    def guard():
+        checks.append(True)
+        return len(checks) == 1
+    result = check(lambda: payload(), recheck_authorization=guard)
+    assert result["reason"] == "authorization_revoked"
+    assert result["customer_outcome"] == "unknown"
+    assert len(checks) == 2
+
+
+def test_invalid_or_unavailable_grant_blocks_provider_read():
+    calls = []
+    def reader():
+        calls.append(True)
+        return payload()
+    assert check(reader, recheck_authorization=lambda: False)["reason"] == "authorization_revoked"
+    def unavailable():
+        raise OSError("grant store unavailable")
+    assert check(reader, recheck_authorization=unavailable)["reason"] == "authorization_unavailable"
+    assert check(reader, recheck_authorization=True)["reason"] == "invalid_authorization_guard"
+    assert calls == []
+    assert check(reader, recheck_authorization=lambda: True)["status"] == "verified_provider_operation"
+    assert len(calls) == 1
