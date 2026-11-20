@@ -12,7 +12,7 @@ stored with the log and deleted with it.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import secrets
 from typing import Annotated, Any, Literal, Union
@@ -60,11 +60,38 @@ class ComplianceCondition(_Strict):
     minimum_cases: StrictInt = Field(default=1, ge=1, le=10 ** 9)
 
 
+class ConformanceCondition(_Strict):
+    """Adherence to a frozen reference net (PNML) saved with the rule: the share of cases that do not fit it,
+    or their alignment fitness, optionally over cases started in the last ``recent_days`` of the log."""
+    kind: Literal["conformance"]
+    net_name: Label
+    pnml: str = Field(min_length=20, max_length=60000)
+    metric: Literal["non_fitting_share", "alignment_fitness"]
+    operator: Literal["above", "below"]
+    threshold: Union[StrictInt, StrictFloat] = Field(ge=0, le=1)
+    recent_days: StrictInt | None = Field(default=None, ge=1, le=3650)
+    minimum_cases: StrictInt = Field(default=1, ge=1, le=10 ** 9)
+
+
+class DueDateCondition(_Strict):
+    """Due-date adherence of an activity (see event_log_due_dates): open cases now overdue, or the late
+    share among cases where it happened."""
+    kind: Literal["due_date"]
+    activity: Label
+    due_attribute: Label | None = None
+    due_days: Union[StrictInt, StrictFloat, None] = Field(default=None, gt=0, le=3650)
+    metric: Literal["open_overdue_cases", "late_share"]
+    operator: Literal["above", "below"] = "above"
+    threshold: Union[StrictInt, StrictFloat] = Field(ge=0)
+    minimum_cases: StrictInt = Field(default=1, ge=1, le=10 ** 9)
+
+
 class SignalRule(_Strict):
     name: str = Field(min_length=1, max_length=120)
     case_type: Label | None = None
     cohort: dict[str, Any] = Field(default_factory=dict)
-    when: Annotated[Union[KpiCondition, CaseCondition, ComplianceCondition], Field(discriminator="kind")]
+    when: Annotated[Union[KpiCondition, CaseCondition, ComplianceCondition, ConformanceCondition,
+                          DueDateCondition], Field(discriminator="kind")]
 
 
 def _validate(spec: Any) -> SignalRule:
@@ -83,6 +110,14 @@ def _validate(spec: Any) -> SignalRule:
             raise workspace.EventLogWorkspaceError("rate thresholds are fractions between 0 and 1")
     elif isinstance(when, ComplianceCondition):
         compliance.parse({"rules": [when.rule.model_dump()]})
+    elif isinstance(when, DueDateCondition):
+        if (when.due_attribute is None) == (when.due_days is None):
+            raise workspace.EventLogWorkspaceError("a due-date signal needs either due_attribute or due_days")
+        if when.metric == "late_share" and when.threshold > 1:
+            raise workspace.EventLogWorkspaceError("late_share is a fraction between 0 and 1")
+    elif isinstance(when, ConformanceCondition):
+        from . import event_log_alignments as alignments
+        alignments.reference_net(when.pnml.encode())
     else:
         needs_seconds = when.condition in {"duration_over", "open_longer_than"}
         needs_activity = when.condition in {"contains_activity", "lacks_activity"}
@@ -240,7 +275,45 @@ def evaluate(log_id: str) -> dict[str, Any]:
                 conn.execute(_PER_CASE)
                 result: dict[str, Any] = {"rule_id": rule_id, "name": rule.name, "case_notion": notion,
                                           "when": rule.when.model_dump(), "cohort": rule.cohort}
-                if isinstance(rule.when, KpiCondition):
+                if isinstance(rule.when, DueDateCondition):
+                    from . import event_log_due_dates as due_dates
+                    w = rule.when
+                    got = due_dates.collect(conn, log_id, w.activity, w.due_attribute, table="rc")
+                    groups, _, _, _, _ = due_dates.classify(got["cases_rows"], got["raw_due"], got["log_end"],
+                                                            due_days=w.due_days, early_days=None)
+                    done = groups["on_time"] + groups["early"] + groups["late"]
+                    value = (groups["open_overdue"] if w.metric == "open_overdue_cases"
+                             else (round(groups["late"] / done, 4) if done else None))
+                    basis = groups["open_overdue"] + groups["open_not_due"] if w.metric == "open_overdue_cases" else done
+                    triggered = basis >= w.minimum_cases and value is not None and (
+                        value > w.threshold if w.operator == "above" else value < w.threshold)
+                    result.update(value=value, triggered=triggered, due_dates={k: groups[k] for k in (
+                                      "on_time", "early", "late", "open_overdue", "open_not_due", "no_due_date",
+                                      "unreadable_due_date")},
+                                  changed_since_last_evaluation=None if previous is None
+                                  else previous.get("triggered") != triggered,
+                                  as_of=as_of.isoformat() + "Z" if as_of else None)
+                    state = {"triggered": triggered, "value": value}
+                elif isinstance(rule.when, ConformanceCondition):
+                    from . import event_log_alignments as alignments
+                    since = None
+                    if rule.when.recent_days and as_of is not None:
+                        since = as_of - timedelta(days=rule.when.recent_days)
+                    paths = conn.execute("""SELECT path, count(*) FROM (
+                          SELECT list(activity ORDER BY ts, event_id) AS path, min(ts) AS started FROM rc GROUP BY case_id)
+                        WHERE ? IS NULL OR started >= ? GROUP BY path""", [since, since]).fetchall()
+                    measured = alignments.conformance_of(rule.when.pnml.encode(), paths)
+                    value = measured[rule.when.metric]
+                    enough = measured["cases"] >= rule.when.minimum_cases
+                    triggered = enough and value is not None and (
+                        value > rule.when.threshold if rule.when.operator == "above" else value < rule.when.threshold)
+                    result.update(value=value, triggered=triggered, conformance=measured,
+                                  changed_since_last_evaluation=None if previous is None
+                                  else previous.get("triggered") != triggered,
+                                  as_of=as_of.isoformat() + "Z" if as_of else None)
+                    state = {"triggered": triggered, "value": value}
+                    result["when"] = {k: v for k, v in result["when"].items() if k != "pnml"}
+                elif isinstance(rule.when, KpiCondition):
                     value = _measure(conn, rule.when)
                     triggered = value is not None and (value > rule.when.threshold if rule.when.operator == "above"
                                                        else value < rule.when.threshold)
@@ -301,4 +374,76 @@ def evaluate(log_id: str) -> dict[str, Any]:
     }
 
 
-__all__ = ["add_rule", "delete_rule", "evaluate", "list_rules"]
+MAX_SCORECARD_MONTHS = 24
+
+
+def _value(conn, log_id: str, when: Any) -> float | None:
+    """The measured value of a KPI, conformance or due-date condition over the cases in ``rc``/``sc``."""
+    if isinstance(when, KpiCondition):
+        return _measure(conn, when)
+    if isinstance(when, ConformanceCondition):
+        from . import event_log_alignments as alignments
+        paths = conn.execute("""SELECT path, count(*) FROM (
+              SELECT list(activity ORDER BY ts, event_id) AS path FROM rc GROUP BY case_id) GROUP BY path""").fetchall()
+        return alignments.conformance_of(when.pnml.encode(), paths)[when.metric] if paths else None
+    if isinstance(when, DueDateCondition):
+        from . import event_log_due_dates as due_dates
+        got = due_dates.collect(conn, log_id, when.activity, when.due_attribute, table="rc")
+        groups = due_dates.classify(got["cases_rows"], got["raw_due"], got["log_end"],
+                                    due_days=when.due_days, early_days=None)[0]
+        if when.metric == "open_overdue_cases":
+            return float(groups["open_overdue"])
+        done = groups["on_time"] + groups["early"] + groups["late"]
+        return round(groups["late"] / done, 4) if done else None
+    return None
+
+
+def scorecard(log_id: str, months: int = 6) -> dict[str, Any]:
+    """Each value-based signal (KPI, conformance, due date) month by month, by when cases started, with
+    whether its condition held that month. Read-only: it records no state and never changes a review."""
+    if isinstance(months, bool) or not isinstance(months, int) or not 1 <= months <= MAX_SCORECARD_MONTHS:
+        raise workspace.EventLogWorkspaceError(f"months must be 1 to {MAX_SCORECARD_MONTHS}")
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            info = workspace._check_log(conn, log_id)
+            rules = conn.execute("SELECT rule_id, definition FROM signal_rules WHERE log_id = ? "
+                                 "ORDER BY created_at, rule_id", [log_id]).fetchall()
+            rows, month_keys = [], None
+            for rule_id, definition in rules:
+                rule = SignalRule.model_validate_json(definition)
+                if not isinstance(rule.when, (KpiCondition, ConformanceCondition, DueDateCondition)):
+                    continue
+                notion = workspace._case_type(conn, log_id, rule.case_type)
+                conn.execute(f"CREATE OR REPLACE TEMP TABLE ce AS {workspace._CASE_EVENTS}", [log_id, notion])
+                cohorts.restrict(conn, cohorts.parse_cohort(rule.cohort), log_id, table="rc_all")
+                starts = conn.execute("""SELECT strftime(date_trunc('month', started), '%Y-%m') AS m, count(*)
+                    FROM (SELECT case_id, min(ts) AS started FROM rc_all GROUP BY case_id) GROUP BY m ORDER BY m""").fetchall()
+                keys = [m for m, _ in starts][-months:]
+                month_keys = sorted(set(month_keys or []) | set(keys))[-months:]
+                values = []
+                for month, cases in starts:
+                    if month not in keys:
+                        continue
+                    conn.execute("""CREATE OR REPLACE TEMP TABLE rc AS SELECT * FROM rc_all WHERE case_id IN (
+                        SELECT case_id FROM rc_all GROUP BY case_id
+                        HAVING strftime(date_trunc('month', min(ts)), '%Y-%m') = ?)""", [month])
+                    conn.execute(_PER_CASE)
+                    value = _value(conn, log_id, rule.when)
+                    holds = None if value is None else (value > rule.when.threshold if rule.when.operator == "above"
+                                                        else value < rule.when.threshold)
+                    values.append({"month": month, "cases": cases, "value": value, "holds": holds})
+                when = {k: v for k, v in rule.when.model_dump().items() if k != "pnml"}
+                rows.append({"rule_id": rule_id, "name": rule.name, "when": when, "months": values})
+        finally:
+            conn.close()
+    return {
+        "log": info, "months": month_keys or [], "rows": rows,
+        "skipped_kinds": "case-matching and compliance signals count matching cases now and are not shown by month",
+        "interpretation": ("Each month holds the cases that started in it. A month where a signal holds met the rule's "
+                           "condition then; recent months may still have open cases."),
+        **workspace.DESCRIPTIVE_ONLY,
+    }
+
+
+__all__ = ["add_rule", "delete_rule", "evaluate", "list_rules", "scorecard"]

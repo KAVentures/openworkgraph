@@ -657,7 +657,6 @@ def test_literal_labels_remain_distinct_in_conformance_and_resource_kpis():
         assert analytics.kpis(log_id, cohort={"resource": resource})["cases"] == 1
     assert analytics.kpis(log_id, cohort={"activity": "Review "})["cases"] == 1
 
-
 def test_source_bound_analysis_api_lineage_auth_and_budget(tmp_path):
     """HTTP contract: same aggregate, distinct source; authentication and fail-closed budget."""
     code = r'''
@@ -716,3 +715,4 @@ with TestClient(app) as client:
     result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env,
                             capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+

@@ -59,6 +59,28 @@ def test_sharing_levels_and_revocation():
     assert net["cases"] == 12 and {e["from"] for e in net["edges"]} >= {"Receive", "Approve"}
     prints = sharing.footprints(log)
     assert prints["cases"] == 12 and prints["conformance"]["cells"] == len(prints["activities"]) ** 2
+    quality = sharing.model_quality(log, levels="0,0.3")
+    assert [r["noise"] for r in quality["levels"]] == [0.0, 0.3] and quality["levels"][0]["fitness"] == 1.0
+    assert quality["best_f_score_noise"] in {0.0, 0.3} and "case_id" not in str(quality)
+    deviations = sharing.model_deviations(log, noise=0)
+    assert deviations["cases"] == 12 and deviations["fitness"]["log"] == 1.0 and deviations["log_moves"] == []
+    assert "case_id" not in str(deviations) and deviations["process_model_sha256"]
+    due = sharing.due_dates(log, "Pay", due_days=2)
+    assert due["groups"]["on_time"] == 6 and due["groups"]["late"] == 6 and due["most_late_cases"] is None
+    after = sharing.next_steps(log, ["Receive"])
+    assert after["cases_at_point"] == 12 and after["next"][0]["activity"] == "Approve"
+    why = sharing.model_deviation_causes(log, noise=0)
+    assert why["non_fitting_paths"] == 0 and why["associations"] == [] and "case_id" not in str(why)
+    start = sharing.brief(log, sla_hours=24)
+    assert start["cases"] == 12 and start["model"]["best_noise"] is not None and "adherence" in start
+    # 12 cases is below the 20 that unusual cases need: reported, not silently skipped.
+    assert "unusual" not in start and "at least 20 cases" in start["parts_unavailable"]["unusual"]
+    assert "case_id" not in str(start) and start["next_tools"][0]["tool"] == "get_process_insights"
+    found = sharing.insights(log, sla_hours=24)
+    assert found["cases"] == 12 and found["findings"] and "case_id" not in str(found)
+    assert any(f["kind"] == "sla_breaches" for f in found["findings"])
+    funnel = sharing.funnel(log, ["Receive", "Pay"])
+    assert funnel["cases"] == 12 and funnel["steps"][0]["activity"] == "Receive" and "case_id" not in str(funnel)
     profile = sharing.temporal_profile(log)
     assert profile["cases"] == 12 and "top_cases" not in profile and "case_id" not in str(profile)
     rc = sharing.root_cause(log, "duration_over", hours=24)
@@ -252,7 +274,20 @@ PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_root_
                  "explain_process_case", "get_slowest_process_cases", "tag_process_cases",
                  "get_process_automation_candidates", "get_process_signals", "get_process_decision_rules",
                  "get_process_temporal_profile", "get_process_heuristics_net",
-                 "get_process_footprints"}
+                 "get_process_footprints", "get_process_model_quality",
+                 "get_process_deviations", "get_process_funnel",
+                 "get_unusual_process_cases",
+                 "get_process_due_dates",
+                 "get_process_next_steps",
+                 "get_process_insights",
+                 "get_process_deviation_causes",
+                 "align_process_case",
+                 "get_process_brief",
+                 "get_process_model_change",
+                 "compare_process_models",
+                 "compare_process_cases",
+                 "get_process_activity_profile",
+                 "get_process_signal_scorecard"}
 
 
 def test_mcp_tools_are_listed_only_when_a_log_is_shared(tmp_path):

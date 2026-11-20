@@ -18,6 +18,19 @@
   FILTERED.add('temporal-profile');
   FILTERED.add('heuristics-net');
   FILTERED.add('footprints');
+  FILTERED.add('model-quality');
+  FILTERED.add('model-change');
+  FILTERED.add('model-comparison');
+  FILTERED.add('funnel');
+  FILTERED.add('unusual-cases');
+  FILTERED.add('due-dates');
+  FILTERED.add('story');
+  FILTERED.add('activity-profile');
+  FILTERED.add('next-steps');
+  FILTERED.add('petri-net-replay');
+  FILTERED.add('petri-net-alignments');
+  FILTERED.add('variant.pnml');
+  FILTERED.add('petri-net-deviation-causes');
 
   const el=(tag,text,cls)=>{
     const node=document.createElement(tag);
@@ -818,7 +831,15 @@
     results.appendChild(dottedSection());
     results.appendChild(spectrumSection());
     results.appendChild(heuristicsSection());
+    results.appendChild(activityProfileSection(names));
+    results.appendChild(pathExplorerSection());
+    results.appendChild(dueDatesSection(names));
+    results.appendChild(unusualCasesSection());
+    results.appendChild(funnelSection(names));
+    results.appendChild(modelQualitySection());
+    results.appendChild(modelChangeSection());
     results.appendChild(footprintsSection());
+    results.appendChild(petriReplaySection());
     results.appendChild(temporalProfileSection());
     results.appendChild(waitingSection());
     results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity),inspection));
@@ -832,8 +853,56 @@
     results.appendChild(complianceSection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(domainPackSection());
     results.appendChild(costSection(names));
+    results.prepend(analysisNavigator(results));
+    results.prepend(storySection());
     attachCaseAttributeSuggestions(generation);
     status('');
+  }
+
+  // A searchable list of the analysis sections below, so a long results page can be navigated by name.
+  // Buttons rather than links: the page hash carries the dashboard session.
+  // The log in plain words, on request: each sentence comes from a computed figure and links to its section.
+  function storySection(){
+    const box=document.createElement('section');box.id='owgStory';box.style.marginTop='12px';box.setAttribute('aria-label','Summary in plain words');
+    const run=button('Summarize in plain words','secondary');run.id='owgStoryRun';
+    const out=el('div');out.id='owgStoryText';out.setAttribute('role','status');out.setAttribute('aria-live','polite');
+    box.append(run,out);
+    run.onclick=async()=>{
+      const generation=state.generation;run.disabled=true;out.replaceChildren(el('div','Summarizing…','muted'));
+      try{
+        const r=await getJSON(logPath('story',{}));
+        if(generation!==state.generation)return;
+        const list=el('ul');list.style.margin='6px 0';
+        r.sentences.forEach(sn=>{const li=el('li',sn.text);
+          const target=sn.section&&document.getElementById(sn.section);
+          if(target){const go=button('Show','secondary');go.style.marginLeft='6px';go.setAttribute('aria-label','Show the analysis: '+sn.text.slice(0,60));
+            go.onclick=()=>{target.scrollIntoView({block:'start'});const h=target.querySelector('h3');if(h){h.tabIndex=-1;h.focus({preventScroll:true});}};li.appendChild(go);}
+          list.appendChild(li);});
+        out.replaceChildren(list,el('div',r.caveat,'muted'));
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{run.disabled=false;}};
+    return box;
+  }
+
+  function analysisNavigator(results){
+    const nav=document.createElement('nav');nav.id='owgAnalysisNav';nav.setAttribute('aria-label','Analyses');nav.style.marginTop='12px';
+    const sections=[...results.children].filter(box=>box.firstElementChild&&box.firstElementChild.tagName==='H3');
+    const search=input('owgAnalysisNavSearch','search','e.g. conformance, funnel, cost');search.autocomplete='off';
+    const count=el('div',null,'muted');count.id='owgAnalysisNavCount';count.setAttribute('role','status');count.setAttribute('aria-live','polite');
+    const list=el('ul');list.id='owgAnalysisNavList';list.style.cssText='display:flex;flex-wrap:wrap;gap:4px 8px;list-style:none;padding:0;margin:6px 0 0';
+    const items=sections.map((box,i)=>{
+      const heading=box.firstElementChild,title=heading.textContent.trim();
+      if(!heading.id)heading.id='owgAnalysisHeading'+i;heading.tabIndex=-1;
+      const go=button(title,'secondary');go.style.fontSize='12px';
+      go.onclick=()=>{box.scrollIntoView({block:'start'});heading.focus({preventScroll:true});};
+      const li=el('li');li.appendChild(go);list.appendChild(li);
+      return {li,text:(title+' '+(box.querySelector('.muted')?.textContent||'')).toLowerCase()};});
+    const show=()=>{const words=search.value.toLowerCase().split(/\s+/).filter(Boolean);let shown=0;
+      items.forEach(item=>{const on=words.every(w=>item.text.includes(w));item.li.hidden=!on;shown+=on?1:0;});
+      count.textContent=words.length?shown+' of '+items.length+' analyses match.':items.length+' analyses on this page.';};
+    search.oninput=show;
+    nav.append(field('Find an analysis',search),count,list);show();
+    return nav;
   }
 
   // Suggest case attributes (from the import or a joined case table) in every case-attribute input:
@@ -1818,8 +1887,27 @@
     const run=button('Explain case','secondary');run.id='owgCaseExplainRun';
     const slowList=el('div');slowList.id='owgCaseExplainSlowest';
     const out=el('div');out.id='owgCaseExplainResult';out.setAttribute('role','status');out.setAttribute('aria-live','polite');
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Case',caseId),run);
-    box.append(slowList,row,out);
+    const other=input('owgCaseCompareId','text','another case ID');other.maxLength=500;other.autocomplete='off';
+    const compare=button('Compare with case','secondary');compare.id='owgCaseCompareRun';
+    const compared=el('div');compared.id='owgCaseCompareResult';compared.setAttribute('role','status');compared.setAttribute('aria-live','polite');
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Case',caseId),run,field('Compare with',other),compare);
+    box.append(slowList,row,out,compared);
+    compare.onclick=async()=>{
+      const a=caseId.value.trim(),b=other.value.trim();
+      if(!a||!b){compared.replaceChildren(el('div','Enter both case IDs.','muted'));return;}
+      compare.disabled=true;
+      try{
+        const q=new URLSearchParams({case_a:a,case_b:b});if(state.caseType)q.set('case_type',state.caseType);
+        const r=await getJSON('/v1/event-logs/'+encodeURIComponent(state.logId)+'/case-compare?'+q);
+        if(generation!==state.generation)return;
+        const h=x=>x===null?'—':(x<48?(Math.round(x*10)/10)+' h':(Math.round(x/24*10)/10)+' d');
+        const kind={both:'both',only_a:'only '+r.case_a.case_id,only_b:'only '+r.case_b.case_id};
+        compared.replaceChildren(
+          el('div','Case '+r.case_a.case_id+' took '+h(r.case_a.hours)+' over '+r.case_a.events+' events; case '+r.case_b.case_id+' took '+h(r.case_b.hours)+' over '+r.case_b.events+'. '+r.shared_steps+' steps are shared.'+(r.largest_gap_growth?' Case '+r.case_b.case_id+' fell furthest behind between '+r.largest_gap_growth.from+' and '+r.largest_gap_growth.to+' (+'+h(r.largest_gap_growth.extra_hours)+').':'')),
+          table(['Step','In',r.case_a.case_id+' (from start)',r.case_b.case_id+' (from start)'],r.steps.map(x=>[x.activity,kind[x.kind],h(x.a_hours_from_start),h(x.b_hours_from_start)])),
+          el('div',r.caveat,'muted'));
+      }catch(error){compared.replaceChildren(el('div',error.message,'muted'));}
+      finally{compare.disabled=false;}};
     const generation=state.generation;
     const base='/v1/event-logs/'+encodeURIComponent(state.logId)+'/cases/';
     const post=(path,body)=>api(base+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
@@ -1834,7 +1922,14 @@
         if(r.repeated_activities.length)lines.push(el('div','Repeated: '+r.repeated_activities.map(a=>a.activity+' ×'+a.times).join(', ')+'.'));
         if(r.uncommon_activities.length)lines.push(el('div','Uncommon steps (in under 10% of cases): '+r.uncommon_activities.join(', ')+'.'));
         const rows=r.gaps.map(g=>[g.from+' → '+g.to,duration(g.gap_seconds),g.typical_gap_seconds===null?'too few cases':duration(g.typical_gap_seconds),g.excess_seconds>0?'+'+duration(g.excess_seconds):'—']);
-        out.replaceChildren(...lines,table(['Step','This case','Typical (median)','Above typical'],rows),el('div',r.interpretation,'muted'));
+        const model=el('div',null,'muted');model.id='owgCaseExplainModel';
+        out.replaceChildren(...lines,model,table(['Step','This case','Typical (median)','Above typical'],rows),el('div',r.interpretation,'muted'));
+        const q=new URLSearchParams({case_id:id,noise:'0.2'});if(state.caseType)q.set('case_type',state.caseType);
+        getJSON('/v1/event-logs/'+encodeURIComponent(state.logId)+'/case-alignment?'+q).then(a=>{
+          if(generation!==state.generation||!a.aligned)return;
+          const parts=[];if(a.skipped_steps.length)parts.push('skipped '+a.skipped_steps.join(', '));if(a.extra_steps.length)parts.push('did '+a.extra_steps.join(', ')+' where the model does not allow it');
+          model.textContent='Against the discovered model: '+(a.fits?'this case follows it exactly.':parts.join('; ')+' (alignment fitness '+pct(a.fitness)+').');
+        }).catch(()=>{});
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
       finally{run.disabled=false;}
     };
@@ -3858,6 +3953,282 @@
     return box;
   }
 
+  function activityProfileSection(activityNames){
+    const box=section('Activity profile');box.id='owgActivityProfile';
+    box.appendChild(el('div','One activity from every side: how often it happens and repeats, what comes before and after it, when in the week and day, and how long cases with it take.','muted'));
+    const pick=select('owgActivityProfilePick',activityNames.slice(0,500).map(a=>[a,a]));
+    const run=button('Show profile','secondary');run.id='owgActivityProfileRun';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activity',pick),run);
+    const statusLine=el('div',null,'muted');statusLine.id='owgActivityProfileStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgActivityProfileResults';
+    box.append(row,statusLine,out);
+    const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
+    const hrs=x=>x===null||x===undefined?'—':(x<48?(Math.round(x*10)/10)+' h':(Math.round(x/24*10)/10)+' d');
+    run.onclick=async()=>{
+      const generation=state.generation;run.disabled=true;statusLine.textContent='Profiling…';out.replaceChildren();
+      try{
+        const r=await getJSON(logPath('activity-profile',{profile_activity:pick.value}));
+        if(generation!==state.generation)return;
+        const c=r.case_hours;
+        statusLine.textContent=r.activity+' happens in '+Number(r.cases_with_activity).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases ('+pct(r.share_of_cases)+'), '+r.occurrences_per_case+' times per case on average; '+pct(r.repeat_share)+' of those cases repeat it. Cases with it take a median '+hrs(c.with_activity.median)+', without it '+hrs(c.without_activity.median)+'.';
+        const side=(title,list)=>{out.appendChild(el('h4',title));out.appendChild(table(['Activity','Times','Share','Median gap'],list.map(n=>[n.activity,Number(n.times).toLocaleString(),pct(n.share),hrs(n.median_hours)])));};
+        side('Comes after',r.comes_after);side('Comes before',r.comes_before);
+        out.appendChild(el('h4','When it happens'));
+        out.appendChild(table(['Weekday','Times'],r.by_weekday.map(d=>[d.day,Number(d.times).toLocaleString()])));
+        const busy=r.by_hour.filter(h=>h.times).sort((a,b)=>b.times-a.times).slice(0,3).map(h=>String(h.hour).padStart(2,'0')+':00 ('+h.times+')');
+        if(busy.length)out.appendChild(el('div','Busiest hours (UTC): '+busy.join(', ')+'.'));
+        out.appendChild(el('div',r.caveat,'muted'));
+      }catch(error){statusLine.textContent=error.message;}
+      finally{run.disabled=false;}};
+    return box;
+  }
+
+  function pathExplorerSection(){
+    const box=section('Path explorer');box.id='owgPaths';
+    box.appendChild(el('div','Walk the process one step at a time: see which activities come next, in how many cases and how fast, then choose one to go deeper.','muted'));
+    const anywhere=document.createElement('input');anywhere.type='checkbox';anywhere.id='owgPathsAnywhere';
+    const anywhereLabel=el('label',' From anywhere in the case, not only its start');anywhereLabel.prepend(anywhere);
+    const start=button('Explore from the start','secondary');start.id='owgPathsStart';
+    const back=button('Back one step','secondary');back.id='owgPathsBack';back.disabled=true;
+    const row=el('div',null,'row');row.style.alignItems='center';row.append(start,back,anywhereLabel);
+    const trail=el('div');trail.id='owgPathsTrail';
+    const statusLine=el('div',null,'muted');statusLine.id='owgPathsStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgPathsResults';
+    box.append(row,trail,statusLine,out);
+    let path=[];
+    const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
+    const hrs=x=>x===null||x===undefined?'—':(x<48?(Math.round(x*10)/10)+' h':(Math.round(x/24*10)/10)+' d');
+    const show=async()=>{
+      if(anywhere.checked&&!path.length){statusLine.textContent='Choose a first step from the start, then look for it anywhere.';anywhere.checked=false;}
+      const generation=state.generation;start.disabled=back.disabled=true;statusLine.textContent='Following cases…';out.replaceChildren();
+      trail.textContent=path.length?'Path: '+(anywhere.checked?'… → ':'(start) → ')+path.join(' → '):'';
+      try{
+        const r=await getJSON(logPath('next-steps',{step:path,anchor:anywhere.checked?'anywhere':'start'}));
+        if(generation!==state.generation)return;
+        statusLine.textContent=(path.length?Number(r.cases_at_point).toLocaleString()+' cases ('+pct(r.share_of_cases)+') reach this point'+(r.hours_to_reach_point?', in a median '+hrs(r.hours_to_reach_point.median):'')+'.':Number(r.cases).toLocaleString()+' cases start with these activities.')+(r.next_total>r.next.length?' Showing the '+r.next.length+' most common of '+r.next_total+' next steps.':'');
+        if(!r.next.length)return;
+        const t=table(['Next','Cases','Share','From previous (median)','To case end (median)',''],r.next.map(x=>[x.activity,Number(x.cases).toLocaleString(),pct(x.share),x.hours_from_previous?hrs(x.hours_from_previous.median):'—',x.hours_to_case_end?hrs(x.hours_to_case_end.median):'—','']));
+        t.querySelector('tbody').querySelectorAll('tr').forEach((tr,i)=>{const x=r.next[i];
+          const bar=el('div');bar.setAttribute('aria-hidden','true');bar.style.cssText='height:4px;background:currentColor;opacity:.35;margin-top:4px;width:'+Math.round((x.share||0)*100)+'%';tr.cells[2].appendChild(bar);
+          if(!x.is_end){const go=button('Go to '+x.activity,'secondary');go.onclick=()=>{path=[...path,x.activity];show();};tr.cells[5].appendChild(go);}});
+        out.appendChild(t);
+      }catch(error){statusLine.textContent=error.message;}
+      finally{start.disabled=false;back.disabled=!path.length;}};
+    start.onclick=()=>{path=[];anywhere.checked=false;show();};
+    back.onclick=()=>{path=path.slice(0,-1);if(!path.length)anywhere.checked=false;show();};
+    anywhere.onchange=()=>{if(path.length)show();else if(anywhere.checked){anywhere.checked=false;statusLine.textContent='Choose a first step from the start, then look for it anywhere.';}};
+    return box;
+  }
+
+  function dueDatesSection(activityNames){
+    const box=section('Due dates');box.id='owgDue';
+    box.appendChild(el('div','Did the step that matters (a payment, a shipment) happen by the date it was due? The due date comes from an attribute such as a payment due date column, or is a fixed number of days after the case started.','muted'));
+    const activity=select('owgDueActivity',activityNames.slice(0,500).map(a=>[a,a]));
+    if(activityNames.length)activity.value=activityNames[activityNames.length-1];
+    const mode=select('owgDueMode',[['attribute','From an attribute'],['days','Days after the case starts']]);
+    const attribute=input('owgDueAttribute','text','e.g. due_date');attribute.maxLength=200;attribute.autocomplete='off';
+    const days=input('owgDueDays','number');days.min='0.01';days.step='any';days.value='30';
+    const early=select('owgDueEarly',[['','No early window'],['3','Early if more than 3 days before'],['7','Early if more than 7 days before'],['14','Early if more than 14 days before']]);
+    const attributeField=field('Due-date attribute',attribute),daysField=field('Days after start',days);
+    const sync=()=>{attributeField.hidden=mode.value!=='attribute';daysField.hidden=mode.value!=='days';};mode.onchange=sync;sync();
+    const run=button('Check due dates','secondary');run.id='owgDueRun';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activity that is due',activity),field('Due date',mode),attributeField,daysField,field('Early window',early),run);
+    const statusLine=el('div',null,'muted');statusLine.id='owgDueStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgDueResults';
+    const alertCount=input('owgDueAlertCount','number');alertCount.min='0';alertCount.step='1';alertCount.value='0';
+    const alertSave=button('Alert me','secondary');alertSave.id='owgDueAlertSave';
+    const alertMessage=el('div',null,'muted');alertMessage.id='owgDueAlertMessage';alertMessage.setAttribute('role','status');alertMessage.setAttribute('aria-live','polite');
+    const alertRow=el('div',null,'row');alertRow.style.alignItems='end';alertRow.append(field('Signal when open overdue cases are more than',alertCount),alertSave);
+    box.append(row,statusLine,out,alertRow,alertMessage);
+    alertSave.onclick=async()=>{
+      const when={kind:'due_date',activity:activity.value,metric:'open_overdue_cases',operator:'above',threshold:Math.max(0,Math.floor(Number(alertCount.value)||0))};
+      if(mode.value==='attribute'){if(!attribute.value.trim()){alertMessage.textContent='Enter the name of the due-date attribute.';return;}when.due_attribute=attribute.value.trim();}
+      else{if(!(Number(days.value)>0)){alertMessage.textContent='Enter a number of days above 0.';return;}when.due_days=Number(days.value);}
+      const sig={name:('Overdue '+activity.value).slice(0,120),when};if(state.caseType)sig.case_type=state.caseType;
+      alertSave.disabled=true;
+      try{await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/signals',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sig)});
+        document.querySelectorAll('#owgEventLogSignals').forEach(node=>node.dispatchEvent(new CustomEvent('owg-signals-changed')));
+        alertMessage.textContent='Saved as a signal. Use Check signals to evaluate it; it counts open cases past their due date each time.';}
+      catch(error){alertMessage.textContent=error.message;}
+      finally{alertSave.disabled=false;}};
+    const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
+    const names={on_time:'On time',early:'Early',late:'Late',open_overdue:'Open, overdue',open_not_due:'Open, not yet due',no_due_date:'No due date',unreadable_due_date:'Unreadable due date'};
+    run.onclick=async()=>{
+      const params={due_activity:activity.value};
+      if(mode.value==='attribute'){if(!attribute.value.trim()){statusLine.textContent='Enter the name of the due-date attribute.';out.replaceChildren();return;}params.due_attribute=attribute.value.trim();}
+      else{if(!(Number(days.value)>0)){statusLine.textContent='Enter a number of days above 0.';out.replaceChildren();return;}params.due_days=days.value;}
+      if(early.value)params.early_days=early.value;
+      const generation=state.generation;run.disabled=true;statusLine.textContent='Checking due dates…';out.replaceChildren();
+      try{
+        const r=await getJSON(logPath('due-dates',params));
+        if(generation!==state.generation)return;
+        const g=r.groups;
+        statusLine.textContent=r.activity+' happened on time in '+pct(r.on_time_share_of_done)+' of the cases where it happened ('+Number(g.on_time).toLocaleString()+' on time, '+Number(g.late).toLocaleString()+' late'+(r.early_days?', '+Number(g.early).toLocaleString()+' early':'')+'). '+Number(g.open_overdue).toLocaleString()+' open cases are overdue.'+(r.days_late.median!==null?' Late cases were a median '+r.days_late.median+' days late.':'')+((g.no_due_date+g.unreadable_due_date)?' '+Number(g.no_due_date+g.unreadable_due_date).toLocaleString()+' cases have no readable due date.':'');
+        out.appendChild(table(['Group','Cases'],Object.keys(names).filter(k=>g[k]||k==='on_time'||k==='late').map(k=>[names[k],Number(g[k]).toLocaleString()])));
+        if(r.by_due_month.length>1){out.appendChild(el('h4','By due month'));
+          out.appendChild(table(['Due month','Due','On time','Late','Open, overdue','On time of done'],r.by_due_month.map(m=>[m.due_month,String(m.due),String(m.on_time),String(m.late),String(m.open_overdue),pct(m.on_time_share_of_done)])));}
+        if(r.most_late_cases&&r.most_late_cases.length){const more=document.createElement('details');more.appendChild(el('summary','Most late cases ('+r.most_late_cases.length+')'));
+          more.appendChild(table(['Case','Days late','Done','Due'],r.most_late_cases.map(c=>[String(c.case_id),String(c.days_late),c.done_at.replace('T',' ').slice(0,16),c.due_at.replace('T',' ').slice(0,16)])));out.appendChild(more);}
+        out.appendChild(el('div',r.caveat,'muted'));
+      }catch(error){statusLine.textContent=error.message;}
+      finally{run.disabled=false;}};
+    return box;
+  }
+
+  function unusualCasesSection(){
+    const box=section('Unusual cases');box.id='owgUnusual';
+    box.appendChild(el('div','Cases that stand out from the rest of this selection, each with the reasons: a rare path, unusually slow or fast, unusually many events, heavy rework, or an activity almost no other case has. Unusual is not wrong; this is a list to look at.','muted'));
+    const limit=select('owgUnusualLimit',[['25','Top 25'],['50','Top 50'],['100','Top 100']]);
+    const run=button('Find unusual cases','secondary');run.id='owgUnusualRun';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Show',limit),run);
+    const statusLine=el('div',null,'muted');statusLine.id='owgUnusualStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgUnusualResults';
+    box.append(row,statusLine,out);
+    const label={rare_path:'Rare path',unusually_slow:'Unusually slow',unusually_fast:'Unusually fast',unusually_long:'Unusually many events',heavy_rework:'Heavy rework',rare_activity:'Rare activity'};
+    run.onclick=async()=>{
+      const generation=state.generation;run.disabled=true;statusLine.textContent='Comparing cases…';out.replaceChildren();
+      try{
+        const r=await getJSON(logPath('unusual-cases',{limit:limit.value}));
+        if(generation!==state.generation)return;
+        const counts=Object.entries(r.by_signal).map(([k,n])=>label[k]+' '+Number(n).toLocaleString()).join(', ');
+        statusLine.textContent=Number(r.unusual_cases).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases stand out'+(counts?' ('+counts+')':'')+'. The median case takes '+r.baseline.median_hours+' h and has '+r.baseline.median_events+' events.';
+        if(!r.top.length)return;
+        const t=table(['Case','Score','Why','Events','Hours',''],r.top.map(c=>[String(c.case_id),String(c.score),c.reasons.map(x=>label[x.signal]+': '+x.detail).join('; '),String(c.events),String(c.hours),'']));
+        t.querySelector('tbody').querySelectorAll('tr').forEach((tr,i)=>{const id=String(r.top[i].case_id);const b=button('Explain','secondary');b.setAttribute('aria-label','Explain case '+id);
+          b.onclick=()=>{const field=document.querySelector('#owgCaseExplainId'),go=document.querySelector('#owgCaseExplainRun');if(!field||!go)return;field.value=id;go.click();document.querySelector('#owgCaseExplain').scrollIntoView({block:'start'});};
+          tr.cells[5].appendChild(b);});
+        out.appendChild(t);
+        out.appendChild(el('div',r.caveat,'muted'));
+      }catch(error){statusLine.textContent=error.message;}
+      finally{run.disabled=false;}};
+    return box;
+  }
+
+  function funnelSection(activityNames){
+    const box=section('Milestone funnel');box.id='owgFunnel';
+    box.appendChild(el('div','Choose activities in order to see how many cases reach each one after the previous ones, how long that takes, and what the cases that stopped did last. Other activities may happen in between.','muted'));
+    const options=[['','(choose an activity)'],...activityNames.slice(0,500).map(a=>[a,a])];
+    const steps=el('div',null,'row');steps.style.alignItems='end';steps.id='owgFunnelSteps';
+    const pickers=[];
+    const addStep=()=>{if(pickers.length>=8)return;const n=pickers.length+1;const pick=select('owgFunnelStep'+n,options);
+      if(activityNames[n-1])pick.value=activityNames[n-1];pickers.push(pick);steps.appendChild(field('Step '+n,pick));more.disabled=pickers.length>=8;};
+    const more=button('Add step','secondary');more.id='owgFunnelAdd';more.onclick=addStep;
+    const windowPick=select('owgFunnelWindow',[['','No time limit'],['24','Within 24 hours of the previous step'],['168','Within 7 days'],['720','Within 30 days']]);
+    const run=button('Show funnel','secondary');run.id='owgFunnelRun';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Conversion window',windowPick),more,run);
+    const statusLine=el('div',null,'muted');statusLine.id='owgFunnelStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgFunnelResults';
+    box.append(steps,row,statusLine,out);
+    for(let i=0;i<3;i++)addStep();
+    const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
+    const hrs=x=>x===null||x===undefined?'—':(x<48?(Math.round(x*10)/10)+' h':(Math.round(x/24*10)/10)+' d');
+    run.onclick=async()=>{
+      const chosen=pickers.map(p=>p.value).filter(Boolean);
+      if(chosen.length<2){statusLine.textContent='Choose at least two steps.';out.replaceChildren();return;}
+      const generation=state.generation;run.disabled=true;statusLine.textContent='Following cases…';out.replaceChildren();
+      try{
+        const params={step:chosen};if(windowPick.value)params.within_hours=windowPick.value;
+        const r=await getJSON(logPath('funnel',params));
+        if(generation!==state.generation)return;
+        const first=r.steps[0],last=r.steps[r.steps.length-1];
+        statusLine.textContent=Number(last.cases).toLocaleString()+' of '+Number(first.cases).toLocaleString()+' cases that reached '+first.activity+' went on to reach '+last.activity+' ('+pct(r.completed.share_of_first_step)+'), in a median '+hrs(r.completed.hours_first_to_last.median)+'.'+(r.largest_drop?' The largest drop is before step '+r.largest_drop.to_step+' ('+Number(r.largest_drop.cases).toLocaleString()+' cases).':'');
+        const t=table(['Step','Reached','Of step 1','From previous','Dropped','Median time from previous','Stopped cases did last'],r.steps.map(x=>[x.step+'. '+x.activity,Number(x.cases).toLocaleString(),pct(x.share_of_first_step),x.step===1?'—':pct(x.conversion_from_previous),x.step===1?'—':Number(x.dropped_after_previous).toLocaleString()+(x.stopped_cases_possibly_open?' ('+x.stopped_cases_possibly_open+' possibly open)':''),x.step===1?'—':hrs(x.hours_from_previous.median),x.step===1?'—':(x.stopped_cases_last_activity.map(a=>a.activity+' ('+a.cases+')').join(', ')||'—')]));
+        t.querySelector('tbody').querySelectorAll('tr').forEach((tr,i)=>{const bar=el('div');bar.setAttribute('aria-hidden','true');bar.style.cssText='height:4px;background:currentColor;opacity:.35;margin-top:4px;width:'+Math.round((r.steps[i].share_of_first_step||0)*100)+'%';tr.cells[1].appendChild(bar);});
+        out.appendChild(t);
+        out.appendChild(el('div',r.caveat,'muted'));
+      }catch(error){statusLine.textContent=error.message;}
+      finally{run.disabled=false;}};
+    return box;
+  }
+
+  function modelChangeSection(){
+    const box=section('Model change');box.id='owgModelChange';
+    box.appendChild(el('div','How the discovered model differs before and after a date: which activities now follow each other differently, which activities are new or gone, and how well each period\'s cases fit the other period\'s model.','muted'));
+    const mode=select('owgModelChangeMode',[['periods','Before and after a date'],['groups','Two groups of cases']]);
+    const groupA=input('owgModelChangeCohortAAttribute','text','e.g. region=EU');groupA.maxLength=400;groupA.autocomplete='off';
+    const groupB=input('owgModelChangeCohortBAttribute','text','e.g. region=US');groupB.maxLength=400;groupB.autocomplete='off';
+    const split=input('owgModelChangeSplit','date');
+    const noise=select('owgModelChangeNoise',[['0.2','Leave out paths under 20% (default)'],['0','Keep every path'],['0.4','Leave out paths under 40%']]);
+    const run=button('Compare periods','secondary');run.id='owgModelChangeRun';
+    const splitField=field('Split at (empty: median case start)',split),aField=field('Group A (attribute=value)',groupA),bField=field('Group B (attribute=value)',groupB);
+    const sync=()=>{splitField.hidden=mode.value!=='periods';aField.hidden=bField.hidden=mode.value!=='groups';};mode.onchange=sync;sync();
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Compare',mode),splitField,aField,bField,field('Models',noise),run);
+    const statusLine=el('div',null,'muted');statusLine.id='owgModelChangeStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgModelChangeResults';
+    box.append(row,statusLine,out);
+    const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
+    run.onclick=async()=>{
+      if(mode.value==='groups'){
+        if(!groupA.value.includes('=')||!groupB.value.includes('=')){statusLine.textContent='Enter both groups as attribute=value.';out.replaceChildren();return;}
+        const generation=state.generation;run.disabled=true;statusLine.textContent='Discovering both groups…';out.replaceChildren();
+        try{
+          const r=await getJSON(logPath('model-comparison',{group_a:groupA.value.trim(),group_b:groupB.value.trim(),noise:noise.value}));
+          if(generation!==state.generation)return;
+          const c=r.cross_fit,A=r.groups.a,B=r.groups.b;
+          statusLine.textContent=A.filter+' ('+Number(A.cases).toLocaleString()+' cases) against '+B.filter+' ('+Number(B.cases).toLocaleString()+'): '+r.orderings.changed+' of '+r.orderings.pairs_compared+' activity orderings differ. '+B.filter+' cases fit the '+A.filter+' model '+pct(c.b_cases_on_a_model.fitness)+', against '+pct(c.a_cases_on_a_model.fitness)+' for its own cases.';
+          const a=r.activities;
+          if(a.only_a.length||a.only_b.length)out.appendChild(el('div',(a.only_a.length?'Only in '+A.filter+': '+a.only_a.join(', ')+'. ':'')+(a.only_b.length?'Only in '+B.filter+': '+a.only_b.join(', ')+'.':'')));
+          if(r.differences.length){out.appendChild(el('h4','Orderings that differ'));
+            out.appendChild(table(['Activity','Activity',A.filter,B.filter],r.differences.map(x=>[x.from,x.to,x.a,x.b])));}
+          out.appendChild(el('h4','Cross-fit'));
+          out.appendChild(table(['Cases','Model','Alignment fitness','Follow it exactly'],[
+            [A.filter,A.filter,pct(c.a_cases_on_a_model.fitness),pct(c.a_cases_on_a_model.fitting_case_share)],
+            [B.filter,A.filter,pct(c.b_cases_on_a_model.fitness),pct(c.b_cases_on_a_model.fitting_case_share)],
+            [B.filter,B.filter,pct(c.b_cases_on_b_model.fitness),pct(c.b_cases_on_b_model.fitting_case_share)],
+            [A.filter,B.filter,pct(c.a_cases_on_b_model.fitness),pct(c.a_cases_on_b_model.fitting_case_share)]]));
+          out.appendChild(el('div',r.caveat,'muted'));
+        }catch(error){statusLine.textContent=error.message;}
+        finally{run.disabled=false;}
+        return;
+      }
+      const generation=state.generation;run.disabled=true;statusLine.textContent='Discovering both periods…';out.replaceChildren();
+      try{
+        const params={noise:noise.value};if(split.value)params.split=split.value+'T00:00:00Z';
+        const r=await getJSON(logPath('model-change',params));
+        if(generation!==state.generation)return;
+        const c=r.cross_fit,drop=r.fitness_drop_on_earlier_model;
+        statusLine.textContent='Split at '+r.split.slice(0,10)+(r.split_chosen==='given'?'':' (median case start)')+': '+Number(r.periods.before.cases).toLocaleString()+' cases before, '+Number(r.periods.after.cases).toLocaleString()+' after. '+r.orderings.changed+' of '+r.orderings.pairs_compared+' activity orderings changed. Later cases fit the earlier model '+pct(c.after_cases_on_before_model.fitness)+', against '+pct(c.before_cases_on_before_model.fitness)+' for the earlier cases'+(drop!==null?(drop>0.02?' — the way the work runs changed.':' — little change in how the work runs.'):'.');
+        const a=r.activities;
+        if(a.only_before.length||a.only_after.length)out.appendChild(el('div',(a.only_after.length?'New after the split: '+a.only_after.join(', ')+'. ':'')+(a.only_before.length?'Gone after the split: '+a.only_before.join(', ')+'.':'')));
+        if(r.changes.length){out.appendChild(el('h4','Orderings that changed'));
+          out.appendChild(table(['Activity','Activity','Before','After'],r.changes.map(x=>[x.from,x.to,x.before,x.after])));}
+        out.appendChild(el('h4','Cross-fit'));
+        out.appendChild(table(['Cases','Model','Alignment fitness','Follow it exactly'],[
+          ['Before','Before',pct(c.before_cases_on_before_model.fitness),pct(c.before_cases_on_before_model.fitting_case_share)],
+          ['After','Before',pct(c.after_cases_on_before_model.fitness),pct(c.after_cases_on_before_model.fitting_case_share)],
+          ['After','After',pct(c.after_cases_on_after_model.fitness),pct(c.after_cases_on_after_model.fitting_case_share)],
+          ['Before','After',pct(c.before_cases_on_after_model.fitness),pct(c.before_cases_on_after_model.fitting_case_share)]]));
+        out.appendChild(el('div','→: the first is followed by the second; ←: the reverse; ||: both orders or in parallel; #: not directly related. '+r.caveat,'muted'));
+      }catch(error){statusLine.textContent=error.message;}
+      finally{run.disabled=false;}};
+    return box;
+  }
+
+  function modelQualitySection(){
+    const box=section('Model quality');box.id='owgModelQuality';
+    box.appendChild(el('div','How good the discovered model is at several noise levels: fitness (can it replay the cases), precision (does it allow little that no case did), their balance (F-score), generalization (is each part backed by many cases) and simplicity (how tangled it is). Use it to choose the noise setting of model discovery.','muted'));
+    const levels=select('owgModelQualityLevels',[['0,0.1,0.2,0.3,0.5','0, 10%, 20%, 30% and 50% (default)'],['0,0.05,0.1,0.15,0.2','Fine steps up to 20%'],['0,0.2,0.4,0.6,0.8','Coarse steps up to 80%']]);
+    const run=button('Score models','secondary');run.id='owgModelQualityRun';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Noise levels',levels),run);
+    const statusLine=el('div',null,'muted');statusLine.id='owgModelQualityStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgModelQualityResults';
+    box.append(row,statusLine,out);
+    const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
+    run.onclick=async()=>{
+      const generation=state.generation;run.disabled=true;statusLine.textContent='Discovering and scoring…';out.replaceChildren();
+      try{
+        const r=await getJSON(logPath('model-quality',{levels:levels.value}));
+        if(generation!==state.generation)return;
+        const best=r.levels.find(l=>l.noise===r.best_f_score_noise);
+        statusLine.textContent='Scored '+r.levels.length+' models on '+Number(r.cases).toLocaleString()+' cases.'+(best?' The best balance of fitness and precision is at noise '+pct(best.noise)+' (F-score '+pct(best.f_score)+', fitness '+pct(best.fitness)+', precision '+pct(best.precision)+').':'')+(r.cases_excluded?' '+Number(r.cases_excluded).toLocaleString()+' cases beyond the length or variant limit were left out.':'');
+        const t=table(['Noise','Fitness','Precision','F-score','Generalization','Simplicity','Places / transitions'],r.levels.map(l=>[pct(l.noise)+(l.noise===r.best_f_score_noise?' (best F-score)':''),pct(l.fitness),pct(l.precision),pct(l.f_score),pct(l.generalization),pct(l.simplicity),l.places+' / '+l.transitions]));
+        out.appendChild(t);
+        out.appendChild(el('div',r.caveat,'muted'));
+      }catch(error){statusLine.textContent=error.message;}
+      finally{run.disabled=false;}};
+    return box;
+  }
+
   function footprintsSection(){
     const box=section('Footprints');box.id='owgFootprints';
     box.appendChild(el('div','For every pair of activities, whether one directly follows the other (→), both orders occur (||) or neither (#): once from the recorded cases and once from the discovered model draft. Cells where they differ show orderings the model leaves out or allows without any case taking them.','muted'));
@@ -3886,6 +4257,139 @@
         out.append(grid,el('div',r.caveat,'muted'));
       }catch(error){statusLine.textContent=error.message;}
       finally{run.disabled=false;}};
+    return box;
+  }
+
+  function petriReplaySection(){
+    const box=section('Check against a Petri net');box.id='owgPetri';
+    const netsBase=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/reference-nets';
+    box.appendChild(el('div','Replay the recorded cases on a Petri net from ProM, PM4Py, Apromore or another tool (a .pnml file), or on the net discovered here. Tokens that are missing or left behind show where the cases and the net disagree. The file is read for this check and not stored.','muted'));
+    const file=input('owgPetriFile','file');file.accept='.pnml,application/xml,text/xml';
+    const run=button('Replay on this net','secondary');run.id='owgPetriRun';
+    const own=button('Replay on the discovered net','secondary');own.id='owgPetriDiscovered';
+    const happy=button('Check against the most common path','secondary');happy.id='owgPetriHappy';
+    const align=button('Explain each case step by step','secondary');align.id='owgPetriAlign';align.disabled=true;
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Petri net (.pnml)',file),run,own,happy,align);
+    const statusLine=el('div',null,'muted');statusLine.id='owgPetriStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgPetriResults';
+    const aligned=el('div');aligned.id='owgPetriAlignResults';
+    const alertShare=select('owgPetriAlertShare',[['0.1','more than 10%'],['0.2','more than 20%'],['0.05','more than 5%'],['0.3','more than 30%']]);
+    const alertWindow=select('owgPetriAlertWindow',[['30','started in the last 30 days'],['7','started in the last 7 days'],['','in the whole log']]);
+    const alertSave=button('Alert me','secondary');alertSave.id='owgPetriAlertSave';alertSave.disabled=true;
+    const alertMessage=el('div',null,'muted');alertMessage.id='owgPetriAlertMessage';alertMessage.setAttribute('role','status');alertMessage.setAttribute('aria-live','polite');
+    const alertRow=el('div',null,'row');alertRow.style.alignItems='end';alertRow.append(field('Signal when cases not fitting this net are',alertShare),field('Among cases',alertWindow),alertSave);
+    box.append(row,statusLine,out,aligned,alertRow,alertMessage);
+    // Reference nets saved with this log: keep the net just checked, or check again against a saved one.
+    const savedPick=select('owgPetriSaved',[]);const savedRun=button('Replay on saved net','secondary');savedRun.id='owgPetriSavedRun';
+    const savedDelete=button('Delete saved net','secondary');savedDelete.id='owgPetriSavedDelete';
+    const saveName=input('owgPetriSaveName','text','e.g. Target process 2025');saveName.maxLength=120;saveName.autocomplete='off';
+    const saveRun=button('Save this net','secondary');saveRun.id='owgPetriSave';saveRun.disabled=true;
+    const savedMessage=el('div',null,'muted');savedMessage.id='owgPetriSavedMessage';savedMessage.setAttribute('role','status');savedMessage.setAttribute('aria-live','polite');
+    const savedRow=el('div',null,'row');savedRow.style.alignItems='end';savedRow.append(field('Saved reference nets',savedPick),savedRun,savedDelete,field('Save the net just checked as',saveName),saveRun);
+    box.append(savedRow,savedMessage);
+    const refreshSaved=async()=>{try{const r=await getJSON(netsBase());
+        savedPick.replaceChildren(...r.nets.map(n=>{const o=document.createElement('option');o.value=n.net_id;o.textContent=n.name+' ('+n.transitions+' transitions)';return o;}));
+        savedRun.disabled=savedDelete.disabled=!r.nets.length;if(!r.nets.length){const o=document.createElement('option');o.value='';o.textContent='(none saved yet)';savedPick.appendChild(o);}}
+      catch(error){savedMessage.textContent=error.message;}};
+    refreshSaved();
+    savedRun.onclick=async()=>{if(!savedPick.value)return;
+      try{const response=await api(netsBase()+'/'+encodeURIComponent(savedPick.value)+'.pnml');await replay(await response.text(),savedPick.selectedOptions[0].textContent.replace(/ \(\d+ transitions\)$/,''));}
+      catch(error){statusLine.textContent=error.message;}};
+    savedDelete.onclick=async()=>{if(!savedPick.value||!window.confirm('Delete the saved net “'+savedPick.selectedOptions[0].textContent+'”?'))return;
+      try{await api(netsBase()+'/'+encodeURIComponent(savedPick.value)+'/delete',{method:'POST'});savedMessage.textContent='Saved net deleted.';await refreshSaved();}
+      catch(error){savedMessage.textContent=error.message;}};
+    saveRun.onclick=async()=>{if(!lastNet)return;
+      if(!saveName.value.trim()){savedMessage.textContent='Enter a name for the net.';return;}
+      saveRun.disabled=true;
+      try{await api(netsBase(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:saveName.value.trim(),pnml:lastNet.body})});
+        savedMessage.textContent='Saved “'+saveName.value.trim()+'” with this log.';saveName.value='';await refreshSaved();}
+      catch(error){savedMessage.textContent=error.message;}
+      finally{saveRun.disabled=!lastNet;}};
+    const pct=x=>Math.round((x||0)*1000)/10+'%';
+    let lastNet=null;
+    const replay=async(body,label)=>{
+      const generation=state.generation;run.disabled=own.disabled=happy.disabled=align.disabled=alertSave.disabled=true;aligned.replaceChildren();alertMessage.textContent='';lastNet=null;statusLine.textContent='Replaying on '+label+'…';out.replaceChildren();
+      try{
+        const r=await (await api(logPath('petri-net-replay',{}),{method:'POST',headers:{'Content-Type':'application/xml'},body})).json();
+        if(generation!==state.generation)return;
+        lastNet={body,label,generation};
+        const f=r.fitness;
+        statusLine.textContent='Fitness '+pct(f.log)+' on '+label+': '+Number(f.fitting_cases).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases ('+pct(f.fitting_case_share)+') replay without missing or remaining tokens.'+(r.precision.precision!==null?' Precision '+pct(r.precision.precision)+'.':'')+' The net has '+r.net.places+' places and '+r.net.transitions+' transitions ('+r.net.silent_transitions+' silent).'+(r.cases_excluded?' '+Number(r.cases_excluded).toLocaleString()+' cases beyond the length or variant limit were left out.':'');
+        if(!r.net.final_marking_declared)out.appendChild(el('div','The file declares no final marking, so cases are expected to end with one token on each place nothing consumes from.','muted'));
+        if(r.places.length){out.appendChild(el('h4','Places where tokens went missing or were left behind'));
+          out.appendChild(table(['Place','Missing tokens','Remaining tokens'],r.places.map(p=>[p.place,Number(p.missing).toLocaleString(),Number(p.remaining).toLocaleString()])));}
+        if(r.transitions_fired_without_tokens.length){out.appendChild(el('h4','Steps taken when the net did not allow them'));
+          out.appendChild(table(['Transition','Times'],r.transitions_fired_without_tokens.map(t=>[t.transition,Number(t.times).toLocaleString()])));}
+        if(r.precision.escaping_edges.length){out.appendChild(el('h4','Steps the net allows that no case took'));
+          out.appendChild(table(['After','Net also allows','Cases at that point'],r.precision.escaping_edges.map(e=>[e.after===null?'(case start)':e.after,e.net_also_allows,Number(e.cases).toLocaleString()])));}
+        if(r.activities_not_in_net.length)out.appendChild(el('div','Activities the net does not have (skipped): '+r.activities_not_in_net.map(a=>a.activity+' ('+a.cases+' cases)').join(', ')+'.','muted'));
+        if(r.net_labels_never_seen.length)out.appendChild(el('div','Net transitions no case took: '+r.net_labels_never_seen.join(', ')+'.','muted'));
+        if(r.non_fitting_variants.length){const more=document.createElement('details');more.appendChild(el('summary','Variants that do not fit ('+r.non_fitting_variants.length+')'));
+          more.appendChild(table(['Variant','Cases','Fitness','Missing','Remaining'],r.non_fitting_variants.map(v=>[v.path.join(' → '),Number(v.cases).toLocaleString(),pct(v.fitness),String(v.missing_tokens),String(v.remaining_tokens)])));out.appendChild(more);}
+        out.appendChild(el('div',r.caveat,'muted'));
+      }catch(error){statusLine.textContent=error.message;}
+      finally{run.disabled=own.disabled=happy.disabled=false;align.disabled=alertSave.disabled=saveRun.disabled=!lastNet;}};
+    alertSave.onclick=async()=>{
+      if(!lastNet)return;
+      if(lastNet.body.length>60000){alertMessage.textContent='This net is too large to keep with a signal (over 60,000 characters).';return;}
+      const when={kind:'conformance',net_name:lastNet.label.slice(0,200),pnml:lastNet.body,metric:'non_fitting_share',operator:'above',threshold:Number(alertShare.value)};
+      if(alertWindow.value)when.recent_days=Number(alertWindow.value);
+      const sig={name:('Cases not fitting '+lastNet.label).slice(0,120),when};if(state.caseType)sig.case_type=state.caseType;
+      alertSave.disabled=true;
+      try{await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/signals',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sig)});
+        document.querySelectorAll('#owgEventLogSignals').forEach(node=>node.dispatchEvent(new CustomEvent('owg-signals-changed')));
+        alertMessage.textContent='Saved as a signal with a copy of this net. Use Check signals to evaluate it now; it keeps checking the same net as the log grows.';}
+      catch(error){alertMessage.textContent=error.message;}
+      finally{alertSave.disabled=!lastNet;}};
+    const step=s=>s.move==='sync'?s.log:s.move==='log'?'+'+s.log+' (not in the net here)':'−'+s.model+' (skipped)';
+    align.onclick=async()=>{
+      if(!lastNet||lastNet.generation!==state.generation){align.disabled=true;return;}
+      const generation=state.generation,net=lastNet;run.disabled=own.disabled=align.disabled=true;
+      const status=el('div','Aligning each variant on '+net.label+'…','muted');status.id='owgPetriAlignStatus';status.setAttribute('role','status');status.setAttribute('aria-live','polite');
+      aligned.replaceChildren(el('h4','Step-by-step explanation (alignments)'),status);
+      try{
+        const r=await (await api(logPath('petri-net-alignments',{}),{method:'POST',headers:{'Content-Type':'application/xml'},body:net.body})).json();
+        if(generation!==state.generation)return;
+        const f=r.fitness;
+        status.textContent='Alignment fitness '+pct(f.log)+': '+Number(f.fitting_cases).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases follow the net exactly. On average a case needs '+r.deviation_cost.per_case+' extra or skipped steps to fit.'+(r.unaligned.variants?' '+r.unaligned.variants+' variants ('+Number(r.unaligned.cases).toLocaleString()+' cases) were too long to align within the search limit.':'');
+        if(r.by_month.length>1){aligned.appendChild(el('h4','Fitness by month the cases started'));
+          const t=table(['Month','Cases','Follow the net exactly','Alignment fitness'],r.by_month.map(m=>[m.month,Number(m.cases).toLocaleString(),pct(m.fitting_case_share),pct(m.fitness)]));t.id='owgPetriAlignMonths';aligned.appendChild(t);}
+        if(r.log_moves.length){aligned.appendChild(el('h4','Steps the cases took that the net does not allow there'));
+          aligned.appendChild(table(['Activity','Cases','Times'],r.log_moves.map(m=>[m.activity,Number(m.cases).toLocaleString(),Number(m.times).toLocaleString()])));}
+        if(r.model_moves.length){aligned.appendChild(el('h4','Steps the net requires that the cases skipped'));
+          aligned.appendChild(table(['Activity','Cases','Times'],r.model_moves.map(m=>[m.activity,Number(m.cases).toLocaleString(),Number(m.times).toLocaleString()])));}
+        if(r.non_fitting_variants.length){const more=document.createElement('details');more.open=true;more.appendChild(el('summary','How each non-fitting variant is explained ('+r.non_fitting_variants.length+' of '+r.non_fitting_variants_total+')'));
+          more.appendChild(table(['Variant','Cases','Fitness','Explanation'],r.non_fitting_variants.map(v=>[v.path.join(' → '),Number(v.cases).toLocaleString(),pct(v.fitness),v.alignment.map(step).join(' → ')])));aligned.appendChild(more);}
+        aligned.appendChild(el('div',r.caveat,'muted'));
+        if(r.non_fitting_variants.length){
+          const why=button('What goes with these deviations?','secondary');why.id='owgPetriCauses';
+          const causes=el('div');causes.id='owgPetriCausesResults';causes.setAttribute('role','status');causes.setAttribute('aria-live','polite');
+          aligned.append(why,causes);
+          why.onclick=async()=>{
+            if(generation!==state.generation)return;why.disabled=true;causes.replaceChildren(el('div','Comparing deviating and fitting cases…','muted'));
+            try{
+              const c=await (await api(logPath('petri-net-deviation-causes',{}),{method:'POST',headers:{'Content-Type':'application/xml'},body:net.body})).json();
+              if(generation!==state.generation)return;
+              const pts=x=>(x>0?'+':'')+(x*100).toFixed(1)+' pts';
+              const list=(c.associations||[]).slice(0,15);
+              causes.replaceChildren(el('div',Number(c.outcome_cases||0).toLocaleString()+' of '+Number(c.cases).toLocaleString()+' cases deviate; '+Number(c.features_tested||0)+' case features tested.'+(list.length?'':' None goes with deviating cases in this log.'),'muted'));
+              if(list.length)causes.appendChild(table(['Feature','Cases with it','Deviate with','Deviate without','Difference (95% CI)','Holds after correction'],list.map(a=>[a.feature.kind+': '+a.feature.value,Number(a.cases_with_feature).toLocaleString(),pct(a.outcome_rate_with),pct(a.outcome_rate_without),pts(a.risk_difference)+' ['+(a.ci95[0]*100).toFixed(1)+', '+(a.ci95[1]*100).toFixed(1)+']',a.holds_after_bonferroni?'Yes':'No'])));
+              causes.appendChild(el('div',c.caveat||c.note||'','muted'));
+            }catch(error){causes.replaceChildren(el('div',error.message,'muted'));}
+            finally{why.disabled=false;}};}
+      }catch(error){status.textContent=error.message;}
+      finally{run.disabled=own.disabled=false;align.disabled=!lastNet;}};
+    run.onclick=async()=>{const chosen=file.files&&file.files[0];if(!chosen){statusLine.textContent='Choose a .pnml file first.';return;}
+      if(chosen.size>2*1024*1024){statusLine.textContent='The Petri net file is larger than 2 MB.';return;}
+      await replay(await chosen.text(),chosen.name);};
+    happy.onclick=async()=>{
+      try{statusLine.textContent='Building the most common path…';const response=await api(logPath('variant.pnml',{rank:'1'}));
+        const share=/share=([0-9.]+)/.exec(response.headers.get('X-OWG-Path-Cases')||'');
+        await replay(await response.text(),'the most common path'+(share?' (followed by '+Math.round(Number(share[1])*1000)/10+'% of cases)':''));}
+      catch(error){statusLine.textContent=error.message;}};
+    own.onclick=async()=>{
+      try{statusLine.textContent='Discovering…';const xml=await (await api(logPath('model-discovery.pnml',{noise:'0'}))).text();await replay(xml,'the discovered net (every path kept)');}
+      catch(error){statusLine.textContent=error.message;}};
     return box;
   }
 
@@ -4429,6 +4933,7 @@
         out.replaceChildren(
           el('div',Number(r.coverage.events_with_resource).toLocaleString()+' of '+Number(r.coverage.events).toLocaleString()+' events name a resource; '+Number(r.cases_with_handover).toLocaleString()+' cases contain a handover.'+(r.resources_truncated?' Less active resources are grouped as “Other resources”.':''),'muted'),
           table(['From','To','Handovers','Cases'],r.handover_of_work.slice(0,25).map(h=>[h.from,h.to,Number(h.handovers).toLocaleString(),Number(h.cases).toLocaleString()])),
+          ...(r.subcontracting&&r.subcontracting.length?[el('h4','Subcontracting: work passed to another resource and straight back'),table(['From','To and back','Times','Cases'],r.subcontracting.slice(0,25).map(s=>[s.from,s.to,Number(s.times).toLocaleString(),Number(s.cases).toLocaleString()]))]:[]),
           table(['Resources','Shared cases'],r.working_together.slice(0,25).map(w=>[w.resources.join(' + '),Number(w.shared_cases).toLocaleString()])),
           table(['Activity',...m.resources.slice(0,10)],m.activities.slice(0,15).map((a,i)=>[a,...m.events[i].slice(0,10).map(n=>n?Number(n).toLocaleString():'')])),
           el('div',r.interpretation+(r.working_together_excluded_cases?' '+r.working_together_excluded_cases+' cases with very many resources are left out of shared-case pairs.':''),'muted'));
@@ -5995,7 +6500,11 @@
       rules.replaceChildren(r.rules.length?table(['Signal','Rule',''],r.rules.map(rule=>{
         const del=button('Delete','secondary');del.setAttribute('aria-label','Delete signal '+rule.name);
         del.onclick=async()=>{try{await api(base()+'/'+encodeURIComponent(rule.rule_id)+'/delete',{method:'POST'});message.textContent='Signal deleted.';await refresh();}catch(error){message.textContent=error.message;}};
-        const w=rule.when;const text=w.kind==='kpi'?w.metric.replace(/_/g,' ')+' '+w.operator+' '+w.threshold:w.condition.replace(/_/g,' ')+(w.activity?' '+w.activity:'')+(w.seconds?' '+duration(w.seconds):'');
+        const w=rule.when;const text=w.kind==='kpi'?w.metric.replace(/_/g,' ')+' '+w.operator+' '+w.threshold
+          :w.kind==='conformance'?w.metric.replace(/_/g,' ')+' on '+w.net_name+' '+w.operator+' '+w.threshold+(w.recent_days?' (cases started in the last '+w.recent_days+' days)':'')
+          :w.kind==='due_date'?(w.metric==='open_overdue_cases'?'open cases overdue for '+w.activity:'late share of '+w.activity)+' '+w.operator+' '+w.threshold+(w.due_attribute?' (due: '+w.due_attribute+')':' (due '+w.due_days+' days after start)')
+          :w.kind==='compliance'?'compliance rule'+(w.rule&&w.rule.kind?': '+String(w.rule.kind).replace(/_/g,' '):'')
+          :w.condition.replace(/_/g,' ')+(w.activity?' '+w.activity:'')+(w.seconds?' '+duration(w.seconds):'');
         return [rule.name,text,del];})):el('div','No saved signals yet.','muted'));
       evaluate.disabled=!r.rules.length;
       await refreshInbox();
@@ -6019,8 +6528,8 @@
           el('div',r.triggered+' of '+r.signals.length+' signals hold now.','muted'),
           table(['Signal','Holds','Value or matching cases','New since last check','Example cases'],r.signals.map(sig=>[
             sig.name,sig.triggered?'yes':'no',
-            sig.when.kind==='kpi'?(sig.value===null?'—':sig.when.metric.endsWith('_rate')?pct(sig.value):sig.when.metric==='case_count'?Number(sig.value).toLocaleString():duration(sig.value)):Number(sig.matching_cases).toLocaleString()+' cases',
-            sig.when.kind==='kpi'?(sig.changed_since_last_evaluation?'changed':'—'):newCaseChange(sig),
+            sig.when.kind==='due_date'?(sig.value===null?'—':sig.when.metric==='late_share'?pct(sig.value)+' late':Number(sig.value).toLocaleString()+' overdue'):sig.when.kind==='conformance'?(sig.value===null?'—':pct(sig.value)+' of '+Number(sig.conformance.cases).toLocaleString()+' cases'):sig.when.kind==='kpi'?(sig.value===null?'—':sig.when.metric.endsWith('_rate')?pct(sig.value):sig.when.metric==='case_count'?Number(sig.value).toLocaleString():duration(sig.value)):Number(sig.matching_cases).toLocaleString()+' cases',
+            (sig.when.kind==='kpi'||sig.when.kind==='conformance'||sig.when.kind==='due_date')?(sig.changed_since_last_evaluation?'changed':'—'):newCaseChange(sig),
             (sig.evidence_cases||[]).slice(0,5).map(c=>c.case_id+(sig.when.condition==='open_longer_than'&&c.age_since_first_event_seconds!==undefined?
               ' (age '+duration(c.age_since_first_event_seconds)+', idle '+duration(c.idle_since_last_event_seconds)+')':'')).join(', ')])),
           el('div',r.interpretation,'muted'));
@@ -6028,6 +6537,23 @@
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
     };
     refresh().catch(error=>{message.textContent=error.message;});
+    // Signals saved from other sections (e.g. a Petri net conformance alert) appear without a reload.
+    box.addEventListener('owg-signals-changed',()=>{refresh().catch(error=>{message.textContent=error.message;});});
+    // Month-by-month scorecard of the value-based signals (read-only).
+    const scoreRun=button('Scorecard by month','secondary');scoreRun.id='owgSignalScorecardRun';
+    const scoreOut=el('div');scoreOut.id='owgSignalScorecard';scoreOut.setAttribute('role','status');scoreOut.setAttribute('aria-live','polite');
+    box.append(scoreRun,scoreOut);
+    scoreRun.onclick=async()=>{
+      scoreRun.disabled=true;scoreOut.replaceChildren(el('div','Computing each month…','muted'));
+      try{
+        const r=await getJSON(base()+'/scorecard?months=6');if(generation!==state.generation)return;
+        if(!r.rows.length){scoreOut.replaceChildren(el('div','No KPI, conformance or due-date signals to show by month.','muted'));return;}
+        const fmt=(row,v)=>{if(v===null||v===undefined)return '—';const m=row.when.metric||'';
+          return (m.endsWith('_rate')||m.endsWith('_share')||m==='alignment_fitness')?Math.round(v*1000)/10+'%':m.endsWith('_seconds')?duration(v):Number(v).toLocaleString();};
+        scoreOut.replaceChildren(table(['Signal',...r.months],r.rows.map(row=>[row.name,...r.months.map(m=>{const cell=row.months.find(x=>x.month===m);
+          return cell?fmt(row,cell.value)+(cell.holds===true?' (holds)':''):'—';})])),el('div',r.interpretation,'muted'));
+      }catch(error){scoreOut.replaceChildren(el('div',error.message,'muted'));}
+      finally{scoreRun.disabled=false;}};
     return box;
   }
 
