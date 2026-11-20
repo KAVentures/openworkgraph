@@ -136,3 +136,55 @@ def test_uncertain_handoff_never_advances_checkpoint_or_retries_append():
                 confirm_checkpoint_commit=True)
     append.assert_called_once()
     checkpoint.assert_not_called()
+
+
+@pytest.mark.parametrize("failure_phase", ["append", "handoff", "checkpoint"])
+def test_uncertain_mutation_never_retries_or_reports_success(failure_phase):
+    """Each uncertain boundary fails closed; only an operator may reconcile."""
+    state = dict(generation=1, candidate_sha256=A, log_id="log")
+    calls = []
+
+    def append(**kwargs):
+        calls.append("append")
+        if failure_phase == "append":
+            raise UncertainReceipt("append response lost")
+        return dict(status="receipt_persisted")
+
+    def handoff(**kwargs):
+        calls.append("handoff")
+        if failure_phase == "handoff":
+            raise UncertainReceipt("handoff response lost")
+        return dict(status="next_round_handoff_prepared")
+
+    def checkpoint(**kwargs):
+        calls.append("checkpoint")
+        if failure_phase == "checkpoint":
+            # Simulate a durable write with a lost response: the operator
+            # must not retry or falsely claim success.
+            state["generation"] = 2
+            raise UncertainReceipt("checkpoint response lost")
+        return dict(status="checkpoint_committed", generation=2)
+
+    with (patch.object(transaction, "inspect_checkpoint", side_effect=lambda **_: dict(state)),
+          patch.object(transaction.cycle, "review", return_value=_review(B)),
+          patch.object(transaction.cycle, "append", side_effect=append),
+          patch.object(transaction.cycle, "handoff", side_effect=handoff),
+          patch.object(transaction.cycle, "checkpoint_commit", side_effect=checkpoint)):
+        with pytest.raises(UncertainReceipt):
+            transaction.execute(
+                **_scope(), candidate=Path("/private/next.json"),
+                csv_path=Path("/private/next.csv"),
+                receipt_file=Path("/private/receipt"),
+                journal_dir=Path("/private/journal"),
+                handoff_dir=Path("/private/handoff"), successor_label="next",
+                expected_review_csv_sha256=B,
+                expected_previous_candidate_sha256=A,
+                consent_local_read=True, consent_local_append=True,
+                confirm_candidate_reviewed=True,
+                confirm_removals_reviewed=True,
+                confirm_checkpoint_commit=True)
+    assert calls == {
+        "append": ["append"],
+        "handoff": ["append", "handoff"],
+        "checkpoint": ["append", "handoff", "checkpoint"],
+    }[failure_phase]
