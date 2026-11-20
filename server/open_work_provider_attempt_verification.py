@@ -69,7 +69,10 @@ def verify_provider_attempt(
     if payload.get("account") != account or payload.get("object_id") != object_id:
         return {**unknown, "reason": "source_scope_mismatch"}
     checked = _utc(payload.get("checked_at"))
-    if checked is None or abs((current - checked).total_seconds()) > max_age_seconds:
+    # A provider snapshot dated in the future is not evidence of a completed
+    # recheck. Permit only a small clock skew; never accept an arbitrarily
+    # future-dated snapshot merely because it falls inside the freshness TTL.
+    if checked is None or (current - checked).total_seconds() < -30 or (current - checked).total_seconds() > max_age_seconds:
         return {**unknown, "reason": "stale_source"}
     events = payload.get("events")
     if not isinstance(events, list) or len(events) > _MAX_EVENTS:
@@ -91,6 +94,13 @@ def verify_provider_attempt(
                           ("operation", operation), ("object_id", object_id)):
         if not hmac.compare_digest(event[key], expected):
             return {**unknown, "reason": "identity_conflict"}
+    # If the provider supplies an event timestamp, it must be independently
+    # coherent with the authenticated snapshot. Future or malformed event
+    # times cannot establish a historical operation, even with exact IDs.
+    if "occurred_at" in event:
+        occurred = _utc(event["occurred_at"])
+        if occurred is None or occurred > checked or occurred > current:
+            return {**unknown, "reason": "invalid_event_time"}
     if event.get("status") not in ("observed", "succeeded", "failed"):
         return {**unknown, "reason": "unconfirmed_provider_status"}
     return {"status": "verified_provider_event" if event["status"] == "observed" else "verified_provider_operation",
