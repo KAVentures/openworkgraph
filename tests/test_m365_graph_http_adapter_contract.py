@@ -676,7 +676,8 @@ def test_real_graph_review_to_authenticated_owg_append_contract(tmp_path):
     next_cursor = ("https://graph.microsoft.com/v1.0/me/mailFolders/folder/"
                    "messages/delta?%24deltatoken=incremental")
     incremental = Transport(Response(cursor, json.dumps({
-        "value": [], "@odata.deltaLink": next_cursor,
+        "value": [{"id": "m1", "@removed": {"reason": "deleted"}}],
+        "@odata.deltaLink": next_cursor,
     }).encode()))
     next_csv, next_candidate = tmp_path / "next.csv", tmp_path / "next.json"
     delta.export_delta(
@@ -693,11 +694,36 @@ def test_real_graph_review_to_authenticated_owg_append_contract(tmp_path):
         **scope_args, ledger_dir=ledger,
         consent_local_read=True)["generation"] == 1
 
-    # Explicitly commit the incremental zero-event round, proving that a
-    # second reviewed cursor can advance without inventing OWG events.
+    # A deletion marker is a second reviewed provider event: explicitly append
+    # it through the authenticated OWG HTTP adapter before advancing the cursor.
     second_review = review(
         **scope_args, candidate=next_candidate, consent_local_read=True)
     assert second_review["event_snapshots"] == 0
+    assert second_review["removal_markers_for_review"] == 1
+
+    second_posts = []
+    def second_post(_transport, req):
+        second_posts.append(req)
+        assert req.get_method() == "POST"
+        assert req.get_header("Authorization") == "OWG-Session " + "s" * 24
+        assert req.data == next_csv.read_bytes()
+        return {"log": {"log_id": log_id}, "added_events": 1,
+                "duplicate_events_skipped": 0, "rejected_events": 0, "batch": 2}
+
+    with (patch.object(owg, "_inventory",
+                       side_effect=[inventory(1), inventory(2)]),
+          patch.object(owg, "_read_json", side_effect=second_post)):
+        second_receipt = owg.append_verified(
+            **scope_args, candidate=next_candidate, csv_path=next_csv,
+            log_id=log_id, confirm_log_id=log_id, port=8765,
+            session="s" * 24, consent_local_read=True,
+            consent_local_append=True, opener=object())
+    assert second_receipt["status"] == "verified"
+    assert second_receipt["csv_sha256"] == second_review["csv_sha256"]
+    assert len(second_posts) == 1
+    assert checkpoint.inspect_checkpoint(
+        **scope_args, ledger_dir=ledger,
+        consent_local_read=True)["generation"] == 1
     with (patch.object(checkpoint, "prepare_handoff",
                        return_value={"idempotent_replay": True}) as handoff,
           patch.object(checkpoint, "reconcile_membership",
