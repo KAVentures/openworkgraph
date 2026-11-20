@@ -249,3 +249,16 @@ def test_denied_recovery_reports_failure_only_for_current_identity_and_open():
     assert 'REFUSED: Could not reopen an authorized revision.' in block
     assert block.index('REFUSED: Could not reopen') < block.index('throw error;')
     assert block.index('throw error;') < block.index('Latest authorized revision reopened.')
+
+
+def test_review_submission_consumes_inspection_before_uncertain_post():
+    """A committed POST with a lost response cannot reuse prior inspection consent."""
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split("async function review(decision) {", 1)[1].split('$("approve").onclick', 1)[0]
+    assert 'const submittedInspectedHandoff=Boolean(inspectedHandoff);' in block
+    assert 'resetHandoff("Review submitted; outcome may be unknown' in block
+    assert '$("handoffConsent").checked=false;' in block
+    assert block.index('resetHandoff("Review submitted; outcome may be unknown') < block.index('const reviewResult=await call(')
+    assert block.index('$("handoffConsent").checked=false;') < block.index('const reviewResult=await call(')
+    assert 'if (submittedInspectedHandoff)' in block
+    assert 'render(reviewResult);' in block
