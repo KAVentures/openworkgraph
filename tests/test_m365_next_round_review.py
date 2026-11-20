@@ -154,16 +154,16 @@ class NextRoundTests(unittest.TestCase):
                        {"provider_requests": 1}, {"owg_writes": 1},
                        {"checkpoint_advanced": True},
                        {"automatic_retry_allowed": True}):
-            with self.subTest(change=change), \\
+            with self.subTest(change=change), \
                  patch.object(flow, "inspect_checkpoint", return_value={
-                     "generation": 2, "candidate_sha256": SHA, "log_id": "log"}), \\
+                     "generation": 2, "candidate_sha256": SHA, "log_id": "log"}), \
                  patch.object(flow.cycle, "extract", return_value={
-                     "event_snapshots": 1, "removal_markers_for_review": 0}), \\
+                     "event_snapshots": 1, "removal_markers_for_review": 0}), \
                  patch.object(flow.cycle, "review", return_value={
                      "csv_sha256": "c" * 64, "event_snapshots": 1,
-                     "removal_markers_for_review": 0}), \\
+                     "removal_markers_for_review": 0}), \
                  patch.object(flow.transaction, "preflight",
-                              return_value={**base, **change}), \\
+                              return_value={**base, **change}), \
                  patch.object(flow.transaction, "execute") as commit:
                 with self.assertRaisesRegex(ReceiptError, "Invalid"):
                     flow.prepare(**inputs())
