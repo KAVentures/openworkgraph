@@ -964,7 +964,7 @@ const path=require('node:path');
      finally { sharingSettled(); }
    },{times:1});
    await page.locator('#owgAnalysisPrepareShare').click();await sharingSeen;
-   const rerunSeen=page.waitForResponse(r=>r.url().endsWith('/analysis'));await page.locator('#owgAnalysisRun').click();await rerunSeen;
+   const rerunSeen=page.waitForResponse(r=>r.url().endsWith('/analysis-source-bound'));await page.locator('#owgAnalysisRun').click();await rerunSeen;
    // Re-running analysis may cancel the old request rather than deliver its response.
    // Either outcome must leave the stale preview hidden. Do not require a response event
    // after the app has correctly invalidated the request.
