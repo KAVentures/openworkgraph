@@ -300,3 +300,17 @@ def test_review_mismatched_gateway_response_never_reports_success():
     assert 'Review outcome unverified. Reopen the latest authorized revision' in block
     assert 'Design review acknowledged against the exact revision and content hash.' in block
     assert 'Design review recorded against the exact revision and content hash.' not in block
+
+
+def test_unverified_review_response_cannot_render_another_workflow():
+    """HTTP success is insufficient to replace selected process or claim review."""
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split("async function review(decision) {", 1)[1].split('$("approve").onclick', 1)[0]
+    assert "const acknowledged=reviewResult?.process?.workflow_id===record.workflow_id" in block
+    assert "reviewResult.process.revision===record.revision" in block
+    assert "reviewResult.process.content_sha256===record.content_sha256" in block
+    assert 'if(!acknowledged){' in block
+    assert '$("reviewConfirm").checked=false;' in block
+    assert "check its review state before resubmitting" in block
+    assert block.index("if(!acknowledged){") < block.index("render(reviewResult);")
+    assert block.index("return;", block.index("if(!acknowledged){")) < block.index("render(reviewResult);")
