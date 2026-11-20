@@ -111,8 +111,10 @@ def prepare(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
             or proposal["removal_markers_for_review"] != checked["removal_markers_for_review"]
             or proposal.get("reviewed_csv_sha256") != digest
             or proposal.get("manual_review_and_separate_commit_required") is not True
-            or proposal.get("provider_requests") != 0
-            or proposal.get("owg_writes") != 0
+            or type(proposal.get("provider_requests")) is not int
+            or proposal["provider_requests"] != 0
+            or type(proposal.get("owg_writes")) is not int
+            or proposal["owg_writes"] != 0
             or proposal.get("checkpoint_advanced") is not False
             or proposal.get("automatic_retry_allowed") is not False):
         raise ReceiptError("Invalid or concurrent checkpoint review preflight")
