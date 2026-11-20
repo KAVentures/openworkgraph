@@ -1325,6 +1325,12 @@ class CompleteSourceCohortTests(unittest.TestCase):
         self.assertEqual(score["source_events_with_false_links"], 1)
         self.assertEqual(score["source_event_false_link_rate"], 0.25)
         self.assertEqual(score["per_window_counts"]["current"]["false_link_events"], 1)
+        metrics = score["per_window_metrics"]["current"]
+        self.assertAlmostEqual(metrics["precision"], 2 / 3)
+        self.assertAlmostEqual(metrics["recall"], 2 / 3)
+        self.assertAlmostEqual(metrics["f1"], 2 / 3)
+        self.assertEqual(metrics["source_event_false_link_rate"], 0.25)
+        self.assertEqual(metrics["negative_false_link_rate"], 1.0)
         disagreements = {r["event_id"]: r for r in score["event_disagreements"]}
         self.assertEqual(set(disagreements), {"b-between", "missed"})
         self.assertTrue(disagreements["b-between"]["explicit_negative_event"])
@@ -1350,6 +1356,8 @@ class CompleteSourceCohortTests(unittest.TestCase):
         self.assertIsNone(score["negative_false_link_rate"])
         self.assertEqual(score["source_events_with_false_links"], 1)
         self.assertEqual(score["source_event_false_link_rate"], 1.0)
+        self.assertIsNone(score["per_window_metrics"]["current"]["negative_false_link_rate"])
+        self.assertEqual(score["per_window_metrics"]["current"]["source_event_false_link_rate"], 1.0)
         self.assertEqual(score["per_window_counts"]["current"]["false_link_events"], 1)
         self.assertEqual(score["false_positive_pairs"], 1)
         self.assertFalse(score["held_out_verified"])
