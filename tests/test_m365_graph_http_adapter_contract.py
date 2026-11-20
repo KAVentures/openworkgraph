@@ -710,17 +710,21 @@ def test_real_graph_review_to_authenticated_owg_append_contract(tmp_path):
         return {"log": {"log_id": log_id}, "added_events": 1,
                 "duplicate_events_skipped": 0, "rejected_events": 0, "batch": 2}
 
+    # A deletion marker is review evidence, not an appendable OWG event.
+    # The adapter must inspect the target without issuing a POST.
     with (patch.object(owg, "_inventory",
-                       side_effect=[inventory(1), inventory(2)]),
+                       return_value=inventory(1)) as inventory_read,
           patch.object(owg, "_read_json", side_effect=second_post)):
         second_receipt = owg.append_verified(
             **scope_args, candidate=next_candidate, csv_path=next_csv,
             log_id=log_id, confirm_log_id=log_id, port=8765,
             session="s" * 24, consent_local_read=True,
             consent_local_append=True, opener=object())
-    assert second_receipt["status"] == "verified"
+    assert second_receipt["status"] == "verified_empty"
+    assert second_receipt["events_before"] == second_receipt["events_after"] == 1
     assert second_receipt["csv_sha256"] == second_review["csv_sha256"]
-    assert len(second_posts) == 1
+    inventory_read.assert_called_once()
+    assert second_posts == []
     assert checkpoint.inspect_checkpoint(
         **scope_args, ledger_dir=ledger,
         consent_local_read=True)["generation"] == 1
