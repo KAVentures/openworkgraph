@@ -2130,17 +2130,30 @@
             resetHandoff("Review submitted; outcome may be unknown until the latest revision is reopened. Reinspect before another decision.");
             $("handoffConsent").checked=false;
           }
-          const reviewResult=await call(
-            "/v1/human/processes/" + record.workflow_id + "/reviews",
-            {
-              revision: record.revision,
-              content_sha256: record.content_sha256,
-              expected_review_number: reviewSelection.your_review_number,
-              decision,
-              comment: confirmedComment,
-              user_confirmed: true,
-            },
-          );
+          let reviewResult;
+          try {
+            reviewResult=await call(
+              "/v1/human/processes/" + encodeURIComponent(record.workflow_id) + "/reviews",
+              {
+                revision: record.revision,
+                content_sha256: record.content_sha256,
+                expected_review_number: reviewSelection.your_review_number,
+                decision,
+                comment: confirmedComment,
+                user_confirmed: true,
+              },
+            );
+          } catch (error) {
+            // A rejected or interrupted POST can still have been committed.
+            // Never leave a reusable confirmation that permits blind retry.
+            if (reviewIdentity===identityGeneration &&
+                reviewCredential===credential && selected===reviewSelection) {
+              $("reviewConfirm").checked=false;
+              $("reviewOutcome").textContent=
+                "Review submission outcome is uncertain. Reopen the latest authorized revision and inspect the recorded decision before submitting again.";
+            }
+            throw error;
+          }
           if(reviewIdentity!==identityGeneration||reviewCredential!==credential||
              selected!==reviewSelection)return;
           // A completed decision changes the review state/number. The inspected
