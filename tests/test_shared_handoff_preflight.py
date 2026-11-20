@@ -205,7 +205,7 @@ def test_successful_review_consumes_inspected_handoff_before_render():
     assert '$("handoffConsent").checked=false;' in block
     assert block.index('resetHandoff("Review submitted; outcome may be unknown') < block.index('const reviewResult=await call(')
     assert block.index('selected!==reviewSelection)return;') < block.index('render(reviewResult);')
-    assert block.index('render(reviewResult);') < block.index('note(\n            "Design review recorded')
+    assert block.index('render(reviewResult);') < block.index('note("Design review acknowledged')
 
 
 def test_handoff_recovery_reopens_latest_using_authenticated_gateway_and_requires_new_consent():
@@ -288,3 +288,15 @@ def test_review_acknowledgment_is_revision_pinned_and_not_execution_receipt():
     assert 'Human design review only; no agent handoff or execution occurred.' in block
     assert 'revision reference could not be verified' in block
     assert block.index("render(reviewResult);") < block.index('$("reviewOutcome").textContent =')
+
+
+def test_review_mismatched_gateway_response_never_reports_success():
+    """A successful HTTP POST with mismatched revision is an unknown outcome."""
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split("async function review(decision) {", 1)[1].split('$("approve").onclick', 1)[0]
+    assert 'reviewResult?.process?.workflow_id===record.workflow_id' in block
+    assert 'reviewResult.process.revision===record.revision' in block
+    assert 'reviewResult.process.content_sha256===record.content_sha256' in block
+    assert 'Review outcome unverified. Reopen the latest authorized revision' in block
+    assert 'Design review acknowledged against the exact revision and content hash.' in block
+    assert 'Design review recorded against the exact revision and content hash.' not in block
