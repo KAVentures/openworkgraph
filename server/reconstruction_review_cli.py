@@ -537,6 +537,13 @@ def score_source_event_cohort(response: dict[str, Any], source_labels: list[dict
         raise ValueError("source inventory omits surfaced prediction events")
     tp = fp = fn = missed_events = negative_events = contaminated_negative_events = false_link_events = 0
     per_window: dict[str, dict[str, int]] = {}
+    # Separate ambiguous multi-pair predictions from single-pair predictions
+    # and source events the engine never surfaced. This exposes contamination
+    # hidden by aggregate micro scores without claiming independent labels.
+    per_prediction_status: dict[str, dict[str, int]] = {
+        name: {"events": 0, "tp": 0, "fp": 0, "fn": 0, "false_link_events": 0}
+        for name in ("ambiguous_multiple_pairs", "single_pair", "no_prediction")
+    }
     disagreements: list[dict[str, Any]] = []
     for key, expected in sorted(truth.items()):
         predicted = predictions.get(key, set())
@@ -545,6 +552,14 @@ def score_source_event_cohort(response: dict[str, Any], source_labels: list[dict
         fp += len(extra)
         fn += len(missing)
         false_link_events += bool(extra)
+        status = ("no_prediction" if key not in predictions else
+                  "ambiguous_multiple_pairs" if len(predicted) > 1 else "single_pair")
+        status_counts = per_prediction_status[status]
+        status_counts["events"] += 1
+        status_counts["tp"] += len(correct)
+        status_counts["fp"] += len(extra)
+        status_counts["fn"] += len(missing)
+        status_counts["false_link_events"] += bool(extra)
         missed_events += bool(expected and not predicted)
         negative_events += not expected
         contaminated_negative_events += bool(not expected and predicted)
@@ -590,6 +605,19 @@ def score_source_event_cohort(response: dict[str, Any], source_labels: list[dict
         "f1": 2 * precision * recall / (precision + recall) if precision + recall else 0.0,
         "per_window_counts": per_window,
         "per_window_metrics": per_window_metrics,
+        "per_prediction_status_metrics": {
+            name: {
+                **counts,
+                "precision": counts["tp"] / (counts["tp"] + counts["fp"])
+                if counts["tp"] + counts["fp"] else 0.0,
+                "recall": counts["tp"] / (counts["tp"] + counts["fn"])
+                if counts["tp"] + counts["fn"] else 0.0,
+                "false_link_event_rate": (
+                    counts["false_link_events"] / counts["events"] if counts["events"] else None
+                ),
+            }
+            for name, counts in per_prediction_status.items()
+        },
         "event_disagreements": disagreements,
         "event_disagreements_are_label_comparisons_not_confirmed_cases": True,
         "source_events_with_false_links": false_link_events,
