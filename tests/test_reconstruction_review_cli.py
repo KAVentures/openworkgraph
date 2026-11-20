@@ -1380,6 +1380,23 @@ class CompleteSourceCohortTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "reused across windows"):
             score_source_event_cohort(source, labels)
 
+    def test_source_inventory_rejects_fabricated_and_noncanonical_windows(self):
+        from server.reconstruction_review_cli import score_source_event_cohort
+        source = payload([pair("A", "F", ["observed"])])
+        candidate = build_review_queue(source)["event_reviews"][0]["candidate_resource_pairs"][0]
+        observed = {"window": "current", "event_id": "observed",
+                    "true_resource_pairs": [candidate]}
+        for invalid in ("arbitrary", "earlier:tomorrow", "earlier:2026-11-01T09:00:00Z",
+                        "earlier:2026-11-01T09:00:00", "earlier:2026-11-01T10:00:00+01:00"):
+            with self.subTest(window=invalid), self.assertRaisesRegex(ValueError, "noncanonical source event window"):
+                score_source_event_cohort(source, [observed, {
+                    "window": invalid, "event_id": "missed", "true_resource_pairs": [candidate]}])
+        valid = score_source_event_cohort(source, [observed, {
+            "window": "earlier:2026-11-01T09:00:00+00:00",
+            "event_id": "missed", "true_resource_pairs": [candidate]}])
+        self.assertEqual(valid["false_negative_pairs"], 1)
+        self.assertFalse(valid["held_out_verified"])
+
     def test_truncated_source_cannot_be_scored(self):
         from server.reconstruction_review_cli import score_source_event_cohort
         source = payload([pair("A", "F", ["e1"])])
