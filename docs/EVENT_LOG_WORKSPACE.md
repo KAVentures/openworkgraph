@@ -2515,7 +2515,15 @@ same case filter as the alignment. Activities appear too: a case with an extra o
 deviates because of that step. These are associations, not causes.
 
 `POST /v1/event-logs/{log_id}/petri-net-deviation-causes` with the PNML file as the body, plus the
-case-filter parameters. Root-cause analysis also accepts the outcome `variant_in` with a list of
+case-filter parameters.
+
+**Download non-fitting cases (CSV)** lists every case that does not fit the net, one row each, for
+follow-up in another tool: case ID, its activities, alignment fitness, the steps it added and the
+steps it skipped. Cells starting with a formula character are prefixed with `'` so the file is safe
+to open in a spreadsheet; at most 200,000 cases are written, and cases too long to align are left
+out and counted in the `X-OWG-Non-Fitting` header.
+`POST /v1/event-logs/{log_id}/petri-net-alignments/cases.csv` with the PNML file as the body, plus
+the case-filter parameters. The net is not stored. Root-cause analysis also accepts the outcome `variant_in` with a list of
 paths when called directly. Agents use `get_process_deviation_causes` on the discovered net.
 
 ## Temporal profile

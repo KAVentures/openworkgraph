@@ -31,6 +31,7 @@
   FILTERED.add('petri-net-alignments');
   FILTERED.add('variant.pnml');
   FILTERED.add('petri-net-deviation-causes');
+  FILTERED.add('petri-net-alignments/cases.csv');
 
   const el=(tag,text,cls)=>{
     const node=document.createElement(tag);
@@ -4384,6 +4385,16 @@
           more.appendChild(table(['Variant','Cases','Fitness','Explanation'],r.non_fitting_variants.map(v=>[v.path.join(' → '),Number(v.cases).toLocaleString(),pct(v.fitness),v.alignment.map(step).join(' → ')])));aligned.appendChild(more);}
         aligned.appendChild(el('div',r.caveat,'muted'));
         if(r.non_fitting_variants.length){
+          const download=button('Download non-fitting cases (CSV)','secondary');download.id='owgPetriCasesCsv';
+          download.onclick=async()=>{
+            download.disabled=true;
+            try{const response=await api(logPath('petri-net-alignments/cases.csv',{}),{method:'POST',headers:{'Content-Type':'application/xml'},body:net.body});
+              const blob=await response.blob();const link=document.createElement('a');link.href=URL.createObjectURL(blob);
+              link.download=(state.logId||'log')+'-non-fitting-cases.csv';document.body.appendChild(link);link.click();link.remove();
+              setTimeout(()=>URL.revokeObjectURL(link.href),1000);}
+            catch(error){status.textContent=error.message;}
+            finally{download.disabled=false;}};
+          aligned.appendChild(download);
           const why=button('What goes with these deviations?','secondary');why.id='owgPetriCauses';
           const causes=el('div');causes.id='owgPetriCausesResults';causes.setAttribute('role','status');causes.setAttribute('aria-live','polite');
           aligned.append(why,causes);

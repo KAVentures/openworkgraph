@@ -20,7 +20,7 @@ const path=require('node:path');
      await new Promise(resolve=>setTimeout(resolve,200));
    }if(!ready)throw new Error('Server not ready: '+logs);
    browser=await chromium.launch({...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE}:{}),headless:true,args:['--no-sandbox']});
-   const context=await browser.newContext();const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
+   const context=await browser.newContext({acceptDownloads:true});const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
    const session=(await fs.readFile(path.join(scratch,'session.txt'),'utf8')).trim();
    await page.goto(base+'/#session='+session);await page.locator('[role=tab][data-tab=evidence]').click();
    // 30 orders: Register, Check, Pay, Close; 6 skip Check.
@@ -63,6 +63,9 @@ const path=require('node:path');
    // Cases i%5===0 skip Check; they alternate months, so each month has 3 non-fitting cases of 15.
    const months=await page.locator('#owgPetriAlignMonths').textContent();
    assert(months.includes('2024-011580%97.4%')&&months.includes('2024-021580%97.4%'),months);
+   const [csvDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#owgPetriCasesCsv').click()]);
+   const csvText=await fs.readFile(await csvDownload.path(),'utf8');
+   assert.equal(csvText.trim().split('\n').length,7,csvText);assert(csvText.includes('Register > Pay > Close')&&csvText.includes(',Check'),csvText);
    // Root causes of the deviation: the six cases without Check are the deviating ones.
    await page.locator('#owgPetriCauses').click();
    await page.locator('#owgPetriCausesResults').filter({hasText:'6 of 30 cases deviate'}).waitFor();
