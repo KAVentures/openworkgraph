@@ -2638,6 +2638,15 @@ out and counted in the `X-OWG-Non-Fitting` header.
 the case-filter parameters. The net is not stored. Root-cause analysis also accepts the outcome `variant_in` with a list of
 paths when called directly. Agents use `get_process_deviation_causes` on the discovered net.
 
+**Tag the non-fitting cases** adds a case tag (default `off-model`) to every case that does not fit
+the net, within the case filter. The tag then works like any other: filter every analysis to those
+cases, compare them with the rest, or save them as a new log. Cases are chosen by their exact path;
+the 500 most common non-fitting paths are covered, and cases on rarer ones are counted as not
+tagged. Tagging again with the same tag does not duplicate it.
+`POST /v1/event-logs/{log_id}/petri-net-alignments/tag?new_tag=…&note=…` with the PNML file as the
+body, plus the case-filter parameters (`tag` there is the filter for cases already tagged, so the
+new tag is `new_tag`). A tag is the analyst's label, not a finding.
+
 ## Temporal profile
 
 **Temporal profile** (as in PM4Py and ProM) learns the usual time between every ordered pair of

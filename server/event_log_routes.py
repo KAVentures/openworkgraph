@@ -1061,6 +1061,31 @@ async def event_log_non_fitting_cases_csv(request: Request, log_id: str,
                              f"truncated={str(meta['truncated']).lower()}"})
 
 
+@router.post("/v1/event-logs/{log_id}/petri-net-alignments/tag")
+async def event_log_tag_non_fitting_cases(request: Request, log_id: str,
+                                          new_tag: str = Query(min_length=1, max_length=60),
+                                          note: str = Query(default="", max_length=500),
+                                          case_type: str | None = Query(default=None, max_length=200),
+                                          cohort: dict[str, Any] = Depends(_case_filter)):
+    """Tag every case that does not fit the PNML net sent as the body (within the case filter).
+
+    ``new_tag`` names the tag to add; ``tag`` is the case filter's own parameter (cases already tagged)."""
+    from . import event_log_alignments as aligned
+    from . import event_log_petri_replay as petri
+    _require_dashboard(request)
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > petri.MAX_BYTES:
+            raise HTTPException(413, "the Petri net file is larger than 2 MB")
+    try:
+        result = await run_in_threadpool(aligned.tag_non_fitting_cases, log_id, bytes(body), new_tag, case_type,
+                                         note=note, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/v1/event-logs/{log_id}/model-quality")
 def event_log_model_quality(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                             levels: str | None = Query(default=None, max_length=100),
