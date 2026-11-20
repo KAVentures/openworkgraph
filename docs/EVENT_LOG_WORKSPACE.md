@@ -2071,6 +2071,16 @@ which filter was applied and how many cases the log had before filtering. In the
 overview shows "Filtered: N of M cases"; sections not in that list still use every case, and the
 filter note says so.
 
+**Time between the two steps.** A rule where one step follows the other can also limit the time
+between them: **after at least** some hours and/or **within** some hours (`min_hours` inclusive and
+`max_hours` exclusive in the rule, for example
+`{"from": "Submit", "to": "Approve", "mode": "eventual", "min_hours": 48}` for approvals that took
+two days or more). For *eventually*, the time runs from the first occurrence of the first activity to
+the next occurrence of the second after it; for *directly*, it is the first place where the second
+activity comes right after the first. A case where the step never follows matches no time limit.
+Limits cannot be set on *never* rules. Saved filters keep them. This is the throughput filter on a
+segment in Disco and Celonis.
+
 **Case attributes in the filter.** The dashboard's case filter also takes one case-attribute value,
 written `name=value` (for example `Region=EU`), and a numeric range on one case attribute (from,
 inclusive, and/or below, exclusive). These are the `attribute` and `attribute_range` query
