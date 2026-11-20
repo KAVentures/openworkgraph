@@ -2137,9 +2137,16 @@
             $("reviewOutcome").textContent =
               "Review response received, but the revision reference could not be verified. Reopen the latest authorized revision before relying on this outcome.";
           }
-          note(
-            "Design review recorded against the exact revision and content hash.",
-          );
+          // A transport-level success is not proof that the Gateway returned
+          // the submitted revision. Never announce a recorded decision when
+          // the response is malformed, stale, or refers to another process.
+          if (reviewResult?.process?.workflow_id===record.workflow_id &&
+              reviewResult.process.revision===record.revision &&
+              reviewResult.process.content_sha256===record.content_sha256) {
+            note("Design review acknowledged against the exact revision and content hash.");
+          } else {
+            note("Review outcome unverified. Reopen the latest authorized revision before taking further action.");
+          }
         }
         $("approve").onclick = () => run(() => review("reviewed_design"));
         $("changes").onclick = () => run(() => review("changes_requested"));
