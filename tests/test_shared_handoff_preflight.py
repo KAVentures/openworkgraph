@@ -329,5 +329,17 @@ def test_concurrent_review_mutations_are_serialized_and_lost_response_stays_fail
     assert block.index("reviewMutationInFlight = true;") < block.index('"/reviews"')
     assert block.index("reviewMutationInFlight = false;") > block.index('"/reviews"')
     assert 'resetHandoff("Review submitted; outcome may be unknown' in block
-    assert block.index('resetHandoff("Review submitted; outcome may be unknown') < block.index("reviewMutationInFlight = true;")
+    assert block.index("reviewMutationInFlight = true;") < block.index('resetHandoff("Review submitted; outcome may be unknown')
     assert '$("handoffConsent").checked=false;' in block
+
+
+def test_review_success_status_requires_verified_actor_acknowledgment():
+    """An HTTP 200 alone must never announce a completed human review."""
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split("async function review(decision) {", 1)[1].split('$("approve").onclick', 1)[0]
+    assert 'reviewResult.your_actor_id===reviewSelection.your_actor_id' in block
+    assert 'entry.reviewer_actor_id===reviewSelection.your_actor_id' in block
+    assert 'entry.decision===decision' in block
+    assert 'Review response received; verifying acknowledgment.' in block
+    assert 'Design review acknowledged. Reopen and reinspect' in block
+    assert block.index('if(!acknowledged){') < block.index('Design review acknowledged. Reopen and reinspect')
