@@ -553,6 +553,20 @@ def score_source_event_cohort(response: dict[str, Any], source_labels: list[dict
             })
     precision = tp / (tp + fp) if tp + fp else 0.0
     recall = tp / (tp + fn) if tp + fn else 0.0
+    per_window_metrics = {}
+    for window, counts in sorted(per_window.items()):
+        wp = counts["tp"] / (counts["tp"] + counts["fp"]) if counts["tp"] + counts["fp"] else 0.0
+        wr = counts["tp"] / (counts["tp"] + counts["fn"]) if counts["tp"] + counts["fn"] else 0.0
+        per_window_metrics[window] = {
+            **counts,
+            "precision": wp, "recall": wr,
+            "f1": 2 * wp * wr / (wp + wr) if wp + wr else 0.0,
+            "source_event_false_link_rate": counts["false_link_events"] / counts["events"],
+            "negative_false_link_rate": (
+                counts["negative_false_link_events"] / counts["negative_events"]
+                if counts["negative_events"] else None
+            ),
+        }
     return {
         "source_events_labeled": len(truth),
         "source_events_without_surfaced_predictions": len(set(truth) - set(predictions)),
@@ -561,6 +575,7 @@ def score_source_event_cohort(response: dict[str, Any], source_labels: list[dict
         "precision": precision, "recall": recall,
         "f1": 2 * precision * recall / (precision + recall) if precision + recall else 0.0,
         "per_window_counts": per_window,
+        "per_window_metrics": per_window_metrics,
         "event_disagreements": disagreements,
         "event_disagreements_are_label_comparisons_not_confirmed_cases": True,
         "source_events_with_false_links": false_link_events,
