@@ -61,7 +61,12 @@ class NextRoundTests(unittest.TestCase):
                     "proposed_generation": 3,
                     "checkpoint_predecessor_generation": 2,
                     "reviewed_event_snapshots": 3,
-                    "removal_markers_for_review": 1}
+                    "removal_markers_for_review": 1,
+                    "reviewed_csv_sha256": "c" * 64,
+                    "manual_review_and_separate_commit_required": True,
+                    "provider_requests": 0, "owg_writes": 0,
+                    "checkpoint_advanced": False,
+                    "automatic_retry_allowed": False}
         with patch.object(flow, "inspect_checkpoint", return_value={
                 "generation": 2, "candidate_sha256": SHA, "log_id": "log"}), \
              patch.object(flow.cycle, "extract", side_effect=extracted), \
@@ -88,7 +93,12 @@ class NextRoundTests(unittest.TestCase):
                                         "proposed_generation": 5,
                                         "checkpoint_predecessor_generation": 2,
                                         "reviewed_event_snapshots": 1,
-                                        "removal_markers_for_review": 0}), \
+                                        "removal_markers_for_review": 0,
+                                        "reviewed_csv_sha256": "c" * 64,
+                                        "manual_review_and_separate_commit_required": True,
+                                        "provider_requests": 0, "owg_writes": 0,
+                                        "checkpoint_advanced": False,
+                                        "automatic_retry_allowed": False}), \
              patch.object(flow.transaction, "execute") as commit:
             with self.assertRaisesRegex(ReceiptError, "concurrent"):
                 flow.prepare(**inputs())
@@ -130,6 +140,34 @@ class NextRoundTests(unittest.TestCase):
             with self.assertRaisesRegex(ReceiptError, "count mismatch"):
                 flow.prepare(**inputs())
             commit.assert_not_called()
+
+    def test_untrusted_preflight_cannot_claim_review_ready_with_wrong_digest_or_side_effects(self):
+        base = {"status": "review_ready_for_explicit_commit",
+                "proposed_generation": 3, "checkpoint_predecessor_generation": 2,
+                "reviewed_event_snapshots": 1, "removal_markers_for_review": 0,
+                "reviewed_csv_sha256": "c" * 64,
+                "manual_review_and_separate_commit_required": True,
+                "provider_requests": 0, "owg_writes": 0,
+                "checkpoint_advanced": False, "automatic_retry_allowed": False}
+        for change in ({"reviewed_csv_sha256": "d" * 64},
+                       {"manual_review_and_separate_commit_required": False},
+                       {"provider_requests": 1}, {"owg_writes": 1},
+                       {"checkpoint_advanced": True},
+                       {"automatic_retry_allowed": True}):
+            with self.subTest(change=change), \\
+                 patch.object(flow, "inspect_checkpoint", return_value={
+                     "generation": 2, "candidate_sha256": SHA, "log_id": "log"}), \\
+                 patch.object(flow.cycle, "extract", return_value={
+                     "event_snapshots": 1, "removal_markers_for_review": 0}), \\
+                 patch.object(flow.cycle, "review", return_value={
+                     "csv_sha256": "c" * 64, "event_snapshots": 1,
+                     "removal_markers_for_review": 0}), \\
+                 patch.object(flow.transaction, "preflight",
+                              return_value={**base, **change}), \\
+                 patch.object(flow.transaction, "execute") as commit:
+                with self.assertRaisesRegex(ReceiptError, "Invalid"):
+                    flow.prepare(**inputs())
+                commit.assert_not_called()
 
     def test_cli_refusal_is_non_retryable(self):
         with patch.object(flow, "prepare", side_effect=ReceiptError("private")):
