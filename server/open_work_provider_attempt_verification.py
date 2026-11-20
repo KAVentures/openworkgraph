@@ -39,6 +39,7 @@ def verify_provider_attempt(
     read_events: Callable[[], dict[str, Any]],
     now: datetime | None = None,
     max_age_seconds: int = 300,
+    recheck_authorization: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """Return a conservative provider-operation verdict, never business success.
 
@@ -58,10 +59,25 @@ def verify_provider_attempt(
         return {**unknown, "reason": "invalid_clock"}
     if not callable(read_events):
         return {**unknown, "reason": "invalid_provider_reader"}
+    if recheck_authorization is not None:
+        if not callable(recheck_authorization):
+            return {**unknown, "reason": "invalid_authorization_guard"}
+        try:
+            if recheck_authorization() is not True:
+                return {**unknown, "reason": "authorization_revoked"}
+        except Exception:
+            return {**unknown, "reason": "authorization_unavailable"}
     try:
         payload = read_events()
     except Exception:
         return {**unknown, "reason": "provider_unavailable"}
+    # Revalidate after provider I/O: consent or grants may be revoked mid-read.
+    if recheck_authorization is not None:
+        try:
+            if recheck_authorization() is not True:
+                return {**unknown, "reason": "authorization_revoked"}
+        except Exception:
+            return {**unknown, "reason": "authorization_unavailable"}
     if not isinstance(payload, dict) or payload.get("revoked") is True:
         return {**unknown, "reason": "source_revoked_or_invalid"}
     if payload.get("complete") is not True or payload.get("authenticated") is not True:
