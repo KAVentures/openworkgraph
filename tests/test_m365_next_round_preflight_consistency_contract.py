@@ -98,3 +98,42 @@ def test_malformed_adapter_evidence_fails_before_transaction_preflight(
         )
     preflight.assert_not_called()
     append.assert_not_called()
+
+
+@pytest.mark.parametrize("source_counts,review_counts", [
+    ((3, 0), (2, 0)),
+    ((2, 1), (2, 0)),
+    ((2, 0), (2, 1)),
+])
+def test_extraction_review_count_drift_refused_before_transaction_preflight(
+        source_counts, review_counts, tmp_path, monkeypatch):
+    """No transaction proposal may be produced from disagreeing provider evidence."""
+    monkeypatch.delenv("OWG_M365_AUDIT_DIR", raising=False)
+    digest = "a" * 64
+    predecessor = {"generation": 1, "candidate_sha256": digest, "log_id": "log"}
+    extracted = dict(zip(("event_snapshots", "removal_markers_for_review"), source_counts))
+    checked = {"csv_sha256": "b" * 64, **dict(zip(
+        ("event_snapshots", "removal_markers_for_review"), review_counts))}
+    with (
+        patch.object(operator, "inspect_checkpoint", return_value=predecessor),
+        patch.object(operator.cycle, "extract", return_value=extracted),
+        patch.object(operator.cycle, "review", return_value=checked),
+        patch.object(operator.transaction, "preflight") as preflight,
+        patch.object(operator.transaction, "execute") as append,
+        pytest.raises(ReceiptError, match="count mismatch"),
+    ):
+        operator.prepare(
+            tenant="tenant", mailbox="mailbox", folder="folder",
+            log_id="log", confirm_log_id="log", grant_file=tmp_path / "grant",
+            previous_candidate=tmp_path / "old.json",
+            previous_csv=tmp_path / "old.csv",
+            receipt_file=tmp_path / "receipt", journal_dir=tmp_path / "journal",
+            handoff_dir=tmp_path / "handoff", ledger_dir=tmp_path / "ledger",
+            successor_label="next", output=tmp_path / "new.csv",
+            candidate=tmp_path / "new.json", expected_generation=1,
+            expected_previous_candidate_sha256=digest, token="token",
+            consent_local_read=True, consent_delta_read=True,
+            consent_local_export=True, confirm_previous_removals_reviewed=True,
+        )
+    preflight.assert_not_called()
+    append.assert_not_called()
