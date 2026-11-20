@@ -269,9 +269,9 @@ class ExplicitAnnotationScoreTests(unittest.TestCase):
                    "true_resource_pairs": row["candidate_resource_pairs"] if row["event_id"] == "old" else []}
                   for row in rows]
         score = score_review_annotations(data, labels)
-        self.assertEqual(score["per_window_counts"]["current"], {"tp": 0, "fp": 1, "fn": 0, "events": 1})
+        self.assertEqual(score["per_window_counts"]["current"], {"tp": 0, "fp": 1, "fn": 0, "events": 1, "false_link_events": 1})
         self.assertEqual(score["per_window_counts"]["earlier:2026-10-12T09:00:00+00:00"],
-                         {"tp": 1, "fp": 0, "fn": 0, "events": 1})
+                         {"tp": 1, "fp": 0, "fn": 0, "events": 1, "false_link_events": 0})
         self.assertFalse(score["cross_case_contamination_measured"])
         disagreements = score["event_disagreements"]
         self.assertEqual(len(disagreements), 1)
