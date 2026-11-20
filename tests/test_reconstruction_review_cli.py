@@ -1322,6 +1322,9 @@ class CompleteSourceCohortTests(unittest.TestCase):
                           score["false_negative_pairs"]), (2, 1, 1))
         self.assertEqual(score["per_window_counts"]["current"]["events"], 4)
         self.assertEqual(score["per_window_counts"]["current"]["negative_false_link_events"], 1)
+        self.assertEqual(score["source_events_with_false_links"], 1)
+        self.assertEqual(score["source_event_false_link_rate"], 0.25)
+        self.assertEqual(score["per_window_counts"]["current"]["false_link_events"], 1)
         disagreements = {r["event_id"]: r for r in score["event_disagreements"]}
         self.assertEqual(set(disagreements), {"b-between", "missed"})
         self.assertTrue(disagreements["b-between"]["explicit_negative_event"])
@@ -1329,6 +1332,26 @@ class CompleteSourceCohortTests(unittest.TestCase):
         self.assertTrue(disagreements["missed"]["prediction_missing"])
         self.assertEqual(len(disagreements["missed"]["false_negative_resource_pairs"]), 1)
         self.assertTrue(score["event_disagreements_are_label_comparisons_not_confirmed_cases"])
+        self.assertFalse(score["held_out_verified"])
+
+    def test_false_link_on_positive_event_is_not_hidden_by_negative_only_rate(self):
+        from server.reconstruction_review_cli import score_source_event_cohort
+        source = payload([
+            pair("case-A", "file-A", ["shared"]),
+            pair("case-B", "file-B", ["shared"]),
+        ])
+        row = build_review_queue(source)["event_reviews"][0]
+        # The event really supports case A; case B is an erroneous extra link.
+        score = score_source_event_cohort(source, [
+            {"window": "current", "event_id": "shared",
+             "true_resource_pairs": row["candidate_resource_pairs"][:1]}
+        ])
+        self.assertEqual(score["negative_source_events"], 0)
+        self.assertIsNone(score["negative_false_link_rate"])
+        self.assertEqual(score["source_events_with_false_links"], 1)
+        self.assertEqual(score["source_event_false_link_rate"], 1.0)
+        self.assertEqual(score["per_window_counts"]["current"]["false_link_events"], 1)
+        self.assertEqual(score["false_positive_pairs"], 1)
         self.assertFalse(score["held_out_verified"])
 
     def test_truncated_source_cannot_be_scored(self):
