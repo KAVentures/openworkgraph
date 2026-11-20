@@ -1174,6 +1174,27 @@ def event_log_activity_profile(request: Request, log_id: str,
     return _respond(profile.activity_profile, log_id, profile_activity, case_type, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/breakdown/dimensions")
+def event_log_breakdown_dimensions(request: Request, log_id: str,
+                                   case_type: str | None = Query(default=None, max_length=200)):
+    """The dimensions a breakdown table can use in this log."""
+    from . import event_log_breakdown as breakdown
+    _require_dashboard(request)
+    return _respond(breakdown.dimensions, log_id, case_type)
+
+
+@router.get("/v1/event-logs/{log_id}/breakdown")
+def event_log_breakdown(request: Request, log_id: str, rows: str = Query(min_length=1, max_length=220),
+                        columns: str | None = Query(default=None, max_length=220),
+                        with_activity: str | None = Query(default=None, min_length=1, max_length=500),
+                        case_type: str | None = Query(default=None, max_length=200),
+                        cohort: dict = Depends(_case_filter)):
+    """Case KPIs by one or two dimensions, as a pivot table."""
+    from . import event_log_breakdown as breakdown
+    _require_dashboard(request)
+    return _respond(breakdown.breakdown, log_id, rows, columns, case_type, with_activity=with_activity, cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/variants")
 def event_log_variants(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                        limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):

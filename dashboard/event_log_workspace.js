@@ -32,6 +32,7 @@
   FILTERED.add('due-dates');
   FILTERED.add('story');
   FILTERED.add('activity-profile');
+  FILTERED.add('breakdown');
   FILTERED.add('next-steps');
   FILTERED.add('petri-net-replay');
   FILTERED.add('petri-net-alignments');
@@ -843,6 +844,7 @@
     results.appendChild(spectrumSection());
     results.appendChild(heuristicsSection());
     results.appendChild(activityProfileSection(names));
+    results.appendChild(breakdownSection(names));
     results.appendChild(pathExplorerSection());
     results.appendChild(dueDatesSection(names));
     results.appendChild(unusualCasesSection());
@@ -4010,6 +4012,61 @@
         const more=document.createElement('details');more.appendChild(el('summary','All arrows'));
         more.appendChild(table(['From','To','Transitions','Dependency','Kept because'],arrows.map(e=>[e.from,e.to,Number(e.transition_count).toLocaleString(),String(e.dependency),({threshold:'above threshold',best_connection:'best connection',short_loop:'short loop'})[e.kept_by]||e.kept_by])));
         out.append(more,el('div',r.note,'muted'));
+      }catch(error){statusLine.textContent=error.message;}
+      finally{run.disabled=false;}};
+    return box;
+  }
+
+  function breakdownSection(activityNames){
+    const box=section('Breakdown table');box.id='owgBreakdown';
+    box.appendChild(el('div','Case figures by one or two dimensions, like a pivot table: choose what goes in the rows and, optionally, the columns. Less common values are grouped as (other); cells with fewer than 5 cases are marked *.','muted'));
+    const builtIn=[['start_month','Month the case started'],['start_weekday','Weekday the case started'],['start_activity','First activity'],['end_activity','Last activity']];
+    const rowsPick=select('owgBreakdownRows',builtIn),colsPick=select('owgBreakdownColumns',[['','(none)'],...builtIn]);colsPick.value='end_activity';
+    const measures=[['cases','Cases'],['share','Share of cases'],['median_hours','Median duration'],['p90_hours','90th percentile duration'],['rework_rate','Share of cases with rework'],['events_per_case','Events per case'],['with_activity_share','Share doing an activity']];
+    const measurePick=select('owgBreakdownMeasure',measures);
+    const activityPick=select('owgBreakdownActivity',activityNames.slice(0,500).map(a=>[a,a]));
+    const activityField=field('Activity',activityPick);activityField.hidden=true;
+    measurePick.onchange=()=>{activityField.hidden=measurePick.value!=='with_activity_share';};
+    const run=button('Show breakdown','secondary');run.id='owgBreakdownRun';
+    const row=el('div',null,'row');row.style.alignItems='end';
+    row.append(field('Rows',rowsPick),field('Columns',colsPick),field('Figure',measurePick),activityField,run);
+    const statusLine=el('div',null,'muted');statusLine.id='owgBreakdownStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgBreakdownResults';
+    box.append(row,statusLine,out);
+    // Attribute dimensions are listed once the section exists; the built-in ones work without them.
+    const generation=state.generation;
+    getJSON(logPath('breakdown/dimensions',{})).then(r=>{
+      if(generation!==state.generation)return;
+      const extra=(r.dimensions||[]).filter(d=>d.dimension.includes(':')).map(d=>[d.dimension,d.label.charAt(0).toUpperCase()+d.label.slice(1)]);
+      if(!extra.length)return;
+      const keep=[rowsPick.value,colsPick.value];
+      setOptions(rowsPick,[...builtIn,...extra]);setOptions(colsPick,[['','(none)'],...builtIn,...extra]);
+      rowsPick.value=keep[0];colsPick.value=keep[1];
+    }).catch(()=>{});
+    const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
+    const hrs=x=>x===null||x===undefined?'—':(x<48?(Math.round(x*10)/10)+' h':(Math.round(x/24*10)/10)+' d');
+    const show={cases:x=>Number(x).toLocaleString(),share:pct,median_hours:hrs,p90_hours:hrs,rework_rate:pct,events_per_case:x=>String(Math.round(x*10)/10),with_activity_share:pct};
+    run.onclick=async()=>{
+      if(colsPick.value&&colsPick.value===rowsPick.value){statusLine.textContent='Choose two different dimensions.';out.replaceChildren();return;}
+      const measure=measurePick.value;
+      const params={rows:rowsPick.value};if(colsPick.value)params.columns=colsPick.value;
+      if(measure==='with_activity_share'){if(!activityPick.value){statusLine.textContent='Choose an activity.';return;}params.with_activity=activityPick.value;}
+      const generation=state.generation;run.disabled=true;statusLine.textContent='Grouping cases…';out.replaceChildren();
+      try{
+        const r=await getJSON(logPath('breakdown',params));
+        if(generation!==state.generation)return;
+        const fmt=show[measure],cols=r.columns?r.column_values:['All cases'];
+        const cell={};r.cells.forEach(c=>{cell[c.row+'\u0000'+c.column]=c;});
+        const values=r.cells.map(c=>c[measure]).filter(v=>v!==null&&v!==undefined),top=Math.max(...values,0);
+        const shown=c=>{if(!c)return '';const wrap=el('div');wrap.appendChild(el('span',fmt(c[measure])+(c.small?' *':'')));
+          if(top>0&&c[measure]!==null){const bar=el('div');bar.setAttribute('aria-hidden','true');bar.style.cssText='height:4px;background:currentColor;opacity:.35;margin-top:4px;width:'+Math.round(c[measure]/top*100)+'%';wrap.appendChild(bar);}
+          return wrap;};
+        const totals={};r.row_totals.forEach(t=>{totals[t.row]=t;});
+        const header=[r.rows.label.charAt(0).toUpperCase()+r.rows.label.slice(1),...(r.columns?cols:[]),'All'];
+        const body=r.row_values.map(v=>[v,...(r.columns?cols.map(c=>shown(cell[v+'\u0000'+c])):[]),shown(totals[v])]);
+        if(r.columns){const ct={};r.column_totals.forEach(t=>{ct[t.column]=t;});body.push(['All',...cols.map(c=>shown(ct[c])),shown(r.overall)]);}
+        statusLine.textContent=measures.find(m=>m[0]===measure)[1]+' by '+r.rows.label+(r.columns?' and '+r.columns.label:'')+', over '+Number(r.cases).toLocaleString()+' cases. Overall: '+fmt(r.overall[measure])+'.';
+        out.append(table(header,body),el('div',r.caveat,'muted'));
       }catch(error){statusLine.textContent=error.message;}
       finally{run.disabled=false;}};
     return box;
