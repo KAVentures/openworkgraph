@@ -817,3 +817,55 @@ def test_real_graph_adapter_two_rounds_each_require_fresh_candidate_review(tmp_p
             assert exported["checkpoint_advanced"] is False
     assert transport.requests == [first_url, first_cursor]
     assert json.loads((tmp_path / "round2.json").read_text())["cursor_url"] == second_cursor
+
+
+def test_authenticated_owg_append_refuses_revocation_after_inventory_read(tmp_path):
+    """Revocation between inventory and POST must not append or advance state."""
+    import os
+    from server import m365_outlook_delta as delta
+    from server import m365_outlook_owg_receipt as owg
+
+    grant = tmp_path / "grant.json"
+    scope = {"version": 1, "enabled": True, "consented": True,
+             "tenant_scope": "tenant", "mailbox_scope": "mailbox",
+             "folder_id": "folder"}
+    grant.write_text(json.dumps(scope))
+    os.chmod(grant, 0o600)
+    initial = delta._initial("folder")
+    cursor = ("https://graph.microsoft.com/v1.0/me/mailFolders/folder/"
+              "messages/delta?%24deltatoken=revocation")
+    transport = Transport(Response(initial, json.dumps({
+        "value": [{"id": "m1", "receivedDateTime": "2026-11-01T10:00:00Z",
+                   "lastModifiedDateTime": "2026-11-01T10:01:00Z",
+                   "isRead": False}],
+        "@odata.deltaLink": cursor,
+    }).encode()))
+    csv_path = tmp_path / "events.csv"
+    candidate = tmp_path / "candidate.json"
+    delta.export_delta(
+        tenant="tenant", mailbox="mailbox", folder_id="folder",
+        grant_file=grant, output=csv_path, candidate=candidate,
+        token="test-token", consent_read=True, consent_export=True,
+        opener=transport)
+    log_id = "log_" + "a" * 16
+    namespace = "m365_" + delta._scope("tenant", "mailbox", "folder")[:32]
+    inventory = [{"log_id": log_id, "source_format": "csv", "events": 0,
+                  "source_identity": {"namespaces": [{
+                      "source_namespace": namespace,
+                      "case_namespace": namespace}]}}]
+    def revoke_after_inventory(*_args, **_kwargs):
+        grant.write_text(json.dumps({**scope, "enabled": False}))
+        os.chmod(grant, 0o600)
+        return inventory
+
+    with (patch.object(owg, "_inventory", side_effect=revoke_after_inventory) as reads,
+          patch.object(owg, "_read_json") as posts):
+        with pytest.raises(delta.DeltaError):
+            owg.append_verified(
+                tenant="tenant", mailbox="mailbox", folder="folder",
+                grant_file=grant, candidate=candidate, csv_path=csv_path,
+                log_id=log_id, confirm_log_id=log_id, port=8765,
+                session="s" * 24, consent_local_read=True,
+                consent_local_append=True, opener=object())
+    reads.assert_called_once()
+    posts.assert_not_called()
