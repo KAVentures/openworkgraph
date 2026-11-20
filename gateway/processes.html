@@ -310,6 +310,7 @@
         <fieldset>
           <legend id="revisionReview">Revision review</legend>
           <p id="reviewState"></p>
+          <output id="reviewOutcome" role="status" aria-live="polite"></output>
           <div id="reviews"></div>
           <label
             >Review comment
@@ -1763,6 +1764,7 @@
           preview(data.process.process_model, $("design"));
           $("update").disabled = !data.permissions.edit;
           $("revise").disabled = !data.permissions.edit;
+          $("reviewOutcome").textContent = "";
           $("reviewConfirm").checked = false;
           $("comment").value = "";
           $("accessConfirm").checked = false;
@@ -2121,6 +2123,20 @@
           if (submittedInspectedHandoff)
             $("handoffStatus").textContent="Review decision recorded. Reopen and reinspect before another handoff.";
           render(reviewResult);
+          // Display only the Gateway's acknowledged, revision-pinned review
+          // result. This is a human design-review acknowledgment, not an
+          // agent execution receipt or a durable external-provider outcome.
+          if (reviewResult?.process?.workflow_id===record.workflow_id &&
+              reviewResult.process.revision===record.revision &&
+              reviewResult.process.content_sha256===record.content_sha256) {
+            $("reviewOutcome").textContent =
+              "Gateway acknowledged "+words(decision)+" for revision "+
+              record.revision+" · SHA-256 "+record.content_sha256+
+              ". Human design review only; no agent handoff or execution occurred.";
+          } else {
+            $("reviewOutcome").textContent =
+              "Review response received, but the revision reference could not be verified. Reopen the latest authorized revision before relying on this outcome.";
+          }
           note(
             "Design review recorded against the exact revision and content hash.",
           );
