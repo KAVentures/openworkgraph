@@ -73,3 +73,52 @@ def test_valid_explicit_utc_clock_and_age_still_verify_provider_only():
     result = check(lambda: payload(), max_age_seconds=300)
     assert result["status"] == "verified_provider_operation"
     assert result["customer_outcome"] == "unknown"
+
+
+def test_future_dated_snapshot_is_not_a_verified_provider_recheck():
+    # A provider or intermediary with a wrong clock must not confer
+    # verification authority using a snapshot from the future.
+    future = (NOW + timedelta(minutes=2)).isoformat()
+    assert check(lambda: payload(checked_at=future))["reason"] == "stale_source"
+    # Small ordinary clock skew remains supported.
+    near = (NOW + timedelta(seconds=20)).isoformat()
+    assert check(lambda: payload(checked_at=near))["status"] == "verified_provider_operation"
+
+
+def test_event_time_must_be_consistent_with_independent_provider_read():
+    base = payload()["events"][0]
+    before = (NOW - timedelta(minutes=2)).isoformat()
+    assert check(lambda: payload(events=[dict(base, occurred_at=before)]))["status"] == "verified_provider_operation"
+    for timestamp in ("not-a-time", "2026-11-06T11:00:00",
+                      (NOW + timedelta(seconds=1)).isoformat(),
+                      (NOW + timedelta(days=1)).isoformat()):
+        result = check(lambda timestamp=timestamp: payload(
+            events=[dict(base, occurred_at=timestamp)]))
+        assert result["reason"] == "invalid_event_time"
+        assert result["customer_outcome"] == "unknown"
+
+
+def test_grant_rechecked_after_provider_read():
+    checks = []
+    def guard():
+        checks.append(True)
+        return len(checks) == 1
+    result = check(lambda: payload(), recheck_authorization=guard)
+    assert result["reason"] == "authorization_revoked"
+    assert result["customer_outcome"] == "unknown"
+    assert len(checks) == 2
+
+
+def test_invalid_or_unavailable_grant_blocks_provider_read():
+    calls = []
+    def reader():
+        calls.append(True)
+        return payload()
+    assert check(reader, recheck_authorization=lambda: False)["reason"] == "authorization_revoked"
+    def unavailable():
+        raise OSError("grant store unavailable")
+    assert check(reader, recheck_authorization=unavailable)["reason"] == "authorization_unavailable"
+    assert check(reader, recheck_authorization=True)["reason"] == "invalid_authorization_guard"
+    assert calls == []
+    assert check(reader, recheck_authorization=lambda: True)["status"] == "verified_provider_operation"
+    assert len(calls) == 1

@@ -123,6 +123,8 @@ def build(log_id: str, case_type: str | None = None, cohort: dict[str, Any] | No
         "slowest_transitions": slowest_transitions(log_id, case_type, cohort),
         "costs": _costs(log_id, case_type, cohort),
         "insights": _insights(log_id, case_type, cohort, sla_seconds),
+        "adherence": _adherence(log_id, case_type, cohort),
+        "story": _story(log_id, case_type, cohort),
         "interpretation": _CAVEAT,
     }
 
@@ -148,6 +150,60 @@ def _insight_section(found: dict[str, Any] | None) -> str:
     return f"""<h2>Where to look first</h2>
 <ol class="insights">{items}</ol>
 <p class="meta">{escape(found["interpretation"])}</p>
+"""
+
+
+def _story(log_id: str, case_type: str | None, cohort: dict[str, Any] | None) -> list[str] | None:
+    from . import event_log_story as story
+    try:
+        return [s["text"] for s in story.story(log_id, case_type, cohort=cohort)["sentences"]]
+    except workspace.EventLogWorkspaceError:
+        return None
+
+
+ADHERENCE_NOISE = 0.2
+
+
+def _adherence(log_id: str, case_type: str | None, cohort: dict[str, Any] | None) -> dict[str, Any] | None:
+    """How well the cases fit the discovered model (noise 20%), from optimal alignments; None if not computable."""
+    from . import event_log_alignments as alignments
+    from . import event_log_pnml as pnml
+    try:
+        xml, _ = pnml.discovered_pnml(log_id, case_type, noise=ADHERENCE_NOISE, cohort=cohort)
+        result = alignments.alignments(log_id, xml.encode(), case_type, cohort=cohort)
+    except workspace.EventLogWorkspaceError:
+        return None
+    return {k: result[k] for k in ("cases", "fitness", "by_month", "log_moves", "model_moves", "unaligned",
+                                   "non_fitting_variants")}
+
+
+def _adherence_section(a: dict[str, Any] | None) -> str:
+    if not a:
+        return ""
+    f = a["fitness"]
+    moves = [[escape(m["activity"]), "skipped", _num(m["cases"])] for m in a["model_moves"][:5]] + \
+            [[escape(m["activity"]), "done where the model does not allow it", _num(m["cases"])] for m in a["log_moves"][:5]]
+    moves.sort(key=lambda r: -int(r[2].replace(",", "")))
+    month_rows = [[escape(m["month"]), _num(m["cases"]), _pct(m["fitting_case_share"]), _pct(m["fitness"])]
+                  for m in a["by_month"][-12:]]
+    variant_rows = []
+    for v in a["non_fitting_variants"][:5]:
+        steps = [s["log"] if s["move"] == "sync" else (f'+{s["log"]}' if s["move"] == "log" else f'−{s["model"]}')
+                 for s in v["alignment"]]
+        variant_rows.append([escape(" → ".join(steps)), _num(v["cases"]), _pct(v["fitness"])])
+    unaligned = ("" if not a["unaligned"]["cases"] else
+                 f'<p class="meta">{_num(a["unaligned"]["cases"])} cases were too long to align and are left out.</p>')
+    return f"""<h2>Model fit and adherence</h2>
+<p class="meta">Each case is aligned with the process model discovered from these cases (rare paths under 20% left out).
+A deviation is a difference from this draft model, not a verified error.</p>
+<div class="tiles"><div class="tile"><div class="v">{_pct(f["log"])}</div><div class="k">Alignment fitness</div></div>
+<div class="tile"><div class="v">{_pct(f["fitting_case_share"])}</div><div class="k">Cases that follow the model exactly</div></div></div>
+{unaligned}
+{'<div class="scroll">' + _table(["Activity", "Deviation", "Cases"], moves[:8], {2}) + '</div>' if moves else ''}
+{('<p class="meta">How the most common non-fitting paths are explained (+ extra step, − skipped step):</p><div class="scroll">'
+  + _table(["Explanation", "Cases", "Fitness"], variant_rows, {1, 2}) + '</div>') if variant_rows else ''}
+{('<div class="scroll">' + _table(["Month cases started", "Cases", "Follow exactly", "Fitness"], month_rows, {1, 2, 3})
+  + '</div>') if len(month_rows) > 1 else ''}
 """
 
 
@@ -241,6 +297,7 @@ generated {escape(data["generated_at"])}</p>
 {filter_html}
 <div class="tiles">{tile_html}</div>
 <p class="caveat">{escape(data["interpretation"])}</p>
+{('<h2>In plain words</h2><ul>' + "".join(f"<li>{escape(t)}</li>" for t in data["story"]) + '</ul>') if data.get("story") else ''}
 {_insight_section(data.get("insights"))}
 <h2>Most frequent variants</h2>
 <p class="meta">The {len(variants["variants"])} most frequent of {_num(variants["distinct_variants"])} variants cover {coverage} of cases.</p>
@@ -248,6 +305,7 @@ generated {escape(data["generated_at"])}</p>
 <h2>Activities</h2>
 <div class="scroll">{_table(["Activity", "Events", "Cases", "Repeated in cases", "Resources"], activity_rows, {1, 2, 3, 4})}</div>
 {_cost_section(data.get("costs"))}
+{_adherence_section(data.get("adherence"))}
 <h2>Slowest transitions</h2>
 <p class="meta">Median time between one activity and the next, for transitions seen in at least {_num(slow["minimum_cases"])} cases. This is elapsed time between recorded events, not measured work or verified waiting.</p>
 <div class="scroll">{_table(["Transition", "Median gap", "90th percentile", "Cases"], slow_rows, {1, 2, 3})}</div>

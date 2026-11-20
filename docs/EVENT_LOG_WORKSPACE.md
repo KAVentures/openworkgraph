@@ -376,6 +376,28 @@ copies, or the two given as `older` and `newer`. A change can come from
 appended events, an applied activity mapping or edited prices as much as from
 the process itself.
 
+It opens with the same **In plain words** summary as the dashboard. The report also has a
+**Model fit and adherence** section: every case is aligned with the process
+model discovered from the same cases (noise 20%), giving the alignment fitness, the share of cases
+that follow the model exactly, the steps most often skipped or done where the model does not allow
+them, how the most common non-fitting paths are explained, and, when cases span several months,
+fitness by the month cases started. The section is left out when the model cannot be computed.
+
+## In plain words
+
+**Summarize in plain words**, at the top of the results, writes a short summary of the selection: its
+size and period, how long a typical case takes, the most common path, how many cases repeat
+activities, how well cases follow the discovered model (and which step is most often skipped or out
+of place), the top two automatic insights, and how many cases stand out. No language model is used:
+each sentence is filled from a computed figure, and **Show** jumps to the analysis behind it.
+`GET /v1/event-logs/{log_id}/story` plus the case-filter parameters.
+
+## Finding an analysis
+
+The results page has many analysis sections. **Find an analysis**, at the top of the results, lists
+them all; typing filters the list by section name and description (for example "conformance",
+"funnel" or "stand out"), and choosing one scrolls to it and moves keyboard focus to its heading.
+
 ## Where to look first (automatic insights)
 
 After **Analyse**, **Where to look first** lists up to six findings, ranked by the
@@ -404,6 +426,9 @@ filter that reproduces it:
 Logs with fewer than 5 cases get no findings. Insights are descriptive: they
 show where recorded time and repetition concentrate, not why. A 300,000-event
 log takes about half a second.
+
+Agents with access to a shared log read the same findings with `get_process_insights`
+(aggregates only).
 
 ## Analytics
 
@@ -453,6 +478,36 @@ where columns kept from a CSV import live; values are compared as stored text).
 `cohort` bodies and saved filter sets. The
 dashboard downloads the result as JSON or CSV; CSV cells that could be read as
 spreadsheet formulas are prefixed with `'`.
+
+### Breakdown table
+
+**Breakdown table** shows case figures by one or two dimensions, like a pivot
+table (a small process cube). Choose what goes in the rows and, optionally, in
+the columns:
+
+* a built-in dimension: the month or weekday the case started, or its first
+  or last activity;
+* a case attribute (`attribute:<name>`, as the case filter reads it);
+* an event attribute (`event_attribute:<name>`, the first non-empty value
+  recorded in the case; columns kept from a CSV import are event attributes).
+
+Every cell gives the number of cases, their share of the selection, the median
+and 90th-percentile duration, events per case and the rework rate (cases that
+repeat an activity). With **Share doing an activity**, it also gives the share
+of cases that do the chosen activity. The table ends with an **All** column
+and row, the totals for each value.
+
+At most 30 row values and 12 column values are shown. For a time dimension
+the latest values are kept; otherwise the most common. The rest are grouped
+as `(other)`, and cases with no value as `(missing)`. Cells with fewer than 5
+cases are marked `*`, because one case moves their figures a lot. The table
+honours the case filter.
+
+`GET /v1/event-logs/{log_id}/breakdown?rows=…&columns=…&with_activity=…`
+(plus `case_type` and the case-filter parameters) returns the cells and
+totals. `GET /v1/event-logs/{log_id}/breakdown/dimensions` lists the
+dimensions available in the log. Both need the dashboard session. A
+difference between cells describes the recorded cases, not a cause.
 
 ### Process cost
 
@@ -1110,6 +1165,35 @@ API:
 Both need the dashboard session. Gaps are elapsed time between recorded
 events, not measured work or verified waiting.
 
+### Similar cases
+
+**Find similar cases** (in *Explain a case*) lists the ten recorded cases
+whose path is closest to the case entered. It answers "have we seen this
+before, and how did it go?".
+
+* **Distance** counts the steps that only one of the two paths has, after
+  matching equal activities in order. This is the same alignment as *Compare
+  with case*, so each row's **Compare** button lines the two cases up step by
+  step.
+* **Similarity** is `1 - distance / (events in both cases)`: 100% for the
+  same path, 0% when no step is shared.
+* Cases at the same distance are ordered by how close their duration is to the
+  chosen case's.
+* **Differences** list activities the similar case does more often (`+`) or
+  less often (`−`) than the chosen case. "Same steps, other order" means only
+  the order differs.
+
+The summary gives how many cases follow exactly the same path, and the median
+duration of the cases listed against the chosen case's own duration. The
+search honours the case filter, but the chosen case itself is found even if
+the filter leaves it out. Each distinct path is compared once. Paths that
+cannot be closer than the ones already found are skipped, and at most 20,000
+paths are compared. Cases with more than 500 events are not compared.
+
+`GET /v1/event-logs/{log_id}/similar-cases?case_id=…&limit=10` (1 to 50, plus
+`case_type` and the case-filter parameters) needs the dashboard session.
+Similar recorded paths do not mean the cases had the same cause or outcome.
+
 ## Organizational mining (handovers)
 
 `GET /v1/event-logs/{log_id}/organization` (dashboard session only) describes how work moves
@@ -1117,6 +1201,9 @@ between the resources named in the log's resource column:
 
 - `handover_of_work`: consecutive events in a case performed by different resources, with
   handover and case counts;
+- `subcontracting`: work that passes from one resource to another and straight back (one
+  resource's event, then another's, then the first one's again), as in PM4Py's subcontracting
+  metric, with occurrence and case counts;
 - `working_together`: pairs of resources that both touched the same cases;
 - `activity_resource_matrix`: event counts per activity and resource;
 - `resources`: events, cases and distinct activities per resource. Resources listed in
@@ -1324,6 +1411,38 @@ under the chosen case notion and the source's activity mapping.
 * **The new log:** counts against the 50-log limit. It can be analysed,
   exported, compared with the source (see *Comparing two logs*) or deleted like
   any other log.
+
+### Anonymized export
+
+**Anonymized export** (after **Analyse**) downloads the cases as a CSV meant
+to leave this computer, for example for a consultant or a benchmark, with
+less that points back to people. It honours the case filter.
+
+* **Rare paths are left out.** A case is kept only when at least the chosen
+  number of cases (2 to 1000, default 5) follow exactly the same sequence of
+  activities. Activities that only occur on rare paths disappear with them.
+* **Case IDs are replaced** by `C000001`, `C000002`, … in a random order, so
+  the file cannot be joined back to the source system by ID or row order.
+* **Time is coarsened.** *Relative* (default) moves each case to start at
+  midnight on the first day of the month it started and keeps the gaps between
+  its events; *day* keeps only each event's date (the `step` column keeps the
+  order); *exact* keeps timestamps.
+* **Resources** are left out (default) or replaced by `Resource 01`, … in a
+  random order.
+* **Attributes are never exported.** Columns: `case_id`, `step`, `activity`,
+  `timestamp` and, if chosen, `resource`. Cells that would start a spreadsheet
+  formula are prefixed with `'`.
+
+**Check what is kept** shows the counts first; nothing is stored.
+`GET /v1/event-logs/{log_id}/anonymized-export` returns that summary and
+`GET /v1/event-logs/{log_id}/anonymized-export.csv` the file (header
+`X-OWG-Anonymized`), both with `min_cases`, `time_mode`
+(`relative|day|exact`), `resource_mode` (`drop|pseudonymize`), `case_type` and
+the case-filter parameters. At most 1,000,000 events are exported at once.
+This lowers the chance that a case can be singled out; it is not a guarantee.
+Durations, dates and activity names can still identify a case to someone who
+knows it, so review the file before sharing it. For a map with formal
+guarantees, see *Private process map (differential privacy)*.
 
 ## Appending newer exports
 
@@ -1972,6 +2091,27 @@ cohort they are `starts_with`, `ends_with` and `duration: {"min": s, "max": s}`.
 every other condition and apply to the same views. Saved filters keep them. A saved filter whose
 first or last activity is no longer in the log is flagged, like its follower rules.
 
+**End time, events, path frequency and rework.** Four more filters follow Disco's timeframe,
+performance and variation filters:
+
+* **Case ended**: the last recorded event is on or after one date and/or before another
+  (`ended_from`, `ended_before`; timezone-qualified ISO times in the API, dates in the
+  dashboard). This complements the start-period filter, for example to keep cases that finished
+  last month.
+* **Events per case**: at least and/or at most a number of recorded events (`events_min`,
+  `events_max`; both inclusive).
+* **Path frequency**: keeps cases whose exact path (sequence of activities) is followed by at
+  least and/or at most a number of cases (`path_cases_min`, `path_cases_max`; both inclusive).
+  "At least 10" keeps the mainstream paths; "at most 2" keeps the rare ones. The count is taken
+  over all cases under the case notion, before the other filters apply, so it does not change
+  when another filter is added.
+* **Rework**: `rework=true` keeps cases that repeat at least one activity; `rework=false` keeps
+  cases that repeat none.
+
+In a JSON cohort they are `ended_from`, `ended_before`, `events: {"min": n, "max": n}`,
+`path_cases: {"min": n, "max": n}` and `rework: true|false`. They combine with every other
+condition, apply to the same views, and are kept by saved filters.
+
 The case pickers inside individual sections take the same numeric range, under "Numeric case
 attribute", "From (inclusive)" and "Below (exclusive)". These are KPIs, the cohort benchmark and
 map comparison, the saved-graph comparison, case tags, saving cases as a log, case metrics and
@@ -1981,7 +2121,12 @@ After an analysis, every case-attribute input suggests what the log contains. `n
 offer each attribute's 20 most common values with their case counts, and numeric-range inputs offer
 the numeric attributes with their minimum and maximum. This covers the global filter and the
 pickers inside sections. The suggestions come from
-`GET /v1/event-logs/{log_id}/case-attribute-values?case_type=...`
+Use **Find a case attribute** in the workspace case filter to search by part of
+a case attribute name, including names outside the initial suggestion list.
+Search returns up to 20 names and reports the total. Choose a common value or a
+numeric field to populate the filter before applying it.
+
+`GET /v1/event-logs/{log_id}/case-attribute-values?case_type=...&search=...`
 (`openworkgraph.event-log-case-attribute-values.v1`): up to 100 attribute names per case notion,
 each with its case count, distinct values, whether it is numeric (90% or more of its values are
 numbers) and its top values, skipping values longer than 100 characters. Nothing is stored.
@@ -2173,6 +2318,326 @@ applies.
 `GET /v1/event-logs/{log_id}/performance-spectrum?top=&bins=&segment=A->B&case_type=` plus the
 case-filter parameters. Repeat `segment` for several segments (at most 12). Dashboard session
 only.
+## Heuristics net
+
+**Heuristics net** (the heuristics miner of ProM and PM4Py, after Weijters and Ribeiro's Flexible
+Heuristics Miner) draws a model that tolerates noise. It keeps an arrow *a → b* only when *a* is
+directly followed by *b* clearly more often than the reverse:
+dependency = (|a>b| − |b>a|) / (|a>b| + |b>a| + 1), kept at or above the threshold (default 0.5;
+the section offers 0.3, 0.5, 0.7 and 0.9) and when seen at least the chosen number of times.
+
+- **Self-loops** use |a>a| / (|a>a| + 1); **two-step loops** (*a b a*) are found from *a b a* patterns
+  so that *a ⇄ b* is not dropped as two-way noise.
+- **All connected** (default): every activity keeps its best incoming and outgoing arrow even below
+  the threshold, unless it always starts or always ends a case.
+- **Splits and joins:** two branches *b* and *c* after *a* are **AND** (parallel) when
+  (|b>c| + |c>b|) / (|a>b| + |a>c| + 1) is at least 0.65, otherwise **XOR** (choice); joins likewise.
+- The section draws the arrows, lists splits, joins and loops, and every arrow with its dependency
+  and why it was kept. Logs with more than 64 activities need an activity mapping or a case filter
+  first. The case filter applies.
+
+`GET /v1/event-logs/{log_id}/heuristics-net?dependency_threshold=&and_threshold=&min_occurrences=&all_connected=`
+plus the case-filter parameters. Agents with access to a shared log use `get_process_heuristics_net`.
+
+## Activity profile
+
+**Activity profile** shows one activity from every side, like the activity views of Celonis and
+Disco: how many cases have it and how many repeat it, what usually comes before and after it with the
+median gap, how far into the case it first happens, how often it occurs on each weekday and hour
+(UTC), and how long cases with it take compared with cases without it. A longer duration with the
+step is an association, not proof that the step causes it.
+
+`GET /v1/event-logs/{log_id}/activity-profile?profile_activity=Check` plus the case-filter
+parameters (`activity` there is the case filter). Agents use `get_process_activity_profile`.
+
+## Path explorer
+
+**Path explorer** walks the process one step at a time, as Celonis's Process Explorer and the variant
+trees of UiPath Process Mining and ProM do. It starts at the beginning of the cases and lists the
+activities that come first; choosing one shows what comes after it, and so on. For each next step it
+shows the number and share of cases that continue with it, the hours from the previous step (median
+and 90th percentile), the median hours from it to the case end, and how many cases end at this point
+(`(end)`). The path chosen so far is shown as a trail, with a button to step back.
+
+**From anywhere in the case** looks for the first place the chosen steps occur one right after
+another, instead of requiring the case to begin with them, which answers "what usually happens after
+Reject → Rework?". The explorer shows recorded order and timing, not why cases branch.
+
+`GET /v1/event-logs/{log_id}/next-steps?step=Open&step=Check&anchor=start` plus the case-filter
+parameters. Agents use `get_process_next_steps` (aggregates only) and call it again with a step
+appended to go deeper.
+
+## Due dates
+
+**Due dates** checks whether the step that matters, such as *Pay invoice* or *Ship order*, happened
+by the date it was due, as UiPath Process Mining's due dates and Celonis's on-time views do. The due
+date is either an attribute (a joined case attribute, or else the first value of an event attribute in
+the case, such as a payment due date column) or a fixed number of days after the case started. The
+first occurrence of the activity in each case is compared with its due date:
+
+- **on time**: by the due date (a date without a time is due by the end of that day, UTC);
+- **early**: with an early window, more than that many days before the due date;
+- **late**: after the due date, with the days late (median, 90th percentile, maximum);
+- **open, overdue**: not done, and the due date is before the log's last event;
+- **open, not yet due**: not done, and the due date is still ahead;
+- **no due date** and **unreadable due date**: counted, never guessed.
+
+A table by due month shows whether adherence is changing, and the most late cases are listed. The
+report says how often deadlines were met, not why.
+
+**Alert me** saves the same check as a **due-date signal**: it holds when more than the chosen
+number of open cases are past their due date. Signals can also watch the late share among cases where
+the activity happened (`"metric": "late_share"`, a fraction). The rule is
+`{"kind": "due_date", "activity": …, "due_attribute": … or "due_days": …, "metric":
+"open_overdue_cases" | "late_share", "operator": "above" | "below", "threshold": …}`.
+
+`GET /v1/event-logs/{log_id}/due-dates?due_activity=Pay&due_attribute=due` (or `due_days=30`,
+optionally `early_days=7`) plus the case-filter parameters, in which `activity` keeps cases that
+contain an activity. Agents use `get_process_due_dates`; case IDs only for
+logs shared at the cases level.
+
+## Unusual cases
+
+**Unusual cases** ranks the cases that stand out from the rest of the selection, as the outlier
+and anomaly views of Celonis and UiPath Process Mining do, and says why for each one. Every case is
+compared with the selection on transparent signals:
+
+- **Rare path**: under 1% of cases (or only this one) followed exactly the same activities, and
+  paths that rare cover at most 5% of cases. In a log where most paths are unique, being unique is
+  not unusual and is not flagged.
+- **Unusually slow / fast**: the case's duration is at least 3 robust standard deviations from the
+  usual, measured on log-duration with the median and median absolute deviation, so a few extreme
+  cases do not hide each other.
+- **Unusually many events**: the same test on the number of events.
+- **Heavy rework**: the same test on the number of repeated activities (at least two).
+- **Rare activity**: the case contains an activity found in under 1% of cases, or in no other case.
+
+Each signal adds 0.25 to 1 to the score; robust-z signals grow from 0.25 at the threshold to 1 at
+twice it. The list shows the top cases with their reasons, the median case for comparison, and an
+**Explain** button that opens the case in **Explain a case**. **Tag these cases** tags the listed cases (`unusual`
+by default) in **Case tags**, so the `tag` case filter can focus every other analysis on them. At least 20 cases are needed. Unusual
+is not wrong: rare paths and long durations are often legitimate.
+
+`GET /v1/event-logs/{log_id}/unusual-cases?limit=25` plus the case-filter parameters. Agents use
+`get_unusual_process_cases`; case IDs and paths are included only for logs shared at the cases
+level.
+
+## Milestone funnel
+
+**Milestone funnel** follows cases through 2 to 8 activities you choose, in order, as Celonis's
+conversion views, UiPath Process Mining milestones and product-analytics funnels do. A case reaches
+step *k* when it did steps 1 … *k* in that order, each after the previous one; other activities may
+come in between. For each step the section shows:
+
+- how many cases reached it, as a share of all cases and of those that reached step 1;
+- the conversion from the previous step and how many cases dropped after it;
+- the hours from the previous step (median, 90th percentile, mean);
+- for cases that reached the previous step but not this one, the activity they did last, and how
+  many of them ended in the last 5% of the log's time span and so may still be open.
+
+The step with the largest drop is named, along with the median and 90th percentile time from the
+first to the last step. An optional **conversion window** counts a step only within that many hours
+of the latest occurrence of the previous step. The funnel shows how far cases got and how long it
+took, not why the others stopped; use the eventual-follower case filter to open the cases behind a
+step.
+
+`GET /v1/event-logs/{log_id}/funnel?step=A&step=B&within_hours=24` plus the case-filter
+parameters. Agents with access to a shared log use `get_process_funnel` (aggregates only).
+
+## Model change
+
+**Model change** shows how the discovered process model differs before and after a date, as ProM's
+model comparison and Celonis's process comparison do; concept drift says *when* behaviour changed,
+this says *how*. Cases are split by when they started (by default at the median case start), a
+model is discovered for each period at the chosen noise level, and the section shows:
+
+- the pairs of activities whose ordering relation changed (→, ←, || or #, as in **Footprints**);
+- activities that only one period's model has;
+- **cross-fit**: each period's cases aligned on both models. When the later cases fit the earlier
+  model clearly worse than the earlier cases did, the way the work runs has changed.
+
+Each period needs at least 10 cases; a start-date case filter cannot be combined with the split.
+Both models are drafts from their own cases, and a change in how events are recorded looks the same
+as a change in the work.
+
+`GET /v1/event-logs/{log_id}/model-change?split=2024-03-01&noise=0.2` plus the other case-filter
+parameters. Agents use `get_process_model_change` (aggregates only).
+
+**Compare groups** in the same section runs the comparison between two groups of cases chosen by
+case attribute values, such as `region=EU` and `region=US`, as Celonis compares org units (a value
+no case attribute has is looked up in the cases' event attributes instead): the
+orderings that differ, activities only one group has, and how well each group's cases fit the other
+group's model. Each group needs at least 10 cases, and an attribute case filter cannot be combined
+with the groups. Groups can also differ in case mix and in how their systems record events.
+`GET /v1/event-logs/{log_id}/model-comparison?group_a=region=EU&group_b=region=US`; agents use
+`compare_process_models`.
+
+## Model quality
+
+**Model quality** discovers the model at several noise levels (by default 0, 10%, 20%, 30% and 50%),
+converts each draft to a Petri net as the PNML export does, and scores it on the four quality
+dimensions of process mining (Buijs, van Dongen and van der Aalst, 2012), as PM4Py's evaluation
+does:
+
+- **Fitness**: token-replay fitness of the recorded cases, as in **Check against a Petri net**.
+- **Precision**: ETConformance, one minus the share of escaping edges.
+- **F-score**: the harmonic mean of fitness and precision.
+- **Generalization**: `1 − mean over transitions of 1/√(times fired)`, where a transition never fired
+  counts as 1. Parts of the net that few cases use score low.
+- **Simplicity**: `1 / (1 + max(0, mean arcs per node − 2))`.
+
+The noise level with the highest F-score is marked; on a tie the simpler net, then the lower noise.
+Noise 0 keeps every observed path, which usually maximizes fitness at the cost of precision and
+simplicity. The scores compare drafts against this log; they help choose the noise setting but do
+not say which model is right. Up to eight levels can be scored at once.
+
+`GET /v1/event-logs/{log_id}/model-quality?levels=0,0.1,0.2&activities=1` plus the case-filter
+parameters. Agents with access to a shared log use `get_process_model_quality` (aggregates only).
+
+## Footprints
+
+**Footprints** (the footprint matrices of van der Aalst's *Process Mining*, PM4Py's footprints
+discovery and conformance, ProM's footprint comparison) classify every ordered pair of activities:
+`→` when the first is directly followed by the second somewhere and never the other way round, `←`
+for the mirror, `||` when both orders occur (or the model runs them in parallel) and `#` when
+neither does.
+
+The matrix is built twice: from the recorded cases, and from the process tree the model discovery
+drafts (the same draft exported as BPMN and PNML), over the activities that model shows. The
+**Footprints** section reports the share of cells that agree (footprint fitness), lists each
+ordering only the log has with how many cases took it, each ordering only the model allows, and
+start or end activities only the log has, and shows the full matrix with disagreeing cells marked.
+The *Model* choice is the discovery noise filter: at 0 the model keeps every ordering it can.
+
+Footprints compare order only: not frequency, timing or how often a loop repeats. A disagreement
+shows where the draft and the recorded cases differ, not which one is right.
+
+`GET /v1/event-logs/{log_id}/footprints?noise=&activities=` plus the case-filter parameters. Agents
+with access to a shared log use `get_process_footprints` (aggregates only).
+
+## Check against a Petri net (PNML import and token replay)
+
+ProM, PM4Py, Apromore, WoPeD and most academic tools exchange models as Petri nets in PNML. The
+**Check against a Petri net** section reads such a file (at most 2 MB; not stored) and replays the
+recorded cases on it with token-based replay (Rozinat and van der Aalst, 2008), as PM4Py's
+`token_based_replay` does. Each case starts from the net's initial marking and fires the
+transition labelled with each activity. Silent (invisible) transitions fire when a bounded search
+finds them enabling the next step or reaching the final marking; otherwise the missing tokens are
+created and counted. At the end the final marking is consumed and any tokens left are counted as
+remaining.
+
+Fitness is `½(1 − missing/consumed) + ½(1 − remaining/produced)`, for each case and over the whole
+log. The section lists the places where tokens went missing or were left behind, the steps taken
+when the net did not allow them, activities the net does not have (skipped and counted), net
+transitions no case took, and the variants that do not fit.
+
+**Precision** (ETConformance, Muñoz-Gama and Carmona, 2010; PM4Py's `precision_token_based_replay`)
+asks the opposite question: how much more the net allows than the cases did. For each prefix of
+the recorded cases that replays without problems, the activities the net allows next, directly or
+after silent transitions, are compared with the activities cases actually took next. Those no case
+took are escaping edges. Precision is one minus the escaping share, weighted by how many cases
+share each prefix. A net that allows anything in any order (a "flower") fits every case but has low
+precision. The section lists the most common escaping edges. *Replay on the discovered net* runs the
+same check on the net that **Process model discovery** exports, discovered with every observed
+path kept (noise 0).
+
+Transitions are matched to activities by their exact label. Silent transitions are those marked
+with ProM's and PM4Py's `$invisible$` tool-specific flag. When the file declares no final marking,
+cases are expected to end with one token on each place nothing consumes from. XML with a DOCTYPE
+or entity declaration is refused. Token replay does not measure precision and can over-count
+problems in nets with duplicate labels or long silent paths.
+
+`POST /v1/event-logs/{log_id}/petri-net-replay` with the PNML file as the body, plus the
+case-filter parameters.
+
+**Check against the most common path** builds a sequence net of the most common path (the "happy
+path") and runs the same replay on it, so fitness, precision, the step-by-step explanation and
+**What goes with these deviations?** all compare cases with the usual way the work is done, as
+Celonis's happy-path views do. `GET /v1/event-logs/{log_id}/variant.pnml?rank=1` returns that net
+(`rank` 1 to 50 picks a less common path) with the share of cases that follow it in the
+`X-OWG-Path-Cases` header.
+
+**Save this net** keeps the net just checked as a named **reference net** with the log (at most 20
+per log), and **Replay on saved net** checks the current selection against a saved one again, as
+target-process libraries in Celonis and ProM's model collections do. Saved nets are checked when
+saved (safe XML, a reachable final marking), listed by name and size, and deleted with the log.
+`GET /v1/event-logs/{log_id}/reference-nets`, `POST …/reference-nets` with `{"name", "pnml"}`,
+`GET …/reference-nets/{net_id}.pnml` and `POST …/reference-nets/{net_id}/delete`.
+
+**Alert me** keeps the net that was just replayed (uploaded, discovered or the most common path) as a
+**conformance signal**: it holds when the share of cases that do not fit that net is above the
+chosen limit, among all cases or those started in the last 7 or 30 days of the log. The signal keeps
+its own copy of the net (at most 60,000 characters), so later checks compare new cases with the same
+reference even after the discovered model changes. Signals can also use the alignment fitness
+(`metric: "alignment_fitness"`, usually with `operator: "below"`) and `minimum_cases`. Checking
+signals aligns each distinct path once; agents listing signals see the rule without the net.
+
+**Scorecard by month**, in the Signals section, shows every KPI, conformance and due-date signal
+month by month, like a KPI cockpit: for the cases that started in each of the last 6 months, the
+signal's value and whether its condition held. It is read-only and never changes a signal's state or
+review. Case-matching and compliance signals are not shown by month.
+`GET /v1/event-logs/{log_id}/signals/scorecard?months=6`; agents use `get_process_signal_scorecard`.
+
+### Step-by-step explanation (alignments)
+
+After a replay, **Explain each case step by step** aligns every variant on the same net (Adriansyah,
+2014; PM4Py's and ProM's alignment-based conformance). An alignment pairs the steps of a case with a
+complete run of the net. Each step is a *synchronous move* (the case did it and the net allowed it),
+a *log move* (the case did a step the net cannot explain there), a *model move* (the net needed a step
+the case skipped) or a free silent move. Log and model moves cost 1. A least-cost alignment is found
+by a shortest-path search over the case and the net together, so the result names exactly which
+steps were extra and which were skipped, without the over-counting token replay can show with
+duplicate labels or silent paths.
+
+Trace fitness is `1 − cost / (case length + visible steps in the net's shortest run)`, as in PM4Py.
+Log fitness divides the summed costs by the summed worst cases. The section lists the activities
+cases did where the net does not allow them, the activities the net required that cases skipped
+(both with case counts), and how each non-fitting variant is explained, e.g.
+`Register → −Check (skipped) → Pay → Close`. When the cases start in more than one month, a
+**fitness by month** table shows, for each month the cases started, how many follow the net exactly
+and the alignment fitness, so a change in adherence over time (for example after a process change)
+is visible. Each variant is aligned once. Up to 500 variants of at
+most 200 steps are aligned; the search has a per-variant and a total limit, and variants it cannot
+finish are listed as unaligned and left out of the fitness. When two explanations cost the same, one
+is shown.
+
+`POST /v1/event-logs/{log_id}/petri-net-alignments` with the PNML file as the body, plus the
+case-filter parameters. The net is not stored.
+Agents with access to a shared log use `get_process_deviations`, which aligns the cases on the
+discovered net at a chosen noise level (aggregates only, no case IDs).
+
+**Compare with case** in **Explain a case** puts the explained case next to another one: their
+steps aligned (shared steps line up; steps only one case has stand out), the hours from each
+case's start to every step, and between which shared steps the second case fell furthest behind.
+`GET /v1/event-logs/{log_id}/case-compare?case_a=…&case_b=…`; agents with cases-level access use
+`compare_process_cases`.
+
+**Explain a case** also aligns the chosen case on the discovered model (noise 20%) and says what it
+skipped and which steps it did where the model does not allow them.
+`GET /v1/event-logs/{log_id}/case-alignment?case_id=…&noise=0.2`; agents with cases-level access use
+`align_process_case`.
+
+### What goes with the deviations
+
+After the step-by-step explanation, **What goes with these deviations?** runs root-cause analysis
+with the outcome "the case followed a path that does not fit the net" (Celonis's conformance checker
+shows the same for violations). Case attributes, activities and attribute ranges are tested as risk
+differences with Newcombe 95% intervals and a Bonferroni check over the features tested, under the
+same case filter as the alignment. Activities appear too: a case with an extra or rare step often
+deviates because of that step. These are associations, not causes.
+
+`POST /v1/event-logs/{log_id}/petri-net-deviation-causes` with the PNML file as the body, plus the
+case-filter parameters.
+
+**Download non-fitting cases (CSV)** lists every case that does not fit the net, one row each, for
+follow-up in another tool: case ID, its activities, alignment fitness, the steps it added and the
+steps it skipped. Cells starting with a formula character are prefixed with `'` so the file is safe
+to open in a spreadsheet; at most 200,000 cases are written, and cases too long to align are left
+out and counted in the `X-OWG-Non-Fitting` header.
+`POST /v1/event-logs/{log_id}/petri-net-alignments/cases.csv` with the PNML file as the body, plus
+the case-filter parameters. The net is not stored. Root-cause analysis also accepts the outcome `variant_in` with a list of
+paths when called directly. Agents use `get_process_deviation_causes` on the discovered net.
+
 ## Temporal profile
 
 **Temporal profile** (as in PM4Py and ProM) learns the usual time between every ordered pair of

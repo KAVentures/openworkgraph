@@ -247,6 +247,45 @@ def overview(log_id: str, case_type: str | None = None, sla_hours: float | None 
     }
 
 
+def brief(log_id: str, case_type: str | None = None, sla_hours: float | None = None) -> dict[str, Any]:
+    """One bounded briefing for an agent starting on a log: the overview, how well the discovered model fits
+    at its best noise level, where cases depart from it, how many cases stand out, and which tools to call
+    next. Every part is aggregates level; a part that cannot be computed is reported, not skipped silently."""
+    result: dict[str, Any] = {"format": FORMAT, "log_id": log_id, **overview(log_id, case_type, sla_hours)}
+    parts_unavailable: dict[str, str] = {}
+    try:
+        quality = model_quality(log_id, case_type, levels="0,0.1,0.2,0.3")
+        best = quality.get("best_f_score_noise")
+        level = next((lv for lv in quality["levels"] if lv["noise"] == best), None)
+        result["model"] = {"best_noise": best, **({k: level[k] for k in ("fitness", "precision", "f_score",
+                           "generalization", "simplicity", "places", "transitions")} if level else {})}
+        if best is not None:
+            dev = model_deviations(log_id, case_type, best)
+            result["adherence"] = {"alignment_fitness": dev["fitness"]["log"],
+                                   "fitting_case_share": dev["fitness"]["fitting_case_share"],
+                                   "extra_steps": dev["log_moves"][:5], "skipped_steps": dev["model_moves"][:5]}
+    except EventLogWorkspaceError as exc:
+        parts_unavailable["model"] = str(exc)
+    try:
+        unusual = unusual_cases(log_id, case_type, limit=1)
+        result["unusual"] = {"cases": unusual["unusual_cases"], "share": unusual["unusual_share"],
+                             "by_signal": unusual["by_signal"]}
+    except EventLogWorkspaceError as exc:
+        parts_unavailable["unusual"] = str(exc)
+    result["parts_unavailable"] = parts_unavailable
+    result["next_tools"] = [
+        {"tool": "get_process_insights", "for": "every ranked finding with the case filter that reproduces it"},
+        {"tool": "get_process_deviations", "for": "the step-by-step explanation of non-fitting variants"},
+        {"tool": "get_process_deviation_causes", "for": "case attributes that go with deviating cases"},
+        {"tool": "get_process_next_steps", "for": "walking the process one step at a time"},
+        {"tool": "get_process_root_cause", "for": "what goes with slow, reworked or other outcomes"},
+        {"tool": "get_unusual_process_cases", "for": "the cases that stand out and why"},
+    ]
+    result["interpretation"] = ("A starting summary of recorded events, not a diagnosis. Model figures describe a "
+                                "draft discovered from this log; deviations and outliers are not errors.")
+    return result
+
+
 def root_cause(log_id: str, outcome: str, case_type: str | None = None, hours: float | None = None,
                activity: str | None = None) -> dict[str, Any]:
     require(log_id, "aggregates")
@@ -293,7 +332,7 @@ def signals(log_id: str) -> dict[str, Any]:
         rule = _json.loads(definition)
         state = _json.loads(last_state) if last_state else {}
         review = states.get(rule_id, {})
-        item = {"rule_id": rule_id, "name": rule.get("name"), "condition": rule.get("when"),
+        item = {"rule_id": rule_id, "name": rule.get("name"), "condition": {k: v for k, v in (rule.get("when") or {}).items() if k != "pnml"},
                 "case_type": rule.get("case_type"), "filtered": bool(rule.get("cohort")),
                 "status": review.get("status", "not_evaluated"), "triggered": review.get("triggered"),
                 "evaluated_at": review.get("evaluated_at"), "reviewed_by_owner": review.get("status") == "acknowledged"}
@@ -351,6 +390,164 @@ def temporal_profile(log_id: str, case_type: str | None = None, zeta: float = 3.
     keep = ("case_notion", "cases", "zeta", "min_occurrences", "max_span_events", "profile_pairs", "pairs_checked",
             "deviating_cases", "deviating_case_share", "pairs", "method", "caveat")
     return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
+
+
+def heuristics_net(log_id: str, case_type: str | None = None, dependency_threshold: float = 0.5) -> dict[str, Any]:
+    """The heuristics-miner dependency graph with AND/XOR splits and loops (aggregates level)."""
+    require(log_id, "aggregates")
+    from . import event_log_heuristics_miner as heuristics
+    result = heuristics.heuristics_net(log_id, case_type,
+                                       dependency_threshold=max(0.0, min(float(dependency_threshold), 1.0)))
+    keep = ("case_notion", "cases", "parameters", "activities", "start", "end", "start_activities",
+            "end_activities", "edges", "splits", "joins", "loops", "coverage", "note")
+    return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
+
+
+def footprints(log_id: str, case_type: str | None = None, noise: float = 0.2) -> dict[str, Any]:
+    """Log and discovered-model footprint matrices and where they disagree (aggregates level)."""
+    require(log_id, "aggregates")
+    from . import event_log_footprints as fp
+    result = fp.footprints(log_id, case_type, noise=max(0.0, min(float(noise), 0.95)))
+    keep = ("case_notion", "cases", "activities", "settings", "conformance", "start_activities", "end_activities",
+            "differences", "differences_total", "matrix", "legend", "method", "caveat")
+    return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
+
+
+def model_quality(log_id: str, case_type: str | None = None, levels: str | None = None) -> dict[str, Any]:
+    """Fitness, precision, generalization and simplicity of the discovered net by noise level (aggregates)."""
+    require(log_id, "aggregates")
+    from . import event_log_model_quality as mq
+    result = mq.model_quality(log_id, case_type, levels=levels)
+    keep = ("case_notion", "cases", "cases_excluded", "variants", "levels", "best_f_score_noise", "definitions",
+            "method", "caveat")
+    return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
+
+
+def model_deviations(log_id: str, case_type: str | None = None, noise: float = 0.2) -> dict[str, Any]:
+    """Optimal alignments of the log on its discovered net: which steps are extra or skipped (aggregates)."""
+    require(log_id, "aggregates")
+    from . import event_log_alignments as al
+    from . import event_log_pnml as pnml
+    noise = max(0.0, min(float(noise), 0.95))
+    xml, meta = pnml.discovered_pnml(log_id, case_type, noise=noise)
+    result = al.alignments(log_id, xml.encode(), case_type)
+    keep = ("case_notion", "cases", "cases_excluded", "variants", "fitness", "by_month", "deviation_cost", "log_moves",
+            "model_moves", "activities_not_in_net", "non_fitting_variants", "non_fitting_variants_total",
+            "unaligned", "method", "caveat")
+    return {"format": FORMAT, "log_id": log_id, "noise": noise,
+            "process_model_sha256": meta.get("process_model_sha256"),
+            **{k: result[k] for k in keep if k in result}}
+
+
+def funnel(log_id: str, steps: list[str], case_type: str | None = None,
+           within_hours: float | None = None) -> dict[str, Any]:
+    """Milestone funnel over chosen activities (aggregates level: counts, timings, last activities)."""
+    require(log_id, "aggregates")
+    from . import event_log_funnel as fn
+    return {**fn.funnel(log_id, steps, case_type, within_hours=within_hours), "format": FORMAT, "log_id": log_id}
+
+
+def unusual_cases(log_id: str, case_type: str | None = None, limit: int = 25) -> dict[str, Any]:
+    """Cases that stand out and why. Case IDs and paths only for logs shared at the cases level."""
+    require(log_id, "aggregates")
+    from . import event_log_unusual_cases as uc
+    with_cases = _level(log_id) == "cases"
+    result = uc.unusual_cases(log_id, case_type, limit=max(1, min(int(limit), 50)), include_case_ids=with_cases)
+    if not with_cases:
+        result["top"] = [{k: v for k, v in c.items() if k not in ("path", "path_truncated")} for c in result["top"]]
+    return {**result, "format": FORMAT, "log_id": log_id}
+
+
+def due_dates(log_id: str, activity: str, case_type: str | None = None, due_attribute: str | None = None,
+              due_days: float | None = None, early_days: float | None = None) -> dict[str, Any]:
+    """Due-date adherence of an activity. Late case IDs only for logs shared at the cases level."""
+    require(log_id, "aggregates")
+    from . import event_log_due_dates as dd
+    result = dd.due_dates(log_id, activity, case_type, due_attribute=due_attribute, due_days=due_days,
+                          early_days=early_days, include_case_ids=_level(log_id) == "cases")
+    return {**result, "format": FORMAT, "log_id": log_id}
+
+
+def next_steps(log_id: str, steps: list[str] | None = None, case_type: str | None = None,
+               anchor: str = "start") -> dict[str, Any]:
+    """Path explorer: what happens after a sequence of steps (aggregates level)."""
+    require(log_id, "aggregates")
+    from . import event_log_path_explorer as px
+    return {**px.next_steps(log_id, steps, case_type, anchor=anchor), "format": FORMAT, "log_id": log_id}
+
+
+def insights(log_id: str, case_type: str | None = None, sla_hours: float | None = None,
+             limit: int = 8) -> dict[str, Any]:
+    """Where to look first: ranked automatic findings with the case filter that reproduces each (aggregates)."""
+    require(log_id, "aggregates")
+    from . import event_log_insights as log_insights
+    spec: dict[str, Any] = {"limit": max(1, min(int(limit), 30))}
+    if case_type:
+        spec["case_type"] = case_type
+    if sla_hours is not None:
+        spec["sla_seconds"] = max(1, min(int(float(sla_hours) * 3600), 10 ** 9))
+    return {**log_insights.insights(log_id, spec), "format": FORMAT, "log_id": log_id}
+
+
+def model_deviation_causes(log_id: str, case_type: str | None = None, noise: float = 0.2) -> dict[str, Any]:
+    """Case features associated with deviating from the discovered net (aggregates level)."""
+    require(log_id, "aggregates")
+    from . import event_log_alignments as al
+    from . import event_log_pnml as pnml
+    noise = max(0.0, min(float(noise), 0.95))
+    xml, meta = pnml.discovered_pnml(log_id, case_type, noise=noise)
+    result = al.deviation_causes(log_id, xml.encode(), case_type)
+    return {**result, "format": FORMAT, "log_id": log_id, "noise": noise,
+            "process_model_sha256": meta.get("process_model_sha256")}
+
+
+def case_alignment(log_id: str, case_id: str, case_type: str | None = None, noise: float = 0.2) -> dict[str, Any]:
+    """One case's optimal alignment on the discovered net (cases level only)."""
+    require(log_id, "cases")
+    from . import event_log_alignments as al
+    return {**al.case_alignment(log_id, case_id, case_type, noise=max(0.0, min(float(noise), 0.95))),
+            "format": FORMAT, "log_id": log_id}
+
+
+def model_change(log_id: str, case_type: str | None = None, split: str | None = None,
+                 noise: float = 0.2) -> dict[str, Any]:
+    """How the discovered model changed between two periods (aggregates level)."""
+    require(log_id, "aggregates")
+    from . import event_log_model_change as mc
+    return {**mc.model_change(log_id, case_type, split=split, noise=max(0.0, min(float(noise), 0.95))),
+            "format": FORMAT, "log_id": log_id}
+
+
+def model_comparison(log_id: str, group_a: str, group_b: str, case_type: str | None = None,
+                     noise: float = 0.2) -> dict[str, Any]:
+    """The discovered models of two attribute-defined groups compared (aggregates level)."""
+    require(log_id, "aggregates")
+    from . import event_log_model_change as mc
+    return {**mc.model_comparison(log_id, group_a, group_b, case_type, noise=max(0.0, min(float(noise), 0.95))),
+            "format": FORMAT, "log_id": log_id}
+
+
+def compare_cases(log_id: str, case_a: str, case_b: str, case_type: str | None = None) -> dict[str, Any]:
+    """Two cases side by side (cases level only)."""
+    require(log_id, "cases")
+    from . import event_log_case_compare as cc
+    return {**cc.compare_cases(log_id, case_a, case_b, case_type), "format": FORMAT, "log_id": log_id}
+
+
+def activity_profile(log_id: str, activity: str, case_type: str | None = None) -> dict[str, Any]:
+    """One activity from every side (aggregates level)."""
+    require(log_id, "aggregates")
+    from . import event_log_activity_profile as ap
+    return {**ap.activity_profile(log_id, activity, case_type), "format": FORMAT, "log_id": log_id}
+
+
+def signal_scorecard(log_id: str, months: int = 6) -> dict[str, Any]:
+    """The owner's value-based signals month by month (aggregates level, read-only)."""
+    require(log_id, "aggregates")
+    from . import event_log_signals as sig
+    result = sig.scorecard(log_id, max(1, min(int(months), 24)))
+    return {"format": FORMAT, "log_id": log_id, "months": result["months"], "rows": result["rows"],
+            "interpretation": result["interpretation"]}
 
 
 def slowest_cases(log_id: str, case_type: str | None = None, limit: int = 10) -> dict[str, Any]:

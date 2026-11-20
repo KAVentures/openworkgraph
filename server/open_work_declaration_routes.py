@@ -721,6 +721,7 @@ async def verify_local_case_provider_operation(request: Request, response: Respo
         raise _safe_error(exc) from None
     # Invalid/revoked/stale link must never trigger a provider read.
     await _recheck_source(scope)
+    _dashboard_only(request)
     try:
         receipt = await asyncio.to_thread(
             source_operation_receipt, resource_ref, "stripe_invoice_paid",
@@ -728,6 +729,7 @@ async def verify_local_case_provider_operation(request: Request, response: Respo
     except (ValueError, OSError, TypeError, CaseDeclarationError, sqlite3.DatabaseError):
         receipt = None
     await _recheck_source(scope)
+    _dashboard_only(request)
     try:
         after = await asyncio.to_thread(list_case_declarations, scope)
         _current, current_signature = admitted_case_dossier_snapshot(
@@ -744,6 +746,7 @@ async def verify_local_case_provider_operation(request: Request, response: Respo
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
         raise _safe_error(exc) from None
     await _recheck_source(scope)
+    _dashboard_only(request)
     response.headers["Cache-Control"] = "no-store"
     return result
 
@@ -1555,6 +1558,28 @@ async def _load_review_triage(scope: str, payload: dict[str, Any]):
             raise _safe_error(exc) from None
         provider_histories.append(provider)
         human_histories.append(human)
+        await _recheck_source(scope)
+    # The two journals are separate SQLite stores. A provider dispute or human
+    # correction can land between reads. Re-read both bounded selections and
+    # refuse mixed-era evidence. This is not a global atomic snapshot.
+    for index, (child, child_signature, child_guard) in enumerate(targets):
+        try:
+            await asyncio.to_thread(root_guard)
+            provider_again = await asyncio.to_thread(
+                read_operation_evidence, child, child_signature,
+                scope=scope, secret=secret, guard=child_guard,
+            )
+            await _recheck_source(scope)
+            human_again = await asyncio.to_thread(
+                read_human_outcomes, child, child_signature,
+                scope=scope, secret=secret, guard=child_guard,
+            )
+            await asyncio.to_thread(root_guard)
+            if (provider_again != provider_histories[index]
+                    or human_again != human_histories[index]):
+                raise CaseDeclarationError("outcome evidence changed during cross-store review")
+        except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+            raise _safe_error(exc) from None
         await _recheck_source(scope)
     try:
         await asyncio.to_thread(root_guard)

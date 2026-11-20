@@ -18,7 +18,9 @@ const path=require('node:path');
   await page.evaluate(async model=>{await window.__owgAuthReady;const r=await fetch('/v1/process-catalog',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:'Local purchase',process_model:model,user_confirmed:true})});if(!r.ok)throw new Error(await r.text());},model);
   await page.getByRole('button',{name:'Load saved designs',exact:true}).click();await page.getByRole('button',{name:'Local purchase · r1',exact:true}).click();
   const section=page.locator('#owgCatalogRuleLibrary');
-  await section.getByRole('button',{name:'Load rule sets',exact:true}).click();
+  // Wait for the load to finish: a save started while it runs is refused as "already in progress".
+  await Promise.all([page.waitForResponse(r=>r.url().endsWith('/v1/process-catalog/rule-library')&&r.request().method()==='GET'),
+    section.getByRole('button',{name:'Load rule sets',exact:true}).click()]);
   await section.getByLabel('Rule set name',{exact:true}).fill('Purchasing');
   await section.getByLabel('Rule set source',{exact:true}).fill('Purchasing policy v3');
   await section.getByRole('button',{name:'Save design rules to library',exact:true}).click();

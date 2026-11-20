@@ -109,17 +109,31 @@ def _case_filter(started_from: str = Query(default="", max_length=64),
                  starts_with: str = Query(default="", max_length=200),
                  ends_with: str = Query(default="", max_length=200),
                  duration_min: float | None = Query(default=None, ge=0, le=10 ** 10),
-                 duration_max: float | None = Query(default=None, ge=0, le=10 ** 10)) -> dict[str, Any]:
+                 duration_max: float | None = Query(default=None, ge=0, le=10 ** 10),
+                 ended_from: str = Query(default="", max_length=64),
+                 ended_before: str = Query(default="", max_length=64),
+                 events_min: int | None = Query(default=None, ge=1, le=10 ** 9),
+                 events_max: int | None = Query(default=None, ge=1, le=10 ** 9),
+                 path_cases_min: int | None = Query(default=None, ge=1, le=10 ** 9),
+                 path_cases_max: int | None = Query(default=None, ge=1, le=10 ** 9),
+                 rework: bool | None = Query(default=None)) -> dict[str, Any]:
     """The case filter shared by analysis views; ``follows`` is a JSON list of follower rules.
 
     ``starts_with``/``ends_with`` keep cases whose first/last activity is the given one; ``duration_min``
-    (inclusive) and ``duration_max`` (exclusive) bound the case duration in seconds.
+    (inclusive) and ``duration_max`` (exclusive) bound the case duration in seconds. ``ended_from``/
+    ``ended_before`` bound the last event's time; ``events_min``/``events_max`` the events per case and
+    ``path_cases_min``/``path_cases_max`` how many cases share the case's exact path (all inclusive);
+    ``rework`` keeps cases that repeat an activity (true) or that repeat none (false).
     """
     cohort: dict[str, Any] = {"started_from": started_from, "started_before": started_before, "resource": resource,
                               "activity": activity, "attribute": attribute, "event_attribute": event_attribute,
                               "tag": tag, "starts_with": starts_with, "ends_with": ends_with}
     if duration_min is not None or duration_max is not None:
         cohort["duration"] = {k: v for k, v in (("min", duration_min), ("max", duration_max)) if v is not None}
+    cohort.update({"ended_from": ended_from, "ended_before": ended_before, "rework": rework})
+    for key, low, high in (("events", events_min, events_max), ("path_cases", path_cases_min, path_cases_max)):
+        if low is not None or high is not None:
+            cohort[key] = {k: v for k, v in (("min", low), ("max", high)) if v is not None}
     if follows:
         try:
             cohort["follows"] = json.loads(follows)
@@ -612,6 +626,45 @@ async def export_event_log_matching_cases(request: Request, log_id: str,
                         headers={"Cache-Control": "no-store"}, background=BackgroundTask(os.unlink, filename))
 
 
+def _anonymized(log_id: str, case_type: str | None, cohort: dict[str, Any], min_cases: int, time_mode: str,
+                resource_mode: str, summary_only: bool) -> dict[str, Any]:
+    from . import event_log_anonymized_export as anonymized
+    try:
+        return anonymized.anonymized_export(log_id, case_type, min_cases=min_cases, time_mode=time_mode,
+                                            resource_mode=resource_mode, cohort=cohort, summary_only=summary_only)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
+@router.get("/v1/event-logs/{log_id}/anonymized-export")
+def event_log_anonymized_export_summary(request: Request, log_id: str,
+                                        case_type: str | None = Query(default=None, max_length=200),
+                                        min_cases: int = Query(default=5, ge=2, le=1000),
+                                        time_mode: str = Query(default="relative", pattern="^(exact|day|relative)$"),
+                                        resource_mode: str = Query(default="drop", pattern="^(drop|pseudonymize)$"),
+                                        cohort: dict = Depends(_case_filter)):
+    """What an anonymized export would keep and remove, without the data."""
+    _require_dashboard(request)
+    result = _anonymized(log_id, case_type, cohort, min_cases, time_mode, resource_mode, True)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/v1/event-logs/{log_id}/anonymized-export.csv")
+def event_log_anonymized_export_csv(request: Request, log_id: str,
+                                    case_type: str | None = Query(default=None, max_length=200),
+                                    min_cases: int = Query(default=5, ge=2, le=1000),
+                                    time_mode: str = Query(default="relative", pattern="^(exact|day|relative)$"),
+                                    resource_mode: str = Query(default="drop", pattern="^(drop|pseudonymize)$"),
+                                    cohort: dict = Depends(_case_filter)):
+    """The anonymized log as CSV: rare paths suppressed, new case IDs, coarser time, no attributes. Not stored."""
+    _require_dashboard(request)
+    result = _anonymized(log_id, case_type, cohort, min_cases, time_mode, resource_mode, False)
+    return Response(result["csv"], media_type="text/csv; charset=utf-8", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-anonymized.csv"',
+        "X-OWG-Anonymized": f"cases={result['cases_kept']}; suppressed={result['cases_suppressed']}; "
+                            f"min_cases={result['min_cases']}"})
+
+
 @router.post("/v1/event-logs/{log_id}/derive")
 async def derive_event_log(request: Request, log_id: str):
     """Save the cases matching a filter as a new event log; the source log is unchanged."""
@@ -745,11 +798,12 @@ def event_log_summary(request: Request, log_id: str, case_type: str | None = Que
 
 @router.get("/v1/event-logs/{log_id}/case-attribute-values")
 def event_log_case_attribute_values(request: Request, log_id: str,
-                                    case_type: str | None = Query(default=None, max_length=200)):
+                                    case_type: str | None = Query(default=None, max_length=200),
+                                    search: str | None = Query(default=None, min_length=1, max_length=200)):
     """Case attribute names, numeric ranges and common values, to suggest case-filter inputs."""
     from . import event_log_case_attribute_values as case_attribute_values
     _require_dashboard(request)
-    return _respond(case_attribute_values.values, log_id, case_type)
+    return _respond(case_attribute_values.values, log_id, case_type, search=search)
 
 
 @router.post("/v1/event-logs/{log_id}/attribute-profile")
@@ -877,6 +931,307 @@ def event_log_temporal_profile(request: Request, log_id: str, case_type: str | N
     _require_dashboard(request)
     return _respond(temporal.temporal_profile, log_id, case_type, zeta=zeta, min_occurrences=min_occurrences,
                     cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/heuristics-net")
+def event_log_heuristics_net(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                             dependency_threshold: float = Query(default=0.5, ge=0, le=1),
+                             and_threshold: float = Query(default=0.65, ge=0, le=1),
+                             min_occurrences: int = Query(default=1, ge=1, le=1_000_000),
+                             all_connected: bool = Query(default=True),
+                             cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_heuristics_miner as heuristics
+    _require_dashboard(request)
+    return _respond(heuristics.heuristics_net, log_id, case_type, dependency_threshold=dependency_threshold,
+                    and_threshold=and_threshold, min_occurrences=min_occurrences, all_connected=all_connected,
+                    cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/footprints")
+def event_log_footprints(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                         noise: float = Query(default=0.2, ge=0, lt=1), activities: float = Query(default=1.0, gt=0, le=1),
+                         cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_footprints as footprints
+    _require_dashboard(request)
+    return _respond(footprints.footprints, log_id, case_type, noise=noise, activities=activities, cohort=cohort)
+
+
+@router.post("/v1/event-logs/{log_id}/petri-net-replay")
+async def event_log_petri_net_replay(request: Request, log_id: str,
+                                     case_type: str | None = Query(default=None, max_length=200),
+                                     cohort: dict[str, Any] = Depends(_case_filter)):
+    """Replay the log on a PNML Petri net sent as the request body (at most 2 MB). The net is not stored."""
+    from . import event_log_petri_replay as petri
+    _require_dashboard(request)
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > petri.MAX_BYTES:
+            raise HTTPException(413, "the Petri net file is larger than 2 MB")
+    try:
+        result = await run_in_threadpool(petri.replay, log_id, bytes(body), case_type, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/v1/event-logs/{log_id}/reference-nets")
+def event_log_reference_nets(request: Request, log_id: str):
+    """Reference nets saved with this log (names and sizes, not contents)."""
+    from . import event_log_reference_nets as nets
+    _require_dashboard(request)
+    return _respond(nets.listing, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/reference-nets")
+async def event_log_save_reference_net(request: Request, log_id: str):
+    """Save a PNML net under a name: {"name": …, "pnml": …}."""
+    from . import event_log_reference_nets as nets
+    _require_dashboard(request)
+    spec = await _json_body(request, "reference net", strict=True, limit=2_300_000)
+    if not isinstance(spec, dict) or set(spec) - {"name", "pnml"}:
+        raise HTTPException(422, "send name and pnml")
+    try:
+        result = await run_in_threadpool(nets.save, log_id, spec.get("name"), spec.get("pnml"))
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/v1/event-logs/{log_id}/reference-nets/{net_id}.pnml")
+def event_log_reference_net_pnml(request: Request, log_id: str, net_id: str):
+    from . import event_log_reference_nets as nets
+    _require_dashboard(request)
+    try:
+        name, xml = nets.get(log_id, net_id)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(404, str(exc)) from None
+    return Response(xml, media_type="application/xml", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{net_id}.pnml"'})
+
+
+@router.post("/v1/event-logs/{log_id}/reference-nets/{net_id}/delete")
+def event_log_delete_reference_net(request: Request, log_id: str, net_id: str):
+    from . import event_log_reference_nets as nets
+    _require_dashboard(request)
+    return _respond(nets.delete, log_id, net_id)
+
+
+@router.post("/v1/event-logs/{log_id}/petri-net-alignments")
+async def event_log_petri_net_alignments(request: Request, log_id: str,
+                                         case_type: str | None = Query(default=None, max_length=200),
+                                         cohort: dict[str, Any] = Depends(_case_filter)):
+    """Optimal alignments of each variant on a PNML Petri net sent as the body (at most 2 MB). Not stored."""
+    from . import event_log_alignments as aligned
+    from . import event_log_petri_replay as petri
+    _require_dashboard(request)
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > petri.MAX_BYTES:
+            raise HTTPException(413, "the Petri net file is larger than 2 MB")
+    try:
+        result = await run_in_threadpool(aligned.alignments, log_id, bytes(body), case_type, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/petri-net-alignments/cases.csv")
+async def event_log_non_fitting_cases_csv(request: Request, log_id: str,
+                                          case_type: str | None = Query(default=None, max_length=200),
+                                          cohort: dict[str, Any] = Depends(_case_filter)):
+    """Each case that does not fit the PNML net sent as the body, as spreadsheet-safe CSV. Not stored."""
+    from . import event_log_alignments as aligned
+    from . import event_log_petri_replay as petri
+    _require_dashboard(request)
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > petri.MAX_BYTES:
+            raise HTTPException(413, "the Petri net file is larger than 2 MB")
+    try:
+        text, meta = await run_in_threadpool(aligned.non_fitting_cases_csv, log_id, bytes(body), case_type,
+                                             cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(text, media_type="text/csv; charset=utf-8", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-non-fitting-cases.csv"',
+        "X-OWG-Non-Fitting": f"cases={meta['non_fitting_cases']}; unaligned={meta['unaligned_cases']}; "
+                             f"truncated={str(meta['truncated']).lower()}"})
+
+
+@router.get("/v1/event-logs/{log_id}/model-quality")
+def event_log_model_quality(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                            levels: str | None = Query(default=None, max_length=100),
+                            activities: float = Query(default=1.0, gt=0, le=1),
+                            cohort: dict = Depends(_case_filter)):
+    """Fitness, precision, generalization and simplicity of the discovered net at several noise levels."""
+    from . import event_log_model_quality as quality
+    _require_dashboard(request)
+    return _respond(quality.model_quality, log_id, case_type, levels=levels, activities=activities, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/funnel")
+def event_log_funnel(request: Request, log_id: str, step: list[str] = Query(default=[], max_length=500),
+                     within_hours: float | None = Query(default=None, gt=0),
+                     case_type: str | None = Query(default=None, max_length=200),
+                     cohort: dict = Depends(_case_filter)):
+    """How many cases reach each chosen step in order, the time between steps and where the rest stopped."""
+    from . import event_log_funnel as funnel
+    _require_dashboard(request)
+    return _respond(funnel.funnel, log_id, step, case_type, within_hours=within_hours, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/unusual-cases")
+def event_log_unusual_cases(request: Request, log_id: str, limit: int = Query(default=25, ge=1, le=200),
+                            case_type: str | None = Query(default=None, max_length=200),
+                            cohort: dict = Depends(_case_filter)):
+    """Cases that stand out (rare path, unusual duration or length, heavy rework, rare activity) and why."""
+    from . import event_log_unusual_cases as unusual
+    _require_dashboard(request)
+    return _respond(unusual.unusual_cases, log_id, case_type, limit=limit, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/due-dates")
+def event_log_due_dates(request: Request, log_id: str, due_activity: str = Query(min_length=1, max_length=500),
+                        due_attribute: str | None = Query(default=None, max_length=200),
+                        due_days: float | None = Query(default=None, gt=0), early_days: float | None = Query(default=None, gt=0),
+                        case_type: str | None = Query(default=None, max_length=200),
+                        cohort: dict = Depends(_case_filter)):
+    """Whether the chosen activity happened by each case's due date: on time, early, late or still open.
+
+    The activity is ``due_activity``: ``activity`` is the case filter (cases containing an activity)."""
+    from . import event_log_due_dates as due
+    _require_dashboard(request)
+    return _respond(due.due_dates, log_id, due_activity, case_type, due_attribute=due_attribute, due_days=due_days,
+                    early_days=early_days, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/next-steps")
+def event_log_next_steps(request: Request, log_id: str, step: list[str] = Query(default=[], max_length=500),
+                         anchor: str = Query(default="start", max_length=20),
+                         case_type: str | None = Query(default=None, max_length=200),
+                         cohort: dict = Depends(_case_filter)):
+    """After a sequence of steps (from the case start or anywhere), which activities come next and how fast."""
+    from . import event_log_path_explorer as explorer
+    _require_dashboard(request)
+    return _respond(explorer.next_steps, log_id, step, case_type, anchor=anchor, cohort=cohort)
+
+
+@router.post("/v1/event-logs/{log_id}/petri-net-deviation-causes")
+async def event_log_petri_net_deviation_causes(request: Request, log_id: str,
+                                               case_type: str | None = Query(default=None, max_length=200),
+                                               cohort: dict[str, Any] = Depends(_case_filter)):
+    """Case features associated with deviating from a PNML net sent as the body (at most 2 MB). Not stored."""
+    from . import event_log_alignments as aligned
+    from . import event_log_petri_replay as petri
+    _require_dashboard(request)
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > petri.MAX_BYTES:
+            raise HTTPException(413, "the Petri net file is larger than 2 MB")
+    try:
+        result = await run_in_threadpool(aligned.deviation_causes, log_id, bytes(body), case_type, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/v1/event-logs/{log_id}/case-alignment")
+def event_log_case_alignment(request: Request, log_id: str, case_id: str = Query(min_length=1, max_length=500),
+                             noise: float = Query(default=0.2, ge=0, lt=1),
+                             case_type: str | None = Query(default=None, max_length=200)):
+    """How one case departs from the discovered model: its optimal alignment, extra and skipped steps."""
+    from . import event_log_alignments as aligned
+    _require_dashboard(request)
+    return _respond(aligned.case_alignment, log_id, case_id, case_type, noise=noise)
+
+
+@router.get("/v1/event-logs/{log_id}/model-change")
+def event_log_model_change(request: Request, log_id: str, split: str | None = Query(default=None, max_length=64),
+                           noise: float = Query(default=0.2, ge=0, lt=1),
+                           case_type: str | None = Query(default=None, max_length=200),
+                           cohort: dict = Depends(_case_filter)):
+    """How the discovered model differs before and after a date: orderings, activities and cross-fit."""
+    from . import event_log_model_change as change
+    _require_dashboard(request)
+    return _respond(change.model_change, log_id, case_type, split=split, noise=noise, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/model-comparison")
+def event_log_model_comparison(request: Request, log_id: str, group_a: str = Query(min_length=3, max_length=400),
+                               group_b: str = Query(min_length=3, max_length=400),
+                               noise: float = Query(default=0.2, ge=0, lt=1),
+                               case_type: str | None = Query(default=None, max_length=200),
+                               cohort: dict = Depends(_case_filter)):
+    """The discovered models of two groups of cases (case attribute values) compared."""
+    from . import event_log_model_change as change
+    _require_dashboard(request)
+    return _respond(change.model_comparison, log_id, group_a, group_b, case_type, noise=noise, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/story")
+def event_log_story(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                    cohort: dict = Depends(_case_filter)):
+    """The process in plain words: sentences filled from computed figures, each linked to its analysis."""
+    from . import event_log_story as story
+    _require_dashboard(request)
+    return _respond(story.story, log_id, case_type, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/case-compare")
+def event_log_case_compare(request: Request, log_id: str, case_a: str = Query(min_length=1, max_length=500),
+                           case_b: str = Query(min_length=1, max_length=500),
+                           case_type: str | None = Query(default=None, max_length=200)):
+    """Two cases side by side: shared steps, steps only one has, and where the second fell behind."""
+    from . import event_log_case_compare as compare
+    _require_dashboard(request)
+    return _respond(compare.compare_cases, log_id, case_a, case_b, case_type)
+
+
+@router.get("/v1/event-logs/{log_id}/similar-cases")
+def event_log_similar_cases(request: Request, log_id: str, case_id: str = Query(min_length=1, max_length=500),
+                            limit: int = Query(default=10, ge=1, le=50),
+                            case_type: str | None = Query(default=None, max_length=200),
+                            cohort: dict = Depends(_case_filter)):
+    """The cases whose path is closest to ``case_id``, what they did differently and how long they took."""
+    from . import event_log_similar_cases as similar
+    _require_dashboard(request)
+    return _respond(similar.similar_cases, log_id, case_id, case_type, limit=limit, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/activity-profile")
+def event_log_activity_profile(request: Request, log_id: str,
+                               profile_activity: str = Query(min_length=1, max_length=500),
+                               case_type: str | None = Query(default=None, max_length=200),
+                               cohort: dict = Depends(_case_filter)):
+    """One activity from every side. ``profile_activity`` names it: ``activity`` is the case filter."""
+    from . import event_log_activity_profile as profile
+    _require_dashboard(request)
+    return _respond(profile.activity_profile, log_id, profile_activity, case_type, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/breakdown/dimensions")
+def event_log_breakdown_dimensions(request: Request, log_id: str,
+                                   case_type: str | None = Query(default=None, max_length=200)):
+    """The dimensions a breakdown table can use in this log."""
+    from . import event_log_breakdown as breakdown
+    _require_dashboard(request)
+    return _respond(breakdown.dimensions, log_id, case_type)
+
+
+@router.get("/v1/event-logs/{log_id}/breakdown")
+def event_log_breakdown(request: Request, log_id: str, rows: str = Query(min_length=1, max_length=220),
+                        columns: str | None = Query(default=None, max_length=220),
+                        with_activity: str | None = Query(default=None, min_length=1, max_length=500),
+                        case_type: str | None = Query(default=None, max_length=200),
+                        cohort: dict = Depends(_case_filter)):
+    """Case KPIs by one or two dimensions, as a pivot table."""
+    from . import event_log_breakdown as breakdown
+    _require_dashboard(request)
+    return _respond(breakdown.breakdown, log_id, rows, columns, case_type, with_activity=with_activity, cohort=cohort)
 
 
 @router.get("/v1/event-logs/{log_id}/variants")
@@ -1594,6 +1949,13 @@ async def event_log_add_signal_rule(request: Request, log_id: str):
     return _respond(signals.add_rule, log_id, await _json_body(request, "signal rule"))
 
 
+@router.get("/v1/event-logs/{log_id}/signals/scorecard")
+def event_log_signal_scorecard(request: Request, log_id: str, months: int = Query(default=6, ge=1, le=24)):
+    """Value-based signals month by month (read-only)."""
+    _require_dashboard(request)
+    return _respond(signals.scorecard, log_id, months)
+
+
 @router.post("/v1/event-logs/{log_id}/signals/evaluate")
 def event_log_evaluate_signals(request: Request, log_id: str):
     _require_dashboard(request)
@@ -1697,6 +2059,21 @@ def event_log_model_discovery_pnml(request: Request, log_id: str, case_type: str
     return Response(xml, media_type="application/xml", headers={
         "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-discovered.pnml"',
         "X-OWG-Petri-Net": f"places={meta['places']}; transitions={meta['transitions']}; silent={meta['silent_transitions']}"})
+
+
+@router.get("/v1/event-logs/{log_id}/variant.pnml")
+def event_log_variant_pnml(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                           rank: int = Query(default=1, ge=1, le=50), cohort: dict[str, Any] = Depends(_case_filter)):
+    """A sequence Petri net of the rank-th most common path (rank 1: the happy path)."""
+    from . import event_log_pnml as pnml
+    _require_dashboard(request)
+    try:
+        xml, meta = pnml.variant_pnml(log_id, case_type, rank=rank, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(xml, media_type="application/xml", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-path-{rank}.pnml"',
+        "X-OWG-Path-Cases": f"cases={meta['cases']}; share={meta['share']}"})
 
 
 @router.post("/v1/event-logs/{log_id}/model-discovery-draft")

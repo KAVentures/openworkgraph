@@ -59,6 +59,12 @@ def organization(log_id: str, case_type: str | None = None, *, names: str = "pse
               SELECT case_id, resource, lead(resource) OVER (PARTITION BY case_id ORDER BY ts, event_id) AS nxt FROM ce)
             WHERE resource <> '' AND nxt <> '' AND nxt IS NOT NULL AND resource <> nxt
             GROUP BY resource, nxt ORDER BY n DESC, resource, nxt""").fetchall()
+        # Subcontracting (PM4Py, van der Aalst et al. 2005): A's event, then B's, then A's again in the case.
+        subcontracting = conn.execute("""SELECT resource, nxt, count(*) AS n, count(DISTINCT case_id) AS cases FROM (
+              SELECT case_id, resource, lead(resource) OVER w AS nxt, lead(resource, 2) OVER w AS back FROM ce
+              WINDOW w AS (PARTITION BY case_id ORDER BY ts, event_id))
+            WHERE resource <> '' AND nxt <> '' AND nxt IS NOT NULL AND resource <> nxt AND back = resource
+            GROUP BY resource, nxt ORDER BY n DESC, resource, nxt""").fetchall()
         crowded = conn.execute("""SELECT count(*) FROM (SELECT case_id FROM ce WHERE resource <> ''
             GROUP BY case_id HAVING count(DISTINCT resource) > ?)""", [MAX_RESOURCES_PER_CASE]).fetchone()[0]
         together = conn.execute("""WITH pr AS (
@@ -100,6 +106,8 @@ def organization(log_id: str, case_type: str | None = None, *, names: str = "pse
             "handover_of_work": [{"from": a, "to": b, "handovers": n, "cases": c}
                                  for (a, b), (n, c) in merge(handovers, 2)[:limit]],
             "cases_with_handover": handover_cases,
+            "subcontracting": [{"from": a, "to": b, "times": n, "cases": c}
+                               for (a, b), (n, c) in merge(subcontracting, 2)[:limit]],
             "working_together": [{"resources": [a, b], "shared_cases": n}
                                  for (a, b), (n,) in merge(together, 1)[:limit]],
             "working_together_excluded_cases": crowded,
@@ -119,7 +127,8 @@ def organization(log_id: str, case_type: str | None = None, *, names: str = "pse
                 "labels_are_stable_within_this_response_only": names == "pseudonymous",
             },
             "interpretation": ("Handover counts consecutive events in a case performed by different resources; "
-                               "working together counts cases two resources both touched. Neither says who "
+                               "subcontracting counts work that passes from one resource to another and straight "
+                               "back; working together counts cases two resources both touched. None says who "
                                "was responsible or how well anyone worked."),
         }
     return workspace._query(log_id, case_type, run)
