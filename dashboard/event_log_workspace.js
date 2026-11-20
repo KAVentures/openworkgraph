@@ -19,6 +19,7 @@
   FILTERED.add('heuristics-net');
   FILTERED.add('footprints');
   FILTERED.add('model-quality');
+  FILTERED.add('similar-cases');
   FILTERED.add('model-change');
   FILTERED.add('model-comparison');
   FILTERED.add('funnel');
@@ -1894,8 +1895,25 @@
     const other=input('owgCaseCompareId','text','another case ID');other.maxLength=500;other.autocomplete='off';
     const compare=button('Compare with case','secondary');compare.id='owgCaseCompareRun';
     const compared=el('div');compared.id='owgCaseCompareResult';compared.setAttribute('role','status');compared.setAttribute('aria-live','polite');
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Case',caseId),run,field('Compare with',other),compare);
-    box.append(slowList,row,out,compared);
+    const similarRun=button('Find similar cases','secondary');similarRun.id='owgSimilarRun';
+    const similarOut=el('div');similarOut.id='owgSimilarResult';similarOut.setAttribute('role','status');similarOut.setAttribute('aria-live','polite');
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Case',caseId),run,similarRun,field('Compare with',other),compare);
+    box.append(slowList,row,out,similarOut,compared);
+    similarRun.onclick=async()=>{
+      const id=caseId.value.trim();
+      if(!id){similarOut.replaceChildren(el('div','Enter a case ID.','muted'));return;}
+      const generation=state.generation;similarRun.disabled=true;similarOut.replaceChildren(el('div','Looking for similar cases…','muted'));
+      try{
+        const r=await getJSON(logPath('similar-cases',{case_id:id,limit:'10'}));
+        if(generation!==state.generation)return;
+        const h=s=>s===null||s===undefined?'—':(s<172800?(Math.round(s/360)/10)+' h':(Math.round(s/8640)/10)+' d');
+        const diff=c=>[...c.more_of.map(x=>'+'+x.activity+(x.times>1?' ×'+x.times:'')),...c.fewer_of.map(x=>'−'+x.activity+(x.times>1?' ×'+x.times:''))].join(', ')||(c.same_path?'same path':'same steps, other order');
+        const t=table(['Case','Similarity','Differences from '+r.case.case_id,'Duration','Started','Compare'],r.similar.map(c=>[c.case_id,Math.round(c.similarity*100)+'%',diff(c),h(c.duration_seconds),(c.started_at||'').slice(0,10),'']));
+        t.querySelectorAll('tbody tr').forEach((tr,i)=>{const go=button('Compare','secondary');go.setAttribute('aria-label','Compare with case '+r.similar[i].case_id);
+          go.onclick=()=>{other.value=r.similar[i].case_id;compare.click();};tr.cells[5].appendChild(go);});
+        similarOut.replaceChildren(el('div',Number(r.same_path_cases).toLocaleString()+' other cases follow exactly the same path. The '+r.similar.length+' most similar cases took a median of '+h(r.similar_median_duration_seconds)+'; this case took '+h(r.case.duration_seconds)+'.'+(r.search_complete?'':' The search stopped early; closer cases may exist.')),t,el('div',r.caveat,'muted'));
+      }catch(error){similarOut.replaceChildren(el('div',error.message,'muted'));}
+      finally{similarRun.disabled=false;}};
     compare.onclick=async()=>{
       const a=caseId.value.trim(),b=other.value.trim();
       if(!a||!b){compared.replaceChildren(el('div','Enter both case IDs.','muted'));return;}
