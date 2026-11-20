@@ -160,6 +160,19 @@ async def agent_model_deviations(request: Request, log_id: str, noise: float = Q
     return await _answer(sharing.model_deviations, log_id, case_type, noise)
 
 
+@router.get("/v1/process-intelligence/{log_id}/reference-nets")
+async def agent_reference_nets(request: Request, log_id: str):
+    _require_agent_access(request)
+    return await _answer(sharing.reference_nets, log_id)
+
+
+@router.get("/v1/process-intelligence/{log_id}/reference-nets/{net_id}/deviations")
+async def agent_reference_deviations(request: Request, log_id: str, net_id: str,
+                                     case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.reference_deviations, log_id, net_id, case_type)
+
+
 @router.get("/v1/process-intelligence/{log_id}/funnel")
 async def agent_funnel(request: Request, log_id: str, step: list[str] = Query(default=[], max_length=500),
                        within_hours: float | None = Query(default=None, gt=0),
