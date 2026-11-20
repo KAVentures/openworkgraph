@@ -272,3 +272,19 @@ def test_stale_packet_read_failure_cannot_overwrite_new_identity_or_selection():
     assert 'ticket===handoffGeneration&&identityTicket===identityGeneration' in block
     assert 'credential===authorizedCredential&&selected===chosen' in block
     assert 'catch(_){fail("Fresh authenticated read failed or access was withdrawn.");}' in block
+
+
+
+def test_review_acknowledgment_is_revision_pinned_and_not_execution_receipt():
+    """The Gateway UI must not imply that a design review executed agent work."""
+    html = PAGE.read_text(encoding="utf-8")
+    assert 'id="reviewOutcome" role="status" aria-live="polite"' in html
+    render = html.split("function render(data) {", 1)[1].split("async function review(decision) {", 1)[0]
+    assert '$("reviewOutcome").textContent = "";' in render
+    block = html.split("async function review(decision) {", 1)[1].split('$("approve").onclick', 1)[0]
+    assert 'reviewResult?.process?.workflow_id===record.workflow_id' in block
+    assert 'reviewResult.process.revision===record.revision' in block
+    assert 'reviewResult.process.content_sha256===record.content_sha256' in block
+    assert 'Human design review only; no agent handoff or execution occurred.' in block
+    assert 'revision reference could not be verified' in block
+    assert block.index("render(reviewResult);") < block.index('$("reviewOutcome").textContent =')
