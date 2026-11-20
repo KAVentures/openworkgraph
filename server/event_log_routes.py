@@ -1450,12 +1450,19 @@ async def event_log_run_analysis_source_bound(request: Request, log_id: str):
     try:
         def compute():
             with workspace._LOCK:
-                result = analysis.run(log_id, spec)
+                # Refuse oversized sources before running potentially expensive
+                # analysis. Keep the preflight, analysis, and digest under one
+                # workspace lock so a concurrent import cannot change lineage.
                 conn = workspace._connect()
                 try:
                     if provenance.source_rows(conn, log_id) > provenance.MAX_SOURCE_ROWS:
                         raise workspace.EventLogWorkspaceError(
                             "Source exceeds complete fingerprint budget; source-bound export unavailable")
+                finally:
+                    conn.close()
+                result = analysis.run(log_id, spec)
+                conn = workspace._connect()
+                try:
                     result["source_content_sha256"] = provenance.source_digest(conn, log_id)
                 finally:
                     conn.close()
