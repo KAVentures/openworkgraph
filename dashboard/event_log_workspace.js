@@ -869,6 +869,7 @@
     results.appendChild(clusterSection());
     results.appendChild(caseTagSection(names));
     results.appendChild(caseAttributeSection());
+    results.appendChild(caseTableExportSection());
     results.appendChild(caseExplainSection());
     results.appendChild(discoverySection());
     results.appendChild(driftSection());
@@ -2108,6 +2109,47 @@
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));ready();}
     };
     getJSON(base).then(r=>{if(generation===state.generation)render(r);}).catch(error=>list.replaceChildren(el('div',error.message,'muted')));
+    return box;
+  }
+
+  function caseTableExportSection(){
+    const box=section('Download a case table');box.id='owgCaseTableExport';
+    const columns=el('textarea');columns.id='owgCaseTableColumns';columns.rows=3;columns.maxLength=2700;
+    columns.placeholder='One attribute name per line';
+    const include=input('owgCaseTableIncludeValues','checkbox');
+    const format=select('owgCaseTableFormat',[['exact','CSV for re-import'],['review','CSV for spreadsheet review']]);
+    const download=button('Download case table','secondary');download.id='owgCaseTableDownload';
+    const message=el('p');message.id='owgCaseTableStatus';message.setAttribute('role','status');
+    const logId=state.logId,notion=state.caseType,generation=state.generation;
+    box.append(el('p','One row per '+(notion||'case')+'. '+(filterOn()?'Uses the active case filter.':'Includes all cases in this case notion.'),'muted'),
+      field('Attribute columns (optional)',columns),field('Include stored values for these columns',include),
+      field('Case table format',format),download,message);
+    const describe=()=>{
+      message.textContent=format.value==='review'
+        ? 'Review CSV changes formula-like cells and headers. Choose CSV for re-import to keep exact case IDs.'
+        : 'Leave values blank for a template. To join an edited table, use case_id as the case ID column.';
+    };
+    format.onchange=describe;describe();
+    download.onclick=async()=>{
+      download.disabled=true;
+      try{
+        const selected=columns.value.split(/\r?\n/).map(line=>line.trim()).filter(Boolean);
+        const review=format.value==='review';
+        const spec={columns:selected,include_values:include.checked,spreadsheet_review:review,
+          ...(notion?{case_type:notion}:{}),...(filterOn()?{cohort:globalCohort()}:{})};
+        message.textContent='Preparing the case table…';
+        const response=await api('/v1/event-logs/'+encodeURIComponent(logId)+'/case-table/export',{
+          method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)});
+        const blob=await response.blob();
+        if(generation!==state.generation||!box.isConnected)return;
+        const url=URL.createObjectURL(blob);
+        const link=el('a');link.href=url;link.download=logId+'-case-table.'+(review?'review.csv':'csv');
+        document.body.appendChild(link);link.click();link.remove();
+        setTimeout(()=>URL.revokeObjectURL(url),1000);
+        message.textContent='Case table downloaded.';
+      }catch(error){if(generation===state.generation)message.textContent=error.message;}
+      finally{download.disabled=false;}
+    };
     return box;
   }
 
