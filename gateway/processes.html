@@ -2052,6 +2052,10 @@
         let reviewMutationInFlight = false;
         async function review(decision) {
           if (reviewMutationInFlight) throw new Error("A review submission is already in progress. Wait for its outcome or reopen the latest revision.");
+          // Lock before any asynchronous authorization read: two rapid clicks
+          // must not both pass preflight and submit competing review decisions.
+          reviewMutationInFlight = true;
+          try {
           if (!$("reviewConfirm").checked)
             throw new Error("Review this exact saved revision first.");
           const record = selected.process;
@@ -2106,10 +2110,7 @@
             resetHandoff("Review submitted; outcome may be unknown until the latest revision is reopened. Reinspect before another decision.");
             $("handoffConsent").checked=false;
           }
-          reviewMutationInFlight = true;
-          let reviewResult;
-          try {
-            reviewResult=await call(
+          const reviewResult=await call(
             "/v1/human/processes/" + record.workflow_id + "/reviews",
             {
               revision: record.revision,
@@ -2120,11 +2121,6 @@
               user_confirmed: true,
             },
           );
-          } finally {
-            // A lost response has an unknown server outcome. Release the UI lock,
-            // but never restore the consumed inspection or consent.
-            reviewMutationInFlight = false;
-          }
           if(reviewIdentity!==identityGeneration||reviewCredential!==credential||
              selected!==reviewSelection)return;
           // A completed decision changes the review state/number. The inspected
@@ -2167,6 +2163,11 @@
             note("Design review acknowledged against the exact revision and content hash.");
           } else {
             note("Review outcome unverified. Reopen the latest authorized revision before taking further action.");
+          }
+          } finally {
+            // Includes failed authorization reads and lost POST responses.
+            // Never restore consumed inspection consent on uncertainty.
+            reviewMutationInFlight = false;
           }
         }
         $("approve").onclick = () => run(() => review("reviewed_design"));
