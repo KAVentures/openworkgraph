@@ -2127,7 +2127,7 @@
           // packet is single-use: require fresh consent and inspection before
           // another review or any downstream handoff, even after success.
           if (submittedInspectedHandoff)
-            $("handoffStatus").textContent="Review decision recorded. Reopen and reinspect before another handoff.";
+            $("handoffStatus").textContent="Review response received; verifying acknowledgment. Reopen and reinspect before another handoff.";
           // An HTTP 200 with another workflow's record is not safe to render.
           // Keep the current selection and require a fresh authorized read.
           // A matching process envelope alone does not prove that the Gateway
@@ -2148,6 +2148,8 @@
             note("Review outcome unverified. Reopen the latest authorized revision before taking further action.");
             return;
           }
+          if (submittedInspectedHandoff)
+            $("handoffStatus").textContent="Design review acknowledged. Reopen and reinspect before another handoff.";
           render(reviewResult);
           // Display only the Gateway's acknowledged, revision-pinned review
           // result. This is a human design-review acknowledgment, not an
