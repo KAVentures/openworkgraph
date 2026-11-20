@@ -108,7 +108,13 @@ def prepare(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
             or type(proposal.get("reviewed_event_snapshots")) is not int
             or proposal["reviewed_event_snapshots"] != checked["event_snapshots"]
             or type(proposal.get("removal_markers_for_review")) is not int
-            or proposal["removal_markers_for_review"] != checked["removal_markers_for_review"]):
+            or proposal["removal_markers_for_review"] != checked["removal_markers_for_review"]
+            or proposal.get("reviewed_csv_sha256") != digest
+            or proposal.get("manual_review_and_separate_commit_required") is not True
+            or proposal.get("provider_requests") != 0
+            or proposal.get("owg_writes") != 0
+            or proposal.get("checkpoint_advanced") is not False
+            or proposal.get("automatic_retry_allowed") is not False):
         raise ReceiptError("Invalid or concurrent checkpoint review preflight")
     # The preflight is read-only, not a lock. Refuse to present a review
     # as current if another operator committed while it was running.
