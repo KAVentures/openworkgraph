@@ -73,7 +73,8 @@ def test_two_generations_require_independent_review_and_explicit_commit():
                 require_event_membership=True)
         assert prepared["status"] == "operator_review_required"
         assert prepared["checkpoint_advanced"] is False
-        assert not writes
+        assert writes == [entry for previous in range(1, generation) for entry in
+                          (("append", previous), ("handoff", previous), ("checkpoint", previous))]
 
         def append(**kwargs):
             writes.append(("append", generation))
