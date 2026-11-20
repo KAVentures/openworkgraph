@@ -2293,7 +2293,16 @@
           resetHandoff("Reopening latest authorized revision. A new inspection is required.");
           const identityTicket=identityGeneration;
           const recoveryOpenTicket=processOpenGeneration+1;
-          await open(workflowId);
+          try {
+            await open(workflowId);
+          } catch (error) {
+            // Denial, revocation, or an unavailable Gateway must not leave the
+            // previous process looking like a successful recovery.
+            if(recoveryOpenTicket===processOpenGeneration&&
+               identityTicket===identityGeneration&&selected?.process?.workflow_id===workflowId)
+              $("handoffStatus").textContent="REFUSED: Could not reopen an authorized revision. Check access and sign in again before inspecting.";
+            throw error;
+          }
           // A later open of even the same workflow supersedes this recovery.
           // Never announce success for a stale asynchronous response.
           if(recoveryOpenTicket!==processOpenGeneration||
