@@ -1405,3 +1405,34 @@ class CompleteSourceCohortTests(unittest.TestCase):
             score_source_event_cohort(source, [
                 {"window": "current", "event_id": "e1", "true_resource_pairs": []}
             ])
+
+    def test_source_cohort_stratifies_ambiguous_false_links_and_missed_events(self):
+        from server.reconstruction_review_cli import score_source_event_cohort
+        source = payload([
+            pair("case-A", "file-A", ["ambiguous", "single"]),
+            pair("case-B", "file-B", ["ambiguous"]),
+        ])
+        rows = {row["event_id"]: row for row in build_review_queue(source)["event_reviews"]}
+        a = rows["single"]["candidate_resource_pairs"][0]
+        labels = [
+            {"window": "current", "event_id": "ambiguous", "true_resource_pairs": [a]},
+            {"window": "current", "event_id": "single", "true_resource_pairs": [a]},
+            {"window": "current", "event_id": "missing", "true_resource_pairs": [a]},
+            {"window": "current", "event_id": "interruption", "true_resource_pairs": []},
+        ]
+        result = score_source_event_cohort(source, labels)
+        strata = result["per_prediction_status_metrics"]
+        self.assertEqual(strata["ambiguous_multiple_pairs"]["events"], 1)
+        self.assertEqual(strata["ambiguous_multiple_pairs"]["fp"], 1)
+        self.assertEqual(strata["ambiguous_multiple_pairs"]["false_link_event_rate"], 1.0)
+        self.assertEqual(strata["single_pair"]["events"], 1)
+        self.assertEqual(strata["single_pair"]["tp"], 1)
+        self.assertEqual(strata["single_pair"]["fp"], 0)
+        self.assertEqual(strata["no_prediction"]["events"], 2)
+        self.assertEqual(strata["no_prediction"]["fn"], 1)
+        self.assertEqual(strata["no_prediction"]["false_link_event_rate"], 0.0)
+        self.assertEqual(result["true_positive_pairs"], 2)
+        self.assertEqual(result["false_positive_pairs"], 1)
+        self.assertEqual(result["false_negative_pairs"], 1)
+        self.assertFalse(result["independent_labels_verified"])
+        self.assertFalse(result["held_out_verified"])
