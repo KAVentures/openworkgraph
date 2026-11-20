@@ -57,7 +57,11 @@ class NextRoundTests(unittest.TestCase):
             order.append("preflight")
             self.assertEqual(kwargs["expected_previous_candidate_sha256"], SHA)
             self.assertEqual(kwargs["expected_review_csv_sha256"], "c" * 64)
-            return {"proposed_generation": 3}
+            return {"status": "review_ready_for_explicit_commit",
+                    "proposed_generation": 3,
+                    "checkpoint_predecessor_generation": 2,
+                    "reviewed_event_snapshots": 3,
+                    "removal_markers_for_review": 1}
         with patch.object(flow, "inspect_checkpoint", return_value={
                 "generation": 2, "candidate_sha256": SHA, "log_id": "log"}), \
              patch.object(flow.cycle, "extract", side_effect=extracted), \
@@ -80,9 +84,13 @@ class NextRoundTests(unittest.TestCase):
                  "csv_sha256": "c" * 64, "event_snapshots": 1,
                  "removal_markers_for_review": 0}), \
              patch.object(flow.transaction, "preflight",
-                          return_value={"proposed_generation": 5}), \
+                          return_value={"status": "review_ready_for_explicit_commit",
+                                        "proposed_generation": 5,
+                                        "checkpoint_predecessor_generation": 2,
+                                        "reviewed_event_snapshots": 1,
+                                        "removal_markers_for_review": 0}), \
              patch.object(flow.transaction, "execute") as commit:
-            with self.assertRaisesRegex(ReceiptError, "Concurrent"):
+            with self.assertRaisesRegex(ReceiptError, "concurrent"):
                 flow.prepare(**inputs())
             commit.assert_not_called()
 
@@ -97,7 +105,11 @@ class NextRoundTests(unittest.TestCase):
                  "csv_sha256": "c" * 64, "event_snapshots": 1,
                  "removal_markers_for_review": 0}), \
              patch.object(flow.transaction, "preflight",
-                          return_value={"proposed_generation": 3}), \
+                          return_value={"status": "review_ready_for_explicit_commit",
+                                        "proposed_generation": 3,
+                                        "checkpoint_predecessor_generation": 2,
+                                        "reviewed_event_snapshots": 1,
+                                        "removal_markers_for_review": 0}), \
              patch.object(flow.transaction, "execute") as commit:
             with self.assertRaisesRegex(ReceiptError, "Checkpoint changed"):
                 flow.prepare(**inputs())
