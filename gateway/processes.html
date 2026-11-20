@@ -64,6 +64,10 @@
         padding: 18px;
         margin: 16px 0;
       }
+      /* Keep digest-pinned handoff status and controls inside narrow viewports. */
+      #handoffPreflight { box-sizing: border-box; max-width: 100%; min-inline-size: 0; overflow-wrap: anywhere; }
+      #handoffPreflight button, #handoffPreflight input { box-sizing: border-box; max-width: 100%; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+      #handoffPreflight output { display: block; max-width: 100%; overflow-wrap: anywhere; }
       #readinessReport { overflow-wrap: anywhere; }
       #opportunityDetail, #opportunityPipeline { min-width: 0; overflow-wrap: anywhere; }
       #opportunityDetail fieldset { min-inline-size: 0; max-width: 100%; box-sizing: border-box; }
