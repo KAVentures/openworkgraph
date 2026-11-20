@@ -222,3 +222,93 @@ def test_next_round_rejects_boolean_preflight_side_effect_counts(field):
                 consent_delta_read=True, consent_local_export=True,
                 confirm_previous_removals_reviewed=True,
                 require_event_membership=True)
+
+
+def test_real_graph_delta_http_adapter_two_rounds_and_revocation(tmp_path):
+    """Exercise production Graph request/response parsing, cursor reuse and grant revocation.
+
+    Network is replaced only at the HTTP transport boundary. No tenant calls
+    or OWG writes occur; downstream reviewed commit is tested separately.
+    """
+    import json
+    from server import m365_outlook_delta as delta
+
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    private.chmod(0o700)
+    grant = private / "grant.json"
+    grant.write_text(json.dumps(dict(version=1, enabled=True, consented=True,
+                                     tenant_scope="tenant", mailbox_scope="mailbox",
+                                     folder_id="inbox")))
+    grant.chmod(0o600)
+    delta_url_1 = ("https://graph.microsoft.com/v1.0/me/mailFolders/inbox/"
+                   "messages/delta?%24deltatoken=round1")
+    delta_url_2 = ("https://graph.microsoft.com/v1.0/me/mailFolders/inbox/"
+                   "messages/delta?%24deltatoken=round2")
+    observed = []
+
+    class Response:
+        status = 200
+        headers = {"Content-Type": "application/json; charset=utf-8"}
+
+        def __init__(self, url, payload):
+            self.url = url
+            self.payload = json.dumps(payload).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def geturl(self):
+            return self.url
+
+        def read(self, limit):
+            return self.payload[:limit]
+
+    class Transport:
+        def open(self, req, timeout):
+            assert timeout == 15
+            assert req.get_method() == "GET"
+            assert req.get_header("Authorization") == "Bearer safe-test-token"
+            assert req.full_url.startswith("https://graph.microsoft.com/")
+            observed.append(req.full_url)
+            if len(observed) == 1:
+                return Response(req.full_url, {
+                    "value": [{"id": "message1",
+                               "receivedDateTime": "2026-11-19T10:00:00Z",
+                               "lastModifiedDateTime": "2026-11-19T10:01:00Z",
+                               "isRead": False}],
+                    "@odata.deltaLink": delta_url_1})
+            assert req.full_url == delta_url_1
+            return Response(req.full_url, {
+                "value": [{"id": "message1", "@removed": {"reason": "deleted"}}],
+                "@odata.deltaLink": delta_url_2})
+
+    def round_(index, previous=None):
+        return delta.export_delta(
+            tenant="tenant", mailbox="mailbox", folder_id="inbox",
+            grant_file=grant, output=private / f"round{index}.csv",
+            candidate=private / f"round{index}.json",
+            token="safe-test-token", consent_read=True, consent_export=True,
+            previous_candidate=previous,
+            confirm_previous_import=previous is not None, opener=Transport())
+
+    first = round_(1)
+    assert first["event_snapshots"] == 1
+    assert first["checkpoint_advanced"] is False
+    second = round_(2, private / "round1.json")
+    assert second["removal_markers_for_review"] == 1
+    assert second["event_snapshots"] == 0
+    assert len(observed) == 2
+
+    # Revocation must prevent any third provider request, even with an
+    # otherwise valid cursor and explicit consent.
+    grant.write_text(json.dumps(dict(version=1, enabled=False, consented=True,
+                                     tenant_scope="tenant", mailbox_scope="mailbox",
+                                     folder_id="inbox")))
+    grant.chmod(0o600)
+    with pytest.raises(delta.DeltaError, match="revoked or mismatched"):
+        round_(3, private / "round2.json")
+    assert len(observed) == 2
