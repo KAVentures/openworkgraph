@@ -2130,9 +2130,18 @@
             $("handoffStatus").textContent="Review decision recorded. Reopen and reinspect before another handoff.";
           // An HTTP 200 with another workflow's record is not safe to render.
           // Keep the current selection and require a fresh authorized read.
+          // A matching process envelope alone does not prove that the Gateway
+          // recorded THIS review decision. Confirm the authenticated actor's
+          // latest decision in the returned review snapshot before claiming
+          // success. Truncated or malformed snapshots require a fresh read.
           const acknowledged=reviewResult?.process?.workflow_id===record.workflow_id &&
             reviewResult.process.revision===record.revision &&
-            reviewResult.process.content_sha256===record.content_sha256;
+            reviewResult.process.content_sha256===record.content_sha256 &&
+            reviewResult.your_actor_id===reviewSelection.your_actor_id &&
+            Array.isArray(reviewResult.review?.reviews) &&
+            reviewResult.review.reviews.some((entry)=>
+              entry.reviewer_actor_id===reviewSelection.your_actor_id &&
+              entry.decision===decision);
           if(!acknowledged){
             $("reviewConfirm").checked=false;
             $("reviewOutcome").textContent="Review response could not be verified. Reopen the latest authorized revision and check its review state before resubmitting.";
