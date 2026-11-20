@@ -312,3 +312,58 @@ def test_real_graph_delta_http_adapter_two_rounds_and_revocation(tmp_path):
     with pytest.raises(delta.DeltaError, match="revoked or mismatched"):
         round_(3, private / "round2.json")
     assert len(observed) == 2
+
+
+def test_real_graph_adapter_refuses_revocation_between_pages_without_publishing(tmp_path):
+    """A revoked grant during pagination must stop before the next Graph GET."""
+    import json
+    from server import m365_outlook_delta as delta
+
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    private.chmod(0o700)
+    grant = private / "grant.json"
+    scope = dict(version=1, enabled=True, consented=True,
+                 tenant_scope="tenant", mailbox_scope="mailbox",
+                 folder_id="inbox")
+    grant.write_text(json.dumps(scope))
+    grant.chmod(0o600)
+    next_url = ("https://graph.microsoft.com/v1.0/me/mailFolders/inbox/"
+                "messages/delta?%24skiptoken=page2")
+    requests = []
+
+    class Response:
+        status = 200
+        headers = {"Content-Type": "application/json"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def geturl(self):
+            return requests[0]
+
+        def read(self, limit):
+            return json.dumps({"value": [], "@odata.nextLink": next_url}).encode()
+
+    class Transport:
+        def open(self, req, timeout):
+            requests.append(req.full_url)
+            assert len(requests) == 1
+            assert req.get_header("Authorization") == "Bearer safe-test-token"
+            # Revoke authorization after the first response, before page two.
+            grant.write_text(json.dumps({**scope, "enabled": False}))
+            grant.chmod(0o600)
+            return Response()
+
+    with pytest.raises(delta.DeltaError, match="revoked or mismatched"):
+        delta.export_delta(
+            tenant="tenant", mailbox="mailbox", folder_id="inbox",
+            grant_file=grant, output=private / "round.csv",
+            candidate=private / "round.json", token="safe-test-token",
+            consent_read=True, consent_export=True, opener=Transport())
+    assert len(requests) == 1
+    assert not (private / "round.csv").exists()
+    assert not (private / "round.json").exists()
