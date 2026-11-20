@@ -48,6 +48,8 @@ def test_handoff_state_initialized_before_oidc_callback_restores_session():
     # The callback invokes run(connectIdentity), which synchronously calls clear().
     # resetHandoff must not touch a lexical binding in its temporal dead zone.
     assert html.index("let handoffGeneration=0;") < html.index("function clear(releaseBusy=false)")
+    assert html.index("let inspectedHandoff=null;") < html.index("function clear(releaseBusy=false)")
+    assert html.count("let inspectedHandoff=null;") == 1
     assert html.index("function clear(releaseBusy=false)") < html.index('run(() => connectIdentity(incomingSession, "OWG-Process-Session"))')
 
 
