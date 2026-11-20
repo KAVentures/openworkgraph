@@ -510,7 +510,13 @@ def score_source_event_cohort(response: dict[str, Any], source_labels: list[dict
         # Unsurfaced earlier observations must still use canonical UTC windows.
         # Fabricated session labels must not inflate false-negative counts.
         if window != "current":
-            if not window.startswith("earlier:") or _session_window(window[len("earlier:"):]) != window:
+            if not window.startswith("earlier:"):
+                raise ValueError("noncanonical source event window")
+            try:
+                canonical_window = _session_window(window[len("earlier:"):])
+            except ValueError as exc:
+                raise ValueError("noncanonical source event window") from exc
+            if canonical_window != window:
                 raise ValueError("noncanonical source event window")
         previous_window = event_windows.setdefault(event_id, window)
         if previous_window != window:
