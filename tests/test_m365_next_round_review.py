@@ -119,7 +119,12 @@ class NextRoundTests(unittest.TestCase):
                                         "proposed_generation": 3,
                                         "checkpoint_predecessor_generation": 2,
                                         "reviewed_event_snapshots": 1,
-                                        "removal_markers_for_review": 0}), \
+                                        "removal_markers_for_review": 0,
+                                        "reviewed_csv_sha256": "c" * 64,
+                                        "manual_review_and_separate_commit_required": True,
+                                        "provider_requests": 0, "owg_writes": 0,
+                                        "checkpoint_advanced": False,
+                                        "automatic_retry_allowed": False}), \
              patch.object(flow.transaction, "execute") as commit:
             with self.assertRaisesRegex(ReceiptError, "Checkpoint changed"):
                 flow.prepare(**inputs())
