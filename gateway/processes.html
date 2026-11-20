@@ -58,6 +58,10 @@
       }
       section,
       .box {
+        box-sizing: border-box;
+        min-inline-size: 0;
+        max-inline-size: 100%;
+        overflow-wrap: anywhere;
         background: white;
         border: 1px solid #d8e0d7;
         border-radius: 10px;
@@ -149,8 +153,18 @@
       }
       @media (max-width: 700px) {
         body {
+          box-sizing: border-box;
+          min-inline-size: 0;
+          width: 100%;
           padding: 12px;
         }
+        button, input, select, textarea, output {
+          box-sizing: border-box;
+          min-inline-size: 0;
+          max-inline-size: 100%;
+          overflow-wrap: anywhere;
+        }
+        button { white-space: normal; }
         .grid {
           grid-template-columns: 1fr;
         }
