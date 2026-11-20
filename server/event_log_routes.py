@@ -1768,6 +1768,42 @@ async def event_log_run_analysis(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/analysis-source-bound")
+async def event_log_run_analysis_source_bound(request: Request, log_id: str):
+    """Return full local analysis with complete source lineage, atomically.
+
+    Ordinary downloads must compare this digest, not merely aggregate values.
+    Fail closed if a complete fingerprint exceeds its bounded source budget.
+    """
+    _require_dashboard(request)
+    from . import process_discovery_provenance as provenance
+    spec = await _json_body(request, "source-bound analysis")
+    try:
+        def compute():
+            with workspace._LOCK:
+                # Refuse oversized sources before running potentially expensive
+                # analysis. Keep the preflight, analysis, and digest under one
+                # workspace lock so a concurrent import cannot change lineage.
+                conn = workspace._connect()
+                try:
+                    if provenance.source_rows(conn, log_id) > provenance.MAX_SOURCE_ROWS:
+                        raise workspace.EventLogWorkspaceError(
+                            "Source exceeds complete fingerprint budget; source-bound export unavailable")
+                finally:
+                    conn.close()
+                result = analysis.run(log_id, spec)
+                conn = workspace._connect()
+                try:
+                    result["source_content_sha256"] = provenance.source_digest(conn, log_id)
+                finally:
+                    conn.close()
+                return result
+        result = await run_in_threadpool(compute)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/{log_id}/case-sharing-preview")
 async def event_log_case_sharing_preview(request: Request, log_id: str):
     _require_dashboard(request)
