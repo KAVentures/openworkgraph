@@ -143,10 +143,10 @@ def test_delayed_review_response_cannot_restore_another_session_or_process():
     block = html.split("async function review(decision) {", 1)[1].split('$("approve").onclick', 1)[0]
     assert "const reviewIdentity=identityGeneration, reviewCredential=credential;" in block
     assert "const reviewSelection=selected;" in block
-    assert "const reviewResult=await call(" in block
+    assert "reviewResult=await call(" in block
     assert "reviewIdentity!==identityGeneration||reviewCredential!==credential||" in block
     assert "selected!==reviewSelection)return;" in block
-    assert block.index("const reviewResult=await call(") < block.index("selected!==reviewSelection)return;")
+    assert block.index("reviewResult=await call(") < block.index("selected!==reviewSelection)return;")
     assert block.index("selected!==reviewSelection)return;") < block.index("render(reviewResult);")
 
 
@@ -205,7 +205,7 @@ def test_successful_review_consumes_inspected_handoff_before_render():
     assert 'if (inspectedHandoff) {' in block
     assert 'resetHandoff("Review submitted; outcome may be unknown' in block
     assert '$("handoffConsent").checked=false;' in block
-    assert block.index('resetHandoff("Review submitted; outcome may be unknown') < block.index('const reviewResult=await call(')
+    assert block.index('resetHandoff("Review submitted; outcome may be unknown') < block.index('reviewResult=await call(')
     assert block.index('selected!==reviewSelection)return;') < block.index('render(reviewResult);')
     assert block.index('render(reviewResult);') < block.index('note("Design review acknowledged')
 
@@ -260,8 +260,8 @@ def test_review_submission_consumes_inspection_before_uncertain_post():
     assert 'const submittedInspectedHandoff=Boolean(inspectedHandoff);' in block
     assert 'resetHandoff("Review submitted; outcome may be unknown' in block
     assert '$("handoffConsent").checked=false;' in block
-    assert block.index('resetHandoff("Review submitted; outcome may be unknown') < block.index('const reviewResult=await call(')
-    assert block.index('$("handoffConsent").checked=false;') < block.index('const reviewResult=await call(')
+    assert block.index('resetHandoff("Review submitted; outcome may be unknown') < block.index('reviewResult=await call(')
+    assert block.index('$("handoffConsent").checked=false;') < block.index('reviewResult=await call(')
     assert 'if (submittedInspectedHandoff)' in block
     assert 'render(reviewResult);' in block
 
@@ -325,7 +325,8 @@ def test_concurrent_review_mutations_are_serialized_and_lost_response_stays_fail
     assert "let reviewMutationInFlight = false;" in html
     assert 'if (reviewMutationInFlight) throw new Error(' in block
     assert "reviewMutationInFlight = true;" in block
-    assert "const reviewResult=await call(" in block
+    assert "let reviewResult;" in block
+    assert "reviewResult=await call(" in block
     assert block.index("reviewMutationInFlight = true;") < block.index("current=await call(")
     assert "reviewMutationInFlight = false;" in block
     assert block.index("reviewMutationInFlight = true;") < block.index('"/reviews"')
