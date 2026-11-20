@@ -374,6 +374,7 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
         counts["fp"] += extra
         counts["fn"] += missed
         counts["events"] += 1
+        counts["false_link_events"] = counts.get("false_link_events", 0) + bool(extra)
         cohort = by_ambiguity["ambiguous_multiple_pairs" if row["review_status"] == "ambiguous_multiple_pairs" else "single_pair"]
         cohort["tp"] += correct
         cohort["fp"] += extra
@@ -389,6 +390,7 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
         wr = counts["tp"] / (counts["tp"] + counts["fn"]) if counts["tp"] + counts["fn"] else 0.0
         per_window_metrics[window] = {
             **counts, "precision": wp, "recall": wr,
+            "false_link_event_rate": counts["false_link_events"] / counts["events"],
             "f1": 2 * wp * wr / (wp + wr) if wp + wr else 0.0,
         }
     ambiguity_metrics = {}
@@ -406,6 +408,7 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
         "ambiguous_annotated_events": ambiguous,
         "true_positive_pairs": tp, "false_positive_pairs": fp, "false_negative_pairs": fn,
         "false_positive_events": false_positive_events,
+        "false_link_event_rate": false_positive_events / len(labels),
         "false_negative_events": false_negative_events,
         "explicit_negative_events": negative_events,
         "explicit_negative_events_with_false_links": negative_events_with_false_links,
