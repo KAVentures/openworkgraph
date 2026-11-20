@@ -721,6 +721,7 @@ async def verify_local_case_provider_operation(request: Request, response: Respo
         raise _safe_error(exc) from None
     # Invalid/revoked/stale link must never trigger a provider read.
     await _recheck_source(scope)
+    _dashboard_only(request)
     try:
         receipt = await asyncio.to_thread(
             source_operation_receipt, resource_ref, "stripe_invoice_paid",
@@ -728,6 +729,7 @@ async def verify_local_case_provider_operation(request: Request, response: Respo
     except (ValueError, OSError, TypeError, CaseDeclarationError, sqlite3.DatabaseError):
         receipt = None
     await _recheck_source(scope)
+    _dashboard_only(request)
     try:
         after = await asyncio.to_thread(list_case_declarations, scope)
         _current, current_signature = admitted_case_dossier_snapshot(
@@ -744,6 +746,7 @@ async def verify_local_case_provider_operation(request: Request, response: Respo
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
         raise _safe_error(exc) from None
     await _recheck_source(scope)
+    _dashboard_only(request)
     response.headers["Cache-Control"] = "no-store"
     return result
 
