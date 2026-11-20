@@ -494,6 +494,9 @@ def score_source_event_cohort(response: dict[str, Any], source_labels: list[dict
         json.dumps(pair, separators=(",", ":")) for pair in row["candidate_resource_pairs"]
     } for row in queue["event_reviews"]}
     truth: dict[tuple[str, str], set[str]] = {}
+    # An event is one source observation, not a separate observation per window.
+    # Reject cross-window duplicates rather than inflating the evaluation cohort.
+    event_windows: dict[str, str] = {}
     for label in source_labels:
         if not isinstance(label, dict):
             raise ValueError("invalid source event label")
@@ -501,6 +504,9 @@ def score_source_event_cohort(response: dict[str, Any], source_labels: list[dict
         if (not isinstance(window, str) or not window or len(window) > 128
                 or not isinstance(event_id, str) or not event_id or len(event_id) > 120):
             raise ValueError("invalid source event identity")
+        previous_window = event_windows.setdefault(event_id, window)
+        if previous_window != window:
+            raise ValueError("source event ID reused across windows")
         key = (window, event_id)
         if key in truth:
             raise ValueError("duplicate source event label")
