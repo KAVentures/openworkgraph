@@ -1412,6 +1412,38 @@ under the chosen case notion and the source's activity mapping.
   exported, compared with the source (see *Comparing two logs*) or deleted like
   any other log.
 
+### Anonymized export
+
+**Anonymized export** (after **Analyse**) downloads the cases as a CSV meant
+to leave this computer, for example for a consultant or a benchmark, with
+less that points back to people. It honours the case filter.
+
+* **Rare paths are left out.** A case is kept only when at least the chosen
+  number of cases (2 to 1000, default 5) follow exactly the same sequence of
+  activities. Activities that only occur on rare paths disappear with them.
+* **Case IDs are replaced** by `C000001`, `C000002`, … in a random order, so
+  the file cannot be joined back to the source system by ID or row order.
+* **Time is coarsened.** *Relative* (default) moves each case to start at
+  midnight on the first day of the month it started and keeps the gaps between
+  its events; *day* keeps only each event's date (the `step` column keeps the
+  order); *exact* keeps timestamps.
+* **Resources** are left out (default) or replaced by `Resource 01`, … in a
+  random order.
+* **Attributes are never exported.** Columns: `case_id`, `step`, `activity`,
+  `timestamp` and, if chosen, `resource`. Cells that would start a spreadsheet
+  formula are prefixed with `'`.
+
+**Check what is kept** shows the counts first; nothing is stored.
+`GET /v1/event-logs/{log_id}/anonymized-export` returns that summary and
+`GET /v1/event-logs/{log_id}/anonymized-export.csv` the file (header
+`X-OWG-Anonymized`), both with `min_cases`, `time_mode`
+(`relative|day|exact`), `resource_mode` (`drop|pseudonymize`), `case_type` and
+the case-filter parameters. At most 1,000,000 events are exported at once.
+This lowers the chance that a case can be singled out; it is not a guarantee.
+Durations, dates and activity names can still identify a case to someone who
+knows it, so review the file before sharing it. For a map with formal
+guarantees, see *Private process map (differential privacy)*.
+
 ## Appending newer exports
 
 `POST /v1/event-logs/{log_id}/append?format=…` (dashboard session plus the

@@ -19,6 +19,8 @@
   // Views that honour the workspace case filter; every other section uses all cases.
   const FILTERED=new Set(['automation-candidates','summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','performance-spectrum','waiting-time','drift','model-discovery','organization','report.html','decision-points','decision-rules']);
   FILTERED.add('roles');
+  FILTERED.add('anonymized-export');
+  FILTERED.add('anonymized-export.csv');
   FILTERED.add('model-discovery.pnml');
   FILTERED.add('temporal-profile');
   FILTERED.add('heuristics-net');
@@ -730,6 +732,42 @@
     caseType.value=state.caseType;
   }
 
+  function anonymizedExportSection(){
+    const box=section('Anonymized export');box.id='owgAnonymized';
+    box.appendChild(el('div','Export the cases to share outside this computer with less that points back to people: paths followed by fewer than the chosen number of cases are left out, case IDs are replaced, time is coarsened and attributes are never included. Check what is kept first, then download.','muted'));
+    const minPick=select('owgAnonymizedMin',[['5','At least 5 cases per path'],['2','At least 2'],['10','At least 10'],['20','At least 20'],['50','At least 50']]);
+    const timePick=select('owgAnonymizedTime',[['relative','Each case moved to the start of its month, gaps kept'],['day','Date of each event only'],['exact','Exact timestamps']]);
+    const resourcePick=select('owgAnonymizedResources',[['drop','Leave resources out'],['pseudonymize','Replace resources with Resource 01, 02, …']]);
+    const check=button('Check what is kept','secondary');check.id='owgAnonymizedCheck';
+    const get=button('Download anonymized CSV','secondary');get.id='owgAnonymizedDownload';
+    const row=el('div',null,'row');row.style.alignItems='end';
+    row.append(field('Smallest group',minPick),field('Time',timePick),field('Resources',resourcePick),check,get);
+    const statusLine=el('div',null,'muted');statusLine.id='owgAnonymizedStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgAnonymizedResults';
+    box.append(row,statusLine,out);
+    const params=()=>({min_cases:minPick.value,time_mode:timePick.value,resource_mode:resourcePick.value});
+    check.onclick=async()=>{
+      const generation=state.generation;check.disabled=true;statusLine.textContent='Checking…';out.replaceChildren();
+      try{
+        const r=await getJSON(logPath('anonymized-export',params()));
+        if(generation!==state.generation)return;
+        statusLine.textContent=Number(r.cases_kept).toLocaleString()+' of '+Number(r.cases_total).toLocaleString()+' cases would be exported ('+Math.round(r.cases_kept_share*1000)/10+'%); '+Number(r.cases_suppressed).toLocaleString()+' cases on '+Number(r.variants_suppressed).toLocaleString()+' rare paths are left out.';
+        out.appendChild(table(['Kept','Value'],[['Paths',Number(r.variants_kept).toLocaleString()+' of '+Number(r.variants_total).toLocaleString()],['Events',Number(r.events_kept).toLocaleString()],['Columns',r.columns.join(', ')],['Activities left out',r.activities_removed_total?r.activities_removed.join(', ')+(r.activities_removed_total>r.activities_removed.length?' …':''):'none']]));
+        out.appendChild(el('div',r.caveat,'muted'));
+      }catch(error){statusLine.textContent=error.message;}
+      finally{check.disabled=false;}};
+    get.onclick=async()=>{
+      get.disabled=true;
+      try{const response=await api(logPath('anonymized-export.csv',params()));
+        const blob=await response.blob();const link=document.createElement('a');link.href=URL.createObjectURL(blob);
+        link.download=(state.logId||'log')+'-anonymized.csv';document.body.appendChild(link);link.click();link.remove();
+        setTimeout(()=>URL.revokeObjectURL(link.href),1000);
+        statusLine.textContent='Downloaded '+(response.headers.get('X-OWG-Anonymized')||'').replace(/; /g,', ')+'. Review the file before sharing it.';}
+      catch(error){statusLine.textContent=error.message;}
+      finally{get.disabled=false;}};
+    return box;
+  }
+
   function activityMappingSection(){
     const box=section('Group activities');box.id='owgActivityMappings';
     box.appendChild(el('div','Group low-level activities under one higher-level name for every analysis of this log. The stored events are never changed, and saved signals and object views keep the original activities.','muted'));
@@ -840,6 +878,7 @@
     results.appendChild(folderFeedSection());
     results.appendChild(agentShareSection());
     results.appendChild(deriveSection(names));
+    results.appendChild(anonymizedExportSection());
     results.appendChild(dottedSection());
     results.appendChild(spectrumSection());
     results.appendChild(heuristicsSection());
