@@ -2292,8 +2292,12 @@
           $("handoffConsent").checked=false;
           resetHandoff("Reopening latest authorized revision. A new inspection is required.");
           const identityTicket=identityGeneration;
+          const recoveryOpenTicket=processOpenGeneration+1;
           await open(workflowId);
-          if(identityTicket!==identityGeneration||!selected||
+          // A later open of even the same workflow supersedes this recovery.
+          // Never announce success for a stale asynchronous response.
+          if(recoveryOpenTicket!==processOpenGeneration||
+             identityTicket!==identityGeneration||!selected||
              selected.process?.workflow_id!==workflowId)return;
           $("handoffStatus").textContent="Latest authorized revision reopened. Select the packet, authorize inspection and check again.";
         }));
