@@ -857,7 +857,7 @@ def test_source_cohort_route_denies_revocation_after_scoring(monkeypatch):
 def test_source_cohort_reviewer_disclaims_stale_inflight_labels():
     """The browser must not present metrics for labels edited during an HTTP request."""
     from pathlib import Path
-    source = (Path(__file__).resolve().parents[1] / "dashboard" / "history_retention.js").read_text()
+    source = (Path(__file__).resolve().parents[1] / "dashboard" / "history_retention.js").read_text(encoding="utf-8")
     function = source.split("async function scoreReconstructionSourceCohort(){", 1)[1].split(
         "async function scoreReconstructionEvidence(){", 1)[0]
     assert "const submittedLabels=root.querySelector('#reconstructionCohortLabels').value;" in function
