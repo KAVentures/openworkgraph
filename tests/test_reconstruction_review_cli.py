@@ -1297,6 +1297,8 @@ class CompleteSourceCohortTests(unittest.TestCase):
         self.assertEqual(score["false_positive_pairs"], 1)
         self.assertEqual(score["negative_source_events_with_false_links"], 1)
         self.assertEqual(score["negative_false_link_rate"], 1.0)
+        self.assertEqual(score["positive_source_events"], 0)
+        self.assertIsNone(score["positive_false_link_rate"])
         with self.assertRaisesRegex(ValueError, "omits surfaced"):
             score_source_event_cohort(source, [
                 {"window": "current", "event_id": "other", "true_resource_pairs": []}
@@ -1359,6 +1361,9 @@ class CompleteSourceCohortTests(unittest.TestCase):
         self.assertIsNone(score["negative_false_link_rate"])
         self.assertEqual(score["source_events_with_false_links"], 1)
         self.assertEqual(score["source_event_false_link_rate"], 1.0)
+        self.assertEqual(score["positive_source_events"], 1)
+        self.assertEqual(score["positive_source_events_with_false_links"], 1)
+        self.assertEqual(score["positive_false_link_rate"], 1.0)
         self.assertIsNone(score["per_window_metrics"]["current"]["negative_false_link_rate"])
         self.assertEqual(score["per_window_metrics"]["current"]["source_event_false_link_rate"], 1.0)
         self.assertEqual(score["per_window_counts"]["current"]["false_link_events"], 1)
