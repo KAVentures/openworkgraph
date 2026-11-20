@@ -227,3 +227,13 @@ def test_handoff_recovery_reopens_latest_using_authenticated_gateway_and_require
     assert '"/v1/human/processes/" + encodeURIComponent(id) + params' in opener
     assert 'render(data);' in opener
     assert 'if (openTicket !== processOpenGeneration || identityTicket !== identityGeneration) return;' in opener
+
+
+def test_recovery_completion_rejects_superseding_open_of_same_process():
+    """A second same-ID navigation must not let the first recovery report success."""
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split('$("handoffRefresh").addEventListener("click",', 1)[1].split('$("handoffPacket").addEventListener', 1)[0]
+    assert "const recoveryOpenTicket=processOpenGeneration+1;" in block
+    assert "recoveryOpenTicket!==processOpenGeneration" in block
+    assert block.index("await open(workflowId);") < block.index("recoveryOpenTicket!==processOpenGeneration")
+    assert block.index("recoveryOpenTicket!==processOpenGeneration") < block.index("Latest authorized revision reopened.")
