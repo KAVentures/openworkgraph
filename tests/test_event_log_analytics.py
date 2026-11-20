@@ -696,7 +696,12 @@ with TestClient(app) as client:
     old_limit = provenance.MAX_SOURCE_ROWS
     try:
         provenance.MAX_SOURCE_ROWS = 0
-        denied = analyze(first, session)
+        # A denied oversized export must not execute the expensive analysis.
+        from unittest.mock import patch
+        with patch("server.event_log_routes.analysis.run", side_effect=AssertionError(
+                "analysis must not run beyond fingerprint budget")) as blocked_run:
+            denied = analyze(first, session)
+            assert blocked_run.call_count == 0
         assert denied.status_code == 422, denied.text
         assert "fingerprint budget" in denied.text
     finally:
