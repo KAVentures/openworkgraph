@@ -314,3 +314,19 @@ def test_unverified_review_response_cannot_render_another_workflow():
     assert "check its review state before resubmitting" in block
     assert block.index("if(!acknowledged){") < block.index("render(reviewResult);")
     assert block.index("return;", block.index("if(!acknowledged){")) < block.index("render(reviewResult);")
+
+
+def test_concurrent_review_mutations_are_serialized_and_lost_response_stays_fail_closed():
+    """Double-clicks cannot submit concurrent decisions; a failed POST never restores consent."""
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split("async function review(decision) {", 1)[1].split('$("approve").onclick', 1)[0]
+    assert "let reviewMutationInFlight = false;" in html
+    assert 'if (reviewMutationInFlight) throw new Error(' in block
+    assert "reviewMutationInFlight = true;" in block
+    assert "reviewResult=await call(" in block
+    assert "reviewMutationInFlight = false;" in block
+    assert block.index("reviewMutationInFlight = true;") < block.index('"/reviews"')
+    assert block.index("reviewMutationInFlight = false;") > block.index('"/reviews"')
+    assert 'resetHandoff("Review submitted; outcome may be unknown' in block
+    assert block.index('resetHandoff("Review submitted; outcome may be unknown') < block.index("reviewMutationInFlight = true;")
+    assert '$("handoffConsent").checked=false;' in block
