@@ -1111,6 +1111,21 @@ profiles.
 | `GET /v1/event-logs/{log_id}/case-attributes` | Recorded uploads. |
 | `POST /v1/event-logs/{log_id}/case-attributes/remove` | `{"upload_id": "...", "columns": [...]}` (columns optional). |
 
+### Download a case table
+
+Use **Download a case table** to get one row per case in the current case notion.
+The active case filter limits the rows. Without a filter the table also includes
+objects that have no events. Enter up to 32 attribute names to create blank
+columns, or select **Include stored values** to download their static values.
+CSV represents these values as text. Timed object attribute history belongs in OCEL.
+
+For a template you intend to join back, choose **CSV for re-import** and use
+`case_id` as the ID column when uploading the edited file. Spreadsheet review
+CSV projects formula-like text and changes the headers for review.
+
+The dashboard-only `POST /v1/event-logs/{log_id}/case-table/export` accepts
+`case_type`, `cohort`, `columns`, `include_values`, and `spreadsheet_review`.
+
 ## Case tags
 
 While investigating, tag cases such as "checked", "root cause: missing PO" or
