@@ -54,3 +54,47 @@ def test_preflight_mismatch_cannot_be_presented_as_review_ready(proposal, tmp_pa
             consent_local_export=True, confirm_previous_removals_reviewed=True,
         )
     append.assert_not_called()
+
+
+@pytest.mark.parametrize("source,bad_value", [
+    ("extracted", {"event_snapshots": True, "removal_markers_for_review": 0}),
+    ("extracted", {"event_snapshots": -1, "removal_markers_for_review": 0}),
+    ("checked", {"csv_sha256": "b" * 64, "event_snapshots": 2,
+                 "removal_markers_for_review": False}),
+    ("checked", {"csv_sha256": "not-a-sha", "event_snapshots": 2,
+                 "removal_markers_for_review": 0}),
+])
+def test_malformed_adapter_evidence_fails_before_transaction_preflight(
+        source, bad_value, tmp_path, monkeypatch):
+    monkeypatch.delenv("OWG_M365_AUDIT_DIR", raising=False)
+    digest = "a" * 64
+    predecessor = {"generation": 1, "candidate_sha256": digest, "log_id": "log"}
+    extracted = {"event_snapshots": 2, "removal_markers_for_review": 0}
+    checked = {"csv_sha256": "b" * 64, **extracted}
+    if source == "extracted":
+        extracted = bad_value
+    else:
+        checked = bad_value
+    with (
+        patch.object(operator, "inspect_checkpoint", return_value=predecessor),
+        patch.object(operator.cycle, "extract", return_value=extracted),
+        patch.object(operator.cycle, "review", return_value=checked),
+        patch.object(operator.transaction, "preflight") as preflight,
+        patch.object(operator.transaction, "execute") as append,
+        pytest.raises(ReceiptError),
+    ):
+        operator.prepare(
+            tenant="tenant", mailbox="mailbox", folder="folder",
+            log_id="log", confirm_log_id="log", grant_file=tmp_path / "grant",
+            previous_candidate=tmp_path / "old.json",
+            previous_csv=tmp_path / "old.csv",
+            receipt_file=tmp_path / "receipt", journal_dir=tmp_path / "journal",
+            handoff_dir=tmp_path / "handoff", ledger_dir=tmp_path / "ledger",
+            successor_label="next", output=tmp_path / "new.csv",
+            candidate=tmp_path / "new.json", expected_generation=1,
+            expected_previous_candidate_sha256=digest, token="token",
+            consent_local_read=True, consent_delta_read=True,
+            consent_local_export=True, confirm_previous_removals_reviewed=True,
+        )
+    preflight.assert_not_called()
+    append.assert_not_called()
