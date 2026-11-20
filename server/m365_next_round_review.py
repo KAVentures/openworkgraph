@@ -74,7 +74,20 @@ def prepare(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
     # uncommitted for manual inspection; never automatically retry extraction.
     checked = cycle.review(**scope, candidate=Path(candidate),
                            consent_local_read=True)
-    digest = checked["csv_sha256"]
+    # Treat every adapter response as untrusted, even after a successful Graph
+    # request. A candidate cannot become review-ready without a valid digest
+    # and nonnegative, exact integer event/removal counts.
+    for result in (extracted, checked):
+        if (type(result) is not dict
+                or type(result.get("event_snapshots")) is not int
+                or result["event_snapshots"] < 0
+                or type(result.get("removal_markers_for_review")) is not int
+                or result["removal_markers_for_review"] < 0):
+            raise ReceiptError("Malformed extraction or candidate review metadata")
+    digest = checked.get("csv_sha256")
+    if (type(digest) is not str or len(digest) != 64
+            or any(ch not in "0123456789abcdef" for ch in digest)):
+        raise ReceiptError("Invalid candidate review digest")
     proposal = transaction.preflight(
         **scope, log_id=log_id, confirm_log_id=confirm_log_id,
         candidate=Path(candidate), ledger_dir=Path(ledger_dir),
