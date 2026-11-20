@@ -4,12 +4,17 @@
   const MODEL_FORMAT='openworkgraph.reference-model.v1';
   const state={logs:[],logId:'',caseType:'',generation:0,refresh:0,follows:[],attr:{},caseActivity:'',objectTypes:[]};
   // The global case filter: follower rules plus an optional case-attribute value and/or numeric range.
-  const filterOn=()=>state.follows.length>0||!!state.attr.attribute||!!state.attr.attribute_range||!!state.attr.starts_with||!!state.attr.ends_with||!!state.attr.duration||!!state.caseActivity;
+  // More case filters (Disco-style timeframe, performance and variation filters): end time, events per case,
+  // how many cases share the case's path, and rework.
+  const MORE_FILTER_KEYS=['ended_from','ended_before','events','path_cases','rework'];
+  const countText=(r,what)=>what+' '+(r.min!==undefined&&r.max!==undefined?(r.min===r.max?'= '+r.min:r.min+'–'+r.max):r.min!==undefined?'\u2265 '+r.min:'\u2264 '+r.max);
+  const moreFilterText=a=>[a.ended_from?'ended from '+a.ended_from.slice(0,10):'',a.ended_before?'ended before '+a.ended_before.slice(0,10):'',a.events?countText(a.events,'events per case'):'',a.path_cases?countText(a.path_cases,'cases on the same path'):'',a.rework===true?'repeats an activity':a.rework===false?'repeats no activity':''].filter(Boolean).join('; ');
+  const filterOn=()=>state.follows.length>0||!!state.attr.attribute||!!state.attr.attribute_range||!!state.attr.starts_with||!!state.attr.ends_with||!!state.attr.duration||MORE_FILTER_KEYS.some(k=>state.attr[k]!==undefined)||!!state.caseActivity;
   const globalCohort=()=>({...(state.follows.length?{follows:state.follows}:{}),...state.attr,...(state.caseActivity?{activity:state.caseActivity}:{})});
   const rangeText=r=>(r.min!==undefined?r.min+' ≤ ':'')+r.name+(r.max!==undefined?' < '+r.max:'');
   const hoursText=s=>Number((s/3600).toFixed(3))+' h';
   const durationText=d=>'case duration '+(d.min!==undefined?'\u2265 '+hoursText(d.min):'')+(d.min!==undefined&&d.max!==undefined?' and ':'')+(d.max!==undefined?'< '+hoursText(d.max):'');
-  const attrText=()=>[state.attr.attribute,state.attr.attribute_range?rangeText(state.attr.attribute_range):'',state.attr.starts_with?'starts with '+JSON.stringify(state.attr.starts_with):'',state.attr.ends_with?'ends with '+JSON.stringify(state.attr.ends_with):'',state.attr.duration?durationText(state.attr.duration):''].filter(Boolean).join('; ');
+  const attrText=()=>[state.attr.attribute,state.attr.attribute_range?rangeText(state.attr.attribute_range):'',state.attr.starts_with?'starts with '+JSON.stringify(state.attr.starts_with):'',state.attr.ends_with?'ends with '+JSON.stringify(state.attr.ends_with):'',state.attr.duration?durationText(state.attr.duration):'',moreFilterText(state.attr)].filter(Boolean).join('; ');
   let activityLookupBusy=false;
   // Views that honour the workspace case filter; every other section uses all cases.
   const FILTERED=new Set(['automation-candidates','summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','performance-spectrum','waiting-time','drift','model-discovery','organization','report.html','decision-points','decision-rules']);
@@ -112,6 +117,7 @@
     for(const [key,value] of Object.entries(args)){
       if(key==='attribute_range'||key==='follows')q.set(key,JSON.stringify(value));
       else if(key==='duration'){if(value.min!==undefined)q.set('duration_min',String(value.min));if(value.max!==undefined)q.set('duration_max',String(value.max));}
+      else if(key==='events'||key==='path_cases'){if(value.min!==undefined)q.set(key+'_min',String(value.min));if(value.max!==undefined)q.set(key+'_max',String(value.max));}
       else if(Array.isArray(value))value.forEach(v=>q.append(key,v));
       else q.set(key,value!==null&&typeof value==='object'?JSON.stringify(value):value);
     }
@@ -1421,6 +1427,11 @@
       if(d.min!==undefined&&d.max!==undefined&&d.min>=d.max)throw new Error('The case duration ranges do not overlap. Change one to continue.');
       result.duration=d;
     }
+    for(const key of MORE_FILTER_KEYS){
+      if(active[key]===undefined)continue;
+      if(result[key]!==undefined&&JSON.stringify(result[key])!==JSON.stringify(active[key]))throw new Error('This operation uses a different '+key.replace('_',' ')+' filter from the active case filter. Clear one to continue.');
+      result[key]=active[key];
+    }
     return result;
   }
   function applyActiveCohort(cohort){Object.assign(cohort,mergeActiveCohort(cohort,globalCohort()));}
@@ -1490,6 +1501,27 @@
     if(state.attr.duration){if(state.attr.duration.min!==undefined)durMin.value=state.attr.duration.min/3600;if(state.attr.duration.max!==undefined)durMax.value=state.attr.duration.max/3600;}
     const endRow=el('div',null,'row');endRow.style.alignItems='end';
     endRow.append(field('Case starts with',startsWith),field('Case ends with',endsWith),field('Case duration at least (hours)',durMin),field('Case duration below (hours)',durMax));
+    // Timeframe by end, events per case, path frequency (variation) and rework.
+    const endedFrom=input('owgCaseFilterEndedFrom','date',''),endedBefore=input('owgCaseFilterEndedBefore','date','');
+    const evMin=input('owgCaseFilterEventsMin','number','events'),evMax=input('owgCaseFilterEventsMax','number','events');
+    const pathMin=input('owgCaseFilterPathMin','number','cases'),pathMax=input('owgCaseFilterPathMax','number','cases');
+    for(const n of [evMin,evMax,pathMin,pathMax]){n.step='1';n.min='1';}
+    const reworkPick=select('owgCaseFilterRework',[['','Any'],['true','Repeats an activity'],['false','Repeats no activity']]);
+    const a0=state.attr;
+    if(a0.ended_from)endedFrom.value=a0.ended_from.slice(0,10);if(a0.ended_before)endedBefore.value=a0.ended_before.slice(0,10);
+    if(a0.events){if(a0.events.min!==undefined)evMin.value=a0.events.min;if(a0.events.max!==undefined)evMax.value=a0.events.max;}
+    if(a0.path_cases){if(a0.path_cases.min!==undefined)pathMin.value=a0.path_cases.min;if(a0.path_cases.max!==undefined)pathMax.value=a0.path_cases.max;}
+    if(a0.rework!==undefined)reworkPick.value=String(a0.rework);
+    const moreRow=el('div',null,'row');moreRow.style.alignItems='end';
+    moreRow.append(field('Case ended on or after',endedFrom),field('Case ended before',endedBefore),field('Events per case at least',evMin),field('Events per case at most',evMax),
+      field('Path followed by at least (cases)',pathMin),field('Path followed by at most (cases)',pathMax),field('Rework',reworkPick));
+    function readCount(lo,hi,what){
+      if(lo.value===''&&hi.value==='')return undefined;
+      const r={};if(lo.value!=='')r.min=Number(lo.value);if(hi.value!=='')r.max=Number(hi.value);
+      if([r.min,r.max].some(v=>v!==undefined&&!(Number.isInteger(v)&&v>=1)))throw new Error(what+' bounds must be whole numbers of 1 or more.');
+      if(r.min!==undefined&&r.max!==undefined&&r.min>r.max)throw new Error(what+': the lower bound must not be above the upper bound.');
+      return r;
+    }
     function readAttr(){
       const out={},value=attrValue.value.trim();
       if(value){if(!value.includes('=')||!value.split('=')[0].trim())throw new Error('Write the case attribute as name=value.');out.attribute=value;}
@@ -1510,6 +1542,12 @@
         if([d.min,d.max].some(v=>v!==undefined&&!(Number.isFinite(v)&&v>=0)))throw new Error('Case duration bounds must be zero or more hours.');
         if(d.min!==undefined&&d.max!==undefined&&!(d.min<d.max))throw new Error('The shortest case duration must be below the longest.');
         out.duration=d;}
+      if(endedFrom.value)out.ended_from=endedFrom.value+'T00:00:00Z';
+      if(endedBefore.value)out.ended_before=endedBefore.value+'T00:00:00Z';
+      if(out.ended_from&&out.ended_before&&!(out.ended_from<out.ended_before))throw new Error('The end period is empty: the first date must be before the second.');
+      const events=readCount(evMin,evMax,'Events per case'),paths=readCount(pathMin,pathMax,'Path frequency');
+      if(events)out.events=events;if(paths)out.path_cases=paths;
+      if(reworkPick.value)out.rework=reworkPick.value==='true';
       return out;
     }
     message.id='owgCaseFilterStatus';message.setAttribute('role','status');message.tabIndex=-1;
@@ -1545,7 +1583,7 @@
     render();
     const controls=el('div',null,'row');controls.append(add,apply,clear);
     box.append(rows,field('Case contains exact activity',contains),containsLookup.wrap,attrRow,
-      caseAttributeSearch(attrValue,rangeName,rangeMin,rangeMax),endRow,controls,message,filterSetBlock(activityNames));
+      caseAttributeSearch(attrValue,rangeName,rangeMin,rangeMax),endRow,moreRow,controls,message,filterSetBlock(activityNames));
     return box;
   }
 
@@ -1563,8 +1601,8 @@
     async function refresh(){
       const r=await getJSON(base());if(generation!==state.generation)return;
       list.replaceChildren(r.filter_sets.length?table(['Filter','Rules','Notes',''],r.filter_sets.map(set=>{
-        const follows=set.cohort.follows||[],activity=set.cohort.activity||'',other=Object.keys(set.cohort).filter(k=>!['follows','attribute','attribute_range','activity','starts_with','ends_with','duration'].includes(k));
-        const attr={...(set.cohort.attribute?{attribute:set.cohort.attribute}:{}),...(set.cohort.attribute_range?{attribute_range:set.cohort.attribute_range}:{}),...(set.cohort.starts_with?{starts_with:set.cohort.starts_with}:{}),...(set.cohort.ends_with?{ends_with:set.cohort.ends_with}:{}),...(set.cohort.duration?{duration:set.cohort.duration}:{})};
+        const follows=set.cohort.follows||[],activity=set.cohort.activity||'',other=Object.keys(set.cohort).filter(k=>!['follows','attribute','attribute_range','activity','starts_with','ends_with','duration',...MORE_FILTER_KEYS].includes(k));
+        const attr={...(set.cohort.attribute?{attribute:set.cohort.attribute}:{}),...(set.cohort.attribute_range?{attribute_range:set.cohort.attribute_range}:{}),...(set.cohort.starts_with?{starts_with:set.cohort.starts_with}:{}),...(set.cohort.ends_with?{ends_with:set.cohort.ends_with}:{}),...(set.cohort.duration?{duration:set.cohort.duration}:{}),...Object.fromEntries(MORE_FILTER_KEYS.filter(k=>set.cohort[k]!==undefined).map(k=>[k,set.cohort[k]]))};
         const use=button('Apply','secondary');use.setAttribute('aria-label','Apply saved filter '+set.name);use.disabled=!(follows.length||Object.keys(attr).length||activity)||other.length>0;
         use.onclick=()=>{state.follows=follows;state.attr=attr;state.caseActivity=activity;analyse().catch(error=>status(error.message));};
         const del=button('Delete','secondary');del.setAttribute('aria-label','Delete saved filter '+set.name);
@@ -1573,7 +1611,7 @@
           ...(set.log_appended_since_saved?['Newer exports were appended since it was saved']:[]),
           ...(other.length?['Also filters by '+other.join(', ')+', which this panel cannot apply']:[])];
         const actions=el('span');actions.append(use,' ',del);
-        return [set.name,[...follows.map(followText),...(activity?['contains activity '+JSON.stringify(activity)]:[]),attr.attribute||'',attr.attribute_range?rangeText(attr.attribute_range):'',attr.starts_with?'starts with '+JSON.stringify(attr.starts_with):'',attr.ends_with?'ends with '+JSON.stringify(attr.ends_with):'',attr.duration?durationText(attr.duration):''].filter(Boolean).join('; ')||'—',notes.join('. ')||'—',actions];
+        return [set.name,[...follows.map(followText),...(activity?['contains activity '+JSON.stringify(activity)]:[]),attr.attribute||'',attr.attribute_range?rangeText(attr.attribute_range):'',attr.starts_with?'starts with '+JSON.stringify(attr.starts_with):'',attr.ends_with?'ends with '+JSON.stringify(attr.ends_with):'',attr.duration?durationText(attr.duration):'',moreFilterText(attr)].filter(Boolean).join('; ')||'—',notes.join('. ')||'—',actions];
       })):el('div','No saved filters yet.','muted'));
     }
     save.onclick=async()=>{
