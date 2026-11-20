@@ -201,10 +201,10 @@ def test_successful_review_consumes_inspected_handoff_before_render():
     html = PAGE.read_text(encoding="utf-8")
     block = html.split("async function review(decision) {", 1)[1].split('$("approve").onclick', 1)[0]
     assert 'if (inspectedHandoff) {' in block
-    assert 'resetHandoff("Review decision recorded. Reinspect' in block
-    assert '$("handoffConsent").checked = false;' in block
-    assert block.index('selected!==reviewSelection)return;') < block.index('resetHandoff("Review decision recorded.')
-    assert block.index('resetHandoff("Review decision recorded.') < block.index('render(reviewResult);')
+    assert 'resetHandoff("Review submitted; outcome may be unknown' in block
+    assert '$("handoffConsent").checked=false;' in block
+    assert block.index('resetHandoff("Review submitted; outcome may be unknown') < block.index('const reviewResult=await call(')
+    assert block.index('selected!==reviewSelection)return;') < block.index('render(reviewResult);')
     assert block.index('render(reviewResult);') < block.index('note(\n            "Design review recorded')
 
 
