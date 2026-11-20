@@ -721,3 +721,69 @@ def test_real_graph_review_to_authenticated_owg_append_contract(tmp_path):
     assert reloaded["cursor_url"] == next_cursor
     assert reloaded["candidate_sha256"] == second_review["csv_sha256"]
     assert len(list(ledger.glob("checkpoint-*.json"))) == 2
+
+
+def test_real_graph_adapter_two_rounds_each_require_fresh_candidate_review(tmp_path):
+    """Run real HTTP delta and real reviewer twice, preserving SHA-bound evidence.
+
+    Only the HTTP transport and private grant lookup are simulated. Neither
+    review authorizes an OWG append or advances a durable checkpoint.
+    """
+    from server import m365_outlook_delta as delta
+    from server import m365_outlook_candidate_review as reviewer
+
+    first_url = delta._initial("folder")
+    first_cursor = ("https://graph.microsoft.com/v1.0/me/mailFolders/folder/"
+                    "messages/delta?%24deltatoken=first")
+    second_cursor = ("https://graph.microsoft.com/v1.0/me/mailFolders/folder/"
+                     "messages/delta?%24deltatoken=second")
+    responses = {
+        first_url: {"value": [
+            {"id": "message1", "receivedDateTime": "2026-11-01T10:00:00Z",
+             "lastModifiedDateTime": "2026-11-01T10:01:00Z", "isRead": False}],
+            "@odata.deltaLink": first_cursor},
+        first_cursor: {"value": [
+            {"id": "message1", "@removed": {"reason": "deleted"}}],
+            "@odata.deltaLink": second_cursor},
+    }
+
+    class TwoRoundTransport:
+        def __init__(self):
+            self.requests = []
+
+        def open(self, req, timeout):
+            self.requests.append(req.full_url)
+            assert req.get_header("Authorization") == "Bearer test-token"
+            assert timeout == 15
+            return Response(req.full_url, json.dumps(responses[req.full_url]).encode())
+
+    transport = TwoRoundTransport()
+    common = dict(tenant="tenant", mailbox="mailbox", folder="folder",
+                  grant_file=tmp_path / "grant.json")
+    with (patch.object(delta, "_delta_private_parent"),
+          patch.object(delta, "_grant", return_value=b"fixed-grant"),
+          patch.object(reviewer, "_delta_private_parent"),
+          patch.object(reviewer, "_grant", return_value=b"fixed-grant")):
+        for round_number, expected_events, expected_removals in ((1, 1, 0), (2, 0, 1)):
+            csv_path = tmp_path / f"round{round_number}.csv"
+            candidate = tmp_path / f"round{round_number}.json"
+            previous = tmp_path / "round1.json" if round_number == 2 else None
+            exported = delta.export_delta(
+                tenant="tenant", mailbox="mailbox", folder_id="folder",
+                grant_file=common["grant_file"], token="test-token",
+                consent_read=True, consent_export=True,
+                output=csv_path, candidate=candidate,
+                previous_candidate=previous,
+                confirm_previous_import=round_number == 2, opener=transport)
+            reviewed = reviewer.review(
+                **common, candidate=candidate, consent_local_read=True)
+            record = json.loads(candidate.read_text())
+            assert reviewed["status"] == "review_ready"
+            assert reviewed["csv_sha256"] == record["csv_sha256"]
+            assert reviewed["event_snapshots"] == exported["event_snapshots"] == expected_events
+            assert reviewed["removal_markers_for_review"] == expected_removals
+            assert reviewed["owg_writes"] == 0
+            assert reviewed["checkpoint_advanced"] is False
+            assert exported["checkpoint_advanced"] is False
+    assert transport.requests == [first_url, first_cursor]
+    assert json.loads((tmp_path / "round2.json").read_text())["cursor_url"] == second_cursor
