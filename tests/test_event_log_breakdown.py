@@ -78,7 +78,7 @@ def test_cohort_dimensions_and_errors():
     only = bd.breakdown(log, "start_month", cohort={"event_attribute": "region=north"})
     assert only["cases"] == 4 and only["row_values"] == ["2024-01"]
     dims = [d["dimension"] for d in bd.dimensions(log)["dimensions"]]
-    assert dims[:4] == list(bd.BUILT_IN) and {"event_attribute:region", "event_attribute:amount"} <= set(dims)
+    assert dims[:len(bd.BUILT_IN)] == list(bd.BUILT_IN) and {"event_attribute:region", "event_attribute:amount"} <= set(dims)
     for args in (("",), ("nope",), ("attribute:",), ("start_month", "start_month"), ("x" * 3,)):
         with pytest.raises(EventLogWorkspaceError):
             bd.breakdown(log, *args)
@@ -113,3 +113,39 @@ with TestClient(app) as client:
 '''
     env = {**os.environ, 'WORKFLOW_OBSERVER_DATA': str(tmp_path / 'data'), 'WORKFLOW_OBSERVER_AUTH_DIR': str(tmp_path / 'auth')}
     subprocess.run([sys.executable, '-c', code], env=env, check=True, timeout=60)
+
+
+def test_tag_rework_and_duration_band_dimensions():
+    from server import event_log_case_tags as case_tags
+    log = _import()
+    case_tags.add(log, {"tag": "vip", "case_ids": ["c0", "c1", "c2"]})
+    r = bd.breakdown(log, "tag:vip", "rework")
+    assert r["row_values"] == ["not tagged", "tagged"] and r["rows"]["label"] == "tag vip"
+    assert set(r["column_values"]) == {"no repeats", "repeats an activity"}
+    cells = {(c["row"], c["column"]): c["cases"] for c in r["cells"]}
+    # c0, c4, c8 repeat B; c0 is also tagged.
+    assert cells[("tagged", "repeats an activity")] == 1 and cells[("tagged", "no repeats")] == 2
+    assert cells[("not tagged", "repeats an activity")] == 2 and cells[("not tagged", "no repeats")] == 7
+    bands = bd.breakdown(log, "duration_band")
+    # Cases take 2 hours, or 3 hours with the repeated B: all in the 1–24 hour band.
+    assert bands["row_values"] == ["1 to 24 hours"] and bands["cells"][0]["cases"] == 12
+    dims = [d["dimension"] for d in bd.dimensions(log)["dimensions"]]
+    assert "tag:vip" in dims and "duration_band" in dims and "rework" in dims
+    nobody = bd.breakdown(log, "tag:missing")
+    assert nobody["row_values"] == ["not tagged"]
+    with pytest.raises(EventLogWorkspaceError):
+        bd.breakdown(log, "tag:")
+
+
+def test_duration_bands_are_ordered():
+    rows = ["case,activity,time"]
+    spans = {"q": 0.5, "h": 5, "d": 50, "w": 300, "m": 1000}   # hours
+    for cid, hours in spans.items():
+        rows += [f"{cid},A,2024-01-01T00:00:00Z"]
+        import datetime as _dt
+        t = _dt.datetime(2024, 1, 1) + _dt.timedelta(hours=hours)
+        rows += [f"{cid},B,{t.isoformat()}Z"]
+    log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="b", source_format="csv",
+                               mapping={k: v for k, v in MAPPING.items() if k != "attribute_columns"})["log_id"]
+    r = bd.breakdown(log, "duration_band")
+    assert r["row_values"] == ["under 1 hour", "1 to 24 hours", "1 to 7 days", "7 to 30 days", "30 days or more"]

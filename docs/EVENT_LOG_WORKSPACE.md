@@ -485,8 +485,12 @@ spreadsheet formulas are prefixed with `'`.
 table (a small process cube). Choose what goes in the rows and, optionally, in
 the columns:
 
-* a built-in dimension: the month or weekday the case started, or its first
-  or last activity;
+* a built-in dimension: the month or weekday the case started, its first or
+  last activity, its duration band (under 1 hour, 1 to 24 hours, 1 to 7 days,
+  7 to 30 days, 30 days or more) or whether it repeats an activity
+  (`duration_band`, `rework`);
+* a case tag (`tag:<name>`): tagged and not tagged, for example the cases
+  tagged as not fitting a reference net;
 * a case attribute (`attribute:<name>`, as the case filter reads it);
 * an event attribute (`event_attribute:<name>`, the first non-empty value
   recorded in the case; columns kept from a CSV import are event attributes).
