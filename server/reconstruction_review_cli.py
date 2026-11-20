@@ -542,6 +542,7 @@ def score_source_event_cohort(response: dict[str, Any], source_labels: list[dict
     if not set(predictions).issubset(truth):
         raise ValueError("source inventory omits surfaced prediction events")
     tp = fp = fn = missed_events = negative_events = contaminated_negative_events = false_link_events = 0
+    positive_events = contaminated_positive_events = 0
     per_window: dict[str, dict[str, int]] = {}
     # Separate ambiguous multi-pair predictions from single-pair predictions
     # and source events the engine never surfaced. This exposes contamination
@@ -568,6 +569,8 @@ def score_source_event_cohort(response: dict[str, Any], source_labels: list[dict
         status_counts["false_link_events"] += bool(extra)
         missed_events += bool(expected and not predicted)
         negative_events += not expected
+        positive_events += bool(expected)
+        contaminated_positive_events += bool(expected and extra)
         contaminated_negative_events += bool(not expected and predicted)
         counts = per_window.setdefault(key[0], {"events": 0, "tp": 0, "fp": 0, "fn": 0,
                                                  "negative_events": 0, "negative_false_link_events": 0, "false_link_events": 0})
@@ -628,6 +631,11 @@ def score_source_event_cohort(response: dict[str, Any], source_labels: list[dict
         "event_disagreements_are_label_comparisons_not_confirmed_cases": True,
         "source_events_with_false_links": false_link_events,
         "source_event_false_link_rate": false_link_events / len(truth),
+        "positive_source_events": positive_events,
+        "positive_source_events_with_false_links": contaminated_positive_events,
+        "positive_false_link_rate": (
+            contaminated_positive_events / positive_events if positive_events else None
+        ),
         "negative_source_events": negative_events,
         "negative_source_events_with_false_links": contaminated_negative_events,
         "negative_false_link_rate": (
