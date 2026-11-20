@@ -74,6 +74,30 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"case_type": case_type, "sla_hours": sla_hours})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def get_process_overview_for_cases(log_id: str, case_filter: dict[str, Any], case_type: str | None = None,
+                                       sla_hours: float | None = None) -> dict[str, Any]:
+        """Overview of only the cases of a shared log that match a case filter, next to the whole log: case
+        count and share, durations, KPIs and top variants. case_filter uses the same keys as insight cohorts,
+        e.g. {"attribute": "region=EU"}, {"activity": "Escalate"}, {"event_attribute": "channel=phone"},
+        {"started_from": "2024-01-01T00:00:00Z"}, {"rework": true} or {"follows": [...]}. At least 5 cases must
+        match. Differences are associations, not causes. Aggregates only.
+        """
+        if not isinstance(case_filter, dict) or not case_filter:
+            raise ToolError("case_filter must be a non-empty object")
+        payload: dict[str, Any] = {"case_filter": case_filter}
+        if case_type is not None:
+            payload["case_type"] = case_type
+        if sla_hours is not None:
+            payload["sla_hours"] = sla_hours
+        runtime_module.authorize_tool("get_process_overview_for_cases")
+        try:
+            result = runtime_module.secure_post(f"/v1/process-intelligence/{_log(log_id)}/overview-for-cases", payload)
+        except Exception as exc:
+            raise ToolError(str(exc) or "process intelligence request failed") from None
+        result["interpretation"] = _NOTE
+        return runtime_module.core._finish("get_process_overview_for_cases", result)
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_root_cause(log_id: str, outcome: str, hours: float | None = None,
                                activity: str | None = None, case_type: str | None = None) -> dict[str, Any]:
         """Which activities, resources and case attributes are associated with an outcome.
