@@ -137,6 +137,18 @@ const path=require('node:path');
   assert.deepEqual(downloads,[],'changed recomputation must not trigger JSON download');
   assert.equal(await page.locator('#owgAnalysisCsv').isDisabled(),true,'stale CSV must also be disabled');
   await page.unroute('**'+analysisPath,changedAnalysis);
+  // After invalidation the operator must explicitly run and review the current
+  // source again. A valid, unchanged source must still permit both exports.
+  await page.locator('#owgAnalysisRun').click();
+  await page.waitForFunction(()=>!document.querySelector('#owgAnalysisJson').disabled,null,{timeout:60000});
+  const jsonDownloadPromise=page.waitForEvent('download',{timeout:30000});
+  await page.locator('#owgAnalysisJson').click();
+  const jsonDownload=await jsonDownloadPromise;
+  assert.match(jsonDownload.suggestedFilename(),/\.json$/i);
+  const csvDownloadPromise=page.waitForEvent('download',{timeout:30000});
+  await page.locator('#owgAnalysisCsv').click();
+  const csvDownload=await csvDownloadPromise;
+  assert.match(csvDownload.suggestedFilename(),/\.csv$/i);
   await page.locator('#owgCohortMetricDelete').click();
   await page.locator('#owgCohortMetricSaved option').filter({hasText:'Browser acceptance duration'}).waitFor({state:'detached',timeout:60000});
   assert.deepEqual(errors,[]);
