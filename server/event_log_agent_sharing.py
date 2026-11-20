@@ -550,6 +550,43 @@ def signal_scorecard(log_id: str, months: int = 6) -> dict[str, Any]:
             "interpretation": result["interpretation"]}
 
 
+AGENT_MIN_CELL_CASES = 5
+
+
+def breakdown(log_id: str, rows: str, columns: str | None = None, case_type: str | None = None,
+              with_activity: str | None = None) -> dict[str, Any]:
+    """Case figures by one or two dimensions (aggregates level). Cells and totals with fewer than
+    AGENT_MIN_CELL_CASES cases are withheld, so a rare attribute value cannot single out a case."""
+    require(log_id, "aggregates")
+    from . import event_log_breakdown as bd
+    result = bd.breakdown(log_id, rows, columns, case_type, with_activity=with_activity)
+    keep = lambda items: [x for x in items if x["cases"] >= AGENT_MIN_CELL_CASES]  # noqa: E731
+    cells, row_totals, column_totals = keep(result["cells"]), keep(result["row_totals"]), keep(result["column_totals"])
+    shown_rows = {t["row"] for t in row_totals}
+    shown_columns = {t["column"] for t in column_totals}
+    return {"format": FORMAT, "log_id": log_id, "case_notion": result.get("case_notion"),
+            "rows": result["rows"], "columns": result["columns"], "with_activity": with_activity,
+            "cases": result["cases"], "overall": {k: v for k, v in result["overall"].items() if k != "small"},
+            "row_values": [v for v in result["row_values"] if v in shown_rows],
+            "column_values": [v for v in result["column_values"] if v in shown_columns],
+            "cells": [{k: v for k, v in c.items() if k != "small"} for c in cells],
+            "row_totals": [{k: v for k, v in t.items() if k != "small"} for t in row_totals],
+            "column_totals": [{k: v for k, v in t.items() if k != "small"} for t in column_totals],
+            "withheld": {"cells": len(result["cells"]) - len(cells),
+                         "row_values": len(result["row_totals"]) - len(row_totals),
+                         "column_values": len(result["column_totals"]) - len(column_totals),
+                         "min_cases": AGENT_MIN_CELL_CASES},
+            "caveat": result["caveat"] + f" Cells with fewer than {AGENT_MIN_CELL_CASES} cases are withheld."}
+
+
+def similar_cases(log_id: str, case_id: str, case_type: str | None = None, limit: int = 10) -> dict[str, Any]:
+    """The recorded cases whose path is closest to case_id (cases level only)."""
+    require(log_id, "cases")
+    from . import event_log_similar_cases as sim
+    return {**sim.similar_cases(log_id, case_id, case_type, limit=max(1, min(int(limit), 50))),
+            "format": FORMAT, "log_id": log_id}
+
+
 def slowest_cases(log_id: str, case_type: str | None = None, limit: int = 10) -> dict[str, Any]:
     require(log_id, "cases")
     from . import event_log_case_explain as case_explain

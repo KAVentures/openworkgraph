@@ -287,7 +287,9 @@ PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_root_
                  "compare_process_models",
                  "compare_process_cases",
                  "get_process_activity_profile",
-                 "get_process_signal_scorecard"}
+                 "get_process_signal_scorecard",
+                 "get_process_breakdown",
+                 "find_similar_process_cases"}
 
 
 def test_mcp_tools_are_listed_only_when_a_log_is_shared(tmp_path):

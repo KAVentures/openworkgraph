@@ -262,6 +262,23 @@ async def agent_signal_scorecard(request: Request, log_id: str, months: int = Qu
     return await _answer(sharing.signal_scorecard, log_id, months)
 
 
+@router.get("/v1/process-intelligence/{log_id}/breakdown")
+async def agent_breakdown(request: Request, log_id: str, rows: str = Query(min_length=1, max_length=220),
+                          columns: str | None = Query(default=None, max_length=220),
+                          with_activity: str | None = Query(default=None, min_length=1, max_length=500),
+                          case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.breakdown, log_id, rows, columns, case_type, with_activity)
+
+
+@router.get("/v1/process-intelligence/{log_id}/similar-cases")
+async def agent_similar_cases(request: Request, log_id: str, case_id: str = Query(min_length=1, max_length=500),
+                              limit: int = Query(default=10, ge=1, le=50),
+                              case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.similar_cases, log_id, case_id, case_type, limit)
+
+
 @router.get("/v1/process-intelligence/{log_id}/signals")
 async def agent_signals(request: Request, log_id: str):
     _require_agent_access(request)
