@@ -922,6 +922,48 @@ async def event_log_petri_net_replay(request: Request, log_id: str,
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.get("/v1/event-logs/{log_id}/reference-nets")
+def event_log_reference_nets(request: Request, log_id: str):
+    """Reference nets saved with this log (names and sizes, not contents)."""
+    from . import event_log_reference_nets as nets
+    _require_dashboard(request)
+    return _respond(nets.listing, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/reference-nets")
+async def event_log_save_reference_net(request: Request, log_id: str):
+    """Save a PNML net under a name: {"name": …, "pnml": …}."""
+    from . import event_log_reference_nets as nets
+    _require_dashboard(request)
+    spec = await _json_body(request, "reference net", strict=True, limit=2_300_000)
+    if not isinstance(spec, dict) or set(spec) - {"name", "pnml"}:
+        raise HTTPException(422, "send name and pnml")
+    try:
+        result = await run_in_threadpool(nets.save, log_id, spec.get("name"), spec.get("pnml"))
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/v1/event-logs/{log_id}/reference-nets/{net_id}.pnml")
+def event_log_reference_net_pnml(request: Request, log_id: str, net_id: str):
+    from . import event_log_reference_nets as nets
+    _require_dashboard(request)
+    try:
+        name, xml = nets.get(log_id, net_id)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(404, str(exc)) from None
+    return Response(xml, media_type="application/xml", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{net_id}.pnml"'})
+
+
+@router.post("/v1/event-logs/{log_id}/reference-nets/{net_id}/delete")
+def event_log_delete_reference_net(request: Request, log_id: str, net_id: str):
+    from . import event_log_reference_nets as nets
+    _require_dashboard(request)
+    return _respond(nets.delete, log_id, net_id)
+
+
 @router.post("/v1/event-logs/{log_id}/petri-net-alignments")
 async def event_log_petri_net_alignments(request: Request, log_id: str,
                                          case_type: str | None = Query(default=None, max_length=200),
@@ -1039,6 +1081,48 @@ def event_log_model_change(request: Request, log_id: str, split: str | None = Qu
     from . import event_log_model_change as change
     _require_dashboard(request)
     return _respond(change.model_change, log_id, case_type, split=split, noise=noise, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/model-comparison")
+def event_log_model_comparison(request: Request, log_id: str, group_a: str = Query(min_length=3, max_length=400),
+                               group_b: str = Query(min_length=3, max_length=400),
+                               noise: float = Query(default=0.2, ge=0, lt=1),
+                               case_type: str | None = Query(default=None, max_length=200),
+                               cohort: dict = Depends(_case_filter)):
+    """The discovered models of two groups of cases (case attribute values) compared."""
+    from . import event_log_model_change as change
+    _require_dashboard(request)
+    return _respond(change.model_comparison, log_id, group_a, group_b, case_type, noise=noise, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/story")
+def event_log_story(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                    cohort: dict = Depends(_case_filter)):
+    """The process in plain words: sentences filled from computed figures, each linked to its analysis."""
+    from . import event_log_story as story
+    _require_dashboard(request)
+    return _respond(story.story, log_id, case_type, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/case-compare")
+def event_log_case_compare(request: Request, log_id: str, case_a: str = Query(min_length=1, max_length=500),
+                           case_b: str = Query(min_length=1, max_length=500),
+                           case_type: str | None = Query(default=None, max_length=200)):
+    """Two cases side by side: shared steps, steps only one has, and where the second fell behind."""
+    from . import event_log_case_compare as compare
+    _require_dashboard(request)
+    return _respond(compare.compare_cases, log_id, case_a, case_b, case_type)
+
+
+@router.get("/v1/event-logs/{log_id}/activity-profile")
+def event_log_activity_profile(request: Request, log_id: str,
+                               profile_activity: str = Query(min_length=1, max_length=500),
+                               case_type: str | None = Query(default=None, max_length=200),
+                               cohort: dict = Depends(_case_filter)):
+    """One activity from every side. ``profile_activity`` names it: ``activity`` is the case filter."""
+    from . import event_log_activity_profile as profile
+    _require_dashboard(request)
+    return _respond(profile.activity_profile, log_id, profile_activity, case_type, cohort=cohort)
 
 
 @router.get("/v1/event-logs/{log_id}/variants")
@@ -1754,6 +1838,13 @@ def event_log_signal_rules(request: Request, log_id: str):
 async def event_log_add_signal_rule(request: Request, log_id: str):
     _require_dashboard(request)
     return _respond(signals.add_rule, log_id, await _json_body(request, "signal rule"))
+
+
+@router.get("/v1/event-logs/{log_id}/signals/scorecard")
+def event_log_signal_scorecard(request: Request, log_id: str, months: int = Query(default=6, ge=1, le=24)):
+    """Value-based signals month by month (read-only)."""
+    _require_dashboard(request)
+    return _respond(signals.scorecard, log_id, months)
 
 
 @router.post("/v1/event-logs/{log_id}/signals/evaluate")

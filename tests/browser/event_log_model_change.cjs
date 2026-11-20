@@ -24,12 +24,12 @@ const path=require('node:path');
    const session=(await fs.readFile(path.join(scratch,'session.txt'),'utf8')).trim();
    await page.goto(base+'/#session='+session);await page.locator('[role=tab][data-tab=evidence]').click();
    // January: Order, Check, Approve, Ship. March: Approve before Check, and a new Notify step.
-   const rows=['case,activity,time,who'];
-   for(let i=0;i<20;i++)['Order','Check','Approve','Ship'].forEach((a,j)=>rows.push(`a${i},${a},2024-01-${String(1+i).padStart(2,'0')}T0${j}:00:00Z,ana`));
-   for(let i=0;i<20;i++)['Order','Approve','Check','Ship','Notify'].forEach((a,j)=>rows.push(`b${i},${a},2024-03-${String(1+i).padStart(2,'0')}T0${j}:00:00Z,ana`));
+   const rows=['case,activity,time,who,region'];
+   for(let i=0;i<20;i++)['Order','Check','Approve','Ship'].forEach((a,j)=>rows.push(`a${i},${a},2024-01-${String(1+i).padStart(2,'0')}T0${j}:00:00Z,ana,EU`));
+   for(let i=0;i<20;i++)['Order','Approve','Check','Ship','Notify'].forEach((a,j)=>rows.push(`b${i},${a},2024-03-${String(1+i).padStart(2,'0')}T0${j}:00:00Z,ana,US`));
    await page.locator('#owgEventLogFile').setInputFiles({name:'orders.csv',mimeType:'text/csv',buffer:Buffer.from(rows.join('\n'))});
-   await page.waitForFunction(()=>document.querySelector('#owgEventLogCase').options.length===4);
-   await page.locator('#owgEventLogResource').selectOption('who');
+   await page.waitForFunction(()=>document.querySelector('#owgEventLogCase').options.length===5);
+   await page.locator('#owgEventLogResource').selectOption('who');await page.locator('#owgEventLogAttributes').selectOption(['region']);
    await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Imported 180 events'}).waitFor();
    await page.locator('#owgEventLogAnalyze').click();
@@ -43,10 +43,17 @@ const path=require('node:path');
    assert(out.includes('New after the split: Notify')&&out.includes('Orderings that changed'),out);
    await page.locator('#owgModelChangeSplit').fill('');await page.locator('#owgModelChangeRun').click();
    await page.locator('#owgModelChangeStatus').filter({hasText:'(median case start)'}).waitFor();
+   // Two groups by the region column (event attribute): EU against US.
+   await page.locator('#owgModelChangeMode').selectOption('groups');
+   await page.locator('#owgModelChangeCohortAAttribute').fill('region=EU');await page.locator('#owgModelChangeCohortBAttribute').fill('region=US');
+   await page.locator('#owgModelChangeRun').click();
+   await page.locator('#owgModelChangeStatus').filter({hasText:'region=EU (20 cases) against region=US (20)'}).waitFor();
+   const groups=await page.locator('#owgModelChangeResults').textContent();
+   assert(groups.includes('Only in region=US: Notify')&&groups.includes('Orderings that differ'),groups);
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgModelChange'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Model change browser acceptance passed: given split with new activity, changed orderings and lower cross-fit, median split, WCAG audit.');
+   console.log('Model change browser acceptance passed: given split with new activity, changed orderings and lower cross-fit, median split, two regions compared, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});
