@@ -2327,7 +2327,7 @@
           resetHandoff("Checking latest authorized process…");
           const ticket=handoffGeneration, file=$("handoffPacket").files[0], chosen=selected;
           const identityTicket=identityGeneration, authorizedCredential=credential;
-          const fail=reason=>{if(ticket===handoffGeneration)$("handoffStatus").textContent="REFUSED: "+reason+" No execution authorization.";};
+          const fail=reason=>{if(ticket===handoffGeneration&&identityTicket===identityGeneration&&credential===authorizedCredential&&selected===chosen)$("handoffStatus").textContent="REFUSED: "+reason+" No execution authorization.";};
           if(!chosen||!credential||!file){fail("Sign in, select a shared process and a packet.");return;}
           if(!$("handoffConsent").checked){fail("Explicit authorization to inspect this packet is required.");return;}
           if(file.size>262144){fail("Packet exceeds 256 KiB.");return;}
@@ -2366,7 +2366,7 @@
             $("handoffStatus").textContent="MATCH: Fresh authorized, independently design-reviewed process revision "+p.revision+" and SHA-256 match. Eligible only for further human review. Consent, owner approval, source access, retention and execution authorization remain unverified.";
             inspectedHandoff={workflow_id:p.workflow_id,revision:p.revision,content_sha256:p.content_sha256};
             $("handoffReview").disabled=false;
-          }catch(_){if(ticket===handoffGeneration)fail("Fresh authenticated read failed or access was withdrawn.");}
+          }catch(_){fail("Fresh authenticated read failed or access was withdrawn.");}
         }));
       })();
     </script>
