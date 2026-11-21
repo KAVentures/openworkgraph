@@ -2093,8 +2093,10 @@
               current=await call("/v1/human/processes/"+encodeURIComponent(pinned.workflow_id));
             } catch (error) {
               if(ticket===handoffGeneration && identityTicket===identityGeneration &&
-                 credential===authorizedCredential && selected===chosen)
+                 credential===authorizedCredential && selected===chosen) {
+                $("reviewConfirm").checked=false;
                 resetHandoff("REFUSED: Authorization read failed. Sign in, reopen the latest revision and inspect again.");
+              }
               throw error;
             }
             // An old request must never invalidate a newer identity, process,
@@ -2114,6 +2116,7 @@
                record.workflow_id!==pinned.workflow_id||
                record.revision!==pinned.revision||
                record.content_sha256!==pinned.content_sha256) {
+              $("reviewConfirm").checked=false;
               resetHandoff("REFUSED: Reviewed handoff is no longer current or authorized. Inspect again.");
               throw new Error("Reviewed handoff changed; reopen latest revision and inspect again.");
             }
