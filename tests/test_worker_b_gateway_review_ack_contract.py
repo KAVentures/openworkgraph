@@ -1,0 +1,82 @@
+"""Worker B regression: Gateway must not acknowledge an unverified review.
+
+This is a source contract guard, NOT the required API-backed browser acceptance.
+"""
+from pathlib import Path
+
+
+def test_review_ack_requires_authenticated_actor_and_decision():
+    source = (Path(__file__).resolve().parents[1] / "gateway" / "processes.html").read_text()
+    start = source.index("const acknowledged=reviewResult?")
+    end = source.index("if(!acknowledged)", start)
+    verification = source[start:end]
+    assert "reviewResult.your_actor_id===reviewSelection.your_actor_id" in verification
+    assert "Array.isArray(reviewResult.review?.reviews)" in verification
+    assert "entry?.reviewer_actor_id===reviewSelection.your_actor_id" in verification
+    assert "entry.decision===decision" in verification
+    assert "reviewResult.process.content_sha256===record.content_sha256" in verification
+    assert end < source.index("render(reviewResult)", start)
+
+
+def test_interrupted_review_submission_requires_fresh_user_confirmation():
+    """A lost POST response is ambiguous: never allow blind retry."""
+    source = (Path(__file__).resolve().parents[1] / "gateway" / "processes.html").read_text()
+    start = source.index("async function review(decision)")
+    end = source.index("const acknowledged=reviewResult?", start)
+    submission = source[start:end]
+    assert 'reviewMutationInFlight = true' in submission
+    assert 'const submittedInspectedHandoff=Boolean(inspectedHandoff)' in submission
+    assert 'resetHandoff("Review submitted; outcome may be unknown' in submission
+    assert '"/reviews",' in submission
+    failure = submission[submission.index("} catch (error) {", submission.index("reviewResult=await call(")):]
+    assert '$("reviewConfirm").checked=false' in failure
+    assert "Review submission outcome is uncertain." in failure
+    assert "Reopen the latest authorized revision" in failure
+    assert 'encodeURIComponent(record.workflow_id)' in submission
+
+
+def test_acknowledged_review_consumes_explicit_confirmation():
+    """Successful submissions must not leave a reusable approval checkbox."""
+    source = (Path(__file__).resolve().parents[1] / "gateway" / "processes.html").read_text()
+    start = source.index("if(!acknowledged)")
+    end = source.index("render(reviewResult)", start)
+    success = source[start:end]
+    assert '$("reviewConfirm").checked=false' in success
+    assert success.index('$("reviewConfirm").checked=false', success.index("return;")) < success.index('$("handoffStatus").textContent="Design review acknowledged.')
+
+
+def test_revoked_or_stale_inspected_review_consumes_human_confirmation():
+    """A denied pre-POST authorization read must require deliberate reconfirmation."""
+    source = (Path(__file__).resolve().parents[1] / "gateway" / "processes.html").read_text()
+    block = source.split("async function review(decision) {", 1)[1].split('$("approve").onclick', 1)[0]
+    read_failure = block.split("current=await call(", 1)[1].split("throw error;", 1)[0]
+    assert '$("reviewConfirm").checked=false;' in read_failure
+    stale = block.split('resetHandoff("REFUSED: Authorization read failed.', 1)[1]
+    stale = stale.split('resetHandoff("REFUSED: Reviewed handoff is no longer current', 1)[0]
+    assert '$("reviewConfirm").checked=false;' in stale
+    assert block.index('resetHandoff("REFUSED: Reviewed handoff is no longer current') < block.index('"/reviews"')
+
+
+def test_agent_project_export_revalidates_latest_reviewed_revision():
+    """Executable SDK downloads require a fresh authenticated Gateway read."""
+    source = (Path(__file__).resolve().parents[1] / "gateway" / "processes.html").read_text()
+    block = source.split("async function download(format) {", 1)[1].split("const response = await fetch(", 1)[0]
+    assert 'if (format === "agent-project")' in block
+    assert 'const current = await call("/v1/human/processes/"' in block
+    for guard in (
+        "identityTicket !== identityGeneration",
+        "credential !== authorizedCredential",
+        "selected !== selection",
+        "current.archived",
+        "current.viewing_historical_revision",
+        "current.process.workflow_id !== record.workflow_id",
+        "current.process.revision !== record.revision",
+        "current.latest_revision !== record.revision",
+        "current.process.content_sha256 !== record.content_sha256",
+        'current.review?.status !== "reviewed_design"',
+    ):
+        assert guard in block
+    # Compare against the refusal belonging to this guard, not the earlier
+    # missing-selection refusal at the beginning of the same function.
+    review_guard = block.index('current.review?.status !== "reviewed_design"')
+    assert review_guard < block.index("throw new Error", review_guard)
