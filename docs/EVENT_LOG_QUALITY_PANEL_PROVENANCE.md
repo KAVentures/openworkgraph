@@ -81,3 +81,17 @@ diagnostics” to read a fresh snapshot, or re-analyse the log.
 When current diagnostics contain more than 32 attribute keys, **Browse all attribute coverage** opens bounded pages of current whole-log counts. Each page shows the attribute name and counts of events with and without a populated value; it never returns source values. Null and empty strings are absent, while false and zero are populated. Repeated occurrences of the same key in one event count once.
 
 The dashboard-session-only `GET /v1/event-logs/{log_id}/quality/attribute-coverage` returns 32 keys ordered by populated count and then literal key, plus the exact total, event count, `revision`, and `next_offset`. Supply the returned revision with a later offset. Appending or releasing rows changes the revision and requires reloading page one. Each page recomputes coverage from the current retained log; it is not a historical import report and may take time for large logs.
+
+The dashboard-session-only `GET /v1/event-logs/{log_id}/quality/timestamp-ties`
+reports affected activities for the selected case notion and optional case filter.
+It counts case-event occurrences and cases with events sharing a timestamp, with
+up to 100 activities ordered by affected occurrences; truncation is explicit. It also counts tied timestamp groups containing different activity labels and affected cases, distinguishing potential sequence ambiguity from ties of identical labels.
+An event shared by several object-centric cases contributes once per case. Ties
+make relative order unknown even though analyses use event IDs to break them.
+The endpoint computes from the current retained selection, not a historical
+import report, and can require a full scan of that selection.
+
+In Data quality, **Analyze timestamp ordering** runs this report on demand for
+the selected case notion and active case filter. It shows activity labels, so it
+is separate from the counts-only import diagnostics. Changing the selection
+requires running the analysis again.

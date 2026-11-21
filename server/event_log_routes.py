@@ -1268,6 +1268,16 @@ def event_log_cooccurrence(request: Request, log_id: str, limit: int = Query(def
     return _respond(co.cooccurrence, log_id, case_type, limit=limit, min_support=min_support, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/quality/timestamp-ties")
+def event_log_quality_timestamp_ties(request: Request, log_id: str,
+                                     case_type: str | None = Query(default=None, max_length=200),
+                                     cohort: dict = Depends(_case_filter)):
+    """Show which activities have ambiguous ordering within selected cases."""
+    from . import event_log_quality_ties
+    _require_dashboard(request)
+    return _respond(event_log_quality_ties.timestamp_ties, log_id, case_type, cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/activity-profile")
 def event_log_activity_profile(request: Request, log_id: str,
                                profile_activity: str = Query(min_length=1, max_length=500),
