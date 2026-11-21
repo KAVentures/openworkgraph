@@ -338,6 +338,7 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
     # Separately count explicitly negative (no true pair) events. These are
     # interruption/rejection probes, not verified cross-case contamination.
     negative_events = negative_events_with_false_links = 0
+    positive_events = positive_events_with_false_links = 0
     false_positive_events = false_negative_events = 0
     # Window-level counts reveal regressions hidden by aggregate accuracy.
     by_window: dict[str, dict[str, int]] = {}
@@ -358,6 +359,11 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
         if not true_pairs:
             negative_events += 1
             negative_events_with_false_links += bool(extra)
+        else:
+            # A correctly linked positive event can still leak into another case.
+            # Negative-only probes cannot detect this failure mode.
+            positive_events += 1
+            positive_events_with_false_links += bool(extra)
         ambiguous += row["review_status"] == "ambiguous_multiple_pairs"
         if extra or missed:
             # Exact event/window provenance lets an authorized reviewer inspect
@@ -410,6 +416,11 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
         "false_positive_events": false_positive_events,
         "false_link_event_rate": false_positive_events / len(labels),
         "false_negative_events": false_negative_events,
+        "explicit_positive_events": positive_events,
+        "explicit_positive_events_with_false_links": positive_events_with_false_links,
+        "explicit_positive_false_link_rate": (
+            positive_events_with_false_links / positive_events if positive_events else None
+        ),
         "explicit_negative_events": negative_events,
         "explicit_negative_events_with_false_links": negative_events_with_false_links,
         "explicit_negative_false_link_rate": (
