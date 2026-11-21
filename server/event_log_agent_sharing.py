@@ -718,11 +718,11 @@ def performance_spectrum(log_id: str, case_type: str | None = None, segments: li
         if counts.get((segment["from"], segment["to"]), 0) < floor:
             continue
         durations = {key: value for key, value in segment["duration_seconds"].items() if key != "max"}
-        # A time-bin containing 1-4 cases can single out a specific event time.
-        # Withhold the whole series (not one cell, since totals permit subtraction)
-        # unless the owner granted cases-level access.
-        cells = [n for bucket in segment["bins"] for n in bucket["counts"].values() if n is not None]
-        safe_bins = with_cases or all(n == 0 or n >= floor for n in cells)
+        # Buckets count occurrences, not distinct cases: one case may account
+        # for an apparently well-supported time bin. Until each class/bin can
+        # prove independent case support, keep temporal histograms at the
+        # explicitly case-shared permission level only.
+        safe_bins = with_cases
         bins_withheld = bins_withheld or not safe_bins
         kept.append({**{key: value for key, value in segment.items()
                          if key not in ("lines", "lines_sampled", "bins")},
@@ -731,7 +731,7 @@ def performance_spectrum(log_id: str, case_type: str | None = None, segments: li
                      "duration_seconds": durations})
     # No source log details or exact global time origin when some bins/segments
     # were hidden from an aggregates-only share.
-    hide_clock = not with_cases and (bins_withheld or len(kept) != len(result["segments"]))
+    hide_clock = not with_cases
     return {**{k: v for k, v in result.items() if k != "log"},
             "time_origin": None if hide_clock else result.get("time_origin"),
             "bin_seconds": None if hide_clock else result.get("bin_seconds"),
