@@ -53,6 +53,7 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 | --- | --- |
 | `list_process_logs` | Shared logs: id, name, level, size, case notions, whether agents may tag cases. |
 | `get_process_overview` | Cases, events, durations, KPIs (optionally an SLA), top variants, top insights with their case filters. |
+| `get_process_overview_for_cases` | The overview of only the cases matching a case filter (same keys as insight cohorts, e.g. `{"attribute": "region=EU"}` or `{"activity": "Escalate"}`), next to the whole log: case count and share, durations, KPIs and top variants. Refused when fewer than 5 cases match. | aggregates |
 | `get_process_root_cause` | Associations with `duration_over` (hours), `rework`, `contains_activity` or `ends_with` (activity). |
 | `explain_process_case` | One case's steps, gaps over the typical gap, repeats and uncommon steps (cases level). |
 | `get_slowest_process_cases` | Slowest cases first (cases level). |
@@ -64,6 +65,8 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 | `get_process_footprints` | Footprint matrices (→, ←, ||, #) from the recorded cases and from the discovered model, the share of cells that agree, and the orderings only the log has (with case counts) or only the model allows (aggregates level). See "Footprints" in EVENT_LOG_WORKSPACE.md. |
 | `get_process_model_quality` | Fitness, precision, their F-score, generalization and simplicity of the discovered net at several noise levels (default 0, 0.1, 0.2, 0.3, 0.5), and the level with the best F-score, to choose a noise level before asking for the model (aggregates level). See "Model quality" in EVENT_LOG_WORKSPACE.md. |
 | `get_process_deviations` | Optimal alignments of the cases on the discovered net at a noise level: alignment fitness, the steps cases took that the model does not allow there and the steps it requires that cases skipped (with case counts), and the step-by-step explanation of the most common non-fitting variants (aggregates level). See "Step-by-step explanation (alignments)" in EVENT_LOG_WORKSPACE.md. |
+| `list_process_reference_nets` | The reference process models (Petri nets) the owner saved for the log, by id and name; the nets themselves are not returned. | aggregates |
+| `get_process_reference_deviations` | Where cases depart from one saved reference model, from optimal alignments: extra and skipped steps with case counts, fitness overall and by month, and each non-fitting variant explained. | aggregates |
 | `get_process_funnel` | Milestone funnel over 2 to 8 activities in order: cases reaching each step, conversion from the previous step, hours between steps (median, p90, mean), what stopped cases did last, and the largest drop; optional conversion window in hours (aggregates level). See "Milestone funnel" in EVENT_LOG_WORKSPACE.md. |
 | `get_unusual_process_cases` | Cases that stand out, ranked, each with reasons (rare path, unusually slow or fast, unusually many events, heavy rework, rare activity) and the log baseline. Case IDs and paths only for logs shared at the cases level; aggregates-level logs get scores and reasons without them. See "Unusual cases" in EVENT_LOG_WORKSPACE.md. |
 | `get_process_due_dates` | Whether an activity happened by each case's due date (from a case or event attribute, or N days after the case started): on time, early, late, open and overdue, open and not yet due, missing or unreadable due dates; days late and a trend by due month. Most-late case IDs only for logs shared at the cases level. See "Due dates" in EVENT_LOG_WORKSPACE.md. |
@@ -77,6 +80,8 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 | `compare_process_cases` | Two cases side by side: aligned steps (shared or only in one), hours from each start, and where the second fell furthest behind (cases level only). |
 | `get_process_activity_profile` | One activity from every side: share of cases, repeats, what comes before and after (with median gaps), time into the case, weekday and hour, and case durations with and without it (aggregates level). |
 | `get_process_signal_scorecard` | The owner's KPI, conformance and due-date signals month by month (by case start), with each month's value and whether the condition held; read-only (aggregates level). |
+| `get_process_breakdown` | Case figures by one or two dimensions (start month or weekday, first or last activity, a case or event attribute), like a pivot table: cases, share, median and p90 duration, events per case, rework rate and optionally the share doing an activity. Cells and totals with fewer than 5 cases are withheld. | aggregates |
+| `find_similar_process_cases` | The recorded cases whose path is closest to a chosen case, with what each does more or less often, its duration and start, and the median duration of those found. | cases |
 
 | `tag_process_cases` | Adds an `agent: ` tag with a note to cases (cases level and the tag permission). |
 

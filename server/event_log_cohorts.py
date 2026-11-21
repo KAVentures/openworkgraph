@@ -21,6 +21,7 @@ _KEYS = {"label", "started_from", "started_before", "resource", "activity", "att
          "follows", "variants", "duration", "starts_with", "ends_with", "ended_from", "ended_before", "events",
          "path_cases", "rework"}
 MAX_FOLLOW_RULES = 5
+MAX_FOLLOW_HOURS = 24 * 3650
 MAX_COHORT_VARIANTS = 500
 MAX_VARIANT_LENGTH = 1000
 BOOTSTRAP_SAMPLE = 5000
@@ -90,13 +91,28 @@ def _parse_follows(rules: Any) -> list[dict[str, Any]]:
         raise EventLogWorkspaceError(f"cohort follows must be a list of 1–{MAX_FOLLOW_RULES} rules")
     parsed = []
     for rule in rules:
-        if not isinstance(rule, dict) or set(rule) - {"from", "to", "mode", "negate"}:
-            raise EventLogWorkspaceError("a follows rule has from, to, mode (direct or eventual) and negate")
+        if not isinstance(rule, dict) or set(rule) - {"from", "to", "mode", "negate", "min_hours", "max_hours"}:
+            raise EventLogWorkspaceError("a follows rule has from, to, mode (direct or eventual), negate, "
+                                         "and optionally min_hours and max_hours")
         mode = rule.get("mode", "eventual")
         if mode not in ("direct", "eventual") or not isinstance(rule.get("negate", False), bool):
             raise EventLogWorkspaceError("a follows rule's mode is direct or eventual and negate is true or false")
-        parsed.append({"from": _short(rule.get("from"), "follows activity"), "to": _short(rule.get("to"), "follows activity"),
-                       "mode": mode, "negate": rule.get("negate", False)})
+        entry = {"from": _short(rule.get("from"), "follows activity"), "to": _short(rule.get("to"), "follows activity"),
+                 "mode": mode, "negate": rule.get("negate", False)}
+        # Optional time between the two steps (Disco/Celonis-style throughput filter on a segment).
+        for key in ("min_hours", "max_hours"):
+            value = rule.get(key)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or value != value \
+                    or not 0 <= value <= MAX_FOLLOW_HOURS:
+                raise EventLogWorkspaceError(f"a follows rule's {key} must be a number of hours from 0 to {MAX_FOLLOW_HOURS}")
+            entry[key] = float(value)
+        if ("min_hours" in entry or "max_hours" in entry) and entry["negate"]:
+            raise EventLogWorkspaceError("a time limit applies only to a rule that keeps cases where one step follows another")
+        if "min_hours" in entry and "max_hours" in entry and entry["min_hours"] >= entry["max_hours"]:
+            raise EventLogWorkspaceError("a follows rule's min_hours must be below its max_hours")
+        parsed.append(entry)
     return parsed
 
 
@@ -221,6 +237,25 @@ def _predicate(cohort: dict[str, Any], log_id: str) -> tuple[str, list[Any]]:
             WHERE j.key = ? AND (CASE WHEN j.type = 'VARCHAR' THEN j.value->>'$' ELSE j.value::VARCHAR END) = ?)""")
         params += list(cohort["event_attribute"])
     for rule in cohort.get("follows", []):
+        if "min_hours" in rule or "max_hours" in rule:
+            # Time from the first occurrence of `from` to the next `to` after it (or, for direct rules, to the
+            # first `to` right after a `from`): min_hours inclusive, max_hours exclusive.
+            if rule["mode"] == "direct":
+                pairs = """SELECT case_id, arg_min(gap, k) AS gap FROM (SELECT case_id, k, activity,
+                      lead(activity) OVER w AS nxt, epoch(lead(ts) OVER w - ts) AS gap FROM (SELECT case_id, activity,
+                      ts, row_number() OVER (PARTITION BY case_id ORDER BY ts, event_id) AS k FROM ce) WINDOW w AS (
+                      PARTITION BY case_id ORDER BY k)) WHERE activity = ? AND nxt = ? GROUP BY case_id"""
+            else:
+                pairs = """SELECT f.case_id, epoch(min(t.ts) FILTER (WHERE t.k > f.k) - f.ts) AS gap FROM (
+                      SELECT case_id, arg_min(ts, k) AS ts, min(k) AS k FROM (SELECT case_id, activity, ts,
+                        row_number() OVER (PARTITION BY case_id ORDER BY ts, event_id) AS k FROM ce)
+                      WHERE activity = ? GROUP BY case_id) f JOIN (SELECT case_id, activity, ts,
+                        row_number() OVER (PARTITION BY case_id ORDER BY ts, event_id) AS k FROM ce) t
+                      ON t.case_id = f.case_id AND t.activity = ? GROUP BY f.case_id, f.ts"""
+            cond = (["gap >= ?"] if "min_hours" in rule else []) + (["gap < ?"] if "max_hours" in rule else [])
+            clauses.append(f"case_id IN (SELECT case_id FROM ({pairs}) WHERE gap IS NOT NULL AND {' AND '.join(cond)})")
+            params += [rule["from"], rule["to"]] + [rule[k] * 3600 for k in ("min_hours", "max_hours") if k in rule]
+            continue
         # Order within a case is time, then event identifier, as everywhere in the workspace.
         if rule["mode"] == "direct":
             cases = """SELECT case_id FROM (SELECT case_id, activity, lead(activity) OVER (

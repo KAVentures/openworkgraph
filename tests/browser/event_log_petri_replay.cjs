@@ -66,6 +66,10 @@ const path=require('node:path');
    const [csvDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#owgPetriCasesCsv').click()]);
    const csvText=await fs.readFile(await csvDownload.path(),'utf8');
    assert.equal(csvText.trim().split('\n').length,7,csvText);assert(csvText.includes('Register > Pay > Close')&&csvText.includes(',Check'),csvText);
+   // Tag the six non-fitting cases so the case filter can focus on them.
+   assert.equal(await page.locator('#owgPetriTag').textContent(),'Tag the 6 non-fitting cases');
+   await page.locator('#owgPetriTagName').fill('skips check');await page.locator('#owgPetriTag').click();
+   await page.locator('#owgPetriTagMessage').filter({hasText:'Tagged 6 cases “skips check”.'}).waitFor();
    // Root causes of the deviation: the six cases without Check are the deviating ones.
    await page.locator('#owgPetriCauses').click();
    await page.locator('#owgPetriCausesResults').filter({hasText:'6 of 30 cases deviate'}).waitFor();

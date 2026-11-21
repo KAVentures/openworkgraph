@@ -247,6 +247,48 @@ def overview(log_id: str, case_type: str | None = None, sla_hours: float | None 
     }
 
 
+AGENT_MIN_FILTERED_CASES = 5
+
+
+def overview_for_cases(log_id: str, case_filter: Any, case_type: str | None = None,
+                       sla_hours: float | None = None) -> dict[str, Any]:
+    """The overview for the cases matching a case filter (aggregates level). At least
+    AGENT_MIN_FILTERED_CASES cases must match, so a narrow filter cannot describe one case."""
+    require(log_id, "aggregates")
+    from . import event_log_analytics as analytics
+    from . import event_log_cohorts as cohorts
+    if not isinstance(case_filter, dict) or not case_filter:
+        raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+    chosen = cohorts.parse_cohort(case_filter)
+    if not any(k != "label" for k in chosen):
+        raise EventLogWorkspaceError("case_filter must filter something")
+    sla = int(sla_hours * 3600) if sla_hours else None
+    summary = workspace.summary(log_id, case_type, case_filter)
+    if summary["cases"] < AGENT_MIN_FILTERED_CASES:
+        raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
+    whole = workspace.summary(log_id, case_type)
+    variants = workspace.variants(log_id, case_type, 5, cohort=case_filter)
+    kpis = analytics.kpis(log_id, case_type, sla, None, case_filter)
+    whole_kpis = analytics.kpis(log_id, case_type, sla)
+    pick = lambda k: {key: k.get(key) for key in ("throughput_seconds", "rework_rate", "sla") if key in k}  # noqa: E731
+    return {
+        "format": FORMAT, "log_id": log_id, "case_notion": summary["case_notion"],
+        "case_filter": cohorts.describe(chosen),
+        "cases": summary["cases"], "cases_in_log": whole["cases"],
+        "share_of_log": round(summary["cases"] / whole["cases"], 4) if whole["cases"] else None,
+        "events": summary["events"], "activities": summary["activities"],
+        "first_event_at": summary["first_event_at"], "last_event_at": summary["last_event_at"],
+        "case_duration_seconds": summary["case_duration_seconds"],
+        "whole_log_case_duration_seconds": whole["case_duration_seconds"],
+        "kpis": pick(kpis), "whole_log_kpis": pick(whole_kpis),
+        "top_variants": [{"path": v["path"], "cases": v["cases"], "share": v.get("share")}
+                         for v in _top(variants.get("variants"), 5)],
+        "variants_total": variants.get("distinct_variants"),
+        "interpretation": ("Describes the recorded cases matching the filter, next to the whole log. A difference "
+                           "between them is an association, not a cause, and nothing here authorizes an action."),
+    }
+
+
 def brief(log_id: str, case_type: str | None = None, sla_hours: float | None = None) -> dict[str, Any]:
     """One bounded briefing for an agent starting on a log: the overview, how well the discovered model fits
     at its best noise level, where cases depart from it, how many cases stand out, and which tools to call
@@ -439,6 +481,28 @@ def model_deviations(log_id: str, case_type: str | None = None, noise: float = 0
             **{k: result[k] for k in keep if k in result}}
 
 
+def reference_nets(log_id: str) -> dict[str, Any]:
+    """The owner's saved reference Petri nets for this log, by name (aggregates level; the nets are not returned)."""
+    require(log_id, "aggregates")
+    from . import event_log_reference_nets as nets
+    listed = nets.listing(log_id)
+    return {"format": FORMAT, "log_id": log_id, "nets": listed["nets"]}
+
+
+def reference_deviations(log_id: str, net_id: str, case_type: str | None = None) -> dict[str, Any]:
+    """Optimal alignments of the log on one of the owner's saved reference nets (aggregates level)."""
+    require(log_id, "aggregates")
+    from . import event_log_alignments as al
+    from . import event_log_reference_nets as nets
+    name, xml = nets.get(log_id, net_id)
+    result = al.alignments(log_id, xml.encode(), case_type)
+    keep = ("case_notion", "cases", "cases_excluded", "variants", "fitness", "by_month", "deviation_cost", "log_moves",
+            "model_moves", "activities_not_in_net", "non_fitting_variants", "non_fitting_variants_total",
+            "unaligned", "method", "caveat")
+    return {"format": FORMAT, "log_id": log_id, "net_id": net_id, "net_name": name,
+            **{k: result[k] for k in keep if k in result}}
+
+
 def funnel(log_id: str, steps: list[str], case_type: str | None = None,
            within_hours: float | None = None) -> dict[str, Any]:
     """Milestone funnel over chosen activities (aggregates level: counts, timings, last activities)."""
@@ -548,6 +612,43 @@ def signal_scorecard(log_id: str, months: int = 6) -> dict[str, Any]:
     result = sig.scorecard(log_id, max(1, min(int(months), 24)))
     return {"format": FORMAT, "log_id": log_id, "months": result["months"], "rows": result["rows"],
             "interpretation": result["interpretation"]}
+
+
+AGENT_MIN_CELL_CASES = 5
+
+
+def breakdown(log_id: str, rows: str, columns: str | None = None, case_type: str | None = None,
+              with_activity: str | None = None) -> dict[str, Any]:
+    """Case figures by one or two dimensions (aggregates level). Cells and totals with fewer than
+    AGENT_MIN_CELL_CASES cases are withheld, so a rare attribute value cannot single out a case."""
+    require(log_id, "aggregates")
+    from . import event_log_breakdown as bd
+    result = bd.breakdown(log_id, rows, columns, case_type, with_activity=with_activity)
+    keep = lambda items: [x for x in items if x["cases"] >= AGENT_MIN_CELL_CASES]  # noqa: E731
+    cells, row_totals, column_totals = keep(result["cells"]), keep(result["row_totals"]), keep(result["column_totals"])
+    shown_rows = {t["row"] for t in row_totals}
+    shown_columns = {t["column"] for t in column_totals}
+    return {"format": FORMAT, "log_id": log_id, "case_notion": result.get("case_notion"),
+            "rows": result["rows"], "columns": result["columns"], "with_activity": with_activity,
+            "cases": result["cases"], "overall": {k: v for k, v in result["overall"].items() if k != "small"},
+            "row_values": [v for v in result["row_values"] if v in shown_rows],
+            "column_values": [v for v in result["column_values"] if v in shown_columns],
+            "cells": [{k: v for k, v in c.items() if k != "small"} for c in cells],
+            "row_totals": [{k: v for k, v in t.items() if k != "small"} for t in row_totals],
+            "column_totals": [{k: v for k, v in t.items() if k != "small"} for t in column_totals],
+            "withheld": {"cells": len(result["cells"]) - len(cells),
+                         "row_values": len(result["row_totals"]) - len(row_totals),
+                         "column_values": len(result["column_totals"]) - len(column_totals),
+                         "min_cases": AGENT_MIN_CELL_CASES},
+            "caveat": result["caveat"] + f" Cells with fewer than {AGENT_MIN_CELL_CASES} cases are withheld."}
+
+
+def similar_cases(log_id: str, case_id: str, case_type: str | None = None, limit: int = 10) -> dict[str, Any]:
+    """The recorded cases whose path is closest to case_id (cases level only)."""
+    require(log_id, "cases")
+    from . import event_log_similar_cases as sim
+    return {**sim.similar_cases(log_id, case_id, case_type, limit=max(1, min(int(limit), 50))),
+            "format": FORMAT, "log_id": log_id}
 
 
 def slowest_cases(log_id: str, case_type: str | None = None, limit: int = 10) -> dict[str, Any]:

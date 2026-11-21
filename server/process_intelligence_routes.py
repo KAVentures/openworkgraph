@@ -92,6 +92,23 @@ async def agent_overview(request: Request, log_id: str, case_type: str | None = 
     return await _answer(sharing.overview, log_id, case_type, sla_hours)
 
 
+@router.post("/v1/process-intelligence/{log_id}/overview-for-cases")
+async def agent_overview_for_cases(request: Request, log_id: str):
+    """POST because the case filter is a JSON object (the same keys as a cohort).
+
+    Body: {"case_filter": {...}, "case_type": optional text, "sla_hours": optional number}."""
+    _require_agent_access(request)
+    spec = await _json_body(request, "case filter", strict=True, limit=16384)
+    if not isinstance(spec, dict) or "case_filter" not in spec or set(spec) - {"case_filter", "case_type", "sla_hours"}:
+        raise HTTPException(422, 'send {"case_filter": {...}} with optional case_type and sla_hours')
+    case_type, sla = spec.get("case_type"), spec.get("sla_hours")
+    if case_type is not None and (not isinstance(case_type, str) or not 0 < len(case_type) <= 200):
+        raise HTTPException(422, "case_type must be a short text")
+    if sla is not None and (isinstance(sla, bool) or not isinstance(sla, (int, float)) or not 0 < sla <= 100000):
+        raise HTTPException(422, "sla_hours must be a number of hours above 0")
+    return await _answer(sharing.overview_for_cases, log_id, spec["case_filter"], case_type, sla)
+
+
 @router.get("/v1/process-intelligence/{log_id}/root-cause")
 async def agent_root_cause(request: Request, log_id: str,
                            outcome: str = Query(pattern="^(duration_over|rework|contains_activity|ends_with)$"),
@@ -158,6 +175,19 @@ async def agent_model_deviations(request: Request, log_id: str, noise: float = Q
                                  case_type: str | None = Query(default=None, max_length=200)):
     _require_agent_access(request)
     return await _answer(sharing.model_deviations, log_id, case_type, noise)
+
+
+@router.get("/v1/process-intelligence/{log_id}/reference-nets")
+async def agent_reference_nets(request: Request, log_id: str):
+    _require_agent_access(request)
+    return await _answer(sharing.reference_nets, log_id)
+
+
+@router.get("/v1/process-intelligence/{log_id}/reference-nets/{net_id}/deviations")
+async def agent_reference_deviations(request: Request, log_id: str, net_id: str,
+                                     case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.reference_deviations, log_id, net_id, case_type)
 
 
 @router.get("/v1/process-intelligence/{log_id}/funnel")
@@ -260,6 +290,23 @@ async def agent_activity_profile(request: Request, log_id: str,
 async def agent_signal_scorecard(request: Request, log_id: str, months: int = Query(default=6, ge=1, le=24)):
     _require_agent_access(request)
     return await _answer(sharing.signal_scorecard, log_id, months)
+
+
+@router.get("/v1/process-intelligence/{log_id}/breakdown")
+async def agent_breakdown(request: Request, log_id: str, rows: str = Query(min_length=1, max_length=220),
+                          columns: str | None = Query(default=None, max_length=220),
+                          with_activity: str | None = Query(default=None, min_length=1, max_length=500),
+                          case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.breakdown, log_id, rows, columns, case_type, with_activity)
+
+
+@router.get("/v1/process-intelligence/{log_id}/similar-cases")
+async def agent_similar_cases(request: Request, log_id: str, case_id: str = Query(min_length=1, max_length=500),
+                              limit: int = Query(default=10, ge=1, le=50),
+                              case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.similar_cases, log_id, case_id, case_type, limit)
 
 
 @router.get("/v1/process-intelligence/{log_id}/signals")

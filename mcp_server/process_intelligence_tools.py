@@ -74,6 +74,30 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"case_type": case_type, "sla_hours": sla_hours})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def get_process_overview_for_cases(log_id: str, case_filter: dict[str, Any], case_type: str | None = None,
+                                       sla_hours: float | None = None) -> dict[str, Any]:
+        """Overview of only the cases of a shared log that match a case filter, next to the whole log: case
+        count and share, durations, KPIs and top variants. case_filter uses the same keys as insight cohorts,
+        e.g. {"attribute": "region=EU"}, {"activity": "Escalate"}, {"event_attribute": "channel=phone"},
+        {"started_from": "2024-01-01T00:00:00Z"}, {"rework": true} or {"follows": [...]}. At least 5 cases must
+        match. Differences are associations, not causes. Aggregates only.
+        """
+        if not isinstance(case_filter, dict) or not case_filter:
+            raise ToolError("case_filter must be a non-empty object")
+        payload: dict[str, Any] = {"case_filter": case_filter}
+        if case_type is not None:
+            payload["case_type"] = case_type
+        if sla_hours is not None:
+            payload["sla_hours"] = sla_hours
+        runtime_module.authorize_tool("get_process_overview_for_cases")
+        try:
+            result = runtime_module.secure_post(f"/v1/process-intelligence/{_log(log_id)}/overview-for-cases", payload)
+        except Exception as exc:
+            raise ToolError(str(exc) or "process intelligence request failed") from None
+        result["interpretation"] = _NOTE
+        return runtime_module.core._finish("get_process_overview_for_cases", result)
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_root_cause(log_id: str, outcome: str, hours: float | None = None,
                                activity: str | None = None, case_type: str | None = None) -> dict[str, Any]:
         """Which activities, resources and case attributes are associated with an outcome.
@@ -191,6 +215,26 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
             raise ToolError("noise must be a share from 0 up to (not including) 1")
         return _get("get_process_deviations", f"/v1/process-intelligence/{_log(log_id)}/model-deviations",
                     {"noise": float(noise), "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def list_process_reference_nets(log_id: str) -> dict[str, Any]:
+        """The reference process models (Petri nets) the owner saved for a shared log, by id and name, such as the
+        approved or designed process. Use the net_id with get_process_reference_deviations. Aggregates only.
+        """
+        return _get("list_process_reference_nets", f"/v1/process-intelligence/{_log(log_id)}/reference-nets", {})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_process_reference_deviations(log_id: str, net_id: str, case_type: str | None = None) -> dict[str, Any]:
+        """Where the recorded cases of a shared log depart from one of the owner's saved reference models, from
+        optimal alignments: steps cases took that the model does not allow there, steps it requires that cases
+        skipped (with case counts), alignment fitness overall and by month, and how each non-fitting variant is
+        explained. A deviation is a difference from the saved model, not a verified error. Aggregates only.
+        """
+        if not isinstance(net_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", net_id):
+            raise ToolError("net_id must be a reference net id from list_process_reference_nets")
+        return _get("get_process_reference_deviations",
+                    f"/v1/process-intelligence/{_log(log_id)}/reference-nets/{net_id}/deviations",
+                    {"case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_funnel(log_id: str, steps: list[str], within_hours: float | None = None,
@@ -366,6 +410,35 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
             raise ToolError("months must be 1 to 24")
         return _get("get_process_signal_scorecard", f"/v1/process-intelligence/{_log(log_id)}/signal-scorecard",
                     {"months": months})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_process_breakdown(log_id: str, rows: str, columns: str | None = None, with_activity: str | None = None,
+                              case_type: str | None = None) -> dict[str, Any]:
+        """Case figures of a shared log by one or two dimensions, like a pivot table: cases, share, median and
+        90th-percentile duration, events per case, rework rate and, with with_activity, the share of cases doing
+        that activity. rows/columns are start_month, start_weekday, start_activity, end_activity,
+        attribute:<name> (case attribute) or event_attribute:<name>. Cells with fewer than 5 cases are withheld.
+        Differences between cells describe recorded cases, not causes. Aggregates only.
+        """
+        if not isinstance(rows, str) or not rows:
+            raise ToolError("rows must name a dimension")
+        return _get("get_process_breakdown", f"/v1/process-intelligence/{_log(log_id)}/breakdown",
+                    {"rows": rows, "columns": columns, "with_activity": with_activity, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def find_similar_process_cases(log_id: str, case_id: str, limit: int = 10,
+                                   case_type: str | None = None) -> dict[str, Any]:
+        """The recorded cases of a shared log whose sequence of activities is closest to case_id, with what each
+        does more or less often, its duration and start, and the median duration of the cases found. Use it to
+        ask "have we seen this before, and how did it go?"; follow up with compare_process_cases. Needs a log
+        shared at the cases level. Similar paths do not mean the same cause.
+        """
+        if not isinstance(case_id, str) or not case_id:
+            raise ToolError("case_id must be a case ID")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
+            raise ToolError("limit must be 1 to 50")
+        return _get("find_similar_process_cases", f"/v1/process-intelligence/{_log(log_id)}/similar-cases",
+                    {"case_id": case_id, "limit": limit, "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_signals(log_id: str) -> dict[str, Any]:

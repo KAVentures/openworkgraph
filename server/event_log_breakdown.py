@@ -25,7 +25,11 @@ from .event_log_workspace import EventLogWorkspaceError
 
 FORMAT = "openworkgraph.event_log_breakdown.v1"
 BUILT_IN = {"start_month": "month the case started", "start_weekday": "weekday the case started",
-            "start_activity": "first activity", "end_activity": "last activity"}
+            "start_activity": "first activity", "end_activity": "last activity",
+            "duration_band": "case duration", "rework": "rework"}
+# Duration bands are computed as sortable codes and shown with these labels.
+DURATION_BANDS = {"1": "under 1 hour", "2": "1 to 24 hours", "3": "1 to 7 days", "4": "7 to 30 days", "5": "30 days or more"}
+TAGGED, NOT_TAGGED = "tagged", "not tagged"
 MAX_ROWS, MAX_COLUMNS = 30, 12
 SMALL_CELL = 5
 OTHER, MISSING = "(other)", "(missing)"
@@ -37,17 +41,20 @@ def _dimension(raw: Any, name: str) -> tuple[str, str | None]:
         raise EventLogWorkspaceError(f"choose a {name} dimension")
     if raw in BUILT_IN:
         return raw, None
-    for prefix in ("attribute:", "event_attribute:"):
+    for prefix in ("attribute:", "event_attribute:", "tag:"):
         if raw.startswith(prefix) and 0 < len(raw) - len(prefix) <= 200:
             return prefix[:-1], raw[len(prefix):]
-    raise EventLogWorkspaceError(f"{name} must be one of {', '.join(BUILT_IN)}, attribute:<name> or "
-                                 "event_attribute:<name>")
+    raise EventLogWorkspaceError(f"{name} must be one of {', '.join(BUILT_IN)}, attribute:<name>, "
+                                 "event_attribute:<name> or tag:<name>")
 
 
 def _expr(kind: str) -> str:
     return {"start_month": "strftime(cs.started, '%Y-%m')",
             "start_weekday": "CAST(isodow(cs.started) AS VARCHAR)",
-            "start_activity": "cs.first_activity", "end_activity": "cs.last_activity"}[kind]
+            "start_activity": "cs.first_activity", "end_activity": "cs.last_activity",
+            "duration_band": """CASE WHEN cs.duration < 3600 THEN '1' WHEN cs.duration < 86400 THEN '2'
+                WHEN cs.duration < 604800 THEN '3' WHEN cs.duration < 2592000 THEN '4' ELSE '5' END""",
+            "rework": "CASE WHEN cs.rework THEN 'repeats an activity' ELSE 'no repeats' END"}[kind]
 
 
 def breakdown(log_id: str, rows: str, columns: str | None = None, case_type: str | None = None, *,
@@ -81,6 +88,12 @@ def breakdown(log_id: str, rows: str, columns: str | None = None, case_type: str
                       map_extract_value(json_transform(attributes, '"MAP(VARCHAR, VARCHAR)"'), ?) AS value
                     FROM objects WHERE log_id = ?""", [attr, log_id])
                 dims.append(f"(SELECT nullif(value, '') FROM dim_{slot} d WHERE d.case_id = cs.case_id)")
+            elif kind == "tag":
+                # Cases the analyst tagged with this tag, and the rest.
+                conn.execute(f"""CREATE OR REPLACE TEMP TABLE dim_{slot} AS SELECT DISTINCT case_id FROM case_tags
+                    WHERE log_id = ? AND tag = ?""", [log_id, attr])
+                dims.append(f"""CASE WHEN cs.case_id IN (SELECT case_id FROM dim_{slot}) THEN '{TAGGED}'
+                    ELSE '{NOT_TAGGED}' END""")
             elif kind == "event_attribute":
                 # The first non-empty value recorded on the case's events.
                 conn.execute(f"""CREATE OR REPLACE TEMP TABLE dim_{slot} AS SELECT case_id,
@@ -103,6 +116,8 @@ def breakdown(log_id: str, rows: str, columns: str | None = None, case_type: str
     def label(kind: str | None, value: str) -> str:
         if kind == "start_weekday" and value != MISSING:
             return WEEKDAYS[int(value) - 1]
+        if kind == "duration_band" and value != MISSING:
+            return DURATION_BANDS[value]
         return value
 
     def keep(index: int, limit: int, kind: str | None) -> tuple[dict[str, str], list[str]]:
@@ -111,7 +126,7 @@ def breakdown(log_id: str, rows: str, columns: str | None = None, case_type: str
         for cell in raw:
             counts[cell[index]] = counts.get(cell[index], 0) + 1
         values = [v for v in counts if v != MISSING]
-        if kind in ("start_month", "start_weekday"):
+        if kind in ("start_month", "start_weekday", "duration_band"):
             shown = sorted(values)[-limit:]
         else:
             shown = sorted(values, key=lambda v: (-counts[v], v))[:limit]
@@ -157,7 +172,8 @@ def breakdown(log_id: str, rows: str, columns: str | None = None, case_type: str
     def describe(raw_name: str | None, kind: str | None, attr: str | None) -> dict[str, Any] | None:
         if kind is None:
             return None
-        label_text = {"attribute": f"case attribute {attr}", "event_attribute": f"event attribute {attr}"}
+        label_text = {"attribute": f"case attribute {attr}", "event_attribute": f"event attribute {attr}",
+                      "tag": f"tag {attr}"}
         return {"dimension": raw_name, "label": label_text.get(kind) or BUILT_IN[kind]}
 
     return {
@@ -186,13 +202,43 @@ def dimensions(log_id: str, case_type: str | None = None) -> dict[str, Any]:
         case = conn.execute("""SELECT j.key, count(*) AS cases FROM objects o, json_each(o.attributes) j
             WHERE o.log_id = ? AND o.object_id IN (SELECT DISTINCT case_id FROM ce) AND j.type <> 'NULL'
             GROUP BY 1 ORDER BY cases DESC, 1 LIMIT ?""", [log_id, MAX_DIMENSION_ATTRIBUTES]).fetchall()
-        return {"events": events, "case": case}
+        tags = conn.execute("""SELECT tag, count(DISTINCT case_id) FROM case_tags WHERE log_id = ?
+            AND case_id IN (SELECT DISTINCT case_id FROM ce) GROUP BY 1 ORDER BY 1""", [log_id]).fetchall()
+        return {"events": events, "case": case, "tags": tags}
     data = workspace._query(log_id, case_type, run)
     options = [{"dimension": k, "label": v} for k, v in BUILT_IN.items()]
     options += [{"dimension": "attribute:" + k, "label": f"case attribute {k}", "cases": n} for k, n in data["case"]]
     options += [{"dimension": "event_attribute:" + k, "label": f"event attribute {k}", "cases": n}
                 for k, n in data["events"]]
+    options += [{"dimension": "tag:" + t, "label": f"tag {t}", "cases": n} for t, n in data["tags"]]
     return {"format": FORMAT, "log_id": log_id, "dimensions": options}
 
 
-__all__ = ["breakdown", "dimensions", "FORMAT", "BUILT_IN"]
+def _cell(value: Any) -> str:
+    """CSV cell safe to open in a spreadsheet: a leading formula character is neutralized."""
+    text = "" if value is None else str(value)
+    return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
+
+
+def breakdown_csv(log_id: str, rows: str, columns: str | None = None, case_type: str | None = None, *,
+                  with_activity: str | None = None, cohort: dict[str, Any] | None = None) -> str:
+    """The breakdown as CSV, one line per cell, then the row totals, column totals and overall ("All")."""
+    import csv
+    import io
+    r = breakdown(log_id, rows, columns, case_type, with_activity=with_activity, cohort=cohort)
+    figures = ["cases", "share", "median_hours", "p90_hours", "events_per_case", "rework_rate"] + (
+        ["with_activity_share"] if with_activity is not None else [])
+    out = io.StringIO()
+    writer = csv.writer(out, lineterminator="\n")
+    writer.writerow([r["rows"]["label"], r["columns"]["label"] if r["columns"] else "column", *figures, "fewer_than_5_cases"])
+    every = "All"
+    lines = [(c["row"], c["column"], c) for c in r["cells"]]
+    lines += [(t["row"], every, t) for t in r["row_totals"]] if r["columns"] else []
+    lines += [(every, t["column"], t) for t in r["column_totals"]]
+    lines.append((every, every, r["overall"]))
+    for row, column, figs in lines:
+        writer.writerow([_cell(row), _cell(column), *[figs.get(f) for f in figures], str(bool(figs.get("small"))).lower()])
+    return out.getvalue()
+
+
+__all__ = ["breakdown", "breakdown_csv", "dimensions", "FORMAT", "BUILT_IN"]

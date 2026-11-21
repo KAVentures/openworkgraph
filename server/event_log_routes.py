@@ -506,6 +506,33 @@ async def retry_one_event_log_feed_file(request: Request, feed_id: str, sha256: 
     return await run_in_threadpool(_respond, folder_feeds.run, feed_id, retry_failed=True, retry_hash=sha256)
 
 
+@router.post("/v1/event-logs/{log_id}/case-table/export")
+async def export_case_table(request: Request, log_id: str):
+    from . import event_log_case_table as case_table
+
+    _require_dashboard(request)
+    spec = await _json_body(request, "case table export settings", strict=True, limit=32768)
+
+    def prepare():
+        handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="", suffix=".csv",
+                                             dir=str(DATA_DIR), delete=False)
+        try:
+            with handle:
+                case_table.export(log_id, spec, handle)
+        except BaseException:
+            os.unlink(handle.name)
+            raise
+        return handle.name
+
+    try:
+        filename = await run_in_threadpool(prepare)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    suffix = "review.csv" if spec.get("spreadsheet_review") is True else "csv"
+    return FileResponse(filename, media_type="text/csv", filename=f"{log_id}-case-table.{suffix}",
+                        headers={"Cache-Control": "no-store"}, background=BackgroundTask(os.unlink, filename))
+
+
 @router.post("/v1/event-logs/{log_id}/case-attributes")
 async def add_case_attributes(
     request: Request, log_id: str,
@@ -1061,6 +1088,31 @@ async def event_log_non_fitting_cases_csv(request: Request, log_id: str,
                              f"truncated={str(meta['truncated']).lower()}"})
 
 
+@router.post("/v1/event-logs/{log_id}/petri-net-alignments/tag")
+async def event_log_tag_non_fitting_cases(request: Request, log_id: str,
+                                          new_tag: str = Query(min_length=1, max_length=60),
+                                          note: str = Query(default="", max_length=500),
+                                          case_type: str | None = Query(default=None, max_length=200),
+                                          cohort: dict[str, Any] = Depends(_case_filter)):
+    """Tag every case that does not fit the PNML net sent as the body (within the case filter).
+
+    ``new_tag`` names the tag to add; ``tag`` is the case filter's own parameter (cases already tagged)."""
+    from . import event_log_alignments as aligned
+    from . import event_log_petri_replay as petri
+    _require_dashboard(request)
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > petri.MAX_BYTES:
+            raise HTTPException(413, "the Petri net file is larger than 2 MB")
+    try:
+        result = await run_in_threadpool(aligned.tag_non_fitting_cases, log_id, bytes(body), new_tag, case_type,
+                                         note=note, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/v1/event-logs/{log_id}/model-quality")
 def event_log_model_quality(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                             levels: str | None = Query(default=None, max_length=100),
@@ -1232,6 +1284,23 @@ def event_log_breakdown(request: Request, log_id: str, rows: str = Query(min_len
     from . import event_log_breakdown as breakdown
     _require_dashboard(request)
     return _respond(breakdown.breakdown, log_id, rows, columns, case_type, with_activity=with_activity, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/breakdown.csv")
+def event_log_breakdown_csv(request: Request, log_id: str, rows: str = Query(min_length=1, max_length=220),
+                            columns: str | None = Query(default=None, max_length=220),
+                            with_activity: str | None = Query(default=None, min_length=1, max_length=500),
+                            case_type: str | None = Query(default=None, max_length=200),
+                            cohort: dict = Depends(_case_filter)):
+    """The breakdown table as spreadsheet-safe CSV, one line per cell plus totals. Not stored."""
+    from . import event_log_breakdown as breakdown
+    _require_dashboard(request)
+    try:
+        text = breakdown.breakdown_csv(log_id, rows, columns, case_type, with_activity=with_activity, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(text, media_type="text/csv; charset=utf-8", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-breakdown.csv"'})
 
 
 @router.get("/v1/event-logs/{log_id}/variants")
