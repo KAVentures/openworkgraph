@@ -1134,6 +1134,12 @@ profiles.
 | `GET /v1/event-logs/{log_id}/case-attributes` | Recorded uploads. |
 | `POST /v1/event-logs/{log_id}/case-attributes/remove` | `{"upload_id": "...", "columns": [...]}` (columns optional). |
 
+Case enrichment also accepts Excel workbooks. Choose an `.xlsx` file and a
+worksheet. OWG converts that sheet to CSV locally for column selection and the
+case ID join. Switching worksheets clears column selection and storage
+confirmation. Store Excel IDs as text when leading zeros or formatting are
+part of the identifier.
+
 ### Download a case table
 
 Use **Download a case table** to get one row per case in the current case notion.
