@@ -384,3 +384,12 @@ def test_export_response_is_discarded_after_session_or_selection_changes():
     assert "selected?.process?.content_sha256 !== record.content_sha256" in block
     assert "Export canceled: session or selected revision changed" in block
     assert block.index("const exportedBlob = await response.blob();") < block.index("URL.createObjectURL(exportedBlob)")
+
+
+def test_executable_sdk_export_revalidates_actor_and_access_revision():
+    """A reviewed revision cannot be exported after membership changes."""
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split("async function download(format) {", 1)[1].split("function resetHandoff(", 1)[0]
+    assert 'current.your_actor_id !== selection.your_actor_id' in block
+    assert 'current.access_revision !== selection.access_revision' in block
+    assert block.index('current.access_revision !== selection.access_revision') < block.index('const response = await fetch(')
