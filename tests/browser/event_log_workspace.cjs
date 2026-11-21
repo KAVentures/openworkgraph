@@ -975,6 +975,7 @@ const path=require('node:path');
    await page.locator('#owgAnalysisName').fill('Rework split');await page.locator('#owgAnalysisSave').click();
    await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis saved.'}).waitFor();
    await page.locator('#owgAnalysisSaved').getByRole('button',{name:'Run saved analysis Rework split'}).click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis complete.'}).waitFor();
    const badSpec=await page.evaluate(()=>{try{window.__owgEventLogModel.analysisSpec({level:'cases',dim1:'attribute',attr1:' ',measure1:'count'});return 'accepted';}catch(e){return e.message;}});
    assert.equal(badSpec,'Enter the attribute name.');
    // A typed case metric: time from Receive to Approve, measured per rework group, then saved for reuse.
