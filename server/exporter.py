@@ -325,11 +325,9 @@ def _family_row(p: dict[str, Any]) -> dict[str, Any]:
 
 def _spreadsheet_safe_value(value: Any) -> Any:
     """Neutralize spreadsheet formulas without changing canonical JSON evidence."""
-    if not isinstance(value, str):
-        return value
-    if value and value[0] in {"=", "+", "-", "@"}:
-        return "'" + value
-    return value
+    from shared.spreadsheet_review import review_cell
+
+    return review_cell(value)
 
 
 def _csv_schema(filename: str) -> list[str]:
