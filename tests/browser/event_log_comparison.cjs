@@ -20,7 +20,7 @@ const path=require('node:path');
      await new Promise(resolve=>setTimeout(resolve,200));
    }if(!ready)throw new Error('Server not ready: '+logs);
    browser=await chromium.launch({...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE}:{}),headless:true,args:['--no-sandbox']});
-   const context=await browser.newContext({});const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
+   const context=await browser.newContext({acceptDownloads:true});const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
    const session=(await fs.readFile(path.join(scratch,'session.txt'),'utf8')).trim();
    await page.goto(base+'/#session='+session);await page.locator('[role=tab][data-tab=evidence]').click();
    const importLog=async(name,paths)=>{
@@ -37,7 +37,7 @@ const path=require('node:path');
    await page.locator('#owgEventLogAnalyze').click();
    const section=page.locator('#owgLogComparison');await section.waitFor();
    await section.scrollIntoViewIfNeeded();
-   assert.equal(await page.locator('#owgLogCompareOther option').count(),1);
+   assert.equal(await page.locator('#owgLogCompareOther option').count(),2);
    await page.locator('#owgLogCompareRun').click();
    const out=page.locator('#owgLogCompareResults');
    await out.locator('table').first().waitFor();
@@ -49,10 +49,64 @@ const path=require('node:path');
    assert.match(text,/0 variants occur in both logs/);
    assert.match(text,/not evidence of its cause/);
    assert.equal(await out.locator('table').count(),3);
+   await page.locator('#owgCaseFilterRework').selectOption('true');
+   await page.locator('#owgCaseFilterApply').click();
+   await page.locator('#owgCaseFilterCount').filter({hasText:'3 of 12 cases'}).waitFor();
+   await section.getByText('Case selection',{exact:true}).click();
+   await page.locator('#owgLogCompareUseActiveFilter').check();
+   await page.locator('#owgLogCompareCaseType').selectOption('case');
+   await page.locator('#owgLogCompareBaselineFrom').fill('2024-03-04');
+   await page.locator('#owgLogCompareBaselineBefore').fill('2024-03-10');
+   await page.locator('#owgLogCompareOtherFrom').fill('2024-03-03');
+   await page.locator('#owgLogCompareOtherBefore').fill('2024-03-08');
+   const [response]=await Promise.all([
+     page.waitForResponse(r=>new URL(r.url()).pathname==='/v1/event-logs/comparison'),
+     page.locator('#owgLogCompareRun').click()
+   ]);
+   const scoped=await response.json();
+   assert.equal(scoped.kpis.baseline.cases,2);assert.equal(scoped.kpis.comparison.cases,5);
+   assert.equal(scoped.baseline.cohort.rework,true);
+   assert.equal(scoped.comparison.cohort.started_before,'2024-03-08T00:00:00Z');
+   assert.equal(scoped.comparison.case_notion,'case');
+   const save=page.locator('#owgLogCompareJson');
+   const [download]=await Promise.all([page.waitForEvent('download'),save.click()]);
+   assert.deepEqual(JSON.parse(await fs.readFile(await download.path(),'utf8')),scoped);
+   await page.locator('#owgLogCompareOtherFrom').fill('2024-03-09');
+   assert.equal(await save.isDisabled(),true);
+   await page.locator('#owgLogCompareRun').click();
+   await out.getByText('A start date must be earlier than its end date.').waitFor();
+   await page.locator('#owgLogCompareOtherFrom').fill('2024-03-02');
+   let entered,release;
+   const seen=new Promise(resolve=>{entered=resolve;});
+   const hold=new Promise(resolve=>{release=resolve;});
+   await page.route('**/v1/event-logs/comparison',async route=>{
+     const pending=await route.fetch();entered();
+     await hold;await route.fulfill({response:pending});
+   },{times:1});
+   await page.locator('#owgLogCompareRun').click();await seen;
+   await page.locator('#owgLogCompareOtherFrom').fill('2024-03-05');
+   const delivered=page.waitForResponse(r=>new URL(r.url()).pathname==='/v1/event-logs/comparison');
+   release();await delivered;await page.waitForLoadState('networkidle');
+   assert.equal(await save.isDisabled(),true);
+   assert.equal(await out.locator('table').count(),0);
+   const own=page.locator('#owgLogCompareOther option').filter({hasText:'This log (compare two case selections)'});
+   await page.locator('#owgLogCompareOther').selectOption(await own.getAttribute('value'));
+   await page.locator('#owgLogCompareUseActiveFilter').uncheck();
+   await page.locator('#owgLogCompareBaselineFrom').fill('2024-03-01');
+   await page.locator('#owgLogCompareBaselineBefore').fill('2024-03-05');
+   await page.locator('#owgLogCompareOtherBefore').fill('2024-03-10');
+   const [sameResponse]=await Promise.all([
+     page.waitForResponse(r=>new URL(r.url()).pathname==='/v1/event-logs/comparison'),
+     page.locator('#owgLogCompareRun').click()
+   ]);
+   const same=await sameResponse.json();
+   assert.equal(same.baseline.log_id,same.comparison.log_id);
+   assert.equal(same.kpis.baseline.cases,4);assert.equal(same.kpis.comparison.cases,5);
+   await out.locator('table').first().waitFor();
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgLogComparison'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Event-log comparison browser acceptance passed: KPIs, activities only in one log, path differences, variant overlap and caveat, WCAG audit.');
+   console.log('Event-log comparison browser passed: separate and same-log scopes, case notions, date ranges, active filter, JSON export, stale-result guard, WCAG.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

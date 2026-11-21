@@ -2228,16 +2228,20 @@ Selected Jira issues can also be read manually into a retained local source-ID l
 
 ## Comparing two logs
 
-**Compare with another log** (after **Analyse**) compares the selected log with
-another saved log. Typical uses are two regions or business units exported
-separately, or the same process before and after a system migration. The REST
-form also compares one log with itself under two case filters:
+**Compare event logs** (after **Analyse**) compares the selected log with another saved log
+or two case selections within the same log. Typical uses are two regions exported separately
+or the same process before and after a system migration. The REST form accepts the same scopes:
 
 ```json
 {"baseline": {"log_id": "log_…", "case_type": null, "cohort": {}},
  "comparison": {"log_id": "log_…", "cohort": {"started_from": "2024-07-01"}},
  "limit": 25}
 ```
+
+Choose the comparison log's case notion and use **Case selection** to set separate UTC start-date
+ranges. The lower date is inclusive and the upper date is exclusive. The baseline can also use
+the current workspace case filter. **Download comparison JSON** saves the displayed results,
+including the case notions and applied filters, to a local file.
 
 `cohort` takes the same keys as other analyses. `limit` (1–200) caps each ranked
 list. The response contains:
