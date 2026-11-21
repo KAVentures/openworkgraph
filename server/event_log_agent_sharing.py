@@ -461,23 +461,35 @@ def costs(log_id: str, model: dict[str, Any] | None = None, case_type: str | Non
     if case_type:
         spec["case_type"] = case_type
     floor = 5
+    # workspace.activities() deliberately limits results to the 500 busiest labels.
+    # Never decide the privacy of a rare/priced activity from that truncated list.
+    def full_support(conn):
+        rows = conn.execute("SELECT activity, count(DISTINCT case_id) FROM ce GROUP BY activity").fetchall()
+        total = conn.execute("SELECT count(DISTINCT case_id) FROM ce").fetchone()[0]
+        return {"support": {a: int(n) for a, n in rows}, "total_cases": int(total)}
+    measured = workspace._query(log_id, case_type, full_support)
+    if measured["total_cases"] < floor:
+        raise EventLogWorkspaceError(f"agent costs require at least {floor} cases in the selected notion")
+    case_support = measured["support"]
     zeroed = 0
     if source == "agent_supplied_model":
-        # Prices chosen by the agent could single out a rare activity (price it alone and read the total), so
-        # activities seen in fewer than 5 cases always cost nothing in an agent's model.
-        listed = workspace.activities(log_id, case_type)["activities"]
-        if len(listed) >= 500 and spec.get("default_activity_cost"):
-            raise EventLogWorkspaceError("this log has too many activities for a default price; price activities by name")
-        rare = {a["activity"] for a in listed if a["cases"] < floor}
+        # Prices chosen by an agent can isolate a rare activity by pricing it
+        # alone and reading the total. Suppress every rare label, not just 500.
+        if len(case_support) > cm.MAX_ACTIVITIES:
+            raise EventLogWorkspaceError("too many distinct activities for safe agent-supplied cost modelling")
+        rare = {name for name, cases in case_support.items() if cases < floor}
         prices = spec.get("activity_costs") if isinstance(spec.get("activity_costs"), dict) else {}
-        spec["activity_costs"] = {**prices, **{a: 0 for a in rare}}
+        if len(set(prices) | rare) > cm.MAX_ACTIVITIES:
+            raise EventLogWorkspaceError("agent-supplied activity costs exceed the safe model size")
+        spec["activity_costs"] = {**prices, **{name: 0 for name in rare}}
         zeroed = len(rare)
     result = cm.costs(log_id, spec)
     activities = [a for a in result["activities"] if a["cases"] >= floor]
     variants = [v for v in result["costliest_variants"] if v["cases"] >= floor][:limit]
-    unpriced = [u for u in result["unpriced_activities"] if u["events"] >= floor]
+    unpriced = [u for u in result["unpriced_activities"]
+                if case_support.get(u["activity"], 0) >= floor]
     return {**{k: v for k, v in result.items() if k not in ("activities", "costliest_variants", "resources",
-                                                             "unpriced_activities", "cost_per_case")},
+                                                             "unpriced_activities", "cost_per_case", "model")},
             "format": FORMAT, "log_id": log_id, "model_source": source,
             "cost_per_case": {k: v for k, v in result["cost_per_case"].items() if k != "max"},
             "activities": activities, "costliest_variants": variants, "unpriced_activities": unpriced,
