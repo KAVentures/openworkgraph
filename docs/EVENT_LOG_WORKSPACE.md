@@ -2038,7 +2038,7 @@ and are deleted with the log.
 | `GET /v1/event-logs/{log_id}/quarantine?batch=&after=&limit=` | Kept rows by batch and reason, a page of rows, and the first 100 decisions with paging metadata. |
 | `GET /v1/event-logs/{log_id}/quarantine/decisions?offset=&limit=` | A page of up to 100 recorded decisions; history can change between pages. |
 | `POST /v1/event-logs/{log_id}/quarantine/release` | `{"naive_timestamp_offset": "+01:00", "batch": 0}` (batch optional). |
-| `POST /v1/event-logs/{log_id}/quarantine/discard` | `{"batch": 0}` (batch optional) deletes kept rows. |
+| `POST /v1/event-logs/{log_id}/quarantine/discard` | `{"batch": 0, "row_start": 2, "row_end": 5}` discards kept rows in that inclusive range. Use just `batch` for one batch or `{}` for all kept rows. |
 
 A release applies one explicit decision: the UTC offset to assume for times written without one
 (`Z` or `±HH:MM`, at most ±14:00). The kept rows that become valid under it are appended as a new
@@ -2048,6 +2048,10 @@ that still fail, such as rows without a case, stay kept. Releasing does not chec
 is right, and nothing is released automatically. Every release and discard is recorded with its
 counts. Appending and removing the released rows are two steps; if the second is interrupted,
 releasing again adds nothing new.
+
+In the dashboard, use **Select row** to fill the batch and range for a single retained row, or enter
+the batch and range yourself. **Discard kept rows** asks you to confirm the scope before deleting
+the retained rows. The decision history records the selected scope and the actual number discarded.
 
 The same decision can be made up front for a CSV import or append with
 `naive_timestamp_offset=+01:00`. It is part of the transform and its digest, and the report counts

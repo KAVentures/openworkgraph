@@ -4996,7 +4996,7 @@
       };
       const preview=button('Preview release','secondary');preview.id='owgQuarantinePreview';
       const release=button('Release rows','secondary');release.id='owgQuarantineRelease';
-      const discard=button('Discard all kept rows','secondary');discard.id='owgQuarantineDiscard';
+      const discard=button('Discard kept rows','secondary');discard.id='owgQuarantineDiscard';
       const message=el('div',null,'muted');message.id='owgQuarantineStatus';message.setAttribute('role','status');
       let reviewed=null;
       let previewGeneration=0;
@@ -5007,8 +5007,20 @@
       const nextPage=button('Next rows','secondary');nextPage.id='owgQuarantineNext';
       let pageTurn=0,nextCursor=null;
       const renderPage=page=>{
-        pageHost.replaceChildren(...(page.rows.length?[table(['Batch','Row','Case','Activity','Time as supplied','Why rejected'],
-          page.rows.map(x=>[x.batch===0?'import (0)':x.batch,x.row,x.case,x.activity,x.time,x.reasons.map(k=>REASON_LABELS[k]||k).join(', ')]))]:[el('div','No retained rows in this batch.','muted')]));
+        const rows=page.rows.map(x=>{
+          const selectRow=button('Select row','secondary');
+          selectRow.setAttribute('aria-label','Select quarantine batch '+x.batch+' row '+x.row);
+          selectRow.onclick=()=>{
+            batch.value=String(x.batch);
+            rowStart.value=rowEnd.value=String(x.row);
+            batch.dispatchEvent(new Event('input',{bubbles:true}));
+            rowStart.focus();
+          };
+          return [x.batch===0?'import (0)':x.batch,x.row,x.case,x.activity,x.time,
+            x.reasons.map(k=>REASON_LABELS[k]||k).join(', '),selectRow];
+        });
+        pageHost.replaceChildren(rows.length?table(['Batch','Row','Case','Activity','Time as supplied','Why rejected','Review'],rows)
+          :el('div','No retained rows in this batch.','muted'));
         nextCursor=page.next_after;nextPage.disabled=nextCursor===null||nextCursor===undefined;
       };
       const loadPage=async after=>{
@@ -5036,7 +5048,12 @@
         const mapped=batches.map(item=>{
           const selectBatch=button('Select batch','secondary');
           selectBatch.setAttribute('aria-label','Select quarantine batch '+item.batch);
-          selectBatch.onclick=()=>{batch.value=String(item.batch);batch.dispatchEvent(new Event('input',{bubbles:true}));batch.focus();};
+          selectBatch.onclick=()=>{
+            batch.value=String(item.batch);
+            rowStart.value=rowEnd.value='';
+            batch.dispatchEvent(new Event('input',{bubbles:true}));
+            batch.focus();
+          };
           return [item.batch===0?'Import (0)':'Append '+item.batch,Number(item.rows).toLocaleString(),selectBatch];
         });
         batchesHost.replaceChildren(...(mapped.length?[table(['Batch','Rows kept','Review'],mapped)]:[]));
@@ -5056,10 +5073,15 @@
       const decisionFirst=button('First decisions'),decisionNext=button('Next decisions');
       decisionFirst.id='owgQuarantineDecisionsFirst';decisionNext.id='owgQuarantineDecisionsNext';
       let decisionTurn=0,decisionNextOffset=r.decisions_next_offset??null;
+      const scopeText=({batch,row_start:start,row_end:end})=>{
+        if(batch==null)return 'all kept rows';
+        if(start==null)return 'all kept rows in batch '+batch;
+        return (start===end?'row '+start:'rows '+start+'–'+end)+' in batch '+batch;
+      };
       const renderDecisions=(page)=>{
         const decisions=page.decisions||[],total=Number(page.total??r.decisions_total??decisions.length),start=Number(page.offset||0);
         decisionNextOffset=page.next_offset??null;
-        decisionHost.replaceChildren(...(decisions.length?[table(['Decision','When','Result'],decisions.map(d=>[d.kind==='release'?'Released with offset '+d.naive_timestamp_offset:'Discarded',d.decided_at.slice(0,16).replace('T',' ')+' UTC',
+        decisionHost.replaceChildren(...(decisions.length?[table(['Decision','Scope','When','Result'],decisions.map(d=>[d.kind==='release'?'Released with offset '+d.naive_timestamp_offset:'Discarded',scopeText(d),d.decided_at.slice(0,16).replace('T',' ')+' UTC',
           d.kind==='release'?d.rows_released+' of '+d.rows_considered+' rows released, '+(d.events_added||0)+' events added, '+(d.duplicates_skipped||0)+' already in the log':d.rows_discarded+' rows discarded']))]:[]));
         decisionStatus.textContent=total?(decisions.length?'Showing '+(start+1).toLocaleString()+'–'+(start+decisions.length).toLocaleString()+' of '+total.toLocaleString()+' decisions':'No decisions on this page; '+total.toLocaleString()+' in total')+'. History can change between pages.':'';
         show(decisionFirst,total>100);show(decisionNext,total>100);
@@ -5078,7 +5100,7 @@
       wrap.append(el('h4','Rejected rows kept for review'),
         el('div',Number(r.rows_kept).toLocaleString()+' rows kept ('+reasonText(r.reasons)+'). '+r.note,'muted'),
         batchesStatus,batchesHost,batchesFirst,batchesNext,pageHost,firstPage,nextPage,
-        el('div','Batch and row range limit preview and release. Discard removes all kept rows.','muted'),row,message,
+        el('div','Batch and row range apply to release and discard. Leave them blank to include all kept rows.','muted'),row,message,
         decisionStatus,decisionHost,decisionFirst,decisionNext);
       for(const control of [offset,batch,rowStart,rowEnd])control.addEventListener('input',()=>{
         previewGeneration++;reviewed=null;release.disabled=true;
@@ -5124,11 +5146,26 @@
         }catch(error){if(generation===state.generation)message.textContent=error.message+' Preview again before releasing.';}
       };
       discard.onclick=async()=>{
+        if(generation!==state.generation||discard.disabled)return;
+        let scope;
+        try{scope=readScope();}catch(error){message.textContent=error.message;return;}
+        if(!window.confirm('Permanently discard '+scopeText(scope)+'?'))return;
         previewGeneration++;reviewed=null;release.disabled=true;
+        discard.disabled=true;
         try{
-          const result=await (await api(base+'/discard',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();
-          await analyse();status('Discarded '+result.decision.rows_discarded+' kept rows.');
-        }catch(error){message.textContent=error.message;}
+          const result=await (await api(base+'/discard',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify(scope)})).json();
+          if(generation!==state.generation)return;
+          const refreshed=analyse(),refreshGeneration=state.generation;
+          await refreshed;
+          if(refreshGeneration===state.generation){
+            const count=result.decision.rows_discarded;
+            status('Discarded '+count.toLocaleString()+' kept '+(count===1?'row':'rows')+'.');
+          }
+        }catch(error){
+          if(generation===state.generation)message.textContent=error.message;
+          discard.disabled=false;
+        }
       };
     }).catch(()=>{});
     return wrap;

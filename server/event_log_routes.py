@@ -755,7 +755,8 @@ async def event_log_quarantine_release(request: Request, log_id: str):
 @router.post("/v1/event-logs/{log_id}/quarantine/discard")
 async def event_log_quarantine_discard(request: Request, log_id: str):
     _require_dashboard(request)
-    return _respond(quarantine.discard, log_id, await _json_body(request, "discard"))
+    body = await _json_body(request, "discard")
+    return await run_in_threadpool(_respond, quarantine.discard, log_id, body)
 
 
 @router.get("/v1/event-logs/{log_id}/case-tags")
