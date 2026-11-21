@@ -156,6 +156,12 @@ async def agent_heuristics_net(request: Request, log_id: str,
     return await _answer(sharing.heuristics_net, log_id, case_type, dependency_threshold)
 
 
+@router.get("/v1/process-intelligence/{log_id}/data-quality")
+async def agent_data_quality(request: Request, log_id: str):
+    _require_agent_access(request)
+    return await _answer(sharing.data_quality, log_id)
+
+
 @router.get("/v1/process-intelligence/{log_id}/footprints")
 async def agent_footprints(request: Request, log_id: str, noise: float = Query(default=0.2, ge=0, lt=1),
                            case_type: str | None = Query(default=None, max_length=200)):
