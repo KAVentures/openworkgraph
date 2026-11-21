@@ -494,3 +494,16 @@ def test_executable_project_export_revalidates_after_streaming_before_download()
     assert 'latest.viewing_historical_revision' in guard
     assert 'credential !== authorizedCredential' in guard
     assert guard.index('const latest = await call(') < guard.index('latest.review?.status')
+
+
+def test_executable_export_rejects_non_zip_success_payload_and_session_rotation():
+    """A proxy's 200 HTML login response must never become an executable download."""
+    html = (Path(__file__).resolve().parents[1] / "gateway" / "processes.html").read_text()
+    block = html.split("async function download(format) {", 1)[1].split("function resetHandoff(", 1)[0]
+    guard = block.split("const signature = new Uint8Array(", 1)[1].split("const url = URL.createObjectURL", 1)[0]
+    assert "exportedBlob.slice(0, 4).arrayBuffer()" in guard
+    assert "signature[0] === 0x50 && signature[1] === 0x4b" in guard
+    assert "if (!zipHeader || identityTicket !== identityGeneration" in guard
+    assert "credential !== authorizedCredential || selected !== selection" in guard
+    assert block.index("const latest = await call(") < block.index("const signature = new Uint8Array(")
+    assert block.index("const signature = new Uint8Array(") < block.index("URL.createObjectURL(exportedBlob)")
