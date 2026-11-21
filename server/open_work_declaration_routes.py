@@ -3413,6 +3413,23 @@ async def read_local_bound_provider_event(request: Request, response: Response):
             correlation_id=payload["provider_correlation_id"],
             expected_event_id=payload["provider_event_id"],
         )
+    # Check the same local grant immediately before AND after the synchronous
+    # provider reader. Async case admission is repeated below before disclosure.
+    # This closes the gap where a revoked session/source could still initiate
+    # a provider read after the route's earlier asynchronous admission.
+    def provider_read_still_authorized():
+        from .local_source_credentials import _metadata_path, _read_metadata
+        current = _read_metadata(_metadata_path())
+        try:
+            _dashboard_only(request)
+            return (
+                _source_scope() == scope
+                and isinstance(current, dict)
+                and current.get("account") == account
+            )
+        except Exception:
+            return False
+
     verdict = await asyncio.to_thread(
         verify_provider_attempt,
         account=account, object_id=payload["provider_object_id"],
@@ -3420,6 +3437,7 @@ async def read_local_bound_provider_event(request: Request, response: Response):
         correlation_id=payload["provider_correlation_id"],
         expected_event_id=payload["provider_event_id"],
         read_events=provider_read,
+        recheck_authorization=provider_read_still_authorized,
     )
     await _recheck_source(scope)
     _dashboard_only(request)
