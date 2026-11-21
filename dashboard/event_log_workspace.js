@@ -33,6 +33,7 @@
   FILTERED.add('unusual-cases');
   FILTERED.add('due-dates');
   FILTERED.add('story');
+  FILTERED.add('variants.csv');
   FILTERED.add('activity-profile');
   FILTERED.add('breakdown');
   FILTERED.add('breakdown.csv');
@@ -847,6 +848,18 @@
       else open.onclick=()=>inspection.path(v.path);
       return [v.path.join(' → ')+(v.path_truncated?' … ('+Number(v.path_activity_count).toLocaleString()+' activities; shortened)':''),Number(v.cases).toLocaleString(),pct(v.share),duration(v.median_duration_seconds),open];})));
     variantBox.appendChild(el('div',Number(variants.distinct_variants).toLocaleString()+' distinct variants.','muted'));
+    // Every variant (not just the top ones) for review in a spreadsheet, with running share and durations.
+    const variantsCsv=button('Download all variants (CSV)','secondary');variantsCsv.id='owgVariantsCsv';
+    const variantsCsvStatus=el('span',null,'muted');variantsCsvStatus.id='owgVariantsCsvStatus';variantsCsvStatus.setAttribute('role','status');
+    variantsCsv.onclick=async()=>{
+      variantsCsv.disabled=true;
+      try{const response=await api(logPath('variants.csv',{}));const blob=await response.blob();
+        downloadBlob(blob,(state.logId||'log')+'-variants.csv');
+        const info=response.headers.get('X-OWG-Variants')||'';
+        variantsCsvStatus.textContent=' Downloaded '+(/written=(\d+)/.exec(info)||[,'the'])[1]+' variants'+(/truncated=true/.test(info)?' (the most common; the list was cut)':'')+'.';}
+      catch(error){variantsCsvStatus.textContent=' '+error.message;}
+      finally{variantsCsv.disabled=false;}};
+    const csvRow=el('div',null,'row');csvRow.append(variantsCsv,variantsCsvStatus);variantBox.appendChild(csvRow);
     results.appendChild(variantBox);
     results.appendChild(variantCoverageSection(names));
     results.appendChild(reworkSection());
