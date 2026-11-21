@@ -67,6 +67,12 @@ def test_bad_requests_are_refused():
         fn.funnel(log, ["A", "Z"])
     with pytest.raises(EventLogWorkspaceError, match="window"):
         fn.funnel(log, ["A", "B"], within_hours=0)
+    # Preserve current main's stricter input contract while integrating #1111.
+    # The superseded branch coerced non-string step values to strings.
+    with pytest.raises(EventLogWorkspaceError, match="steps"):
+        fn.funnel(log, ("A", "B"), evidence_step=2)
+    with pytest.raises(EventLogWorkspaceError, match="each step"):
+        fn.funnel(log, [1, "B"], evidence_step=2)
 
 
 def test_case_evidence_matches_funnel_and_filters():
