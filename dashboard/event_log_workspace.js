@@ -36,12 +36,14 @@
   FILTERED.add('co-occurrence');
   FILTERED.add('activity-profile');
   FILTERED.add('breakdown');
+  FILTERED.add('breakdown.csv');
   FILTERED.add('next-steps');
   FILTERED.add('petri-net-replay');
   FILTERED.add('petri-net-alignments');
   FILTERED.add('variant.pnml');
   FILTERED.add('petri-net-deviation-causes');
   FILTERED.add('petri-net-alignments/cases.csv');
+  FILTERED.add('petri-net-alignments/tag');
 
   const el=(tag,text,cls)=>{
     const node=document.createElement(tag);
@@ -870,6 +872,7 @@
     results.appendChild(clusterSection());
     results.appendChild(caseTagSection(names));
     results.appendChild(caseAttributeSection());
+    results.appendChild(caseTableExportSection());
     results.appendChild(caseExplainSection());
     results.appendChild(discoverySection());
     results.appendChild(driftSection());
@@ -1370,7 +1373,15 @@
       if(!from||!to)throw new Error('Choose both activities for every rule.');
       if(Array.from(from).length>200||Array.from(to).length>200)throw new Error('Activity labels must have at most 200 characters.');
       if(!mode)throw new Error('Choose how the activities follow each other.');
-      return {from,to,mode:mode[0],negate:mode[1]};
+      const spec={from,to,mode:mode[0],negate:mode[1]};
+      // Optional time between the two steps, in hours: at least min_hours, less than max_hours.
+      for(const key of ['min_hours','max_hours']){
+        const raw=r[key];if(raw===undefined||raw===null||raw==='')continue;
+        const value=Number(raw);if(!Number.isFinite(value)||value<0)throw new Error('Time limits are zero or more hours.');
+        spec[key]=value;}
+      if((spec.min_hours!==undefined||spec.max_hours!==undefined)&&spec.negate)throw new Error('A time limit applies only to a rule where one step follows the other.');
+      if(spec.min_hours!==undefined&&spec.max_hours!==undefined&&!(spec.min_hours<spec.max_hours))throw new Error('The shortest time must be below the longest.');
+      return spec;
     });
     if(rules.length>5)throw new Error('Use at most 5 rules.');
     return rules;
@@ -1428,9 +1439,12 @@
   }
 
   function followText(rule){
-    return rule.from+(rule.negate?' is never ':' is ')+(rule.mode==='direct'?'directly':'eventually')+' followed by '+rule.to;
+    const h=x=>Number(x)+' h';
+    const time=rule.min_hours!==undefined&&rule.max_hours!==undefined?' after '+h(rule.min_hours)+' to '+h(rule.max_hours):rule.min_hours!==undefined?' after at least '+h(rule.min_hours):rule.max_hours!==undefined?' within '+h(rule.max_hours):'';
+    return rule.from+(rule.negate?' is never ':' is ')+(rule.mode==='direct'?'directly':'eventually')+' followed by '+rule.to+time;
   }
-  const followRow=rule=>({from:rule.from,to:rule.to,mode:(rule.negate?'not-':'')+rule.mode});
+  const followRow=rule=>({from:rule.from,to:rule.to,mode:(rule.negate?'not-':'')+rule.mode,
+    ...(rule.min_hours!==undefined?{min_hours:rule.min_hours}:{}),...(rule.max_hours!==undefined?{max_hours:rule.max_hours}:{})});
 
   // Preserve all selected conditions. Incompatible numeric ranges fail closed
   // instead of silently dropping either the operation or workspace constraint.
@@ -1612,9 +1626,12 @@
         const fromLookup=activityLabelLookup(exactFrom,{id:part=>'owgCaseFilterFrom'+part+n,subject:'activity for rule '+n}),toLookup=activityLabelLookup(exactTo,{id:part=>'owgCaseFilterTo'+part+n,subject:'later activity for rule '+n});
         exactFrom.oninput=()=>{rule.from=exactFrom.value||from.value;fromLookup.reset();};
         exactTo.oninput=()=>{rule.to=exactTo.value||to.value;toLookup.reset();};mode.onchange=()=>{rule.mode=mode.value;};
+        const minH=input('owgCaseFilterMinHours'+n,'number','hours'),maxH=input('owgCaseFilterMaxHours'+n,'number','hours');
+        for(const [node,key] of [[minH,'min_hours'],[maxH,'max_hours']]){node.min='0';node.step='any';if(rule[key]!==undefined)node.value=rule[key];node.oninput=()=>{rule[key]=node.value;};}
         const remove=button('Remove','secondary');remove.setAttribute('aria-label','Remove rule '+n);remove.onclick=()=>{draft.splice(i,1);render();};
         const row=el('div',null,'row');row.style.alignItems='end';
-        row.append(field('Rule '+n+': activity',from),field('Rule '+n+': exact activity',exactFrom),fromLookup.wrap,field('Rule '+n+': order',mode),field('Rule '+n+': later activity',to),field('Rule '+n+': exact later activity',exactTo),toLookup.wrap,remove);
+        row.append(field('Rule '+n+': activity',from),field('Rule '+n+': exact activity',exactFrom),fromLookup.wrap,field('Rule '+n+': order',mode),field('Rule '+n+': later activity',to),field('Rule '+n+': exact later activity',exactTo),toLookup.wrap,
+          field('Rule '+n+': after at least (hours)',minH),field('Rule '+n+': within (hours)',maxH),remove);
         return row;
       }));
       add.disabled=draft.length>=5;
@@ -1895,7 +1912,7 @@
     box.appendChild(el('div','Point this log at a folder where a system drops exports. Each run appends new files that match the pattern, using the column mapping of this log\u2019s latest CSV import. Files are read, never changed or deleted. A file is appended once, by its content.','muted'));
     const list=el('div');list.id='owgFolderFeedList';list.setAttribute('role','status');
     const folder=input('owgFolderFeedFolder','text','for example /Users/me/Exports/orders');folder.size=40;
-    const pattern=input('owgFolderFeedPattern','text');pattern.value='*.csv';pattern.maxLength=84;
+    const pattern=input('owgFolderFeedPattern','text');pattern.value='*.csv';pattern.maxLength=164;
     const consent=input('owgFolderFeedConsent','checkbox');
     const consentLabel=el('label',' Read files from this folder and store their events with the log on this computer');consentLabel.prepend(consent);
     const create=button('Create feed','secondary');create.id='owgFolderFeedCreate';create.disabled=true;
@@ -1959,7 +1976,7 @@
           latest?latest.name+' \u2014 '+(latest.outcome==='appended'?Number(latest.added_events).toLocaleString()+' events added'+(latest.warning?' · '+latest.warning:''):'not appended: '+latest.error):'\u2014',wrap];})));
     };
     create.onclick=async()=>{create.disabled=true;
-      try{await api(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({folder:folder.value.trim(),pattern:pattern.value.trim(),confirm_folder_reads:true})});
+      try{await api(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({folder:folder.value,pattern:pattern.value,confirm_folder_reads:true})});
         consent.checked=false;out.replaceChildren(el('div','Feed created. Run it now or every day.'));render(await getJSON(base));}
       catch(error){out.replaceChildren(el('div',error.message,'muted'));ready();}};
     getJSON(base).then(r=>{if(generation===state.generation)render(r);}).catch(error=>list.replaceChildren(el('div',error.message,'muted')));
@@ -2110,6 +2127,47 @@
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));ready();}
     };
     getJSON(base).then(r=>{if(generation===state.generation)render(r);}).catch(error=>list.replaceChildren(el('div',error.message,'muted')));
+    return box;
+  }
+
+  function caseTableExportSection(){
+    const box=section('Download a case table');box.id='owgCaseTableExport';
+    const columns=el('textarea');columns.id='owgCaseTableColumns';columns.rows=3;columns.maxLength=2700;
+    columns.placeholder='One attribute name per line';
+    const include=input('owgCaseTableIncludeValues','checkbox');
+    const format=select('owgCaseTableFormat',[['exact','CSV for re-import'],['review','CSV for spreadsheet review']]);
+    const download=button('Download case table','secondary');download.id='owgCaseTableDownload';
+    const message=el('p');message.id='owgCaseTableStatus';message.setAttribute('role','status');
+    const logId=state.logId,notion=state.caseType,generation=state.generation;
+    box.append(el('p','One row per '+(notion||'case')+'. '+(filterOn()?'Uses the active case filter.':'Includes all cases in this case notion.'),'muted'),
+      field('Attribute columns (optional)',columns),field('Include stored values for these columns',include),
+      field('Case table format',format),download,message);
+    const describe=()=>{
+      message.textContent=format.value==='review'
+        ? 'Review CSV changes formula-like cells and headers. Choose CSV for re-import to keep exact case IDs.'
+        : 'Leave values blank for a template. To join an edited table, use case_id as the case ID column.';
+    };
+    format.onchange=describe;describe();
+    download.onclick=async()=>{
+      download.disabled=true;
+      try{
+        const selected=columns.value.split(/\r?\n/).map(line=>line.trim()).filter(Boolean);
+        const review=format.value==='review';
+        const spec={columns:selected,include_values:include.checked,spreadsheet_review:review,
+          ...(notion?{case_type:notion}:{}),...(filterOn()?{cohort:globalCohort()}:{})};
+        message.textContent='Preparing the case table…';
+        const response=await api('/v1/event-logs/'+encodeURIComponent(logId)+'/case-table/export',{
+          method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)});
+        const blob=await response.blob();
+        if(generation!==state.generation||!box.isConnected)return;
+        const url=URL.createObjectURL(blob);
+        const link=el('a');link.href=url;link.download=logId+'-case-table.'+(review?'review.csv':'csv');
+        document.body.appendChild(link);link.click();link.remove();
+        setTimeout(()=>URL.revokeObjectURL(url),1000);
+        message.textContent='Case table downloaded.';
+      }catch(error){if(generation===state.generation)message.textContent=error.message;}
+      finally{download.disabled=false;}
+    };
     return box;
   }
 
@@ -4061,7 +4119,7 @@
   function breakdownSection(activityNames){
     const box=section('Breakdown table');box.id='owgBreakdown';
     box.appendChild(el('div','Case figures by one or two dimensions, like a pivot table: choose what goes in the rows and, optionally, the columns. Less common values are grouped as (other); cells with fewer than 5 cases are marked *.','muted'));
-    const builtIn=[['start_month','Month the case started'],['start_weekday','Weekday the case started'],['start_activity','First activity'],['end_activity','Last activity']];
+    const builtIn=[['start_month','Month the case started'],['start_weekday','Weekday the case started'],['start_activity','First activity'],['end_activity','Last activity'],['duration_band','Case duration (bands)'],['rework','Rework (repeats an activity or not)']];
     const rowsPick=select('owgBreakdownRows',builtIn),colsPick=select('owgBreakdownColumns',[['','(none)'],...builtIn]);colsPick.value='end_activity';
     const measures=[['cases','Cases'],['share','Share of cases'],['median_hours','Median duration'],['p90_hours','90th percentile duration'],['rework_rate','Share of cases with rework'],['events_per_case','Events per case'],['with_activity_share','Share doing an activity']];
     const measurePick=select('owgBreakdownMeasure',measures);
@@ -4069,8 +4127,9 @@
     const activityField=field('Activity',activityPick);activityField.hidden=true;
     measurePick.onchange=()=>{activityField.hidden=measurePick.value!=='with_activity_share';};
     const run=button('Show breakdown','secondary');run.id='owgBreakdownRun';
+    const csv=button('Download as CSV','secondary');csv.id='owgBreakdownCsv';
     const row=el('div',null,'row');row.style.alignItems='end';
-    row.append(field('Rows',rowsPick),field('Columns',colsPick),field('Figure',measurePick),activityField,run);
+    row.append(field('Rows',rowsPick),field('Columns',colsPick),field('Figure',measurePick),activityField,run,csv);
     const statusLine=el('div',null,'muted');statusLine.id='owgBreakdownStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgBreakdownResults';
     box.append(row,statusLine,out);
@@ -4087,6 +4146,17 @@
     const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
     const hrs=x=>x===null||x===undefined?'—':(x<48?(Math.round(x*10)/10)+' h':(Math.round(x/24*10)/10)+' d');
     const show={cases:x=>Number(x).toLocaleString(),share:pct,median_hours:hrs,p90_hours:hrs,rework_rate:pct,events_per_case:x=>String(Math.round(x*10)/10),with_activity_share:pct};
+    csv.onclick=async()=>{
+      if(colsPick.value&&colsPick.value===rowsPick.value){statusLine.textContent='Choose two different dimensions.';return;}
+      const params={rows:rowsPick.value};if(colsPick.value)params.columns=colsPick.value;
+      if(measurePick.value==='with_activity_share'&&activityPick.value)params.with_activity=activityPick.value;
+      csv.disabled=true;
+      try{const response=await api(logPath('breakdown.csv',params));const blob=await response.blob();
+        const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=(state.logId||'log')+'-breakdown.csv';
+        document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(link.href),1000);
+        statusLine.textContent='Downloaded the breakdown: one line per cell, then the totals ("All").';}
+      catch(error){statusLine.textContent=error.message;}
+      finally{csv.disabled=false;}};
     run.onclick=async()=>{
       if(colsPick.value&&colsPick.value===rowsPick.value){statusLine.textContent='Choose two different dimensions.';out.replaceChildren();return;}
       const measure=measurePick.value;
@@ -4579,6 +4649,20 @@
             catch(error){status.textContent=error.message;}
             finally{download.disabled=false;}};
           aligned.appendChild(download);
+          // Tag every non-fitting case, so the tag can focus other analyses on them (or compare them).
+          const tagName=input('owgPetriTagName','text');tagName.value='off-model';tagName.maxLength=60;tagName.autocomplete='off';
+          const tagRun=button('Tag the '+Number(r.cases-f.fitting_cases).toLocaleString()+' non-fitting cases','secondary');tagRun.id='owgPetriTag';
+          const tagMessage=el('div',null,'muted');tagMessage.id='owgPetriTagMessage';tagMessage.setAttribute('role','status');tagMessage.setAttribute('aria-live','polite');
+          const tagRow=el('div',null,'row');tagRow.style.alignItems='end';tagRow.append(field('Tag',tagName),tagRun);
+          aligned.append(tagRow,tagMessage);
+          tagRun.onclick=async()=>{
+            if(!tagName.value.trim()){tagMessage.textContent='Enter a tag.';return;}
+            tagRun.disabled=true;tagMessage.textContent='Tagging…';
+            try{const t2=await (await api(logPath('petri-net-alignments/tag',{new_tag:tagName.value.trim()}),{method:'POST',headers:{'Content-Type':'application/xml'},body:net.body})).json();
+              document.querySelectorAll('#owgCaseTags').forEach(node=>node.dispatchEvent(new CustomEvent('owg-tags-changed')));
+              tagMessage.textContent='Tagged '+Number(t2.tagged).toLocaleString()+' cases “'+t2.tag+'”'+(t2.cases_not_tagged?' ('+Number(t2.cases_not_tagged).toLocaleString()+' on less common paths were left out)':'')+'. Use the tag in the case filter to focus every analysis on them.';}
+            catch(error){tagMessage.textContent=error.message;}
+            finally{tagRun.disabled=false;}};
           const why=button('What goes with these deviations?','secondary');why.id='owgPetriCauses';
           const causes=el('div');causes.id='owgPetriCausesResults';causes.setAttribute('role','status');causes.setAttribute('aria-live','polite');
           aligned.append(why,causes);

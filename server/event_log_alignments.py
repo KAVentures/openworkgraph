@@ -392,5 +392,54 @@ def non_fitting_cases_csv(log_id: str, pnml: bytes, case_type: str | None = None
                             "truncated": written >= MAX_EXPORT_CASES}
 
 
-__all__ = ["alignments", "deviation_causes", "case_alignment", "reference_net", "conformance_of",
+MAX_TAG_VARIANTS = 500
+
+
+def tag_non_fitting_cases(log_id: str, pnml: bytes, tag: str, case_type: str | None = None, *,
+                          note: str = "", cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Tag every case whose path does not fit the net, so the tag can focus other analyses on them.
+
+    Distinct paths are aligned once. The cases are chosen by their exact path (the cohort's ``variants``
+    key) within the given case filter, then tagged with the case-tag store; the most common
+    MAX_TAG_VARIANTS non-fitting paths are covered."""
+    from . import event_log_case_tags as case_tags
+    net = reference_net(pnml)
+    labels = {label for label in net["transitions"].values() if label is not None}
+
+    def run(conn):
+        rows = conn.execute("""SELECT path, count(*) AS cases FROM (
+              SELECT list(activity ORDER BY ts, event_id) AS path FROM ce GROUP BY case_id)
+            GROUP BY path ORDER BY cases DESC, path""").fetchall()
+        return {"rows": rows}
+
+    rows = workspace._query_filtered(log_id, case_type, cohort, run)["rows"]
+    remaining = MAX_STATES_TOTAL
+    misfit: list[tuple[list[str], int]] = []
+    unaligned = 0
+    for path, n in rows:
+        trace = tuple(path)
+        if len(trace) > MAX_TRACE_LENGTH or remaining <= 0:
+            unaligned += n
+            continue
+        result, used = _align(net, trace, labels, min(MAX_STATES_PER_VARIANT, remaining))
+        remaining -= used
+        if result is None or result["cost"] is None:
+            unaligned += n
+        elif result["cost"] > 0:
+            misfit.append((list(trace), n))
+    if not misfit:
+        raise EventLogWorkspaceError("every aligned case fits the net; there is nothing to tag")
+    chosen = misfit[:MAX_TAG_VARIANTS]
+    spec: dict[str, Any] = {"tag": tag, "note": note or "does not fit the reference Petri net",
+                            "cohort": {**{k: v for k, v in (cohort or {}).items() if v not in (None, "", [], {})},
+                                       "variants": [p for p, _ in chosen]}}
+    if case_type:
+        spec["case_type"] = case_type
+    tagged = case_tags.add(log_id, spec)
+    return {**tagged, "non_fitting_cases": sum(n for _, n in misfit),
+            "non_fitting_paths": len(misfit), "paths_tagged": len(chosen),
+            "cases_not_tagged": sum(n for _, n in misfit[MAX_TAG_VARIANTS:]), "unaligned_cases": unaligned}
+
+
+__all__ = ["tag_non_fitting_cases", "alignments", "deviation_causes", "case_alignment", "reference_net", "conformance_of",
            "non_fitting_cases_csv", "FORMAT"]

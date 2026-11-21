@@ -164,3 +164,55 @@ def test_non_fitting_cases_csv_lists_each_deviating_case():
     assert by_id["c3"]["skipped_steps"] == "B" and by_id["c3"]["extra_steps"] == ""
     assert by_id["c5"]["extra_steps"] == "'=X" and by_id["c5"]["activities"] == "A > B > =X > C"
     assert by_id["c3"]["alignment_fitness"] == str(round(1 - 1 / 5, 4))
+
+
+def test_tag_non_fitting_cases_tags_each_deviating_case(monkeypatch):
+    from server import event_log_case_tags as case_tags
+    log = _import([["A", "B", "C"]] * 3 + [["A", "C"]] * 2 + [["A", "B", "X", "C"]])
+    net = _sequence_net(["A", "B", "C"])
+    r = al.tag_non_fitting_cases(log, net, "off-model")
+    assert (r["tagged"], r["non_fitting_cases"], r["non_fitting_paths"], r["paths_tagged"]) == (3, 3, 2, 2)
+    assert r["cases_not_tagged"] == 0 and r["unaligned_cases"] == 0
+    listed = case_tags.listing(log, "off-model")
+    assert sorted(c["case_id"] for c in listed["cases"]) == ["c3", "c4", "c5"]
+    assert listed["cases"][0]["note"] == "does not fit the reference Petri net"
+    again = al.tag_non_fitting_cases(log, net, "off-model")
+    assert again["already_tagged"] == 3
+    # The case filter limits what is tagged: only cases containing X.
+    only_x = al.tag_non_fitting_cases(log, net, "extra-step", cohort={"activity": "X"})
+    assert only_x["tagged"] == 1 and only_x["non_fitting_paths"] == 1
+    fits = _import([["A", "B", "C"]] * 2)
+    with pytest.raises(EventLogWorkspaceError, match="nothing to tag"):
+        al.tag_non_fitting_cases(fits, net, "x")
+    with pytest.raises(EventLogWorkspaceError):
+        al.tag_non_fitting_cases(log, net, "")
+    monkeypatch.setattr(al, "MAX_TAG_VARIANTS", 1)
+    capped = al.tag_non_fitting_cases(log, net, "capped")
+    assert capped["paths_tagged"] == 1 and capped["tagged"] == 2 and capped["cases_not_tagged"] == 1
+
+
+def test_tag_non_fitting_route(tmp_path):
+    import os
+    import subprocess
+    import sys
+    net = _sequence_net(["A", "B", "C"]).decode()
+    code = r'''
+import sys
+from fastapi.testclient import TestClient
+from server.secure_app import app
+from server import local_auth
+net = sys.argv[1].encode()
+doc = "case,activity,time\n" + "".join(f"c{i},A,2024-01-0{i+1}T00:00:00Z\nc{i},B,2024-01-0{i+1}T01:00:00Z\nc{i},C,2024-01-0{i+1}T02:00:00Z\n" for i in range(3)) + "d,A,2024-01-05T00:00:00Z\nd,C,2024-01-05T01:00:00Z\n"
+with TestClient(app) as client:
+    owner={'Authorization':'OWG-Session '+local_auth.create_dashboard_session()}
+    made=client.post('/v1/event-logs/import?format=csv&name=q&case_column=case&activity_column=activity&timestamp_column=time',
+        content=doc.encode(),headers={**owner,'x-owg-local-storage-confirmed':'true'})
+    url='/v1/event-logs/'+made.json()['log_id']+'/petri-net-alignments/tag?new_tag=off'
+    assert client.post(url,content=net,headers={'Content-Type':'application/xml'}).status_code in (401,403)
+    r=client.post(url,content=net,headers={**owner,'Content-Type':'application/xml'})
+    assert r.status_code==200 and r.json()['tagged']==1, r.text
+    assert client.post(url.replace('new_tag=off','new_tag='),content=net,headers={**owner,'Content-Type':'application/xml'}).status_code==422
+    assert client.post(url,content=b'<nope/>',headers={**owner,'Content-Type':'application/xml'}).status_code==422
+'''
+    env = {**os.environ, 'WORKFLOW_OBSERVER_DATA': str(tmp_path / 'data'), 'WORKFLOW_OBSERVER_AUTH_DIR': str(tmp_path / 'auth')}
+    subprocess.run([sys.executable, '-c', code, net], env=env, check=True, timeout=60)

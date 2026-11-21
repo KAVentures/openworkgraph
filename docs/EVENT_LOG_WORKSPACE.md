@@ -485,8 +485,12 @@ spreadsheet formulas are prefixed with `'`.
 table (a small process cube). Choose what goes in the rows and, optionally, in
 the columns:
 
-* a built-in dimension: the month or weekday the case started, or its first
-  or last activity;
+* a built-in dimension: the month or weekday the case started, its first or
+  last activity, its duration band (under 1 hour, 1 to 24 hours, 1 to 7 days,
+  7 to 30 days, 30 days or more) or whether it repeats an activity
+  (`duration_band`, `rework`);
+* a case tag (`tag:<name>`): tagged and not tagged, for example the cases
+  tagged as not fitting a reference net;
 * a case attribute (`attribute:<name>`, as the case filter reads it);
 * an event attribute (`event_attribute:<name>`, the first non-empty value
   recorded in the case; columns kept from a CSV import are event attributes).
@@ -508,6 +512,11 @@ honours the case filter.
 totals. `GET /v1/event-logs/{log_id}/breakdown/dimensions` lists the
 dimensions available in the log. Both need the dashboard session. A
 difference between cells describes the recorded cases, not a cause.
+
+**Download as CSV** saves the same table for a spreadsheet: one line per cell (row value, column
+value and every figure), then the row totals, the column totals and the overall figures, labelled
+`All`. A `fewer_than_5_cases` column marks the small cells, and cells that would start a formula
+are prefixed with `'`. `GET /v1/event-logs/{log_id}/breakdown.csv` takes the same parameters.
 
 ### Process cost
 
@@ -1111,6 +1120,21 @@ profiles.
 | `GET /v1/event-logs/{log_id}/case-attributes` | Recorded uploads. |
 | `POST /v1/event-logs/{log_id}/case-attributes/remove` | `{"upload_id": "...", "columns": [...]}` (columns optional). |
 
+### Download a case table
+
+Use **Download a case table** to get one row per case in the current case notion.
+The active case filter limits the rows. Without a filter the table also includes
+objects that have no events. Enter up to 32 attribute names to create blank
+columns, or select **Include stored values** to download their static values.
+CSV represents these values as text. Timed object attribute history belongs in OCEL.
+
+For a template you intend to join back, choose **CSV for re-import** and use
+`case_id` as the ID column when uploading the edited file. Spreadsheet review
+CSV projects formula-like text and changes the headers for review.
+
+The dashboard-only `POST /v1/event-logs/{log_id}/case-table/export` accepts
+`case_type`, `cohort`, `columns`, `include_values`, and `spreadsheet_review`.
+
 ## Case tags
 
 While investigating, tag cases such as "checked", "root cause: missing PO" or
@@ -1477,7 +1501,10 @@ hand.
 
 - You create a feed for one absolute folder and one file pattern
   (`orders-*.csv`; `.csv`, `.tsv` or `.txt`), and you confirm that the folder
-  may be read. Subfolders are not read.
+  may be read. Folder paths and filename patterns preserve spaces and Unicode
+  literally; wildcard characters in the pattern retain their usual meaning.
+  Path separators and control characters are not permitted in the pattern,
+  and subfolders are not read.
 - The mapping is copied when the feed is created. A changed mapping needs a
   new feed.
 - A file is appended once, identified by the SHA-256 of its content. A renamed
@@ -1514,7 +1541,10 @@ hand.
   deleted.
 - "Run every day" schedules the feed on the local scheduler (job kind
   `event_log_folder_feed`). Deleting the feed or the log removes the feed, its
-  file records and its schedule.
+  file records and its schedule. A scheduled run is labelled partial when
+  files are not ready or additional matching files still need checking; it
+  remains enabled and checks again at its normal interval. Partial status is
+  not evidence that the folder or the source system is fully up to date.
 
 | Route | Purpose |
 | --- | --- |
@@ -2070,6 +2100,16 @@ alongside the other case filters (`started_from`, `started_before`, `resource`, 
 which filter was applied and how many cases the log had before filtering. In the dashboard the
 overview shows "Filtered: N of M cases"; sections not in that list still use every case, and the
 filter note says so.
+
+**Time between the two steps.** A rule where one step follows the other can also limit the time
+between them: **after at least** some hours and/or **within** some hours (`min_hours` inclusive and
+`max_hours` exclusive in the rule, for example
+`{"from": "Submit", "to": "Approve", "mode": "eventual", "min_hours": 48}` for approvals that took
+two days or more). For *eventually*, the time runs from the first occurrence of the first activity to
+the next occurrence of the second after it; for *directly*, it is the first place where the second
+activity comes right after the first. A case where the step never follows matches no time limit.
+Limits cannot be set on *never* rules. Saved filters keep them. This is the throughput filter on a
+segment in Disco and Celonis.
 
 **Case attributes in the filter.** The dashboard's case filter also takes one case-attribute value,
 written `name=value` (for example `Region=EU`), and a numeric range on one case attribute (from,
@@ -2652,6 +2692,15 @@ out and counted in the `X-OWG-Non-Fitting` header.
 `POST /v1/event-logs/{log_id}/petri-net-alignments/cases.csv` with the PNML file as the body, plus
 the case-filter parameters. The net is not stored. Root-cause analysis also accepts the outcome `variant_in` with a list of
 paths when called directly. Agents use `get_process_deviation_causes` on the discovered net.
+
+**Tag the non-fitting cases** adds a case tag (default `off-model`) to every case that does not fit
+the net, within the case filter. The tag then works like any other: filter every analysis to those
+cases, compare them with the rest, or save them as a new log. Cases are chosen by their exact path;
+the 500 most common non-fitting paths are covered, and cases on rarer ones are counted as not
+tagged. Tagging again with the same tag does not duplicate it.
+`POST /v1/event-logs/{log_id}/petri-net-alignments/tag?new_tag=…&note=…` with the PNML file as the
+body, plus the case-filter parameters (`tag` there is the filter for cases already tagged, so the
+new tag is `new_tag`). A tag is the analyst's label, not a finding.
 
 ## Temporal profile
 
