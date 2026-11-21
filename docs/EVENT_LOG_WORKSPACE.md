@@ -2037,17 +2037,21 @@ and are deleted with the log.
 | --- | --- |
 | `GET /v1/event-logs/{log_id}/quarantine?batch=&after=&limit=` | Kept rows by batch and reason, a page of rows, and the first 100 decisions with paging metadata. |
 | `GET /v1/event-logs/{log_id}/quarantine/decisions?offset=&limit=` | A page of up to 100 recorded decisions; history can change between pages. |
+| `POST /v1/event-logs/{log_id}/quarantine/preview` | Preview release eligibility for the supplied timestamp settings and scope. Returns a digest to include as `expected_preview_sha256` when releasing. |
 | `POST /v1/event-logs/{log_id}/quarantine/release` | `{"naive_timestamp_offset": "+01:00", "batch": 0}` (batch optional). |
 | `POST /v1/event-logs/{log_id}/quarantine/discard` | `{"batch": 0, "row_start": 2, "row_end": 5}` discards kept rows in that inclusive range. Use just `batch` for one batch or `{}` for all kept rows. |
 
-A release applies one explicit decision: the UTC offset to assume for times written without one
-(`Z` or `±HH:MM`, at most ±14:00). The kept rows that become valid under it are appended as a new
-batch through the normal append path, so events already in the log are skipped, and that batch
-gets its own quality report (`kind: quarantine_release`) whose transform records the offset. Rows
-that still fail, such as rows without a case, stay kept. Releasing does not check that the offset
-is right, and nothing is released automatically. Every release and discard is recorded with its
-counts. Appending and removing the released rows are two steps; if the second is interrupted,
-releasing again adds nothing new.
+A release can use the default ISO 8601 parser or a `timestamp_format` pattern such as
+`%d/%m/%Y %H:%M`. Include `naive_timestamp_offset` (`Z` or `±HH:MM`, at most ±14:00)
+when the timestamps omit their offset. A declared pattern containing `%z` reads each value's
+own offset. Given a batch, `row_start` and `row_end` scope preview and release to an inclusive
+range. The preview digest binds the format, offset, scope, and retained rows.
+
+Kept rows that become valid are appended through the normal append path, which skips events
+already in the log. The new batch's quality report (`kind: quarantine_release`) records the format
+and any assumed offset. Rows that still fail, such as rows without a case, stay kept. Each release
+and discard decision records its counts. If the append succeeds and removal of the released rows
+is interrupted, retrying the release uses the same duplicate checks.
 
 In the dashboard, use **Select row** to fill the batch and range for a single retained row, or enter
 the batch and range yourself. **Discard kept rows** asks you to confirm the scope before deleting

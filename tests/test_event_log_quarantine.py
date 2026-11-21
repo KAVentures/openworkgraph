@@ -87,6 +87,49 @@ def test_release_applies_one_recorded_offset_decision_through_the_append_path():
 
 
 
+def test_release_declared_timestamp_formats_bind_preview_and_record_import_transform():
+    source = ("case,activity,time\n"
+              "c1,Start,2024-01-01T00:00:00Z\n"
+              "c1,Review,03/04/2024 14:05\n"
+              "c1,Close,03/04/2024 15:00 +0530\n"
+              "c1,Unknown,31/02/2024 14:05\n")
+    log = workspace.import_log(BytesIO(source.encode()), name="Mixed dates", source_format="csv",
+                               mapping={"case_column": "case", "activity_column": "activity",
+                                        "timestamp_column": "time", "keep_rejected": True})["log_id"]
+    declared = {"timestamp_format": "%d/%m/%Y %H:%M", "naive_timestamp_offset": "+01:00", "batch": 0}
+    preview = quarantine.preview(log, declared)
+    assert preview["timestamp_format"] == declared["timestamp_format"]
+    assert (preview["rows_considered"], preview["rows_eligible"]) == (3, 1)
+    reviewed = {**declared, "expected_preview_sha256": preview["expected_preview_sha256"]}
+    with pytest.raises(workspace.EventLogWorkspaceError, match="changed since preview"):
+        quarantine.release(log, {**reviewed, "timestamp_format": "%m/%d/%Y %H:%M"})
+    assert workspace.summary(log)["events"] == 1
+    released = quarantine.release(log, reviewed)["decision"]
+    assert released["rows_released"] == 1 and released["timestamp_format"] == declared["timestamp_format"]
+
+    explicit = {"timestamp_format": "%d/%m/%Y %H:%M %z", "batch": 0}
+    with pytest.raises(workspace.EventLogWorkspaceError, match="leave the assumed offset blank"):
+        quarantine.preview(log, {**explicit, "naive_timestamp_offset": "Z"})
+    with pytest.raises(workspace.EventLogWorkspaceError, match="choose the UTC offset"):
+        quarantine.preview(log, {**declared, "naive_timestamp_offset": ""})
+    preview = quarantine.preview(log, explicit)
+    assert preview["rows_eligible"] == 1 and preview["naive_timestamp_offset"] == ""
+    quarantine.release(log, {**explicit, "expected_preview_sha256": preview["expected_preview_sha256"]})
+    assert [row["activity"] for row in quarantine.quarantine(log)["rows"]] == ["Unknown"]
+    conn = workspace._connect()
+    try:
+        times = dict(conn.execute("SELECT activity, ts FROM events WHERE log_id = ?", [log]).fetchall())
+    finally:
+        conn.close()
+    assert times["Review"].isoformat() == "2024-04-03T13:05:00"
+    assert times["Close"].isoformat() == "2024-04-03T09:30:00"
+    transforms = [report["transform"]["mapping"] for report in quality.quality(log)["reports"][1:]]
+    assert [mapping["timestamp_format"] for mapping in transforms] == [
+        declared["timestamp_format"], explicit["timestamp_format"]]
+    assert transforms[0]["naive_timestamp_offset"] == "+01:00"
+    assert "naive_timestamp_offset" not in transforms[1]
+
+
 def test_preview_is_counts_only_nonmutating_and_guarded_release_matches_it():
     made = _import()
     log = made["log_id"]
