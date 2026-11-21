@@ -157,4 +157,72 @@ def glossary_csv(log_id: str) -> str:
     return out.getvalue()
 
 
-__all__ = ["glossary", "set_note", "delete_note", "glossary_csv", "FORMAT", "AUTOMATION"]
+MAX_IMPORT_BYTES = 1_000_000
+_AUTOMATION_WORDS = {"manual": "manual", "partly": "partly", "partly automated": "partly", "automated": "automated",
+                     "candidate": "candidate", "automation candidate": "candidate", "": None}
+
+
+def _uncell(value: str) -> str:
+    """Undo the formula guard of glossary_csv, so a downloaded glossary imports unchanged."""
+    if len(value) > 1 and value[0] == "'" and value[1] in "".join(_FORMULA):
+        return value[1:]
+    return value
+
+
+def import_csv(log_id: str, text: Any) -> dict[str, Any]:
+    """Fill the glossary from CSV with an ``activity`` column and any of description, owner_team, system and
+    automation. Rows for activities not in the log are skipped and listed. A downloaded glossary imports as is;
+    columns it does not know (in_log, events) are ignored. Imported values replace the activity's entry."""
+    if not isinstance(text, str) or not text.strip():
+        raise EventLogWorkspaceError("send the glossary as CSV text")
+    if len(text.encode("utf-8")) > MAX_IMPORT_BYTES:
+        raise EventLogWorkspaceError("the glossary CSV is larger than 1 MB")
+    reader = csv.DictReader(io.StringIO(text.lstrip("\ufeff")))
+    header = [h.strip().lower() for h in (reader.fieldnames or [])]
+    if "activity" not in header:
+        raise EventLogWorkspaceError("the CSV needs an activity column")
+    reader.fieldnames = header
+    notes: dict[str, Note] = {}
+    for number, row in enumerate(reader, start=2):
+        if len(notes) >= MAX_NOTES_PER_LOG:
+            raise EventLogWorkspaceError(f"a glossary has at most {MAX_NOTES_PER_LOG} entries")
+        activity = _uncell((row.get("activity") or "").strip())
+        if not activity:
+            continue
+        word = (row.get("automation") or "").strip().lower()
+        if word not in _AUTOMATION_WORDS:
+            raise EventLogWorkspaceError(f"line {number}: automation must be manual, partly, automated or candidate")
+        spec = {"activity": activity, "automation": _AUTOMATION_WORDS[word]}
+        for name in ("description", "owner_team", "system"):
+            spec[name] = _uncell((row.get(name) or "").strip())
+        try:
+            notes[activity] = _parse(spec)
+        except EventLogWorkspaceError as exc:
+            raise EventLogWorkspaceError(f"line {number}: {exc}") from None
+
+    def run(conn):
+        known = {a for (a,) in conn.execute("SELECT DISTINCT activity FROM events WHERE log_id = ?", [log_id]).fetchall()}
+        chosen = [n for a, n in notes.items() if a in known]
+        unknown = sorted(a for a in notes if a not in known)
+        existing = {a for (a,) in conn.execute("SELECT activity FROM activity_notes WHERE log_id = ?", [log_id]).fetchall()}
+        if len(existing | {n.activity for n in chosen}) > MAX_NOTES_PER_LOG:
+            raise EventLogWorkspaceError(f"a log keeps at most {MAX_NOTES_PER_LOG} glossary entries")
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        conn.execute("BEGIN")
+        try:
+            for n in chosen:
+                conn.execute("DELETE FROM activity_notes WHERE log_id = ? AND activity = ?", [log_id, n.activity])
+                fields = (n.description.strip(), n.owner_team.strip(), n.system.strip())
+                if any(fields) or n.automation is not None:
+                    conn.execute("INSERT INTO activity_notes VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                 [log_id, n.activity, *fields, n.automation, now])
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        return {**_listing(conn, log_id), "imported": len(chosen), "skipped_not_in_log": unknown[:50],
+                "skipped_not_in_log_total": len(unknown)}
+    return _with_conn(log_id, run)
+
+
+__all__ = ["glossary", "set_note", "delete_note", "glossary_csv", "import_csv", "FORMAT", "AUTOMATION"]

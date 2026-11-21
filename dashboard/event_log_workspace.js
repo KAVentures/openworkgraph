@@ -4251,7 +4251,8 @@
     box.appendChild(el('div','Write down what each activity means, which team usually does it, the system it happens in and how automated it is, so the map can be read by anyone. Your notes are stored locally with the log, never change its events, and agents can read them when you share the log.','muted'));
     const load=button('Show glossary','secondary');load.id='owgGlossaryLoad';
     const csv=button('Download glossary (CSV)','secondary');csv.id='owgGlossaryCsv';
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(load,csv);
+    const upload=document.createElement('input');upload.type='file';upload.id='owgGlossaryImport';upload.accept='.csv,text/csv';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(load,csv,field('Import glossary (CSV)',upload));
     const statusLine=el('div',null,'muted');statusLine.id='owgGlossaryStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgGlossaryResults';
     box.append(row,statusLine,out);
@@ -4281,6 +4282,13 @@
       try{const r=await getJSON(base());if(generation!==state.generation)return;statusLine.textContent=summary(r);render(r);}
       catch(error){statusLine.textContent=error.message;}
       finally{load.disabled=false;}};
+    upload.onchange=async()=>{const file=upload.files&&upload.files[0];if(!file)return;
+      const generation=state.generation;upload.disabled=true;statusLine.textContent='Importing the glossary…';
+      try{const r=await (await api(base()+'/import',{method:'POST',headers:{'Content-Type':'text/csv'},body:await file.text()})).json();
+        if(generation!==state.generation)return;
+        statusLine.textContent='Imported '+r.imported+' entries.'+(r.skipped_not_in_log_total?' Skipped '+r.skipped_not_in_log_total+' activities not in this log.':'')+' '+summary(r);render(r);}
+      catch(error){statusLine.textContent=error.message;}
+      finally{upload.disabled=false;upload.value='';}};
     csv.onclick=async()=>{csv.disabled=true;
       try{const response=await api(base()+'.csv');downloadBlob(await response.blob(),(state.logId||'log')+'-activity-glossary.csv');statusLine.textContent='Glossary downloaded.';}
       catch(error){statusLine.textContent=error.message;}

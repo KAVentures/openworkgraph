@@ -130,6 +130,27 @@ with TestClient(app) as client:
     a=client.get(agent,headers=bearer)
     assert a.status_code==200 and a.json()['activities'][0]['description']=='Start', a.text
     assert client.post(url+'/delete',json={"activity":"A"},headers=owner).json()['removed'] is True
+    imp=client.post(url+'/import',content='activity,description\nB,Finish\n'.encode(),headers={**owner,'content-type':'text/csv'})
+    assert imp.status_code==200 and imp.json()['imported']==1, imp.text
+    assert client.post(url+'/import',content=b'\xff\xfe',headers=owner).status_code==422
+    assert client.post(url+'/import',content=b'activity\nB\n',headers=bearer).status_code in (401,403)
 '''
     env = {**os.environ, 'WORKFLOW_OBSERVER_DATA': str(tmp_path / 'data'), 'WORKFLOW_OBSERVER_AUTH_DIR': str(tmp_path / 'auth')}
     subprocess.run([sys.executable, '-c', code], env=env, check=True, timeout=60)
+
+
+def test_csv_import_round_trips_and_skips_unknown():
+    log = _log()
+    gl.set_note(log, {"activity": "Close", "description": "=Done", "system": "@sys", "automation": "automated"})
+    text = gl.glossary_csv(log)
+    gl.delete_note(log, "Close")
+    r = gl.import_csv(log, "﻿" + text)
+    close = {a["activity"]: a for a in r["activities"]}["Close"]
+    assert (close["description"], close["system"], close["automation"]) == ("=Done", "@sys", "automated")
+    assert r["imported"] == 4 and r["coverage"]["described"] == 1   # empty rows clear, not create, entries
+    r = gl.import_csv(log, "Activity,Description,Automation\nOpen,Request arrives,Automation candidate\nGhost,x,\n")
+    assert r["imported"] == 1 and r["skipped_not_in_log"] == ["Ghost"] and r["automation"]["candidate"] == 1
+    for bad, match in (("description\nx\n", "activity column"), ("activity,automation\nOpen,robot\n", "line 2"),
+                       ("", "CSV text"), ("activity,system\nOpen,a\x01b\n", "line 2")):
+        with pytest.raises(EventLogWorkspaceError, match=match):
+            gl.import_csv(log, bad)

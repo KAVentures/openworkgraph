@@ -1834,6 +1834,25 @@ async def event_log_delete_activity_note(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/activity-glossary/import")
+async def event_log_import_activity_glossary(request: Request, log_id: str):
+    """Body: the glossary as CSV text (activity, description, owner_team, system, automation)."""
+    from . import event_log_activity_glossary as glossary
+    _require_dashboard(request)
+    body = await request.body()
+    if len(body) > glossary.MAX_IMPORT_BYTES:
+        raise HTTPException(413, "the glossary CSV is larger than 1 MB")
+    try:
+        text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(422, "the glossary CSV must be UTF-8") from None
+    try:
+        result = await run_in_threadpool(glossary.import_csv, log_id, text)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/v1/event-logs/{log_id}/activity-glossary.csv")
 def event_log_activity_glossary_csv(request: Request, log_id: str):
     """The glossary as spreadsheet-safe CSV, one line per activity. Not stored."""

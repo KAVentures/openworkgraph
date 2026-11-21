@@ -305,7 +305,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs/{log_id}/playback?activities=&max_cases=` | Per-case event offsets for animating cases along the process map (below). |
 | `GET`/`POST /v1/event-logs/{log_id}/filter-sets`, `POST .../filter-sets/{set_id}/delete` | Saved, reusable case filters (below). |
 | `GET`/`POST /v1/event-logs/{log_id}/case-tags`, `POST .../case-tags/remove` | Analyst tags on cases (below). |
-| `GET`/`POST /v1/event-logs/{log_id}/activity-glossary`, `POST .../activity-glossary/delete`, `GET .../activity-glossary.csv` | The owner's notes per activity (below). |
+| `GET`/`POST /v1/event-logs/{log_id}/activity-glossary`, `POST .../activity-glossary/delete`, `POST .../activity-glossary/import`, `GET .../activity-glossary.csv` | The owner's notes per activity (below). |
 | `GET /v1/event-logs/{log_id}/root-cause?outcome=...` | Case features associated with an outcome, with confidence intervals. |
 | `GET /v1/event-logs/{log_id}/export?format=csv\|xes\|ocel\|ocelxml` | Download the log. |
 | `GET /v1/event-logs/{log_id}/report.html?sla_seconds=&variants=` | Download a self-contained HTML report (below). |
@@ -1183,6 +1183,7 @@ The notes are stored locally and never change the log's events. A note stays whe
 * **Listing:** `GET /v1/event-logs/{log_id}/activity-glossary` lists every activity with its events, its notes and the coverage.
 * **Saving an entry:** `POST /v1/event-logs/{log_id}/activity-glossary` with `{"activity", "description"?, "owner_team"?, "system"?, "automation"?}` saves one entry. Sending only the activity clears it.
 * **Deleting an entry:** `POST .../activity-glossary/delete` with `{"activity"}` removes it.
+* **Importing:** `POST .../activity-glossary/import` with CSV text (an `activity` column and any of `description`, `owner_team`, `system`, `automation`) fills the glossary in one go. The dashboard's **Import glossary (CSV)** does the same. A downloaded glossary imports back unchanged, and rows for activities not in the log are skipped and listed.
 * **Agents:** when the log is shared with agents, they can read the glossary with `get_process_activity_glossary`. Activities with fewer than 5 events are left out.
 
 ## Explain a case

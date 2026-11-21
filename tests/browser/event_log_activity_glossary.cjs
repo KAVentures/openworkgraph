@@ -50,10 +50,14 @@ const path=require('node:path');
    assert(text.startsWith('activity,in_log,events,description,owner_team,system,automation\n'),text);
    assert(text.includes("Approve,yes,6,Manager approves the order,Finance,'=SAP,candidate"),text);
    await page.locator('#owgGlossaryStatus').filter({hasText:'Glossary downloaded.'}).waitFor();
+   await page.locator('#owgGlossaryImport').setInputFiles({name:'glossary.csv',mimeType:'text/csv',buffer:Buffer.from(text+'Close,yes,6,Order is closed,Sales,,automated\nGhost,no,0,x,,,\n')});
+   await page.locator('#owgGlossaryStatus').filter({hasText:'Imported 3 entries. Skipped 1 activities not in this log. 2 of 3 activities described, covering 67% of events.'}).waitFor();
+   assert.equal(await page.getByLabel('Description for Close').inputValue(),'Order is closed');
+   assert.equal(await page.getByLabel('System for Approve').inputValue(),'=SAP');
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgGlossary'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Activity glossary browser acceptance passed: notes saved and reloaded, coverage, spreadsheet-safe CSV, WCAG audit.');
+   console.log('Activity glossary browser acceptance passed: notes saved and reloaded, coverage, spreadsheet-safe CSV that imports back, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});
