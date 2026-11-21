@@ -1349,9 +1349,10 @@ def event_log_duration_distribution(request: Request, log_id: str,
 def event_log_variant_coverage(request: Request, log_id: str,
                                case_type: str | None = Query(default=None, max_length=200),
                                limit: int = Query(default=20, ge=1, le=200),
+                               offset: int = Query(default=0, ge=0, le=variant_coverage.MAX_OFFSET),
                                cohort: dict[str, Any] = Depends(_case_filter)):
     _require_dashboard(request)
-    return _respond(variant_coverage.coverage, log_id, case_type, limit, cohort=cohort)
+    return _respond(variant_coverage.coverage, log_id, case_type, limit, cohort=cohort, offset=offset)
 
 
 @router.get("/v1/event-logs/{log_id}/directly-follows")

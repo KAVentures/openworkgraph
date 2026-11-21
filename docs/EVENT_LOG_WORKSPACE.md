@@ -1025,6 +1025,17 @@ across and partly in Berlin's skipped and repeated hours, that work always
 starts inside a usable period, and that a round-the-clock calendar reproduces
 the results without one.
 
+## Variant coverage
+
+Page through ranked event sequences while keeping the coverage targets and cumulative shares for
+the full case selection. **Inspect variant cases** opens complete case histories, including
+variants whose displayed sequence is shortened.
+
+`GET /v1/event-logs/{log_id}/variant-coverage` accepts `limit` (1–200), `offset`, and the case
+filter. Use `page.next_offset` for the following page. Each row has a `variant_id` for its full
+sequence. Pass it to the dashboard-only `POST /v1/event-logs/{log_id}/cases/query` with the same
+case notion and cohort to keep the match exact.
+
 ## Literal case identity and qualified relationships
 
 A case key is supplied data, not a guess about business intent. CSV grouping
