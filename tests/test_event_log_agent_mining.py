@@ -89,9 +89,27 @@ def test_model_calls_and_case_attributes(_data):
 
 def test_validation(_data):
     for bad in ({"max_runs": 0}, {"max_runs": "5"}, {"include_model_calls": "yes"}, {"since": "2026-09-01"},
+                {"since": "2026-09-02T00:00:00Z", "until": "2026-09-01T00:00:00Z"},
                 {"unexpected": 1}, []):
         with pytest.raises(workspace.EventLogWorkspaceError):
             mining.import_agent_runs(bad)
+
+
+def test_subsecond_time_bounds_are_compared_chronologically(_data):
+    # Both values normalize to UTC; string sorting misorders fractional seconds
+    # because '.' sorts before the 'Z' suffix on a whole-second timestamp.
+    for since, until in (
+        ("2026-09-01T00:00:00.500Z", "2026-09-01T00:00:00Z"),
+        ("2026-09-01T01:00:00.500+01:00", "2026-09-01T00:00:00Z"),
+    ):
+        with pytest.raises(workspace.EventLogWorkspaceError, match="since must be before"):
+            mining.import_agent_runs({"since": since, "until": until})
+    # The fixture runs start at 08:00 UTC and end after 19:00 UTC;
+    # a valid range must actually include them to test successful import.
+    valid = mining.import_agent_runs({"name": "agents",
+        "since": "2026-09-01T08:59:59.500+01:00", "until": "2026-09-01T19:05:00.500Z"})
+    assert valid["runs"] == 12
+
 
 
 def test_no_runs_is_a_clear_error(monkeypatch):
