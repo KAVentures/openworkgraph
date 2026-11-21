@@ -102,3 +102,17 @@ with TestClient(app) as client:
 '''
     env = {**os.environ, 'WORKFLOW_OBSERVER_DATA': str(tmp_path / 'data'), 'WORKFLOW_OBSERVER_AUTH_DIR': str(tmp_path / 'auth')}
     subprocess.run([sys.executable, '-c', code], env=env, check=True, timeout=60)
+
+
+def test_shared_activity_keeps_only_types_that_show_it():
+    """X involves 7 orders but only 1 item; orders and items each have 5+ objects."""
+    doc = _document()
+    rel = lambda ids: [{"objectId": x, "qualifier": "q"} for x in ids]  # noqa: E731
+    doc["events"] += [{"id": f"x{k}", "type": "Review", "time": f"2024-01-0{1 + k % 6}T20:0{k}:00Z",
+                       "relationships": rel([f"o{k % 6}"] + (["i0a"] if k == 0 else []))} for k in range(7)]
+    log = workspace.import_log(BytesIO(json.dumps(doc).encode()), name="x", source_format="ocel")["log_id"]
+    sharing.set_share(log, "aggregates")
+    r = sharing.object_map(log)
+    assert "Review" not in {x["activity"] for x in r["activities_touching_several_types"]}
+    order = {t["object_type"]: t for t in r["object_types"]}["order"]
+    assert "Review" in {a["activity"] for a in order["activities"]}     # still shown for orders

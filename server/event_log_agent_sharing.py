@@ -544,11 +544,11 @@ def object_map(log_id: str) -> dict[str, Any]:
     shown = {t["object_type"] for t in types}
     relations = [{k: v for k, v in r.items() if k != "max_linked_per_object"} for r in result["relations"]
                  if r["from_type"] in shown and r["to_type"] in shown and r["objects_with_link"] >= floor]
-    # Only activities already shown for some type (5+ distinct objects), and only the shown types, so the list
-    # cannot name an activity that a single object performed many times.
-    visible = {a["activity"] for t in types for a in t["activities"]}
-    shared = [{**s, "object_types": [t for t in s["object_types"] if t in shown]}
-              for s in result["activities_touching_several_types"] if s["activity"] in visible]
+    # Keep a type for a shared activity only when that type itself shows the activity (5+ distinct objects of
+    # that type), so the row cannot reveal that a handful of objects of another type took part.
+    supported = {t["object_type"]: {a["activity"] for a in t["activities"]} for t in types}
+    shared = [{**s, "object_types": [t for t in s["object_types"] if s["activity"] in supported.get(t, set())]}
+              for s in result["activities_touching_several_types"]]
     shared = [s for s in shared if len(s["object_types"]) > 1]
     return {**{k: v for k, v in result.items() if k not in ("log", "object_types", "relations",
                                                              "activities_touching_several_types")},
