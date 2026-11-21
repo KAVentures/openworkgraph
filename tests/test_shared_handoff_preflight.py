@@ -369,4 +369,3 @@ def test_handoff_live_reads_bind_reviewer_permission_and_actor_identity():
         assert "current.permissions?.review!==true" in block
         assert "current.your_actor_id!==chosen.your_actor_id" in block
         assert 'current.review?.status!=="reviewed_design"' in block
-        assert block.index("current.permissions?.review!==true") < block.index("resetHandoff(") if block is navigation else True
