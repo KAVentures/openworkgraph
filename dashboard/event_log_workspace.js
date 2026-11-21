@@ -4291,28 +4291,32 @@
     const statusLine=el('div',null,'muted');statusLine.id='owgPathsStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgPathsResults';
     box.append(row,trail,statusLine,out);
-    let path=[];
+    let path=[],anchored=0,request=0;
     const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
     const hrs=x=>x===null||x===undefined?'—':(x<48?(Math.round(x*10)/10)+' h':(Math.round(x/24*10)/10)+' d');
     const show=async()=>{
       if(anywhere.checked&&!path.length){statusLine.textContent='Choose a first step from the start, then look for it anywhere.';anywhere.checked=false;}
-      const generation=state.generation;start.disabled=back.disabled=true;statusLine.textContent='Following cases…';out.replaceChildren();
+      const generation=state.generation,turn=++request;
+      const current=()=>generation===state.generation&&turn===request;
+      start.disabled=back.disabled=true;statusLine.textContent='Following cases…';out.replaceChildren();
       trail.textContent=path.length?'Path: '+(anywhere.checked?'… → ':'(start) → ')+path.join(' → '):'';
       try{
-        const r=await getJSON(logPath('next-steps',{step:path,anchor:anywhere.checked?'anywhere':'start'}));
-        if(generation!==state.generation)return;
+        const params={step:path,anchor:anywhere.checked?'anywhere':'start'};
+        if(anywhere.checked)params.anchor_steps=anchored;
+        const r=await getJSON(logPath('next-steps',params));
+        if(!current())return;
         statusLine.textContent=(path.length?Number(r.cases_at_point).toLocaleString()+' cases ('+pct(r.share_of_cases)+') reach this point'+(r.hours_to_reach_point?', in a median '+hrs(r.hours_to_reach_point.median):'')+'.':Number(r.cases).toLocaleString()+' cases start with these activities.')+(r.next_total>r.next.length?' Showing the '+r.next.length+' most common of '+r.next_total+' next steps.':'');
         if(!r.next.length)return;
-        const t=table(['Next','Cases','Share','From previous (median)','To case end (median)',''],r.next.map(x=>[x.activity,Number(x.cases).toLocaleString(),pct(x.share),x.hours_from_previous?hrs(x.hours_from_previous.median):'—',x.hours_to_case_end?hrs(x.hours_to_case_end.median):'—','']));
+        const t=table(['Next','Cases','Share','From previous (median)','To case end (median)',''],r.next.map(x=>[x.is_end?'Case ends here':x.activity,Number(x.cases).toLocaleString(),pct(x.share),x.hours_from_previous?hrs(x.hours_from_previous.median):'—',x.hours_to_case_end?hrs(x.hours_to_case_end.median):'—','']));
         t.querySelector('tbody').querySelectorAll('tr').forEach((tr,i)=>{const x=r.next[i];
           const bar=el('div');bar.setAttribute('aria-hidden','true');bar.style.cssText='height:4px;background:currentColor;opacity:.35;margin-top:4px;width:'+Math.round((x.share||0)*100)+'%';tr.cells[2].appendChild(bar);
           if(!x.is_end){const go=button('Go to '+x.activity,'secondary');go.onclick=()=>{path=[...path,x.activity];show();};tr.cells[5].appendChild(go);}});
         out.appendChild(t);
-      }catch(error){statusLine.textContent=error.message;}
-      finally{start.disabled=false;back.disabled=!path.length;}};
-    start.onclick=()=>{path=[];anywhere.checked=false;show();};
-    back.onclick=()=>{path=path.slice(0,-1);if(!path.length)anywhere.checked=false;show();};
-    anywhere.onchange=()=>{if(path.length)show();else if(anywhere.checked){anywhere.checked=false;statusLine.textContent='Choose a first step from the start, then look for it anywhere.';}};
+      }catch(error){if(current())statusLine.textContent=error.message;}
+      finally{if(current()){start.disabled=false;back.disabled=!path.length;}}};
+    start.onclick=()=>{path=[];anchored=0;anywhere.checked=false;show();};
+    back.onclick=()=>{path=path.slice(0,-1);anchored=Math.min(anchored,path.length);if(!path.length)anywhere.checked=false;show();};
+    anywhere.onchange=()=>{anchored=anywhere.checked?path.length:0;if(path.length)show();else if(anywhere.checked){anywhere.checked=false;statusLine.textContent='Choose a first step from the start, then look for it anywhere.';}};
     return box;
   }
 
