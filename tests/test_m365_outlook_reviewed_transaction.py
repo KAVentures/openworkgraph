@@ -499,6 +499,22 @@ class ReviewedTransactionTests(unittest.TestCase):
             handoff.assert_called_once()
             commit.assert_called_once()
 
+    def test_authenticated_append_connection_drop_refuses_handoff_and_checkpoint(self):
+        """A transport loss may mean OWG accepted the append: never replay it."""
+        reviewed = {"status": "review_ready", "csv_sha256": DIGEST,
+                    "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}
+        with patch.object(tx, "inspect_checkpoint", return_value=None), \
+             patch.object(tx.cycle, "review", return_value=reviewed), \
+             patch.object(tx.cycle, "append",
+                          side_effect=ConnectionResetError("OWG response lost")) as append, \
+             patch.object(tx.cycle, "handoff") as handoff, \
+             patch.object(tx.cycle, "checkpoint_commit") as commit:
+            with self.assertRaises(ConnectionResetError):
+                tx.execute(**inputs())
+            append.assert_called_once()
+            handoff.assert_not_called()
+            commit.assert_not_called()
+
     def test_audit_preflight_failure_prevents_any_mutation(self):
         with patch.dict("os.environ", {"OWG_M365_AUDIT_DIR": "/audit"}), \
              patch.object(tx, "preflight_operator_audit", side_effect=OSError("unsafe")), \
