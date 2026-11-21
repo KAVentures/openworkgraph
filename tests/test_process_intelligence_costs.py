@@ -54,6 +54,7 @@ def test_saved_model_and_agent_prices():
     assert "Escalate" not in names and {"Open", "Check", "Close"} <= set(names)
     assert [(v["path"], v["cases"]) for v in r["costliest_variants"]] == [(["Open", "Check", "Check", "Close"], 6)]
     assert "max" not in r["cost_per_case"] and "resources" not in r and "ana" not in repr(r)
+    assert "model" not in r and "Escalate" not in repr(r)  # no raw rare-price labels in aggregate response
     assert r["withheld"]["activities"] == 1 and r["withheld"]["variants"] == 2     # 4-case and 1-case paths
     what_if = sharing.costs(log, {"currency": "EUR", "activity_costs": {"Check": 5}, "default_activity_cost": 0})
     assert what_if["model_source"] == "agent_supplied_model" and what_if["total_cost"] == 80
@@ -67,6 +68,47 @@ def test_saved_model_and_agent_prices():
             sharing.costs(log, bad)
     with pytest.raises(EventLogWorkspaceError):
         sharing.costs(log, limit=0)
+
+
+def test_unpriced_repeat_does_not_reveal_single_case_activity():
+    import csv
+    import io
+    table = io.StringIO()
+    writer = csv.writer(table)
+    writer.writerow(["case", "activity", "time", "who"])
+    for i in range(6):
+        day = f"2024-01-{1 + i:02d}"
+        writer.writerow([f"c{i}", "Open", day + "T00:00:00Z", "a"])
+        if i == 0:
+            for j in range(6):
+                writer.writerow(["c0", "Rare repeated", day + f"T{j + 1:02d}:00:00Z", "a"])
+        writer.writerow([f"c{i}", "Close", day + "T09:00:00Z", "a"])
+    log = workspace.import_log(BytesIO(table.getvalue().encode()), name="repeat",
+                               source_format="csv", mapping=MAPPING)["log_id"]
+    sharing.set_share(log, "aggregates")
+    cost_model.save_model(log, {"activity_costs": {"Open": 1, "Close": 1}})
+    result = sharing.costs(log)
+    assert result["total_cost"] == 12
+    assert result["unpriced_activities"] == []
+    assert "Rare repeated" not in repr(result)
+
+
+def test_agent_costs_refuse_over_500_activities_instead_of_missing_rare_tail():
+    import csv
+    import io
+    table = io.StringIO()
+    writer = csv.writer(table)
+    writer.writerow(["case", "activity", "time", "who"])
+    for i in range(6):
+        writer.writerow([f"c{i}", "Common", f"2024-01-0{i + 1}T00:00:00Z", "a"])
+    for i in range(501):
+        writer.writerow(["c0", f"Unique_{i:03d}", f"2024-01-01T{(i % 24):02d}:{(i // 24) % 60:02d}:00Z", "a"])
+    log = workspace.import_log(BytesIO(table.getvalue().encode()), name="many",
+                               source_format="csv", mapping=MAPPING)["log_id"]
+    sharing.set_share(log, "aggregates")
+    with pytest.raises(EventLogWorkspaceError, match="too many distinct activities"):
+        sharing.costs(log, {"default_activity_cost": 5})
+
 
 
 def test_agent_route(tmp_path):
