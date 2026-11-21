@@ -364,7 +364,7 @@
       importButton.disabled=true;status('Importing '+chosen.name+'…');
       try{
         const log=await (await api('/v1/event-logs/import?'+q,{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream','X-OWG-Local-Storage-Confirmed':'true'}})).json();
-        const done='Imported '+Number(log.events).toLocaleString()+' events'+(log.rejected_events?' ('+Number(log.rejected_events).toLocaleString()+' rejected: '+reasonText(log.quality&&log.quality.rejected_by_reason)+')':'')+'.'+relationshipText(log.object_relationships)+identityText(log.source_identity)+tieText(log.quality)+keptText(log.quality);
+        const done='Imported '+Number(log.events).toLocaleString()+' events'+(log.rejected_events?' ('+Number(log.rejected_events).toLocaleString()+' rejected: '+reasonText(log.quality&&log.quality.rejected_by_reason)+')':'')+'.'+relationshipText(log.object_relationships)+identityText(log.source_identity)+tieText(log.quality)+keptText(log.quality)+sameSourceText(log.same_source_as);
         consent.checked=false;keep.checked=false;file.value='';name.value='';
         // Report the import only once the new log is selected. Selecting it starts a new generation and
         // clears the results, so an analysis started before that would be dropped and never shown.
@@ -393,7 +393,7 @@
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(target.log_id)+'/append?'+q,{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream','X-OWG-Local-Storage-Confirmed':'true'}})).json();
         consent.checked=false;file.value='';
         await refreshLogs(target.log_id);
-        status('Added '+Number(r.added_events).toLocaleString()+' new events to '+target.name+'; skipped '+Number(r.duplicate_events_skipped).toLocaleString()+' already in the log'+(r.rejected_events?' and rejected '+Number(r.rejected_events).toLocaleString()+' ('+reasonText(r.quality&&r.quality.rejected_by_reason)+')':'')+'.'+relationshipText(r.log&&r.log.object_relationships)+identityText(r.source_identity)+tieText(r.quality)+keptText(r.quality));keep.checked=false;
+        status('Added '+Number(r.added_events).toLocaleString()+' new events to '+target.name+'; skipped '+Number(r.duplicate_events_skipped).toLocaleString()+' already in the log'+(r.rejected_events?' and rejected '+Number(r.rejected_events).toLocaleString()+' ('+reasonText(r.quality&&r.quality.rejected_by_reason)+')':'')+'.'+relationshipText(r.log&&r.log.object_relationships)+identityText(r.source_identity)+tieText(r.quality)+keptText(r.quality)+sameSourceText(r.same_source_as));keep.checked=false;
       }catch(error){status(error.message);}finally{refreshImport();}
     };
     pick.onchange=()=>{selectLog(pick.value);refreshImport();};
@@ -4879,6 +4879,11 @@
 
   function relationshipText(profile){return profile?' Retained '+Number(profile.retained_relationships).toLocaleString()+' supplied object relationships; these do not establish case membership or causality.':'';}
 
+  function sameSourceText(matches){
+    if(!Array.isArray(matches)||!matches.length)return '';
+    const names=matches.slice(0,3).map(m=>m.this_log?'an earlier batch of this log':'\u201c'+m.name+'\u201d');
+    return ' This exact file was already loaded as '+names.join(', ')+(matches.length>3?' and '+(matches.length-3)+' more':'')+'; delete the copy you do not need to save space.';
+  }
   function identityText(identity){return identity?' Supplied source-ID matching: '+Number(identity.duplicate_source_ids_skipped||0).toLocaleString()+' repeated IDs skipped; namespace and case associations are caller-declared. Plain CSV/XES/OCEL exports omit these keys.':'';}
 
   function qualitySection(){
