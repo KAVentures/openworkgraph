@@ -2203,7 +2203,7 @@
   function caseTagSection(activityNames){
     const box=section('Case tags');box.id='owgCaseTags';
     box.appendChild(el('div','Tag cases you have looked at, such as “checked” or “root cause: missing PO”, then choose the tag under “Tagged” in any filter. Tags are your judgement, stored on this computer; the log itself is not changed.','muted'));
-    const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/case-tags';
+    const base='/v1/event-logs/'+encodeURIComponent(state.logId)+'/case-tags';
     const list=el('div');list.id='owgCaseTagList';list.setAttribute('role','status');
     const tag=input('owgCaseTagName','text','for example checked');tag.maxLength=60;tag.autocomplete='off';
     const note=input('owgCaseTagNote','text','optional');note.maxLength=500;
@@ -2211,23 +2211,99 @@
     const filter=cohortFields('owgCaseTagCohort','Or tag every case that matches',activityNames);
     const add=button('Tag cases','secondary');add.id='owgCaseTagAdd';
     const out=el('div');out.id='owgCaseTagResult';out.setAttribute('role','status');
+    const review=el('div');review.id='owgCaseTagReview';
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Tag',tag),field('Note',note));
-    box.append(list,row,field('Cases',ids),filter.node,add,out);
+    box.append(list,row,field('Cases',ids),filter.node,add,out,review);
     const generation=state.generation;
+    const pageSize=100;
+    let openTag=null,openOffset=0,reviewRequest=0;
+    const removeTag=spec=>api(base+'/remove',{
+      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)
+    }).then(response=>response.json());
+    const loadCases=async(tagName,offset,focus=false)=>{
+      openTag=tagName;
+      openOffset=offset;
+      const request=++reviewRequest;
+      const current=()=>generation===state.generation&&request===reviewRequest;
+      const heading=el('h4','Cases tagged '+tagName);heading.tabIndex=-1;
+      const status=el('div','Loading tagged cases…','muted');status.setAttribute('role','status');
+      review.replaceChildren(heading,status);
+      if(focus)heading.focus();
+      try{
+        const query=new URLSearchParams({tag:tagName,limit:pageSize,offset});
+        const result=await getJSON(base+'?'+query);
+        if(!current())return;
+        const {total,next_offset:nextOffset}=result.page;
+        if(offset>0&&offset>=total){
+          return loadCases(tagName,Math.max(0,Math.floor((total-1)/pageSize)*pageSize),focus);
+        }
+        if(!total){status.textContent='No cases have this tag.';return;}
+        status.textContent='Showing '+(offset+1).toLocaleString()+'–'+(offset+result.cases.length).toLocaleString()+' of '+total.toLocaleString()+' cases.';
+        const selected=new Set();
+        const remove=button('Remove tag from selected cases','secondary');remove.disabled=true;
+        const cases=table(['Select','Case','Note','Tagged'],result.cases.map(item=>{
+          const checkbox=document.createElement('input');checkbox.type='checkbox';
+          checkbox.setAttribute('aria-label','Select case '+item.case_id);
+          checkbox.onchange=()=>{
+            if(checkbox.checked)selected.add(item.case_id);
+            else selected.delete(item.case_id);
+            remove.disabled=!selected.size;
+          };
+          return [checkbox,item.case_id,item.note||'—',String(item.tagged_at).slice(0,16).replace('T',' ')];
+        }));
+        const previous=button('Previous page','secondary');previous.disabled=offset===0;
+        const next=button('Next page','secondary');next.disabled=nextOffset===null;
+        previous.onclick=()=>loadCases(tagName,offset-pageSize,true);
+        next.onclick=()=>loadCases(tagName,nextOffset,true);
+        remove.onclick=async()=>{
+          if(!selected.size||!window.confirm('Remove “'+tagName+'” from '+selected.size+' selected '+(selected.size===1?'case':'cases')+'?'))return;
+          remove.disabled=true;
+          cases.querySelectorAll('input').forEach(checkbox=>{checkbox.disabled=true;});
+          try{
+            const response=await removeTag({tag:tagName,case_ids:[...selected]});
+            if(generation!==state.generation)return;
+            render(response);
+            out.textContent='Removed “'+tagName+'” from '+response.removed.toLocaleString()+' '+(response.removed===1?'case':'cases')+'.';
+            refreshReview(current());
+          }catch(error){
+            if(!current())return;
+            out.textContent=error.message;
+            cases.querySelectorAll('input').forEach(checkbox=>{checkbox.disabled=false;});
+            remove.disabled=false;
+          }
+        };
+        const controls=el('div',null,'row');controls.append(previous,next,remove);
+        review.append(cases,controls);
+      }catch(error){if(current())status.textContent=error.message;}
+    };
+    const refreshReview=(focus=false)=>{if(openTag!==null)loadCases(openTag,openOffset,focus);};
     const render=r=>{
       if(!r.tags.length){list.replaceChildren(el('div','No tags yet.','muted'));return;}
       list.replaceChildren(table(['Tag','Cases','With a note','Last tagged',''],r.tags.map(t=>{
         const wrap=el('div',null,'row');
         const showCases=button('Show cases','secondary');showCases.setAttribute('aria-label','Show cases tagged '+t.tag);
         const remove=button('Remove tag','secondary');remove.setAttribute('aria-label','Remove tag '+t.tag);
-        showCases.onclick=async()=>{try{const c=await getJSON(base()+'?tag='+encodeURIComponent(t.tag)+'&limit=200');out.replaceChildren(el('h4','Cases tagged '+t.tag),table(['Case','Note','Tagged'],c.cases.map(x=>[x.case_id,x.note||'—',String(x.tagged_at).slice(0,16).replace('T',' ')])));}catch(error){out.replaceChildren(el('div',error.message,'muted'));}};
-        remove.onclick=async()=>{if(!window.confirm('Remove the tag “'+t.tag+'” from all '+t.cases+' cases?'))return;try{const r2=await (await api(base()+'/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tag:t.tag})})).json();render(r2);out.replaceChildren(el('div','Removed “'+t.tag+'” from '+r2.removed+' cases.'));}catch(error){out.replaceChildren(el('div',error.message,'muted'));}};
+        showCases.onclick=()=>loadCases(t.tag,0,true);
+        remove.onclick=async()=>{
+          if(!window.confirm('Remove the tag “'+t.tag+'” from all '+t.cases+' cases?'))return;
+          remove.disabled=true;
+          try{
+            const result=await removeTag({tag:t.tag});
+            if(generation!==state.generation)return;
+            render(result);
+            out.textContent='Removed “'+t.tag+'” from '+result.removed.toLocaleString()+' cases.';
+            if(openTag===t.tag)refreshReview();
+          }catch(error){
+            if(generation===state.generation)out.textContent=error.message;
+            remove.disabled=false;
+          }
+        };
         wrap.append(showCases,remove);
         return [t.tag,Number(t.cases).toLocaleString(),Number(t.cases_with_note).toLocaleString(),String(t.last_tagged_at).slice(0,16).replace('T',' '),wrap];})));
     };
-    getJSON(base()).then(r=>{if(generation===state.generation)render(r);}).catch(error=>list.replaceChildren(el('div',error.message,'muted')));
+    getJSON(base).then(r=>{if(generation===state.generation)render(r);}).catch(error=>list.replaceChildren(el('div',error.message,'muted')));
     // Cases tagged from other sections (for example unusual cases) appear here without a reload.
-    box.addEventListener('owg-tags-changed',()=>{getJSON(base()).then(r=>{if(generation===state.generation)render(r);}).catch(()=>{});});
+    box.addEventListener('owg-tags-changed',()=>{getJSON(base).then(r=>{if(generation===state.generation){render(r);refreshReview();}}).catch(()=>{});});
     add.onclick=async()=>{
       add.disabled=true;
       try{
@@ -2236,9 +2312,10 @@
         const list2=ids.value.split(/[\n,]/).map(x=>x.trim()).filter(Boolean);
         if(list2.length)spec.case_ids=list2.slice(0,1000);
         else{const cohort=filter.read();delete cohort.label;if(!Object.keys(cohort).length)throw new Error('Enter case IDs or choose which cases match.');spec.cohort=cohort;}
-        const r=await (await api(base(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        const r=await (await api(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
         if(generation!==state.generation)return;
         render(r);
+        if(openTag===r.tag)refreshReview();
         out.replaceChildren(el('div','Tagged '+Number(r.tagged).toLocaleString()+' cases “'+r.tag+'”'+(r.already_tagged?' ('+r.already_tagged+' already had it; their note was replaced)':'')+(r.unknown_case_ids?'; '+r.unknown_case_ids+' IDs are not cases of this log':'')+'.'));
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
       finally{add.disabled=false;}
