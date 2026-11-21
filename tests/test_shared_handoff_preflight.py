@@ -475,3 +475,22 @@ def test_review_ui_renders_durable_gateway_readback_not_post_snapshot():
     assert 'render(reviewResult);' not in block
     assert block.index('recordedReview=await call(') < block.index('if(!recorded) {')
     assert block.index('if(!recorded) {') < block.index('render(recordedReview);')
+
+
+def test_executable_project_export_revalidates_after_streaming_before_download():
+    """A revocation while receiving ZIP bytes must prevent exposing the project."""
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split("async function download(format) {", 1)[1].split("function resetHandoff(", 1)[0]
+    assert block.count('await call("/v1/human/processes/" + encodeURIComponent(record.workflow_id))') == 2
+    post_stream = block.split("const exportedBlob = await response.blob();", 1)[1]
+    guard = post_stream.split("const url = URL.createObjectURL(exportedBlob)", 1)[0]
+    assert 'if (format === "agent-project")' in guard
+    assert 'latest.review?.status !== "reviewed_design"' in guard
+    assert 'latest.access_revision !== selection.access_revision' in guard
+    assert 'latest.your_actor_id !== selection.your_actor_id' in guard
+    assert 'latest.latest_revision !== record.revision' in guard
+    assert 'latest.process.content_sha256 !== record.content_sha256' in guard
+    assert 'latest.archived' in guard
+    assert 'latest.viewing_historical_revision' in guard
+    assert 'credential !== authorizedCredential' in guard
+    assert guard.index('const latest = await call(') < guard.index('latest.review?.status')
