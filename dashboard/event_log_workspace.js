@@ -30,10 +30,10 @@
   FILTERED.add('model-change');
   FILTERED.add('model-comparison');
   FILTERED.add('funnel');
+  FILTERED.add('variants.csv');
   FILTERED.add('unusual-cases');
   FILTERED.add('due-dates');
   FILTERED.add('story');
-  FILTERED.add('variants.csv');
   FILTERED.add('activity-profile');
   FILTERED.add('breakdown');
   FILTERED.add('breakdown.csv');
