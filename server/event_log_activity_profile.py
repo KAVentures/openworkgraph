@@ -43,8 +43,8 @@ def activity_profile(log_id: str, activity: str, case_type: str | None = None, *
     total = len(rows)
     with_cases, occurrences = 0, 0
     per_case: Counter = Counter()
-    before: Counter = Counter()
-    after: Counter = Counter()
+    before: Counter[str | None] = Counter()
+    after: Counter[str | None] = Counter()
     gap_in: dict[str, list[float]] = {}
     gap_out: dict[str, list[float]] = {}
     weekday: Counter = Counter()
@@ -64,20 +64,22 @@ def activity_profile(log_id: str, activity: str, case_type: str | None = None, *
         for i in idx:
             weekday[_WEEKDAYS[dows[i] - 1]] += 1
             hours[hrs[i]] += 1
-            prev = acts[i - 1] if i else "(start)"
-            nxt = acts[i + 1] if i + 1 < len(acts) else "(end)"
+            prev = acts[i - 1] if i else None
+            nxt = acts[i + 1] if i + 1 < len(acts) else None
             before[prev] += 1
             after[nxt] += 1
-            if i:
+            if prev is not None:
                 gap_in.setdefault(prev, []).append(stamps[i] - stamps[i - 1])
-            if i + 1 < len(acts):
+            if nxt is not None:
                 gap_out.setdefault(nxt, []).append(stamps[i + 1] - stamps[i])
     if not with_cases:
         raise EventLogWorkspaceError(f"no case in this selection has the activity {activity!r}")
 
-    def neighbours(counts: Counter, gaps: dict[str, list[float]]) -> list[dict[str, Any]]:
-        return [{"activity": a, "times": n, "share": round(n / occurrences, 4),
-                 "median_hours": _q(gaps.get(a, []), 0.5)} for a, n in counts.most_common(TOP)]
+    def neighbours(counts: Counter[str | None], gaps: dict[str, list[float]], boundary: str) -> list[dict[str, Any]]:
+        ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0] is None, item[0] or ""))
+        return [{"activity": a if a is not None else boundary, "times": n, "share": round(n / occurrences, 4),
+                 "median_hours": _q(gaps.get(a, []), 0.5) if a is not None else None,
+                 **({"boundary": True} if a is None else {})} for a, n in ranked[:TOP]]
 
     repeat_cases = sum(n for k, n in per_case.items() if k > 1)
     return {
@@ -85,7 +87,7 @@ def activity_profile(log_id: str, activity: str, case_type: str | None = None, *
         "cases": total, "cases_with_activity": with_cases, "share_of_cases": round(with_cases / total, 4),
         "occurrences": occurrences, "occurrences_per_case": round(occurrences / with_cases, 3),
         "cases_repeating_it": repeat_cases, "repeat_share": round(repeat_cases / with_cases, 4),
-        "comes_after": neighbours(before, gap_in), "comes_before": neighbours(after, gap_out),
+        "comes_after": neighbours(before, gap_in, "(start)"), "comes_before": neighbours(after, gap_out, "(end)"),
         "hours_from_case_start_to_first": {"median": _q(first_at, 0.5), "p90": _q(first_at, 0.9)},
         "case_hours": {"with_activity": {"median": _q(dur_with, 0.5), "p90": _q(dur_with, 0.9)},
                        "without_activity": {"median": _q(dur_without, 0.5), "p90": _q(dur_without, 0.9)}},
