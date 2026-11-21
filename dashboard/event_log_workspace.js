@@ -2097,11 +2097,14 @@
   // Columns from a separate case table (customer, region, amount...) joined onto the cases by id.
   function caseAttributeSection(){
     const box=section('Case attributes from a table');box.id='owgCaseAttributes';
-    box.appendChild(el('div','Add columns such as region, segment or contract value from a separate CSV keyed by case ID. They become case attributes for filters, root cause and attribute profiles. You can undo new uploads to restore the previous values of the cases they changed.','muted'));
+    box.appendChild(el('div','Add columns such as region, segment or contract value from a CSV or Excel worksheet keyed by case ID. They become case attributes for filters, root cause and attribute profiles. You can undo new uploads to restore the previous values of the cases they changed.','muted'));
     const base='/v1/event-logs/'+encodeURIComponent(state.logId)+'/case-attributes';
     const list=el('div');list.id='owgCaseAttributeUploads';list.setAttribute('role','status');
-    const file=input('owgCaseAttributeFile','file');file.accept='.csv,.tsv,.txt';
+    const file=input('owgCaseAttributeFile','file');file.accept='.csv,.tsv,.txt,.xlsx';
     const delimiter=select('owgCaseAttributeDelimiter',[[',','Comma'],[';','Semicolon'],['t','Tab'],['|','Pipe']]);
+    const worksheet=select('owgCaseAttributeWorksheet',[]);
+    const sheetField=field('Case table worksheet',worksheet);sheetField.hidden=true;
+    const workbookStatus=el('p');workbookStatus.id='owgCaseAttributeWorkbookStatus';workbookStatus.setAttribute('role','status');
     const idColumn=select('owgCaseAttributeId',[]);
     const columns=select('owgCaseAttributeColumns',[]);columns.multiple=true;columns.size=4;
     const replace=input('owgCaseAttributeReplace','checkbox');
@@ -2109,24 +2112,63 @@
     const add=button('Add to cases','secondary');add.id='owgCaseAttributeAdd';add.disabled=true;
     const out=el('div');out.id='owgCaseAttributeResult';out.setAttribute('role','status');
     const row=el('div',null,'row');row.style.alignItems='end';
-    row.append(field('Case table (CSV)',file),field('Delimiter',delimiter),field('Case ID column',idColumn),field('Columns to add',columns));
+    row.append(field('Case table (CSV or Excel)',file),sheetField,field('Delimiter',delimiter),field('Case ID column',idColumn),field('Columns to add',columns));
     const checks=el('div',null,'row');
     const replaceLabel=el('label',' Overwrite values the cases already have');replaceLabel.prepend(replace);
     const consentLabel=el('label',' Store these values with the log on this computer');consentLabel.prepend(consent);
     checks.append(replaceLabel,consentLabel);
-    box.append(list,row,checks,add,out);
-    const ready=()=>{add.disabled=!(file.files&&file.files[0]&&idColumn.value&&columns.selectedOptions.length&&consent.checked);};
+    box.append(list,row,workbookStatus,checks,add,out);
+    const generation=state.generation,notion=state.caseType;
+    let revision=0,busy=false,workbook=null,converted=null,reading=false,workbookRequest=0;
+    const effectiveFile=()=>workbook?converted:file.files?.[0];
+    const ready=()=>{
+      const complete=!!(!reading&&effectiveFile()&&idColumn.value&&columns.selectedOptions.length);
+      add.disabled=busy||!complete||!consent.checked;
+    };
     const readHeader=async()=>{
-      const chosen=file.files&&file.files[0];setOptions(idColumn,[]);setOptions(columns,[]);ready();if(!chosen)return;
+      const turn=++revision;
+      const chosen=effectiveFile();setOptions(idColumn,[]);setOptions(columns,[]);ready();if(!chosen)return;
       const header=csvHeader(await chosen.slice(0,65536).text(),delimiter.value==='t'?'\t':delimiter.value);
+      if(turn!==revision)return;
       setOptions(idColumn,header.map(c=>[c,c]));
       idColumn.value=header.find(c=>/case|order|ticket|^id$/i.test(c))||header[0]||'';
       const others=()=>setOptions(columns,header.filter(c=>c!==idColumn.value).map(c=>[c,c]));
       others();idColumn.onchange=()=>{others();ready();};ready();
     };
-    file.onchange=()=>{consent.checked=false;readHeader();};delimiter.onchange=readHeader;
-    for(const control of [columns,consent])control.addEventListener('change',ready);
-    const generation=state.generation;
+    async function readWorksheet(chosen,sheet){
+      const ticket=++workbookRequest;
+      workbook=chosen;converted=null;reading=true;consent.checked=false;delimiter.disabled=true;
+      worksheet.disabled=true;readHeader();
+      workbookStatus.textContent='Reading the Excel worksheet…';
+      try{
+        const query=sheet?'?'+new URLSearchParams({sheet}):'';
+        const response=await api('/v1/event-logs/xlsx-to-csv'+query,{method:'POST',body:chosen,
+          headers:{'Content-Type':'application/octet-stream'}});
+        const result=await response.json();
+        if(generation!==state.generation||ticket!==workbookRequest)return;
+        setOptions(worksheet,result.sheets.map(name=>[name,name]));worksheet.value=result.sheet;
+        sheetField.hidden=result.sheets.length<2;
+        converted=new File([result.csv],'case-table.csv',{type:'text/csv'});
+        delimiter.value=',';
+        workbookStatus.textContent='Using worksheet '+JSON.stringify(result.sheet)+' ('+
+          Number(result.rows).toLocaleString()+' rows). Match IDs exactly as stored in the log.';
+        await readHeader();
+      }catch(error){if(generation===state.generation&&ticket===workbookRequest)workbookStatus.textContent=error.message;}
+      finally{if(ticket===workbookRequest){reading=false;worksheet.disabled=false;ready();}}
+    }
+    file.onchange=()=>{
+      workbookRequest++;workbook=null;converted=null;reading=false;consent.checked=false;
+      sheetField.hidden=true;setOptions(worksheet,[]);workbookStatus.textContent='';
+      const chosen=file.files?.[0];
+      if(chosen&&/\.xlsx$/i.test(chosen.name)){readWorksheet(chosen);return;}
+      delimiter.disabled=false;
+      if(chosen&&/\.tsv$/i.test(chosen.name))delimiter.value='t';
+      readHeader();
+    };
+    worksheet.onchange=()=>{if(workbook)readWorksheet(workbook,worksheet.value);};
+    delimiter.onchange=readHeader;
+    columns.addEventListener('change',ready);
+    consent.addEventListener('change',ready);
     const render=r=>{
       if(!r.uploads.length){list.replaceChildren(el('div','No case attributes added yet.','muted'));return;}
       list.replaceChildren(table(['Added','Columns','Cases updated','Rows not in this log','Cases without a row',''],r.uploads.map(u=>{
@@ -2144,16 +2186,23 @@
         const action=u.undo_supported?remove:el('span','Undo unavailable for this older upload','muted');
         return [String(u.added_at).slice(0,16).replace('T',' '),u.columns.join(', '),Number(u.cases_updated).toLocaleString(),Number(u.rows_not_in_log).toLocaleString(),Number(u.cases_without_row).toLocaleString(),action];})));
     };
-    add.onclick=async()=>{
+    function uploadQuery(){
       const q=new URLSearchParams({id_column:idColumn.value,delimiter:delimiter.value});
       [...columns.selectedOptions].forEach(o=>q.append('column',o.value));
-      if(state.caseType)q.set('object_type',state.caseType);if(replace.checked)q.set('replace','true');
-      add.disabled=true;out.replaceChildren(el('div','Adding…','muted'));
+      if(notion)q.set('object_type',notion);
+      if(replace.checked)q.set('replace','true');
+      return q;
+    }
+    add.onclick=async()=>{
+      const q=uploadQuery();
+      busy=true;ready();out.textContent='Adding…';
       try{
-        const r=await (await api(base+'?'+q,{method:'POST',body:file.files[0],headers:{'Content-Type':'text/csv','X-OWG-Local-Storage-Confirmed':'true'}})).json();
-        out.replaceChildren(el('div','Added '+r.columns.join(', ')+' to '+Number(r.cases_updated).toLocaleString()+' cases. '+Number(r.rows_not_in_log).toLocaleString()+' rows matched no case; '+Number(r.cases_without_row).toLocaleString()+' cases had no row.'));
+        const r=await (await api(base+'?'+q,{method:'POST',body:effectiveFile(),headers:{'Content-Type':'text/csv','X-OWG-Local-Storage-Confirmed':'true'}})).json();
+        if(generation!==state.generation)return;
+        out.textContent='Added '+r.columns.join(', ')+' to '+Number(r.cases_updated).toLocaleString()+' cases. '+Number(r.rows_not_in_log).toLocaleString()+' rows matched no case; '+Number(r.cases_without_row).toLocaleString()+' cases had no row.';
         consent.checked=false;render(await getJSON(base));
-      }catch(error){out.replaceChildren(el('div',error.message,'muted'));ready();}
+      }catch(error){if(generation===state.generation)out.textContent=error.message;}
+      finally{busy=false;ready();}
     };
     getJSON(base).then(r=>{if(generation===state.generation)render(r);}).catch(error=>list.replaceChildren(el('div',error.message,'muted')));
     return box;
