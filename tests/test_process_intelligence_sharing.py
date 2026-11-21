@@ -286,6 +286,7 @@ PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_overv
                  "predict_open_process_cases", "predict_next_process_activity",
                  "get_process_insights",
                  "get_process_deviation_causes",
+                 "get_process_object_map",
                  "align_process_case",
                  "get_process_data_quality",
                  "get_process_brief",
