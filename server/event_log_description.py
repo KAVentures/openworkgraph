@@ -55,15 +55,10 @@ def set_description(log_id: str, text: Any) -> dict[str, Any]:
     return _with_conn(log_id, run)
 
 
-def erase_log(log_id: str) -> None:
-    """Called by workspace.delete_log after the log's own rows are gone."""
-    with workspace._LOCK:
-        conn = workspace._connect()
-        try:
-            conn.execute(_TABLE)
-            conn.execute("DELETE FROM log_descriptions WHERE log_id = ?", [log_id])
-        finally:
-            conn.close()
+def erase(conn, log_id: str) -> None:
+    """Called by workspace.delete_log inside its transaction, so the note goes exactly when the log goes."""
+    conn.execute(_TABLE)
+    conn.execute("DELETE FROM log_descriptions WHERE log_id = ?", [log_id])
 
 
-__all__ = ["description", "set_description", "erase_log", "FORMAT"]
+__all__ = ["description", "set_description", "erase", "FORMAT"]

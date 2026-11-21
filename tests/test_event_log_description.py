@@ -48,6 +48,25 @@ def test_set_read_clear_validate_and_delete():
         d.description(log)
 
 
+def test_a_failed_cleanup_rolls_the_whole_deletion_back(monkeypatch):
+    log = _log()
+    d.set_description(log, "keep me")
+    original = d.erase
+
+    def fail(conn, log_id):
+        original(conn, log_id)
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(d, "erase", fail)
+    with pytest.raises(RuntimeError):
+        workspace.delete_log(log)
+    assert [l["log_id"] for l in workspace.list_logs()["logs"]] == [log]
+    assert d.description(log)["description"] == "keep me"
+    monkeypatch.setattr(d, "erase", original)
+    workspace.delete_log(log)
+    assert workspace.list_logs()["logs"] == []
+
+
 def test_route_is_owner_only(tmp_path):
     code = r'''
 from io import BytesIO
