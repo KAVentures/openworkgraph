@@ -154,6 +154,13 @@ CREATE INDEX IF NOT EXISTS signal_transitions_by_log_time ON signal_transitions(
 """
 
 _SCHEMA += source_identity.SCHEMA + object_relationships.SCHEMA
+# Dated notes on a log's timeline (event_log_change_markers), such as "Automation went live".
+_SCHEMA += """
+CREATE TABLE IF NOT EXISTS change_markers (
+  log_id VARCHAR NOT NULL, marker_id VARCHAR NOT NULL, marked_at TIMESTAMP NOT NULL, label VARCHAR NOT NULL,
+  note VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL
+);
+"""
 # Analyst case tags (event_log_case_tags); declared here so case filters can always refer to them.
 _SCHEMA += """
 CREATE TABLE IF NOT EXISTS case_tags (
@@ -771,6 +778,8 @@ def delete_log(log_id: str) -> dict[str, Any]:
             erase_snapshots(log_id)
             from .event_log_saved_reports import erase as erase_saved_reports
             erase_saved_reports(log_id)
+            from .event_log_change_markers import erase_log as erase_change_markers
+            erase_change_markers(log_id)
             from .local_scheduler import forget_target
             for kind in ("event_log_signals", "event_log_report", "event_log_agent_runs"):
                 forget_target(kind, log_id)
