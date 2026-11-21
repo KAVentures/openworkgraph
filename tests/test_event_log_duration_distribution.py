@@ -73,6 +73,21 @@ def test_filtered_and_empty_populations_preserve_whole_cases():
     assert all(x is None for x in empty['observed_duration_seconds'].values())
 
 
+def test_duration_band_evidence_matches_counts_at_fractional_boundaries():
+    from server import event_log_cases as evidence
+    log = imported_log()
+    selection = {'duration': {'min': 0.1, 'max': 2.5}}
+    report = subject.distribution(log, [1, 2], cohort=selection)
+    expected = [['c1'], ['c2', 'c3'], ['c4']]
+    for band, keys in zip(report['bands'], expected):
+        duration = {'min': max(band['lower_seconds'], selection['duration']['min']),
+                    'max': min(band['upper_seconds'] or float('inf'), selection['duration']['max'])}
+        page = evidence.cases(log, {'cohort': {'duration': duration}})
+        assert page['selected_cases'] == band['cases']
+        assert [case['case_id'] for case in page['cases']] == keys
+        assert all(case['events'] == 2 for case in page['cases'])
+
+
 @pytest.mark.parametrize('thresholds', [None, [], [0], [-1], [1, 1], [2, 1], [True], [1.2],
                                       [1, '2'], [subject.MAX_CUTOFF_SECONDS + 1], list(range(1, 12))])
 def test_malformed_or_unbounded_thresholds_are_refused(thresholds):

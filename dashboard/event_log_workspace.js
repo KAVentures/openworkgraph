@@ -897,7 +897,7 @@
     results.append(activityBox,inspection.node);
     results.appendChild(kpiSection(names));
     results.appendChild(workInProgressSection());
-    results.appendChild(durationDistributionSection());
+    results.appendChild(durationDistributionSection(inspection));
     results.appendChild(batchingSection());
     results.appendChild(benchmarkSection(names));
     results.appendChild(timePatternSection(names));
@@ -1393,10 +1393,9 @@
       association=false;exactActivity.value='';activityLookup.reset();path=null;transition=value.slice();document.getElementById(prefix+'FilterActivity').value='';
       chosen.textContent='Adjacent transition: '+JSON.stringify(transition)+'. Timestamp ties do not verify order.';
       start();box.scrollIntoView({block:'nearest'});
-    },cohort(value){
-      // This selection uses the full case notion, not the active workspace filter.
-      path=null;transition=null;association=true;filterApplied=false;spec={cohort:value,limit:30};
-      chosen.textContent='Association cases: '+JSON.stringify(value)+'. This selection uses all cases in the current case notion. Browse cases uses the fields above instead.';
+    },cohort(value,description){
+      path=null;transition=null;association=true;filterApplied=Boolean(description)&&filterOn();spec={cohort:value,limit:30};
+      chosen.textContent=description||'Association cases: '+JSON.stringify(value)+'. This selection uses all cases in the current case notion. Browse cases uses the fields above instead.';
       detail.replaceChildren();opening++;load(null);box.scrollIntoView({block:'nearest'});
     }};
   }
@@ -3118,7 +3117,7 @@
     return box;
   }
 
-  function durationDistributionSection(){
+  function durationDistributionSection(inspection){
     const box=section('Case duration distribution');
     const bounds=input('owgDurationBounds','text','1, 4, 24, 72');bounds.value='1, 4, 24, 72';bounds.maxLength=110;
     const unit=select('owgDurationUnit',[['1','seconds'],['60','minutes'],['3600','hours'],['86400','days']]);unit.value='3600';
@@ -3128,7 +3127,7 @@
     const out=el('div');out.id='owgDurationResults';out.setAttribute('role','status');
     box.append(el('p','Count cases by time between their first and last recorded events. Enter up to 10 whole-number thresholds. This is observed elapsed time, not work time or proof of completion.','muted'),controls,out);
     let version=0;
-    function invalidate(){version++;out.replaceChildren(el('div','Thresholds changed. Analyse again to refresh these results.','muted'));}
+    function invalidate(){version++;run.disabled=false;out.replaceChildren(el('div','Thresholds changed. Analyse again to refresh these results.','muted'));}
     bounds.oninput=invalidate;unit.onchange=invalidate;
     function textFor(seconds){
       if(seconds%86400===0)return (seconds/86400)+' '+(seconds===86400?'day':'days');
@@ -3142,7 +3141,8 @@
       return textFor(b.lower_seconds)+' to less than '+textFor(b.upper_seconds);
     }
     run.onclick=async()=>{
-      const generation=state.generation,ticket=++version;run.disabled=true;
+      const generation=state.generation,ticket=++version,cohort=globalCohort();run.disabled=true;
+      const current=()=>generation===state.generation&&ticket===version&&box.isConnected;
       out.replaceChildren(el('div','Analysing duration distribution…','muted'));
       try{
         const parts=bounds.value.split(',').map(x=>x.trim()),multiplier=Number(unit.value);
@@ -3150,20 +3150,41 @@
         const cutoffs=parts.map(x=>Number(x)*multiplier);
         if(cutoffs.some((x,i)=>!Number.isSafeInteger(x)||x<1||x>3155760000||(i>0&&x<=cutoffs[i-1])))throw new Error('Thresholds must be positive, strictly increasing, and at most 100 years.');
         const r=await getJSON(logPath('duration-distribution',{cutoffs_seconds:cutoffs.join(',')}));
-        if(generation!==state.generation||ticket!==version||!box.isConnected)return;
+        if(!current())return;
         const exports=exportButtons('owgDurationDistribution',()=>r,()=>[
           ['lower_seconds_inclusive','upper_seconds_exclusive','cases','share'],
           ...r.bands.map(b=>[b.lower_seconds,b.upper_seconds,b.cases,b.share])]);exports.enable(true);
         const rows=r.bands.map(b=>{
           const share=el('div',b.share===null?'—':pct(b.share));
           if(b.share!==null){const bar=document.createElement('progress');bar.max=1;bar.value=b.share;bar.style.cssText='display:block;width:100%;max-width:200px';bar.setAttribute('aria-label',label(b)+': '+pct(b.share)+' of selected cases');share.appendChild(bar);}
-          return [label(b),Number(b.cases).toLocaleString(),share];
+          const title=label(b),actions=el('div',null,'row');
+          const inspect=button('Inspect cases','secondary'),filter=button('Use band as filter','secondary');
+          inspect.setAttribute('aria-label','Inspect cases with duration '+title);
+          filter.setAttribute('aria-label','Use duration band '+title+' as filter');
+          inspect.disabled=filter.disabled=b.cases===0;
+          if(b.cases){
+            const duration={min:b.lower_seconds};
+            if(b.upper_seconds!==null)duration.max=b.upper_seconds;
+            const selection=mergeActiveCohort({duration},cohort);
+            inspect.onclick=()=>{if(current())inspection.cohort(selection,'Observed duration: '+title+'.');};
+            filter.onclick=async()=>{
+              if(!current())return;
+              state.attr={...state.attr,duration:selection.duration};
+              const refresh=analyse(),appliedGeneration=state.generation;
+              try{
+                await refresh;
+                if(appliedGeneration===state.generation)document.getElementById('owgCaseFilter')?.scrollIntoView({block:'nearest'});
+              }catch(error){if(appliedGeneration===state.generation)status(error.message);}
+            };
+          }
+          actions.append(inspect,filter);
+          return [title,Number(b.cases).toLocaleString(),share,actions];
         });
         const scope=r.cases_before_filter==null?'':(' Filter applied: '+Number(r.cases).toLocaleString()+' of '+Number(r.cases_before_filter).toLocaleString()+' cases.');
         out.replaceChildren(el('p',Number(r.cases).toLocaleString()+' selected cases with retained events; '+Number(r.single_event_cases).toLocaleString()+' contain only one retained event.'+scope,'muted'),
-          table(['Observed duration','Cases','Share of selected cases'],rows),el('p',r.interpretation,'muted'),exports.node);
-      }catch(error){if(generation===state.generation&&ticket===version&&box.isConnected)out.replaceChildren(el('div',error.message,'muted'));}
-      finally{if(box.isConnected)run.disabled=false;}
+          table(['Observed duration','Cases','Share of selected cases','Cases and filters'],rows),el('p',r.interpretation,'muted'),exports.node);
+      }catch(error){if(current())out.replaceChildren(el('div',error.message,'muted'));}
+      finally{if(current())run.disabled=false;}
     };
     return box;
   }
