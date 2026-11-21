@@ -287,6 +287,7 @@ PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_overv
                  "get_process_deviation_causes",
                  "align_process_case",
                  "get_process_brief",
+                 "get_process_intervention_impact",
                  "get_process_model_change",
                  "compare_process_models",
                  "compare_process_cases",

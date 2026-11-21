@@ -62,6 +62,7 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 | `simulate_process_scenario` | What-if simulation calibrated from the log: baseline and scenario (arrivals, activity times, resources, paths, calendar, pools, priorities) with shared random numbers, cycle time, waiting and utilization for both, and optionally replications for uncertainty. At most 5,000 cases and 20 replications; calibrated paths are not returned. | aggregates |
 | `get_process_decision_rules` | Without `activity`: the decision points and their branches. With `activity`: rules learned from data recorded at or before it, with held-out accuracy against the majority baseline (aggregates level). See "Decision rules" in EVENT_LOG_WORKSPACE.md. |
 | `get_process_temporal_profile` | For each ordered pair of activities, the mean and standard deviation of the time between them and how many occurrences deviate by more than `zeta` standard deviations, slower or faster (aggregates level, no case IDs). See "Temporal profile" in EVENT_LOG_WORKSPACE.md. |
+| `get_process_intervention_impact` | Before/after impact of a change on cycle time, rework, SLA breach or an activity's count per case, with bootstrap intervals, an optional treated/control difference-in-differences and a placebo check. Periods with fewer than 10 cases show only their count. | aggregates |
 | `get_process_heuristics_net` | The heuristics-miner model: arrows whose dependency is at or above `dependency_threshold`, splits and joins marked AND or XOR, and self- and two-step loops (aggregates level). See "Heuristics net" in EVENT_LOG_WORKSPACE.md. |
 | `get_process_footprints` | Footprint matrices (→, ←, ||, #) from the recorded cases and from the discovered model, the share of cells that agree, and the orderings only the log has (with case counts) or only the model allows (aggregates level). See "Footprints" in EVENT_LOG_WORKSPACE.md. |
 | `get_process_model_quality` | Fitness, precision, their F-score, generalization and simplicity of the discovered net at several noise levels (default 0, 0.1, 0.2, 0.3, 0.5), and the level with the best F-score, to choose a noise level before asking for the model (aggregates level). See "Model quality" in EVENT_LOG_WORKSPACE.md. |
@@ -105,6 +106,7 @@ nothing authorizes an action.
 | --- | --- |
 | `GET/POST /v1/event-logs/{log_id}/agent-share` (`{"level": "aggregates" \| "cases" \| null}`) | Dashboard session only. |
 | `GET /v1/process-intelligence/logs` | Local AI bearer (with AI access on) or dashboard. |
+| `POST /v1/process-intelligence/{log_id}/impact` (`{"intervention_at", "metric"?, "activity"?, "sla_hours"?, "window_days"?, "exclude_recent_days"?, "exclude_spanning"?, "treated"?, "control"?, "case_type"?}`) | Agent, `aggregates` or `cases`. |
 | `GET /v1/process-intelligence/{log_id}/overview?case_type=&sla_hours=` | Same, `aggregates` or `cases`. |
 | `GET /v1/process-intelligence/{log_id}/root-cause?outcome=&hours=&activity=&case_type=` | Same, `aggregates` or `cases`. |
 | `GET /v1/process-intelligence/{log_id}/case?case_id=&case_type=` | Same, `cases` only. |
