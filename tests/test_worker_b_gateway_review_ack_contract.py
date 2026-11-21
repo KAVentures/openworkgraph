@@ -55,3 +55,25 @@ def test_revoked_or_stale_inspected_review_consumes_human_confirmation():
     stale = stale.split('resetHandoff("REFUSED: Reviewed handoff is no longer current', 1)[0]
     assert '$("reviewConfirm").checked=false;' in stale
     assert block.index('resetHandoff("REFUSED: Reviewed handoff is no longer current') < block.index('"/reviews"')
+
+
+def test_agent_project_export_revalidates_latest_reviewed_revision():
+    """Executable SDK downloads require a fresh authenticated Gateway read."""
+    source = (Path(__file__).resolve().parents[1] / "gateway" / "processes.html").read_text()
+    block = source.split("async function download(format) {", 1)[1].split("const response = await fetch(", 1)[0]
+    assert 'if (format === "agent-project")' in block
+    assert 'const current = await call("/v1/human/processes/"' in block
+    for guard in (
+        "identityTicket !== identityGeneration",
+        "credential !== authorizedCredential",
+        "selected !== selection",
+        "current.archived",
+        "current.viewing_historical_revision",
+        "current.process.workflow_id !== record.workflow_id",
+        "current.process.revision !== record.revision",
+        "current.latest_revision !== record.revision",
+        "current.process.content_sha256 !== record.content_sha256",
+        'current.review?.status !== "reviewed_design"',
+    ):
+        assert guard in block
+    assert block.index('current.review?.status !== "reviewed_design"') < block.index("throw new Error")
