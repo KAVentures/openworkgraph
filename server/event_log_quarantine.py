@@ -5,8 +5,8 @@ mapped fields (case, activity, time text, resource, kept attributes) of up to
 ``MAX_QUARANTINED_ROWS`` rejected rows per batch, with the reasons they were rejected. They
 are stored on this computer next to the log and deleted with it.
 
-A *release* applies one explicit decision — the UTC offset to assume for times written without
-one — and appends the rows that become valid as a new batch through the normal append path,
+A *release* applies an explicit timestamp format or UTC offset decision and appends the rows
+that become valid as a new batch through the normal append path,
 so duplicates are skipped and the batch gets its own quality report recording the decision.
 Rows that still fail stay quarantined. A *discard* deletes rows. Both decisions are recorded.
 Nothing is released automatically, and no other value in a row is changed.
@@ -26,8 +26,8 @@ MAX_PAGE = 100
 MAX_WORK_ROWS = 10_000
 MAX_WORK_BYTES = 32 * 1024 * 1024
 REVIEW_NOTE = ("Rejected rows are kept only because this was chosen at import or append. They hold the mapped "
-               "values as supplied and are deleted with the log. Releasing assumes the chosen UTC offset for "
-               "times without one; it does not verify that the assumption is right.")
+               "values as supplied and are deleted with the log. Release uses the chosen timestamp format and "
+               "any assumed UTC offset for times without one.")
 
 
 def _batch(value: Any) -> int | None:
@@ -155,38 +155,53 @@ def _rows(conn, log_id: str, batch: int | None, start: int | None = None,
         [log_id, *params]).fetchall()]
 
 
-def _eligible(conn, rows: list[tuple[int, int, dict[str, Any]]], offset: str) -> set[tuple[int, int]]:
+def _timestamp_decision(body: dict[str, Any]) -> tuple[str, str]:
+    for key in ("timestamp_format", "naive_timestamp_offset"):
+        if body.get(key) is not None and not isinstance(body[key], str):
+            raise workspace.EventLogWorkspaceError(f"{key} must be a string")
+    try:
+        offset = workspace.naive_offset(body)
+        pattern = workspace.timestamp_format(body)
+    except workspace.EventLogFormatError as exc:
+        raise workspace.EventLogWorkspaceError(str(exc)) from None
+    if workspace.timestamp_formats.has_offset(pattern):
+        if offset:
+            raise workspace.EventLogWorkspaceError("leave the assumed offset blank when the timestamp format includes %z")
+    elif not offset:
+        raise workspace.EventLogWorkspaceError("choose the UTC offset to assume for times written without one")
+    return offset, pattern
+
+
+def _eligible(conn, rows: list[tuple[int, int, dict[str, Any]]], offset: str, pattern: str) -> set[tuple[int, int]]:
     """Use the exact importer timestamp predicate for both preview and release."""
-    conn.execute("CREATE OR REPLACE TEMP TABLE qrel (batch INTEGER, row_n BIGINT, c VARCHAR, a VARCHAR, t VARCHAR)")
-    conn.executemany("INSERT INTO qrel VALUES (?, ?, ?, ?, ?)",
-                     [(b, n, v["case"], v["activity"], v["time"]) for b, n, v in rows])
-    return {(b, n) for b, n in conn.execute(f"""SELECT batch, row_n FROM qrel WHERE trim(c) <> ''
-        AND trim(a) <> '' AND ({workspace.timestamp_sql('t', offset)}) IS NOT NULL""").fetchall()}
+    columns = list(zip(*[(b, n, v["case"], v["activity"], v["time"]) for b, n, v in rows]))
+    return set(conn.execute(f"""SELECT batch, row_n FROM (
+        SELECT unnest(?::INTEGER[]) AS batch, unnest(?::BIGINT[]) AS row_n,
+               unnest(?::VARCHAR[]) AS c, unnest(?::VARCHAR[]) AS a, unnest(?::VARCHAR[]) AS t
+        ) WHERE trim(c) <> '' AND trim(a) <> ''
+        AND ({workspace.timestamp_sql('t', offset, pattern)}) IS NOT NULL""", columns).fetchall())
 
 
 def _fingerprint(log_id: str, batch: int | None, offset: str,
                  rows: list[tuple[int, int, dict[str, Any]]],
-                 start: int | None = None, end: int | None = None) -> str:
+                 start: int | None = None, end: int | None = None, pattern: str = "") -> str:
     """Counts-only optimistic concurrency token; not an authentication credential."""
     content = {"version": 1, "log_id": log_id, "batch": batch,
                "naive_timestamp_offset": offset, "rows": rows}
     if start is not None:
         content.update(row_start=start, row_end=end)
+    if pattern:
+        content["timestamp_format"] = pattern
     payload = json.dumps(content, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def preview(log_id: str, body: Any) -> dict[str, Any]:
     """Read-only, session-gated release preview; never expose row contents."""
-    if not isinstance(body, dict) or set(body) - {"naive_timestamp_offset", "batch", "row_start", "row_end"}:
-        raise workspace.EventLogWorkspaceError("a preview accepts naive_timestamp_offset, optional batch and optional row range")
+    if not isinstance(body, dict) or set(body) - {"naive_timestamp_offset", "timestamp_format", "batch", "row_start", "row_end"}:
+        raise workspace.EventLogWorkspaceError("a preview accepts a timestamp format, assumed offset, optional batch and optional row range")
     batch, start, end = _selection(body)
-    try:
-        offset = workspace.naive_offset({"naive_timestamp_offset": body.get("naive_timestamp_offset") or ""})
-    except workspace.EventLogFormatError as exc:
-        raise workspace.EventLogWorkspaceError(str(exc)) from None
-    if not offset:
-        raise workspace.EventLogWorkspaceError("choose the UTC offset to assume for times written without one")
+    offset, pattern = _timestamp_decision(body)
     with workspace._LOCK:
         conn = workspace._connect()
         try:
@@ -194,12 +209,13 @@ def preview(log_id: str, body: Any) -> dict[str, Any]:
             rows = _rows(conn, log_id, batch, start, end)
             if not rows:
                 raise workspace.EventLogWorkspaceError("no rejected rows are kept for this log or batch")
-            eligible = _eligible(conn, rows, offset)
-            fingerprint = _fingerprint(log_id, batch, offset, rows, start, end)
+            eligible = _eligible(conn, rows, offset, pattern)
+            fingerprint = _fingerprint(log_id, batch, offset, rows, start, end, pattern)
         finally:
             conn.close()
     return {"format": "openworkgraph.quarantine-release-preview.v1",
             "batch": batch, "row_start": start, "row_end": end, "naive_timestamp_offset": offset,
+            **({"timestamp_format": pattern} if pattern else {}),
             "rows_considered": len(rows), "rows_eligible": len(eligible),
             "rows_still_rejected": len(rows) - len(eligible),
             "expected_preview_sha256": fingerprint,
@@ -211,19 +227,14 @@ def preview(log_id: str, body: Any) -> dict[str, Any]:
 
 
 def release(log_id: str, body: Any) -> dict[str, Any]:
-    if not isinstance(body, dict) or set(body) - {"naive_timestamp_offset", "batch", "row_start", "row_end", "expected_preview_sha256"}:
-        raise workspace.EventLogWorkspaceError("a release accepts naive_timestamp_offset, optional batch, row range and preview SHA-256")
+    if not isinstance(body, dict) or set(body) - {"naive_timestamp_offset", "timestamp_format", "batch", "row_start", "row_end", "expected_preview_sha256"}:
+        raise workspace.EventLogWorkspaceError("a release accepts a timestamp format, assumed offset, optional batch, row range and preview SHA-256")
     batch, start, end = _selection(body)
     expected = body.get("expected_preview_sha256")
     if expected is not None and (not isinstance(expected, str) or len(expected) != 64
                                  or any(c not in "0123456789abcdef" for c in expected)):
         raise workspace.EventLogWorkspaceError("expected_preview_sha256 must be a lowercase SHA-256 digest")
-    try:
-        offset = workspace.naive_offset({"naive_timestamp_offset": body.get("naive_timestamp_offset") or ""})
-    except workspace.EventLogFormatError as exc:
-        raise workspace.EventLogWorkspaceError(str(exc)) from None
-    if not offset:
-        raise workspace.EventLogWorkspaceError("choose the UTC offset to assume for times written without one")
+    offset, pattern = _timestamp_decision(body)
     with workspace._LOCK:
         conn = workspace._connect()
         try:
@@ -231,12 +242,13 @@ def release(log_id: str, body: Any) -> dict[str, Any]:
             rows = _rows(conn, log_id, batch, start, end)
             if not rows:
                 raise workspace.EventLogWorkspaceError("no rejected rows are kept for this log or batch")
-            if expected is not None and expected != _fingerprint(log_id, batch, offset, rows, start, end):
+            if expected is not None and expected != _fingerprint(log_id, batch, offset, rows, start, end, pattern):
                 raise workspace.EventLogWorkspaceError("quarantine changed since preview; preview again before release")
-            valid = _eligible(conn, rows, offset)
+            valid = _eligible(conn, rows, offset, pattern)
         finally:
             conn.close()
         decision = {"kind": "release", "naive_timestamp_offset": offset, "batch": batch,
+                    **({"timestamp_format": pattern} if pattern else {}),
                     **({"row_start": start, "row_end": end} if start is not None else {}),
                     "rows_considered": len(rows), "rows_released": len(valid)}
         result: dict[str, Any] = {}
@@ -252,7 +264,7 @@ def release(log_id: str, body: Any) -> dict[str, Any]:
                                      *[v["attributes"].get(k, "") for k in attributes]])
             mapping = {"case_column": "case", "activity_column": "activity", "timestamp_column": "time",
                        "resource_column": "resource", "attribute_columns": attributes,
-                       "naive_timestamp_offset": offset}
+                       "naive_timestamp_offset": offset, "timestamp_format": pattern}
             result = workspace.append_log(log_id, io.BytesIO(text.getvalue().encode()), source_format="csv",
                                           mapping=mapping, kind="quarantine_release")
             decision.update(appended_batch=result["batch"], events_added=result["added_events"],
@@ -263,8 +275,11 @@ def release(log_id: str, body: Any) -> dict[str, Any]:
             # interrupted, releasing again appends nothing new because duplicates are skipped.
             conn.execute("BEGIN")
             if valid:
-                conn.executemany("DELETE FROM quarantine WHERE log_id = ? AND batch = ? AND row_n = ?",
-                                 [(log_id, b, n) for b, n in sorted(valid)])
+                batches, positions = zip(*valid)
+                conn.execute("""DELETE FROM quarantine AS q USING (
+                    SELECT unnest($1::INTEGER[]) AS batch, unnest($2::BIGINT[]) AS row_n
+                ) AS released WHERE q.log_id = $3 AND q.batch = released.batch AND q.row_n = released.row_n""",
+                             [batches, positions, log_id])
             decision["rows_still_kept"] = conn.execute("SELECT count(*) FROM quarantine WHERE log_id = ?",
                                                        [log_id]).fetchone()[0]
             _record(conn, log_id, decision)
