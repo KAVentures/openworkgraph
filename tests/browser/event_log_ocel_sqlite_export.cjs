@@ -38,7 +38,15 @@ c=sqlite3.connect(sys.argv[1])
 print(c.execute('SELECT count(*) FROM event').fetchone()[0],c.execute('SELECT count(*) FROM event_object').fetchone()[0],sorted(t for (t,) in c.execute("SELECT ocel_type_map FROM event_map_type")))`,file]).toString().trim();
    assert.equal(counts,"8 8 ['Pay', 'Receive']");
    await page.locator('#owgEventLogStatus').filter({hasText:'Export ready.'}).waitFor();
+   // The same log as an Excel workbook, read back by the workspace's own .xlsx reader.
+   await page.locator('#owgEventLogExportFormat').selectOption('xlsx');
+   const [book]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogExport').click()]);
+   assert.match(book.suggestedFilename(),/\.xlsx$/);
+   const sheet=execFileSync(python,['-c',`import sys
+from server import event_log_xlsx as r
+print(r.to_csv(open(sys.argv[1],'rb'))['csv'].splitlines()[:2])`,await book.path()]).toString().trim();
+   assert.equal(sheet,"['case_id,activity,timestamp,resource', 'c0,Receive,2024-03-01T08:00:00Z,']");
    assert.deepEqual(errors,[]);
-   console.log('OCEL SQLite export browser acceptance passed: standard tables with every event and link.');
+   console.log('OCEL SQLite and Excel export browser acceptance passed: standard tables with every event and link; workbook reads back to the CSV rows.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});
