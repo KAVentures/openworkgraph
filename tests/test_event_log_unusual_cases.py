@@ -55,6 +55,28 @@ def test_each_signal_is_found_and_explained():
     assert all(0 < x["strength"] <= 1 for c in r["top"] for x in c["reasons"])
 
 
+def test_reason_filter_pages_ranked_matches_without_changing_baseline():
+    cases = [_normal(i) for i in range(50)]
+    cases += [(f"odd-{i:02d}", [("Open", 0), (f"Escalate {i}", 60), ("Close", 120)]) for i in range(30)]
+    log = _import(cases)
+    baseline = uc.unusual_cases(log)
+    first = uc.unusual_cases(log, signal="rare_activity", limit=25)
+    assert first["baseline"] == baseline["baseline"]
+    assert first["by_signal"] == baseline["by_signal"] and first["unusual_cases"] == baseline["unusual_cases"]
+    assert first["page"] == {"signal": "rare_activity", "total": 30, "offset": 0, "limit": 25, "next_offset": 25}
+    second = uc.unusual_cases(log, signal="rare_activity", offset=first["page"]["next_offset"])
+    assert second["page"]["next_offset"] is None
+    assert [case["case_id"] for case in first["top"] + second["top"]] == [f"odd-{i:02d}" for i in range(30)]
+    assert uc.unusual_cases(log, signal="heavy_rework")["top"] == []
+    assert uc.unusual_cases(log, signal="rare_activity", offset=60)["page"]["next_offset"] is None
+
+
+@pytest.mark.parametrize("options", [{"signal": "none"}, {"signal": []}, {"offset": -1}, {"offset": True}])
+def test_rejects_invalid_review_filters(options):
+    with pytest.raises(EventLogWorkspaceError):
+        uc.unusual_cases("not-read", **options)
+
+
 def test_case_ids_can_be_withheld_and_limits_hold():
     cases = [_normal(i) for i in range(30)] + [("odd", [("Open", 0), ("Escalate", 5), ("Close", 9)])]
     log = _import(cases)
