@@ -71,3 +71,18 @@ def test_source_account_unavailable_fails_closed(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
     assert exc.value.status_code == 403
+
+
+def test_provider_account_replacement_during_read_denies_verdict(monkeypatch):
+    """A source switch during provider I/O must not disclose old-account evidence."""
+    install(monkeypatch)
+    from server import local_source_credentials
+    from server import open_work_provider_attempt_verification as verifier
+    accounts = iter(["acct_12345678", "acct_87654321"])
+    monkeypatch.setattr(local_source_credentials, "_read_metadata",
+                        lambda path: {"account": next(accounts)})
+    monkeypatch.setattr(verifier, "verify_provider_attempt",
+                        lambda **kwargs: {"status": "verified_provider_event"})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
+    assert exc.value.status_code == 409
