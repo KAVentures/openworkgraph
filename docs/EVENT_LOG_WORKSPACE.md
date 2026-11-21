@@ -2437,6 +2437,15 @@ appended to go deeper.
 
 ## Due dates
 
+Use **Inspect cases** next to a deadline group to view its case keys, due and completion times,
+and links to event history. The dashboard-only `GET /v1/event-logs/{log_id}/due-dates/cases`
+takes the due-date settings and case filter from the summary, plus `due_group`. Send the returned
+`next_after` as `after` to continue in literal case-key order. The optional `limit` is 1–100
+(default 50), and each page reflects the current log.
+
+Case filters choose which cases appear. Open cases are evaluated at the latest event in the
+selected case notion, so filtering to cases that are still open preserves the observation cutoff.
+
 **Due dates** checks whether the step that matters, such as *Pay invoice* or *Ship order*, happened
 by the date it was due, as UiPath Process Mining's due dates and Celonis's on-time views do. The due
 date is either an attribute (a joined case attribute, or else the first value of an event attribute in

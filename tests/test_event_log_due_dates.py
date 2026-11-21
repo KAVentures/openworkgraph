@@ -54,6 +54,30 @@ def test_groups_from_a_due_date_attribute():
     assert dd.due_dates(log, "Pay", due_attribute="due")["groups"]["on_time"] == 2
 
 
+def test_due_case_pages_share_summary_classification_and_keep_literal_keys():
+    log = _import(ROWS + [(" b literal ", "Invoice", "2024-03-01T09:00:00Z", "2024-03-05"),
+                          (" b literal ", "Pay", "2024-03-08T12:00:00Z", ""),
+                          ("overflow", "Invoice", "2024-03-01T09:00:00Z", "9999-12-31")])
+    options = {"due_attribute": "due", "early_days": 7}
+    summary = dd.due_dates(log, "Pay", **options)
+    for group in dd.GROUPS:
+        page = dd.due_cases(log, "Pay", group=group, **options)
+        assert page["total"] == len(page["cases"]) == summary["groups"][group]
+    first = dd.due_cases(log, "Pay", group="late", limit=1, **options)
+    assert first["next_after"] == " b literal "
+    assert first["cases"][0]["days_from_due"] == 2.5
+    second = dd.due_cases(log, "Pay", group="late", after=first["next_after"], limit=1, **options)
+    assert second["cases"][0]["case_id"] == "b" and second["next_after"] is None
+    overdue = dd.due_cases(log, "Pay", group="open_overdue", **options)["cases"]
+    assert overdue == [{"case_id": "d", "done_at": None, "due_at": "2024-03-16T00:00:00Z", "days_from_due": None}]
+
+
+@pytest.mark.parametrize("options", [{"group": "unknown"}, {"limit": True}, {"after": ""}, {"limit": 101}])
+def test_due_case_pages_reject_invalid_queries(options):
+    with pytest.raises(EventLogWorkspaceError):
+        dd.due_cases("not-read", "Pay", **{"group": "late", "due_days": 1, **options})
+
+
 def test_fixed_days_after_start_and_withheld_ids():
     log = _import(ROWS)
     r = dd.due_dates(log, "Pay", due_days=5, include_case_ids=False)
@@ -61,6 +85,16 @@ def test_fixed_days_after_start_and_withheld_ids():
     assert r["groups"]["late"] == 2 and r["groups"]["on_time"] == 3
     assert r["groups"]["open_overdue"] == 1 and r["groups"]["open_not_due"] == 1
     assert r["groups"]["no_due_date"] == 0 and r["most_late_cases"] is None
+
+
+def test_all_open_cohort_uses_the_case_notions_observation_end():
+    log = _import(ROWS + [("marker", "Pay", "2024-05-02T00:00:00Z", "")])
+    options = {"due_attribute": "due", "cohort": {"without_activity": "Pay"}}
+    summary = dd.due_dates(log, "Pay", **options)
+    assert summary["groups"]["open_overdue"] == 2
+    page = dd.due_cases(log, "Pay", group="open_overdue", **options)
+    assert page["log_end"] == summary["log_end"] == "2024-05-02T00:00:00Z"
+    assert [row["case_id"] for row in page["cases"]] == ["d", "e"]
 
 
 def test_bad_requests():
