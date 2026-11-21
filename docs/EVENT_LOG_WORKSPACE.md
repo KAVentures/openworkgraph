@@ -284,6 +284,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-log-domain-packs`, `GET/POST/DELETE /v1/event-logs/{log_id}/domain-packs/…` | Versioned domain packs (order to cash): map the pack's roles to the log's names, install with version and parameters, run its metrics, rules and reference model as one report. See [DOMAIN_PACKS.md](DOMAIN_PACKS.md). |
 | `GET /v1/event-logs/{log_id}/object-attributes` | Per object type and attribute, how timed values change and how many event links happened while another value than the stored one held; `object_id` adds one object's timeline. |
 | `GET /v1/event-logs/{log_id}/variants` | Most frequent variants with share and median duration. |
+| `GET /v1/event-logs/{log_id}/variants.csv` | Every variant (up to 10,000) as spreadsheet-safe CSV: rank, path (activities joined with ` > `), steps, cases, share, running share, median and 90th-percentile duration in seconds; honours the case filter. The dashboard's **Download all variants (CSV)** under *Most common variants* saves it; the `X-OWG-Variants` header says when the list was cut. |
 | `GET /v1/event-logs/{log_id}/directly-follows` | Directly-follows graph with start and end activities. |
 | `GET /v1/event-logs/{log_id}/activities` | Activity frequency and rework (cases that repeat the activity). |
 | `POST /v1/event-logs/{log_id}/attribute-profile` | Coverage, type, level and frequent values of every event attribute (below). |
@@ -2176,9 +2177,13 @@ performance and variation filters:
 * **Case tag**: keeps the cases that carry a tag (`tag`) or that do not (`without_tag`), for
   example everything except the cases tagged as not fitting a reference net. Tags come from *Case
   tags*, unusual cases, alignments and root-cause results.
+* **Case never does activity**: `without_activity` keeps the cases in which an activity never
+  occurs. It is the opposite of *contains activity*, for example every case without an
+  escalation, or (combined with *contains activity*) the cases that were approved but never
+  shipped. The label must match exactly.
 
 In a JSON cohort they are `ended_from`, `ended_before`, `events: {"min": n, "max": n}`,
-`path_cases: {"min": n, "max": n}`, `rework: true|false`, `tag` and `without_tag`. They combine with every other
+`path_cases: {"min": n, "max": n}`, `rework: true|false`, `tag`, `without_tag` and `without_activity`. They combine with every other
 condition, apply to the same views, and are kept by saved filters.
 
 The case pickers inside individual sections take the same numeric range, under "Numeric case
