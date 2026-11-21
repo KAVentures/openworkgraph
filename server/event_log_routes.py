@@ -2397,6 +2397,14 @@ async def event_log_activity_mappings(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.get("/v1/event-logs/{log_id}/activity-label-suggestions")
+def event_log_activity_label_suggestions(request: Request, log_id: str):
+    """Groups of original activity names that are probably the same activity (mapping suggestions)."""
+    from . import event_log_label_suggestions as labels
+    _require_dashboard(request)
+    return _respond(labels.suggestions, log_id)
+
+
 @router.post("/v1/event-logs/{log_id}/activity-mappings")
 async def event_log_create_activity_mapping(request: Request, log_id: str):
     from . import event_log_activity_mappings as activity_mappings
