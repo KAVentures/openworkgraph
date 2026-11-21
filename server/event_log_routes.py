@@ -506,6 +506,33 @@ async def retry_one_event_log_feed_file(request: Request, feed_id: str, sha256: 
     return await run_in_threadpool(_respond, folder_feeds.run, feed_id, retry_failed=True, retry_hash=sha256)
 
 
+@router.post("/v1/event-logs/{log_id}/case-table/export")
+async def export_case_table(request: Request, log_id: str):
+    from . import event_log_case_table as case_table
+
+    _require_dashboard(request)
+    spec = await _json_body(request, "case table export settings", strict=True, limit=32768)
+
+    def prepare():
+        handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="", suffix=".csv",
+                                             dir=str(DATA_DIR), delete=False)
+        try:
+            with handle:
+                case_table.export(log_id, spec, handle)
+        except BaseException:
+            os.unlink(handle.name)
+            raise
+        return handle.name
+
+    try:
+        filename = await run_in_threadpool(prepare)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    suffix = "review.csv" if spec.get("spreadsheet_review") is True else "csv"
+    return FileResponse(filename, media_type="text/csv", filename=f"{log_id}-case-table.{suffix}",
+                        headers={"Cache-Control": "no-store"}, background=BackgroundTask(os.unlink, filename))
+
+
 @router.post("/v1/event-logs/{log_id}/case-attributes")
 async def add_case_attributes(
     request: Request, log_id: str,
