@@ -83,6 +83,10 @@ def test_provider_read_rechecks_review_and_keeps_customer_outcome_unknown(monkey
     assert result["run_ref"] == "run-1"
     assert result["customer_outcome"] == "unknown"
     assert result["customer_outcome_verified"] is False
+    # A fresh invoice-state comparison is not an exact provider event
+    # independently correlated to the retained agent attempt.
+    assert result["provider_state_rechecked_on_this_read"] is True
+    assert result["provider_event_independently_rechecked_on_this_read"] is False
     assert result["agent_execution_authorized"] is False
 
 
