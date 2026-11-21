@@ -2350,6 +2350,21 @@ step is an association, not proof that the step causes it.
 `GET /v1/event-logs/{log_id}/activity-profile?profile_activity=Check` plus the case-filter
 parameters (`activity` there is the case filter). Agents use `get_process_activity_profile`.
 
+## Activities that happen together
+
+**Activities that happen together** compares the most common activities (8, 12 or 20) by the
+cases they occur in, in any order. The matrix reads row by row: of the cases with the activity in
+the row, the share that also have the one in the column. Hover a cell for the number of cases and
+the **lift**: cases with both × all cases / (cases with the first × cases with the second). Above 1,
+the two go together more than chance would give; 0 means they never occur in the same case.
+
+Below the matrix are the pairs that **go together most** (lift above 1, with at least 5 cases with
+both) and the pairs of activities, each in at least 5 cases, that are **never in the same case**.
+The second list often shows alternative branches, such as approve and reject. The view honours the
+case filter. `GET /v1/event-logs/{log_id}/co-occurrence?limit=12&min_support=5` (plus `case_type`
+and the case-filter parameters) needs the dashboard session. Co-occurrence describes the recorded
+cases; two activities that go together need not depend on each other.
+
 ## Path explorer
 
 **Path explorer** walks the process one step at a time, as Celonis's Process Explorer and the variant

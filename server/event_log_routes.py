@@ -1202,6 +1202,17 @@ def event_log_similar_cases(request: Request, log_id: str, case_id: str = Query(
     return _respond(similar.similar_cases, log_id, case_id, case_type, limit=limit, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/co-occurrence")
+def event_log_cooccurrence(request: Request, log_id: str, limit: int = Query(default=12, ge=2, le=25),
+                           min_support: int = Query(default=5, ge=1, le=10 ** 6),
+                           case_type: str | None = Query(default=None, max_length=200),
+                           cohort: dict = Depends(_case_filter)):
+    """Which of the most common activities happen in the same cases, regardless of order."""
+    from . import event_log_cooccurrence as co
+    _require_dashboard(request)
+    return _respond(co.cooccurrence, log_id, case_type, limit=limit, min_support=min_support, cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/activity-profile")
 def event_log_activity_profile(request: Request, log_id: str,
                                profile_activity: str = Query(min_length=1, max_length=500),
