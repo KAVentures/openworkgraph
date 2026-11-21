@@ -49,6 +49,8 @@ Celonis also offers this kind of write-back. Here it is opt-in and narrow:
 These tools are listed once at least one log is shared. Connected apps see them after their next
 restart. If every share is revoked, the tools stay listed but empty until that restart.
 
+**Stop sharing every log** (in *Share with AI agents*, after a confirmation) withdraws every share and every tag permission at once, for all logs. Only the owner's dashboard can do this. Agents can neither stop nor start sharing.
+
 | Tool | Answers |
 | --- | --- |
 | `list_process_logs` | Shared logs: id, name, level, size, case notions, whether agents may tag cases. |
@@ -104,6 +106,7 @@ nothing authorizes an action.
 | Route | Who |
 | --- | --- |
 | `GET/POST /v1/event-logs/{log_id}/agent-share` (`{"level": "aggregates" \| "cases" \| null}`) | Dashboard session only. |
+| `POST /v1/process-intelligence/stop-sharing` | Dashboard session only: stops sharing every log and removes every tag permission; returns the names of the logs that were shared. |
 | `GET /v1/process-intelligence/logs` | Local AI bearer (with AI access on) or dashboard. |
 | `GET /v1/process-intelligence/{log_id}/overview?case_type=&sla_hours=` | Same, `aggregates` or `cases`. |
 | `GET /v1/process-intelligence/{log_id}/root-cause?outcome=&hours=&activity=&case_type=` | Same, `aggregates` or `cases`. |

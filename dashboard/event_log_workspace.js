@@ -1859,6 +1859,18 @@
       try{show(await (await api(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({level:level.value||null})})).json());}
       catch(error){out.textContent=error.message;}
     };
+    // One action that withdraws every share at once, for every log.
+    const stopAll=button('Stop sharing every log','secondary');stopAll.id='owgAgentShareStopAll';
+    const stopOut=el('div');stopOut.id='owgAgentShareStopAllStatus';stopOut.setAttribute('role','status');
+    box.append(stopAll,stopOut);
+    stopAll.onclick=async()=>{
+      if(!window.confirm('Stop sharing every event log with AI agents, including tag permissions?'))return;
+      stopAll.disabled=true;
+      try{const r=await (await api('/v1/process-intelligence/stop-sharing',{method:'POST'})).json();
+        stopOut.textContent=r.stopped?'Stopped sharing '+r.stopped+' log'+(r.stopped===1?'':'s')+': '+r.logs.join(', ')+'. '+r.note:'No log was shared with AI agents.';
+        show(await getJSON(base));}
+      catch(error){stopOut.textContent=error.message;}
+      finally{stopAll.disabled=false;}};
     return box;
   }
 
