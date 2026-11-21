@@ -3341,7 +3341,11 @@ async def read_local_bound_provider_review(request: Request, response: Response)
         "provider_check_persisted": bool(persist),
         "persisted_evidence_scope": "case_provider_ledger" if persist else None,
         "persisted_evidence_is_independent_attempt_receipt": False,
-        "provider_event_independently_rechecked_on_this_read": True,
+        # The Stripe invoice-state read does not return an exact provider event
+        # correlated to the retained agent attempt. Do not advertise an
+        # independent event receipt even when invoice state is confirmed.
+        "provider_event_independently_rechecked_on_this_read": False,
+        "provider_state_rechecked_on_this_read": True,
         "provider_operation_not_agent_causality": True,
         "customer_outcome_verified": False,
         "customer_outcome": "unknown",
