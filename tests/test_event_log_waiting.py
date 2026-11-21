@@ -75,6 +75,24 @@ def test_lifecycle_pairs_split_processing_from_waiting():
     assert result["flow_efficiency"]["median"] == pytest.approx(3.5 / 5.5)
 
 
+
+def test_only_unfinished_activity_remains_visible_with_zero_coverage():
+    log = _import(["case", "activity", "time", "lifecycle:transition"], [
+        ("x", "Unfinished", _at(0, 0), "start"),
+        ("y", "Unfinished", _at(1, 0), "start"),
+        ("z", "Finished", _at(2, 0), "start"),
+        ("z", "Finished", _at(2, 1), "complete"),
+    ])
+    result = waiting.waiting_time(log)
+    unfinished = _by(result)["Unfinished"]
+    assert unfinished["open_starts"] == 2
+    assert unfinished["instances"] == 0
+    assert unfinished["processing_observation_share"] == 0
+    assert unfinished["processing"]["median_seconds"] is None
+    assert unfinished["waiting_observation_share"] is None
+    assert _by(result)["Finished"]["processing_observation_share"] == 1
+
+
 def test_overlapping_work_is_not_waiting_and_counts_once_as_busy():
     log = _import(["case", "activity", "time", "lifecycle:transition"], [
         ("x", "A", _at(0, 0), "start"), ("x", "B", _at(0, 1), "start"),
