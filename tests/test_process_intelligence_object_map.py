@@ -67,6 +67,18 @@ def test_object_map_with_floor():
     assert {(x["from_type"], x["to_type"]) for x in r["relations"]} <= {("order", "item"), ("item", "order")}
     assert all("max_linked_per_object" not in x and "delivery" not in (x["from_type"], x["to_type"]) for x in r["relations"])
     assert "Cancel" not in repr(r) and "o0" not in repr(r) and r["format"] == sharing.FORMAT
+    shared = {x["activity"]: x["object_types"] for x in r["activities_touching_several_types"]}
+    assert shared == {"Place order": ["item", "order"]}           # Ship also touches deliveries, which are hidden
+
+
+def test_repeated_activity_of_one_object_is_not_named():
+    doc = _document()
+    rel = lambda ids: [{"objectId": x, "qualifier": "q"} for x in ids]  # noqa: E731
+    doc["events"] += [{"id": f"o0-audit{k}", "type": "Audit", "time": f"2024-01-01T{19 + k % 4:02d}:0{k}:00Z",
+                       "relationships": rel(["o0", "i0a"])} for k in range(6)]
+    log = workspace.import_log(BytesIO(json.dumps(doc).encode()), name="a", source_format="ocel")["log_id"]
+    sharing.set_share(log, "aggregates")
+    assert "Audit" not in repr(sharing.object_map(log))
 
 
 def test_agent_route(tmp_path):
