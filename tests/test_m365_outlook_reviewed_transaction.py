@@ -462,6 +462,43 @@ class ReviewedTransactionTests(unittest.TestCase):
             commit.assert_called_once()
         self.assertEqual(calls[-1], "audit:checkpoint-commit")
 
+    def test_post_checkpoint_audit_failure_cli_never_claims_success(self):
+        """A committed checkpoint with missing final audit needs manual inspection."""
+        if os.name != "posix":
+            self.skipTest("Private audit writer is POSIX-only")
+        argv = ["--tenant", "t", "--mailbox", "m", "--folder", "f",
+                "--log-id", "log", "--confirm-log-id", "log",
+                "--grant-file", "grant", "--candidate", "candidate",
+                "--ledger-dir", "ledger", "--csv-path", "csv",
+                "--receipt-file", "receipt", "--journal-dir", "journal",
+                "--handoff-dir", "handoff", "--successor-label", "next",
+                "--expected-review-csv-sha256", DIGEST,
+                "--consent-local-read", "--consent-local-append",
+                "--confirm-candidate-reviewed", "--confirm-removals-reviewed",
+                "--confirm-checkpoint-commit"]
+        def audit(phase, result, **kwargs):
+            if phase == "checkpoint-commit":
+                raise tx.AuditWriteError("final audit unavailable")
+        reviewed = {"status": "review_ready", "csv_sha256": DIGEST,
+                    "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}
+        with patch.dict(os.environ, {"OWG_M365_AUDIT_DIR": "/audit"}), \
+             patch.object(tx, "preflight_operator_audit"), \
+             patch.object(tx, "record_operator_phase", side_effect=audit), \
+             patch.object(tx, "inspect_checkpoint", return_value=None), \
+             patch.object(tx.cycle, "review", return_value=reviewed), \
+             patch.object(tx.cycle, "append", return_value={"status": "receipt_persisted"}) as append, \
+             patch.object(tx.cycle, "handoff", return_value={"status": "next_round_handoff_prepared"}) as handoff, \
+             patch.object(tx.cycle, "checkpoint_commit", return_value={"status": "checkpoint_committed", "generation": 1}) as commit:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(tx.main(argv), 3)
+            refusal = json.loads(output.getvalue())
+            self.assertEqual(refusal["status"], "manual_reconciliation_required")
+            self.assertIs(refusal["automatic_retry_allowed"], False)
+            append.assert_called_once()
+            handoff.assert_called_once()
+            commit.assert_called_once()
+
     def test_audit_preflight_failure_prevents_any_mutation(self):
         with patch.dict("os.environ", {"OWG_M365_AUDIT_DIR": "/audit"}), \
              patch.object(tx, "preflight_operator_audit", side_effect=OSError("unsafe")), \
