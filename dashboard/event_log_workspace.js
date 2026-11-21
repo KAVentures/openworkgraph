@@ -6,9 +6,9 @@
   // The global case filter: follower rules plus an optional case-attribute value and/or numeric range.
   // More case filters (Disco-style timeframe, performance and variation filters): end time, events per case,
   // how many cases share the case's path, and rework.
-  const MORE_FILTER_KEYS=['ended_from','ended_before','events','path_cases','rework','tag','without_tag'];
+  const MORE_FILTER_KEYS=['ended_from','ended_before','events','path_cases','rework','tag','without_tag','without_activity'];
   const countText=(r,what)=>what+' '+(r.min!==undefined&&r.max!==undefined?(r.min===r.max?'= '+r.min:r.min+'–'+r.max):r.min!==undefined?'\u2265 '+r.min:'\u2264 '+r.max);
-  const moreFilterText=a=>[a.ended_from?'ended from '+a.ended_from.slice(0,10):'',a.ended_before?'ended before '+a.ended_before.slice(0,10):'',a.events?countText(a.events,'events per case'):'',a.path_cases?countText(a.path_cases,'cases on the same path'):'',a.rework===true?'repeats an activity':a.rework===false?'repeats no activity':'',a.tag?'tagged '+JSON.stringify(a.tag):'',a.without_tag?'not tagged '+JSON.stringify(a.without_tag):''].filter(Boolean).join('; ');
+  const moreFilterText=a=>[a.ended_from?'ended from '+a.ended_from.slice(0,10):'',a.ended_before?'ended before '+a.ended_before.slice(0,10):'',a.events?countText(a.events,'events per case'):'',a.path_cases?countText(a.path_cases,'cases on the same path'):'',a.rework===true?'repeats an activity':a.rework===false?'repeats no activity':'',a.tag?'tagged '+JSON.stringify(a.tag):'',a.without_tag?'not tagged '+JSON.stringify(a.without_tag):'',a.without_activity?'never does '+JSON.stringify(a.without_activity):''].filter(Boolean).join('; ');
   const filterOn=()=>state.follows.length>0||!!state.attr.attribute||!!state.attr.attribute_range||!!state.attr.starts_with||!!state.attr.ends_with||!!state.attr.duration||MORE_FILTER_KEYS.some(k=>state.attr[k]!==undefined)||!!state.caseActivity;
   const globalCohort=()=>({...(state.follows.length?{follows:state.follows}:{}),...state.attr,...(state.caseActivity?{activity:state.caseActivity}:{})});
   const rangeText=r=>(r.min!==undefined?r.min+' ≤ ':'')+r.name+(r.max!==undefined?' < '+r.max:'');
@@ -1590,7 +1590,10 @@
     // Case tags (yours, or added from unusual cases, alignments or root causes): keep tagged or untagged cases.
     const tagName=input('owgCaseFilterTag','text','tag');tagName.maxLength=60;tagName.autocomplete='off';
     const tagMode=select('owgCaseFilterTagMode',[['tag','Has the tag'],['without_tag','Does not have the tag']]);
+    // Cases that never do an activity (the opposite of "contains activity").
+    const withoutActivity=input('owgCaseFilterWithoutActivity','text','Exact activity label');withoutActivity.maxLength=200;withoutActivity.autocomplete='off';
     const a0=state.attr;
+    if(a0.without_activity)withoutActivity.value=a0.without_activity;
     if(a0.ended_from)endedFrom.value=a0.ended_from.slice(0,10);if(a0.ended_before)endedBefore.value=a0.ended_before.slice(0,10);
     if(a0.events){if(a0.events.min!==undefined)evMin.value=a0.events.min;if(a0.events.max!==undefined)evMax.value=a0.events.max;}
     if(a0.path_cases){if(a0.path_cases.min!==undefined)pathMin.value=a0.path_cases.min;if(a0.path_cases.max!==undefined)pathMax.value=a0.path_cases.max;}
@@ -1599,7 +1602,7 @@
     const moreRow=el('div',null,'row');moreRow.style.alignItems='end';
     moreRow.append(field('Case ended on or after',endedFrom),field('Case ended before',endedBefore),field('Events per case at least',evMin),field('Events per case at most',evMax),
       field('Path followed by at least (cases)',pathMin),field('Path followed by at most (cases)',pathMax),field('Rework',reworkPick),
-      field('Case tag',tagName),field('Tag condition',tagMode));
+      field('Case tag',tagName),field('Tag condition',tagMode),field('Case never does activity',withoutActivity));
     function readCount(lo,hi,what){
       if(lo.value===''&&hi.value==='')return undefined;
       const r={};if(lo.value!=='')r.min=Number(lo.value);if(hi.value!=='')r.max=Number(hi.value);
@@ -1633,6 +1636,8 @@
       const events=readCount(evMin,evMax,'Events per case'),paths=readCount(pathMin,pathMax,'Path frequency');
       if(events)out.events=events;if(paths)out.path_cases=paths;
       if(reworkPick.value)out.rework=reworkPick.value==='true';
+      const never=withoutActivity.value;
+      if(never){if(/^[\p{White_Space}\u001c-\u001f]*$/u.test(never)||Array.from(never).length>200)throw new Error('Enter an activity label of at most 200 characters for "never does".');out.without_activity=never;}
       const t=tagName.value.trim();if(t){if(Array.from(t).length>60)throw new Error('A tag has at most 60 characters.');out[tagMode.value]=t;}
       return out;
     }
