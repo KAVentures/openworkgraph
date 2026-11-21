@@ -104,8 +104,10 @@ def test_subsecond_time_bounds_are_compared_chronologically(_data):
     ):
         with pytest.raises(workspace.EventLogWorkspaceError, match="since must be before"):
             mining.import_agent_runs({"since": since, "until": until})
+    # The fixture runs start at 08:00 UTC and end after 19:00 UTC;
+    # a valid range must actually include them to test successful import.
     valid = mining.import_agent_runs({"name": "agents",
-        "since": "2026-09-01T01:00:00+01:00", "until": "2026-09-01T00:00:00.500Z"})
+        "since": "2026-09-01T08:59:59.500+01:00", "until": "2026-09-01T19:05:00.500Z"})
     assert valid["runs"] == 12
 
 
