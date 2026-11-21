@@ -175,6 +175,20 @@ async def agent_automation_candidates(request: Request, log_id: str, limit: int 
     return await _answer(sharing.automation_candidates, log_id, case_type, limit)
 
 
+@router.post("/v1/process-intelligence/{log_id}/costs")
+async def agent_costs(request: Request, log_id: str):
+    """POST because prices are a JSON object. Body: {"model"?: {...}, "case_type"?: text, "limit"?: 1-100}.
+    Without model, the owner's saved cost model is used."""
+    _require_agent_access(request)
+    spec = await _json_body(request, "cost request", strict=True, limit=131072)
+    if not isinstance(spec, dict) or set(spec) - {"model", "case_type", "limit"}:
+        raise HTTPException(422, 'send {"model"?: {...}, "case_type"?: ..., "limit"?: ...}')
+    case_type = spec.get("case_type")
+    if case_type is not None and (not isinstance(case_type, str) or not 0 < len(case_type) <= 200):
+        raise HTTPException(422, "case_type must be a short text")
+    return await _answer(sharing.costs, log_id, spec.get("model"), case_type, spec.get("limit", 20))
+
+
 @router.get("/v1/process-intelligence/{log_id}/decision-rules")
 async def agent_decision_rules(request: Request, log_id: str, activity: str | None = Query(default=None, max_length=200),
                                case_type: str | None = Query(default=None, max_length=200),
