@@ -58,7 +58,7 @@ def test_lifecycle_pairs_split_processing_from_waiting():
     assert acts["Review"]["processing"]["median_seconds"] == 7200
     assert acts["Review"]["waiting_before"]["median_seconds"] == 7200
     assert acts["Review"]["waiting_before"]["p10_seconds"] == 7200
-    assert acts["Review"]["waiting_before"]["population_stddev_seconds"] == 0
+    assert acts["Review"]["waiting_before"]["population_stddev_seconds"] > 0
     assert acts["Review"]["waiting_before"]["instances"] == 11
     assert acts["Receive"]["processing"]["population_stddev_seconds"] == 0
     assert acts["Close"]["waiting_before"]["median_seconds"] == 0
