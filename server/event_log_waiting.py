@@ -136,11 +136,18 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
         # A lifecycle activity with only unfinished starts has no row in inst/seq2.
         # Keep it visible instead of silently hiding a completely unobserved activity.
         observed_names = {row[0] for row in activities}
+        # Keep the documented response cap even when the log has many activities
+        # with starts but no completions. Rank those missing-duration activities
+        # deterministically after the observed waiting-time hotspots.
         open_only = sorted(set(open_by_activity) - observed_names)
-        if open_only:
+        remaining = max(0, MAX_ACTIVITIES - len(activities))
+        if remaining and open_only:
+            open_case_counts = dict(conn.execute("""SELECT activity, count(DISTINCT case_id)
+                FROM lc WHERE tr = 'start' GROUP BY activity""").fetchall())
             activities = list(activities) + [
-                (name, 0, 0, 0, None, None, None, 0, None, None, None, 0,
-                 None, None, None) for name in open_only
+                (name, 0, int(open_case_counts.get(name, 0)), 0, None, None, None,
+                 0, None, None, None, 0, None, None, None)
+                for name in open_only[:remaining]
             ]
         transitions = conn.execute(f"""SELECT prev_activity, activity, count(*), quantile_cont(wait, 0.5), sum(wait)
             FROM seq2 WHERE wait IS NOT NULL GROUP BY prev_activity, activity
