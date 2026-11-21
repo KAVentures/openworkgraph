@@ -1,9 +1,11 @@
 """Bounded, dashboard-only evidence pages for explicitly retained business logs."""
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from . import event_log_cohorts as cohorts
+from .event_log_variant_coverage import VARIANT_KEY_SQL
 from . import event_log_workspace as workspace
 from .event_log_workspace import EventLogWorkspaceError
 
@@ -30,7 +32,10 @@ def _spec(value: Any, keys: set[str]) -> dict[str, Any]:
 
 
 def cases(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, Any]:
-    spec = _spec(spec, {"cohort", "path", "transition", "after", "limit"})
+    variant_id = spec.get("variant_id") if isinstance(spec, dict) else None
+    if variant_id is not None and (not isinstance(variant_id, str) or not re.fullmatch(r"[a-f0-9]{64}", variant_id)):
+        raise EventLogWorkspaceError("invalid exact variant identifier")
+    spec = _spec(spec, {"cohort", "path", "transition", "after", "limit", "variant_id"})
     cohort = cohorts.parse_cohort(spec.get("cohort"))
     limit = _integer(spec.get("limit", 30), 100)
     after = _text(spec["after"]) if spec.get("after") is not None else None
@@ -39,6 +44,8 @@ def cases(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, Any
         if not isinstance(path, list) or not 0 < len(path) <= MAX_PATH:
             raise EventLogWorkspaceError("an exact case path requires 1 to 500 activity names")
         path = [_text(item) for item in path]
+        if variant_id is not None:
+            raise EventLogWorkspaceError("choose either a path or a variant identifier")
     transition = spec.get("transition")
     if transition is not None:
         if not isinstance(transition, list) or len(transition) != 2:
@@ -53,15 +60,24 @@ def cases(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, Any
                     PARTITION BY case_id ORDER BY ts, event_id) AS next_activity FROM ce
                 ) WHERE activity = ? AND next_activity = ?)"""
             params.extend(transition)
-        having = " HAVING list(activity ORDER BY ts, event_id) = ?" if path is not None else ""
+        sequence = "list(activity ORDER BY ts, event_id)"
+        shape = f", {sequence} AS path" if variant_id is not None else ""
+        having = ""
         if path is not None:
+            having = f" HAVING {sequence} = ?"
             params.append(path)
+        if variant_id is not None:
+            having = f" HAVING {VARIANT_KEY_SQL.format(path=sequence)} = ?"
+            params.append(variant_id)
         conn.execute(f"""CREATE TEMP TABLE selected_cases AS SELECT case_id, count(*) AS events,
-            min(ts) AS started, max(ts) AS ended, count(*) - count(DISTINCT ts) AS timestamp_ties
+            min(ts) AS started, max(ts) AS ended, count(*) - count(DISTINCT ts) AS timestamp_ties{shape}
             FROM ce WHERE {predicate} GROUP BY case_id{having}""", params)
+        if variant_id is not None and conn.execute("SELECT count(DISTINCT path) FROM selected_cases").fetchone()[0] > 1:
+            raise EventLogWorkspaceError("this identifier matches multiple paths")
         total = conn.execute("SELECT count(*) FROM selected_cases").fetchone()[0]
         where, args = (" WHERE case_id > ?", [after]) if after is not None else ("", [])
-        rows = conn.execute("SELECT * FROM selected_cases" + where + " ORDER BY case_id LIMIT ?", [*args, limit + 1]).fetchall()
+        rows = conn.execute("SELECT case_id, events, started, ended, timestamp_ties FROM selected_cases" +
+                            where + " ORDER BY case_id LIMIT ?", [*args, limit + 1]).fetchall()
         more = len(rows) > limit
         rows = rows[:limit]
         return {

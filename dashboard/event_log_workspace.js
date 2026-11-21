@@ -1389,6 +1389,11 @@
       const picker=document.getElementById(prefix+'FilterActivity');
       if(!Array.from(picker.options).some(option=>option.value===value))picker.add(new Option(value,value));
       association=false;exactActivity.value='';activityLookup.reset();path=null;transition=null;chosen.textContent='All paths.';picker.value=value;start();box.scrollIntoView({block:'nearest'});
+    },variant(value,rank,cohort){
+      path=null;transition=null;association=true;filterApplied=Object.keys(cohort).length>0;
+      spec={cohort,variant_id:value,limit:30};
+      chosen.textContent='Exact path for variant '+rank+'.';
+      detail.replaceChildren();opening++;load(null);box.scrollIntoView({block:'nearest'});
     },transition(value){
       association=false;exactActivity.value='';activityLookup.reset();path=null;transition=value.slice();document.getElementById(prefix+'FilterActivity').value='';
       chosen.textContent='Adjacent transition: '+JSON.stringify(transition)+'. Timestamp ties do not verify order.';
@@ -1780,31 +1785,44 @@
     const budget=select('owgVariantCoverageLimit',[['20','20 variants'],['50','50 variants'],['100','100 variants'],['200','200 variants']]);
     const inspection=caseInspector(activityNames,{prefix:'owgVariantCoverageCases'});
     for(const control of inspection.node.querySelectorAll('button'))control.setAttribute('aria-label','Variant coverage: '+control.textContent);
-    const out=el('div');box.append(el('p','See how many observed paths cover most cases, before deciding which variations to investigate.'),field('Maximum displayed variants',budget),run,out,inspection.node);
-    run.onclick=async()=>{
+    const out=el('div');box.append(el('p','See how many observed paths cover most cases, before deciding which variations to investigate.'),field('Variants per page',budget),run,out,inspection.node);
+    const generation=state.generation;
+    let revision=0;
+    budget.onchange=()=>{++revision;run.disabled=false;out.replaceChildren();};
+    async function load(offset){
+      const ticket=++revision,cohort=globalCohort();
+      const current=()=>generation===state.generation&&ticket===revision;
       run.disabled=true;
-      const generation=state.generation;
+      out.replaceChildren(el('div','Calculating coverage…','muted'));
       try{
-        const r=await getJSON(logPath('variant-coverage',{limit:budget.value}));
-        if(generation!==state.generation)return;
+        const r=await getJSON(logPath('variant-coverage',{limit:budget.value,offset}));
+        if(!current())return;
+        if(offset&&offset>=r.distinct_variants)return load(Math.max(0,Math.floor((r.distinct_variants-1)/r.page.limit)*r.page.limit));
         const exports=exportButtons('owgVariantCoverage',()=>r,()=>[
           ['rank','path','cases','case_share','cumulative_cases','cumulative_share','path_truncated'],
           ...r.displayed_variants.map(v=>[v.rank,JSON.stringify(v.path),v.cases,v.share,v.cumulative_cases,v.cumulative_share,v.path_truncated])]);
         exports.enable(true);
+        const previous=button('Previous page','secondary'),next=button('Next page','secondary');
+        previous.disabled=offset===0;next.disabled=r.page.next_offset===null;
+        previous.onclick=()=>load(offset-r.page.limit);next.onclick=()=>load(r.page.next_offset);
+        const navigation=el('div',null,'row');navigation.append(previous,next);
+        const coverage=el('p',r.displayed_variants.length?'Showing ranks '+(offset+1).toLocaleString()+'–'+(offset+r.displayed_variants.length).toLocaleString()+' of '+r.distinct_variants.toLocaleString()+'.':'No variants in this selection.','muted');
+        coverage.setAttribute('role','status');
         out.replaceChildren(
           table(['Target case coverage','Variants needed'],r.coverage_targets.map(t=>[t.target_percent+'%',t.variants_needed??'—'])),
+          coverage,
           table(['Rank','Observed path','Cases','Cumulative coverage','Evidence'],r.displayed_variants.map(v=>{
             const inspect=button('Inspect variant '+v.rank+' cases','secondary');
-            inspect.disabled=v.path_truncated;
-            if(v.path_truncated)inspect.title='The displayed path is shortened; selecting it would incorrectly match a prefix. Browse cases by activity instead.';
-            else inspect.onclick=()=>inspection.path(v.path);
-            return [v.rank,v.path.join(' → ')+(v.path_truncated?' … ('+v.path_activity_count+' activities; exact-path inspection unavailable)':''),v.cases,pct(v.cumulative_share),inspect];
+            inspect.onclick=()=>inspection.variant(v.variant_id,v.rank,cohort);
+            return [v.rank,v.path.join(' → ')+(v.path_truncated?' … ('+v.path_activity_count+' steps)':''),v.cases,pct(v.cumulative_share),inspect];
           })),
+          navigation,
           el('p',r.cases+' cases across '+r.distinct_variants+' variants. '+r.omitted_variants+' variants containing '+r.omitted_cases+' cases are outside the displayed rows. Targets use every variant, including omitted rows.','muted'),
           el('p',r.interpretation,'muted'),exports.node);
-      }catch(error){if(generation===state.generation)out.replaceChildren(el('p',error.message,'muted'));}
-      finally{run.disabled=false;}
-    };
+      }catch(error){if(current())out.replaceChildren(el('p',error.message,'muted'));}
+      finally{if(current())run.disabled=false;}
+    }
+    run.onclick=()=>load(0);
     return box;
   }
 
