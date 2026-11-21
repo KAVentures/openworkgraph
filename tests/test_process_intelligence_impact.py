@@ -60,6 +60,11 @@ def test_small_periods_show_only_counts():
     follow = late["groups"]["all"]["follow_up"]
     assert follow == {"cases": 3, "mean": None, "median": None} and late["withheld"]["period_summaries"] == 1
     assert late["change"]["estimated"] is False
+    counted = sharing.impact(log, {"intervention_at": "2024-01-16T00:00:00Z", "metric": "activity_count",
+                                   "activity": "Open"})
+    assert counted["groups"]["all"]["baseline"]["mean"] == 1.0
+    with pytest.raises(EventLogWorkspaceError, match="at least 5 cases"):
+        sharing.impact(log, {"intervention_at": "2024-01-16T00:00:00Z", "metric": "activity_count", "activity": "Nope"})
     for bad in ({}, {"intervention_at": "2024-01-16T00:00:00Z", "rounds": 2000},
                 {"intervention_at": "2024-01-16T00:00:00Z", "metric": "sla_breach", "sla_hours": -1}, "x"):
         with pytest.raises(EventLogWorkspaceError):
