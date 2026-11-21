@@ -266,6 +266,14 @@ def list_event_logs(request: Request):
     return _respond(workspace.list_logs)
 
 
+@router.get("/v1/event-logs/storage")
+def event_log_storage(request: Request):
+    """Disk used by the saved logs: the database file, free space, and each log's estimated share."""
+    from . import event_log_storage as log_storage
+    _require_dashboard(request)
+    return _respond(log_storage.storage)
+
+
 @router.get("/v1/event-logs/signal-overview")
 def event_log_signal_overview(
     request: Request, status: str = Query(default="attention", max_length=20),

@@ -252,6 +252,16 @@ analysis reads them.
   analysis query returns in well under 30 seconds on a CI runner
   (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_scale_acceptance.py`).
 
+## Storage used
+
+Saved logs stay on this computer. **Storage used**, in the import card, shows:
+
+- the size of the local database file, plus any write-ahead log not yet compacted;
+- the free space on that disk;
+- for each log, largest first: its events, objects, import date and estimated size and share.
+
+DuckDB does not report bytes per log, so a log's size is estimated from the rows it owns (events, event-object links, objects and attribute values) as a share of the file. Deleting a log frees about that much once the database is compacted (`GET /v1/event-logs/storage`, dashboard session only).
+
 ## Sharing with AI agents
 
 A log can be shared, read-only, with AI apps connected to OpenWorkGraph over MCP, at the

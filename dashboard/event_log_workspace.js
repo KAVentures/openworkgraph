@@ -185,7 +185,21 @@
     const sampleButton=button('Try with a sample log','secondary');sampleButton.id='owgEventLogSample';
     sampleButton.title='Stores a synthetic order-to-cash log (no real data) on this computer and analyses it';
     const importRow=el('div',null,'row');importRow.append(importButton,appendButton,sampleButton);
-    card.append(row,mapping,identity,consentLabel,keepLabel,importRow,statusLine);
+    // Storage used by the saved logs on this computer, largest first.
+    const storageButton=button('Storage used','secondary');storageButton.id='owgEventLogStorage';storageButton.setAttribute('aria-expanded','false');storageButton.setAttribute('aria-controls','owgEventLogStorageList');
+    const storageList=el('div');storageList.id='owgEventLogStorageList';storageList.setAttribute('role','region');storageList.setAttribute('aria-label','Storage used by saved logs');show(storageList,false);
+    const bytes=n=>n===null||n===undefined?'unknown':n<1048576?Math.max(1,Math.round(n/1024))+' KB':n<1073741824?(Math.round(n/104857.6)/10)+' MB':(Math.round(n/107374182.4)/10)+' GB';
+    storageButton.onclick=async()=>{
+      const open=storageButton.getAttribute('aria-expanded')!=='true';storageButton.setAttribute('aria-expanded',String(open));show(storageList,open);
+      if(!open)return;storageList.replaceChildren(el('div','Measuring storage\u2026','muted'));
+      try{const r=await getJSON('/v1/event-logs/storage');
+        const head=el('div',r.log_count+' saved log'+(r.log_count===1?' uses ':'s use ')+bytes(r.database_bytes)+' on this computer'+(r.write_ahead_log_bytes?' (plus '+bytes(r.write_ahead_log_bytes)+' not yet compacted)':'')+'; '+bytes(r.free_disk_bytes)+' free on that disk.','muted');
+        if(!r.logs.length){storageList.replaceChildren(head);return;}
+        const t=table(['Log','Events','Objects','Imported','Estimated size','Share'],r.logs.map(l=>[l.name,Number(l.events).toLocaleString(),Number(l.objects).toLocaleString(),l.imported_at.slice(0,10),bytes(l.estimated_bytes),Math.round(l.share*1000)/10+'%']));t.id='owgEventLogStorageTable';
+        storageList.replaceChildren(head,t,el('div',r.estimate,'muted'));}
+      catch(error){storageList.replaceChildren(el('div',error.message));}};
+    const storageRow=el('div',null,'row');storageRow.append(storageButton);
+    card.append(row,mapping,identity,consentLabel,keepLabel,importRow,statusLine,storageRow,storageList);
 
     const pick=select('owgEventLogPick',[]);const caseType=select('owgEventLogCaseType',[]);
     const exportFormat=select('owgEventLogExportFormat',[['csv','CSV (exact interchange)'],['csv-review','CSV for spreadsheet review'],['sourcecsv','Source-ID CSV (exact interchange)'],['sourcecsv-review','Source-ID CSV for spreadsheet review'],['xes','XES'],['xes-attributes','XES with retained attributes'],['ocel','OCEL 2.0 JSON'],['ocelxml','OCEL 2.0 XML']]);
