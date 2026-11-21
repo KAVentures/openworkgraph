@@ -2420,6 +2420,20 @@
                 latest.access_revision !== selection.access_revision)
               throw new Error("Executable project export canceled: authorization or independent review changed during download. Reopen the latest authorized revision.");
           }
+          // A successful HTTP status is not proof that the executable archive
+          // is a ZIP: auth proxies can return an HTML login page with 200.
+          // Refuse to expose such responses as an agent project.
+          if (format === "agent-project") {
+            const signature = new Uint8Array(await exportedBlob.slice(0, 4).arrayBuffer());
+            const zipHeader = signature.length === 4 &&
+              signature[0] === 0x50 && signature[1] === 0x4b &&
+              ((signature[2] === 0x03 && signature[3] === 0x04) ||
+               (signature[2] === 0x05 && signature[3] === 0x06) ||
+               (signature[2] === 0x07 && signature[3] === 0x08));
+            if (!zipHeader || identityTicket !== identityGeneration ||
+                credential !== authorizedCredential || selected !== selection)
+              throw new Error("Executable project export canceled: invalid ZIP or authorization context changed. Reopen and retry.");
+          }
           const url = URL.createObjectURL(exportedBlob),
             a = el("a");
           a.href = url;
