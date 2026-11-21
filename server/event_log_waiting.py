@@ -146,6 +146,8 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
                           "ignored_lifecycle_events": int(ignored)},
             "activities": [{
                 "activity": a, "instances": n, "cases": cases, "instances_with_processing_time": known,
+                "processing_observation_share": known / n if n else None,
+                "waiting_observation_share": waited / n if n else None,
                 "processing": {**stats(p50, p90, mean), "population_stddev_seconds": pstd},
                 "waiting_before": {**stats(w50, w90, wmean), "p10_seconds": w10,
                                    "population_stddev_seconds": wstd, "instances": waited,
