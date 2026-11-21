@@ -328,6 +328,7 @@ assert.deepEqual(plain(m.cohortSpec({resource:' bot,system ',activity:' Review >
 assert.throws(()=>m.cohortSpec({from:'2024-02-01',before:'2024-01-01'}));
 assert.throws(()=>m.cohortSpec({attribute:'region'}));
 assert.equal(m.toCSV([['a','b'],['=1+1','x,\x22y\x22'],[null,'-2']]),'a,b\r\n\'=1+1,\x22x,\x22\x22y\x22\x22\x22\r\n,\'-2\r\n');
+assert.equal(m.toCSV([['  =1', '\ufeff+2', '\nfoo', -2, 'ordinary']]), "'  =1,'\ufeff+2,\"'\nfoo\",-2,ordinary\r\n");
 """
     result = subprocess.run(["node", "-e", check], cwd=ROOT, capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr

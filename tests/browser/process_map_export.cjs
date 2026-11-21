@@ -46,7 +46,9 @@ const path=require('node:path');
    // The numbers behind the map: activities, starts, paths and ends.
    const [csvDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#owgMapDownloadCsv').click()]);
    assert.match(csvDownload.suggestedFilename(),/^process-map-[A-Za-z0-9_-]+\.csv$/);
-   const csvLines=(await fs.readFile(await csvDownload.path(),'utf8')).trim().split('\n');
+   const csvText=await fs.readFile(await csvDownload.path(),'utf8');
+   assert(csvText.includes('\r\n'),'CSV output follows standard CRLF row terminators');
+   const csvLines=csvText.trim().split(/\r?\n/);
    assert.equal(csvLines[0],'kind,from,to,count,cases,median_gap_seconds,mean_gap_seconds,p90_gap_seconds');
    assert(csvLines.includes('activity,Receive order,,8,8,,,'),csvLines.join('|'));
    assert(csvLines.includes('start,,Receive order,8,,,,'),csvLines.join('|'));
