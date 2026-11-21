@@ -247,6 +247,48 @@ def overview(log_id: str, case_type: str | None = None, sla_hours: float | None 
     }
 
 
+AGENT_MIN_FILTERED_CASES = 5
+
+
+def overview_for_cases(log_id: str, case_filter: Any, case_type: str | None = None,
+                       sla_hours: float | None = None) -> dict[str, Any]:
+    """The overview for the cases matching a case filter (aggregates level). At least
+    AGENT_MIN_FILTERED_CASES cases must match, so a narrow filter cannot describe one case."""
+    require(log_id, "aggregates")
+    from . import event_log_analytics as analytics
+    from . import event_log_cohorts as cohorts
+    if not isinstance(case_filter, dict) or not case_filter:
+        raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+    chosen = cohorts.parse_cohort(case_filter)
+    if not any(k != "label" for k in chosen):
+        raise EventLogWorkspaceError("case_filter must filter something")
+    sla = int(sla_hours * 3600) if sla_hours else None
+    summary = workspace.summary(log_id, case_type, case_filter)
+    if summary["cases"] < AGENT_MIN_FILTERED_CASES:
+        raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
+    whole = workspace.summary(log_id, case_type)
+    variants = workspace.variants(log_id, case_type, 5, cohort=case_filter)
+    kpis = analytics.kpis(log_id, case_type, sla, None, case_filter)
+    whole_kpis = analytics.kpis(log_id, case_type, sla)
+    pick = lambda k: {key: k.get(key) for key in ("throughput_seconds", "rework_rate", "sla") if key in k}  # noqa: E731
+    return {
+        "format": FORMAT, "log_id": log_id, "case_notion": summary["case_notion"],
+        "case_filter": cohorts.describe(chosen),
+        "cases": summary["cases"], "cases_in_log": whole["cases"],
+        "share_of_log": round(summary["cases"] / whole["cases"], 4) if whole["cases"] else None,
+        "events": summary["events"], "activities": summary["activities"],
+        "first_event_at": summary["first_event_at"], "last_event_at": summary["last_event_at"],
+        "case_duration_seconds": summary["case_duration_seconds"],
+        "whole_log_case_duration_seconds": whole["case_duration_seconds"],
+        "kpis": pick(kpis), "whole_log_kpis": pick(whole_kpis),
+        "top_variants": [{"path": v["path"], "cases": v["cases"], "share": v.get("share")}
+                         for v in _top(variants.get("variants"), 5)],
+        "variants_total": variants.get("distinct_variants"),
+        "interpretation": ("Describes the recorded cases matching the filter, next to the whole log. A difference "
+                           "between them is an association, not a cause, and nothing here authorizes an action."),
+    }
+
+
 def brief(log_id: str, case_type: str | None = None, sla_hours: float | None = None) -> dict[str, Any]:
     """One bounded briefing for an agent starting on a log: the overview, how well the discovered model fits
     at its best noise level, where cases depart from it, how many cases stand out, and which tools to call

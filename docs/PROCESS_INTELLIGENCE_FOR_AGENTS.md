@@ -53,6 +53,7 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 | --- | --- |
 | `list_process_logs` | Shared logs: id, name, level, size, case notions, whether agents may tag cases. |
 | `get_process_overview` | Cases, events, durations, KPIs (optionally an SLA), top variants, top insights with their case filters. |
+| `get_process_overview_for_cases` | The overview of only the cases matching a case filter (same keys as insight cohorts, e.g. `{"attribute": "region=EU"}` or `{"activity": "Escalate"}`), next to the whole log: case count and share, durations, KPIs and top variants. Refused when fewer than 5 cases match. | aggregates |
 | `get_process_root_cause` | Associations with `duration_over` (hours), `rework`, `contains_activity` or `ends_with` (activity). |
 | `explain_process_case` | One case's steps, gaps over the typical gap, repeats and uncommon steps (cases level). |
 | `get_slowest_process_cases` | Slowest cases first (cases level). |

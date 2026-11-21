@@ -270,7 +270,7 @@ async def _listed_tools(tmp_path: Path, enabled: bool) -> set[str]:
             return {tool.name for tool in (await session.list_tools()).tools}
 
 
-PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_root_cause",
+PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_overview_for_cases", "get_process_root_cause",
                  "explain_process_case", "get_slowest_process_cases", "tag_process_cases",
                  "get_process_automation_candidates", "get_process_signals", "get_process_decision_rules",
                  "get_process_temporal_profile", "get_process_heuristics_net",
