@@ -1633,6 +1633,13 @@ async def event_log_compliance(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/compliance/violations")
+async def event_log_compliance_violations(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "compliance violation page")
+    return await run_in_threadpool(_respond, compliance.violations, log_id, spec)
+
+
 @router.post("/v1/event-logs/{log_id}/compliance/discover")
 async def event_log_rule_discovery(request: Request, log_id: str):
     """Candidate Declare-style rules most cases already follow; nothing is saved or enforced."""
