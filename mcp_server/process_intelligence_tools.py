@@ -137,6 +137,33 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"limit": max(1, min(int(limit), 50)), "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def get_process_costs(log_id: str, model: dict[str, Any] | None = None, limit: int = 20,
+                          case_type: str | None = None) -> dict[str, Any]:
+        """Process cost of a shared log from the owner's saved cost model, or from prices you supply for a what-if:
+        model = {"currency": "EUR", "activity_costs": {"Approve": 12.5}, "default_activity_cost": 2,
+        "hourly_open_case_cost": 0.4}. Returns total, activity and holding cost, cost per case (mean, median, p90),
+        cost per activity, the cost of repeated executions (an activity done again in the same case) and the
+        costliest variants. The log does not record what work cost; these are the model's figures. Per-resource
+        costs are not returned, and activities and variants seen in fewer than 5 cases are withheld. Aggregates.
+        """
+        if model is not None and not isinstance(model, dict):
+            raise ToolError("model must be an object of prices")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ToolError("limit must be 1 to 100")
+        payload: dict[str, Any] = {"limit": limit}
+        if model is not None:
+            payload["model"] = model
+        if case_type is not None:
+            payload["case_type"] = case_type
+        runtime_module.authorize_tool("get_process_costs")
+        try:
+            result = runtime_module.secure_post(f"/v1/process-intelligence/{_log(log_id)}/costs", payload)
+        except Exception as exc:
+            raise ToolError(str(exc) or "process intelligence request failed") from None
+        result["interpretation"] = _NOTE
+        return runtime_module.core._finish("get_process_costs", result)
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_decision_rules(log_id: str, activity: str | None = None, max_depth: int = 3,
                                    case_type: str | None = None) -> dict[str, Any]:
         """Decision mining on a shared log. Without an activity: the decision points (activities after which
