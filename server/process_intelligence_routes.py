@@ -292,6 +292,40 @@ async def agent_signal_scorecard(request: Request, log_id: str, months: int = Qu
     return await _answer(sharing.signal_scorecard, log_id, months)
 
 
+@router.get("/v1/process-intelligence/{log_id}/variants")
+async def agent_variants(request: Request, log_id: str, limit: int = Query(default=20, ge=1, le=100),
+                         case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.variants, log_id, case_type, limit)
+
+
+@router.get("/v1/process-intelligence/{log_id}/process-map")
+async def agent_process_map(request: Request, log_id: str, activities: float = Query(default=1.0, gt=0, le=1),
+                            paths: float = Query(default=1.0, gt=0, le=1),
+                            case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.process_map, log_id, case_type, activities, paths)
+
+
+@router.get("/v1/process-intelligence/{log_id}/duration-distribution")
+async def agent_duration_distribution(request: Request, log_id: str,
+                                      cutoffs_seconds: str = Query(default="3600,14400,86400,259200", max_length=110),
+                                      case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    parts = cutoffs_seconds.split(",")
+    if not 1 <= len(parts) <= 10 or any(not p.isascii() or not p.isdecimal() or len(p) > 10 for p in parts):
+        raise HTTPException(422, "duration thresholds must be comma-separated whole seconds")
+    return await _answer(sharing.duration_distribution, log_id, [int(p) for p in parts], case_type)
+
+
+@router.get("/v1/process-intelligence/{log_id}/time-patterns")
+async def agent_time_patterns(request: Request, log_id: str, time_zone: str = Query(default="UTC", min_length=1, max_length=64),
+                              activity: str | None = Query(default=None, min_length=1, max_length=200),
+                              case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.time_patterns, log_id, case_type, time_zone, activity)
+
+
 @router.get("/v1/process-intelligence/{log_id}/breakdown")
 async def agent_breakdown(request: Request, log_id: str, rows: str = Query(min_length=1, max_length=220),
                           columns: str | None = Query(default=None, max_length=220),
