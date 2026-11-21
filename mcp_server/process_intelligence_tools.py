@@ -237,6 +237,16 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"dependency_threshold": float(dependency_threshold), "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def get_process_data_quality(log_id: str) -> dict[str, Any]:
+        """How far a shared log can be trusted before analysing it: rows accepted and rejected by reason (missing
+        case, activity or time, unparseable or offset-less timestamps) over every import and append; duplicates,
+        events sharing a timestamp in a case (their order is not observed), events without resource, future-dated
+        events, single-event cases and attribute coverage; whether the saved content still matches its import
+        report; and the quality trend per batch. Call it first when results look odd. Aggregates only.
+        """
+        return _get("get_process_data_quality", f"/v1/process-intelligence/{_log(log_id)}/data-quality", {})
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_footprints(log_id: str, noise: float = 0.2, case_type: str | None = None) -> dict[str, Any]:
         """Footprint comparison of a shared log: for every pair of activities, whether one directly follows the
         other (→), both orders occur (||) or neither (#), once from the recorded cases and once from the discovered

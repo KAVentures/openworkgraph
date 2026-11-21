@@ -64,6 +64,7 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 | `get_process_temporal_profile` | For each ordered pair of activities, the mean and standard deviation of the time between them and how many occurrences deviate by more than `zeta` standard deviations, slower or faster (aggregates level, no case IDs). See "Temporal profile" in EVENT_LOG_WORKSPACE.md. |
 | `get_process_heuristics_net` | The heuristics-miner model: arrows whose dependency is at or above `dependency_threshold`, splits and joins marked AND or XOR, and self- and two-step loops (aggregates level). See "Heuristics net" in EVENT_LOG_WORKSPACE.md. |
 | `get_process_footprints` | Footprint matrices (→, ←, ||, #) from the recorded cases and from the discovered model, the share of cells that agree, and the orderings only the log has (with case counts) or only the model allows (aggregates level). See "Footprints" in EVENT_LOG_WORKSPACE.md. |
+| `get_process_data_quality` | How far the log can be trusted: accepted and rejected rows by reason over all imports and appends, duplicates, shared timestamps, events without resource, future-dated events, single-event cases, attribute coverage, content integrity and the per-batch trend. | aggregates |
 | `get_process_model_quality` | Fitness, precision, their F-score, generalization and simplicity of the discovered net at several noise levels (default 0, 0.1, 0.2, 0.3, 0.5), and the level with the best F-score, to choose a noise level before asking for the model (aggregates level). See "Model quality" in EVENT_LOG_WORKSPACE.md. |
 | `get_process_deviations` | Optimal alignments of the cases on the discovered net at a noise level: alignment fitness, the steps cases took that the model does not allow there and the steps it requires that cases skipped (with case counts), and the step-by-step explanation of the most common non-fitting variants (aggregates level). See "Step-by-step explanation (alignments)" in EVENT_LOG_WORKSPACE.md. |
 | `list_process_reference_nets` | The reference process models (Petri nets) the owner saved for the log, by id and name; the nets themselves are not returned. | aggregates |
@@ -110,6 +111,7 @@ nothing authorizes an action.
 | `GET /v1/process-intelligence/{log_id}/case?case_id=&case_type=` | Same, `cases` only. |
 | `POST /v1/process-intelligence/{log_id}/simulate` (`{"scenario": {...}, "case_type"?}`) | Agent, `aggregates` or `cases`. |
 | `GET /v1/process-intelligence/{log_id}/slowest-cases?limit=&case_type=` | Same, `cases` only. |
+| `GET /v1/process-intelligence/{log_id}/data-quality` | Same, `aggregates` or `cases`. |
 | `GET /v1/process-intelligence/{log_id}/signals` | Same, `aggregates` or `cases` (case IDs only at `cases`). |
 | `GET /v1/process-intelligence/{log_id}/automation-candidates?limit=&case_type=` | Same, `aggregates` or `cases`. |
 | `GET /v1/process-intelligence/{log_id}/decision-rules?activity=&max_depth=&case_type=` | Same, `aggregates` or `cases`. |

@@ -529,6 +529,36 @@ def heuristics_net(log_id: str, case_type: str | None = None, dependency_thresho
     return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
 
 
+def data_quality(log_id: str) -> dict[str, Any]:
+    """How far the log can be trusted (aggregates level): rows accepted and rejected (by reason) over every
+    import and append, the current diagnostics (duplicates, shared timestamps, events without resource,
+    future-dated events, single-event cases, attribute coverage), whether the saved content still matches its
+    import report, and the per-batch quality trend. Hashes and import mappings are not returned."""
+    require(log_id, "aggregates")
+    from . import event_log_quality as quality
+    result = quality.quality(log_id)
+    reasons: dict[str, int] = {}
+    accepted = rejected = 0
+    for report in result.get("reports") or []:
+        rows = report.get("rows") or {}
+        accepted += int(rows.get("accepted") or 0)
+        rejected += int(rows.get("rejected") or 0)
+        for reason, n in (rows.get("rejected_by_reason") or {}).items():
+            reasons[reason] = reasons.get(reason, 0) + int(n or 0)
+    current = result.get("current") or {}
+    trends = [{k: b.get(k) for k in ("batch", "kind", "created_at", "metrics", "comparison")}
+              for b in ((result.get("batch_trends") or {}).get("batches") or [])][-12:]
+    return {"format": FORMAT, "log_id": log_id, "batches": len(result.get("reports") or []),
+            "batches_without_report": len(result.get("batches_without_report") or []),
+            "rows": {"accepted": accepted, "rejected": rejected, "rejected_by_reason": reasons,
+                     "reason_counts_can_overlap": True},
+            "diagnostics": current.get("diagnostics"), "completeness": current.get("completeness"),
+            "integrity": {k: v for k, v in (result.get("integrity") or {}).items() if k in ("status", "reason")},
+            "batch_trend": trends,
+            "caveat": ("Quality describes the supplied rows. Whether the source system holds events that were not "
+                       "exported is unknown; check rejected rows and shared timestamps before trusting orderings.")}
+
+
 def footprints(log_id: str, case_type: str | None = None, noise: float = 0.2) -> dict[str, Any]:
     """Log and discovered-model footprint matrices and where they disagree (aggregates level)."""
     require(log_id, "aggregates")
