@@ -60,6 +60,31 @@ def test_anywhere_finds_the_sequence_inside_cases():
     assert approve["hours_from_previous"]["median"] == 2
 
 
+def test_anywhere_branch_keeps_the_first_occurrence_of_the_anchor():
+    log = _import([
+        [("Open", 0), ("Hold", 1), ("Open", 2), ("Check", 3)],
+        [("Draft", 0), ("Open", 1), ("Check", 2), ("Close", 3)],
+        [("Open", 0), ("Check", 1), ("Hold", 2), ("Open", 3), ("Check", 4), ("Close", 5)],
+    ])
+    parent = px.next_steps(log, ["Open"], anchor="anywhere")
+    assert {row["activity"]: row["cases"] for row in parent["next"]} == {"Check": 2, "Hold": 1}
+    assert px.next_steps(log, ["Open", "Check"], anchor="anywhere")["cases_at_point"] == 3
+    anchored = px.next_steps(log, ["Open", "Check"], anchor="anywhere", anchor_steps=1)
+    assert anchored["cases_at_point"] == 2 and anchored["anchor_steps"] == 1
+    assert {row["activity"]: row["cases"] for row in anchored["next"]} == {"Close": 1, "Hold": 1}
+    assert px.next_steps(log, ["Open", "Check", "Close"], anchor="anywhere", anchor_steps=2)["cases_at_point"] == 1
+
+
+def test_literal_end_label_is_an_activity_distinct_from_case_end():
+    log = _import([[("Open", 0)], [("Open", 0), ("(end)", 1), ("Close", 2)]])
+    page = px.next_steps(log, ["Open"])
+    assert [(row["activity"], row["is_end"], row["cases"]) for row in page["next"]] == [
+        ("(end)", False, 1), ("(end)", True, 1)]
+    assert page["next"][0]["hours_from_previous"]["median"] == 1
+    assert page["next"][1]["hours_from_previous"] is None
+    assert px.next_steps(log, ["Open", "(end)"])["next"][0]["activity"] == "Close"
+
+
 def test_bad_requests():
     log = _import(CASES)
     with pytest.raises(EventLogWorkspaceError, match="anchor"):
@@ -68,4 +93,9 @@ def test_bad_requests():
         px.next_steps(log, [], anchor="anywhere")
     with pytest.raises(EventLogWorkspaceError, match="at most"):
         px.next_steps(log, ["Open"] * 31)
+    for bad in (0, True, 2):
+        with pytest.raises(EventLogWorkspaceError, match="anchor_steps"):
+            px.next_steps(log, ["Open"], anchor="anywhere", anchor_steps=bad)
+    with pytest.raises(EventLogWorkspaceError, match="anchor_steps"):
+        px.next_steps(log, ["Open"], anchor_steps=1)
     assert px.next_steps(log, ["Nope"])["cases_at_point"] == 0

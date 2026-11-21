@@ -58,7 +58,15 @@ const path=require('node:path');
    await page.locator('#owgPathsStatus').filter({hasText:'12 cases (100%) reach this point.'}).waitFor();
    assert.equal(await page.locator('#owgPathsTrail').textContent(),'Path: … → Open');
    assert((await rowsText()).startsWith('Check1191.7%'),await rowsText());
-   await page.locator('#owgPathsResults button',{hasText:'Go to Check'}).click();
+   const [anchored]=await Promise.all([
+     page.waitForResponse(response=>{
+       const url=new URL(response.url());
+       return url.pathname.endsWith('/next-steps')&&url.searchParams.getAll('step').length===2;
+     }),
+     page.locator('#owgPathsResults button',{hasText:'Go to Check'}).click()
+   ]);
+   assert.equal(new URL(anchored.url()).searchParams.get('anchor_steps'),'1');
+   assert.equal((await anchored.json()).anchor_steps,1);
    await page.locator('#owgPathsStatus').filter({hasText:'11 cases'}).waitFor();
    assert.equal(await page.locator('#owgPathsResults button',{hasText:'Go to'}).count(),2);
    await page.addScriptTag({content:axeSource});

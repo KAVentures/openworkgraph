@@ -38,22 +38,24 @@ def _quantile(values: list[float], q: float) -> float | None:
     return round((ordered[lo] + (ordered[hi] - ordered[lo]) * (pos - lo)) / 3600, 3)
 
 
-def _find(path: list[str], prefix: list[str], anchor: str) -> int | None:
+def _find(path: list[str], prefix: list[str], anchor: str, anchor_steps: int | None) -> int | None:
     """Index just after the prefix in ``path``, or None."""
     k = len(prefix)
     if not k:
         return 0
     if anchor == "start":
         return k if path[:k] == prefix else None
-    first = prefix[0]
-    for i in range(len(path) - k + 1):
-        if path[i] == first and path[i:i + k] == prefix:
-            return i + k
+    initial = prefix if anchor_steps is None else prefix[:anchor_steps]
+    width = len(initial)
+    for i in range(len(path) - width + 1):
+        if path[i] == initial[0] and path[i:i + width] == initial:
+            return i + k if width == k or path[i:i + k] == prefix else None
     return None
 
 
 def next_steps(log_id: str, prefix: list[str] | None = None, case_type: str | None = None, *,
-               anchor: str = "start", cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+               anchor: str = "start", cohort: dict[str, Any] | None = None,
+               anchor_steps: int | None = None) -> dict[str, Any]:
     prefix = [str(p) for p in (prefix or [])]
     if len(prefix) > MAX_PREFIX or any(not p or len(p) > 500 for p in prefix):
         raise EventLogWorkspaceError(f"the sequence has at most {MAX_PREFIX} named steps")
@@ -61,6 +63,9 @@ def next_steps(log_id: str, prefix: list[str] | None = None, case_type: str | No
         raise EventLogWorkspaceError("anchor must be start or anywhere")
     if anchor == "anywhere" and not prefix:
         raise EventLogWorkspaceError("choose at least one step to look for anywhere in the cases")
+    if anchor_steps is not None and (anchor != "anywhere" or type(anchor_steps) is not int
+                                     or not 1 <= anchor_steps <= len(prefix)):
+        raise EventLogWorkspaceError("anchor_steps requires an anywhere sequence and must fit within that sequence")
 
     def run(conn):
         rows = conn.execute("""SELECT list(activity ORDER BY ts, event_id), list(epoch(ts) ORDER BY ts, event_id)
@@ -73,36 +78,37 @@ def next_steps(log_id: str, prefix: list[str] | None = None, case_type: str | No
     at_point = 0
     gaps: dict[str, list[float]] = defaultdict(list)
     to_end: dict[str, list[float]] = defaultdict(list)
-    counts: dict[str, int] = defaultdict(int)
+    counts: dict[str | None, int] = defaultdict(int)
     elapsed: list[float] = []
     for path, stamps in rows:
-        after = _find(path, prefix, anchor)
+        after = _find(path, prefix, anchor, anchor_steps)
         if after is None:
             continue
         at_point += 1
         if prefix:
             elapsed.append(stamps[after - 1] - stamps[0])
         if after >= len(path):
-            counts[END] += 1
+            counts[None] += 1
             continue
         step = path[after]
         counts[step] += 1
         gaps[step].append(stamps[after] - stamps[after - 1] if after else 0.0)
         to_end[step].append(stamps[-1] - stamps[after])
-    order = sorted(counts, key=lambda a: (-counts[a], a == END, a))
+    order = sorted(counts, key=lambda a: (-counts[a], a is None, a or ""))
     steps = []
     for activity in order[:MAX_NEXT]:
         n = counts[activity]
         steps.append({
-            "activity": activity, "is_end": activity == END, "cases": n,
+            "activity": END if activity is None else activity, "is_end": activity is None, "cases": n,
             "share": round(n / at_point, 4) if at_point else None,
-            "hours_from_previous": None if activity == END or not prefix else {
+            "hours_from_previous": None if activity is None or not prefix else {
                 "median": _quantile(gaps[activity], 0.5), "p90": _quantile(gaps[activity], 0.9)},
-            "hours_to_case_end": None if activity == END else {"median": _quantile(to_end[activity], 0.5)},
+            "hours_to_case_end": None if activity is None else {"median": _quantile(to_end[activity], 0.5)},
         })
     return {
         "format": FORMAT, "log_id": log_id, "case_notion": data.get("case_notion"),
         "prefix": prefix, "anchor": anchor, "cases": total, "cases_at_point": at_point,
+        **({"anchor_steps": anchor_steps} if anchor_steps is not None else {}),
         "share_of_cases": round(at_point / total, 4) if total else None,
         "hours_to_reach_point": {"median": _quantile(elapsed, 0.5), "p90": _quantile(elapsed, 0.9)}
                                 if prefix and anchor == "start" else None,
