@@ -1872,7 +1872,21 @@
     const tagBox=input('owgAgentShareTags','checkbox');
     const tagLabel=el('label',' Let AI agents tag cases (tags start with \u201cagent:\u201d and say an agent added them; nothing else changes)');tagLabel.prepend(tagBox);
     const tagOut=el('div');tagOut.id='owgAgentShareTagsStatus';tagOut.setAttribute('role','status');
-    box.append(row,out,tagLabel,tagOut);
+    // What connected agents asked for: time, tool and outcome only, never parameters or answers.
+    const reads=button('Show recent agent reads','secondary');reads.id='owgAgentAccessLoad';
+    const readsOut=el('div');readsOut.id='owgAgentAccess';readsOut.setAttribute('role','status');readsOut.setAttribute('aria-live','polite');
+    box.append(row,out,tagLabel,tagOut,reads,readsOut);
+    const OUTCOMES={ok:'Answered',not_shared:'Refused: not shared at that level',not_allowed:'Refused: not allowed',invalid:'Refused: invalid request',error:'Failed: the tool hit an error'};
+    const toolName=op=>op.replace(/_/g,' ');
+    reads.onclick=async()=>{reads.disabled=true;readsOut.replaceChildren(el('div','Loading agent reads\u2026','muted'));
+      try{const r=await getJSON('/v1/event-logs/'+encodeURIComponent(state.logId)+'/agent-access?limit=50');
+        if(!r.recorded){readsOut.replaceChildren(el('div','No AI agent has read this log yet.','muted'));return;}
+        const summary=el('div',r.recorded+' agent call'+(r.recorded===1?'':'s')+' recorded'+(r.recorded>=r.kept_at_most?' (only the latest '+r.kept_at_most+' are kept)':'')+'. '+r.note,'muted');
+        const counts=table(['Tool (last 30 days)','Calls','Refused'],r.last_30_days.map(x=>[toolName(x.operation),String(x.calls),String(x.refused)]));counts.id='owgAgentAccessTools';
+        const calls=table(['When (UTC)','Tool','Outcome'],r.calls.map(c=>[c.at.slice(0,19).replace('T',' '),toolName(c.operation),OUTCOMES[c.outcome]||c.outcome]));calls.id='owgAgentAccessCalls';
+        readsOut.replaceChildren(summary,counts,el('h4','Latest calls'),calls);}
+      catch(error){readsOut.replaceChildren(el('div',error.message));}
+      finally{reads.disabled=false;}};
     const base='/v1/event-logs/'+encodeURIComponent(state.logId)+'/agent-share',generation=state.generation;
     const show=r=>{level.value=r.level||'';
       out.textContent=r.level?('Shared with AI agents since '+String(r.granted_at).slice(0,16).replace('T',' ')+' UTC.'+(r.tools_listed?' Restart a connected AI app to see the process tools.':'')):'Not shared: AI agents cannot read this log.';
