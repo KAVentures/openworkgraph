@@ -38,10 +38,10 @@ def _read(text):
 @pytest.mark.parametrize(("raw", "expected"), [
     ("=1+1", "'=1+1"),
     ("  =SUM(1,2)", "'  =SUM(1,2)"),
-    ("\\ufeff+HYPERLINK(1)", "'\\ufeff+HYPERLINK(1)"),
-    (" \\ufeff\\t@unsafe", "' \\ufeff\\t@unsafe"),
-    ("\\n=1+1", "'\\n=1+1"),
-    ("\\tplain", "'\\tplain"),
+    ("\ufeff+HYPERLINK(1)", "'\ufeff+HYPERLINK(1)"),
+    (" \ufeff\t@unsafe", "' \ufeff\t@unsafe"),
+    ("\n=1+1", "'\n=1+1"),
+    ("\tplain", "'\tplain"),
     ("Normal activity", "Normal activity"),
     ("123", "123"),
 ])
@@ -56,7 +56,7 @@ def test_formula_like_activity_paths_are_safe_end_to_end():
     stream = io.StringIO()
     writer = csv.writer(stream)
     writer.writerow(["case", "activity", "time"])
-    labels = ("  =SUM(1,2)", "\\ufeff+HYPERLINK(1)", "Normal")
+    labels = ("  =SUM(1,2)", "\ufeff+HYPERLINK(1)", "Normal")
     for i, label in enumerate(labels):
         writer.writerow([f"c{i}", label, f"2024-01-0{i + 1}T00:00:00Z"])
     log = workspace.import_log(BytesIO(stream.getvalue().encode("utf-8")),
@@ -64,7 +64,7 @@ def test_formula_like_activity_paths_are_safe_end_to_end():
     text, meta = ve.variants_csv(log)
     assert meta["cases"] == 3
     assert {row["path"] for row in _read(text)} == {
-        "'  =SUM(1,2)", "'\\ufeff+HYPERLINK(1)", "Normal",
+        "'  =SUM(1,2)", "'\ufeff+HYPERLINK(1)", "Normal",
     }
 
 
