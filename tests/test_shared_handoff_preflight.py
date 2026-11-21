@@ -346,3 +346,14 @@ def test_review_success_status_requires_verified_actor_acknowledgment():
     assert 'Review response received; verifying acknowledgment.' in block
     assert 'Design review acknowledged. Reopen and reinspect' in block
     assert block.index('if(!acknowledged){') < block.index('Design review acknowledged. Reopen and reinspect')
+
+
+def test_review_acknowledgment_rejects_ambiguous_duplicate_actor_entries():
+    """A matching historical/duplicate decision cannot prove the latest decision."""
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split("async function review(decision) {", 1)[1].split('$("approve").onclick', 1)[0]
+    assert 'reviewResult.review.reviews.filter((entry)=>' in block
+    assert 'entry?.reviewer_actor_id===reviewSelection.your_actor_id).length===1' in block
+    assert 'entry.decision===decision' in block
+    assert block.index(').length===1') < block.index('reviewResult.review.reviews.some((entry)=>')
+    assert block.index('if(!acknowledged){') < block.index('render(reviewResult);')
