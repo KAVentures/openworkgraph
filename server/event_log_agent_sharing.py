@@ -535,6 +535,36 @@ def heuristics_net(log_id: str, case_type: str | None = None, dependency_thresho
     return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
 
 
+def data_quality(log_id: str) -> dict[str, Any]:
+    """How far the log can be trusted (aggregates level): rows accepted and rejected (by reason) over every
+    import and append, the current diagnostics (duplicates, shared timestamps, events without resource,
+    future-dated events, single-event cases, attribute coverage), whether the saved content still matches its
+    import report, and the per-batch quality trend. Hashes and import mappings are not returned."""
+    require(log_id, "aggregates")
+    from . import event_log_quality as quality
+    result = quality.quality(log_id)
+    reasons: dict[str, int] = {}
+    accepted = rejected = 0
+    for report in result.get("reports") or []:
+        rows = report.get("rows") or {}
+        accepted += int(rows.get("accepted") or 0)
+        rejected += int(rows.get("rejected") or 0)
+        for reason, n in (rows.get("rejected_by_reason") or {}).items():
+            reasons[reason] = reasons.get(reason, 0) + int(n or 0)
+    current = result.get("current") or {}
+    trends = [{k: b.get(k) for k in ("batch", "kind", "created_at", "metrics", "comparison")}
+              for b in ((result.get("batch_trends") or {}).get("batches") or [])][-12:]
+    return {"format": FORMAT, "log_id": log_id, "batches": len(result.get("reports") or []),
+            "batches_without_report": len(result.get("batches_without_report") or []),
+            "rows": {"accepted": accepted, "rejected": rejected, "rejected_by_reason": reasons,
+                     "reason_counts_can_overlap": True},
+            "diagnostics": current.get("diagnostics"), "completeness": current.get("completeness"),
+            "integrity": {k: v for k, v in (result.get("integrity") or {}).items() if k in ("status", "reason")},
+            "batch_trend": trends,
+            "caveat": ("Quality describes the supplied rows. Whether the source system holds events that were not "
+                       "exported is unknown; check rejected rows and shared timestamps before trusting orderings.")}
+
+
 def footprints(log_id: str, case_type: str | None = None, noise: float = 0.2) -> dict[str, Any]:
     """Log and discovered-model footprint matrices and where they disagree (aggregates level)."""
     require(log_id, "aggregates")
@@ -679,6 +709,127 @@ def model_comparison(log_id: str, group_a: str, group_b: str, case_type: str | N
     from . import event_log_model_change as mc
     return {**mc.model_comparison(log_id, group_a, group_b, case_type, noise=max(0.0, min(float(noise), 0.95))),
             "format": FORMAT, "log_id": log_id}
+
+
+def trace_clusters(log_id: str, case_type: str | None = None, k: int | None = None, max_k: int = 8) -> dict[str, Any]:
+    """Groups of cases with similar behaviour (aggregates level). Clusters and variants with fewer than
+    AGENT_MIN_CELL_CASES cases are withheld; the variant lists that would filter to a cluster are not returned."""
+    require(log_id, "aggregates")
+    from . import event_log_trace_clusters as tc
+    spec: dict[str, Any] = {"max_k": max_k}
+    if k is not None:
+        spec["k"] = k
+    if case_type:
+        spec["case_type"] = case_type
+    result = tc.clusters(log_id, spec)
+    floor = AGENT_MIN_CELL_CASES
+    shown = []
+    for cluster in result["clusters"]:
+        if cluster["cases"] < floor:
+            continue
+        variants = [v for v in cluster["top_variants"] if v["cases"] >= floor]
+        # A large cluster can still contain a one-case activity. Only expose
+        # activity contrasts supported by at least five cases both locally
+        # and in the complete log; do not return internal support counters.
+        def safe_contrast(items):
+            return [{key: value for key, value in item.items()
+                     if key not in ("cases_in_cluster", "cases_in_log")}
+                    for item in items if item["cases_in_cluster"] >= floor and item["cases_in_log"] >= floor]
+        shown.append({**{key: value for key, value in cluster.items()
+                         if key not in ("cohort", "more_common_activities", "less_common_activities")},
+                      "more_common_activities": safe_contrast(cluster["more_common_activities"]),
+                      "less_common_activities": safe_contrast(cluster["less_common_activities"]),
+                      "top_variants": variants,
+                      "top_variants_withheld": len(cluster["top_variants"]) - len(variants)})
+    return {**{key: value for key, value in result.items() if key != "log"}, "format": FORMAT, "log_id": log_id,
+            "clusters": shown,
+            "withheld": {"clusters": len(result["clusters"]) - len(shown),
+                         "cases": sum(c["cases"] for c in result["clusters"]) - sum(c["cases"] for c in shown),
+                         "min_cases": floor}}
+
+
+def compliance(log_id: str, rules: Any, case_type: str | None = None) -> dict[str, Any]:
+    """Check rules (response, precedence, response within a time, not co-existence, segregation of duties,
+    existence) against the cases (aggregates level). Violating case IDs are returned only for a log shared at
+    the cases level; at the aggregates level a rule's counts are withheld when it applies to fewer than
+    AGENT_MIN_CELL_CASES cases or any of its counts is between 1 and AGENT_MIN_CELL_CASES - 1."""
+    require(log_id, "aggregates")
+    from . import event_log_compliance as cp
+    if not isinstance(rules, list) or not rules:
+        raise EventLogWorkspaceError("rules must be a non-empty list")
+    spec: dict[str, Any] = {"rules": rules}
+    if case_type:
+        spec["case_type"] = case_type
+    result = cp.check(log_id, spec)
+    with_cases = _level(log_id) == "cases"
+    floor = AGENT_MIN_CELL_CASES
+    counted = ("activated_cases", "vacuously_satisfied_cases", "violating_cases", "satisfied_cases", "unknown_cases")
+    results, withheld = [], 0
+    for item in result["results"]:
+        if not with_cases:
+            item = {key: value for key, value in item.items() if key not in ("violating_case_examples", "examples_truncated")}
+            # A rule about a rare activity would otherwise say how many of a handful of cases did something.
+            small = item["activated_cases"] < floor or any(0 < (item[key] or 0) < floor for key in counted)
+            if small:
+                withheld += 1
+                item = {**{key: value for key, value in item.items()
+                           if key not in counted + ("violation_rate", "violation_rate_ci95")},
+                        **{key: None for key in counted}, "violation_rate": None, "violation_rate_ci95": None,
+                        "withheld": True}
+        results.append(item)
+    return {**{key: value for key, value in result.items() if key not in ("log", "rules_with_violations")},
+            "format": FORMAT, "log_id": log_id, "results": results, "case_ids_returned": with_cases,
+            "rules_with_violations": sum(1 for r in results if r.get("violating_cases")),
+            "withheld": {"rules": withheld, "min_cases": floor, "applies": "aggregates level"}}
+
+
+def performance_spectrum(log_id: str, case_type: str | None = None, segments: list[str] | None = None,
+                         top: int = 6, bins: int = 30) -> dict[str, Any]:
+    """Time between consecutive activities over the log's span, per segment: duration classes per time bin,
+    FIFO and batching shares (aggregates level). Individual case lines are not returned, and segments seen fewer
+    than AGENT_MIN_CELL_CASES times are withheld."""
+    require(log_id, "aggregates")
+    from . import event_log_performance_spectrum as ps
+    result = ps.spectrum(log_id, case_type, segments=ps.parse_segments(list(segments or [])), top=top, bins=bins)
+    floor = AGENT_MIN_CELL_CASES
+    # Repeated events from one case are not five independent supporting cases.
+    # The dashboard spectrum counts occurrences; separately measure case support
+    # in the same mapped case notion before sharing any segment with agents.
+    def support(conn):
+        rows = conn.execute("""SELECT activity, next_activity, count(DISTINCT case_id)
+            FROM (SELECT case_id, activity,
+                         lead(activity) OVER (PARTITION BY case_id ORDER BY ts, event_id) AS next_activity
+                  FROM ce) WHERE next_activity IS NOT NULL GROUP BY activity, next_activity""").fetchall()
+        return {"result": rows}
+    counts = {(a, b): int(n) for a, b, n in workspace._query(log_id, case_type, support)["result"]}
+    with_cases = _level(log_id) == "cases"
+    kept = []
+    bins_withheld = False
+    for segment in result["segments"]:
+        if counts.get((segment["from"], segment["to"]), 0) < floor:
+            continue
+        durations = {key: value for key, value in segment["duration_seconds"].items() if key != "max"}
+        # Buckets count occurrences, not distinct cases: one case may account
+        # for an apparently well-supported time bin. Until each class/bin can
+        # prove independent case support, keep temporal histograms at the
+        # explicitly case-shared permission level only.
+        safe_bins = with_cases
+        bins_withheld = bins_withheld or not safe_bins
+        kept.append({**{key: value for key, value in segment.items()
+                         if key not in ("lines", "lines_sampled", "bins")},
+                     "bins": segment["bins"] if safe_bins else [],
+                     "bins_withheld_for_small_cells": not safe_bins,
+                     "duration_seconds": durations})
+    # No source log details or exact global time origin when some bins/segments
+    # were hidden from an aggregates-only share.
+    hide_clock = not with_cases
+    return {**{k: v for k, v in result.items() if k != "log"},
+            "time_origin": None if hide_clock else result.get("time_origin"),
+            "bin_seconds": None if hide_clock else result.get("bin_seconds"),
+            "format": FORMAT, "log_id": log_id, "segments": kept,
+            "withheld": {"segments": len(result["segments"]) - len(kept), "min_cases": floor,
+                         "spectrum_bins_withheld": bins_withheld},
+            "case_lines_returned": False}
 
 
 def compare_cases(log_id: str, case_a: str, case_b: str, case_type: str | None = None) -> dict[str, Any]:

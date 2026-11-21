@@ -291,6 +291,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-log-domain-packs`, `GET/POST/DELETE /v1/event-logs/{log_id}/domain-packs/…` | Versioned domain packs (order to cash): map the pack's roles to the log's names, install with version and parameters, run its metrics, rules and reference model as one report. See [DOMAIN_PACKS.md](DOMAIN_PACKS.md). |
 | `GET /v1/event-logs/{log_id}/object-attributes` | Per object type and attribute, how timed values change and how many event links happened while another value than the stored one held; `object_id` adds one object's timeline. |
 | `GET /v1/event-logs/{log_id}/variants` | Most frequent variants with share and median duration. |
+| `GET /v1/event-logs/{log_id}/variants.csv` | Every variant (up to 10,000) as spreadsheet-safe CSV: rank, path (activities joined with ` > `), steps, cases, share, running share, median and 90th-percentile duration in seconds; honours the case filter. The dashboard's **Download all variants (CSV)** under *Most common variants* saves it; the `X-OWG-Variants` header says when the list was cut. |
 | `GET /v1/event-logs/{log_id}/directly-follows` | Directly-follows graph with start and end activities. |
 | `GET /v1/event-logs/{log_id}/activities` | Activity frequency and rework (cases that repeat the activity). |
 | `POST /v1/event-logs/{log_id}/attribute-profile` | Coverage, type, level and frequent values of every event attribute (below). |
