@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -28,7 +29,8 @@ from .event_log_workspace import EventLogWorkspaceError
 FORMAT = "openworkgraph.event_log_activity_glossary.v1"
 MAX_NOTES_PER_LOG = 2000
 AUTOMATION = ("manual", "partly", "automated", "candidate")
-_FORMULA = ("=", "+", "-", "@", "\t", "\r")
+# A spreadsheet may evaluate a cell as a formula after leading spaces, line breaks or a byte-order mark.
+_FORMULA_PREFIX = re.compile(r"^[\s\ufeff]*[=+\-@]")
 
 
 class Note(BaseModel):
@@ -140,8 +142,12 @@ def delete_note(log_id: str, activity: Any) -> dict[str, Any]:
     return _with_conn(log_id, run)
 
 
+def _guarded(text: str) -> bool:
+    return text.startswith(("\t", "\r", "\n")) or bool(_FORMULA_PREFIX.match(text))
+
+
 def _cell(value: Any) -> Any:
-    if isinstance(value, str) and value.startswith(_FORMULA):
+    if isinstance(value, str) and _guarded(value):
         return "'" + value
     return value
 
@@ -164,7 +170,7 @@ _AUTOMATION_WORDS = {"manual": "manual", "partly": "partly", "partly automated":
 
 def _uncell(value: str) -> str:
     """Undo the formula guard of glossary_csv, so a downloaded glossary imports unchanged."""
-    if len(value) > 1 and value[0] == "'" and value[1] in "".join(_FORMULA):
+    if len(value) > 1 and value[0] == "'" and _guarded(value[1:]):
         return value[1:]
     return value
 

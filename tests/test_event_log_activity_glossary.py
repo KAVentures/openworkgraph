@@ -77,6 +77,20 @@ def test_csv_is_spreadsheet_safe():
     assert close[3].startswith("'=") and close[5] == "'@sys" and close[1] == "yes"
 
 
+def test_csv_guards_formulas_after_spaces_breaks_and_bom():
+    rows = ["case,activity,time"] + [f'c{i},"{a}",2024-01-0{1 + i}T00:00:00Z' for i, a in enumerate(["  =HYPERLINK(1)", "\ufeff+SUM(1)", "Plain"])]
+    log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="f", source_format="csv", mapping=MAPPING)["log_id"]
+    gl.set_note(log, {"activity": "Plain", "description": "-1 day", "owner_team": " @team", "system": "SAP"})
+    out = {r[0]: r for r in csv.reader(io.StringIO(gl.glossary_csv(log)))}
+    assert "'  =HYPERLINK(1)" in out and "'\ufeff+SUM(1)" in out
+    plain = out["Plain"]
+    assert plain[3] == "'-1 day" and plain[5] == "SAP"
+    assert gl._cell("\n=1") == "'\n=1" and gl._cell("\t1") == "'\t1" and gl._cell("a=1") == "a=1"
+    imported = gl.import_csv(log, gl.glossary_csv(log))
+    row = {a["activity"]: a for a in imported["activities"]}
+    assert row["Plain"]["description"] == "-1 day" and row["Plain"]["owner_team"] == "@team"
+
+
 def test_deleting_the_log_deletes_the_glossary():
     log = _log()
     gl.set_note(log, {"activity": "Open", "description": "Request arrives"})
