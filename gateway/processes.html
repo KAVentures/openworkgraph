@@ -2172,8 +2172,12 @@
             reviewResult.process.content_sha256===record.content_sha256 &&
             reviewResult.your_actor_id===reviewSelection.your_actor_id &&
             Array.isArray(reviewResult.review?.reviews) &&
+            // Review summaries represent the latest decision per actor.
+            // Duplicate actor entries make the acknowledgment ambiguous.
+            reviewResult.review.reviews.filter((entry)=>
+              entry?.reviewer_actor_id===reviewSelection.your_actor_id).length===1 &&
             reviewResult.review.reviews.some((entry)=>
-              entry.reviewer_actor_id===reviewSelection.your_actor_id &&
+              entry?.reviewer_actor_id===reviewSelection.your_actor_id &&
               entry.decision===decision);
           if(!acknowledged){
             $("reviewConfirm").checked=false;
