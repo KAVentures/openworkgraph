@@ -216,8 +216,10 @@ def dimensions(log_id: str, case_type: str | None = None) -> dict[str, Any]:
 
 def _cell(value: Any) -> str:
     """CSV cell safe to open in a spreadsheet: a leading formula character is neutralized."""
+    from shared.spreadsheet_review import review_cell
+
     text = "" if value is None else str(value)
-    return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
+    return review_cell(text)
 
 
 def breakdown_csv(log_id: str, rows: str, columns: str | None = None, case_type: str | None = None, *,
@@ -230,7 +232,7 @@ def breakdown_csv(log_id: str, rows: str, columns: str | None = None, case_type:
         ["with_activity_share"] if with_activity is not None else [])
     out = io.StringIO()
     writer = csv.writer(out, lineterminator="\n")
-    writer.writerow([r["rows"]["label"], r["columns"]["label"] if r["columns"] else "column", *figures, "fewer_than_5_cases"])
+    writer.writerow([_cell(r["rows"]["label"]), _cell(r["columns"]["label"]) if r["columns"] else "column", *figures, "fewer_than_5_cases"])
     every = "All"
     lines = [(c["row"], c["column"], c) for c in r["cells"]]
     lines += [(t["row"], every, t) for t in r["row_totals"]] if r["columns"] else []

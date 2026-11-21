@@ -178,6 +178,20 @@ def test_breakdown_csv_neutralizes_formulas():
     assert lines[1][0] == "'=SUM(1)"
 
 
+def test_breakdown_csv_neutralizes_whitespace_prefixed_formulas_and_headers(monkeypatch):
+    import csv
+    import io
+
+    monkeypatch.setattr(bd, "breakdown", lambda *args, **kwargs: {
+        "rows": {"label": "\ufeff=header"}, "columns": {"label": "\tcolumn"},
+        "cells": [{"row": "  =1+1", "column": "\n@cmd"}],
+        "row_totals": [], "column_totals": [], "overall": {},
+    })
+    lines = list(csv.reader(io.StringIO(bd.breakdown_csv("log", "row", "column"))))
+    assert lines[0][:2] == ["'\ufeff=header", "'\tcolumn"]
+    assert lines[1][:2] == ["'  =1+1", "'\n@cmd"]
+
+
 def test_breakdown_csv_route(tmp_path):
     code = r'''
 from fastapi.testclient import TestClient

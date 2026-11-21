@@ -24,7 +24,7 @@ MAX_ALIGNED_TRACE_LENGTH = 300
 MAX_AUTOMATION_RESOURCES = 50
 MIN_GROUP_CASES = 5
 NUMERIC_RANGE_MIN_DISTINCT = 10  # numeric case attributes with more distinct values are also tested by quartile
-_OUTCOMES = {"duration_over", "contains_activity", "ends_with", "rework", "variant_in"}
+_OUTCOMES = {"duration_over", "contains_activity", "ends_with", "rework", "variant_in", "tagged"}
 MAX_OUTCOME_VARIANTS = 500
 
 
@@ -260,9 +260,10 @@ def _cohort_hint(kind: str, value: str, bounds: str | None) -> dict[str, Any] | 
 
 def root_cause(log_id: str, outcome: str, case_type: str | None = None, *, threshold_seconds: int | None = None,
                activity: str | None = None, limit: int = 30, variants: list[list[str]] | None = None,
-               cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+               cohort: dict[str, Any] | None = None, tag: str | None = None) -> dict[str, Any]:
     """Case features associated with an outcome. ``variant_in`` marks cases whose exact path is one of
-    ``variants`` (for example the paths an alignment found non-fitting); ``cohort`` restricts the cases."""
+    ``variants`` (for example the paths an alignment found non-fitting); ``tagged`` marks cases the analyst
+    tagged with ``tag``; ``cohort`` restricts the cases."""
     # A malformed direct-call outcome may be an unhashable list/dict; reject
     # it with the public domain error instead of leaking Python TypeError.
     if not isinstance(outcome, str) or outcome not in _OUTCOMES:
@@ -285,6 +286,8 @@ def root_cause(log_id: str, outcome: str, case_type: str | None = None, *, thres
         raise EventLogWorkspaceError("threshold_seconds is required for a duration outcome")
     if outcome in {"contains_activity", "ends_with"} and not activity:
         raise EventLogWorkspaceError("activity is required for this outcome")
+    if outcome == "tagged" and (not isinstance(tag, str) or not 0 < len(tag.strip()) <= 60):
+        raise EventLogWorkspaceError("tag is required for a tagged outcome (1 to 60 characters)")
     if outcome == "variant_in":
         if (not isinstance(variants, list) or not 1 <= len(variants) <= MAX_OUTCOME_VARIANTS
                 or any(not isinstance(v, list) or not v or any(not isinstance(a, str) for a in v) for v in variants)):
@@ -299,11 +302,14 @@ def root_cause(log_id: str, outcome: str, case_type: str | None = None, *, thres
         "ends_with": "arg_max(activity, (ts, event_id)) = $activity",
         "rework": "count(*) > count(DISTINCT activity)",
         "variant_in": f"string_agg(activity, '{workspace._SEP}' ORDER BY ts, event_id) IN (SELECT unnest($paths))",
+        "tagged": "case_id IN (SELECT case_id FROM case_tags WHERE log_id = $tag_log AND tag = $tag)",
     }[outcome]
     params = {key: value for key, value in (
         ("threshold", threshold_seconds if threshold_seconds is not None else 0),
         ("activity", activity or ""),
         ("paths", [workspace._SEP.join(v) for v in variants or []]),
+        ("tag_log", log_id),
+        ("tag", (tag or "").strip()),
     ) if "$" + key in outcome_sql}
 
     def run(conn):
@@ -312,7 +318,8 @@ def root_cause(log_id: str, outcome: str, case_type: str | None = None, *, thres
         n, y = conn.execute("SELECT count(*), count(*) FILTER (WHERE y) FROM co").fetchone()
         base = {"cases": n, "outcome_cases": y, "outcome_rate": round(y / n, 6) if n else None,
                 "outcome": {"kind": outcome, "threshold_seconds": threshold_seconds, "activity": activity,
-                            **({"variants": len(variants)} if outcome == "variant_in" else {})}}
+                            **({"variants": len(variants)} if outcome == "variant_in" else {}),
+                            **({"tag": (tag or "").strip()} if outcome == "tagged" else {})}}
         if not n or y in (0, n):
             return {**base, "features_tested": 0, "associations": [],
                     "note": "the outcome does not vary across cases, so nothing can be associated with it",

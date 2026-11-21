@@ -116,7 +116,8 @@ def _case_filter(started_from: str = Query(default="", max_length=64),
                  events_max: int | None = Query(default=None, ge=1, le=10 ** 9),
                  path_cases_min: int | None = Query(default=None, ge=1, le=10 ** 9),
                  path_cases_max: int | None = Query(default=None, ge=1, le=10 ** 9),
-                 rework: bool | None = Query(default=None)) -> dict[str, Any]:
+                 rework: bool | None = Query(default=None),
+                 without_tag: str = Query(default="", max_length=60)) -> dict[str, Any]:
     """The case filter shared by analysis views; ``follows`` is a JSON list of follower rules.
 
     ``starts_with``/``ends_with`` keep cases whose first/last activity is the given one; ``duration_min``
@@ -130,7 +131,7 @@ def _case_filter(started_from: str = Query(default="", max_length=64),
                               "tag": tag, "starts_with": starts_with, "ends_with": ends_with}
     if duration_min is not None or duration_max is not None:
         cohort["duration"] = {k: v for k, v in (("min", duration_min), ("max", duration_max)) if v is not None}
-    cohort.update({"ended_from": ended_from, "ended_before": ended_before, "rework": rework})
+    cohort.update({"ended_from": ended_from, "ended_before": ended_before, "rework": rework, "without_tag": without_tag})
     for key, low, high in (("events", events_min, events_max), ("path_cases", path_cases_min, path_cases_max)):
         if low is not None or high is not None:
             cohort[key] = {k: v for k, v in (("min", low), ("max", high)) if v is not None}
@@ -1254,6 +1255,17 @@ def event_log_similar_cases(request: Request, log_id: str, case_id: str = Query(
     return _respond(similar.similar_cases, log_id, case_id, case_type, limit=limit, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/co-occurrence")
+def event_log_cooccurrence(request: Request, log_id: str, limit: int = Query(default=12, ge=2, le=25),
+                           min_support: int = Query(default=5, ge=1, le=10 ** 6),
+                           case_type: str | None = Query(default=None, max_length=200),
+                           cohort: dict = Depends(_case_filter)):
+    """Which of the most common activities happen in the same cases, regardless of order."""
+    from . import event_log_cooccurrence as co
+    _require_dashboard(request)
+    return _respond(co.cooccurrence, log_id, case_type, limit=limit, min_support=min_support, cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/activity-profile")
 def event_log_activity_profile(request: Request, log_id: str,
                                profile_activity: str = Query(min_length=1, max_length=500),
@@ -2209,10 +2221,12 @@ def event_log_root_cause(request: Request, log_id: str, outcome: str = Query(max
                          case_type: str | None = Query(default=None, max_length=200),
                          threshold_seconds: int | None = Query(default=None, ge=1, le=10 ** 9),
                          activity: str | None = Query(default=None, max_length=200),
+                         outcome_tag: str | None = Query(default=None, max_length=60),
                          limit: int = Query(default=30, ge=1, le=100)):
+    """``outcome=tagged`` with ``outcome_tag``: which features go with the cases carrying that tag."""
     _require_dashboard(request)
     return _respond(analytics.root_cause, log_id, outcome, case_type, threshold_seconds=threshold_seconds,
-                    activity=activity, limit=limit)
+                    activity=activity, limit=limit, tag=outcome_tag)
 
 
 @router.get("/v1/event-logs/{log_id}/simulation/calibration")
@@ -2395,6 +2409,14 @@ async def event_log_activity_mappings(request: Request, log_id: str):
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(404, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/v1/event-logs/{log_id}/activity-label-suggestions")
+def event_log_activity_label_suggestions(request: Request, log_id: str):
+    """Groups of original activity names that are probably the same activity (mapping suggestions)."""
+    from . import event_log_label_suggestions as labels
+    _require_dashboard(request)
+    return _respond(labels.suggestions, log_id)
 
 
 @router.post("/v1/event-logs/{log_id}/activity-mappings")

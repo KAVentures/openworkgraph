@@ -651,7 +651,9 @@ enter; it is not treated as approved policy.
 ### Root cause
 
 Choose an outcome: case takes longer than N hours, case has rework, case
-contains an activity, or case ends with an activity. Every case feature
+contains an activity, case ends with an activity, or **case has tag** (the cases
+you or an alignment tagged, such as `off-model`; `outcome=tagged&outcome_tag=…`
+in the API). Every case feature
 (activity present, resource involved, case-object attribute value) that both
 5+ cases have and 5+ cases lack is compared:
 
@@ -1764,7 +1766,10 @@ verified waiting. Redrawing a one-million-event log takes a few seconds
 settings, for slides and documents. The SVG is self-contained: styles are inlined, and
 interactive attributes are removed. Its `<desc>` and a two-line footer record the log, the
 slider settings, the coverage shown and that the map is derived from the supplied log, not a
-verified business workflow. The PNG is rendered in the browser at twice the drawn size.
+verified business workflow. The PNG is rendered in the browser at twice the drawn size. **Download map data (CSV)** saves the numbers behind the same map
+for a spreadsheet: one row per activity (events and cases), start activity, path (transitions,
+cases and the median, mean and 90th-percentile gap in seconds) and end activity, with cells that
+would start a formula prefixed with `'`.
 Nothing is uploaded; activity names in the file are as sensitive as the log.
 
 ## Predicting open cases
@@ -2148,8 +2153,12 @@ performance and variation filters:
 * **Rework**: `rework=true` keeps cases that repeat at least one activity; `rework=false` keeps
   cases that repeat none.
 
+* **Case tag**: keeps the cases that carry a tag (`tag`) or that do not (`without_tag`), for
+  example everything except the cases tagged as not fitting a reference net. Tags come from *Case
+  tags*, unusual cases, alignments and root-cause results.
+
 In a JSON cohort they are `ended_from`, `ended_before`, `events: {"min": n, "max": n}`,
-`path_cases: {"min": n, "max": n}` and `rework: true|false`. They combine with every other
+`path_cases: {"min": n, "max": n}`, `rework: true|false`, `tag` and `without_tag`. They combine with every other
 condition, apply to the same views, and are kept by saved filters.
 
 The case pickers inside individual sections take the same numeric range, under "Numeric case
@@ -2389,6 +2398,21 @@ step is an association, not proof that the step causes it.
 
 `GET /v1/event-logs/{log_id}/activity-profile?profile_activity=Check` plus the case-filter
 parameters (`activity` there is the case filter). Agents use `get_process_activity_profile`.
+
+## Activities that happen together
+
+**Activities that happen together** compares the most common activities (8, 12 or 20) by the
+cases they occur in, in any order. The matrix reads row by row: of the cases with the activity in
+the row, the share that also have the one in the column. Hover a cell for the number of cases and
+the **lift**: cases with both × all cases / (cases with the first × cases with the second). Above 1,
+the two go together more than chance would give; 0 means they never occur in the same case.
+
+Below the matrix are the pairs that **go together most** (lift above 1, with at least 5 cases with
+both) and the pairs of activities, each in at least 5 cases, that are **never in the same case**.
+The second list often shows alternative branches, such as approve and reject. The view honours the
+case filter. `GET /v1/event-logs/{log_id}/co-occurrence?limit=12&min_support=5` (plus `case_type`
+and the case-filter parameters) needs the dashboard session. Co-occurrence describes the recorded
+cases; two activities that go together need not depend on each other.
 
 ## Path explorer
 
