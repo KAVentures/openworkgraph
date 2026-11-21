@@ -1766,7 +1766,10 @@ verified waiting. Redrawing a one-million-event log takes a few seconds
 settings, for slides and documents. The SVG is self-contained: styles are inlined, and
 interactive attributes are removed. Its `<desc>` and a two-line footer record the log, the
 slider settings, the coverage shown and that the map is derived from the supplied log, not a
-verified business workflow. The PNG is rendered in the browser at twice the drawn size.
+verified business workflow. The PNG is rendered in the browser at twice the drawn size. **Download map data (CSV)** saves the numbers behind the same map
+for a spreadsheet: one row per activity (events and cases), start activity, path (transitions,
+cases and the median, mean and 90th-percentile gap in seconds) and end activity, with cells that
+would start a formula prefixed with `'`.
 Nothing is uploaded; activity names in the file are as sensitive as the log.
 
 ## Predicting open cases
