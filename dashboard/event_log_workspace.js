@@ -1371,7 +1371,15 @@
       if(!from||!to)throw new Error('Choose both activities for every rule.');
       if(Array.from(from).length>200||Array.from(to).length>200)throw new Error('Activity labels must have at most 200 characters.');
       if(!mode)throw new Error('Choose how the activities follow each other.');
-      return {from,to,mode:mode[0],negate:mode[1]};
+      const spec={from,to,mode:mode[0],negate:mode[1]};
+      // Optional time between the two steps, in hours: at least min_hours, less than max_hours.
+      for(const key of ['min_hours','max_hours']){
+        const raw=r[key];if(raw===undefined||raw===null||raw==='')continue;
+        const value=Number(raw);if(!Number.isFinite(value)||value<0)throw new Error('Time limits are zero or more hours.');
+        spec[key]=value;}
+      if((spec.min_hours!==undefined||spec.max_hours!==undefined)&&spec.negate)throw new Error('A time limit applies only to a rule where one step follows the other.');
+      if(spec.min_hours!==undefined&&spec.max_hours!==undefined&&!(spec.min_hours<spec.max_hours))throw new Error('The shortest time must be below the longest.');
+      return spec;
     });
     if(rules.length>5)throw new Error('Use at most 5 rules.');
     return rules;
@@ -1429,9 +1437,12 @@
   }
 
   function followText(rule){
-    return rule.from+(rule.negate?' is never ':' is ')+(rule.mode==='direct'?'directly':'eventually')+' followed by '+rule.to;
+    const h=x=>Number(x)+' h';
+    const time=rule.min_hours!==undefined&&rule.max_hours!==undefined?' after '+h(rule.min_hours)+' to '+h(rule.max_hours):rule.min_hours!==undefined?' after at least '+h(rule.min_hours):rule.max_hours!==undefined?' within '+h(rule.max_hours):'';
+    return rule.from+(rule.negate?' is never ':' is ')+(rule.mode==='direct'?'directly':'eventually')+' followed by '+rule.to+time;
   }
-  const followRow=rule=>({from:rule.from,to:rule.to,mode:(rule.negate?'not-':'')+rule.mode});
+  const followRow=rule=>({from:rule.from,to:rule.to,mode:(rule.negate?'not-':'')+rule.mode,
+    ...(rule.min_hours!==undefined?{min_hours:rule.min_hours}:{}),...(rule.max_hours!==undefined?{max_hours:rule.max_hours}:{})});
 
   // Preserve all selected conditions. Incompatible numeric ranges fail closed
   // instead of silently dropping either the operation or workspace constraint.
@@ -1613,9 +1624,12 @@
         const fromLookup=activityLabelLookup(exactFrom,{id:part=>'owgCaseFilterFrom'+part+n,subject:'activity for rule '+n}),toLookup=activityLabelLookup(exactTo,{id:part=>'owgCaseFilterTo'+part+n,subject:'later activity for rule '+n});
         exactFrom.oninput=()=>{rule.from=exactFrom.value||from.value;fromLookup.reset();};
         exactTo.oninput=()=>{rule.to=exactTo.value||to.value;toLookup.reset();};mode.onchange=()=>{rule.mode=mode.value;};
+        const minH=input('owgCaseFilterMinHours'+n,'number','hours'),maxH=input('owgCaseFilterMaxHours'+n,'number','hours');
+        for(const [node,key] of [[minH,'min_hours'],[maxH,'max_hours']]){node.min='0';node.step='any';if(rule[key]!==undefined)node.value=rule[key];node.oninput=()=>{rule[key]=node.value;};}
         const remove=button('Remove','secondary');remove.setAttribute('aria-label','Remove rule '+n);remove.onclick=()=>{draft.splice(i,1);render();};
         const row=el('div',null,'row');row.style.alignItems='end';
-        row.append(field('Rule '+n+': activity',from),field('Rule '+n+': exact activity',exactFrom),fromLookup.wrap,field('Rule '+n+': order',mode),field('Rule '+n+': later activity',to),field('Rule '+n+': exact later activity',exactTo),toLookup.wrap,remove);
+        row.append(field('Rule '+n+': activity',from),field('Rule '+n+': exact activity',exactFrom),fromLookup.wrap,field('Rule '+n+': order',mode),field('Rule '+n+': later activity',to),field('Rule '+n+': exact later activity',exactTo),toLookup.wrap,
+          field('Rule '+n+': after at least (hours)',minH),field('Rule '+n+': within (hours)',maxH),remove);
         return row;
       }));
       add.disabled=draft.length>=5;
