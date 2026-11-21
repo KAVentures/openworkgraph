@@ -2113,6 +2113,8 @@
                current.process.revision!==pinned.revision||
                current.process.content_sha256!==pinned.content_sha256||
                current.review?.status!=="reviewed_design"||
+               current.permissions?.review!==true||
+               current.your_actor_id!==chosen.your_actor_id||
                record.workflow_id!==pinned.workflow_id||
                record.revision!==pinned.revision||
                record.content_sha256!==pinned.content_sha256) {
@@ -2372,6 +2374,8 @@
                current.latest_revision!==inspected.revision||
                current.process.content_sha256!==inspected.content_sha256||
                current.review?.status!=="reviewed_design"||
+               current.permissions?.review!==true||
+               current.your_actor_id!==chosen.your_actor_id||
                chosen.viewing_historical_revision||chosen.archived||
                chosen.process?.revision!==inspected.revision||
                chosen.process?.content_sha256!==inspected.content_sha256){
@@ -2451,7 +2455,9 @@
                current.process.revision!==p.revision||
                current.latest_revision!==p.revision||
                current.process.content_sha256!==p.content_sha256||
-               current.review?.status!=="reviewed_design"){
+               current.review?.status!=="reviewed_design"||
+               current.permissions?.review!==true||
+               current.your_actor_id!==chosen.your_actor_id){
               fail("Current authorized process is archived, changed, inaccessible, mismatched or lacks independent design review of this revision.");return;
             }
             // Inspection may fetch the latest revision while the UI still shows
