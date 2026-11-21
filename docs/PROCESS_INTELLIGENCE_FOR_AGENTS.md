@@ -54,6 +54,10 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 | `list_process_logs` | Shared logs: id, name, level, size, case notions, whether agents may tag cases. |
 | `get_process_overview` | Cases, events, durations, KPIs (optionally an SLA), top variants, top insights with their case filters. |
 | `get_process_overview_for_cases` | The overview of only the cases matching a case filter (same keys as insight cohorts, e.g. `{"attribute": "region=EU"}` or `{"activity": "Escalate"}`), next to the whole log: case count and share, durations, KPIs and top variants. Refused when fewer than 5 cases match. | aggregates |
+| `get_process_variants` | The most common paths with cases, share and median duration, and how much of the log they cover. Variants followed by fewer than 5 cases are withheld and counted. | aggregates |
+| `get_process_map` | The process map: activities, which directly follows which (counts and gaps), start and end activities, with optional activity and path sliders. Activities and transitions in fewer than 5 cases are withheld. | aggregates |
+| `get_process_duration_distribution` | Cases per duration band and the median, p90 and p95 duration (not the single shortest or longest case). | aggregates |
+| `get_process_time_patterns` | Events and case arrivals by weekday and hour in a time zone, optionally for one activity, and the share outside working hours. | aggregates |
 | `get_process_root_cause` | Associations with `duration_over` (hours), `rework`, `contains_activity` or `ends_with` (activity). |
 | `explain_process_case` | One case's steps, gaps over the typical gap, repeats and uncommon steps (cases level). |
 | `get_slowest_process_cases` | Slowest cases first (cases level). |
@@ -105,6 +109,10 @@ nothing authorizes an action.
 | `GET /v1/process-intelligence/{log_id}/temporal-profile?zeta=&case_type=` | Same, `aggregates` or `cases`. |
 | `GET /v1/process-intelligence/{log_id}/heuristics-net?dependency_threshold=&case_type=` | Same, `aggregates` or `cases`. |
 | `GET /v1/process-intelligence/{log_id}/footprints?noise=&case_type=` | Same, `aggregates` or `cases`. |
+| `GET /v1/process-intelligence/{log_id}/variants?limit=&case_type=` | Same, `aggregates` or `cases`. |
+| `GET /v1/process-intelligence/{log_id}/process-map?activities=&paths=&case_type=` | Same, `aggregates` or `cases`. |
+| `GET /v1/process-intelligence/{log_id}/duration-distribution?cutoffs_seconds=&case_type=` | Same, `aggregates` or `cases`. |
+| `GET /v1/process-intelligence/{log_id}/time-patterns?time_zone=&activity=&case_type=` | Same, `aggregates` or `cases`. |
 | `POST /v1/event-logs/{log_id}/agent-share/tags` (`{"allowed": true \| false}`) | Dashboard session only. |
 | `POST /v1/process-intelligence/{log_id}/case-tags` (`{"tag", "case_ids", "note"?, "case_type"?}`) | Agent, `cases` level and the tag permission (403 without it). |
 
