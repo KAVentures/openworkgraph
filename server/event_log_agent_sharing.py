@@ -532,8 +532,10 @@ def impact(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, An
         body["case_type"] = case_type
     if spec.get("metric") == "activity_count" and isinstance(spec.get("activity"), str):
         # Per-period counts of a rare activity would say how many of a handful of cases did it.
-        cases = {x["activity"]: x["cases"] for x in workspace.activities(log_id, case_type)["activities"]}
-        if cases.get(spec["activity"], 0) < AGENT_MIN_CELL_CASES:
+        # Counted directly: workspace.activities lists only the 500 most frequent labels.
+        support = workspace._query(log_id, case_type, lambda conn: {"cases": conn.execute(
+            "SELECT count(DISTINCT case_id) FROM ce WHERE activity = ?", [spec["activity"]]).fetchone()[0]})["cases"]
+        if support < AGENT_MIN_CELL_CASES:
             raise EventLogWorkspaceError(f"activity_count needs an activity seen in at least {AGENT_MIN_CELL_CASES} cases")
     result = im.analyze(log_id, body)
     floor = im.MIN_CASES

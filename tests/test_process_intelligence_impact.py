@@ -93,3 +93,27 @@ with TestClient(app) as client:
 '''
     env = {**os.environ, 'WORKFLOW_OBSERVER_DATA': str(tmp_path / 'data'), 'WORKFLOW_OBSERVER_AUTH_DIR': str(tmp_path / 'auth')}
     subprocess.run([sys.executable, '-c', code], env=env, check=True, timeout=60)
+
+
+def test_activity_count_support_beyond_the_500_most_frequent_labels():
+    """500 labels in 7 cases each outrank "Late step", which is in 5 cases; it must still be accepted."""
+    rows = ["case,activity,time"]
+    start = datetime(2024, 1, 1, 8)
+    stamp = lambda t: t.strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
+    for i in range(30):
+        t0 = start + timedelta(days=i)
+        rows += [f"c{i},Open,{stamp(t0)}", f"c{i},Close,{stamp(t0 + timedelta(hours=2))}"]
+        if i < 5:
+            rows.append(f"c{i},Late step,{stamp(t0 + timedelta(hours=1))}")
+    for k in range(500):
+        rows += [f"c{j},Label {k:03d},{stamp(start + timedelta(days=j, minutes=30))}" for j in range(7)]
+    log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="w", source_format="csv",
+                               mapping={"case_column": "case", "activity_column": "activity",
+                                        "timestamp_column": "time"})["log_id"]
+    assert "Late step" not in {a["activity"] for a in workspace.activities(log)["activities"]}
+    sharing.set_share(log, "aggregates")
+    r = sharing.impact(log, {"intervention_at": "2024-01-16T00:00:00Z", "metric": "activity_count", "activity": "Late step"})
+    assert r["groups"]["all"]["baseline"]["cases"] == 15
+    with pytest.raises(EventLogWorkspaceError, match="at least 5 cases"):
+        sharing.impact(log, {"intervention_at": "2024-01-16T00:00:00Z", "metric": "activity_count",
+                             "activity": "Missing"})
