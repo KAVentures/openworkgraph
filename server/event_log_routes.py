@@ -2220,10 +2220,12 @@ def event_log_root_cause(request: Request, log_id: str, outcome: str = Query(max
                          case_type: str | None = Query(default=None, max_length=200),
                          threshold_seconds: int | None = Query(default=None, ge=1, le=10 ** 9),
                          activity: str | None = Query(default=None, max_length=200),
+                         outcome_tag: str | None = Query(default=None, max_length=60),
                          limit: int = Query(default=30, ge=1, le=100)):
+    """``outcome=tagged`` with ``outcome_tag``: which features go with the cases carrying that tag."""
     _require_dashboard(request)
     return _respond(analytics.root_cause, log_id, outcome, case_type, threshold_seconds=threshold_seconds,
-                    activity=activity, limit=limit)
+                    activity=activity, limit=limit, tag=outcome_tag)
 
 
 @router.get("/v1/event-logs/{log_id}/simulation/calibration")

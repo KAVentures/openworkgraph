@@ -3770,19 +3770,20 @@
 
   function rootCauseSection(activityNames,inspection){
     const box=section('What is associated with an outcome');
-    const outcome=select('owgEventLogOutcome',[['duration_over','Case takes longer than'],['rework','Case has rework'],['contains_activity','Case contains activity'],['ends_with','Case ends with activity']]);
+    const outcome=select('owgEventLogOutcome',[['duration_over','Case takes longer than'],['rework','Case has rework'],['contains_activity','Case contains activity'],['ends_with','Case ends with activity'],['tagged','Case has tag']]);
+    const outcomeTag=input('owgEventLogOutcomeTag','text','for example off-model');outcomeTag.maxLength=60;outcomeTag.autocomplete='off';
     const hours=input('owgEventLogOutcomeHours','number','hours');hours.min='0';hours.step='any';
     const activity=select('owgEventLogOutcomeActivity',activityNames.slice(0,500).map(a=>[a,a]));
     const exact=input('owgEventLogOutcomeActivityExact','text','Exact activity label (optional)');exact.maxLength=400;
     const lookup=activityLabelLookup(exact,{id:part=>'owgEventLogOutcomeActivity'+part,subject:'outcome activity'});
     exact.addEventListener('input',lookup.reset);activity.onchange=()=>{exact.value='';lookup.reset();};
     const run=button('Find associations','secondary');run.id='owgEventLogRootCauseRun';
-    const hoursField=field('Hours',hours),activityField=field('Activity',activity),exactField=field('Exact outcome activity',exact);
+    const hoursField=field('Hours',hours),activityField=field('Activity',activity),exactField=field('Exact outcome activity',exact),tagField=field('Tag',outcomeTag);
     const activityNote=el('div','An exact label overrides the suggestion. Matching is literal; an unknown label may match no cases.','muted');
     const sync=()=>{const needsActivity=['contains_activity','ends_with'].includes(outcome.value);
-      show(hoursField,outcome.value==='duration_over');show(activityField,needsActivity);show(exactField,needsActivity);show(lookup.wrap,needsActivity);show(activityNote,needsActivity);};
+      show(hoursField,outcome.value==='duration_over');show(tagField,outcome.value==='tagged');show(activityField,needsActivity);show(exactField,needsActivity);show(lookup.wrap,needsActivity);show(activityNote,needsActivity);};
     outcome.onchange=sync;sync();
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Outcome',outcome),hoursField,activityField,exactField,lookup.wrap,run);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Outcome',outcome),hoursField,tagField,activityField,exactField,lookup.wrap,run);
     const out=el('div');out.id='owgEventLogRootCauseResults';box.append(row,activityNote,out);
     // Each association carries the case filter that selects exactly its cases: look at them, tag them or save them.
     const casePanel=el('div');casePanel.id='owgEventLogRootCauseCases';casePanel.setAttribute('role','status');
@@ -3853,6 +3854,7 @@
       try{
         const params={outcome:outcome.value};
         if(outcome.value==='duration_over'){const h=Number(hours.value);if(!(h>0))throw new Error('Enter the number of hours.');params.threshold_seconds=String(Math.round(h*3600));}
+        if(outcome.value==='tagged'){const t=outcomeTag.value.trim();if(!t)throw new Error('Enter the tag of the cases to explain.');params.outcome_tag=t;}
         if(!activityField.hidden){const label=exact.value||activity.value;
           if(!label||Array.from(label).length>200)throw new Error('Choose an activity label of at most 200 characters.');params.activity=label;}
         const r=await getJSON(logPath('root-cause',params));
