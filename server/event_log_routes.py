@@ -336,6 +336,26 @@ async def event_log_mapping_matches(request: Request):
     return await run_in_threadpool(_respond, reuse.matches, spec)
 
 
+@router.post("/v1/event-logs/jsonl-to-csv")
+async def convert_jsonl_event_log(request: Request):
+    """Convert a JSON Lines file (one object per line) to CSV for the ordinary CSV import. Nothing is stored."""
+    from . import event_log_jsonl as jsonl
+    _require_dashboard(request)
+    with tempfile.SpooledTemporaryFile(max_size=8 << 20, dir=str(DATA_DIR)) as spool:
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > jsonl.MAX_BYTES:
+                raise HTTPException(413, "the file is larger than the supported limit")
+            spool.write(chunk)
+        spool.seek(0)
+        try:
+            result = await run_in_threadpool(jsonl.to_csv, spool)
+        except jsonl.JsonlError as exc:
+            raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/timestamp-formats")
 async def detect_timestamp_formats(request: Request, column: str = Query(min_length=1, max_length=200),
                                    delimiter: str = Query(default=",", max_length=1)):

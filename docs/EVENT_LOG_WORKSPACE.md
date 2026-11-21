@@ -128,6 +128,17 @@ are offered, not views, virtual tables or SQLite's own tables, and each is read 
 most 256 MB. NULL becomes an empty cell and binary values are left empty and counted. SQLite stores
 no time zone, so the import asks which offset times without one use.
 
+### JSON Lines files
+
+A `.jsonl` or `.ndjson` file (one JSON object per line, as APIs and log shippers write) is converted
+to CSV in the same way and then mapped like any CSV. Nested objects become dotted columns
+(`customer.id`, up to five levels), lists and other non-scalar values are kept as compact JSON text,
+`null` becomes an empty cell and booleans `true`/`false`; columns appear in the order first seen.
+Blank lines are skipped; any other line that is not a JSON object refuses the file with its line
+number. At most 2,000,000 lines, 500 columns and 1 MB per line are read, and the upload may be at
+most 256 MB. `POST /v1/event-logs/jsonl-to-csv` with the file as the body returns `rows`, `columns`
+and `csv`. Nothing is stored. A `.json` file is still read as OCEL 2.0 JSON.
+
 ### Excel workbooks
 
 Choosing an `.xlsx` file in the dashboard converts its first worksheet to CSV
