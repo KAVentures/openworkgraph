@@ -2213,6 +2213,11 @@
             recordedReview.process.revision===record.revision &&
             recordedReview.process.content_sha256===record.content_sha256 &&
             recordedReview.your_actor_id===reviewSelection.your_actor_id &&
+            // A read-back of an archived or superseded revision cannot certify
+            // the current reviewed handoff, even if its historical decision matches.
+            !recordedReview.archived &&
+            !recordedReview.viewing_historical_revision &&
+            recordedReview.latest_revision===record.revision &&
             // An inspected handoff must not be acknowledged after access was
             // revoked or its membership revision changed during POST/read-back.
             (!submittedInspectedHandoff ||
