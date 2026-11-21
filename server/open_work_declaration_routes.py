@@ -3423,6 +3423,16 @@ async def read_local_bound_provider_event(request: Request, response: Response):
     )
     await _recheck_source(scope)
     _dashboard_only(request)
+    # Source credentials and account metadata may be replaced during provider
+    # I/O without changing the retained case. Never disclose a verdict from
+    # the former account under a newly authorized source identity.
+    async def require_same_provider_account():
+        current = await asyncio.to_thread(_read_metadata, _metadata_path())
+        if (not isinstance(current, dict)
+                or current.get("account") != account):
+            raise HTTPException(409, "provider source account changed during verification")
+
+    await require_same_provider_account()
     after = await review()
     if before != after:
         raise HTTPException(409, "run/case admission changed during provider read")
@@ -3432,6 +3442,8 @@ async def read_local_bound_provider_event(request: Request, response: Response):
     if final != after:
         raise HTTPException(409, "run/case admission changed during final review")
     await _recheck_source(scope)
+    _dashboard_only(request)
+    await require_same_provider_account()
     _dashboard_only(request)
     response.headers["Cache-Control"] = "no-store"
     return {
