@@ -126,6 +126,19 @@ async def agent_case(request: Request, log_id: str, case_id: str = Query(min_len
     return await _answer(sharing.explain_case, log_id, case_id, case_type)
 
 
+@router.post("/v1/process-intelligence/{log_id}/simulate")
+async def agent_simulate(request: Request, log_id: str):
+    """POST because a scenario is a JSON object. Body: {"scenario": {...}, "case_type": optional text}."""
+    _require_agent_access(request)
+    spec = await _json_body(request, "scenario", strict=True, limit=65536)
+    if not isinstance(spec, dict) or "scenario" not in spec or set(spec) - {"scenario", "case_type"}:
+        raise HTTPException(422, 'send {"scenario": {...}} with optional case_type')
+    case_type = spec.get("case_type")
+    if case_type is not None and (not isinstance(case_type, str) or not 0 < len(case_type) <= 200):
+        raise HTTPException(422, "case_type must be a short text")
+    return await _answer(sharing.simulate, log_id, spec["scenario"], case_type)
+
+
 @router.get("/v1/process-intelligence/{log_id}/automation-candidates")
 async def agent_automation_candidates(request: Request, log_id: str, limit: int = Query(default=10, ge=1, le=50),
                                       case_type: str | None = Query(default=None, max_length=200)):
@@ -139,6 +152,29 @@ async def agent_decision_rules(request: Request, log_id: str, activity: str | No
                                max_depth: int = Query(default=3, ge=1, le=4)):
     _require_agent_access(request)
     return await _answer(sharing.decision_rules, log_id, activity, case_type, max_depth)
+
+
+@router.get("/v1/process-intelligence/{log_id}/open-case-predictions")
+async def agent_open_case_predictions(request: Request, log_id: str,
+                                      end_activity: list[str] = Query(min_length=1, max_length=20),
+                                      outcome: str | None = Query(default=None, pattern="^(duration_over|contains_activity)$"),
+                                      outcome_hours: float | None = Query(default=None, gt=0, le=100000),
+                                      outcome_activity: str | None = Query(default=None, min_length=1, max_length=200),
+                                      limit: int = Query(default=25, ge=1, le=100),
+                                      case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.open_case_predictions, log_id, end_activity, case_type, outcome, outcome_hours,
+                         outcome_activity, limit)
+
+
+@router.get("/v1/process-intelligence/{log_id}/open-case-next-activity")
+async def agent_open_case_next_activity(request: Request, log_id: str,
+                                        end_activity: list[str] = Query(min_length=1, max_length=20),
+                                        history: int = Query(default=2, ge=1, le=4),
+                                        limit: int = Query(default=25, ge=1, le=100),
+                                        case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.open_case_next_activity, log_id, end_activity, case_type, history, limit)
 
 
 @router.get("/v1/process-intelligence/{log_id}/temporal-profile")

@@ -398,6 +398,35 @@ def signals(log_id: str) -> dict[str, Any]:
                      "or snooze signals. A triggered signal is not a verified problem or an instruction to act.")}
 
 
+AGENT_MAX_SIMULATED_CASES = 5000
+AGENT_MAX_REPLICATIONS = 20
+
+
+def simulate(log_id: str, scenario: Any, case_type: str | None = None) -> dict[str, Any]:
+    """What-if simulation against the baseline calibrated from the log (aggregates level). The calibrated case
+    paths are not returned (only how many there are and the share of cases they cover), so a rare path cannot
+    single out a case; paths or transitions the agent supplies are echoed back. Runs are bounded for agents."""
+    require(log_id, "aggregates")
+    from . import event_log_simulation as sim
+    if not isinstance(scenario, dict):
+        raise EventLogWorkspaceError("scenario must be an object")
+    cases = scenario.get("cases", 2000)
+    if isinstance(cases, bool) or not isinstance(cases, int) or not 10 <= cases <= AGENT_MAX_SIMULATED_CASES:
+        raise EventLogWorkspaceError(f"cases must be a whole number from 10 to {AGENT_MAX_SIMULATED_CASES} for agents")
+    spread = scenario.get("uncertainty")
+    if isinstance(spread, dict):
+        count = spread.get("replications", 20)
+        if isinstance(count, bool) or not isinstance(count, int) or count > AGENT_MAX_REPLICATIONS:
+            raise EventLogWorkspaceError(f"uncertainty replications are at most {AGENT_MAX_REPLICATIONS} for agents")
+    result = sim.what_if(log_id, {"format": sim.FORMAT, **scenario}, case_type)
+    calibration = {k: v for k, v in result["calibration"].items() if k not in ("paths", "transitions")}
+    calibration["paths_count"] = len(result["calibration"].get("paths") or [])
+    shown = {k: v for k, v in result["scenario"].items()
+             if k not in ("paths", "transitions") or k in scenario}
+    return {**{k: v for k, v in result.items() if k not in ("log", "calibration", "scenario")}, "format": FORMAT,
+            "log_id": log_id, "calibration": calibration, "scenario": shown, "calibrated_paths_returned": False}
+
+
 def automation_candidates(log_id: str, case_type: str | None = None, limit: int = 10) -> dict[str, Any]:
     """Activities ranked by volume, routine routing and waiting (aggregates level)."""
     require(log_id, "aggregates")
@@ -422,6 +451,61 @@ def decision_rules(log_id: str, activity: str | None = None, case_type: str | No
                 "method", "features_known_at_decision", "max_depth", "features", "feature_importance", "rules",
                 "evaluation", "learned_anything", "note", "caveat")
     return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
+
+
+def _open_case_spec(end_activities: list[str], case_type: str | None, limit: int) -> dict[str, Any]:
+    if not isinstance(end_activities, list) or not 1 <= len(end_activities) <= 20 or any(
+            not isinstance(a, str) or not 1 <= len(a) <= 200 for a in end_activities):
+        raise EventLogWorkspaceError("end_activities must be 1 to 20 activity names that end a case")
+    spec: dict[str, Any] = {"end_activities": list(dict.fromkeys(end_activities)), "limit": limit}
+    if case_type:
+        spec["case_type"] = case_type
+    return spec
+
+
+def open_case_predictions(log_id: str, end_activities: list[str], case_type: str | None = None,
+                          outcome: str | None = None, outcome_hours: float | None = None,
+                          outcome_activity: str | None = None, limit: int = 25) -> dict[str, Any]:
+    """Remaining time (and optionally an outcome risk) for open cases, learned from completed cases and
+    backtested (aggregates level). Per-case estimates are returned only for a log shared at the cases level."""
+    require(log_id, "aggregates")
+    from . import event_log_predictions as predictions
+    spec = _open_case_spec(end_activities, case_type, max(1, min(int(limit), 100)))
+    if outcome == "duration_over":
+        if outcome_hours is None or isinstance(outcome_hours, bool) or not 0 < float(outcome_hours) <= 10 ** 5:
+            raise EventLogWorkspaceError("outcome duration_over needs outcome_hours above 0")
+        spec["outcome"] = {"kind": "duration_over", "seconds": max(1, int(round(float(outcome_hours) * 3600)))}
+    elif outcome == "contains_activity":
+        if not isinstance(outcome_activity, str) or not 1 <= len(outcome_activity) <= 200:
+            raise EventLogWorkspaceError("outcome contains_activity needs outcome_activity")
+        spec["outcome"] = {"kind": "contains_activity", "activity": outcome_activity}
+    elif outcome is not None:
+        raise EventLogWorkspaceError("outcome must be duration_over or contains_activity")
+    result = predictions.predict(log_id, spec)
+    with_cases = _level(log_id) == "cases"
+    out = {k: v for k, v in result.items() if k not in ("predictions", "predictions_truncated")}
+    if with_cases:
+        out["predictions"] = result["predictions"]
+        out["predictions_truncated"] = result["predictions_truncated"]
+    return {**out, "format": FORMAT, "log_id": log_id, "case_ids_returned": with_cases}
+
+
+def open_case_next_activity(log_id: str, end_activities: list[str], case_type: str | None = None,
+                            history: int = 2, limit: int = 25) -> dict[str, Any]:
+    """What usually happens next in open cases, from completed cases with the same recent activities, with a
+    backtest (aggregates level). Per-case predictions are returned only for a log shared at the cases level."""
+    require(log_id, "aggregates")
+    from . import event_log_next_activity as na
+    if isinstance(history, bool) or not isinstance(history, int) or not 1 <= history <= 4:
+        raise EventLogWorkspaceError("history must be 1 to 4 recent activities")
+    spec = {**_open_case_spec(end_activities, case_type, max(1, min(int(limit), 100))), "history": history}
+    result = na.next_activity(log_id, spec)
+    with_cases = _level(log_id) == "cases"
+    out = {k: v for k, v in result.items() if k not in ("predictions", "open_cases_shown")}
+    if with_cases:
+        out["predictions"] = result["predictions"]
+        out["open_cases_shown"] = result["open_cases_shown"]
+    return {**out, "format": FORMAT, "log_id": log_id, "case_ids_returned": with_cases}
 
 
 def temporal_profile(log_id: str, case_type: str | None = None, zeta: float = 3.0) -> dict[str, Any]:
