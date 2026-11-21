@@ -454,3 +454,14 @@ def test_handoff_review_readback_rejects_access_revocation_after_post():
     assert "recordedReview.permissions?.review===true" in block
     assert block.index("recordedReview.access_revision===reviewSelection.access_revision") < block.index("if(!recorded) {")
     assert block.index("if(!recorded) {") < block.index("Design review acknowledged. Reopen and reinspect")
+
+
+def test_review_readback_refuses_archived_or_superseded_revision():
+    """A historical matching decision must not certify a current reviewed handoff."""
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split('const recordedEntries=recordedReview?.review?.reviews;', 1)[1].split('if(!recorded)', 1)[0]
+    assert '!recordedReview.archived' in block
+    assert '!recordedReview.viewing_historical_revision' in block
+    assert 'recordedReview.latest_revision===record.revision' in block
+    assert 'recordedReview.process.content_sha256===record.content_sha256' in block
+    assert 'recordedReview.permissions?.review===true' in block
