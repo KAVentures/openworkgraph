@@ -1359,9 +1359,11 @@ class CompleteSourceCohortTests(unittest.TestCase):
         self.assertEqual(score["source_events_with_false_links"], 1)
         self.assertEqual(score["source_event_false_link_rate"], 0.25)
         self.assertEqual(score["per_window_counts"]["current"]["false_link_events"], 1)
-        self.assertEqual(score["per_window_counts"]["current"]["positive_events"], 1)
-        self.assertEqual(score["per_window_counts"]["current"]["positive_false_link_events"], 1)
-        self.assertEqual(score["per_window_metrics"]["current"]["positive_false_link_rate"], 1.0)
+        # Three events have positive labels (two surfaced, one missed).
+        # The only false link belongs to the explicitly negative b-between event.
+        self.assertEqual(score["per_window_counts"]["current"]["positive_events"], 3)
+        self.assertEqual(score["per_window_counts"]["current"]["positive_false_link_events"], 0)
+        self.assertEqual(score["per_window_metrics"]["current"]["positive_false_link_rate"], 0.0)
         metrics = score["per_window_metrics"]["current"]
         self.assertAlmostEqual(metrics["precision"], 2 / 3)
         self.assertAlmostEqual(metrics["recall"], 2 / 3)
