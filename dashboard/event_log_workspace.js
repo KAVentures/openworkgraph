@@ -888,7 +888,7 @@
     results.appendChild(benchmarkSection(names));
     results.appendChild(timePatternSection(names));
     results.appendChild(impactSection(names));
-    results.appendChild(stuckSection());
+    results.appendChild(stuckSection(inspection));
     results.appendChild(savedGraphSection(names,inspection));
     results.appendChild(simulationSection());
     results.appendChild(conformanceSection((variants.variants||[])[0]));
@@ -1362,7 +1362,7 @@
       }
       more.onclick=page;await page();
     }
-    return {node:box,path(value,comparisonCohort){
+    return {node:box,open:openCase,path(value,comparisonCohort){
       if(value.length>500){message.textContent='This path exceeds the 500-step case selector limit. Browse by activity or cohort instead.';box.scrollIntoView({block:'nearest'});return;}
       association=false;path=value.slice();transition=null;chosen.textContent='Exact path: '+JSON.stringify(path);
       if(comparisonCohort!==undefined){
@@ -2490,25 +2490,32 @@
       placebo:r.placebo.estimated?'Placebo check at '+String(r.placebo.placebo_at).slice(0,10)+': '+signed(r.placebo.mean_change)+' (95% '+range(r.placebo.mean_change_ci95)+')'+(r.placebo.pre_trend_detected?', already changing before the intervention.':', no earlier change.'):'Placebo check: '+r.placebo.reason+'.'};
   }
 
-  function stuckSection(){
+  function stuckSection(inspection){
     const box=section('Stuck open cases');box.id='owgEventLogStuck';
-    box.appendChild(el('div','Open cases idle longer than usual after their latest activity, compared with how long cases in this log usually waited after the same activity. Measured to the end of the log.','muted'));
+    box.appendChild(el('div','Open cases idle longer than usual after their latest activity. The case filter selects which cases to check. Wait history and the latest event come from the selected case notion.','muted'));
     const ends=input('owgStuckEnds','text','Close, Cancel');
     const pctInput=select('owgStuckPercentile',[['0.9','Longer than 90% of past waits'],['0.95','Longer than 95%'],['0.75','Longer than 75%']]);
     const run=button('Find stuck cases','secondary');run.id='owgStuckRun';
     const out=el('div');out.id='owgStuckResults';out.setAttribute('role','status');
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities that end a case',ends),field('Stuck when idle',pctInput),run);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities that end a case (comma-separated or JSON array)',ends),field('Stuck when idle',pctInput),run);
     box.append(row,out);
     const generation=state.generation;
     run.onclick=async()=>{
       run.disabled=true;
       try{
-        const spec={end_activities:ends.value.split(',').map(x=>x.trim()).filter(Boolean),percentile:Number(pctInput.value)};
+        const raw=ends.value.trim();
+        const endActivities=/^\[\s*(?:"|\])/.test(raw)?JSON.parse(raw):raw.split(',').map(x=>x.trim()).filter(Boolean);
+        const spec={end_activities:endActivities,percentile:Number(pctInput.value),cohort:globalCohort()};
         if(state.caseType)spec.case_type=state.caseType;
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/stuck-cases',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
         if(generation!==state.generation)return;
         const parts=[el('div',Number(r.stuck_cases).toLocaleString()+' of '+Number(r.judged_open_cases).toLocaleString()+' judged open cases look stuck'+(r.not_judged_open_cases?'; '+Number(r.not_judged_open_cases).toLocaleString()+' open cases sit at activities with too little history to judge':'')+'.')];
-        if(r.cases.length)parts.push(table(['Case','Latest activity','Idle for','Usually waits','Stuck after','Events so far'],r.cases.map(c=>[c.case_id,c.latest_activity,duration(c.idle_seconds),duration(c.usual_wait_seconds),duration(c.threshold_seconds),c.events_so_far])));
+        if(r.cases.length)parts.push(table(['Case','Latest activity','Idle for','Usually waits','Stuck after','Events so far','Evidence'],r.cases.map(c=>{
+          const open=button('Open case','secondary');open.setAttribute('aria-label','Open case '+c.case_id);
+          open.onclick=()=>inspection.open(c.case_id);
+          return [c.case_id,c.latest_activity,duration(c.idle_seconds),duration(c.usual_wait_seconds),duration(c.threshold_seconds),c.events_so_far,open];
+        })));
+        if(r.cases_truncated)parts.push(el('div','Showing '+r.cases.length+' of '+Number(r.stuck_cases).toLocaleString()+' stuck cases.','muted'));
         const acts=r.by_activity.filter(a=>a.stuck_cases);
         if(acts.length)parts.push(el('h4','Where they wait'),table(['Latest activity','Open cases','Stuck'],acts.map(a=>[a.activity,a.open_cases,a.stuck_cases])));
         parts.push(el('div',r.interpretation,'muted'));out.replaceChildren(...parts);
