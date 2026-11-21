@@ -820,11 +820,15 @@ def _query(log_id: str, case_type: str | None, fn, *, control=None) -> dict[str,
                 notion = _case_type(query_conn, log_id, case_type)
                 # Materialize the case-notion projection once per request (temp, per connection).
                 query_conn.execute(f"CREATE OR REPLACE TEMP TABLE ce AS {_CASE_EVENTS}", [log_id, notion])
+                # Hidden activities match stored names, so they are removed before any mapping relabels them.
+                from .event_log_hidden_activities import apply_to_case_events as hide_activities
+                hidden = hide_activities(query_conn, log_id)
                 from .event_log_activity_mappings import apply_to_case_events
                 mapping = apply_to_case_events(query_conn, log_id)
                 result = fn(query_conn)
                 return {"log": info, "case_notion": notion, **result, **DESCRIPTIVE_ONLY,
-                        **({"activity_mapping": mapping} if mapping else {})}
+                        **({"activity_mapping": mapping} if mapping else {}),
+                        **({"hidden_activities": hidden} if hidden else {})}
         finally:
             conn.close()
 
