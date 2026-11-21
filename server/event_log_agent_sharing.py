@@ -424,6 +424,61 @@ def decision_rules(log_id: str, activity: str | None = None, case_type: str | No
     return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
 
 
+def _open_case_spec(end_activities: list[str], case_type: str | None, limit: int) -> dict[str, Any]:
+    if not isinstance(end_activities, list) or not 1 <= len(end_activities) <= 20 or any(
+            not isinstance(a, str) or not 1 <= len(a) <= 200 for a in end_activities):
+        raise EventLogWorkspaceError("end_activities must be 1 to 20 activity names that end a case")
+    spec: dict[str, Any] = {"end_activities": list(dict.fromkeys(end_activities)), "limit": limit}
+    if case_type:
+        spec["case_type"] = case_type
+    return spec
+
+
+def open_case_predictions(log_id: str, end_activities: list[str], case_type: str | None = None,
+                          outcome: str | None = None, outcome_hours: float | None = None,
+                          outcome_activity: str | None = None, limit: int = 25) -> dict[str, Any]:
+    """Remaining time (and optionally an outcome risk) for open cases, learned from completed cases and
+    backtested (aggregates level). Per-case estimates are returned only for a log shared at the cases level."""
+    require(log_id, "aggregates")
+    from . import event_log_predictions as predictions
+    spec = _open_case_spec(end_activities, case_type, max(1, min(int(limit), 100)))
+    if outcome == "duration_over":
+        if outcome_hours is None or isinstance(outcome_hours, bool) or not 0 < float(outcome_hours) <= 10 ** 5:
+            raise EventLogWorkspaceError("outcome duration_over needs outcome_hours above 0")
+        spec["outcome"] = {"kind": "duration_over", "seconds": max(1, int(round(float(outcome_hours) * 3600)))}
+    elif outcome == "contains_activity":
+        if not isinstance(outcome_activity, str) or not 1 <= len(outcome_activity) <= 200:
+            raise EventLogWorkspaceError("outcome contains_activity needs outcome_activity")
+        spec["outcome"] = {"kind": "contains_activity", "activity": outcome_activity}
+    elif outcome is not None:
+        raise EventLogWorkspaceError("outcome must be duration_over or contains_activity")
+    result = predictions.predict(log_id, spec)
+    with_cases = _level(log_id) == "cases"
+    out = {k: v for k, v in result.items() if k not in ("predictions", "predictions_truncated")}
+    if with_cases:
+        out["predictions"] = result["predictions"]
+        out["predictions_truncated"] = result["predictions_truncated"]
+    return {**out, "format": FORMAT, "log_id": log_id, "case_ids_returned": with_cases}
+
+
+def open_case_next_activity(log_id: str, end_activities: list[str], case_type: str | None = None,
+                            history: int = 2, limit: int = 25) -> dict[str, Any]:
+    """What usually happens next in open cases, from completed cases with the same recent activities, with a
+    backtest (aggregates level). Per-case predictions are returned only for a log shared at the cases level."""
+    require(log_id, "aggregates")
+    from . import event_log_next_activity as na
+    if isinstance(history, bool) or not isinstance(history, int) or not 1 <= history <= 4:
+        raise EventLogWorkspaceError("history must be 1 to 4 recent activities")
+    spec = {**_open_case_spec(end_activities, case_type, max(1, min(int(limit), 100))), "history": history}
+    result = na.next_activity(log_id, spec)
+    with_cases = _level(log_id) == "cases"
+    out = {k: v for k, v in result.items() if k not in ("predictions", "open_cases_shown")}
+    if with_cases:
+        out["predictions"] = result["predictions"]
+        out["open_cases_shown"] = result["open_cases_shown"]
+    return {**out, "format": FORMAT, "log_id": log_id, "case_ids_returned": with_cases}
+
+
 def temporal_profile(log_id: str, case_type: str | None = None, zeta: float = 3.0) -> dict[str, Any]:
     """Usual times between activity pairs and how often they are broken (aggregates level, no case IDs)."""
     require(log_id, "aggregates")
