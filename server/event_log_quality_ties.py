@@ -20,6 +20,11 @@ def timestamp_ties(log_id: str, case_type: str | None = None, *,
         occurrences, tied, cases, tied_cases = conn.execute("""SELECT count(*),
             count(*) FILTER (WHERE tied), count(DISTINCT case_id),
             count(DISTINCT case_id) FILTER (WHERE tied) FROM tie_members""").fetchone()
+        groups, mixed_groups, mixed_cases = conn.execute("""SELECT count(*),
+            count(*) FILTER (WHERE activity_count > 1),
+            count(DISTINCT case_id) FILTER (WHERE activity_count > 1)
+            FROM (SELECT case_id, ts, count(DISTINCT activity) AS activity_count
+                  FROM tie_members WHERE tied GROUP BY case_id, ts)""").fetchone()
         rows = conn.execute("""SELECT activity, count(*) AS occurrences,
             count(*) FILTER (WHERE tied) AS tied_occurrences,
             count(DISTINCT case_id) FILTER (WHERE tied) AS tied_cases
@@ -30,11 +35,16 @@ def timestamp_ties(log_id: str, case_type: str | None = None, *,
             "case_event_occurrences": occurrences,
             "tied_case_event_occurrences": tied,
             "cases": cases, "cases_with_ties": tied_cases,
+            "tied_timestamp_groups": groups,
+            "groups_with_different_activities": mixed_groups,
+            "cases_with_different_activities_tied": mixed_cases,
             "activities": [{"activity": a, "occurrences": n, "tied_occurrences": t,
                             "cases_with_ties": c} for a, n, t, c in rows[:MAX_ACTIVITIES]],
             "activities_truncated": len(rows) > MAX_ACTIVITIES,
             "interpretation": ("Events at the same timestamp within a case have unknown relative order; "
                 "analyses use event identifiers as a deterministic tie-breaker. Counts are case-event "
-                "occurrences, so an event shared by multiple cases is counted once in each case."),
+                "occurrences, so an event shared by multiple cases is counted once in each case. "
+                "Groups with different activities can change the apparent activity sequence; "
+                "ties between identical activity labels can still affect event-level interpretation."),
         }
     return workspace._query_filtered(log_id, case_type, cohort, run)

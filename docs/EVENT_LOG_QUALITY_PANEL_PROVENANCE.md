@@ -85,7 +85,7 @@ The dashboard-session-only `GET /v1/event-logs/{log_id}/quality/attribute-covera
 The dashboard-session-only `GET /v1/event-logs/{log_id}/quality/timestamp-ties`
 reports affected activities for the selected case notion and optional case filter.
 It counts case-event occurrences and cases with events sharing a timestamp, with
-up to 100 activities ordered by affected occurrences; truncation is explicit.
+up to 100 activities ordered by affected occurrences; truncation is explicit. It also counts tied timestamp groups containing different activity labels and affected cases, distinguishing potential sequence ambiguity from ties of identical labels.
 An event shared by several object-centric cases contributes once per case. Ties
 make relative order unknown even though analyses use event IDs to break them.
 The endpoint computes from the current retained selection, not a historical

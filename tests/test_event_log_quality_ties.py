@@ -24,12 +24,30 @@ def test_timestamp_ties_are_counted_per_case_and_activity():
     result = ties.timestamp_ties(log)
     assert (result["case_event_occurrences"], result["tied_case_event_occurrences"]) == (5, 2)
     assert (result["cases"], result["cases_with_ties"]) == (2, 1)
+    assert (result["tied_timestamp_groups"], result["groups_with_different_activities"],
+            result["cases_with_different_activities_tied"]) == (1, 1, 1)
     assert result["activities"] == [
         {"activity": "A", "occurrences": 3, "tied_occurrences": 1, "cases_with_ties": 1},
         {"activity": "B", "occurrences": 1, "tied_occurrences": 1, "cases_with_ties": 1},
         {"activity": "C", "occurrences": 1, "tied_occurrences": 0, "cases_with_ties": 0},
     ]
     assert not result["activities_truncated"]
+
+
+def test_same_activity_ties_are_distinguished_from_mixed_groups():
+    data = b'''case,activity,time,resource
+1,A,2024-01-01T00:00:00Z,one
+1,A,2024-01-01T00:00:00Z,two
+1,B,2024-01-01T01:00:00Z,one
+1,C,2024-01-01T01:00:00Z,one
+'''
+    log = workspace.import_log(BytesIO(data), name="ties", source_format="csv", mapping={
+        "case_column": "case", "activity_column": "activity", "timestamp_column": "time",
+        "resource_column": "resource"})["log_id"]
+    result = ties.timestamp_ties(log)
+    assert result["tied_timestamp_groups"] == 2
+    assert result["groups_with_different_activities"] == 1
+    assert result["cases_with_different_activities_tied"] == 1
 
 
 def test_filter_and_dashboard_authorization():
