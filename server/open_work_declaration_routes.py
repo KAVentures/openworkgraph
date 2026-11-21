@@ -2559,10 +2559,14 @@ async def verify_local_bound_run_source(request: Request, response: Response):
         "confirm_historical_review", "confirm_run_comparison",
         "confirm_source_verification", "max_cases", "deployment_id",
         "run_id", "record_link",
-    }, optional={"persist_provider_check"})
+    }, optional={"persist_provider_check", "confirm_provider_evidence_write"})
     persist = payload.get("persist_provider_check", False)
     if type(persist) is not bool:
         raise HTTPException(422, "persist_provider_check must be boolean")
+    if persist and payload.get("confirm_provider_evidence_write") is not True:
+        raise HTTPException(403, "explicit provider evidence persistence approval required")
+    if not persist and "confirm_provider_evidence_write" in payload:
+        raise HTTPException(422, "write approval requires persist_provider_check")
     if (payload["confirm_historical_review"] is not True
             or payload["confirm_run_comparison"] is not True
             or payload["confirm_source_verification"] is not True):
@@ -3308,6 +3312,7 @@ async def read_local_bound_provider_review(request: Request, response: Response)
             "confirm_source_verification": True,
             "record_link": payload["record_link"],
             "persist_provider_check": True,
+            "confirm_provider_evidence_write": True,
         })
         verified = await replay(verify_local_bound_run_source, bound_fields)
         if not verified.get("provider_check_persisted"):

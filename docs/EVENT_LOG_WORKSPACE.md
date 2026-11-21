@@ -1477,7 +1477,10 @@ hand.
 
 - You create a feed for one absolute folder and one file pattern
   (`orders-*.csv`; `.csv`, `.tsv` or `.txt`), and you confirm that the folder
-  may be read. Subfolders are not read.
+  may be read. Folder paths and filename patterns preserve spaces and Unicode
+  literally; wildcard characters in the pattern retain their usual meaning.
+  Path separators and control characters are not permitted in the pattern,
+  and subfolders are not read.
 - The mapping is copied when the feed is created. A changed mapping needs a
   new feed.
 - A file is appended once, identified by the SHA-256 of its content. A renamed
@@ -1514,7 +1517,10 @@ hand.
   deleted.
 - "Run every day" schedules the feed on the local scheduler (job kind
   `event_log_folder_feed`). Deleting the feed or the log removes the feed, its
-  file records and its schedule.
+  file records and its schedule. A scheduled run is labelled partial when
+  files are not ready or additional matching files still need checking; it
+  remains enabled and checks again at its normal interval. Partial status is
+  not evidence that the folder or the source system is fully up to date.
 
 | Route | Purpose |
 | --- | --- |

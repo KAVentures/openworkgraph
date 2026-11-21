@@ -50,6 +50,10 @@ def units(metrics) -> dict[str, dict[str, int]]:
     """Validate dependency order and units before opening/reading the dataset."""
     known = {}
     for metric in metrics:
+        # Reject ambiguous names before they can silently replace an earlier
+        # metric's unit/dependency in a saved analysis or exported result.
+        if metric.name in known:
+            raise ValueError(f"duplicate metric name {metric.name!r}")
         if metric.kind != "arithmetic":
             unit = "seconds" if metric.kind == "time_between" else "events" if metric.kind == "activity_count" else metric.unit
             known[metric.name] = _atomic(unit)
@@ -112,6 +116,20 @@ def materialize(conn, metric: Arithmetic, columns: dict[str, str], column: str) 
                        "THEN a + (b - a) / 2.0 "
                        "ELSE a / 2.0 + b / 2.0 END"),
            "absolute_difference": "CASE WHEN a IS NULL OR b IS NULL THEN NULL ELSE abs(a - b) END"}[metric.operation]
-    conn.execute(f"UPDATE qc SET {column} = {sql} FROM qexpr WHERE qc.case_id = qexpr.case_id")
-    return {"cases_with_missing_operand": missing,
-            "cases_with_zero_divisor": zeros if metric.operation == "divide" else 0}
+    # Finite inputs can still overflow (e.g. 1e308 * 1e308). Never let
+    # Infinity/NaN propagate into grouped KPIs, JSON exports or saved metrics.
+    # Retain a counts-only diagnostic rather than silently reporting a value.
+    conn.execute(f"""CREATE OR REPLACE TEMP TABLE qexpr_result AS
+        SELECT case_id, ({sql}) AS result FROM qexpr""")
+    nonfinite = conn.execute("""SELECT count(*) FROM qexpr_result
+        WHERE result IS NOT NULL AND NOT isfinite(result)""").fetchone()[0]
+    conn.execute(f"""UPDATE qc SET {column} =
+        CASE WHEN isfinite(qexpr_result.result) THEN qexpr_result.result ELSE NULL END
+        FROM qexpr_result WHERE qc.case_id = qexpr_result.case_id""")
+    # Preserve the established sparse coverage contract used by the query API:
+    # only nonzero non-finite counts are reported, under the existing key.
+    coverage = {"cases_with_missing_operand": missing,
+                "cases_with_zero_divisor": zeros if metric.operation == "divide" else 0}
+    if nonfinite:
+        coverage["cases_with_non_finite_value"] = nonfinite
+    return coverage
