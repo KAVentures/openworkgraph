@@ -443,3 +443,14 @@ def test_handoff_review_submission_rejects_membership_revision_drift():
     assert "current.your_actor_id!==chosen.your_actor_id" in review
     assert review.index("current.access_revision!==pinned.access_revision") < review.index('"/reviews"')
     assert review.index("resetHandoff(\"REFUSED: Reviewed handoff") < review.index('"/reviews"')
+
+
+def test_handoff_review_readback_rejects_access_revocation_after_post():
+    """A committed review cannot claim a still-authorized handoff after membership drift."""
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split("async function review(decision) {", 1)[1].split('$("approve").onclick', 1)[0]
+    assert "(!submittedInspectedHandoff ||" in block
+    assert "recordedReview.access_revision===reviewSelection.access_revision" in block
+    assert "recordedReview.permissions?.review===true" in block
+    assert block.index("recordedReview.access_revision===reviewSelection.access_revision") < block.index("if(!recorded) {")
+    assert block.index("if(!recorded) {") < block.index("Design review acknowledged. Reopen and reinspect")
