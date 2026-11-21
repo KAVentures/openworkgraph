@@ -3352,3 +3352,96 @@ async def read_local_bound_provider_review(request: Request, response: Response)
         "agent_execution_authorized": False,
         "cross_store_atomic_snapshot": False,
     }
+
+
+@router.post("/v1/open-work/declarations/human-outcomes/bound-provider-event")
+async def read_local_bound_provider_event(request: Request, response: Response):
+    """Operator-approved exact provider event read; no agent causality assertion.
+
+    The event and correlation are operator-supplied identifiers, NOT proof that
+    the retained run generated the event. No receipt is persisted or agent
+    execution granted until a separate trusted run-to-event binding exists.
+    """
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_historical_review", "confirm_run_comparison",
+        "confirm_source_verification", "max_cases", "deployment_id",
+        "run_id", "provider_object_id", "provider_operation",
+        "provider_correlation_id", "provider_event_id",
+    })
+    if any(payload[k] is not True for k in (
+        "confirm_historical_review", "confirm_run_comparison",
+        "confirm_source_verification",
+    )):
+        raise HTTPException(403, "explicit run review and provider read approval required")
+
+    async def review():
+        raw = json.dumps({key: payload[key] for key in (
+            "work_item_ref", "expected_revision", "expected_edit_token",
+            "confirm_historical_review", "confirm_run_comparison", "max_cases",
+            "deployment_id", "run_id",
+        )}, separators=(",", ":")).encode("utf-8")
+        async def receive():
+            return {"type": "http.request", "body": raw, "more_body": False}
+        return await read_local_combined_case_review(
+            Request(dict(request.scope), receive=receive), Response(),
+        )
+
+    # Full actor-scoped retained run, reviewed declaration and dependency
+    # admission precedes any network access.
+    before = await review()
+    await _recheck_source(scope)
+    _dashboard_only(request)
+    from .local_source_credentials import _metadata_path, _read_metadata
+    from .open_work_provider_attempt_verification import verify_provider_attempt
+    from .open_work_stripe_attempt_event_reader import read_exact_stripe_attempt_event
+
+    metadata = await asyncio.to_thread(_read_metadata, _metadata_path())
+    if not isinstance(metadata, dict) or not isinstance(metadata.get("account"), str):
+        raise HTTPException(403, "current verified source account required")
+    account = metadata["account"]
+
+    # The synchronous verifier checks authorization before and after provider
+    # I/O; the async route then repeats full admission before disclosure.
+    # No caller-controlled provider URL, credential, tenant or actor.
+    def provider_read():
+        return read_exact_stripe_attempt_event(
+            account=account, object_id=payload["provider_object_id"],
+            operation=payload["provider_operation"],
+            correlation_id=payload["provider_correlation_id"],
+            expected_event_id=payload["provider_event_id"],
+        )
+    verdict = await asyncio.to_thread(
+        verify_provider_attempt,
+        account=account, object_id=payload["provider_object_id"],
+        operation=payload["provider_operation"],
+        correlation_id=payload["provider_correlation_id"],
+        expected_event_id=payload["provider_event_id"],
+        read_events=provider_read,
+    )
+    await _recheck_source(scope)
+    _dashboard_only(request)
+    after = await review()
+    if before != after:
+        raise HTTPException(409, "run/case admission changed during provider read")
+    await _recheck_source(scope)
+    _dashboard_only(request)
+    final = await review()
+    if final != after:
+        raise HTTPException(409, "run/case admission changed during final review")
+    await _recheck_source(scope)
+    _dashboard_only(request)
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "format": "openworkgraph.bound-provider-event.v1",
+        "case_ref": final["case_ref"], "run_ref": final["receipts"]["run_ref"],
+        "provider_event_verdict": verdict,
+        "provider_event_independently_rechecked_on_this_read":
+            verdict["status"] in ("verified_provider_event", "verified_provider_operation"),
+        "provider_event_attributed_to_agent_run": False,
+        "provider_operation_not_agent_causality": True,
+        "customer_outcome": "unknown", "customer_outcome_verified": False,
+        "receipt_persisted": False, "agent_execution_authorized": False,
+    }
