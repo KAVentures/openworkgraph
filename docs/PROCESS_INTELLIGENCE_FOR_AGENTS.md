@@ -119,6 +119,7 @@ nothing authorizes an action.
 | `GET /v1/process-intelligence/{log_id}/heuristics-net?dependency_threshold=&case_type=` | Same, `aggregates` or `cases`. |
 | `GET /v1/process-intelligence/{log_id}/footprints?noise=&case_type=` | Same, `aggregates` or `cases`. |
 | `POST /v1/event-logs/{log_id}/agent-share/tags` (`{"allowed": true \| false}`) | Dashboard session only. |
+| `GET /v1/event-logs/{log_id}/agent-access?limit=` | Dashboard session only: the latest agent calls that reached this log's tools (time, tool, outcome: ok, not_shared, not_allowed, invalid or error), with counts per tool over 30 days. Recorded automatically; requests rejected before any tool runs are not, and no parameters or answers are kept. |
 | `POST /v1/process-intelligence/{log_id}/case-tags` (`{"tag", "case_ids", "note"?, "case_type"?}`) | Agent, `cases` level and the tag permission (403 without it). |
 | `GET /v1/process-intelligence/{log_id}/co-occurrence?limit=&min_support=&case_type=` | Agent, `aggregates` or `cases` (`min_support` at least 5). |
 | `GET /v1/process-intelligence/{log_id}/work-in-progress?bucket=day\|week&end_activity=&case_type=` | Agent, `aggregates` or `cases`. |

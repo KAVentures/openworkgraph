@@ -258,6 +258,8 @@ A log can be shared, read-only, with AI apps connected to OpenWorkGraph over MCP
 `aggregates` or `cases` level. Logs are not shared by default. See
 [PROCESS_INTELLIGENCE_FOR_AGENTS.md](PROCESS_INTELLIGENCE_FOR_AGENTS.md).
 
+**Show recent agent reads** in *Share with AI agents* lists what connected agents asked for. It shows each call that reached one of the log's tools: its time, the tool, and whether it was answered, refused (not shared at that level, not allowed, or input the tool rejected) or failed with an error. It also shows how often each tool was used in the last 30 days. Requests rejected before any tool ran, such as malformed JSON, are not listed. Only those facts are kept, never parameters or answers. The owner's own dashboard calls are not recorded. The latest 1,000 calls per log are kept, and they are deleted with the log (`GET /v1/event-logs/{log_id}/agent-access?limit=`, dashboard session only).
+
 ## API
 
 All routes need the local dashboard session (`Authorization: OWG-Session ...`).
