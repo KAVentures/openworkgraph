@@ -1221,6 +1221,21 @@ paths are compared. Cases with more than 500 events are not compared.
 `case_type` and the case-filter parameters) needs the dashboard session.
 Similar recorded paths do not mean the cases had the same cause or outcome.
 
+## Case notes
+
+**Case notes** (under Analyse) keep what you found about single cases next to them: why an order
+waited three weeks, what the customer said on the phone. A note names a case or object ID of the
+log and holds up to 2,000 characters; it records when it was written. Notes are your own text, not
+events of the log: they never change its data or any analysis, stay on this computer, are never
+shared with AI agents and are deleted with the log in the same transaction. A log keeps at most
+5,000 notes.
+
+| Route | Purpose |
+|---|---|
+| `GET /v1/event-logs/{log_id}/case-notes` | Notes, newest first (at most 500 listed); `?case_id=` for one case |
+| `POST /v1/event-logs/{log_id}/case-notes` | `{"case_id": ..., "text": ...}` adds a note |
+| `POST /v1/event-logs/{log_id}/case-notes/{note_id}/delete` | Delete a note |
+
 ## Organizational mining (handovers)
 
 `GET /v1/event-logs/{log_id}/organization` (dashboard session only) describes how work moves
