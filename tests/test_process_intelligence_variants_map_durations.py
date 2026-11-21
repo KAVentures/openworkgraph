@@ -76,15 +76,41 @@ def test_durations_and_time_patterns():
     assert set(d["observed_duration_seconds"]) == {"median", "p90", "p95"}
     t = sharing.time_patterns(log, time_zone="Europe/Berlin", activity="Open")
     assert t["settings"]["time_zone"] == "Europe/Berlin" and t["settings"]["activity"] == "Open"
-    # The weekday/hour cells have only 1-4 cases, so withhold the
-    # entire time histogram rather than disclosing rare event times.
+    # Aggregates sharing withholds the full temporal histogram because
+    # events per cell do not establish independent case support.
     assert t["total_events"] == 15 and t["time_bins_withheld"] is True
     assert t["events"] is None and t["case_arrivals"] is None
     assert t["outside_working_hours_share"] is None and t["busiest"] == []
+    sharing.set_share(log, "cases")
+    detailed = sharing.time_patterns(log, time_zone="Europe/Berlin", activity="Open")
+    assert detailed["time_bins_withheld"] is False
+    assert sum(map(sum, detailed["events"])) == 15 and detailed["events"][0][10] > 0
+    sharing.set_share(log, "aggregates")
     with pytest.raises(EventLogWorkspaceError, match="at least 5 supporting cases"):
         sharing.time_patterns(log, time_zone="Europe/Berlin", activity="Rare")
     with pytest.raises(EventLogWorkspaceError):
         sharing.time_patterns(log, time_zone="Not/AZone")
+
+
+def test_aggregate_hourly_cell_with_many_events_from_one_case_still_hidden():
+    # All non-zero grid cells have 6+ events, but six Ping events in one
+    # hour belong to one case. Frequency is not independent case support.
+    lines = ["case,activity,time"]
+    lines += [f"c{i},Open,2024-01-01T09:00:00Z" for i in range(6)]
+    lines += [f"c0,Ping,2024-01-01T10:{i:02d}:00Z" for i in range(6)]
+    log = workspace.import_log(BytesIO("\\n".join(lines).encode()), name="cell",
+                               source_format="csv", mapping=MAPPING)["log_id"]
+    sharing.set_share(log, "aggregates")
+    aggregate = sharing.time_patterns(log)
+    assert aggregate["total_events"] == 12 and aggregate["total_case_arrivals"] == 6
+    assert aggregate["time_bins_withheld"] is True
+    assert aggregate["events"] is None and aggregate["case_arrivals"] is None
+    assert aggregate["busiest"] == []
+    sharing.set_share(log, "cases")
+    detailed = sharing.time_patterns(log)
+    assert detailed["time_bins_withheld"] is False
+    assert detailed["events"][0][10] == 6
+
 
 
 def test_agent_routes(tmp_path):
