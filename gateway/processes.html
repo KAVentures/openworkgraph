@@ -2348,7 +2348,17 @@
           );
           if (!response.ok)
             throw new Error("Could not export the saved shared revision.");
-          const url = URL.createObjectURL(await response.blob()),
+          // A download can finish after sign-out, a credential rotation, or
+          // selection of another tenant's process. Never surface the old
+          // response as a local file after that authorization context changes.
+          const exportedBlob = await response.blob();
+          if (identityTicket !== identityGeneration ||
+              credential !== authorizedCredential || selected !== selection ||
+              selected?.process?.workflow_id !== record.workflow_id ||
+              selected?.process?.revision !== record.revision ||
+              selected?.process?.content_sha256 !== record.content_sha256)
+            throw new Error("Export canceled: session or selected revision changed while downloading. Reopen and authorize the latest process.");
+          const url = URL.createObjectURL(exportedBlob),
             a = el("a");
           a.href = url;
           a.download =
