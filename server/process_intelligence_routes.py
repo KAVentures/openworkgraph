@@ -55,6 +55,9 @@ async def _answer(operation, *args: Any, **kwargs: Any) -> JSONResponse:
     except EventLogWorkspaceError as exc:
         outcome = "invalid"
         raise HTTPException(422, str(exc)) from None
+    except Exception:
+        outcome = "error"          # recorded as failed; the original error propagates unchanged
+        raise
     finally:
         if _AGENT_CALL.get() and args and isinstance(args[0], str):
             from . import event_log_agent_access as agent_access

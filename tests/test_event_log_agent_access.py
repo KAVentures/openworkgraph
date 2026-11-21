@@ -82,3 +82,27 @@ with TestClient(app) as client:
 '''
     env = {**os.environ, 'WORKFLOW_OBSERVER_DATA': str(tmp_path / 'data'), 'WORKFLOW_OBSERVER_AUTH_DIR': str(tmp_path / 'auth')}
     subprocess.run([sys.executable, '-c', code], env=env, check=True, timeout=60)
+
+
+def test_a_failing_tool_is_recorded_as_error(tmp_path):
+    code = r'''
+from io import BytesIO
+from fastapi.testclient import TestClient
+from server.secure_app import app
+from server import local_auth, event_log_workspace as workspace, event_log_agent_sharing as sharing
+rows = ["case,activity,time"] + [f"c{i},A,2024-03-0{1+i}T00:00:00Z" for i in range(6)]
+log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="q", source_format="csv",
+    mapping={"case_column":"case","activity_column":"activity","timestamp_column":"time"})["log_id"]
+sharing.set_share(log,'aggregates')
+def overview(*args, **kwargs):
+    raise RuntimeError("disk went away")
+sharing.overview = overview
+with TestClient(app, raise_server_exceptions=False) as client:
+    owner={'Authorization':'OWG-Session '+local_auth.create_dashboard_session()}
+    bearer={'Authorization':'Bearer '+local_auth.ensure_api_token()}
+    assert client.get('/v1/process-intelligence/'+log+'/overview',headers=bearer).status_code==500
+    calls=client.get('/v1/event-logs/'+log+'/agent-access',headers=owner).json()['calls']
+    assert [(c['operation'],c['outcome']) for c in calls]==[('overview','error')], calls
+'''
+    env = {**os.environ, 'WORKFLOW_OBSERVER_DATA': str(tmp_path / 'data'), 'WORKFLOW_OBSERVER_AUTH_DIR': str(tmp_path / 'auth')}
+    subprocess.run([sys.executable, '-c', code], env=env, check=True, timeout=60)

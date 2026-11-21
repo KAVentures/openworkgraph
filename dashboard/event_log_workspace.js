@@ -1845,7 +1845,7 @@
     const reads=button('Show recent agent reads','secondary');reads.id='owgAgentAccessLoad';
     const readsOut=el('div');readsOut.id='owgAgentAccess';readsOut.setAttribute('role','status');readsOut.setAttribute('aria-live','polite');
     box.append(row,out,tagLabel,tagOut,reads,readsOut);
-    const OUTCOMES={ok:'Answered',not_shared:'Refused: not shared at that level',not_allowed:'Refused: not allowed',invalid:'Refused: invalid request'};
+    const OUTCOMES={ok:'Answered',not_shared:'Refused: not shared at that level',not_allowed:'Refused: not allowed',invalid:'Refused: invalid request',error:'Failed: the tool hit an error'};
     const toolName=op=>op.replace(/_/g,' ');
     reads.onclick=async()=>{reads.disabled=true;readsOut.replaceChildren(el('div','Loading agent reads\u2026','muted'));
       try{const r=await getJSON('/v1/event-logs/'+encodeURIComponent(state.logId)+'/agent-access?limit=50');

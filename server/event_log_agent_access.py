@@ -1,10 +1,12 @@
 """Which agent tools read a shared log, and when: a short local record for the owner.
 
 Sharing a log with AI agents is the owner's choice; seeing what the agents then asked for keeps that
-choice informed. Every call an agent (the local AI bearer, not the owner's dashboard) makes to a
-process-intelligence route for a log is recorded with its time, the tool's operation name and the
-outcome: ``ok``, ``not_shared`` (the log is not shared at the level the tool needs), ``not_allowed``
-(for example tagging without permission) or ``invalid`` (rejected input).
+choice informed. Every call an agent (the local AI bearer, not the owner's dashboard) makes that reaches one of a log's
+process tools is recorded with its time, the tool's operation name and the outcome: ``ok``,
+``not_shared`` (the log is not shared at the level the tool needs), ``not_allowed`` (for example
+tagging without permission), ``invalid`` (input the tool rejected) or ``error`` (the tool failed).
+Requests the route rejects before any tool runs, such as malformed JSON or out-of-range query
+parameters, are not recorded: no tool read anything.
 
 Only these four facts are kept: no parameters, no case IDs and no answers. The record is local, keeps the
 latest ``MAX_ROWS_PER_LOG`` calls per log, and is deleted with the log.
@@ -20,7 +22,7 @@ from .event_log_workspace import EventLogWorkspaceError
 
 FORMAT = "openworkgraph.event_log_agent_access.v1"
 MAX_ROWS_PER_LOG = 1000
-OUTCOMES = ("ok", "not_shared", "not_allowed", "invalid")
+OUTCOMES = ("ok", "not_shared", "not_allowed", "invalid", "error")
 # The agent_access_log table is part of the workspace schema and is erased with its log by workspace.delete_log.
 
 
