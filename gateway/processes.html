@@ -2404,6 +2404,22 @@
               selected?.process?.revision !== record.revision ||
               selected?.process?.content_sha256 !== record.content_sha256)
             throw new Error("Export canceled: session or selected revision changed while downloading. Reopen and authorize the latest process.");
+          // Review or membership can be revoked while a ZIP is streaming.
+          // Recheck the Gateway after receiving bytes and before exposing them.
+          if (format === "agent-project") {
+            const latest = await call("/v1/human/processes/" + encodeURIComponent(record.workflow_id));
+            if (identityTicket !== identityGeneration ||
+                credential !== authorizedCredential || selected !== selection ||
+                !latest?.process || latest.archived || latest.viewing_historical_revision ||
+                latest.process.workflow_id !== record.workflow_id ||
+                latest.process.revision !== record.revision ||
+                latest.latest_revision !== record.revision ||
+                latest.process.content_sha256 !== record.content_sha256 ||
+                latest.review?.status !== "reviewed_design" ||
+                latest.your_actor_id !== selection.your_actor_id ||
+                latest.access_revision !== selection.access_revision)
+              throw new Error("Executable project export canceled: authorization or independent review changed during download. Reopen the latest authorized revision.");
+          }
           const url = URL.createObjectURL(exportedBlob),
             a = el("a");
           a.href = url;
