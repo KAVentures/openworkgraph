@@ -584,12 +584,15 @@ def score_source_event_cohort(response: dict[str, Any], source_labels: list[dict
         contaminated_positive_events += bool(expected and extra)
         contaminated_negative_events += bool(not expected and predicted)
         counts = per_window.setdefault(key[0], {"events": 0, "tp": 0, "fp": 0, "fn": 0,
-                                                 "negative_events": 0, "negative_false_link_events": 0, "false_link_events": 0})
+                                                 "negative_events": 0, "negative_false_link_events": 0, "false_link_events": 0,
+                                                 "positive_events": 0, "positive_false_link_events": 0})
         counts["events"] += 1
         counts["tp"] += len(correct)
         counts["fp"] += len(extra)
         counts["fn"] += len(missing)
         counts["false_link_events"] += bool(extra)
+        counts["positive_events"] += bool(expected)
+        counts["positive_false_link_events"] += bool(expected and extra)
         counts["negative_events"] += not expected
         counts["negative_false_link_events"] += bool(not expected and predicted)
         if extra or missing:
@@ -611,6 +614,10 @@ def score_source_event_cohort(response: dict[str, Any], source_labels: list[dict
             "precision": wp, "recall": wr,
             "f1": 2 * wp * wr / (wp + wr) if wp + wr else 0.0,
             "source_event_false_link_rate": counts["false_link_events"] / counts["events"],
+            "positive_false_link_rate": (
+                counts["positive_false_link_events"] / counts["positive_events"]
+                if counts["positive_events"] else None
+            ),
             "negative_false_link_rate": (
                 counts["negative_false_link_events"] / counts["negative_events"]
                 if counts["negative_events"] else None
