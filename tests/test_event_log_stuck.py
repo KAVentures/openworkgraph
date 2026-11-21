@@ -59,9 +59,38 @@ def test_settings_and_validation():
     # Without end activities, finished cases ending at Close (never followed) are not open.
     noend = stuck.stuck_cases(log)
     assert {c["case_id"] for c in noend["cases"]} == {"late"} and noend["open_cases"] == 3
-    for bad in ({"percentile": 0.2}, {"end_activities": [" "]}, {"unknown": 1}, {"limit": 0}):
+    for bad in ([], {"percentile": 0.2}, {"end_activities": [" "]}, {"unknown": 1}, {"limit": 0}):
         with pytest.raises(workspace.EventLogWorkspaceError):
             stuck.stuck_cases(log, bad)
+
+
+def test_cohort_selects_open_cases_without_changing_history_or_observation_end():
+    log = _log()
+    unfiltered = stuck.stuck_cases(log, {"end_activities": ["Close"]})
+    filtered = stuck.stuck_cases(log, {"cohort": {"without_activity": "Close"}, "end_activities": ["Close"]})
+    assert filtered["as_of"] == unfiltered["as_of"]
+    assert filtered["cases"] == unfiltered["cases"] and filtered["stuck_cases"] == 1
+    assert next(row for row in filtered["by_activity"] if row["activity"] == "Receive")["observed_waits"] == 30
+    empty = stuck.stuck_cases(log, {"cohort": {"activity": "missing"}})
+    assert empty["as_of"] == unfiltered["as_of"]
+    assert empty["open_cases"] == 0 and empty["cases"] == [] and empty["by_activity"] == []
+
+
+def test_literal_end_activities_and_zero_wait_ranking():
+    stream = StringIO()
+    writer = csv.writer(stream)
+    writer.writerow(["case", "activity", "time"])
+    writer.writerow(["marker", " Close ", (START + timedelta(days=2)).isoformat()])
+    for prefix, delay in (("A", 0), ("B", 1)):
+        for index in range(5):
+            writer.writerow([f"{prefix}{index}", prefix, START.isoformat()])
+            writer.writerow([f"{prefix}{index}", " Close ", (START + timedelta(hours=delay)).isoformat()])
+        writer.writerow([f"open-{prefix}", prefix, START.isoformat()])
+    log = workspace.import_log(BytesIO(stream.getvalue().encode()), name="literal", source_format="csv",
+                               mapping=MAPPING)["log_id"]
+    ranked = stuck.stuck_cases(log, {"end_activities": [" Close "], "min_support": 5, "limit": 1})
+    assert ranked["open_cases"] == 2 and ranked["stuck_cases"] == 2 and ranked["cases_truncated"]
+    assert ranked["cases"][0]["case_id"] == "open-A" and ranked["cases"][0]["times_usual_threshold"] is None
 
 
 def test_route_requires_the_dashboard(tmp_path):
