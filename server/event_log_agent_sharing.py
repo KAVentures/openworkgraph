@@ -439,6 +439,28 @@ def model_deviations(log_id: str, case_type: str | None = None, noise: float = 0
             **{k: result[k] for k in keep if k in result}}
 
 
+def reference_nets(log_id: str) -> dict[str, Any]:
+    """The owner's saved reference Petri nets for this log, by name (aggregates level; the nets are not returned)."""
+    require(log_id, "aggregates")
+    from . import event_log_reference_nets as nets
+    listed = nets.listing(log_id)
+    return {"format": FORMAT, "log_id": log_id, "nets": listed["nets"]}
+
+
+def reference_deviations(log_id: str, net_id: str, case_type: str | None = None) -> dict[str, Any]:
+    """Optimal alignments of the log on one of the owner's saved reference nets (aggregates level)."""
+    require(log_id, "aggregates")
+    from . import event_log_alignments as al
+    from . import event_log_reference_nets as nets
+    name, xml = nets.get(log_id, net_id)
+    result = al.alignments(log_id, xml.encode(), case_type)
+    keep = ("case_notion", "cases", "cases_excluded", "variants", "fitness", "by_month", "deviation_cost", "log_moves",
+            "model_moves", "activities_not_in_net", "non_fitting_variants", "non_fitting_variants_total",
+            "unaligned", "method", "caveat")
+    return {"format": FORMAT, "log_id": log_id, "net_id": net_id, "net_name": name,
+            **{k: result[k] for k in keep if k in result}}
+
+
 def funnel(log_id: str, steps: list[str], case_type: str | None = None,
            within_hours: float | None = None) -> dict[str, Any]:
     """Milestone funnel over chosen activities (aggregates level: counts, timings, last activities)."""
