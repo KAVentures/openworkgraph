@@ -246,8 +246,6 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_filter_without_activity.cjs
       - name: Verify follower rules with a time limit between the steps
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_follow_time_filter.cjs
-      - name: Verify importing the same file twice names the earlier log
-        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_same_source.cjs
       - name: Verify the owner shares a log's process intelligence with AI agents and revokes it
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_agent_share.cjs
       - name: Verify numeric case-attribute ranges in KPI and benchmark case pickers
@@ -316,6 +314,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/automation_pipeline.cjs
       - name: Verify automation portfolio planning in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/automation_portfolio.cjs
+      - name: Verify importing the same file twice names the earlier log
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_same_source.cjs
       - name: Verify interleaved opted-in records stay in separate exact-record lanes in a real browser
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/record_case_lanes.cjs
       - name: Install isolated generated-project SDK runtime
