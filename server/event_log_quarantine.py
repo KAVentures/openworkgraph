@@ -132,12 +132,17 @@ def _selection(body: dict[str, Any]) -> tuple[int | None, int | None, int | None
     return batch, start, end
 
 
-def _rows(conn, log_id: str, batch: int | None, start: int | None = None,
-          end: int | None = None) -> list[tuple[int, int, dict[str, Any]]]:
+def _row_scope(batch: int | None, start: int | None, end: int | None) -> tuple[str, list[int]]:
     scope, params = ("AND batch = ?", [batch]) if batch is not None else ("", [])
     if start is not None:
         scope += " AND row_n >= ? AND row_n <= ?"
         params.extend([start, end])
+    return scope, params
+
+
+def _rows(conn, log_id: str, batch: int | None, start: int | None = None,
+          end: int | None = None) -> list[tuple[int, int, dict[str, Any]]]:
+    scope, params = _row_scope(batch, start, end)
     # Check both count and serialized UTF-8 size before fetching raw values.
     count, size = conn.execute(
         f"SELECT count(*), coalesce(sum(octet_length(encode(row))), 0) FROM quarantine WHERE log_id = ? {scope}",
@@ -270,10 +275,10 @@ def release(log_id: str, body: Any) -> dict[str, Any]:
 
 
 def discard(log_id: str, body: Any) -> dict[str, Any]:
-    if not isinstance(body, dict) or set(body) - {"batch"}:
-        raise workspace.EventLogWorkspaceError("a discard accepts only an optional batch")
-    batch = _batch(body.get("batch"))
-    scope, params = ("AND batch = ?", [batch]) if batch is not None else ("", [])
+    if not isinstance(body, dict) or set(body) - {"batch", "row_start", "row_end"}:
+        raise workspace.EventLogWorkspaceError("a discard accepts an optional batch and row range")
+    batch, start, end = _selection(body)
+    scope, params = _row_scope(batch, start, end)
     with workspace._LOCK:
         conn = workspace._connect()
         try:
@@ -281,6 +286,8 @@ def discard(log_id: str, body: Any) -> dict[str, Any]:
             conn.execute("BEGIN")
             removed = conn.execute(f"DELETE FROM quarantine WHERE log_id = ? {scope}", [log_id, *params]).fetchone()[0]
             decision = {"kind": "discard", "batch": batch, "rows_discarded": removed}
+            if start is not None:
+                decision.update(row_start=start, row_end=end)
             _record(conn, log_id, decision)
             conn.execute("COMMIT")
         finally:

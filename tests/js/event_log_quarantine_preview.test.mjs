@@ -14,6 +14,7 @@ function harness(previewJSON) {
   const inputs = new Map();
   const requests = [];
   const messages = [];
+  const confirmations = [];
   const state = {logId:'log_0123456789abcdef', generation:1};
   const node = (tag, value='') => ({
     tag, textContent:String(value ?? ''), style:{}, children:[],
@@ -22,6 +23,7 @@ function harness(previewJSON) {
   });
   const sandbox = {
     state, URLSearchParams,
+    window:{confirm:message=>{confirmations.push(message);return true;}},
     el:(tag,value)=>node(tag,value),
     show:()=>{},
     getJSON:async()=>({rows_kept:2, decisions:[], rows:[], reasons:{}, note:'Local review'}),
@@ -44,6 +46,7 @@ function harness(previewJSON) {
       requests.push({url,options,body:JSON.parse(options.body)});
       return {json:async()=>url.endsWith('/preview')
         ? (typeof previewJSON === 'function' ? previewJSON() : previewJSON)
+        : url.endsWith('/discard') ? {decision:{rows_discarded:1}}
         : {decision:{rows_released:1,rows_considered:2,rows_still_kept:1,
           events_added:1,naive_timestamp_offset:'+01:00'}}};
     },
@@ -52,7 +55,7 @@ function harness(previewJSON) {
     status:text=>messages.push(text)
   };
   const build = runInNewContext(source.slice(start,end) + '\nquarantineBlock', sandbox);
-  return {build,buttons,inputs,requests,messages,state};
+  return {build,buttons,inputs,requests,messages,state,confirmations};
 }
 
 const preview = {format:'openworkgraph.quarantine-release-preview.v1',
@@ -118,9 +121,11 @@ test('discard action invalidates the current release preview', async()=>{
   await settle();
   await h.buttons.get('Preview release').onclick();
   assert.equal(h.buttons.get('Release rows').disabled,false);
-  await h.buttons.get('Discard all kept rows').onclick();
+  await h.buttons.get('Discard kept rows').onclick();
   assert.equal(h.buttons.get('Release rows').disabled,true);
   assert.match(h.requests.at(-1).url,/\/quarantine\/discard$/);
+  assert.deepEqual(h.requests.at(-1).body,{});
+  assert.deepEqual(h.confirmations,['Permanently discard all kept rows?']);
 });
 
 
