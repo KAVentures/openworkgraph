@@ -1870,9 +1870,27 @@
     getJSON(base).then(r=>{if(generation===state.generation)show(r);}).catch(error=>{out.textContent=error.message;});
     apply.onclick=async()=>{
       if(level.value&&!window.confirm('Let connected AI apps read '+(level.value==='cases'?'this process and its individual cases':'this process overview, insights and root cause')+'? You can stop sharing at any time.'))return;
-      try{show(await (await api(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({level:level.value||null})})).json());}
+      try{show(await (await api(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({level:level.value||null})})).json());if(typeof listShares==='function')listShares();}
       catch(error){out.textContent=error.message;}
     };
+    // One action that withdraws every share at once, for every log.
+    const stopAll=button('Stop sharing every log','secondary');stopAll.id='owgAgentShareStopAll';
+    const stopOut=el('div');stopOut.id='owgAgentShareStopAllStatus';stopOut.setAttribute('role','status');
+    const everyShare=el('div',null,'muted');everyShare.id='owgAgentShareEvery';
+    const LEVEL_TEXT={aggregates:'process overview',cases:'also individual cases'};
+    const listShares=async()=>{try{const r=await getJSON('/v1/process-intelligence/logs');
+      everyShare.textContent=r.logs.length?'Shared with AI agents now: '+r.logs.map(l=>l.name+' ('+(LEVEL_TEXT[l.level]||l.level)+')').join(', ')+'.':'No log is shared with AI agents.';}
+      catch(error){everyShare.textContent=error.message;}};
+    box.append(everyShare,stopAll,stopOut);
+    listShares();
+    stopAll.onclick=async()=>{
+      if(!window.confirm('Stop sharing every event log with AI agents, including tag permissions?'))return;
+      stopAll.disabled=true;
+      try{const r=await (await api('/v1/process-intelligence/stop-sharing',{method:'POST'})).json();
+        stopOut.textContent=r.stopped?'Stopped sharing '+r.stopped+' log'+(r.stopped===1?'':'s')+': '+r.logs.join(', ')+'. '+r.note:'No log was shared with AI agents.';
+        show(await getJSON(base));listShares();}
+      catch(error){stopOut.textContent=error.message;}
+      finally{stopAll.disabled=false;}};
     return box;
   }
 

@@ -104,6 +104,29 @@ def set_tag_grant(log_id: str, allowed: Any) -> dict[str, Any]:
     return share_status(log_id)
 
 
+def stop_sharing_all() -> dict[str, Any]:
+    """Stop sharing every log with agents at once, including every tag permission (owner only)."""
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            names = [n for (n,) in conn.execute("""SELECT l.name FROM event_log_agent_shares s JOIN logs l USING (log_id)
+                ORDER BY l.name""").fetchall()]
+            conn.execute("BEGIN")
+            try:
+                conn.execute("DELETE FROM event_log_agent_shares")
+                conn.execute("DELETE FROM event_log_agent_tag_grants")
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+        finally:
+            conn.close()
+    if tools_enabled() and os.getenv("OWG_PROCESS_INTELLIGENCE_TOOLS") is None:
+        _write_flag(False)
+    return {"format": FORMAT, "stopped": len(names), "logs": names, "shared_logs": 0,
+            "note": "No log is shared with AI agents now. Restart a connected AI app to hide the process tools."}
+
+
 def agent_tag_cases(log_id: str, spec: Any) -> dict[str, Any]:
     """An agent records a decision as a case tag. Needs the cases level and the separate tag grant."""
     require(log_id, "cases")
