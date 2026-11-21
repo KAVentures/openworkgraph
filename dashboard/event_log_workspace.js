@@ -35,6 +35,7 @@
   FILTERED.add('story');
   FILTERED.add('activity-profile');
   FILTERED.add('breakdown');
+  FILTERED.add('breakdown.csv');
   FILTERED.add('next-steps');
   FILTERED.add('petri-net-replay');
   FILTERED.add('petri-net-alignments');
@@ -4110,8 +4111,9 @@
     const activityField=field('Activity',activityPick);activityField.hidden=true;
     measurePick.onchange=()=>{activityField.hidden=measurePick.value!=='with_activity_share';};
     const run=button('Show breakdown','secondary');run.id='owgBreakdownRun';
+    const csv=button('Download as CSV','secondary');csv.id='owgBreakdownCsv';
     const row=el('div',null,'row');row.style.alignItems='end';
-    row.append(field('Rows',rowsPick),field('Columns',colsPick),field('Figure',measurePick),activityField,run);
+    row.append(field('Rows',rowsPick),field('Columns',colsPick),field('Figure',measurePick),activityField,run,csv);
     const statusLine=el('div',null,'muted');statusLine.id='owgBreakdownStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgBreakdownResults';
     box.append(row,statusLine,out);
@@ -4128,6 +4130,17 @@
     const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
     const hrs=x=>x===null||x===undefined?'—':(x<48?(Math.round(x*10)/10)+' h':(Math.round(x/24*10)/10)+' d');
     const show={cases:x=>Number(x).toLocaleString(),share:pct,median_hours:hrs,p90_hours:hrs,rework_rate:pct,events_per_case:x=>String(Math.round(x*10)/10),with_activity_share:pct};
+    csv.onclick=async()=>{
+      if(colsPick.value&&colsPick.value===rowsPick.value){statusLine.textContent='Choose two different dimensions.';return;}
+      const params={rows:rowsPick.value};if(colsPick.value)params.columns=colsPick.value;
+      if(measurePick.value==='with_activity_share'&&activityPick.value)params.with_activity=activityPick.value;
+      csv.disabled=true;
+      try{const response=await api(logPath('breakdown.csv',params));const blob=await response.blob();
+        const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=(state.logId||'log')+'-breakdown.csv';
+        document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(link.href),1000);
+        statusLine.textContent='Downloaded the breakdown: one line per cell, then the totals ("All").';}
+      catch(error){statusLine.textContent=error.message;}
+      finally{csv.disabled=false;}};
     run.onclick=async()=>{
       if(colsPick.value&&colsPick.value===rowsPick.value){statusLine.textContent='Choose two different dimensions.';out.replaceChildren();return;}
       const measure=measurePick.value;

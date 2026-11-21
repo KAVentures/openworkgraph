@@ -1286,6 +1286,23 @@ def event_log_breakdown(request: Request, log_id: str, rows: str = Query(min_len
     return _respond(breakdown.breakdown, log_id, rows, columns, case_type, with_activity=with_activity, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/breakdown.csv")
+def event_log_breakdown_csv(request: Request, log_id: str, rows: str = Query(min_length=1, max_length=220),
+                            columns: str | None = Query(default=None, max_length=220),
+                            with_activity: str | None = Query(default=None, min_length=1, max_length=500),
+                            case_type: str | None = Query(default=None, max_length=200),
+                            cohort: dict = Depends(_case_filter)):
+    """The breakdown table as spreadsheet-safe CSV, one line per cell plus totals. Not stored."""
+    from . import event_log_breakdown as breakdown
+    _require_dashboard(request)
+    try:
+        text = breakdown.breakdown_csv(log_id, rows, columns, case_type, with_activity=with_activity, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(text, media_type="text/csv; charset=utf-8", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-breakdown.csv"'})
+
+
 @router.get("/v1/event-logs/{log_id}/variants")
 def event_log_variants(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                        limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):

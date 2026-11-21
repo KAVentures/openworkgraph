@@ -195,4 +195,31 @@ def dimensions(log_id: str, case_type: str | None = None) -> dict[str, Any]:
     return {"format": FORMAT, "log_id": log_id, "dimensions": options}
 
 
-__all__ = ["breakdown", "dimensions", "FORMAT", "BUILT_IN"]
+def _cell(value: Any) -> str:
+    """CSV cell safe to open in a spreadsheet: a leading formula character is neutralized."""
+    text = "" if value is None else str(value)
+    return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
+
+
+def breakdown_csv(log_id: str, rows: str, columns: str | None = None, case_type: str | None = None, *,
+                  with_activity: str | None = None, cohort: dict[str, Any] | None = None) -> str:
+    """The breakdown as CSV, one line per cell, then the row totals, column totals and overall ("All")."""
+    import csv
+    import io
+    r = breakdown(log_id, rows, columns, case_type, with_activity=with_activity, cohort=cohort)
+    figures = ["cases", "share", "median_hours", "p90_hours", "events_per_case", "rework_rate"] + (
+        ["with_activity_share"] if with_activity is not None else [])
+    out = io.StringIO()
+    writer = csv.writer(out, lineterminator="\n")
+    writer.writerow([r["rows"]["label"], r["columns"]["label"] if r["columns"] else "column", *figures, "fewer_than_5_cases"])
+    every = "All"
+    lines = [(c["row"], c["column"], c) for c in r["cells"]]
+    lines += [(t["row"], every, t) for t in r["row_totals"]] if r["columns"] else []
+    lines += [(every, t["column"], t) for t in r["column_totals"]]
+    lines.append((every, every, r["overall"]))
+    for row, column, figs in lines:
+        writer.writerow([_cell(row), _cell(column), *[figs.get(f) for f in figures], str(bool(figs.get("small"))).lower()])
+    return out.getvalue()
+
+
+__all__ = ["breakdown", "breakdown_csv", "dimensions", "FORMAT", "BUILT_IN"]

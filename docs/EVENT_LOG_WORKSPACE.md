@@ -509,6 +509,11 @@ totals. `GET /v1/event-logs/{log_id}/breakdown/dimensions` lists the
 dimensions available in the log. Both need the dashboard session. A
 difference between cells describes the recorded cases, not a cause.
 
+**Download as CSV** saves the same table for a spreadsheet: one line per cell (row value, column
+value and every figure), then the row totals, the column totals and the overall figures, labelled
+`All`. A `fewer_than_5_cases` column marks the small cells, and cells that would start a formula
+are prefixed with `'`. `GET /v1/event-logs/{log_id}/breakdown.csv` takes the same parameters.
+
 ### Process cost
 
 The log records what happened, not what it cost. **Process cost** applies your
