@@ -98,6 +98,63 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         return runtime_module.core._finish("get_process_overview_for_cases", result)
 
     @mcp.tool(annotations=_READ_ONLY)
+    def get_process_trace_clusters(log_id: str, k: int | None = None, max_k: int = 8,
+                                   case_type: str | None = None) -> dict[str, Any]:
+        """Groups of cases of a shared log with similar behaviour (trace clustering): each cluster's cases and
+        share, top variants, activities more and less common in it than in the whole log, median throughput time
+        and events per case. k fixes the number of clusters; otherwise the best between 2 and max_k is chosen.
+        Clusters and variants with fewer than 5 cases are withheld. Clusters are not process types or causes.
+        Aggregates only.
+        """
+        for name, value in (("k", k), ("max_k", max_k)):
+            if value is not None and (isinstance(value, bool) or not isinstance(value, int) or not 2 <= value <= 12):
+                raise ToolError(f"{name} must be 2 to 12")
+        return _get("get_process_trace_clusters", f"/v1/process-intelligence/{_log(log_id)}/trace-clusters",
+                    {"k": k, "max_k": max_k, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def check_process_compliance(log_id: str, rules: list[dict[str, Any]], case_type: str | None = None) -> dict[str, Any]:
+        """Check rules against the cases of a shared log and get, per rule, how many cases it applies to, how many
+        violate it and the violation rate with a 95% interval. Rule forms:
+        {"template": "response", "a": X, "b": Y} (every X is followed by Y), "precedence" (Y only after X),
+        "not_coexistence" (never both), "segregation_of_duties" (X and Y not by the same resource),
+        {"template": "response_within", "a", "b", "seconds"} and {"template": "existence", "a", "min", "max"}.
+        Violating case IDs are included only for logs shared at the cases level; at the aggregates level a rule's
+        counts are withheld when it applies to fewer than 5 cases or any count is 1 to 4. Describes the log against your
+        rules; not audit evidence. Read-only.
+        """
+        if not isinstance(rules, list) or not rules or any(not isinstance(r, dict) for r in rules):
+            raise ToolError("rules must be a non-empty list of rule objects")
+        payload: dict[str, Any] = {"rules": rules}
+        if case_type is not None:
+            payload["case_type"] = case_type
+        runtime_module.authorize_tool("check_process_compliance")
+        try:
+            result = runtime_module.secure_post(f"/v1/process-intelligence/{_log(log_id)}/compliance", payload)
+        except Exception as exc:
+            raise ToolError(str(exc) or "process intelligence request failed") from None
+        result["interpretation"] = _NOTE
+        return runtime_module.core._finish("check_process_compliance", result)
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_process_performance_spectrum(log_id: str, segments: list[str] | None = None, top: int = 6, bins: int = 30,
+                                         case_type: str | None = None) -> dict[str, Any]:
+        """Performance spectrum of a shared log: for the most frequent segments (one activity directly followed by
+        another) or the given ones ("A->B"), the time between the two over the log's span in bins, classed fast,
+        normal, slow and very slow, with the share handled first-in-first-out and the share ending in batches.
+        Segments seen fewer than 5 times are withheld and individual case lines are not returned. Aggregates only.
+        """
+        chosen = list(segments or [])
+        if len(chosen) > 12 or any(not isinstance(s, str) or "->" not in s for s in chosen):
+            raise ToolError('segments must be up to 12 texts like "Approve->Pay"')
+        if isinstance(top, bool) or not isinstance(top, int) or not 1 <= top <= 12:
+            raise ToolError("top must be 1 to 12")
+        if isinstance(bins, bool) or not isinstance(bins, int) or not 2 <= bins <= 100:
+            raise ToolError("bins must be 2 to 100")
+        return _get("get_process_performance_spectrum", f"/v1/process-intelligence/{_log(log_id)}/performance-spectrum",
+                    {"segment": chosen or None, "top": top, "bins": bins, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_root_cause(log_id: str, outcome: str, hours: float | None = None,
                                activity: str | None = None, case_type: str | None = None) -> dict[str, Any]:
         """Which activities, resources and case attributes are associated with an outcome.
