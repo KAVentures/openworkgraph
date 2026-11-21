@@ -89,6 +89,7 @@ def test_model_calls_and_case_attributes(_data):
 
 def test_validation(_data):
     for bad in ({"max_runs": 0}, {"max_runs": "5"}, {"include_model_calls": "yes"}, {"since": "2026-09-01"},
+                {"since": "2026-09-02T00:00:00Z", "until": "2026-09-01T00:00:00Z"},
                 {"unexpected": 1}, []):
         with pytest.raises(workspace.EventLogWorkspaceError):
             mining.import_agent_runs(bad)
