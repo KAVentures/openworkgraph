@@ -650,6 +650,25 @@
     if(next){pick.value=next;await selectLog(next,next===selectId?preferredCaseType:undefined);}else{state.logId='';state.objectTypes=[];}
   }
 
+  // About this log: the owner's own description, kept with the log.
+  function descriptionSection(){
+    const box=section('About this log');box.id='owgLogDescription';
+    const text=document.createElement('textarea');text.id='owgLogDescriptionText';text.rows=3;text.maxLength=2000;
+    text.placeholder='What is this log, where did it come from and what is it for?';
+    const save=button('Save description','secondary');save.id='owgLogDescriptionSave';
+    const statusLine=el('div',null,'muted');statusLine.id='owgLogDescriptionStatus';statusLine.setAttribute('role','status');
+    box.append(field('Description',text),save,statusLine);
+    const base='/v1/event-logs/'+encodeURIComponent(state.logId)+'/description',generation=state.generation;
+    const show=r=>{if(generation!==state.generation)return;text.value=r.description;
+      statusLine.textContent=r.updated_at?'Saved '+r.updated_at.slice(0,16).replace('T',' ')+' UTC. Only you see it; it never changes the events.':'No description yet. Only you see it; it never changes the events.';};
+    save.onclick=async()=>{save.disabled=true;
+      try{show(await (await api(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({description:text.value})})).json());}
+      catch(error){statusLine.textContent=error.message;}
+      finally{save.disabled=false;}};
+    getJSON(base).then(show).catch(error=>{statusLine.textContent=error.message;});
+    return box;
+  }
+
   // Save the cases matching a filter as a new saved log, to analyse or compare a slice on its own.
   function deriveSection(activityNames){
     const box=section('Save or export matching cases');box.id='owgEventLogDerive';
@@ -902,6 +921,7 @@
     results.appendChild(driftSection());
     results.appendChild(automationSection());
     results.appendChild(decisionSection());
+    results.appendChild(descriptionSection());
     results.appendChild(agentRunsRefreshSection());
     results.appendChild(folderFeedSection());
     results.appendChild(agentShareSection());

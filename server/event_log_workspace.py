@@ -769,6 +769,8 @@ def delete_log(log_id: str) -> dict[str, Any]:
             conn.execute("CHECKPOINT")
             from .event_log_prediction_snapshots import erase_log as erase_snapshots
             erase_snapshots(log_id)
+            from .event_log_description import erase_log as erase_description
+            erase_description(log_id)
             from .event_log_saved_reports import erase as erase_saved_reports
             erase_saved_reports(log_id)
             from .local_scheduler import forget_target

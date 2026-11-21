@@ -274,6 +274,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `POST /v1/event-logs/{log_id}/derive` | Save the cases matching a filter as a new log (below). |
 | `GET /v1/event-logs/{log_id}/quality` | Stored quality and mapping reports per import and append, plus current whole-log diagnostics (below). |
 | `GET /v1/event-logs/{log_id}/summary` | Events, cases, activities, time span and case-duration median/p90/mean. |
+| `GET`/`POST /v1/event-logs/{log_id}/description` (`{"description"}`) | The owner's description of the log (at most 2,000 characters; an empty text removes it), shown and edited in **About this log**. It never changes the events and is deleted with the log. |
 | `GET /v1/event-logs/{log_id}/object-types` | Object types, objects per type and shared events between types. |
 | `GET /v1/event-logs/{log_id}/object-map` | Per-object-type lifecycle maps, links between object types and activities shared by several types. |
 | `GET /v1/event-logs/{log_id}/object-relationships` | Supplied directed object assertions, with bounded type/qualifier groups. |
