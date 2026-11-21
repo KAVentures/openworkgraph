@@ -60,8 +60,9 @@ def test_lifecycle_pairs_split_processing_from_waiting():
     assert acts["Review"]["waiting_before"]["p10_seconds"] == 7200
     assert acts["Review"]["waiting_before"]["population_stddev_seconds"] > 0
     assert acts["Review"]["waiting_before"]["instances"] == 11
-    assert acts["Review"]["processing_observation_share"] == pytest.approx(11 / 12)
-    assert acts["Review"]["waiting_observation_share"] == pytest.approx(11 / 12)
+    assert acts["Review"]["processing_observation_share"] == 1.0
+    assert acts["Receive"]["processing_observation_share"] == pytest.approx(11 / 12)
+    assert acts["Review"]["waiting_observation_share"] == 1.0
     assert acts["Receive"]["processing"]["population_stddev_seconds"] == 0
     assert acts["Close"]["waiting_before"]["median_seconds"] == 0
     assert result["activities"][0]["activity"] == "Review"   # ranked by total waiting
