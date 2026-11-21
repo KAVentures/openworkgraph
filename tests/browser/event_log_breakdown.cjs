@@ -60,6 +60,12 @@ const path=require('node:path');
    await page.locator('#owgBreakdownStatus').filter({hasText:'Share doing an activity by month the case started, over 24 cases. Overall: 33.3%.'}).waitFor();
    const months=await page.locator('#owgBreakdownResults tbody tr').evaluateAll(trs=>trs.map(tr=>[...tr.cells].map(td=>td.textContent)));
    assert.deepEqual(months,[['2024-01','33.3%'],['2024-02','33.3%']],JSON.stringify(months));
+   // Duration bands: red cases take 2 h and blue 6 h, both in the 1 to 24 hour band.
+   await page.locator('#owgBreakdownRows').selectOption('duration_band');await page.locator('#owgBreakdownMeasure').selectOption('cases');
+   await page.locator('#owgBreakdownRun').click();
+   await page.locator('#owgBreakdownStatus').filter({hasText:'Cases by case duration, over 24 cases.'}).waitFor();
+   assert.deepEqual(await page.locator('#owgBreakdownResults tbody tr').evaluateAll(trs=>trs.map(tr=>tr.cells[0].textContent)),['1 to 24 hours']);
+   await page.locator('#owgBreakdownRows').selectOption('start_month');
    await page.locator('#owgBreakdownColumns').selectOption('start_month');await page.locator('#owgBreakdownRun').click();
    await page.locator('#owgBreakdownStatus').filter({hasText:'Choose two different dimensions.'}).waitFor();
    await page.addScriptTag({content:axeSource});
