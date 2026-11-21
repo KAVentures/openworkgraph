@@ -52,6 +52,32 @@ def test_a_real_change_is_found_and_stable_months_are_not():
 
 
 
+@pytest.mark.parametrize("window", ["month", "cases"])
+def test_evidence_matches_the_sample_and_path_share(monkeypatch, window):
+    monkeypatch.setattr(drift, "SAMPLE_PER_WINDOW", 25)
+    log = _log(changed_from_month=1, months=2)
+    report = drift.drift(log, window=window, window_cases=60, min_cases=20)
+    assert len(report["change_points"]) == 1
+    label = report["windows"][1]["window"]
+    query = {"window_index": 1, "window": window, "window_size": 60, "expected_window": label,
+             "source": "Receive", "destination": "Approve", "limit": 7}
+    page = drift.window_cases(log, **query)
+    moved = next(path for path in report["change_points"][0]["paths_that_moved"] if path["path"] == "Receive → Approve")
+    assert page["window"] == label and page["window_cases"] == 60
+    assert page["sampled_cases"] == 25
+    assert page["matching_cases"] / page["sampled_cases"] == pytest.approx(moved["case_share_after"])
+    keys = []
+    while True:
+        keys.extend(item["case_id"] for item in page["cases"])
+        if page["next_after"] is None:
+            break
+        page = drift.window_cases(log, **query, after=page["next_after"])
+    assert len(keys) == len(set(keys)) == page["matching_cases"] and keys == sorted(keys)
+    assert all(key.startswith("m1c") and int(key.split("c")[1]) % 4 != 0 for key in keys)
+    with pytest.raises(workspace.EventLogWorkspaceError, match="window changed"):
+        drift.window_cases(log, **{**query, "expected_window": "stale"})
+
+
 def test_activity_names_containing_arrow_do_not_collide_as_drift_edges():
     """Different endpoint pairs must not become the same flattened path."""
     rows = ["case,activity,time"]
@@ -81,6 +107,9 @@ def test_activity_names_containing_arrow_do_not_collide_as_drift_edges():
     # The legacy display remains readable for simple labels; ambiguous labels
     # receive a reversible JSON-pair display, with explicit endpoints in both.
     assert all(p["path"].startswith('["') for p in moved.values())
+    evidence = drift.window_cases(log, window_index=1, source="A", destination="B → C")
+    assert evidence["matching_cases"] == 60
+    assert not drift.window_cases(log, window_index=1, source="A → B", destination="C")["cases"]
 
 
 def test_window_sampling_provenance_at_and_above_cap():
@@ -400,6 +429,13 @@ with TestClient(app) as client:
     assert sparse.json()["boundaries_not_tested"][0]["reason"] == "insufficient_path_support"
     assert sparse.json()["boundaries_not_tested"][0]["insufficient_path_support_side"] == "before"
     assert client.get(path + "?window=year", headers=headers).status_code == 422
+    spec = {"window_index": 0, "limit": 1}
+    assert client.post(path + "/cases", json=spec).status_code in (401, 403)
+    page = client.post(path + "/cases", json=spec, headers=headers)
+    assert page.status_code == 200 and page.headers["cache-control"] == "no-store", page.text
+    assert len(page.json()["cases"]) == 1
+    assert client.post(path + "/cases", json={"window_index": 0, "source": "A"}, headers=headers).status_code == 422
+    assert client.post(path + "/cases", json={"window_index": True}, headers=headers).status_code == 422
 '''
     env = os.environ.copy()
     env.update({"WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"), "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth"),

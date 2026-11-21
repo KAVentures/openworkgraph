@@ -1980,6 +1980,14 @@ sides of that window. One million events take a few seconds
 (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_drift.py`). A change point does not say why
 behaviour changed, and a change in how events are recorded looks the same.
 
+Use **Inspect sampled cases** on a window to review its analysis sample. The before and after
+actions on a changed path select cases containing that exact adjacent pair within each sample.
+Open a case to see its full event history. The dashboard-only
+`POST /v1/event-logs/{log_id}/drift/cases` reuses the window settings and case filter in the query.
+Send the zero-based `window_index` in the body and optionally `expected_window`, `source` and
+`destination` together, `after`, or `limit` (1–100, default 50). It recomputes the sample from
+the retained log. A changed window label asks for a fresh analysis.
+
 ## Data quality and mapping reports
 
 Every import and every appended batch stores a counts-only quality report next to the log. The
