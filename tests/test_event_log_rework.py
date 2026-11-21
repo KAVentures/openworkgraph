@@ -53,6 +53,36 @@ def test_repeats_loop_patterns_and_comparison():
     assert "does not show that the rework caused" in r["interpretation"]
 
 
+def test_repeat_and_loop_evidence_match_the_report():
+    from server import event_log_cases as evidence
+    log = _log()
+    for cohort in ({}, {"without_activity": "Correct"}):
+        report = rework.rework(log, {"cohort": cohort})
+        for activity in report["activities"]:
+            query = {"cohort": cohort, "repeat_activity": activity["activity"], "limit": 2}
+            page = evidence.cases(log, query)
+            assert page["selected_cases"] == activity["cases_repeating"]
+            assert page["next_after"] == page["cases"][-1]["case_id"]
+            following = evidence.cases(log, {**query, "after": page["next_after"]})
+            assert not {row["case_id"] for row in page["cases"]}.intersection(
+                row["case_id"] for row in following["cases"])
+        for loop in report["loop_patterns"]:
+            page = evidence.cases(log, {"cohort": cohort, "loop_pattern": loop["pattern"]})
+            assert page["selected_cases"] == loop["cases"]
+            assert all(row["events"] > len(loop["pattern"]) for row in page["cases"])
+        assert evidence.cases(log, {"cohort": cohort, "loop_pattern": ["Check", "Approve", "Check"]})["cases"] == []
+
+
+@pytest.mark.parametrize("selector", [
+    {"repeat_activity": False}, {"loop_pattern": ["A", "B"]}, {"loop_pattern": ["A", "B", "A", "A"]},
+    {"loop_pattern": ["A", "A"], "repeat_activity": "A"}, {"loop_pattern": ["A"] * 7},
+])
+def test_invalid_rework_evidence_selectors(selector):
+    from server import event_log_cases as evidence
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        evidence.cases("not-read", selector)
+
+
 def test_limits_cohort_and_validation():
     log = _log()
     assert len(rework.rework(log, {"limit": 1})["activities"]) == 1

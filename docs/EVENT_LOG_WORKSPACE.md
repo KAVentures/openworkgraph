@@ -1166,6 +1166,16 @@ and the log's events are never changed.
 A log keeps at most 100 tags and 200,000 tagged cases. Deleting the log deletes
 its tags. A log saved from matching cases does not copy them.
 
+## Rework and loops
+
+**Find rework** applies the workspace case filter and counts activities repeated within a case.
+Choose **Inspect cases** for a repeated activity or loop to open the matching cases and their
+event histories. A loop uses the recorded steps between consecutive occurrences of the same
+activity, in timestamp and event ID order.
+
+`POST /v1/event-logs/{log_id}/cases/query` accepts `repeat_activity` or a `loop_pattern` of two
+to six exact labels. Both selectors preserve the selected cases' complete event histories.
+
 ## Explain a case
 
 **Explain a case** offers the five slowest cases (honouring the case notion and
