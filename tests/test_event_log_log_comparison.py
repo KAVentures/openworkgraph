@@ -45,6 +45,7 @@ def test_two_logs_are_compared():
     r = comparison.compare({"baseline": {"log_id": north}, "comparison": {"log_id": south}})
     assert r["format"] == comparison.FORMAT
     assert r["baseline"]["name"] == "north" and r["comparison"]["name"] == "south"
+    assert r["baseline"]["case_notion"] == r["comparison"]["case_notion"] == "case"
     kb, kc, d = r["kpis"]["baseline"], r["kpis"]["comparison"], r["kpis"]["difference"]
     assert kb["cases"] == kc["cases"] == 40 and d["cases"] == 0
     assert kb["repeat_rate"] == 0.25 and kc["repeat_rate"] == 0 and d["repeat_rate"] == -0.25
@@ -73,6 +74,8 @@ def test_one_log_against_a_filtered_version_of_itself_and_limits():
     assert r["variants"]["comparison_cases_in_shared_variants"] == 1.0
     assert r["variants"]["baseline_cases_in_shared_variants"] == 0.25
     assert len(r["activities"]["largest_share_differences"]) <= 2 and len(r["variants"]["largest_share_differences"]) <= 2
+    with pytest.raises(workspace.EventLogWorkspaceError, match="same log, case notion and filter"):
+        comparison.compare({"baseline": {"log_id": north, "case_type": "case"}, "comparison": {"log_id": north}})
 
 
 def test_invalid_specs():
@@ -87,6 +90,26 @@ def test_invalid_specs():
     for spec in bad:
         with pytest.raises(workspace.EventLogWorkspaceError):
             comparison.compare(spec)
+
+
+def test_comparison_records_the_resolved_case_notion_on_each_side():
+    import json
+    baseline, _ = _logs()
+    doc = {"objects": [{"id": "o1", "type": "order"}, {"id": "o2", "type": "order"},
+                       {"id": "i1", "type": "invoice"}],
+           "events": [
+               {"id": "e1", "type": "Open", "time": "2024-01-01T00:00:00Z",
+                "relationships": [{"objectId": "o1"}, {"objectId": "i1"}]},
+               {"id": "e2", "type": "Open", "time": "2024-01-02T00:00:00Z",
+                "relationships": [{"objectId": "o2"}]},
+           ]}
+    other = workspace.import_log(BytesIO(json.dumps(doc).encode()), name="objects", source_format="ocel")["log_id"]
+    spec = {"baseline": {"log_id": baseline}, "comparison": {"log_id": other}}
+    default = comparison.compare(spec)
+    assert default["comparison"]["case_notion"] == "order" and default["kpis"]["comparison"]["cases"] == 2
+    selected = comparison.compare({**spec, "comparison": {"log_id": other, "case_type": "invoice"}})
+    assert selected["baseline"]["case_notion"] == "case"
+    assert selected["comparison"]["case_notion"] == "invoice" and selected["kpis"]["comparison"]["cases"] == 1
 
 
 def test_route_requires_the_dashboard(tmp_path):

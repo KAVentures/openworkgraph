@@ -5141,25 +5141,77 @@
 
   // Compare this log with another saved log: KPIs, activities and paths present in only one, and case-share differences.
   function logComparisonSection(){
-    const box=section('Compare with another log');box.id='owgLogComparison';
-    box.appendChild(el('div','Compare this log with another saved log, for example another region or the same process before a system change. Activities are matched by exact name after each log’s activity mapping.','muted'));
+    const box=section('Compare event logs');box.id='owgLogComparison';
+    box.appendChild(el('div','Compare two saved logs or two case selections from this log. Activities match by exact name after each log’s activity mapping.','muted'));
     const others=state.logs.filter(l=>l.log_id!==state.logId);
-    if(!others.length){box.appendChild(el('div','Import a second log to compare with.','muted'));return box;}
-    const other=select('owgLogCompareOther',others.map(l=>[l.log_id,l.name+' · '+Number(l.events).toLocaleString()+' events']));
+    const other=select('owgLogCompareOther',[...others.map(l=>[l.log_id,l.name+' · '+Number(l.events).toLocaleString()+' events']),
+      [state.logId,'This log (compare two case selections)']]);
+    const otherType=select('owgLogCompareCaseType',[['','Log default']]);
     const run=button('Compare logs','secondary');run.id='owgLogCompareRun';
+    const save=button('Download comparison JSON','secondary');save.id='owgLogCompareJson';save.disabled=true;
     const out=el('div');out.id='owgLogCompareResults';out.setAttribute('role','status');
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Other log',other),run);
-    box.append(row,out);
-    const generation=state.generation,baseId=state.logId;
+    const options=document.createElement('details');options.appendChild(el('summary','Case selection'));
+    const baseFrom=input('owgLogCompareBaselineFrom','date'),baseBefore=input('owgLogCompareBaselineBefore','date');
+    const otherFrom=input('owgLogCompareOtherFrom','date'),otherBefore=input('owgLogCompareOtherBefore','date');
+    const active=input('owgLogCompareUseActiveFilter','checkbox');
+    active.disabled=!filterOn();
+    const dates=el('div',null,'row');
+    dates.append(field('Baseline cases start on or after (UTC)',baseFrom),field('Baseline cases start before (UTC)',baseBefore),
+      field('Comparison cases start on or after (UTC)',otherFrom),field('Comparison cases start before (UTC)',otherBefore));
+    const typeStatus=el('div',null,'muted');typeStatus.setAttribute('role','status');
+    options.append(field('Comparison case notion',otherType),typeStatus,dates,field('Use the workspace case filter for the baseline',active));
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Comparison log',other),run,save);
+    box.append(row,options,out);
+    const generation=state.generation,baseId=state.logId,baseType=state.caseType;
+    const enabled=()=>generation===state.generation&&box.isConnected;
+    let typeTurn=0,runTurn=0,result=null,loadedTypes=null;
+    const invalidate=()=>{++runTurn;run.disabled=false;save.disabled=true;result=null;out.replaceChildren();};
+    async function loadTypes(){
+      const selected=other.value,ticket=++typeTurn;
+      const current=()=>enabled()&&ticket===typeTurn&&other.value===selected;
+      setOptions(otherType,[['','Log default']]);otherType.disabled=true;
+      typeStatus.textContent='Loading case notions…';
+      try{
+        const response=await getJSON('/v1/event-logs/'+encodeURIComponent(selected)+'/object-types');
+        if(!current())return;
+        setOptions(otherType,[['','Log default'],...response.object_types.map(item=>[item.object_type,item.object_type])]);
+        loadedTypes=selected;
+        typeStatus.textContent=response.object_types.length?'':'This log has no case notions.';
+      }catch(error){if(current())typeStatus.textContent='Could not load case notions. '+error.message;}
+      finally{if(current())otherType.disabled=false;}
+    }
+    other.onchange=()=>{
+      invalidate();++typeTurn;loadedTypes=null;typeStatus.textContent='';
+      setOptions(otherType,[['','Log default']]);otherType.disabled=false;
+      if(options.open)loadTypes();
+    };
+    options.addEventListener('toggle',()=>{if(options.open&&loadedTypes!==other.value&&!otherType.disabled)loadTypes();});
+    otherType.onchange=active.onchange=invalidate;
+    for(const date of [baseFrom,baseBefore,otherFrom,otherBefore])date.oninput=invalidate;
+    save.onclick=()=>{if(result&&enabled())download('event-log-comparison.json',JSON.stringify(result,null,2),'application/json');};
+    const datesIn=(start,end,cohort={})=>{
+      const picked={...cohort};
+      if(start.value)picked.started_from=start.value+'T00:00:00Z';
+      if(end.value)picked.started_before=end.value+'T00:00:00Z';
+      if(picked.started_from&&picked.started_before&&Date.parse(picked.started_from)>=Date.parse(picked.started_before)){
+        throw new Error('A start date must be earlier than its end date.');
+      }
+      return picked;
+    };
     const shareCell=r=>r.share_difference===null?'—':(r.share_difference>0?'+':'')+(r.share_difference*100).toFixed(1)+' pts'+(r.interval_excludes_zero?' *':'');
     const signed=(v,f)=>v===null||v===undefined?'—':(v>0?'+':v<0?'−':'')+f(Math.abs(v));
     run.onclick=async()=>{
+      const ticket=++runTurn;
+      const current=()=>enabled()&&ticket===runTurn;
+      result=null;save.disabled=true;
       run.disabled=true;out.replaceChildren(el('div','Comparing…','muted'));
       try{
-        const spec={baseline:{log_id:baseId},comparison:{log_id:other.value},limit:15};
-        if(state.caseType)spec.baseline.case_type=state.caseType;
+        const spec={baseline:{log_id:baseId,cohort:datesIn(baseFrom,baseBefore,active.checked?globalCohort():{})},
+          comparison:{log_id:other.value,cohort:datesIn(otherFrom,otherBefore)},limit:15};
+        if(baseType)spec.baseline.case_type=baseType;
+        if(otherType.value)spec.comparison.case_type=otherType.value;
         const r=await (await api('/v1/event-logs/comparison',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
-        if(generation!==state.generation)return;
+        if(!current())return;
         const b=r.kpis.baseline,c=r.kpis.comparison,d=r.kpis.difference;
         const kpiTable=table(['Measure',r.baseline.name+' (this log)',r.comparison.name,'Difference'],[
           ['Cases',Number(b.cases).toLocaleString(),Number(c.cases).toLocaleString(),signed(d.cases,v=>Number(v).toLocaleString())],
@@ -5172,15 +5224,21 @@
         const only=(label,list)=>list.length?el('div',label+': '+list.slice(0,20).join(', ')+(list.length>20?' and '+(list.length-20)+' more':'')+'.'):null;
         const actRows=r.activities.largest_share_differences.map(a=>[a.activity,pct(a.baseline_share),pct(a.comparison_share),shareCell(a)]);
         const pathRows=r.paths.largest_share_differences.map(e=>[e.from+' → '+e.to,pct(e.baseline_share),pct(e.comparison_share),shareCell(e)]);
-        out.replaceChildren(kpiTable,
+        const selection=side=>{
+          const {started_from:start,started_before:end}=side.cohort;
+          return side.name+' uses '+side.case_notion+(start||end?' cases starting'+
+            (start?' on or after '+start.slice(0,10):'')+(start&&end?' and':'')+(end?' before '+end.slice(0,10):'')+' UTC':' cases')+'.';
+        };
+        out.replaceChildren(el('p','Baseline '+selection(r.baseline)+' Comparison '+selection(r.comparison),'muted'),kpiTable,
           el('div','A random case in '+r.comparison.name+' takes longer than a random case in '+r.baseline.name+' '+pct(longer)+' of the time (50% means no shift).','muted'),
           ...[only('Only in '+r.baseline.name,r.activities.only_baseline),only('Only in '+r.comparison.name,r.activities.only_comparison)].filter(Boolean),
           el('h4','Activities: share of cases'),table(['Activity',r.baseline.name,r.comparison.name,'Difference'],actRows),
           el('h4','Paths: share of cases'),table(['Path',r.baseline.name,r.comparison.name,'Difference'],pathRows),
           el('div',r.variants.shared_variants.toLocaleString()+' variants occur in both logs; they cover '+pct(r.variants.baseline_cases_in_shared_variants)+' of '+r.baseline.name+' cases and '+pct(r.variants.comparison_cases_in_shared_variants)+' of '+r.comparison.name+' cases.','muted'),
           el('div','* the 95% interval of the difference excludes zero. '+r.interpretation,'muted'));
-      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
-      finally{run.disabled=false;}
+        result=r;save.disabled=false;
+      }catch(error){if(current())out.replaceChildren(el('div',error.message,'muted'));}
+      finally{if(current())run.disabled=false;}
     };
     return box;
   }

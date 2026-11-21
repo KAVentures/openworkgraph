@@ -74,9 +74,7 @@ def _profile(side: Side) -> dict[str, Any]:
                 "first_event_at": first.isoformat() + "Z" if first else None,
                 "last_event_at": last.isoformat() + "Z" if last else None,
                 "durations": durations, "activity_cases": activity_cases, "edges": edges, "variants": variants}
-    profile = workspace._query(side.log_id, side.case_type, run)
-    profile["log"] = next((log for log in workspace.list_logs()["logs"] if log["log_id"] == side.log_id), {})
-    return profile
+    return workspace._query(side.log_id, side.case_type, run)
 
 
 def _quantile(values: list[float], q: float) -> float | None:
@@ -132,6 +130,9 @@ def _kpis(p: dict[str, Any]) -> dict[str, Any]:
 def compare(spec: Any) -> dict[str, Any]:
     settings = _parse(spec)
     base, comp = _profile(settings.baseline), _profile(settings.comparison)
+    if (settings.baseline.log_id == settings.comparison.log_id and base["case_notion"] == comp["case_notion"]
+            and cohorts.parse_cohort(settings.baseline.cohort) == cohorts.parse_cohort(settings.comparison.cohort)):
+        raise workspace.EventLogWorkspaceError("baseline and comparison are the same log, case notion and filter")
     n0, n1 = base["cases"], comp["cases"]
     if not n0 or not n1:
         raise workspace.EventLogWorkspaceError("each side needs at least one case after its filter")
@@ -160,7 +161,8 @@ def compare(spec: Any) -> dict[str, Any]:
     def side_info(side: Side, profile: dict[str, Any]) -> dict[str, Any]:
         log = profile["log"]
         return {"log_id": side.log_id, "name": log.get("name"), "source_format": log.get("source_format"),
-                "case_type": side.case_type, "cohort": cohorts.describe(cohorts.parse_cohort(side.cohort))}
+                "case_type": side.case_type, "case_notion": profile["case_notion"],
+                "cohort": cohorts.describe(cohorts.parse_cohort(side.cohort))}
 
     return {
         "format": FORMAT,
