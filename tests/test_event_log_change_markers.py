@@ -62,6 +62,31 @@ def test_limit_and_deletion_with_the_log(monkeypatch):
             conn.close()
 
 
+def test_a_failed_marker_cleanup_rolls_the_whole_deletion_back(monkeypatch):
+    log = _log()
+    cm.add(log, {"marked_at": "2024-01-05T00:00:00Z", "label": "Go-live", "note": "keep me"})
+
+    def fail(conn, log_id):
+        conn.execute("DELETE FROM change_markers WHERE log_id = ?", [log_id])
+        raise RuntimeError("disk full")
+
+    original = cm.erase
+    monkeypatch.setattr(cm, "erase", fail)
+    with pytest.raises(RuntimeError):
+        workspace.delete_log(log)
+    assert [l["log_id"] for l in workspace.list_logs()["logs"]] == [log]          # nothing deleted
+    assert workspace.summary(log)["cases"] == 20
+    assert cm.markers(log)["markers"][0]["note"] == "keep me"                       # nor the markers
+    monkeypatch.setattr(cm, "erase", original)
+    workspace.delete_log(log)
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            assert conn.execute("SELECT count(*) FROM change_markers").fetchone()[0] == 0
+        finally:
+            conn.close()
+
+
 def test_routes_are_owner_only(tmp_path):
     code = r'''
 from io import BytesIO

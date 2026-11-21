@@ -762,6 +762,8 @@ def delete_log(log_id: str) -> dict[str, Any]:
                 erase_mappings(conn, log_id)
                 from .event_log_folder_feeds import erase_log as erase_feeds
                 feed_ids = erase_feeds(conn, log_id)
+                from .event_log_change_markers import erase as erase_change_markers
+                erase_change_markers(conn, log_id)       # in the deletion's transaction: no orphan markers
                 from .jira_retained_profiles import forget_dataset
                 forget_dataset(conn, log_id)
                 for table in ("object_relationships", "event_source_keys", "event_source_namespaces", "discovery_snapshots", "log_appends", "log_quality", "quarantine", "quarantine_decisions", "filter_sets",
@@ -778,8 +780,6 @@ def delete_log(log_id: str) -> dict[str, Any]:
             erase_snapshots(log_id)
             from .event_log_saved_reports import erase as erase_saved_reports
             erase_saved_reports(log_id)
-            from .event_log_change_markers import erase_log as erase_change_markers
-            erase_change_markers(log_id)
             from .local_scheduler import forget_target
             for kind in ("event_log_signals", "event_log_report", "event_log_agent_runs"):
                 forget_target(kind, log_id)

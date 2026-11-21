@@ -98,14 +98,9 @@ def remove(log_id: str, marker_id: str) -> dict[str, Any]:
     return _with_conn(log_id, run)
 
 
-def erase_log(log_id: str) -> None:
-    """Called by workspace.delete_log after the log's own rows are gone."""
-    with workspace._LOCK:
-        conn = workspace._connect()
-        try:
-            conn.execute("DELETE FROM change_markers WHERE log_id = ?", [log_id])
-        finally:
-            conn.close()
+def erase(conn, log_id: str) -> None:
+    """Called by workspace.delete_log inside its transaction, so markers go exactly when the log goes."""
+    conn.execute("DELETE FROM change_markers WHERE log_id = ?", [log_id])
 
 
-__all__ = ["markers", "add", "remove", "erase_log", "FORMAT"]
+__all__ = ["markers", "add", "remove", "erase", "FORMAT"]
