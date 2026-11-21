@@ -133,6 +133,15 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
               count(wait), quantile_cont(wait, 0.5), quantile_cont(wait, 0.9), avg(wait), coalesce(sum(wait), 0),
               stddev_pop(proc), stddev_pop(wait), quantile_cont(wait, 0.1)
             FROM seq2 GROUP BY activity ORDER BY coalesce(sum(wait), 0) DESC, activity LIMIT {MAX_ACTIVITIES}""").fetchall()
+        # A lifecycle activity with only unfinished starts has no row in inst/seq2.
+        # Keep it visible instead of silently hiding a completely unobserved activity.
+        observed_names = {row[0] for row in activities}
+        open_only = sorted(set(open_by_activity) - observed_names)
+        if open_only:
+            activities = list(activities) + [
+                (name, 0, 0, 0, None, None, None, 0, None, None, None, 0,
+                 None, None, None) for name in open_only
+            ]
         transitions = conn.execute(f"""SELECT prev_activity, activity, count(*), quantile_cont(wait, 0.5), sum(wait)
             FROM seq2 WHERE wait IS NOT NULL GROUP BY prev_activity, activity
             ORDER BY sum(wait) DESC, prev_activity, activity LIMIT {MAX_TRANSITIONS}""").fetchall()
