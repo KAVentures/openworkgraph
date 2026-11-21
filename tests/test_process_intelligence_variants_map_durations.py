@@ -76,7 +76,11 @@ def test_durations_and_time_patterns():
     assert set(d["observed_duration_seconds"]) == {"median", "p90", "p95"}
     t = sharing.time_patterns(log, time_zone="Europe/Berlin", activity="Open")
     assert t["settings"]["time_zone"] == "Europe/Berlin" and t["settings"]["activity"] == "Open"
-    assert sum(map(sum, t["events"])) == 15 and t["events"][0][10] > 0   # 09:00 UTC is 10:00 in Berlin
+    # The weekday/hour cells have only 1-4 cases, so withhold the
+    # entire time histogram rather than disclosing rare event times.
+    assert t["total_events"] == 15 and t["time_bins_withheld"] is True
+    assert t["events"] is None and t["case_arrivals"] is None
+    assert t["outside_working_hours_share"] is None and t["busiest"] == []
     with pytest.raises(EventLogWorkspaceError, match="at least 5 supporting cases"):
         sharing.time_patterns(log, time_zone="Europe/Berlin", activity="Rare")
     with pytest.raises(EventLogWorkspaceError):
@@ -105,7 +109,9 @@ with TestClient(app) as client:
     d=client.get(base+'/duration-distribution?cutoffs_seconds=3600,10000',headers=bearer)
     assert d.status_code==200 and [b['cases'] for b in d.json()['bands']]==[0,8,0], d.text
     assert client.get(base+'/duration-distribution?cutoffs_seconds=x',headers=bearer).status_code==422
-    assert client.get(base+'/time-patterns?time_zone=UTC',headers=bearer).status_code==200
+    t=client.get(base+'/time-patterns?time_zone=UTC',headers=bearer)
+    assert t.status_code==200 and t.json()['time_bins_withheld'] is True, t.text
+    assert t.json()['events'] is None and t.json()['case_arrivals'] is None
     assert client.get(base+'/time-patterns?time_zone=UTC&activity=D',headers=bearer).status_code==422
     assert client.get(base+'/process-map?paths=0',headers=bearer).status_code==422
     assert client.get(base+'/variants').status_code in (401,403)
