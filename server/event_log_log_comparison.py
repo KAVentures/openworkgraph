@@ -74,7 +74,11 @@ def _profile(side: Side) -> dict[str, Any]:
                 "first_event_at": first.isoformat() + "Z" if first else None,
                 "last_event_at": last.isoformat() + "Z" if last else None,
                 "durations": durations, "activity_cases": activity_cases, "edges": edges, "variants": variants}
-    return workspace._query(side.log_id, side.case_type, run)
+    profile = workspace._query(side.log_id, side.case_type, run)
+    # The response still needs source-log metadata for both sides. Preserve it
+    # separately from the resolved case notion returned by the query.
+    profile["log"] = next((log for log in workspace.list_logs()["logs"] if log["log_id"] == side.log_id), {})
+    return profile
 
 
 def _quantile(values: list[float], q: float) -> float | None:
