@@ -147,7 +147,7 @@ def test_delayed_review_response_cannot_restore_another_session_or_process():
     assert "reviewIdentity!==identityGeneration||reviewCredential!==credential||" in block
     assert "selected!==reviewSelection)return;" in block
     assert block.index("reviewResult=await call(") < block.index("selected!==reviewSelection)return;")
-    assert block.index("selected!==reviewSelection)return;") < block.index("render(reviewResult);")
+    assert block.index("selected!==reviewSelection)return;") < block.index("render(recordedReview);")
 
 
 def test_review_submission_rejects_confirmation_or_comment_drift_during_revalidation():
@@ -206,8 +206,8 @@ def test_successful_review_consumes_inspected_handoff_before_render():
     assert 'resetHandoff("Review submitted; outcome may be unknown' in block
     assert '$("handoffConsent").checked=false;' in block
     assert block.index('resetHandoff("Review submitted; outcome may be unknown') < block.index('reviewResult=await call(')
-    assert block.index('selected!==reviewSelection)return;') < block.index('render(reviewResult);')
-    assert block.index('render(reviewResult);') < block.index('note("Design review acknowledged')
+    assert block.index('selected!==reviewSelection)return;') < block.index('render(recordedReview);')
+    assert block.index('render(recordedReview);') < block.index('note("Design review acknowledged')
 
 
 def test_handoff_recovery_reopens_latest_using_authenticated_gateway_and_requires_new_consent():
@@ -263,7 +263,7 @@ def test_review_submission_consumes_inspection_before_uncertain_post():
     assert block.index('resetHandoff("Review submitted; outcome may be unknown') < block.index('reviewResult=await call(')
     assert block.index('$("handoffConsent").checked=false;') < block.index('reviewResult=await call(')
     assert 'if (submittedInspectedHandoff)' in block
-    assert 'render(reviewResult);' in block
+    assert 'render(recordedReview);' in block
 
 
 def test_stale_packet_read_failure_cannot_overwrite_new_identity_or_selection():
@@ -289,7 +289,7 @@ def test_review_acknowledgment_is_revision_pinned_and_not_execution_receipt():
     assert 'reviewResult.process.content_sha256===record.content_sha256' in block
     assert 'Human design review only; no agent handoff or execution occurred.' in block
     assert 'revision reference could not be verified' in block
-    assert block.index("render(reviewResult);") < block.index('$("reviewOutcome").textContent =')
+    assert block.index("render(recordedReview);") < block.index('$("reviewOutcome").textContent =')
 
 
 def test_review_mismatched_gateway_response_never_reports_success():
@@ -314,8 +314,8 @@ def test_unverified_review_response_cannot_render_another_workflow():
     assert 'if(!acknowledged){' in block
     assert '$("reviewConfirm").checked=false;' in block
     assert "check its review state before resubmitting" in block
-    assert block.index("if(!acknowledged){") < block.index("render(reviewResult);")
-    assert block.index("return;", block.index("if(!acknowledged){")) < block.index("render(reviewResult);")
+    assert block.index("if(!acknowledged){") < block.index("render(recordedReview);")
+    assert block.index("return;", block.index("if(!acknowledged){")) < block.index("render(recordedReview);")
 
 
 def test_concurrent_review_mutations_are_serialized_and_lost_response_stays_fail_closed():
@@ -356,7 +356,7 @@ def test_review_acknowledgment_rejects_ambiguous_duplicate_actor_entries():
     assert 'entry?.reviewer_actor_id===reviewSelection.your_actor_id).length===1' in block
     assert 'entry.decision===decision' in block
     assert block.index(').length===1') < block.index('reviewResult.review.reviews.some((entry)=>')
-    assert block.index('if(!acknowledged){') < block.index('render(reviewResult);')
+    assert block.index('if(!acknowledged){') < block.index('render(recordedReview);')
 
 
 def test_handoff_live_reads_bind_reviewer_permission_and_actor_identity():
@@ -405,7 +405,7 @@ def test_acknowledged_review_requires_authenticated_durable_readback():
     assert 'entry.decision===decision' in block
     assert 'recordedEntries.filter(entry=>entry?.reviewer_actor_id===reviewSelection.your_actor_id).length===1' in block
     assert block.index('reviewResult=await call(') < block.index('recordedReview=await call(')
-    assert block.index('recordedReview=await call(') < block.index('render(reviewResult);')
+    assert block.index('recordedReview=await call(') < block.index('render(recordedReview);')
 
 
 def test_durable_review_readback_failure_requires_recovery_without_retry():
@@ -416,7 +416,7 @@ def test_durable_review_readback_failure_requires_recovery_without_retry():
     assert 'reviewIdentity!==identityGeneration||reviewCredential!==credential' in block
     assert 'selected!==reviewSelection)return;' in block
     assert 'if(!recorded) {' in block
-    assert block.index('if(!recorded) {') < block.index('render(reviewResult);')
+    assert block.index('if(!recorded) {') < block.index('render(recordedReview);')
 
 
 def test_handoff_inspection_pins_membership_revision_for_review_navigation():
@@ -465,3 +465,13 @@ def test_review_readback_refuses_archived_or_superseded_revision():
     assert 'recordedReview.latest_revision===record.revision' in block
     assert 'recordedReview.process.content_sha256===record.content_sha256' in block
     assert 'recordedReview.permissions?.review===true' in block
+
+
+def test_review_ui_renders_durable_gateway_readback_not_post_snapshot():
+    """A stale POST response must not overwrite the independently verified review state."""
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split("async function review(decision) {", 1)[1].split('$("approve").onclick', 1)[0]
+    assert 'render(recordedReview);' in block
+    assert 'render(reviewResult);' not in block
+    assert block.index('recordedReview=await call(') < block.index('if(!recorded) {')
+    assert block.index('if(!recorded) {') < block.index('render(recordedReview);')
