@@ -2090,6 +2090,11 @@ the case filter.
 
 ## Case filter and playback
 
+In **Case duration distribution**, choose **Inspect cases** on a nonempty band to open its case
+histories. **Use band as filter** narrows the active workspace filter to that band while retaining
+the other conditions. A band includes its lower bound and excludes its upper bound. The distribution
+measures elapsed time between the first and last retained event of each case.
+
 The **Case filter** keeps only cases whose recorded order matches every rule, like Disco's follower
 filter or Celonis' process-flow selection. A rule names two activities and one of four orders:
 *is directly followed by*, *is eventually followed by*, *is never directly followed by* and *is never
