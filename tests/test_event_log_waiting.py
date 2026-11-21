@@ -93,6 +93,23 @@ def test_only_unfinished_activity_remains_visible_with_zero_coverage():
     assert _by(result)["Finished"]["processing_observation_share"] == 1
 
 
+def test_unfinished_only_activities_have_case_counts_and_respect_response_limit():
+    rows = []
+    for i in range(waiting.MAX_ACTIVITIES + 15):
+        rows.append((f"case{i}", f"Open{i:03d}", _at(0, i / 100), "start"))
+    rows += [("finished", "Finished", _at(1, 0), "start"),
+             ("finished", "Finished", _at(1, 1), "complete")]
+    result = waiting.waiting_time(_import(
+        ["case", "activity", "time", "lifecycle:transition"], rows))
+    assert len(result["activities"]) == waiting.MAX_ACTIVITIES
+    assert result["activities"][0]["activity"] == "Finished"
+    unfinished = result["activities"][1:]
+    assert len(unfinished) == waiting.MAX_ACTIVITIES - 1
+    assert all(a["cases"] == 1 and a["open_starts"] == 1
+               and a["processing_observation_share"] == 0 for a in unfinished)
+    assert [a["activity"] for a in unfinished] == sorted(a["activity"] for a in unfinished)
+
+
 def test_overlapping_work_is_not_waiting_and_counts_once_as_busy():
     log = _import(["case", "activity", "time", "lifecycle:transition"], [
         ("x", "A", _at(0, 0), "start"), ("x", "B", _at(0, 1), "start"),
