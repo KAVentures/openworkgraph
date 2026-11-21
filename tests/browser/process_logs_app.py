@@ -10,7 +10,7 @@ scratch=Path(os.environ['OWG_BROWSER_TEST_DIR'])
 os.environ.update(WORKFLOW_OBSERVER_DATA=str(scratch/'data'),
     WORKFLOW_OBSERVER_AUTH_DIR=str(scratch/'auth'),WORKFLOW_OBSERVER_CONFIG=str(scratch/'config.json'))
 from server.secure_app import app
-from server.local_auth import create_dashboard_session
+from server.local_auth import create_dashboard_session, ensure_api_token
 
 @app.middleware('http')
 async def inspect_owned_synthetic_preview(request, call_next):
@@ -25,3 +25,5 @@ async def inspect_owned_synthetic_preview(request, call_next):
     return await call_next(request)
 
 (scratch/'session.txt').write_text(create_dashboard_session(),encoding='utf-8')
+# The local AI bearer, so a browser test can act as a connected agent from Node (never from the page).
+(scratch/'token.txt').write_text(ensure_api_token(),encoding='utf-8')

@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+from contextvars import ContextVar
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -21,6 +22,9 @@ from .event_log_workspace import EventLogWorkspaceError
 from .local_auth import dashboard_session_valid
 
 router = APIRouter()
+# Set when a request passes _require_agent_access as an agent (not the owner's dashboard), so _answer can
+# record the call for the owner (event_log_agent_access).
+_AGENT_CALL: ContextVar[bool] = ContextVar("owg_agent_call", default=False)
 
 
 def _is_dashboard(request: Request) -> bool:
@@ -30,21 +34,31 @@ def _is_dashboard(request: Request) -> bool:
 
 def _require_agent_access(request: Request) -> None:
     if _is_dashboard(request):
+        _AGENT_CALL.set(False)
         return
     from .ai_access import ai_access_enabled
     if not ai_access_enabled():
         raise HTTPException(403, "OpenWorkGraph AI access is off")
+    _AGENT_CALL.set(True)
 
 
 async def _answer(operation, *args: Any, **kwargs: Any) -> JSONResponse:
+    outcome = "ok"
     try:
         result = await run_in_threadpool(operation, *args, **kwargs)
     except sharing.NotShared as exc:
+        outcome = "not_shared"
         raise HTTPException(404, str(exc)) from None
     except sharing.NotAllowed as exc:
+        outcome = "not_allowed"
         raise HTTPException(403, str(exc)) from None
     except EventLogWorkspaceError as exc:
+        outcome = "invalid"
         raise HTTPException(422, str(exc)) from None
+    finally:
+        if _AGENT_CALL.get() and args and isinstance(args[0], str):
+            from . import event_log_agent_access as agent_access
+            await run_in_threadpool(agent_access.record, args[0], getattr(operation, "__name__", "unknown"), outcome)
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
@@ -70,6 +84,14 @@ async def set_agent_tag_grant(request: Request, log_id: str):
     if not isinstance(body, dict) or set(body) != {"allowed"}:
         raise HTTPException(422, 'send {"allowed": true | false}')
     return await _answer(sharing.set_tag_grant, log_id, body["allowed"])
+
+
+@router.get("/v1/event-logs/{log_id}/agent-access")
+async def get_agent_access(request: Request, log_id: str, limit: int = Query(default=50, ge=1, le=500)):
+    """Dashboard only: the latest calls connected AI agents made to this log's process tools."""
+    from . import event_log_agent_access as agent_access
+    _require_dashboard(request)
+    return await _answer(agent_access.access, log_id, limit)
 
 
 @router.post("/v1/process-intelligence/{log_id}/case-tags")
