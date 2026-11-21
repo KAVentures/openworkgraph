@@ -41,6 +41,7 @@
   FILTERED.add('variant.pnml');
   FILTERED.add('petri-net-deviation-causes');
   FILTERED.add('petri-net-alignments/cases.csv');
+  FILTERED.add('petri-net-alignments/tag');
 
   const el=(tag,text,cls)=>{
     const node=document.createElement(tag);
@@ -4589,6 +4590,20 @@
             catch(error){status.textContent=error.message;}
             finally{download.disabled=false;}};
           aligned.appendChild(download);
+          // Tag every non-fitting case, so the tag can focus other analyses on them (or compare them).
+          const tagName=input('owgPetriTagName','text');tagName.value='off-model';tagName.maxLength=60;tagName.autocomplete='off';
+          const tagRun=button('Tag the '+Number(r.cases-f.fitting_cases).toLocaleString()+' non-fitting cases','secondary');tagRun.id='owgPetriTag';
+          const tagMessage=el('div',null,'muted');tagMessage.id='owgPetriTagMessage';tagMessage.setAttribute('role','status');tagMessage.setAttribute('aria-live','polite');
+          const tagRow=el('div',null,'row');tagRow.style.alignItems='end';tagRow.append(field('Tag',tagName),tagRun);
+          aligned.append(tagRow,tagMessage);
+          tagRun.onclick=async()=>{
+            if(!tagName.value.trim()){tagMessage.textContent='Enter a tag.';return;}
+            tagRun.disabled=true;tagMessage.textContent='Tagging…';
+            try{const t2=await (await api(logPath('petri-net-alignments/tag',{new_tag:tagName.value.trim()}),{method:'POST',headers:{'Content-Type':'application/xml'},body:net.body})).json();
+              document.querySelectorAll('#owgCaseTags').forEach(node=>node.dispatchEvent(new CustomEvent('owg-tags-changed')));
+              tagMessage.textContent='Tagged '+Number(t2.tagged).toLocaleString()+' cases “'+t2.tag+'”'+(t2.cases_not_tagged?' ('+Number(t2.cases_not_tagged).toLocaleString()+' on less common paths were left out)':'')+'. Use the tag in the case filter to focus every analysis on them.';}
+            catch(error){tagMessage.textContent=error.message;}
+            finally{tagRun.disabled=false;}};
           const why=button('What goes with these deviations?','secondary');why.id='owgPetriCauses';
           const causes=el('div');causes.id='owgPetriCausesResults';causes.setAttribute('role','status');causes.setAttribute('aria-live','polite');
           aligned.append(why,causes);
