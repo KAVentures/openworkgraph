@@ -50,6 +50,10 @@ def units(metrics) -> dict[str, dict[str, int]]:
     """Validate dependency order and units before opening/reading the dataset."""
     known = {}
     for metric in metrics:
+        # Reject ambiguous names before they can silently replace an earlier
+        # metric's unit/dependency in a saved analysis or exported result.
+        if metric.name in known:
+            raise ValueError(f"duplicate metric name {metric.name!r}")
         if metric.kind != "arithmetic":
             unit = "seconds" if metric.kind == "time_between" else "events" if metric.kind == "activity_count" else metric.unit
             known[metric.name] = _atomic(unit)
