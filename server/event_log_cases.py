@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import event_log_cohorts as cohorts
+from .event_log_rework import MAX_PATTERN_LENGTH
 from . import event_log_workspace as workspace
 from .event_log_workspace import EventLogWorkspaceError
 
@@ -39,7 +40,7 @@ def _activity_selection(values: Any) -> list[str]:
 
 def cases(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, Any]:
     spec = _spec(spec, {"cohort", "path", "transition", "after", "limit",
-                        "required_activities", "excluded_activities"})
+                        "required_activities", "excluded_activities", "repeat_activity", "loop_pattern"})
     cohort = cohorts.parse_cohort(spec.get("cohort"))
     limit = _integer(spec.get("limit", 30), 100)
     after = _text(spec["after"]) if spec.get("after") is not None else None
@@ -57,6 +58,14 @@ def cases(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, Any
         if not isinstance(transition, list) or len(transition) != 2:
             raise EventLogWorkspaceError("an adjacent transition requires exactly two activity names")
         transition = [_text(item) for item in transition]
+    repeat = _text(spec["repeat_activity"]) if spec.get("repeat_activity") is not None else None
+    loop = spec.get("loop_pattern")
+    if loop is not None:
+        if not isinstance(loop, list) or not 2 <= len(loop) <= MAX_PATTERN_LENGTH:
+            raise EventLogWorkspaceError(f"a rework loop requires 2 to {MAX_PATTERN_LENGTH} activity names")
+        loop = [_text(item) for item in loop]
+        if repeat is not None or loop[0] != loop[-1] or loop[0] in loop[1:-1]:
+            raise EventLogWorkspaceError("a loop selects consecutive occurrences of one activity without a separate repeat selector")
 
     def run(conn):
         predicate, params = cohorts._predicate(cohort, log_id)
@@ -67,6 +76,16 @@ def cases(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, Any
         if excluded:
             predicate += " AND case_id NOT IN (SELECT case_id FROM ce WHERE activity IN (SELECT unnest(?)))"
             params.append(excluded)
+        if repeat is not None:
+            predicate += " AND case_id IN (SELECT case_id FROM ce WHERE activity = ? GROUP BY case_id HAVING count(*) > 1)"
+            params.append(repeat)
+        if loop is not None:
+            following = len(loop) - 1
+            predicate += f""" AND case_id IN (SELECT case_id FROM (
+                SELECT case_id, list(activity) OVER (PARTITION BY case_id ORDER BY ts, event_id
+                    ROWS BETWEEN CURRENT ROW AND {following} FOLLOWING) AS steps FROM ce
+                ) WHERE steps = ?)"""
+            params.append(loop)
         if transition is not None:
             predicate += """ AND case_id IN (SELECT case_id FROM (
                 SELECT case_id, activity, lead(activity) OVER (
@@ -89,6 +108,8 @@ def cases(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, Any
             "transition": transition,
             **({"required_activities": required} if required else {}),
             **({"excluded_activities": excluded} if excluded else {}),
+            **({"repeat_activity": repeat} if repeat is not None else {}),
+            **({"loop_pattern": loop} if loop is not None else {}),
             "cases": [{"case_id": key, "events": n, "started_at": start.isoformat() + "Z",
                        "ended_at": end.isoformat() + "Z", "elapsed_seconds": (end-start).total_seconds(),
                        "timestamp_ties": ties} for key, n, start, end, ties in rows],
