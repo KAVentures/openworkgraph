@@ -2150,8 +2150,12 @@ performance and variation filters:
 * **Rework**: `rework=true` keeps cases that repeat at least one activity; `rework=false` keeps
   cases that repeat none.
 
+* **Case tag**: keeps the cases that carry a tag (`tag`) or that do not (`without_tag`), for
+  example everything except the cases tagged as not fitting a reference net. Tags come from *Case
+  tags*, unusual cases, alignments and root-cause results.
+
 In a JSON cohort they are `ended_from`, `ended_before`, `events: {"min": n, "max": n}`,
-`path_cases: {"min": n, "max": n}` and `rework: true|false`. They combine with every other
+`path_cases: {"min": n, "max": n}`, `rework: true|false`, `tag` and `without_tag`. They combine with every other
 condition, apply to the same views, and are kept by saved filters.
 
 The case pickers inside individual sections take the same numeric range, under "Numeric case
