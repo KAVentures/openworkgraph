@@ -125,6 +125,29 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"case_id": case_id, "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def simulate_process_scenario(log_id: str, scenario: dict[str, Any], case_type: str | None = None) -> dict[str, Any]:
+        """What-if simulation for a shared log: a discrete-event simulation calibrated from the log (arrival rate,
+        paths, median activity times, resources per activity) runs a baseline and your scenario with the same
+        random numbers and reports cycle time, waiting and utilization for both and the median cycle-time change.
+        scenario overrides any of: "arrivals_per_hour", "activities" ({"Approve": {"minutes": 30, "resources": 2}},
+        optionally "batch" and "queue_timeout_minutes"), "paths" ([{"activities": [...], "weight": 0.7}]), "cases" (10 to 5000), "seed",
+        "calendar", "pools", "priorities", "routing", "label" and "uncertainty" ({"replications": up to 20}).
+        A model output under stated assumptions, not a forecast; nothing is changed. Aggregates only.
+        """
+        if not isinstance(scenario, dict):
+            raise ToolError("scenario must be an object")
+        payload: dict[str, Any] = {"scenario": scenario}
+        if case_type is not None:
+            payload["case_type"] = case_type
+        runtime_module.authorize_tool("simulate_process_scenario")
+        try:
+            result = runtime_module.secure_post(f"/v1/process-intelligence/{_log(log_id)}/simulate", payload)
+        except Exception as exc:
+            raise ToolError(str(exc) or "process intelligence request failed") from None
+        result["interpretation"] = _NOTE
+        return runtime_module.core._finish("simulate_process_scenario", result)
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_automation_candidates(log_id: str, limit: int = 10, case_type: str | None = None) -> dict[str, Any]:
         """Activities of a shared log ranked as automation candidates, with every score component.
 

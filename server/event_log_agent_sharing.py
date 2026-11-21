@@ -398,6 +398,35 @@ def signals(log_id: str) -> dict[str, Any]:
                      "or snooze signals. A triggered signal is not a verified problem or an instruction to act.")}
 
 
+AGENT_MAX_SIMULATED_CASES = 5000
+AGENT_MAX_REPLICATIONS = 20
+
+
+def simulate(log_id: str, scenario: Any, case_type: str | None = None) -> dict[str, Any]:
+    """What-if simulation against the baseline calibrated from the log (aggregates level). The calibrated case
+    paths are not returned (only how many there are and the share of cases they cover), so a rare path cannot
+    single out a case; paths or transitions the agent supplies are echoed back. Runs are bounded for agents."""
+    require(log_id, "aggregates")
+    from . import event_log_simulation as sim
+    if not isinstance(scenario, dict):
+        raise EventLogWorkspaceError("scenario must be an object")
+    cases = scenario.get("cases", 2000)
+    if isinstance(cases, bool) or not isinstance(cases, int) or not 10 <= cases <= AGENT_MAX_SIMULATED_CASES:
+        raise EventLogWorkspaceError(f"cases must be a whole number from 10 to {AGENT_MAX_SIMULATED_CASES} for agents")
+    spread = scenario.get("uncertainty")
+    if isinstance(spread, dict):
+        count = spread.get("replications", 20)
+        if isinstance(count, bool) or not isinstance(count, int) or count > AGENT_MAX_REPLICATIONS:
+            raise EventLogWorkspaceError(f"uncertainty replications are at most {AGENT_MAX_REPLICATIONS} for agents")
+    result = sim.what_if(log_id, {"format": sim.FORMAT, **scenario}, case_type)
+    calibration = {k: v for k, v in result["calibration"].items() if k not in ("paths", "transitions")}
+    calibration["paths_count"] = len(result["calibration"].get("paths") or [])
+    shown = {k: v for k, v in result["scenario"].items()
+             if k not in ("paths", "transitions") or k in scenario}
+    return {**{k: v for k, v in result.items() if k not in ("log", "calibration", "scenario")}, "format": FORMAT,
+            "log_id": log_id, "calibration": calibration, "scenario": shown, "calibrated_paths_returned": False}
+
+
 def automation_candidates(log_id: str, case_type: str | None = None, limit: int = 10) -> dict[str, Any]:
     """Activities ranked by volume, routine routing and waiting (aggregates level)."""
     require(log_id, "aggregates")
