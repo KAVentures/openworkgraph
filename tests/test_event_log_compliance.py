@@ -86,6 +86,15 @@ def test_ties_follow_event_order_and_repeats_check_the_last_trigger():
     assert _violating(summary) == ["t2"]
 
 
+def test_chain_response_checks_each_next_step_and_vacuity():
+    cases = {"ok": [("A", 0, "x"), ("B", 1, "x"), ("A", 2, "x"), ("B", 3, "x")],
+             "intervening": [("A", 0, "x"), ("C", 1, "x"), ("B", 2, "x")],
+             "last": [("A", 0, "x")], "vacuous": [("B", 0, "x")]}
+    result = compliance.check(_log(cases), {"rules": [{"template": "chain_response", "a": "A", "b": "B"}]})["results"][0]
+    assert _violating(result) == ["intervening", "last"]
+    assert result["activated_cases"] == 3 and result["vacuously_satisfied_cases"] == 1
+
+
 def test_cohorts_and_minimum_existence_apply():
     result, (must_pay,) = _run({"template": "existence", "a": "Pay", "min": 1}, cohort={"activity": "Create PO"})
     assert must_pay["cases"] == 5 and _violating(must_pay) == ["c5"]
