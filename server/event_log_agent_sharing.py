@@ -694,3 +694,63 @@ def slowest_cases(log_id: str, case_type: str | None = None, limit: int = 10) ->
     if case_type:
         spec["case_type"] = case_type
     return {"format": FORMAT, "log_id": log_id, **case_explain.slowest(log_id, spec)}
+
+
+def cooccurrence(log_id: str, case_type: str | None = None, limit: int = 12,
+                 min_support: int = AGENT_MIN_CELL_CASES) -> dict[str, Any]:
+    """Which activities happen in the same cases, regardless of order (aggregates level). Activities in fewer
+    than AGENT_MIN_CELL_CASES cases are left out, and pair counts from 1 to AGENT_MIN_CELL_CASES - 1 are
+    withheld, so a rare combination cannot single out a case."""
+    require(log_id, "aggregates")
+    from . import event_log_cooccurrence as co
+    if isinstance(min_support, bool) or not isinstance(min_support, int):
+        raise EventLogWorkspaceError("min_support must be a whole number of cases")
+    result = co.cooccurrence(log_id, case_type, limit=limit, min_support=max(min_support, AGENT_MIN_CELL_CASES))
+    shown = {a["activity"] for a in result["activities"] if a["cases"] >= AGENT_MIN_CELL_CASES}
+    small = lambda n: 0 < n < AGENT_MIN_CELL_CASES  # noqa: E731
+    withheld = 0
+    matrix = []
+    for row in result["matrix"]:
+        if row["activity"] not in shown:
+            continue
+        cells = []
+        for cell in row["with"]:
+            if cell["activity"] not in shown:
+                continue
+            if row["activity"] != cell["activity"] and small(cell["both"]):
+                withheld += 1
+                cell = {"activity": cell["activity"], "both": None, "share_of_a": None, "lift": None, "withheld": True}
+            cells.append(cell)
+        matrix.append({**row, "with": cells})
+    keep = lambda pairs: [p for p in pairs if p["a"] in shown and p["b"] in shown and not small(p["both"])]  # noqa: E731
+    return {**result, "format": FORMAT, "log_id": log_id,
+            "activities": [a for a in result["activities"] if a["activity"] in shown],
+            "matrix": matrix, "go_together": keep(result["go_together"]),
+            "never_together": keep(result["never_together"]),
+            "withheld": {"activities": len(result["activities"]) - len(shown), "pair_cells": withheld // 2,
+                         "min_cases": AGENT_MIN_CELL_CASES},
+            "caveat": result["caveat"] + (f" Activities in fewer than {AGENT_MIN_CELL_CASES} cases and pair counts "
+                                          f"below {AGENT_MIN_CELL_CASES} are withheld.")}
+
+
+def work_in_progress(log_id: str, case_type: str | None = None, bucket: str = "week",
+                     end_activities: list[str] | None = None) -> dict[str, Any]:
+    """Arrivals, completions and open cases per day or week, with a Little's law check (aggregates level)."""
+    require(log_id, "aggregates")
+    from . import event_log_wip as wip
+    spec: dict[str, Any] = {"bucket": bucket, "end_activities": list(end_activities or [])}
+    if case_type:
+        spec["case_type"] = case_type
+    return {**wip.work_in_progress(log_id, spec), "format": FORMAT, "log_id": log_id}
+
+
+def batching(log_id: str, case_type: str | None = None, gap_seconds: int = 60, min_batch_size: int = 3,
+             by_resource: bool = True) -> dict[str, Any]:
+    """Batch processing per activity: share of events in batches, batch sizes and the wait before batched
+    events (aggregates level). Resource labels are never returned, only how many resources batch."""
+    require(log_id, "aggregates")
+    from . import event_log_batching as bt
+    spec: dict[str, Any] = {"gap_seconds": gap_seconds, "min_batch_size": min_batch_size, "by_resource": by_resource}
+    if case_type:
+        spec["case_type"] = case_type
+    return {**bt.batching(log_id, spec), "format": FORMAT, "log_id": log_id}
