@@ -437,6 +437,70 @@ def automation_candidates(log_id: str, case_type: str | None = None, limit: int 
     return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
 
 
+def costs(log_id: str, model: dict[str, Any] | None = None, case_type: str | None = None,
+          limit: int = 20) -> dict[str, Any]:
+    """Process cost from the owner's saved cost model, or from prices the agent supplies for a what-if
+    (aggregates level): totals, cost per case, cost per activity, the cost of repeated executions and the
+    costliest variants. Per-resource costs and the single costliest case are not returned, and activities and
+    variants seen in fewer than 5 cases are withheld. In a model the agent supplies, activities seen in
+    fewer than 5 cases are priced at zero, so prices cannot single them out."""
+    require(log_id, "aggregates")
+    from . import event_log_costs as cm
+    if model is None:
+        saved = cm.saved_model(log_id)
+        if saved is None:
+            raise EventLogWorkspaceError("the owner has not saved a cost model for this log; supply prices as model")
+        spec, source = dict(saved["model"]), "owner_saved_model"
+    elif isinstance(model, dict) and not set(model) - set(cm.MODEL_KEYS):
+        spec, source = dict(model), "agent_supplied_model"
+    else:
+        raise EventLogWorkspaceError("model holds only " + ", ".join(cm.MODEL_KEYS))
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+        raise EventLogWorkspaceError("limit must be a whole number from 1 to 100")
+    spec["limit"] = 200
+    if case_type:
+        spec["case_type"] = case_type
+    floor = 5
+    # workspace.activities() deliberately limits results to the 500 busiest labels.
+    # Never decide the privacy of a rare/priced activity from that truncated list.
+    def full_support(conn):
+        rows = conn.execute("SELECT activity, count(DISTINCT case_id) FROM ce GROUP BY activity").fetchall()
+        total = conn.execute("SELECT count(DISTINCT case_id) FROM ce").fetchone()[0]
+        return {"support": {a: int(n) for a, n in rows}, "total_cases": int(total)}
+    measured = workspace._query(log_id, case_type, full_support)
+    if measured["total_cases"] < floor:
+        raise EventLogWorkspaceError(f"agent costs require at least {floor} cases in the selected notion")
+    case_support = measured["support"]
+    zeroed = 0
+    if source == "agent_supplied_model":
+        # Prices chosen by an agent can isolate a rare activity by pricing it
+        # alone and reading the total. Suppress every rare label, not just 500.
+        if len(case_support) > cm.MAX_ACTIVITIES:
+            raise EventLogWorkspaceError("too many distinct activities for safe agent-supplied cost modelling")
+        rare = {name for name, cases in case_support.items() if cases < floor}
+        prices = spec.get("activity_costs") if isinstance(spec.get("activity_costs"), dict) else {}
+        if len(set(prices) | rare) > cm.MAX_ACTIVITIES:
+            raise EventLogWorkspaceError("agent-supplied activity costs exceed the safe model size")
+        spec["activity_costs"] = {**prices, **{name: 0 for name in rare}}
+        zeroed = len(rare)
+    result = cm.costs(log_id, spec)
+    activities = [a for a in result["activities"] if a["cases"] >= floor]
+    variants = [v for v in result["costliest_variants"] if v["cases"] >= floor][:limit]
+    unpriced = [u for u in result["unpriced_activities"]
+                if case_support.get(u["activity"], 0) >= floor]
+    return {**{k: v for k, v in result.items() if k not in ("activities", "costliest_variants", "resources",
+                                                             "unpriced_activities", "cost_per_case", "model")},
+            "format": FORMAT, "log_id": log_id, "model_source": source,
+            "cost_per_case": {k: v for k, v in result["cost_per_case"].items() if k != "max"},
+            "activities": activities, "costliest_variants": variants, "unpriced_activities": unpriced,
+            "withheld": {"activities": len(result["activities"]) - len(activities),
+                         "variants": sum(1 for v in result["costliest_variants"] if v["cases"] < floor),
+                         "unpriced_activities": len(result["unpriced_activities"]) - len(unpriced),
+                         "min_cases": floor},
+            "resources_returned": False,
+            "rare_activities_priced_at_zero": zeroed}
+
+
 def decision_rules(log_id: str, activity: str | None = None, case_type: str | None = None,
                    max_depth: int = 3) -> dict[str, Any]:
     """Decision points of a log, or the rules learned after one activity (aggregates level)."""
