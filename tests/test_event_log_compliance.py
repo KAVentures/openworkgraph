@@ -100,6 +100,35 @@ def test_cohorts_and_minimum_existence_apply():
     assert must_pay["cases"] == 5 and _violating(must_pay) == ["c5"]
 
 
+def test_violation_pages_use_exact_keys_and_cohort_and_match_summary():
+    cases = {f"case-{n:03}": [("A", 0, "owner")] for n in range(55)}
+    cases[" case literal "] = [("A", 0, "owner")]
+    cases["complete"] = [("A", 0, "owner"), ("B", 1, "reviewer")]
+    cases["unrelated"] = [("C", 0, "owner")]
+    log = _log(cases)
+    rule = {"template": "existence", "a": "B", "min": 1}
+    scope = {"cohort": {"activity": "A"}, "case_type": "case"}
+    summary = compliance.check(log, {**scope, "rules": [rule]})["results"][0]
+    assert summary["examples_truncated"]
+    first = compliance.violations(log, {**scope, "rule": rule, "limit": 1})
+    assert first["cases"] == [{"case_id": " case literal ", "detail": "0 occurrences"}]
+    assert first["next_after"] == " case literal "
+    next_page = compliance.violations(log, {**scope, "rule": rule, "after": first["next_after"]})
+    last_page = compliance.violations(log, {**scope, "rule": rule, "after": next_page["next_after"]})
+    assert [page["violating_cases"] for page in (first, next_page, last_page)] == [56] * 3
+    assert [c["case_id"] for c in next_page["cases"] + last_page["cases"]] == [f"case-{n:03}" for n in range(55)]
+    assert last_page["next_after"] is None
+    assert first["violating_cases"] == summary["violating_cases"]
+
+
+def test_within_violation_details_distinguish_missing_step_from_late_step():
+    log = _log({"missing": [("A", 0, "x"), ("B", 1, "y"), ("A", 2, "x")],
+                "late": [("A", 0, "x"), ("B", 3, "y")]})
+    page = compliance.violations(log, {"rule": {"template": "response_within", "a": "A", "b": "B", "seconds": 7200}})
+    assert page["cases"] == [{"case_id": "late", "detail": "slowest gap 10800.0 s"},
+                             {"case_id": "missing", "detail": "no later step for at least one occurrence"}]
+
+
 @pytest.mark.parametrize("spec,message", [
     ({"rules": [{"template": "response", "a": "A", "b": "A"}]}, "two different"),
     ({"rules": [{"template": "existence", "a": "A"}]}, "min above 0"),
@@ -134,6 +163,15 @@ with TestClient(app) as client:
     assert result.status_code == 200 and result.headers["cache-control"] == "no-store", result.text
     assert result.json()["results"][0]["violating_cases"] == 1 and "ann" not in result.text
     assert client.post(path, json={"rules": []}, headers=headers).status_code == 422
+    query = {"rule": rules["rules"][0], "limit": 1}
+    assert client.post(path + "/violations", json=query, headers=bearer).status_code in (401, 403)
+    page = client.post(path + "/violations", json=query, headers=headers)
+    assert page.status_code == 200 and page.headers["cache-control"] == "no-store", page.text
+    assert page.json()["cases"] == [{"case_id": "1", "detail": "same resource performed both steps"}]
+    assert "ann" not in page.text
+    assert client.post(path + "/violations", json={**query, "limit": True}, headers=headers).status_code == 422
+    assert client.post(path + "/violations", json={**query, "rule": {"template": "existence", "a": "A"}},
+                       headers=headers).status_code == 422
 '''
     env = os.environ.copy()
     env.update({"WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"), "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth"),
@@ -159,6 +197,9 @@ def test_one_million_events_with_six_rules_stay_interactive():
     started = time.perf_counter()
     result = compliance.check(log, {"rules": rules})
     assert time.perf_counter() - started < 60 and result["results"][0]["cases"] == 250_000
+    page = compliance.violations(log, {"rule": rules[3], "limit": 100})
+    assert page["violating_cases"] == result["results"][3]["violating_cases"] == 250_000
+    assert len(page["cases"]) == 100 and page["next_after"] == page["cases"][-1]["case_id"]
 
 
 def test_compliance_rules_can_be_saved_as_signals_and_track_new_violations():

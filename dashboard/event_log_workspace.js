@@ -930,7 +930,7 @@
     results.appendChild(signalSection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(predictionSection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(nextActivitySection((activities.activities||[]).map(a=>a.activity)));
-    results.appendChild(complianceSection((activities.activities||[]).map(a=>a.activity)));
+    results.appendChild(complianceSection((activities.activities||[]).map(a=>a.activity),inspection));
     results.appendChild(domainPackSection());
     results.appendChild(costSection(names));
     results.prepend(analysisNavigator(results));
@@ -1362,7 +1362,7 @@
       }
       more.onclick=page;await page();
     }
-    return {node:box,path(value,comparisonCohort){
+    return {node:box,open:openCase,path(value,comparisonCohort){
       if(value.length>500){message.textContent='This path exceeds the 500-step case selector limit. Browse by activity or cohort instead.';box.scrollIntoView({block:'nearest'});return;}
       association=false;path=value.slice();transition=null;chosen.textContent='Exact path: '+JSON.stringify(path);
       if(comparisonCohort!==undefined){
@@ -6188,7 +6188,7 @@
     return box;
   }
 
-  function complianceSection(activityNames){
+  function complianceSection(activityNames,inspection){
     const box=section('Compliance rules');box.id='owgEventLogCompliance';
     box.appendChild(el('div','Check cases against rules such as "every order is approved before payment" or "the person who creates a purchase order does not approve it". Results describe this log; they are not an audit or legal finding, and no names are shown.','muted'));
     const template=select('owgComplianceTemplate',COMPLIANCE_TEMPLATES);
@@ -6205,18 +6205,55 @@
     const pending=el('div');pending.id='owgComplianceRules';
     const message=el('div',null,'muted');message.id='owgComplianceStatus';message.setAttribute('role','status');
     const out=el('div');out.id='owgComplianceResults';
+    const review=el('div');review.id='owgComplianceViolations';
     const confidence=input('owgComplianceConfidence','number');confidence.min='50';confidence.max='100';confidence.step='1';confidence.value='95';
     const support=input('owgComplianceSupport','number');support.min='0';support.max='100';support.step='1';support.value='10';
     const suggest=button('Suggest rules from this log','secondary');suggest.id='owgComplianceSuggest';
     const suggestions=el('div');suggestions.id='owgComplianceSuggestions';
     const suggestRow=el('div',null,'row');suggestRow.style.alignItems='end';
     suggestRow.append(field('Followed by at least (% of cases)',confidence),field('Applies to at least (% of cases)',support),suggest);
-    box.append(row,suggestRow,suggestions,pending,run,message,out);
+    box.append(row,suggestRow,suggestions,pending,run,message,out,review);
     const rules=[];const generation=state.generation;
+    const endpoint='/v1/event-logs/'+encodeURIComponent(state.logId)+'/compliance';
+    const post=(suffix,body)=>api(endpoint+suffix,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(body)}).then(response=>response.json());
+    let checkTurn=0,reviewTurn=0;
+    function reviewViolations(result,scope){
+      const ticket=++reviewTurn;
+      const current=()=>ticket===reviewTurn&&generation===state.generation;
+      const heading=el('h4','Violations of '+result.description);heading.tabIndex=-1;
+      const status=el('div');status.setAttribute('role','status');
+      const rows=el('div');
+      const previous=button('Previous page','secondary'),next=button('Next page','secondary');
+      const controls=el('div',null,'row');controls.append(previous,next);
+      review.replaceChildren(heading,status,rows,controls);
+      heading.focus();
+      const cursors=[null];
+      let page=0,nextAfter=null;
+      async function load(index){
+        previous.disabled=next.disabled=true;
+        status.textContent='Loading violations…';
+        try{
+          const response=await post('/violations',{...scope,rule:result.rule,after:cursors[index]});
+          if(!current())return;
+          page=index;nextAfter=response.next_after;
+          status.textContent=Number(response.violating_cases).toLocaleString()+' violations. Showing '+response.cases.length+' cases on this page.';
+          rows.replaceChildren(response.cases.length?table(['Case','Reason','Evidence'],response.cases.map(item=>{
+            const open=button('Open case','secondary');open.setAttribute('aria-label','Open case '+item.case_id);
+            open.onclick=()=>inspection.open(item.case_id);
+            return [item.case_id,item.detail,open];
+          })):el('div','No violations on this page.','muted'));
+        }catch(error){if(current())status.textContent=error.message;}
+        finally{if(current()){previous.disabled=page===0;next.disabled=nextAfter===null;}}
+      }
+      previous.onclick=()=>load(page-1);
+      next.onclick=()=>{cursors[page+1]=nextAfter;load(page+1);};
+      load(0);
+    }
     suggest.onclick=async()=>{
       try{
         const body={min_confidence:Number(confidence.value)/100,min_support:Number(support.value)/100};if(state.caseType)body.case_type=state.caseType;
-        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/compliance/discover',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+        const r=await post('/discover',body);
         if(generation!==state.generation)return;
         const same=(x,y)=>JSON.stringify(x)===JSON.stringify(y);
         const rows=r.candidates.map(c=>{
@@ -6235,19 +6272,29 @@
     drawPending();
     add.onclick=()=>{try{if(rules.length>=20)throw new Error('Check at most 20 rules at once.');rules.push(complianceRule({template:template.value,a:a.value,b:b.value,hours:hours.value,min:min.value,max:max.value}));message.textContent='';drawPending();}catch(error){message.textContent=error.message;}};
     run.onclick=async()=>{
+      const ticket=++checkTurn;
+      const current=()=>ticket===checkTurn&&generation===state.generation;
+      ++reviewTurn;review.replaceChildren();out.replaceChildren();
       try{
-        const body={rules};if(state.caseType)body.case_type=state.caseType;
-        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/compliance',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
-        if(generation!==state.generation)return;
+        const scope=state.caseType?{case_type:state.caseType}:{};
+        const r=await post('',{...scope,rules});
+        if(!current())return;
         const rows=r.results.map(res=>{
           const keep=button('Save as signal','secondary');keep.setAttribute('aria-label','Save as signal: '+res.description);
           keep.onclick=async()=>{try{const sig={name:res.description.slice(0,120),when:{kind:'compliance',rule:res.rule}};if(state.caseType)sig.case_type=state.caseType;
             await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/signals',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sig)});message.textContent='Saved as a signal.';}catch(error){message.textContent=error.message;}};
           const rate=res.violation_rate===null?'—':pct(res.violation_rate)+' ['+pct(res.violation_rate_ci95[0])+', '+pct(res.violation_rate_ci95[1])+']';
-          return [res.description,Number(res.activated_cases).toLocaleString(),Number(res.violating_cases).toLocaleString(),rate,res.unknown_cases?Number(res.unknown_cases).toLocaleString():'—',res.violating_case_examples.slice(0,5).map(e=>e.case_id).join(', '),keep];});
+          const actions=el('div',null,'row');
+          if(res.violating_cases){
+            const browse=button('Review violations','secondary');browse.setAttribute('aria-label','Review violations of '+res.description);
+            browse.onclick=()=>reviewViolations(res,scope);
+            actions.append(browse);
+          }
+          actions.append(keep);
+          return [res.description,Number(res.activated_cases).toLocaleString(),Number(res.violating_cases).toLocaleString(),rate,res.unknown_cases?Number(res.unknown_cases).toLocaleString():'—',res.violating_case_examples.slice(0,5).map(e=>e.case_id).join(', '),actions];});
         out.replaceChildren(el('div',r.rules_with_violations+' of '+r.results.length+' rules have violations.','muted'),
           table(['Rule','Cases it applies to','Violating cases','Violation rate (95% CI)','Unknown','Example cases',''],rows),el('div',r.interpretation,'muted'));
-      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      }catch(error){if(current())out.replaceChildren(el('div',error.message,'muted'));}
     };
     return box;
   }

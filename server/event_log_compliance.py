@@ -61,28 +61,45 @@ class Existence(_Strict):
 Rule = Annotated[Union[Pair, Within, Existence], Field(discriminator="template")]
 
 
-class RuleSet(_Strict):
-    rules: list[Rule] = Field(min_length=1, max_length=MAX_RULES)
+class Scope(_Strict):
     cohort: dict[str, Any] = Field(default_factory=dict)
     case_type: Label | None = None
 
 
-def parse(spec: Any) -> RuleSet:
+class RuleSet(Scope):
+    rules: list[Rule] = Field(min_length=1, max_length=MAX_RULES)
+
+
+class ViolationPage(Scope):
+    rule: Rule
+    after: Label | None = None
+    limit: StrictInt = Field(default=50, ge=1, le=100)
+
+
+def _parse(model, spec: Any):
     try:
-        parsed = RuleSet.model_validate(spec)
+        return model.model_validate(spec)
     except ValidationError as exc:
         first = exc.errors()[0]
         raise workspace.EventLogWorkspaceError(
             "compliance rules are invalid: " + ".".join(str(p) for p in first["loc"]) + " " + first["msg"]) from None
+
+
+def _validate_rule(rule) -> None:
+    if isinstance(rule, Existence):
+        if rule.max is not None and rule.max < rule.min:
+            raise workspace.EventLogWorkspaceError("existence max must not be below min")
+        if rule.min == 0 and rule.max is None:
+            raise workspace.EventLogWorkspaceError("existence needs a min above 0 or a max")
+    elif rule.a == rule.b:
+        raise workspace.EventLogWorkspaceError(f"{rule.template} needs two different activities")
+
+
+def parse(spec: Any) -> RuleSet:
+    parsed = _parse(RuleSet, spec)
     cohorts.parse_cohort(parsed.cohort)
     for rule in parsed.rules:
-        if isinstance(rule, Existence):
-            if rule.max is not None and rule.max < rule.min:
-                raise workspace.EventLogWorkspaceError("existence max must not be below min")
-            if rule.min == 0 and rule.max is None:
-                raise workspace.EventLogWorkspaceError("existence needs a min above 0 or a max")
-        elif rule.a == rule.b:
-            raise workspace.EventLogWorkspaceError(f"{rule.template} needs two different activities")
+        _validate_rule(rule)
     return parsed
 
 
@@ -143,9 +160,11 @@ def _outcomes(conn, rule) -> tuple[str, list[Any]]:
                     nxt AS (SELECT a.case_id, a.ts AS a_ts,
                               (SELECT min(b.ts) FROM b WHERE b.case_id = a.case_id AND b.pos > a.pos) AS b_ts FROM a),
                     per AS (SELECT case_id, bool_or(b_ts IS NULL OR epoch(b_ts - a_ts) > ?) AS late,
+                              bool_or(b_ts IS NULL) AS missing,
                               max(epoch(b_ts - a_ts)) AS worst FROM nxt GROUP BY case_id)
                SELECT c.case_id, per.case_id IS NOT NULL, coalesce(per.late, FALSE), FALSE,
-                      CASE WHEN per.worst IS NULL THEN 'no later step' ELSE 'slowest gap ' || CAST(round(per.worst) AS VARCHAR) || ' s' END
+                      CASE WHEN per.missing THEN 'no later step for at least one occurrence'
+                           ELSE 'slowest gap ' || CAST(per.worst AS VARCHAR) || ' s' END
                FROM (SELECT DISTINCT case_id FROM cp) c LEFT JOIN per ON per.case_id = c.case_id""",
             [rule.a, rule.b, rule.seconds])
 
@@ -165,17 +184,21 @@ def _describe(rule) -> str:
     }[rule.template]
 
 
-def evaluate_rule(conn, rule) -> tuple[dict[str, Any], list[str]]:
-    """Evaluate one rule over the ``cp`` table; returns the summary and all violating case IDs."""
+def _materialize_outcomes(conn, rule) -> None:
     sql, params = _outcomes(conn, rule)
     conn.execute(f"CREATE OR REPLACE TEMP TABLE co AS SELECT * FROM ({sql}) t(case_id, activated, violated, unknown, detail)",
                  params)
+
+
+def evaluate_rule(conn, rule, *, include_ids: bool = True) -> tuple[dict[str, Any], list[str]]:
+    """Evaluate one rule over ``cp`` and optionally collect violating case IDs for signals."""
+    _materialize_outcomes(conn, rule)
     cases, activated, violated, unknown = conn.execute(
         "SELECT count(*), count(*) FILTER (WHERE activated), count(*) FILTER (WHERE violated), "
         "count(*) FILTER (WHERE unknown) FROM co").fetchone()
     evidence = [{"case_id": c, "detail": d} for c, d in conn.execute(
         "SELECT case_id, detail FROM co WHERE violated ORDER BY case_id LIMIT ?", [MAX_EVIDENCE_CASES]).fetchall()]
-    ids = [row[0] for row in conn.execute("SELECT case_id FROM co WHERE violated ORDER BY case_id").fetchall()]
+    ids = [row[0] for row in conn.execute("SELECT case_id FROM co WHERE violated ORDER BY case_id").fetchall()] if include_ids else []
     decided = activated - unknown
     summary: dict[str, Any] = {
         "rule": rule.model_dump(), "description": _describe(rule), "cases": cases,
@@ -194,7 +217,7 @@ def check(log_id: str, spec: Any) -> dict[str, Any]:
     def run(conn):
         cohorts.restrict(conn, cohorts.parse_cohort(rules.cohort), log_id)
         positions(conn)
-        results = [evaluate_rule(conn, rule)[0] for rule in rules.rules]
+        results = [evaluate_rule(conn, rule, include_ids=False)[0] for rule in rules.rules]
         return {
             "results": results,
             "rules_with_violations": sum(1 for r in results if r["violating_cases"]),
@@ -205,6 +228,30 @@ def check(log_id: str, spec: Any) -> dict[str, Any]:
                                "policy, audit evidence or legal compliance; a violation may reflect missing events."),
         }
     return workspace._query(log_id, rules.case_type, run)
+
+
+def violations(log_id: str, spec: Any) -> dict[str, Any]:
+    selection = _parse(ViolationPage, spec)
+    _validate_rule(selection.rule)
+    cohort = cohorts.parse_cohort(selection.cohort)
+
+    def run(conn):
+        cohorts.restrict(conn, cohort, log_id)
+        positions(conn)
+        _materialize_outcomes(conn, selection.rule)
+        total = conn.execute("SELECT count(*) FROM co WHERE violated").fetchone()[0]
+        after, args = (" AND case_id > ?", [selection.after]) if selection.after is not None else ("", [])
+        rows = conn.execute("SELECT case_id, detail FROM co WHERE violated" + after + " ORDER BY case_id LIMIT ?",
+                            [*args, selection.limit + 1]).fetchall()
+        page = rows[:selection.limit]
+        return {
+            "violating_cases": total,
+            "cases": [{"case_id": key, "detail": detail} for key, detail in page],
+            "next_after": page[-1][0] if len(rows) > selection.limit else None,
+            "resource_names_returned": False,
+        }
+
+    return workspace._query(log_id, selection.case_type, run)
 
 
 __all__ = ["Rule", "check", "evaluate_rule", "parse", "positions"]
