@@ -462,20 +462,22 @@ def costs(log_id: str, model: dict[str, Any] | None = None, case_type: str | Non
         spec["case_type"] = case_type
     floor = 5
     zeroed = 0
+    listed = workspace.activities(log_id, case_type)["activities"]
+    case_counts = {a["activity"]: a["cases"] for a in listed}
+    rare = {a["activity"] for a in listed if a["cases"] < floor}
     if source == "agent_supplied_model":
         # Prices chosen by the agent could single out a rare activity (price it alone and read the total), so
         # activities seen in fewer than 5 cases always cost nothing in an agent's model.
-        listed = workspace.activities(log_id, case_type)["activities"]
         if len(listed) >= 500 and spec.get("default_activity_cost"):
             raise EventLogWorkspaceError("this log has too many activities for a default price; price activities by name")
-        rare = {a["activity"] for a in listed if a["cases"] < floor}
         prices = spec.get("activity_costs") if isinstance(spec.get("activity_costs"), dict) else {}
         spec["activity_costs"] = {**prices, **{a: 0 for a in rare}}
         zeroed = len(rare)
     result = cm.costs(log_id, spec)
     activities = [a for a in result["activities"] if a["cases"] >= floor]
     variants = [v for v in result["costliest_variants"] if v["cases"] >= floor][:limit]
-    unpriced = [u for u in result["unpriced_activities"] if u["events"] >= floor]
+    # Distinct cases, not events: one case repeating an activity must not name it.
+    unpriced = [u for u in result["unpriced_activities"] if case_counts.get(u["activity"], 0) >= floor]
     return {**{k: v for k, v in result.items() if k not in ("activities", "costliest_variants", "resources",
                                                              "unpriced_activities", "cost_per_case")},
             "format": FORMAT, "log_id": log_id, "model_source": source,

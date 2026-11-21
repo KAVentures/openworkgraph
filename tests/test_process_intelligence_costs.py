@@ -94,3 +94,13 @@ with TestClient(app) as client:
 '''
     env = {**os.environ, 'WORKFLOW_OBSERVER_DATA': str(tmp_path / 'data'), 'WORKFLOW_OBSERVER_AUTH_DIR': str(tmp_path / 'auth')}
     subprocess.run([sys.executable, '-c', code], env=env, check=True, timeout=60)
+
+
+def test_unpriced_activities_need_five_distinct_cases():
+    rows = ["case,activity,time,who"] + [f"c{i},Open,2024-01-0{1 + i}T08:00:00Z,a" for i in range(6)]
+    rows += [f"c0,Retry,2024-01-01T{9 + k:02d}:00:00Z,a" for k in range(7)]      # 7 events, one case
+    log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="u", source_format="csv", mapping=MAPPING)["log_id"]
+    sharing.set_share(log, "aggregates")
+    cost_model.save_model(log, {"currency": "EUR", "activity_costs": {"Open": 1}})
+    r = sharing.costs(log)
+    assert r["unpriced_activities"] == [] and "Retry" not in repr(r) and r["withheld"]["unpriced_activities"] == 1
