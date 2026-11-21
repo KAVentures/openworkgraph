@@ -1184,7 +1184,7 @@ The notes are stored locally and never change the log's events. A note stays whe
 * **Saving an entry:** `POST /v1/event-logs/{log_id}/activity-glossary` with `{"activity", "description"?, "owner_team"?, "system"?, "automation"?}` saves one entry. Sending only the activity clears it.
 * **Deleting an entry:** `POST .../activity-glossary/delete` with `{"activity"}` removes it.
 * **Importing:** `POST .../activity-glossary/import` with CSV text (an `activity` column and any of `description`, `owner_team`, `system`, `automation`) fills the glossary in one go. The dashboard's **Import glossary (CSV)** does the same. A downloaded glossary imports back unchanged, and rows for activities not in the log are skipped and listed.
-* **Agents:** when the log is shared with agents, they can read the glossary with `get_process_activity_glossary`. Activities with fewer than 5 events are left out.
+* **Agents:** when the log is shared with agents, they can read the glossary with `get_process_activity_glossary`. Activities seen in fewer than 5 distinct cases are left out.
 
 ## Explain a case
 

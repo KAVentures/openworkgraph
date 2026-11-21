@@ -112,9 +112,20 @@ def test_agent_view_lists_described_common_activities():
     sharing.set_share(log, "aggregates")
     r = sharing.activity_glossary(log)
     assert [a["activity"] for a in r["activities"]] == ["Approve"]
-    assert r["activities"][0] == {"activity": "Approve", "events": 8, "description": "Manager approves",
+    assert r["activities"][0] == {"activity": "Approve", "events": 8, "cases": 8, "description": "Manager approves",
                                   "owner_team": "", "system": "", "automation": "manual"}
-    assert r["withheld"] == {"activities_under_min_events": 1, "min_events": 5}
+    assert r["withheld"] == {"activities_under_min_cases": 1, "min_cases": 5}
+
+
+def test_agent_view_counts_distinct_cases_not_events():
+    rows = ["case,activity,time"] + [f"c{i},Open,2024-01-0{1 + i}T08:00:00Z" for i in range(6)]
+    rows += [f"c0,Retry,2024-01-01T{9 + k:02d}:00:00Z" for k in range(7)]     # 7 events, one case
+    log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="r", source_format="csv", mapping=MAPPING)["log_id"]
+    gl.set_note(log, {"activity": "Retry", "description": "Retried by one clerk"})
+    gl.set_note(log, {"activity": "Open", "description": "Request arrives"})
+    sharing.set_share(log, "aggregates")
+    r = sharing.activity_glossary(log)
+    assert [a["activity"] for a in r["activities"]] == ["Open"] and "Retry" not in repr(r["activities"])
 
 
 def test_owner_and_agent_routes(tmp_path):
