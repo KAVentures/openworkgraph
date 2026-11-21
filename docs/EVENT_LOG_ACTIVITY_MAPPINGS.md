@@ -16,6 +16,25 @@ within a case, a run of events that map to the same label becomes its first even
 Activities that are not in the log are accepted but listed back, so typos are visible. A log
 keeps at most 50 mappings, and deleting the log deletes them.
 
+## Suggested groups of similar labels
+
+Exports from several systems, or from one system over time, often spell one step in several ways:
+*Approve invoice*, *approve  invoice*, *Approve Invoice.*, or a typo such as *Recieve goods*.
+**Suggest groups of similar labels** lists candidate groups among the log's original activity
+names:
+
+* **same apart from case, spacing or punctuation**: names that are equal after case-folding,
+  Unicode normalization, removing punctuation and collapsing whitespace;
+* **similar spelling**: among the 400 most common names, pairs at least 90% alike (difflib ratio,
+  names of at least 5 characters) that contain the same digits, so *Step 1* and *Step 2* stay
+  apart.
+
+Each group shows its spellings with their event counts and a suggested label, its most frequent
+spelling. **Add these groups to the mapping** puts them in the draft, skipping labels already
+there. Review them, remove any that are not the same step, then save and apply the mapping as
+usual. Nothing changes until then. `GET /v1/event-logs/{log_id}/activity-label-suggestions`
+returns the groups (at most 100, most events first). A suggestion is a guess from spelling.
+
 ## Applying a mapping
 
 Saving a mapping does not change anything. **Apply to analyses** applies it, and at most one
@@ -38,3 +57,4 @@ keeps meaning *Type name*.
 | `POST /v1/event-logs/{log_id}/activity-mappings` | Save a mapping: `{"name", "groups": [{"label", "activities": [...]}], "collapse_repeats"}` |
 | `POST /v1/event-logs/{log_id}/activity-mappings/applied` | `{"mapping_id": "amap_…"}` applies one; `{"mapping_id": null}` removes it |
 | `POST /v1/event-logs/{log_id}/activity-mappings/{mapping_id}/delete` | Delete a mapping |
+| `GET /v1/event-logs/{log_id}/activity-label-suggestions` | Suggested groups of similar activity names |

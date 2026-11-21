@@ -815,7 +815,30 @@
     const row=el('div',null,'row');row.style.alignItems='end';
     const collapseWrap=el('div');const collapseLabel=el('label',' Collapse consecutive repeats into the first');collapseLabel.htmlFor=collapse.id;collapseWrap.append(collapse,collapseLabel);
     row.append(field('Mapping name',name),field('Group name',label),field('Activities in the group',pick),addGroup);
-    box.append(host,row,draft,collapseWrap,save,msg);
+    // Suggested groups: spellings of probably the same activity (case, spacing, punctuation, typos).
+    const suggest=button('Suggest groups of similar labels','secondary');suggest.id='owgActivitySuggest';
+    const suggestions=el('div');suggestions.id='owgActivitySuggestions';suggestions.setAttribute('role','status');suggestions.setAttribute('aria-live','polite');
+    suggest.onclick=async()=>{
+      suggest.disabled=true;suggestions.replaceChildren(el('div','Comparing activity names…','muted'));
+      try{
+        const r=await getJSON('/v1/event-logs/'+encodeURIComponent(state.logId)+'/activity-label-suggestions');
+        if(generation!==state.generation)return;
+        if(!r.groups.length){suggestions.replaceChildren(el('div','No activity names look like spellings of the same activity.','muted'));return;}
+        const list=el('ul');
+        r.groups.forEach(g=>list.appendChild(el('li',g.suggested_label+' ← '+g.labels.map(l=>l.activity+' ('+Number(l.events).toLocaleString()+')').join(', ')+' · '+g.reason)));
+        const use=button('Add these groups to the mapping','secondary');use.id='owgActivitySuggestUse';
+        use.onclick=()=>{
+          const taken=new Set(groups.flatMap(g=>g.activities));
+          let added=0;
+          r.groups.forEach(g=>{const acts=g.labels.map(l=>l.activity).filter(a=>!taken.has(a));if(acts.length<2)return;
+            acts.forEach(a=>taken.add(a));groups.push({label:g.suggested_label,activities:acts});added++;});
+          if(!name.value.trim())name.value='Similar labels';
+          drawDraft();msg.textContent=added?'Added '+added+' groups to the draft. Review them, then save the mapping.':'Every suggested label is already in the draft.';
+        };
+        suggestions.replaceChildren(el('div',r.groups.length+' groups of names that may be the same activity'+(r.groups_total>r.groups.length?' (showing '+r.groups.length+' of '+r.groups_total+')':'')+'. '+r.caveat,'muted'),list,use);
+      }catch(e){suggestions.replaceChildren(el('div',e.message,'muted'));}
+      finally{suggest.disabled=false;}};
+    box.append(host,row,suggest,suggestions,draft,collapseWrap,save,msg);
     api(base()).then(r=>r.json()).then(render).catch(e=>{msg.textContent=e.message;});
     return box;
   }
