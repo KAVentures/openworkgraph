@@ -1163,6 +1163,20 @@ def event_log_due_dates(request: Request, log_id: str, due_activity: str = Query
                     early_days=early_days, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/due-dates/cases")
+def event_log_due_cases(request: Request, log_id: str, due_activity: str = Query(min_length=1, max_length=500),
+                        due_group: str = Query(min_length=1, max_length=32),
+                        due_attribute: str | None = Query(default=None, max_length=200),
+                        due_days: float | None = Query(default=None, gt=0), early_days: float | None = Query(default=None, gt=0),
+                        case_type: str | None = Query(default=None, max_length=200),
+                        after: str | None = Query(default=None, min_length=1, max_length=200),
+                        limit: int = Query(default=50, ge=1, le=100), cohort: dict = Depends(_case_filter)):
+    from . import event_log_due_dates as due
+    _require_dashboard(request)
+    return _respond(due.due_cases, log_id, due_activity, case_type, group=due_group, after=after, limit=limit,
+                    due_attribute=due_attribute, due_days=due_days, early_days=early_days, cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/next-steps")
 def event_log_next_steps(request: Request, log_id: str, step: list[str] = Query(default=[], max_length=500),
                          anchor: str = Query(default="start", max_length=20),

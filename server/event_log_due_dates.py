@@ -23,14 +23,17 @@ from __future__ import annotations
 import json
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+from heapq import nsmallest
 from typing import Any
 
+from . import event_log_cohorts as cohorts
 from . import event_log_workspace as workspace
 from .event_log_workspace import EventLogWorkspaceError
 
 FORMAT = "openworkgraph.event_log_due_dates.v1"
 MAX_DAYS = 3650
 MAX_LATE_CASES = 50
+MAX_EVIDENCE_PAGE = 100
 GROUPS = ("on_time", "early", "late", "open_overdue", "open_not_due", "no_due_date", "unreadable_due_date")
 
 
@@ -42,10 +45,10 @@ def _parse_due(raw: Any) -> datetime | None:
         if len(text) == 10:   # YYYY-MM-DD: due by the end of that day
             return datetime.fromisoformat(text) + timedelta(days=1)
         value = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
+        if value.tzinfo is not None:
+            value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    except (ValueError, OverflowError):
         return None
-    if value.tzinfo is not None:
-        value = value.astimezone(timezone.utc).replace(tzinfo=None)
     return value
 
 
@@ -84,44 +87,50 @@ def collect(conn, log_id: str, activity: str, due_attribute: str | None, table: 
     return {"cases_rows": cases, "log_end": log_end, "has_activity": has_activity, "raw_due": raw}
 
 
+def _classifications(rows, raw_due, log_end, due_days, early_days):
+    for case_id, started, done in rows:
+        if due_days is not None:
+            due = started + timedelta(days=due_days)
+        elif case_id not in raw_due:
+            yield case_id, "no_due_date", done, None, None
+            continue
+        else:
+            due = _parse_due(raw_due[case_id])
+            if due is None:
+                yield case_id, "unreadable_due_date", done, None, None
+                continue
+        difference = (done - due).total_seconds() / 86400 if done is not None else None
+        if done is None:
+            group = "open_overdue" if log_end is not None and due < log_end else "open_not_due"
+        elif difference > 0:
+            group = "late"
+        elif early_days is not None and difference < -early_days:
+            group = "early"
+        else:
+            group = "on_time"
+        yield case_id, group, done, due, difference
+
+
 def classify(rows, raw_due: dict[str, Any], log_end, *, due_days: float | None, early_days: float | None):
-    """Group each case as on time, early, late, open overdue, open not due, or without a usable due date."""
+    """Group cases and collect the statistics used by summaries and signals."""
     groups: Counter = Counter()
     days_late: list[float] = []
     days_early: list[float] = []
     months: dict[str, Counter] = {}
     late_cases = []
-    for case_id, started, done in rows:
-        if due_days is not None:
-            due = started + timedelta(days=due_days)
-        elif case_id not in raw_due:
-            groups["no_due_date"] += 1
-            continue
-        else:
-            due = _parse_due(raw_due[case_id])
-            if due is None:
-                groups["unreadable_due_date"] += 1
-                continue
-        if done is None:
-            group = "open_overdue" if log_end is not None and due < log_end else "open_not_due"
-        elif done > due:
-            group = "late"
-            late = (done - due).total_seconds() / 86400
-            days_late.append(late)
-            late_cases.append((late, case_id, done, due))
-        elif early_days is not None and (due - done).total_seconds() / 86400 > early_days:
-            group = "early"
-            days_early.append((due - done).total_seconds() / 86400)
-        else:
-            group = "on_time"
+    for case_id, group, done, due, difference in _classifications(rows, raw_due, log_end, due_days, early_days):
         groups[group] += 1
-        months.setdefault(due.strftime("%Y-%m"), Counter())[group] += 1
+        if due is not None:
+            months.setdefault(due.strftime("%Y-%m"), Counter())[group] += 1
+        if group == "late":
+            days_late.append(difference)
+            late_cases.append((difference, case_id, done, due))
+        elif group == "early":
+            days_early.append(-difference)
     return groups, days_late, days_early, months, late_cases
 
 
-def due_dates(log_id: str, activity: str, case_type: str | None = None, *, due_attribute: str | None = None,
-              due_days: float | None = None, early_days: float | None = None, include_case_ids: bool = True,
-              cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+def _validated_data(log_id, activity, case_type, due_attribute, due_days, early_days, cohort):
     if not isinstance(activity, str) or not activity or len(activity) > 500:
         raise EventLogWorkspaceError("choose the activity that has a due date")
     if (due_attribute is None) == (due_days is None):
@@ -133,13 +142,28 @@ def due_dates(log_id: str, activity: str, case_type: str | None = None, *, due_a
                                   or not 0 < value <= MAX_DAYS):
             raise EventLogWorkspaceError(f"{name} must be a number of days from above 0 to {MAX_DAYS}")
 
-    def run(conn):
-        return collect(conn, log_id, activity, due_attribute)
+    selected = cohorts.parse_cohort(cohort)
 
-    data = workspace._query_filtered(log_id, case_type, cohort, run)
-    rows, log_end, raw_due = data.pop("cases_rows"), data.pop("log_end"), data.pop("raw_due")
+    def run(conn):
+        if not selected:
+            return collect(conn, log_id, activity, due_attribute)
+        log_end, has_activity = conn.execute(
+            "SELECT max(ts), count(*) FILTER (WHERE activity = ?) FROM ce", [activity]).fetchone()
+        cohorts.restrict(conn, selected, log_id)
+        data = collect(conn, log_id, activity, due_attribute)
+        return {**data, "log_end": log_end, "has_activity": has_activity}
+
+    data = workspace._query(log_id, case_type, run)
     if not data.pop("has_activity"):
-        raise EventLogWorkspaceError(f"no case in this selection has the activity {activity!r}")
+        raise EventLogWorkspaceError(f"no case in this case notion has the activity {activity!r}")
+    return data
+
+
+def due_dates(log_id: str, activity: str, case_type: str | None = None, *, due_attribute: str | None = None,
+              due_days: float | None = None, early_days: float | None = None, include_case_ids: bool = True,
+              cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+    data = _validated_data(log_id, activity, case_type, due_attribute, due_days, early_days, cohort)
+    rows, log_end, raw_due = data.pop("cases_rows"), data.pop("log_end"), data.pop("raw_due")
     groups, days_late, days_early, months, late_cases = classify(rows, raw_due, log_end, due_days=due_days,
                                                                   early_days=early_days)
     evaluated = sum(groups[g] for g in ("on_time", "early", "late", "open_overdue", "open_not_due"))
@@ -179,4 +203,36 @@ def due_dates(log_id: str, activity: str, case_type: str | None = None, *, due_a
     }
 
 
-__all__ = ["due_dates", "collect", "classify", "FORMAT"]
+def due_cases(log_id: str, activity: str, case_type: str | None = None, *, group: str,
+              after: str | None = None, limit: int = 50, due_attribute: str | None = None,
+              due_days: float | None = None, early_days: float | None = None,
+              cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not isinstance(group, str) or group not in GROUPS:
+        raise EventLogWorkspaceError("unknown due-date group")
+    if after is not None and (not isinstance(after, str) or not after or len(after) > 200):
+        raise EventLogWorkspaceError("invalid case key cursor")
+    if type(limit) is not int or not 1 <= limit <= MAX_EVIDENCE_PAGE:
+        raise EventLogWorkspaceError("limit must be a whole number from 1 to 100")
+    data = _validated_data(log_id, activity, case_type, due_attribute, due_days, early_days, cohort)
+    total = 0
+
+    def selected():
+        nonlocal total
+        for key, category, done, due, difference in _classifications(
+                data["cases_rows"], data["raw_due"], data["log_end"], due_days, early_days):
+            if category == group:
+                total += 1
+                if after is None or key > after:
+                    yield key, done, due, difference
+
+    rows = nsmallest(limit + 1, selected(), key=lambda row: row[0])
+    return {"group": group, "total": total, "case_notion": data["case_notion"],
+            "log_end": data["log_end"].isoformat() + "Z" if data["log_end"] else None,
+            "next_after": rows[limit - 1][0] if len(rows) > limit else None,
+            "cases": [{"case_id": key, "done_at": done.isoformat() + "Z" if done is not None else None,
+                       "due_at": due.isoformat() + "Z" if due is not None else None,
+                       "days_from_due": round(difference, 2) if difference is not None else None}
+                      for key, done, due, difference in rows[:limit]]}
+
+
+__all__ = ["due_dates", "due_cases", "collect", "classify", "FORMAT"]
