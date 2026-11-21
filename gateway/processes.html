@@ -2112,6 +2112,7 @@
                current.latest_revision!==pinned.revision||
                current.process.revision!==pinned.revision||
                current.process.content_sha256!==pinned.content_sha256||
+               current.access_revision!==pinned.access_revision||
                current.review?.status!=="reviewed_design"||
                current.permissions?.review!==true||
                current.your_actor_id!==chosen.your_actor_id||
