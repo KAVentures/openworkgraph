@@ -223,6 +223,16 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"zeta": float(zeta), "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def get_process_object_map(log_id: str) -> dict[str, Any]:
+        """The object-centric map of a shared log (OCEL-style, for logs with several object types such as orders,
+        items and deliveries): per object type, its activities, which activity follows which for the same object
+        (with median gaps), start and end activities and events per object; how often objects of two types share
+        events; and the activities that touch several types. Anything seen for fewer than 5 objects is withheld.
+        Shared events are not verified relationships. Aggregates only.
+        """
+        return _get("get_process_object_map", f"/v1/process-intelligence/{_log(log_id)}/object-map", {})
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_heuristics_net(log_id: str, dependency_threshold: float = 0.5,
                                    case_type: str | None = None) -> dict[str, Any]:
         """Heuristics-miner model of a shared log: arrows kept only where one activity follows another clearly
