@@ -1910,6 +1910,13 @@ performance measure. Processing, waiting amounts and union-busy accounting are u
 In `auto` mode without lifecycle values or an end attribute it returns `available: false` and
 the attribute names found in the log.
 
+In **Where cases wait**, choose **Inspect cases** to page through a hotspot's contributing cases
+and open their event histories. The list shows the number of matching instances, total elapsed
+waiting, and longest elapsed wait for each case. The dashboard-only
+`GET /v1/event-logs/{log_id}/waiting-time/cases` takes the analysis settings and case filter,
+plus the exact `source` and `destination` labels. Send `next_after` as `after` for the next
+page. The optional `limit` is 1–100 and defaults to 50.
+
 For CSV logs, choose the lifecycle or end-time column under "Extra columns to keep" when importing.
 Only selected columns are stored, with the same bounds as XES attributes. One million lifecycle
 events take a few seconds (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_waiting.py`).

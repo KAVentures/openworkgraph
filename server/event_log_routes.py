@@ -1495,6 +1495,21 @@ def event_log_waiting_time(request: Request, log_id: str, case_type: str | None 
                     end_attribute=end_attribute, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/waiting-time/cases")
+def event_log_waiting_hotspot_cases(request: Request, log_id: str,
+        source: str = Query(min_length=1, max_length=200), destination: str = Query(min_length=1, max_length=200),
+        case_type: str | None = Query(default=None, max_length=200),
+        mode: str = Query(default="auto", pattern="^(auto|lifecycle|end_attribute)$"),
+        lifecycle_attribute: str = Query(default="lifecycle:transition", min_length=1, max_length=120),
+        end_attribute: str = Query(default="", max_length=120),
+        after: str | None = Query(default=None, min_length=1, max_length=200),
+        limit: int = Query(default=50, ge=1, le=100), cohort: dict[str, Any] = Depends(_case_filter)):
+    _require_dashboard(request)
+    return _respond(waiting.waiting_hotspot_cases, log_id, case_type, source=source, destination=destination,
+                     after=after, limit=limit, mode=mode, lifecycle_attribute=lifecycle_attribute,
+                     end_attribute=end_attribute, cohort=cohort)
+
+
 @router.post('/v1/event-logs/{log_id}/waiting-time')
 async def event_log_working_calendar(request: Request,log_id: str,
         case_type: str | None=Query(default=None,max_length=200),

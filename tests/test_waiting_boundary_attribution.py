@@ -95,6 +95,26 @@ def test_attribution_query_preserves_canonical_case_events_and_timing_controls(m
     assert all(h['from']!='Independent' and h['to']!='Independent' for h in result['waiting_hotspots'])
 
 
+@pytest.mark.parametrize('mode', ['lifecycle', 'end_attribute'])
+def test_hotspot_case_pages_match_summary_and_keep_complete_cohort(mode):
+    values = [(1, 'Long', 0, 10), (1, 'Short', 1, 2), (1, 'Next', 20, 21),
+              (2, 'Long', 0, 4), (2, 'Next', 3, 6), (3, 'Long', 0, 1), (3, 'Later', 2, 3)]
+    log = imported(values, mode)
+    settings = {'mode': mode, **({'end_attribute': 'finished'} if mode == 'end_attribute' else {})}
+    overview = waiting.waiting_time(log, **settings)
+    aggregate = next(row for row in overview['waiting_hotspots'] if row['from'] == 'Long' and row['to'] == 'Next')
+    query = {'source': 'Long', 'destination': 'Next', 'limit': 1, **settings}
+    first = waiting.waiting_hotspot_cases(log, **query)
+    assert first['total_cases'] == first['total_instances'] == aggregate['count'] == 2
+    assert first['total_waiting_seconds'] == aggregate['total_waiting_seconds'] == 36000
+    assert first['cases'] == [{'case_id': 'case_1', 'instances': 1, 'waiting_seconds': 36000, 'longest_wait_seconds': 36000}]
+    second = waiting.waiting_hotspot_cases(log, **query, after=first['next_after'])
+    assert second['cases'] == [{'case_id': 'case_2', 'instances': 1, 'waiting_seconds': 0, 'longest_wait_seconds': 0}]
+    assert second['next_after'] is None
+    cohort = waiting.waiting_hotspot_cases(log, **query, cohort={'without_activity': 'Short'})
+    assert cohort['total_cases'] == 1 and cohort['cases'] == second['cases']
+
+
 def test_real_http_keeps_dashboard_auth_and_reports_actual_boundary(tmp_path):
     import os
     from pathlib import Path
@@ -119,6 +139,12 @@ with TestClient(app) as client:
         assert report.status_code==200 and report.headers['cache-control']=='no-store',report.text
         row=next(h for h in report.json()['waiting_hotspots'] if h['to']=='Next')
         assert row['from']=='Long' and row['total_waiting_seconds']==36000
+        params={'mode':mode,'source':'Long','destination':'Next',**({'end_attribute':attribute} if mode=='end_attribute' else {})}
+        assert client.get(url+'/cases',params=params).status_code==401
+        assert client.get(url+'/cases',params=params,headers={'Authorization':'Bearer '+local_auth.ensure_api_token()}).status_code in (401,403)
+        page=client.get(url+'/cases',params=params,headers=headers)
+        assert page.status_code==200 and page.headers['cache-control']=='no-store',page.text
+        assert page.json()['cases']==[{'case_id':'x','instances':1,'waiting_seconds':36000,'longest_wait_seconds':36000}]
 '''
     env={**os.environ,'WORKFLOW_OBSERVER_DATA':str(tmp_path/'data'),
          'WORKFLOW_OBSERVER_AUTH_DIR':str(tmp_path/'auth'),'WORKFLOW_OBSERVER_CONFIG':str(tmp_path/'config.json')}

@@ -21,6 +21,7 @@ includes off-hours and unrecorded work, and nothing is attributed to a person.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from . import event_log_cohorts as cohorts
@@ -33,6 +34,34 @@ _OFFSET = r"([zZ]|[+-][0-9]{2}:?[0-9]{2})$"
 MODES = ("auto", "lifecycle", "end_attribute")
 
 
+@dataclass(frozen=True)
+class _HotspotPage:
+    source: str
+    destination: str
+    after: str | None
+    limit: int
+
+
+def _hotspot_cases(conn, page: _HotspotPage) -> dict[str, Any]:
+    conn.execute("""CREATE TEMP TABLE waiting_case_evidence AS
+        SELECT case_id, count(*) AS instances, sum(wait) AS waiting, max(wait) AS longest
+        FROM seq2 WHERE wait IS NOT NULL AND prev_activity = ? AND activity = ? GROUP BY case_id""",
+                 [page.source, page.destination])
+    total, occurrences, waiting_seconds = conn.execute(
+        "SELECT count(*), coalesce(sum(instances), 0), coalesce(sum(waiting), 0) FROM waiting_case_evidence"
+    ).fetchone()
+    where, params = (" WHERE case_id > ?", [page.after]) if page.after is not None else ("", [])
+    rows = conn.execute("SELECT * FROM waiting_case_evidence" + where + " ORDER BY case_id LIMIT ?",
+                        [*params, page.limit + 1]).fetchall()
+    return {
+        "from": page.source, "to": page.destination,
+        "total_cases": total, "total_instances": occurrences, "total_waiting_seconds": waiting_seconds,
+        "next_after": rows[page.limit - 1][0] if len(rows) > page.limit else None,
+        "cases": [{"case_id": key, "instances": count, "waiting_seconds": waiting, "longest_wait_seconds": longest}
+                  for key, count, waiting, longest in rows[:page.limit]],
+    }
+
+
 def _path(name: str) -> str:
     if not _ATTRIBUTE.match(name or ""):
         raise workspace.EventLogWorkspaceError("Attribute names are 1–120 characters without quotes or backslashes")
@@ -41,7 +70,8 @@ def _path(name: str) -> str:
 
 def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto",
                  lifecycle_attribute: str = "lifecycle:transition", end_attribute: str = "",
-                 cohort: dict[str, Any] | None = None, working_calendar: dict[str, Any] | None = None) -> dict[str, Any]:
+                 cohort: dict[str, Any] | None = None, working_calendar: dict[str, Any] | None = None,
+                 _hotspot: _HotspotPage | None = None) -> dict[str, Any]:
     if mode not in MODES:
         raise workspace.EventLogWorkspaceError("mode must be auto, lifecycle or end_attribute")
     lifecycle_path = _path(lifecycle_attribute)
@@ -121,6 +151,8 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
               CASE WHEN prev_end IS NULL THEN NULL ELSE greatest(0, epoch(st - prev_end)) END AS wait,
               CASE WHEN proc IS NULL THEN 0 ELSE greatest(0, epoch(en - greatest(st, coalesce(prev_end, st)))) END AS busy
             FROM seq""")
+        if _hotspot is not None:
+            return {**base, "available": True, **_hotspot_cases(conn, _hotspot)}
         calendar_result = calendars.measure(conn,calendar) if calendar is not None else None
         if calendar_result is not None:
             calendar_result['case_filter_sha256']=calendars.digest(cohorts.describe(chosen))
@@ -172,4 +204,18 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
     return workspace._query(log_id, case_type, run)
 
 
-__all__ = ["waiting_time", "MODES"]
+def waiting_hotspot_cases(log_id: str, case_type: str | None = None, *, source: str, destination: str,
+                          after: str | None = None, limit: int = 50, mode: str = "auto",
+                          lifecycle_attribute: str = "lifecycle:transition", end_attribute: str = "",
+                          cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+    if any(not isinstance(value, str) or not value or len(value) > 200 for value in (source, destination)):
+        raise workspace.EventLogWorkspaceError("choose the exact source and destination activity labels")
+    if after is not None and (not isinstance(after, str) or not after or len(after) > 200):
+        raise workspace.EventLogWorkspaceError("invalid case key cursor")
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise workspace.EventLogWorkspaceError("page size must be a whole number from 1 to 100")
+    return waiting_time(log_id, case_type, mode=mode, lifecycle_attribute=lifecycle_attribute, end_attribute=end_attribute,
+                        cohort=cohort, _hotspot=_HotspotPage(source, destination, after, limit))
+
+
+__all__ = ["waiting_time", "waiting_hotspot_cases", "MODES"]
