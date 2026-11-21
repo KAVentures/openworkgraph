@@ -3993,12 +3993,12 @@
         out.append(
           table(['Activity','Instances','Processing with known duration','Median processing','90th percentile processing','Processing spread (population SD)','Waiting observations','Median waiting before','10th–90th percentile waiting','Waiting spread (population SD)','Total waiting before','Share of all waiting'],
             r.activities.slice(0,25).map(a=>[a.activity,Number(a.instances).toLocaleString(),
-              Number(a.instances_with_processing_time).toLocaleString()+' ('+pct(a.processing_observation_share)+')',duration(a.processing.median_seconds),
+              Number(a.instances_with_processing_time).toLocaleString()+' ('+pct(a.processing_observation_share)+')'+(a.open_starts?' · '+Number(a.open_starts).toLocaleString()+' unfinished starts':''),duration(a.processing.median_seconds),
               duration(a.processing.p90_seconds),duration(a.processing.population_stddev_seconds),
               Number(a.waiting_before.instances).toLocaleString()+' ('+pct(a.waiting_observation_share)+')',duration(a.waiting_before.median_seconds),
               duration(a.waiting_before.p10_seconds)+' – '+duration(a.waiting_before.p90_seconds),
               duration(a.waiting_before.population_stddev_seconds),duration(a.waiting_before.total_seconds),pct(a.share_of_all_waiting)])),
-          el('p','Spread is population standard deviation of observed durations, not a confidence interval. Percentiles and spread exclude missing durations; counts show coverage. Tied timestamps and incomplete lifecycle data can affect these descriptive results.','muted'),
+          el('p','Spread is population standard deviation of observed durations, not a confidence interval. Percentiles and spread exclude missing durations; processing coverage includes unfinished lifecycle starts in its denominator. Tied timestamps and incomplete lifecycle data can affect these descriptive results.','muted'),
           el('h4','Where cases wait'),
           table(['After','Before','Times','Median waiting','Share of all waiting'],r.waiting_hotspots.slice(0,10).map(h=>[h.from,h.to,Number(h.count).toLocaleString(),duration(h.median_waiting_seconds),pct(h.share_of_all_waiting)])),
           el('div',r.interpretation,'muted'));
