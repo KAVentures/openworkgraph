@@ -119,7 +119,8 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         {"template": "response", "a": X, "b": Y} (every X is followed by Y), "precedence" (Y only after X),
         "not_coexistence" (never both), "segregation_of_duties" (X and Y not by the same resource),
         {"template": "response_within", "a", "b", "seconds"} and {"template": "existence", "a", "min", "max"}.
-        Violating case IDs are included only for logs shared at the cases level. Describes the log against your
+        Violating case IDs are included only for logs shared at the cases level; at the aggregates level a rule's
+        counts are withheld when it applies to fewer than 5 cases or any count is 1 to 4. Describes the log against your
         rules; not audit evidence. Read-only.
         """
         if not isinstance(rules, list) or not rules or any(not isinstance(r, dict) for r in rules):

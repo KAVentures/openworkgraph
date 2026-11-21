@@ -621,7 +621,8 @@ def trace_clusters(log_id: str, case_type: str | None = None, k: int | None = No
 def compliance(log_id: str, rules: Any, case_type: str | None = None) -> dict[str, Any]:
     """Check rules (response, precedence, response within a time, not co-existence, segregation of duties,
     existence) against the cases (aggregates level). Violating case IDs are returned only for a log shared at
-    the cases level."""
+    the cases level; at the aggregates level a rule's counts are withheld when it applies to fewer than
+    AGENT_MIN_CELL_CASES cases or any of its counts is between 1 and AGENT_MIN_CELL_CASES - 1."""
     require(log_id, "aggregates")
     from . import event_log_compliance as cp
     if not isinstance(rules, list) or not rules:
@@ -631,13 +632,25 @@ def compliance(log_id: str, rules: Any, case_type: str | None = None) -> dict[st
         spec["case_type"] = case_type
     result = cp.check(log_id, spec)
     with_cases = _level(log_id) == "cases"
-    results = []
+    floor = AGENT_MIN_CELL_CASES
+    counted = ("activated_cases", "vacuously_satisfied_cases", "violating_cases", "satisfied_cases", "unknown_cases")
+    results, withheld = [], 0
     for item in result["results"]:
         if not with_cases:
             item = {key: value for key, value in item.items() if key not in ("violating_case_examples", "examples_truncated")}
+            # A rule about a rare activity would otherwise say how many of a handful of cases did something.
+            small = item["activated_cases"] < floor or any(0 < (item[key] or 0) < floor for key in counted)
+            if small:
+                withheld += 1
+                item = {**{key: value for key, value in item.items()
+                           if key not in counted + ("violation_rate", "violation_rate_ci95")},
+                        **{key: None for key in counted}, "violation_rate": None, "violation_rate_ci95": None,
+                        "withheld": True}
         results.append(item)
-    return {**{key: value for key, value in result.items() if key != "log"}, "format": FORMAT, "log_id": log_id,
-            "results": results, "case_ids_returned": with_cases}
+    return {**{key: value for key, value in result.items() if key not in ("log", "rules_with_violations")},
+            "format": FORMAT, "log_id": log_id, "results": results, "case_ids_returned": with_cases,
+            "rules_with_violations": sum(1 for r in results if r.get("violating_cases")),
+            "withheld": {"rules": withheld, "min_cases": floor, "applies": "aggregates level"}}
 
 
 def performance_spectrum(log_id: str, case_type: str | None = None, segments: list[str] | None = None,

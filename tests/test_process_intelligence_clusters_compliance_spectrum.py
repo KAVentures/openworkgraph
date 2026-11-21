@@ -56,15 +56,20 @@ def test_compliance_rates_with_case_ids_only_at_cases_level():
     log = _log()
     sharing.set_share(log, "aggregates")
     rules = [{"template": "response", "a": "Pay", "b": "Ship"},
-             {"template": "segregation_of_duties", "a": "Check", "b": "Pay"}]
+             {"template": "segregation_of_duties", "a": "Check", "b": "Pay"},
+             {"template": "response", "a": "Order", "b": "Check"}]
     r = sharing.compliance(log, rules)
-    response, sod = r["results"]
-    assert (response["activated_cases"], response["violating_cases"]) == (15, 3)
-    assert sod["violating_cases"] == 2 and r["case_ids_returned"] is False
-    assert "violating_case_examples" not in response and "ann" not in repr(r)
+    response, sod, checked = r["results"]
+    # 3 and 2 violating cases would describe a handful of cases: withheld at the aggregates level.
+    assert response["withheld"] and response["violating_cases"] is None and response["violation_rate"] is None
+    assert sod["withheld"] and sod["activated_cases"] is None and r["withheld"]["rules"] == 2
+    assert (checked["activated_cases"], checked["violating_cases"]) == (24, 9) and "withheld" not in checked
+    assert r["rules_with_violations"] == 1 and r["case_ids_returned"] is False
+    assert "violating_case_examples" not in checked and "ann" not in repr(r)
     sharing.set_share(log, "cases")
     full = sharing.compliance(log, rules)
-    assert full["case_ids_returned"] is True
+    assert full["case_ids_returned"] is True and full["withheld"]["rules"] == 0
+    assert (full["results"][0]["activated_cases"], full["results"][0]["violating_cases"]) == (15, 3)
     assert {e["case_id"] for e in full["results"][1]["violating_case_examples"]} == {"c0", "c1"}
     for bad in ([], None, [{"template": "bogus", "a": "x"}]):
         with pytest.raises(EventLogWorkspaceError):
@@ -104,7 +109,7 @@ with TestClient(app) as client:
     assert sorted(c['cases'] for c in r.json()['clusters'])==[6], r.json()
     body={"rules":[{"template":"existence","a":"C","min":1}]}
     c=client.post(base+'/compliance',json=body,headers=bearer)
-    assert c.status_code==200 and c.json()['results'][0]['violating_cases']==4, c.text
+    assert c.status_code==200 and c.json()['results'][0]['withheld'] is True, c.text   # 4 violating cases
     assert client.post(base+'/compliance',json={"rules":[],"x":1},headers=bearer).status_code==422
     s=client.get(base+'/performance-spectrum?segment=A->B&bins=2',headers=bearer)
     assert s.status_code==200 and s.json()['segments'][0]['occurrences']==10, s.text
