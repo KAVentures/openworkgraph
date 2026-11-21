@@ -453,6 +453,50 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         return _get("get_process_signals", f"/v1/process-intelligence/{_log(log_id)}/signals", {})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def get_process_rework(log_id: str, limit: int = 20, case_type: str | None = None) -> dict[str, Any]:
+        """Rework in a shared log: the share of cases that repeat an activity, which activities are repeated most
+        and how often, the most common loop patterns (self-loop, short loop, longer return), and how long cases
+        with rework take compared with cases without (median difference with a 95% interval). Association, not
+        cause. Aggregates only.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ToolError("limit must be 1 to 100")
+        return _get("get_process_rework", f"/v1/process-intelligence/{_log(log_id)}/rework",
+                    {"limit": limit, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_process_waiting_times(log_id: str, case_type: str | None = None) -> dict[str, Any]:
+        """Processing and waiting time per activity of a shared log, when the log records when work on an activity
+        started and completed (lifecycle start/complete or an end-time attribute): how long each activity is
+        worked on and how long cases wait before it. Says so when the log has no such data. Aggregates only.
+        """
+        return _get("get_process_waiting_times", f"/v1/process-intelligence/{_log(log_id)}/waiting-times",
+                    {"case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_process_drift(log_id: str, window: str = "month", case_type: str | None = None) -> dict[str, Any]:
+        """When the way cases of a shared log run changed (concept drift): cases grouped by start week or month,
+        adjacent windows compared on their paths with a permutation test, and for each change point the paths whose
+        share moved most and each window's median duration. A change may also come from how events are recorded.
+        Aggregates only.
+        """
+        if window not in ("week", "month"):
+            raise ToolError("window must be week or month")
+        return _get("get_process_drift", f"/v1/process-intelligence/{_log(log_id)}/drift",
+                    {"window": window, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_stuck_process_cases(log_id: str, limit: int = 25, case_type: str | None = None) -> dict[str, Any]:
+        """Open cases of a shared log that have been idle much longer than usual after their latest activity, with
+        their latest activity and how many times the usual wait they have exceeded. Needs a log shared at the cases
+        level. A stuck case is a prompt to look, not a finding that anyone did anything wrong.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ToolError("limit must be 1 to 100")
+        return _get("get_stuck_process_cases", f"/v1/process-intelligence/{_log(log_id)}/stuck-cases",
+                    {"limit": limit, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_slowest_process_cases(log_id: str, limit: int = 10, case_type: str | None = None) -> dict[str, Any]:
         """The slowest cases of a shared log (first to last recorded event), slowest first.
 
