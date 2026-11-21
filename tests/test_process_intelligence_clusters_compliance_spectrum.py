@@ -90,6 +90,63 @@ def test_performance_spectrum_without_case_lines():
         sharing.performance_spectrum(log, segments=["Ship->Order"])
 
 
+def test_rare_activity_contrast_hidden_even_in_large_cluster(monkeypatch):
+    log = _log()
+    sharing.set_share(log, "aggregates")
+    from server import event_log_trace_clusters as clustering
+    original = clustering.clusters
+
+    def with_rare_contrast(*args, **kwargs):
+        result = original(*args, **kwargs)
+        if result["clusters"]:
+            result["clusters"][0]["more_common_activities"].append({
+                "activity": "rare-private-activity", "cases_in_cluster": 1, "cases_in_log": 1,
+                "case_share_in_cluster": 0.1, "case_share_in_log": 0.04,
+                "lift": 2.5, "difference": 0.06,
+            })
+        return result
+
+    monkeypatch.setattr(clustering, "clusters", with_rare_contrast)
+    result = sharing.trace_clusters(log, k=2)
+    assert "rare-private-activity" not in repr(result)
+    for cluster in result["clusters"]:
+        for contrast in cluster["more_common_activities"] + cluster["less_common_activities"]:
+            assert "cases_in_cluster" not in contrast and "cases_in_log" not in contrast
+
+
+def test_spectrum_requires_distinct_case_support_and_suppresses_small_bins():
+    import csv
+    import io
+    from io import BytesIO
+    table = io.StringIO()
+    writer = csv.writer(table)
+    writer.writerow(["case", "activity", "time", "who"])
+    # One case repeats A->B six times. Occurrence count is high, case count is one.
+    for i in range(6):
+        writer.writerow(["repeat", "A", f"2024-01-01T{2 * i:02d}:00:00Z", "a"])
+        writer.writerow(["repeat", "B", f"2024-01-01T{2 * i+1:02d}:00:00Z", "a"])
+    # Six independent X->Y cases, distributed across days (sparse time bins).
+    for i in range(6):
+        writer.writerow([f"c{i}", "X", f"2024-01-0{i+2}T08:00:00Z", "a"])
+        writer.writerow([f"c{i}", "Y", f"2024-01-0{i+2}T09:00:00Z", "a"])
+    log = workspace.import_log(BytesIO(table.getvalue().encode()), name="sparse",
+        source_format="csv", mapping=MAPPING)["log_id"]
+    sharing.set_share(log, "aggregates")
+    rare = sharing.performance_spectrum(log, segments=["A->B"], bins=4)
+    assert rare["segments"] == [] and rare["withheld"]["segments"] == 1
+    result = sharing.performance_spectrum(log, segments=["X->Y"], bins=4)
+    assert len(result["segments"]) == 1
+    assert result["segments"][0]["bins"] == []
+    assert result["segments"][0]["bins_withheld_for_small_cells"] is True
+    assert result["time_origin"] is None and result["bin_seconds"] is None
+    assert "log" not in result and result["case_lines_returned"] is False
+    sharing.set_share(log, "cases")
+    full = sharing.performance_spectrum(log, segments=["X->Y"], bins=4)
+    assert len(full["segments"][0]["bins"]) == 4
+    assert "lines" not in full["segments"][0]
+
+
+
 def test_agent_routes(tmp_path):
     code = r'''
 from io import BytesIO
