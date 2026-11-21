@@ -338,8 +338,9 @@ MAX_EXPORT_CASES = 200_000
 
 def _cell(value: Any) -> str:
     """CSV cell safe to open in a spreadsheet: a leading formula character is neutralized."""
-    text = "" if value is None else str(value)
-    return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
+    from shared.spreadsheet_review import review_cell
+
+    return review_cell("" if value is None else str(value))
 
 
 def non_fitting_cases_csv(log_id: str, pnml: bytes, case_type: str | None = None, *,

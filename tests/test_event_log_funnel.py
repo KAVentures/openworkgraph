@@ -67,3 +67,6 @@ def test_bad_requests_are_refused():
         fn.funnel(log, ["A", "Z"])
     with pytest.raises(EventLogWorkspaceError, match="window"):
         fn.funnel(log, ["A", "B"], within_hours=0)
+    for steps in ("AB", {"A": 1, "B": 2}, ["A", None], ["A", 1]):
+        with pytest.raises(EventLogWorkspaceError):
+            fn.funnel(log, steps)

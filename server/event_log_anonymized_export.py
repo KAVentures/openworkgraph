@@ -41,8 +41,9 @@ MAX_EXPORT_EVENTS = 1_000_000
 
 def _cell(value: Any) -> str:
     """CSV cell safe to open in a spreadsheet: a leading formula character is neutralized."""
-    text = "" if value is None else str(value)
-    return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
+    from shared.spreadsheet_review import review_cell
+
+    return review_cell("" if value is None else str(value))
 
 
 def _check(min_cases: Any, time_mode: str, resource_mode: str) -> int:

@@ -77,6 +77,17 @@ def test_overlapping_work_is_not_waiting_and_counts_once_as_busy():
     assert result["flow_efficiency"]["busy_seconds"] == 3 * 3600
 
 
+def test_completion_before_start_does_not_close_start():
+    log = _import(["case", "activity", "time", "lifecycle:transition"], [
+        ("a", "A", _at(0, 0), "complete"), ("a", "A", _at(0, 1), "start"),
+        ("a", "A", _at(0, 2), "start"),
+        ("b", "B", _at(0, 0), "start"), ("b", "B", _at(0, 1), "complete")])
+    instances = waiting.waiting_time(log)["instances"]
+    assert instances["end_before_start"] == 1
+    assert instances["unmatched_starts"] == 2
+    assert instances["activities_with_open_starts"] == 1
+
+
 def test_end_time_attribute_with_offsets_and_bad_values():
     log = _import(["case", "activity", "time", "finished"], [
         ("a", "Receive", _at(0, 0), "2024-01-01T02:00:00+01:00"),   # 1 h after start in UTC
