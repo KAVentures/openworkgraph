@@ -2185,6 +2185,10 @@
             note("Review outcome unverified. Reopen the latest authorized revision before taking further action.");
             return;
           }
+          // An acknowledged decision consumes the explicit human confirmation.
+          // A subsequent review, including the opposite decision, must be
+          // consciously reconfirmed against the freshly loaded revision.
+          $("reviewConfirm").checked=false;
           if (submittedInspectedHandoff)
             $("handoffStatus").textContent="Design review acknowledged. Reopen and reinspect before another handoff.";
           render(reviewResult);
