@@ -26,6 +26,7 @@ def test_explicit_persistence_reads_prior_history_before_source_and_cas_appends(
     async def exercise():
         payload, source = setup(monkeypatch, tmp_path)
         payload["persist_provider_check"] = True
+        payload["confirm_provider_evidence_write"] = True
         _bind()
         events = [{"sequence": 1, "kind": "check"}]
         order = []
@@ -75,6 +76,7 @@ def test_concurrent_ledger_change_refuses_append_result(monkeypatch, tmp_path):
     async def exercise():
         payload, _ = setup(monkeypatch, tmp_path)
         payload["persist_provider_check"] = True
+        payload["confirm_provider_evidence_write"] = True
         _bind()
         monkeypatch.setattr(routes, "read_operation_evidence",
                             lambda *a, **kw: {"events": []})
@@ -92,6 +94,7 @@ def test_revoked_binding_before_append_denies_persistence(monkeypatch, tmp_path)
     async def exercise():
         payload, source = setup(monkeypatch, tmp_path)
         payload["persist_provider_check"] = True
+        payload["confirm_provider_evidence_write"] = True
         _bind()
         monkeypatch.setattr(routes, "read_operation_evidence",
                             lambda *a, **kw: {"events": []})
