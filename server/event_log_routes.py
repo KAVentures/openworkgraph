@@ -862,6 +862,32 @@ async def event_log_insights(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.get("/v1/event-logs/{log_id}/change-markers")
+def event_log_change_markers(request: Request, log_id: str):
+    """The owner's dated notes on this log's timeline, oldest first."""
+    from . import event_log_change_markers as change_markers
+    _require_dashboard(request)
+    return _respond(change_markers.markers, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/change-markers")
+async def event_log_add_change_marker(request: Request, log_id: str):
+    """Body: {"marked_at": ISO time with an offset, "label": text, "note"?: text}."""
+    from . import event_log_change_markers as change_markers
+    _require_dashboard(request)
+    spec = await _json_body(request, "change marker", strict=True, limit=4096)
+    return _respond(change_markers.add, log_id, spec)
+
+
+@router.post("/v1/event-logs/{log_id}/change-markers/{marker_id}/delete")
+def event_log_remove_change_marker(request: Request, log_id: str, marker_id: str):
+    from . import event_log_change_markers as change_markers
+    _require_dashboard(request)
+    if not marker_id.startswith("mark_") or len(marker_id) > 40:
+        raise HTTPException(422, "unknown change marker")
+    return _respond(change_markers.remove, log_id, marker_id)
+
+
 @router.get("/v1/event-logs/{log_id}/object-types")
 def event_log_object_types(request: Request, log_id: str):
     _require_dashboard(request)

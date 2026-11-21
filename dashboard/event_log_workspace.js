@@ -2534,7 +2534,34 @@
     const row=el('div',null,'row');row.style.alignItems='end';
     row.append(field('Change went live (UTC)',date),field('Measure',metric),...Object.values(f),field('Days on each side',windowDays),field('Leave out the last … days',recent),field('Change applies to',treatedActivity),field('…or to resource',treatedResource),run);
     const out=el('div');out.id='owgImpactResults';out.setAttribute('role','status');
-    box.append(row,out);
+    // Change markers: pick a saved date, or save this one with a label, so the change is recorded once.
+    const markerPick=select('owgImpactMarker',[['','Pick a saved change']]);
+    const markerLabel=input('owgImpactMarkerLabel','text','e.g. Automation went live');markerLabel.maxLength=120;
+    const markerSave=button('Save this date as a change','secondary');markerSave.id='owgImpactMarkerSave';
+    const markerRemove=button('Remove saved change','secondary');markerRemove.id='owgImpactMarkerRemove';markerRemove.disabled=true;
+    const markerStatus=el('div',null,'muted');markerStatus.id='owgImpactMarkerStatus';markerStatus.setAttribute('role','status');
+    const markerRow=el('div',null,'row');markerRow.style.alignItems='end';
+    markerRow.append(field('Saved changes',markerPick),markerRemove,field('Label for this date',markerLabel),markerSave);
+    box.append(markerRow,markerStatus,row,out);
+    const markersBase='/v1/event-logs/'+encodeURIComponent(state.logId)+'/change-markers';let markerList=[];
+    const showMarkers=r=>{markerList=r.markers;
+      setOptions(markerPick,[['',r.markers.length?'Pick a saved change':'No saved changes yet'],...r.markers.map(m=>[m.marker_id,m.marked_at.slice(0,10)+' — '+m.label+(m.within_log?'':' (outside this log)')])]);
+      markerRemove.disabled=true;};
+    markerPick.onchange=()=>{const m=markerList.find(x=>x.marker_id===markerPick.value);markerRemove.disabled=!m;
+      if(m){date.value=m.marked_at.slice(0,10);markerStatus.textContent='Using the change "'+m.label+'" on '+m.marked_at.slice(0,10)+'.'+(m.note?' '+m.note:'');}};
+    markerSave.onclick=async()=>{
+      if(!date.value){markerStatus.textContent='Choose the date the change went live first.';return;}
+      if(!markerLabel.value.trim()){markerStatus.textContent='Give the change a label.';return;}
+      try{const r=await (await api(markersBase,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({marked_at:date.value+'T00:00:00Z',label:markerLabel.value})})).json();
+        showMarkers(r);markerPick.value=r.added;markerRemove.disabled=false;markerLabel.value='';
+        markerStatus.textContent='Saved the change on '+date.value+'.';}
+      catch(error){markerStatus.textContent=error.message;}};
+    markerRemove.onclick=async()=>{const m=markerList.find(x=>x.marker_id===markerPick.value);if(!m)return;
+      try{showMarkers(await (await api(markersBase+'/'+encodeURIComponent(m.marker_id)+'/delete',{method:'POST'})).json());
+        markerStatus.textContent='Removed the saved change "'+m.label+'".';}
+      catch(error){markerStatus.textContent=error.message;}};
+    const markersGeneration=state.generation;
+    getJSON(markersBase).then(r=>{if(markersGeneration===state.generation)showMarkers(r);}).catch(error=>{markerStatus.textContent=error.message;});
     const generation=state.generation,logId=state.logId;let turn=0;
     run.onclick=async()=>{
       const t=++turn;
