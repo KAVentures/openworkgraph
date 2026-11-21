@@ -122,3 +122,46 @@ def test_no_provider_read_without_explicit_approval(monkeypatch):
         asyncio.run(routes.read_local_bound_provider_review(request(), Response()))
     assert exc.value.status_code == 403
     assert calls == []
+
+
+def test_conflicting_review_after_provider_read_is_not_disclosed(monkeypatch):
+    calls = []
+
+    async def review(request, response):
+        calls.append("review")
+        return {"case_ref": "case-1", "receipts": {"run_ref": "run-1"},
+                "snapshot": len(calls)}
+
+    async def provider(request, response):
+        calls.append("provider")
+        return {"provider_operation": "verified"}
+
+    install(monkeypatch, payload(), review, provider)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.read_local_bound_provider_review(request(), Response()))
+    assert exc.value.status_code == 409
+    assert calls == ["review", "provider", "review"]
+
+
+def test_source_revocation_after_provider_read_denies_disclosure(monkeypatch):
+    calls = []
+    revoked = [False]
+
+    async def review(request, response):
+        calls.append("review")
+        return {"case_ref": "case-1", "receipts": {"run_ref": "run-1"}}
+
+    async def provider(request, response):
+        calls.append("provider")
+        revoked[0] = True
+        return {"provider_operation": "verified"}
+
+    def source_guard():
+        if revoked[0]:
+            raise HTTPException(403, "source grant revoked")
+
+    install(monkeypatch, payload(), review, provider, scope_check=source_guard)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.read_local_bound_provider_review(request(), Response()))
+    assert exc.value.status_code == 403
+    assert calls == ["review", "provider", "review"]
