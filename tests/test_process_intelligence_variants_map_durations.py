@@ -98,7 +98,7 @@ def test_aggregate_hourly_cell_with_many_events_from_one_case_still_hidden():
     lines = ["case,activity,time"]
     lines += [f"c{i},Open,2024-01-01T09:00:00Z" for i in range(6)]
     lines += [f"c0,Ping,2024-01-01T10:{i:02d}:00Z" for i in range(6)]
-    log = workspace.import_log(BytesIO("\\n".join(lines).encode()), name="cell",
+    log = workspace.import_log(BytesIO("\n".join(lines).encode()), name="cell",
                                source_format="csv", mapping=MAPPING)["log_id"]
     sharing.set_share(log, "aggregates")
     aggregate = sharing.time_patterns(log)
