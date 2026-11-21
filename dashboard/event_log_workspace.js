@@ -6,9 +6,9 @@
   // The global case filter: follower rules plus an optional case-attribute value and/or numeric range.
   // More case filters (Disco-style timeframe, performance and variation filters): end time, events per case,
   // how many cases share the case's path, and rework.
-  const MORE_FILTER_KEYS=['ended_from','ended_before','events','path_cases','rework'];
+  const MORE_FILTER_KEYS=['ended_from','ended_before','events','path_cases','rework','tag','without_tag'];
   const countText=(r,what)=>what+' '+(r.min!==undefined&&r.max!==undefined?(r.min===r.max?'= '+r.min:r.min+'–'+r.max):r.min!==undefined?'\u2265 '+r.min:'\u2264 '+r.max);
-  const moreFilterText=a=>[a.ended_from?'ended from '+a.ended_from.slice(0,10):'',a.ended_before?'ended before '+a.ended_before.slice(0,10):'',a.events?countText(a.events,'events per case'):'',a.path_cases?countText(a.path_cases,'cases on the same path'):'',a.rework===true?'repeats an activity':a.rework===false?'repeats no activity':''].filter(Boolean).join('; ');
+  const moreFilterText=a=>[a.ended_from?'ended from '+a.ended_from.slice(0,10):'',a.ended_before?'ended before '+a.ended_before.slice(0,10):'',a.events?countText(a.events,'events per case'):'',a.path_cases?countText(a.path_cases,'cases on the same path'):'',a.rework===true?'repeats an activity':a.rework===false?'repeats no activity':'',a.tag?'tagged '+JSON.stringify(a.tag):'',a.without_tag?'not tagged '+JSON.stringify(a.without_tag):''].filter(Boolean).join('; ');
   const filterOn=()=>state.follows.length>0||!!state.attr.attribute||!!state.attr.attribute_range||!!state.attr.starts_with||!!state.attr.ends_with||!!state.attr.duration||MORE_FILTER_KEYS.some(k=>state.attr[k]!==undefined)||!!state.caseActivity;
   const globalCohort=()=>({...(state.follows.length?{follows:state.follows}:{}),...state.attr,...(state.caseActivity?{activity:state.caseActivity}:{})});
   const rangeText=r=>(r.min!==undefined?r.min+' ≤ ':'')+r.name+(r.max!==undefined?' < '+r.max:'');
@@ -815,7 +815,30 @@
     const row=el('div',null,'row');row.style.alignItems='end';
     const collapseWrap=el('div');const collapseLabel=el('label',' Collapse consecutive repeats into the first');collapseLabel.htmlFor=collapse.id;collapseWrap.append(collapse,collapseLabel);
     row.append(field('Mapping name',name),field('Group name',label),field('Activities in the group',pick),addGroup);
-    box.append(host,row,draft,collapseWrap,save,msg);
+    // Suggested groups: spellings of probably the same activity (case, spacing, punctuation, typos).
+    const suggest=button('Suggest groups of similar labels','secondary');suggest.id='owgActivitySuggest';
+    const suggestions=el('div');suggestions.id='owgActivitySuggestions';suggestions.setAttribute('role','status');suggestions.setAttribute('aria-live','polite');
+    suggest.onclick=async()=>{
+      suggest.disabled=true;suggestions.replaceChildren(el('div','Comparing activity names…','muted'));
+      try{
+        const r=await getJSON('/v1/event-logs/'+encodeURIComponent(state.logId)+'/activity-label-suggestions');
+        if(generation!==state.generation)return;
+        if(!r.groups.length){suggestions.replaceChildren(el('div','No activity names look like spellings of the same activity.','muted'));return;}
+        const list=el('ul');
+        r.groups.forEach(g=>list.appendChild(el('li',g.suggested_label+' ← '+g.labels.map(l=>l.activity+' ('+Number(l.events).toLocaleString()+')').join(', ')+' · '+g.reason)));
+        const use=button('Add these groups to the mapping','secondary');use.id='owgActivitySuggestUse';
+        use.onclick=()=>{
+          const taken=new Set(groups.flatMap(g=>g.activities));
+          let added=0;
+          r.groups.forEach(g=>{const acts=g.labels.map(l=>l.activity).filter(a=>!taken.has(a));if(acts.length<2)return;
+            acts.forEach(a=>taken.add(a));groups.push({label:g.suggested_label,activities:acts});added++;});
+          if(!name.value.trim())name.value='Similar labels';
+          drawDraft();msg.textContent=added?'Added '+added+' groups to the draft. Review them, then save the mapping.':'Every suggested label is already in the draft.';
+        };
+        suggestions.replaceChildren(el('div',r.groups.length+' groups of names that may be the same activity'+(r.groups_total>r.groups.length?' (showing '+r.groups.length+' of '+r.groups_total+')':'')+'. '+r.caveat,'muted'),list,use);
+      }catch(e){suggestions.replaceChildren(el('div',e.message,'muted'));}
+      finally{suggest.disabled=false;}};
+    box.append(host,row,suggest,suggestions,draft,collapseWrap,save,msg);
     api(base()).then(r=>r.json()).then(render).catch(e=>{msg.textContent=e.message;});
     return box;
   }
@@ -1565,14 +1588,19 @@
     const pathMin=input('owgCaseFilterPathMin','number','cases'),pathMax=input('owgCaseFilterPathMax','number','cases');
     for(const n of [evMin,evMax,pathMin,pathMax]){n.step='1';n.min='1';}
     const reworkPick=select('owgCaseFilterRework',[['','Any'],['true','Repeats an activity'],['false','Repeats no activity']]);
+    // Case tags (yours, or added from unusual cases, alignments or root causes): keep tagged or untagged cases.
+    const tagName=input('owgCaseFilterTag','text','tag');tagName.maxLength=60;tagName.autocomplete='off';
+    const tagMode=select('owgCaseFilterTagMode',[['tag','Has the tag'],['without_tag','Does not have the tag']]);
     const a0=state.attr;
     if(a0.ended_from)endedFrom.value=a0.ended_from.slice(0,10);if(a0.ended_before)endedBefore.value=a0.ended_before.slice(0,10);
     if(a0.events){if(a0.events.min!==undefined)evMin.value=a0.events.min;if(a0.events.max!==undefined)evMax.value=a0.events.max;}
     if(a0.path_cases){if(a0.path_cases.min!==undefined)pathMin.value=a0.path_cases.min;if(a0.path_cases.max!==undefined)pathMax.value=a0.path_cases.max;}
     if(a0.rework!==undefined)reworkPick.value=String(a0.rework);
+    if(a0.tag){tagName.value=a0.tag;tagMode.value='tag';}else if(a0.without_tag){tagName.value=a0.without_tag;tagMode.value='without_tag';}
     const moreRow=el('div',null,'row');moreRow.style.alignItems='end';
     moreRow.append(field('Case ended on or after',endedFrom),field('Case ended before',endedBefore),field('Events per case at least',evMin),field('Events per case at most',evMax),
-      field('Path followed by at least (cases)',pathMin),field('Path followed by at most (cases)',pathMax),field('Rework',reworkPick));
+      field('Path followed by at least (cases)',pathMin),field('Path followed by at most (cases)',pathMax),field('Rework',reworkPick),
+      field('Case tag',tagName),field('Tag condition',tagMode));
     function readCount(lo,hi,what){
       if(lo.value===''&&hi.value==='')return undefined;
       const r={};if(lo.value!=='')r.min=Number(lo.value);if(hi.value!=='')r.max=Number(hi.value);
@@ -1606,6 +1634,7 @@
       const events=readCount(evMin,evMax,'Events per case'),paths=readCount(pathMin,pathMax,'Path frequency');
       if(events)out.events=events;if(paths)out.path_cases=paths;
       if(reworkPick.value)out.rework=reworkPick.value==='true';
+      const t=tagName.value.trim();if(t){if(Array.from(t).length>60)throw new Error('A tag has at most 60 characters.');out[tagMode.value]=t;}
       return out;
     }
     message.id='owgCaseFilterStatus';message.setAttribute('role','status');message.tabIndex=-1;
@@ -6305,9 +6334,22 @@
     const player=mapPlayback(box);
     const svgButton=button('Download map (SVG)','secondary');svgButton.id='owgMapDownloadSvg';
     const pngButton=button('Download map (PNG)','secondary');pngButton.id='owgMapDownloadPng';
-    const exportRow=el('div',null,'row');exportRow.append(svgButton,pngButton);
+    const csvButton=button('Download map data (CSV)','secondary');csvButton.id='owgMapDownloadCsv';
+    const exportRow=el('div',null,'row');exportRow.append(svgButton,pngButton,csvButton);
     box.append(row,status,player.node,graphHost,exportRow,slow);
-    const generation=state.generation;let timer=null,request=0,lastCaption='';
+    const generation=state.generation;let timer=null,request=0,lastCaption='',lastMap=null;
+    // The numbers behind the drawn map, one row per activity, start, path and end, for a spreadsheet.
+    const safeCell=v=>{const t=v===null||v===undefined?'':String(v);const s=/^[=+\-@\t\r]/.test(t)?"'"+t:t;return /[",\n\r]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;};
+    csvButton.onclick=()=>{
+      if(!lastMap){status.textContent='No map is drawn to download.';return;}
+      const r=lastMap,lines=[['kind','from','to','count','cases','median_gap_seconds','mean_gap_seconds','p90_gap_seconds']];
+      r.activities.forEach(a=>lines.push(['activity',a.activity,'',a.event_count,a.case_count,'','','']));
+      Object.entries(r.start_activities||{}).forEach(([a,n])=>lines.push(['start','',a,n,'','','','']));
+      r.transitions.forEach(t=>lines.push(['path',t.from,t.to,t.transition_count,t.case_count,t.median_elapsed_gap_seconds,t.mean_elapsed_gap_seconds,t.p90_elapsed_gap_seconds]));
+      Object.entries(r.end_activities||{}).forEach(([a,n])=>lines.push(['end',a,'',n,'','','','']));
+      downloadBlob(new Blob([lines.map(l=>l.map(safeCell).join(',')).join('\n')+'\n'],{type:'text/csv'}),mapFileName('csv'));
+      status.textContent='Downloaded the map data: '+r.activities.length+' activities and '+r.transitions.length+' paths at the current settings.';
+    };
     const currentSvg=()=>graphHost.querySelector('#owgMapDrawing svg')||graphHost.querySelector('svg');
     svgButton.onclick=()=>{const svg=currentSvg();if(!svg){status.textContent='No map is drawn to download.';return;}
       downloadBlob(new Blob([exportableSvg(svg,lastCaption).text],{type:'image/svg+xml'}),mapFileName('svg'));};
@@ -6323,6 +6365,7 @@
       const mine=++request;
       const r=await getJSON(logPath('process-map',{activities:String(Number(acts.node.value)/100),paths:String(Number(paths.node.value)/100)}));
       if(mine!==request||generation!==state.generation)return;
+      lastMap=r;
       const c=r.coverage;
       lastCaption=(document.querySelector('#owgEventLogPick option:checked')?.textContent||'Event log')+' · activities '+acts.node.value+'%, paths '+paths.node.value+'%'+(r.activity_mapping?' · grouped by '+r.activity_mapping.name:'')+
         '\nShowing '+c.activities_shown+' activities ('+pct(c.event_share_shown)+' of events) and '+c.transition_types_shown+' of '+c.transition_types_total+' paths. Derived from the supplied log; not a verified business workflow.';

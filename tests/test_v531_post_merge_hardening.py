@@ -257,6 +257,9 @@ def test_pause_creates_permanent_local_only_interval(tmp_path, monkeypatch):
 def test_spreadsheet_formula_strings_are_neutralized_without_mutating_json_semantics():
     assert _spreadsheet_safe_value("=HYPERLINK(\"https://evil.invalid\")").startswith("'")
     assert _spreadsheet_safe_value("normal title") == "normal title"
+    assert _spreadsheet_safe_value(" \ufeff=1+1") == "' \ufeff=1+1"
+    assert _spreadsheet_safe_value("\nordinary") == "'\nordinary"
+    assert _spreadsheet_safe_value(-3) == -3
 
     payload = {
         "export": {

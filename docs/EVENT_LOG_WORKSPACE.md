@@ -1786,7 +1786,10 @@ verified waiting. Redrawing a one-million-event log takes a few seconds
 settings, for slides and documents. The SVG is self-contained: styles are inlined, and
 interactive attributes are removed. Its `<desc>` and a two-line footer record the log, the
 slider settings, the coverage shown and that the map is derived from the supplied log, not a
-verified business workflow. The PNG is rendered in the browser at twice the drawn size.
+verified business workflow. The PNG is rendered in the browser at twice the drawn size. **Download map data (CSV)** saves the numbers behind the same map
+for a spreadsheet: one row per activity (events and cases), start activity, path (transitions,
+cases and the median, mean and 90th-percentile gap in seconds) and end activity, with cells that
+would start a formula prefixed with `'`.
 Nothing is uploaded; activity names in the file are as sensitive as the log.
 
 ## Predicting open cases
@@ -2170,8 +2173,12 @@ performance and variation filters:
 * **Rework**: `rework=true` keeps cases that repeat at least one activity; `rework=false` keeps
   cases that repeat none.
 
+* **Case tag**: keeps the cases that carry a tag (`tag`) or that do not (`without_tag`), for
+  example everything except the cases tagged as not fitting a reference net. Tags come from *Case
+  tags*, unusual cases, alignments and root-cause results.
+
 In a JSON cohort they are `ended_from`, `ended_before`, `events: {"min": n, "max": n}`,
-`path_cases: {"min": n, "max": n}` and `rework: true|false`. They combine with every other
+`path_cases: {"min": n, "max": n}`, `rework: true|false`, `tag` and `without_tag`. They combine with every other
 condition, apply to the same views, and are kept by saved filters.
 
 The case pickers inside individual sections take the same numeric range, under "Numeric case
