@@ -79,6 +79,13 @@ async def agent_tag_cases(request: Request, log_id: str):
     return await _answer(sharing.agent_tag_cases, log_id, body)
 
 
+@router.post("/v1/process-intelligence/stop-sharing")
+async def stop_sharing_all(request: Request):
+    """Dashboard only: stop sharing every log with agents, with every tag permission."""
+    _require_dashboard(request)
+    return await _answer(sharing.stop_sharing_all)
+
+
 @router.get("/v1/process-intelligence/logs")
 async def agent_logs(request: Request):
     _require_agent_access(request)
