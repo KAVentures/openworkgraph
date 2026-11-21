@@ -82,6 +82,9 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 | `get_process_signal_scorecard` | The owner's KPI, conformance and due-date signals month by month (by case start), with each month's value and whether the condition held; read-only (aggregates level). |
 | `get_process_breakdown` | Case figures by one or two dimensions (start month or weekday, first or last activity, a case or event attribute), like a pivot table: cases, share, median and p90 duration, events per case, rework rate and optionally the share doing an activity. Cells and totals with fewer than 5 cases are withheld. | aggregates |
 | `find_similar_process_cases` | The recorded cases whose path is closest to a chosen case, with what each does more or less often, its duration and start, and the median duration of those found. | cases |
+| `get_process_cooccurrence` | Which activities happen in the same cases, regardless of order: cases with both, the share of cases with one that also have the other, lift, and the pairs that go together most or never. Activities in fewer than 5 cases and pair counts below 5 are withheld. | aggregates |
+| `get_process_work_in_progress` | Cases arriving, completing and open per day or week, optionally with the activities that complete a case, and a Little's law check. | aggregates |
+| `get_process_batching` | Batch processing per activity: share of events in batches, batch sizes, simultaneous or sequential batches, and the wait before batched events. Resources are counted, never named. | aggregates |
 
 | `tag_process_cases` | Adds an `agent: ` tag with a note to cases (cases level and the tag permission). |
 
@@ -107,6 +110,9 @@ nothing authorizes an action.
 | `GET /v1/process-intelligence/{log_id}/footprints?noise=&case_type=` | Same, `aggregates` or `cases`. |
 | `POST /v1/event-logs/{log_id}/agent-share/tags` (`{"allowed": true \| false}`) | Dashboard session only. |
 | `POST /v1/process-intelligence/{log_id}/case-tags` (`{"tag", "case_ids", "note"?, "case_type"?}`) | Agent, `cases` level and the tag permission (403 without it). |
+| `GET /v1/process-intelligence/{log_id}/co-occurrence?limit=&min_support=&case_type=` | Agent, `aggregates` or `cases` (`min_support` at least 5). |
+| `GET /v1/process-intelligence/{log_id}/work-in-progress?bucket=day\|week&end_activity=&case_type=` | Agent, `aggregates` or `cases`. |
+| `GET /v1/process-intelligence/{log_id}/batching?gap_seconds=&min_batch_size=&by_resource=&case_type=` | Agent, `aggregates` or `cases`. |
 
 Not covered: acting in source systems. That would need separate, explicit action authority,
 which this feature never grants.

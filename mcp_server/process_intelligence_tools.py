@@ -462,6 +462,56 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"limit": max(1, min(int(limit), 50)), "case_type": case_type})
 
 
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_process_cooccurrence(log_id: str, limit: int = 12, min_support: int = 5,
+                                 case_type: str | None = None) -> dict[str, Any]:
+        """Which activities of a shared log happen in the same cases, regardless of order: for the most common
+        activities, how many cases have both, the share of cases with A that also have B, and the lift (above 1
+        they go together, 0 never together), plus the pairs that go together most and those that never do (often
+        alternative branches). Activities in fewer than 5 cases and pair counts below 5 are withheld. Describes the
+        recorded cases, not a dependency. Aggregates only.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 2 <= limit <= 25:
+            raise ToolError("limit must be 2 to 25")
+        if isinstance(min_support, bool) or not isinstance(min_support, int) or min_support < 5:
+            raise ToolError("min_support must be a whole number of cases from 5")
+        return _get("get_process_cooccurrence", f"/v1/process-intelligence/{_log(log_id)}/co-occurrence",
+                    {"limit": limit, "min_support": min_support, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_process_work_in_progress(log_id: str, bucket: str = "week", end_activities: list[str] | None = None,
+                                     case_type: str | None = None) -> dict[str, Any]:
+        """Work in progress of a shared log over time: cases arriving, completing and still open at the end of each
+        day or week, with a Little's law check (average open cases against arrival rate times mean cycle time).
+        end_activities optionally names the activities that complete a case; otherwise every case completes at its
+        last event. Not a capacity plan or a rating of anyone. Aggregates only.
+        """
+        if bucket not in ("day", "week"):
+            raise ToolError("bucket must be day or week")
+        ends = list(end_activities or [])
+        if len(ends) > 20 or any(not isinstance(a, str) or not a for a in ends):
+            raise ToolError("end_activities must be up to 20 activity names")
+        return _get("get_process_work_in_progress", f"/v1/process-intelligence/{_log(log_id)}/work-in-progress",
+                    {"bucket": bucket, "end_activity": ends or None, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_process_batching(log_id: str, gap_seconds: int = 60, min_batch_size: int = 3, by_resource: bool = True,
+                             case_type: str | None = None) -> dict[str, Any]:
+        """Batch processing in a shared log: per activity, the share of events done in batches (events of one
+        activity by one resource within gap_seconds, at least min_batch_size of them), batch sizes, whether batches
+        are simultaneous or sequential, and how long cases waited before a batched event compared with an unbatched
+        one. Batches are inferred from timestamps; resources are only counted, never named. Aggregates only.
+        """
+        if isinstance(gap_seconds, bool) or not isinstance(gap_seconds, int) or not 0 <= gap_seconds <= 86_400:
+            raise ToolError("gap_seconds must be 0 to 86400")
+        if isinstance(min_batch_size, bool) or not isinstance(min_batch_size, int) or not 2 <= min_batch_size <= 1000:
+            raise ToolError("min_batch_size must be 2 to 1000")
+        if not isinstance(by_resource, bool):
+            raise ToolError("by_resource must be true or false")
+        return _get("get_process_batching", f"/v1/process-intelligence/{_log(log_id)}/batching",
+                    {"gap_seconds": gap_seconds, "min_batch_size": min_batch_size,
+                     "by_resource": "true" if by_resource else "false", "case_type": case_type})
+
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
     def tag_process_cases(log_id: str, tag: str, case_ids: list[str], note: str = "") -> dict[str, Any]:
         """Record a decision about cases as a case tag, for example "needs review" or "duplicate invoice".
