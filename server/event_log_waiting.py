@@ -120,6 +120,14 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
             calendar_result['instance_settings_sha256']=calendars.digest({**base['settings'],'mode_used':used})
         kinds = dict(conn.execute("SELECT kind, count(*) FROM inst GROUP BY kind").fetchall())
         total_wait = conn.execute("SELECT coalesce(sum(wait), 0) FROM seq2").fetchone()[0] or 0
+        # Open lifecycle starts are absent from inst; include them in the coverage denominator.
+        # Otherwise an activity with one completed pair and many unfinished starts appears 100% observed.
+        open_by_activity = {}
+        if used == 'lifecycle':
+            open_by_activity = dict(conn.execute("""SELECT activity, sum(missing) FROM (
+                SELECT activity, greatest(0, count(*) FILTER (WHERE tr = 'start') -
+                    count(*) FILTER (WHERE tr = 'complete')) AS missing
+                FROM lc GROUP BY case_id, activity) GROUP BY activity""").fetchall())
         activities = conn.execute(f"""SELECT activity, count(*), count(DISTINCT case_id), count(proc),
               quantile_cont(proc, 0.5), quantile_cont(proc, 0.9), avg(proc),
               count(wait), quantile_cont(wait, 0.5), quantile_cont(wait, 0.9), avg(wait), coalesce(sum(wait), 0),
@@ -146,7 +154,8 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
                           "ignored_lifecycle_events": int(ignored)},
             "activities": [{
                 "activity": a, "instances": n, "cases": cases, "instances_with_processing_time": known,
-                "processing_observation_share": known / n if n else None,
+                "processing_observation_share": known / (n + open_by_activity.get(a, 0)) if n + open_by_activity.get(a, 0) else None,
+                "open_starts": int(open_by_activity.get(a, 0)),
                 "waiting_observation_share": waited / n if n else None,
                 "processing": {**stats(p50, p90, mean), "population_stddev_seconds": pstd},
                 "waiting_before": {**stats(w50, w90, wmean), "p10_seconds": w10,
