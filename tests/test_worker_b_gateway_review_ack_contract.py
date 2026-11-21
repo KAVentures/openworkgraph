@@ -43,3 +43,15 @@ def test_acknowledged_review_consumes_explicit_confirmation():
     success = source[start:end]
     assert '$("reviewConfirm").checked=false' in success
     assert success.index('$("reviewConfirm").checked=false', success.index("return;")) < success.index('$("handoffStatus").textContent="Design review acknowledged.')
+
+
+def test_revoked_or_stale_inspected_review_consumes_human_confirmation():
+    """A denied pre-POST authorization read must require deliberate reconfirmation."""
+    source = (Path(__file__).resolve().parents[1] / "gateway" / "processes.html").read_text()
+    block = source.split("async function review(decision) {", 1)[1].split('$("approve").onclick', 1)[0]
+    read_failure = block.split("current=await call(", 1)[1].split("throw error;", 1)[0]
+    assert '$("reviewConfirm").checked=false;' in read_failure
+    stale = block.split('resetHandoff("REFUSED: Authorization read failed.', 1)[1]
+    stale = stale.split('resetHandoff("REFUSED: Reviewed handoff is no longer current', 1)[0]
+    assert '$("reviewConfirm").checked=false;' in stale
+    assert block.index('resetHandoff("REFUSED: Reviewed handoff is no longer current') < block.index('"/reviews"')
