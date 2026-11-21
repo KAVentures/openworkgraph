@@ -35,6 +35,8 @@ RARE_ACTIVITY_SHARE = 0.01
 RARE_PATH_COVERAGE = 0.05
 Z_FLAG = 3.0
 MAX_LIMIT = 200
+MAX_OFFSET = 10_000_000
+SIGNALS = {"rare_path", "unusually_slow", "unusually_fast", "unusually_long", "heavy_rework", "rare_activity"}
 _MAD_SCALE = 1.4826
 
 
@@ -64,9 +66,13 @@ def _hours(seconds: float) -> float:
 
 
 def unusual_cases(log_id: str, case_type: str | None = None, *, limit: int = 25, include_case_ids: bool = True,
-                  cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+                  cohort: dict[str, Any] | None = None, signal: str | None = None, offset: int = 0) -> dict[str, Any]:
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_LIMIT:
         raise EventLogWorkspaceError(f"limit must be 1 to {MAX_LIMIT}")
+    if signal is not None and (not isinstance(signal, str) or signal not in SIGNALS):
+        raise EventLogWorkspaceError("unknown unusual-case reason")
+    if type(offset) is not int or not 0 <= offset <= MAX_OFFSET:
+        raise EventLogWorkspaceError(f"offset must be 0 to {MAX_OFFSET}")
 
     def run(conn):
         rows = conn.execute("""SELECT case_id, list(activity ORDER BY ts, event_id),
@@ -98,6 +104,7 @@ def unusual_cases(log_id: str, case_type: str | None = None, *, limit: int = 25,
     median_events = round(math.exp(len_c), 1)
     reason_cases: Counter = Counter()
     scored = []
+    unusual = 0
     for (case_id, path, duration), log_d, log_n, rep in zip(rows, log_durations, log_lengths, repeats):
         reasons = []
         share = variants[tuple(path)] / cases
@@ -108,8 +115,8 @@ def unusual_cases(log_id: str, case_type: str | None = None, *, limit: int = 25,
                             "detail": f"{variants[tuple(path)]} of {cases} cases followed this exact path"})
         z = _z(log_d, dur_c, dur_s)
         if abs(z) >= Z_FLAG:
-            signal = "unusually_slow" if z > 0 else "unusually_fast"
-            reasons.append({"signal": signal, "strength": round(_strength(z), 3), "z": round(z, 2),
+            duration_signal = "unusually_slow" if z > 0 else "unusually_fast"
+            reasons.append({"signal": duration_signal, "strength": round(_strength(z), 3), "z": round(z, 2),
                             "detail": f"took {_hours(duration or 0.0)} h; the median case takes {median_hours} h"})
         z = _z(log_n, len_c, len_s)
         if z >= Z_FLAG:
@@ -125,20 +132,25 @@ def unusual_cases(log_id: str, case_type: str | None = None, *, limit: int = 25,
                             "detail": "contains " + ", ".join(f"{a} ({activity_cases[a]} cases)" for a in rare[:5])})
         if not reasons:
             continue
+        unusual += 1
         for reason in reasons:
             reason_cases[reason["signal"]] += 1
+        if signal is not None and not any(reason["signal"] == signal for reason in reasons):
+            continue
         score = round(sum(r["strength"] for r in reasons), 3)
         reasons.sort(key=lambda r: -r["strength"])
         scored.append({"case_id": case_id, "score": score, "reasons": reasons,
                        "events": len(path), "hours": _hours(duration or 0.0), "path": list(path)[:50],
                        "path_truncated": len(path) > 50})
     scored.sort(key=lambda c: (-c["score"], str(c["case_id"])))
-    top = scored[:limit]
+    top = scored[offset:offset + limit]
     if not include_case_ids:
         top = [{k: v for k, v in c.items() if k != "case_id"} for c in top]
     return {
         "format": FORMAT, "log_id": log_id, "case_notion": data.get("case_notion"),
-        "cases": cases, "unusual_cases": len(scored), "unusual_share": round(len(scored) / cases, 4),
+        "cases": cases, "unusual_cases": unusual, "unusual_share": round(unusual / cases, 4),
+        "page": {"signal": signal, "total": len(scored), "offset": offset, "limit": limit,
+                 "next_offset": offset + len(top) if offset + len(top) < len(scored) else None},
         "by_signal": dict(sorted(reason_cases.items(), key=lambda kv: (-kv[1], kv[0]))),
         "baseline": {"median_hours": median_hours, "median_events": median_events,
                      "distinct_paths": len(variants)},
