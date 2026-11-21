@@ -112,6 +112,16 @@ def materialize(conn, metric: Arithmetic, columns: dict[str, str], column: str) 
                        "THEN a + (b - a) / 2.0 "
                        "ELSE a / 2.0 + b / 2.0 END"),
            "absolute_difference": "CASE WHEN a IS NULL OR b IS NULL THEN NULL ELSE abs(a - b) END"}[metric.operation]
-    conn.execute(f"UPDATE qc SET {column} = {sql} FROM qexpr WHERE qc.case_id = qexpr.case_id")
+    # Finite inputs can still overflow (e.g. 1e308 * 1e308). Never let
+    # Infinity/NaN propagate into grouped KPIs, JSON exports or saved metrics.
+    # Retain a counts-only diagnostic rather than silently reporting a value.
+    conn.execute(f"""CREATE OR REPLACE TEMP TABLE qexpr_result AS
+        SELECT case_id, ({sql}) AS result FROM qexpr""")
+    nonfinite = conn.execute("""SELECT count(*) FROM qexpr_result
+        WHERE result IS NOT NULL AND NOT isfinite(result)""").fetchone()[0]
+    conn.execute(f"""UPDATE qc SET {column} =
+        CASE WHEN isfinite(qexpr_result.result) THEN qexpr_result.result ELSE NULL END
+        FROM qexpr_result WHERE qc.case_id = qexpr_result.case_id""")
     return {"cases_with_missing_operand": missing,
-            "cases_with_zero_divisor": zeros if metric.operation == "divide" else 0}
+            "cases_with_zero_divisor": zeros if metric.operation == "divide" else 0,
+            "cases_with_nonfinite_result": nonfinite}
