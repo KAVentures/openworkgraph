@@ -898,7 +898,7 @@
     results.appendChild(caseTableExportSection());
     results.appendChild(caseExplainSection());
     results.appendChild(discoverySection());
-    results.appendChild(driftSection());
+    results.appendChild(driftSection(inspection));
     results.appendChild(automationSection());
     results.appendChild(decisionSection());
     results.appendChild(agentRunsRefreshSection());
@@ -1362,7 +1362,7 @@
       }
       more.onclick=page;await page();
     }
-    return {node:box,path(value,comparisonCohort){
+    return {node:box,open:openCase,path(value,comparisonCohort){
       if(value.length>500){message.textContent='This path exceeds the 500-step case selector limit. Browse by activity or cohort instead.';box.scrollIntoView({block:'nearest'});return;}
       association=false;path=value.slice();transition=null;chosen.textContent='Exact path: '+JSON.stringify(path);
       if(comparisonCohort!==undefined){
@@ -4827,38 +4827,89 @@
     return box;
   }
 
-  function driftSection(){
+  function driftSection(inspection){
     const box=section('Changes over time');box.id='owgConceptDrift';
     box.appendChild(el('div','Finds when the way cases run changed: cases are grouped by when they started, and each window\'s paths are compared with the next. A change point means the difference is larger than random splits of the same cases give. It does not say why, and a change in how events are recorded looks the same.','muted'));
     const windowKind=select('owgConceptDriftWindow',[['month','Month'],['week','Week'],['cases','Fixed number of cases']]);
     const perWindow=input('owgConceptDriftCases','number');perWindow.min='20';perWindow.step='1';perWindow.value='500';
     const casesField=field('Cases per window',perWindow);show(casesField,false);
-    windowKind.onchange=()=>show(casesField,windowKind.value==='cases');
     const run=button('Find changes','secondary');run.id='owgConceptDriftRun';
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Window',windowKind),casesField,run);
     const statusLine=el('div',null,'muted');statusLine.id='owgConceptDriftStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgConceptDriftResults';
-    box.append(row,statusLine,out);
+    const review=el('div');review.id='owgConceptDriftCases';
+    box.append(row,statusLine,out,review);
+    const generation=state.generation;
+    let revision=0,selection=0;
+    function reset(){
+      ++revision;run.disabled=false;out.replaceChildren();review.replaceChildren();
+      statusLine.textContent='Settings changed. Find changes again.';
+    }
+    windowKind.onchange=()=>{show(casesField,windowKind.value==='cases');reset();};
+    perWindow.oninput=reset;
+    function reviewWindow(url,index,label,path){
+      const report=revision,chosen=++selection;
+      const current=()=>generation===state.generation&&report===revision&&chosen===selection;
+      const title=el('h4',label+(path?' · '+path.path:''));title.tabIndex=-1;
+      const message=el('div');message.setAttribute('role','status');
+      const rows=el('div'),nav=el('div',null,'row');
+      const prev=button('Previous page','secondary'),next=button('Next page','secondary');
+      nav.append(prev,next);review.replaceChildren(title,message,rows,nav);title.focus();
+      const cursors=[null];let page=0,more=null;
+      async function load(at){
+        prev.disabled=next.disabled=true;message.textContent='Loading the current sample…';
+        try{
+          const endpoint=new URL(url,window.location.origin);endpoint.pathname+='/cases';
+          const spec={window_index:index,expected_window:label};
+          if(path){spec.source=path.from;spec.destination=path.to;}
+          if(cursors[at]!==null)spec.after=cursors[at];
+          const result=await (await api(endpoint.pathname+endpoint.search,{method:'POST',
+            headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+          if(!current())return;
+          page=at;more=result.next_after;
+          const n=value=>Number(value).toLocaleString();
+          message.textContent=n(result.matching_cases)+' matches in '+n(result.sampled_cases)+' sampled cases ('+n(result.window_cases)+' cases in the window). Showing '+result.cases.length+'.';
+          rows.replaceChildren(result.cases.length?table(['Case','Observed duration','Evidence'],result.cases.map(item=>{
+            const open=button('Open case','secondary');open.setAttribute('aria-label','Open case '+item.case_id);
+            open.onclick=()=>inspection.open(item.case_id);
+            return [item.case_id,duration(item.duration_seconds),open];
+          })):el('div','No sampled cases match.','muted'));
+        }catch(error){if(current())message.textContent=error.message;}
+        finally{if(current()){prev.disabled=page===0;next.disabled=more===null;}}
+      }
+      prev.onclick=()=>load(page-1);next.onclick=()=>{cursors[page+1]=more;load(page+1);};
+      load(0);
+    }
     run.onclick=async()=>{
-      const generation=state.generation;
+      const report=++revision;
+      const current=()=>generation===state.generation&&report===revision;
       try{
-        run.disabled=true;out.replaceChildren();statusLine.textContent='Comparing windows…';
+        run.disabled=true;out.replaceChildren();review.replaceChildren();statusLine.textContent='Comparing windows…';
         const params={window:windowKind.value};
         if(windowKind.value==='cases'){const n=Math.round(Number(perWindow.value));if(!(n>=20))throw new Error('Use at least 20 cases per window.');params.window_cases=String(n);params.min_cases=String(Math.max(10,Math.min(30,n)));}
-        const r=await getJSON(logPath('drift',params));
-        if(generation!==state.generation)return;
+        const url=logPath('drift',params),r=await getJSON(url);
+        if(!current())return;
         statusLine.textContent=r.change_points.length+' change point'+(r.change_points.length===1?'':'s')+' among '+r.boundaries_tested+' window boundaries tested'+(r.boundaries_skipped_small_windows?' ('+r.boundaries_skipped_small_windows+' skipped because a window had fewer than '+r.settings.min_cases+' cases)':'')+'.';
         const byAfter=Object.fromEntries(r.boundaries.map(b=>[b.after,b]));
         const p=v=>v<0.0001?'< 0.0001':v.toFixed(4);
-        out.appendChild(table(['Window','Cases','Median case time','Change from previous window'],r.windows.map(w=>{const b=byAfter[w.window];
-          return [w.window,Number(w.cases).toLocaleString(),duration(w.median_case_duration_seconds),b?(b.change_point?'Change point · ':'')+'distance '+b.distance.toFixed(3)+', p '+p(b.p_value):'—'];})));
+        const windows=new Map(r.windows.map((w,index)=>[w.window,index]));
+        const inspect=(label,path)=>{
+          const open=button('Inspect sampled cases','secondary');
+          open.setAttribute('aria-label','Inspect sampled cases in '+label+(path?' with '+path.path:''));
+          open.onclick=()=>reviewWindow(url,windows.get(label),label,path);
+          return open;
+        };
+        out.appendChild(table(['Window','Cases','Sampled cases','Median case time','Change from previous window','Evidence'],r.windows.map(w=>{const b=byAfter[w.window];
+          return [w.window,Number(w.cases).toLocaleString(),Number(w.sampled_cases).toLocaleString(),duration(w.median_case_duration_seconds),b?(b.change_point?'Change point · ':'')+'distance '+b.distance.toFixed(3)+', p '+p(b.p_value):'—',inspect(w.window)];})));
         r.change_points.forEach(c=>{
           out.appendChild(el('h4','Paths that moved most: '+c.before+' → '+c.after));
-          out.appendChild(table(['Path','Cases with path before','After'],c.paths_that_moved.map(m=>[m.path,pct(m.case_share_before),pct(m.case_share_after)])));
+          out.appendChild(table(['Path','Sampled share before','Sampled share after','Before cases','After cases'],c.paths_that_moved.map(m=>[
+            m.path,pct(m.case_share_before),pct(m.case_share_after),inspect(c.before,m),inspect(c.after,m)
+          ])));
         });
         out.appendChild(el('div',r.interpretation,'muted'));
-      }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
-      finally{run.disabled=false;}
+      }catch(error){if(current())statusLine.textContent=error.message;}
+      finally{if(current())run.disabled=false;}
     };
     return box;
   }

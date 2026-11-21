@@ -1519,6 +1519,22 @@ def event_log_drift(request: Request, log_id: str, case_type: str | None = Query
                     cohort=cohort)
 
 
+@router.post("/v1/event-logs/{log_id}/drift/cases")
+async def event_log_drift_window_cases(request: Request, log_id: str,
+        case_type: str | None = Query(default=None, max_length=200),
+        window: str = Query(default="month", pattern="^(week|month|cases)$"),
+        window_cases: int = Query(default=500, ge=20, le=100_000),
+        cohort: dict[str, Any] = Depends(_case_filter)):
+    _require_dashboard(request)
+    spec = await _json_body(request, "drift case page", strict=True, limit=16_384)
+    if not isinstance(spec, dict) or "window_index" not in spec or set(spec) - {
+        "window_index", "source", "destination", "after", "expected_window", "limit",
+    }:
+        raise HTTPException(422, "invalid drift case page settings")
+    return await run_in_threadpool(_respond, drift.window_cases, log_id, case_type, window=window,
+                                   window_size=window_cases, cohort=cohort, **spec)
+
+
 @router.get("/v1/event-logs/{log_id}/roles")
 def event_log_roles(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                     threshold: float = Query(default=0.65, gt=0, lt=1),

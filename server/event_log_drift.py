@@ -41,8 +41,7 @@ _JSD = """
   FROM wide GROUP BY ALL"""
 
 
-def drift(log_id: str, case_type: str | None = None, *, window: str = "month", window_cases: int = 500,
-          min_cases: int = 30, cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+def _validate_window(window: str, window_cases: int) -> None:
     if window not in WINDOWS:
         raise workspace.EventLogWorkspaceError("window must be week, month or cases")
     # FastAPI validates typed query parameters, but direct callers (including
@@ -51,28 +50,45 @@ def drift(log_id: str, case_type: str | None = None, *, window: str = "month", w
     # ValueError/TypeError/OverflowError for malformed or nonfinite inputs.
     if not isinstance(window_cases, int) or isinstance(window_cases, bool) or not 20 <= window_cases <= 100_000:
         raise workspace.EventLogWorkspaceError("window_cases must be an integer between 20 and 100000")
+
+
+def _windows(conn, window: str, window_cases: int) -> None:
+    bucket = (f"date_trunc('{window}', min(ts))" if window != "cases"
+              else f"(row_number() OVER (ORDER BY min(ts), case_id) - 1) // {window_cases}")
+    conn.execute(f"""CREATE OR REPLACE TEMP TABLE dw0 AS SELECT case_id, {bucket} AS bucket,
+          epoch(max(ts) - min(ts)) AS duration FROM ce GROUP BY case_id""")
+    conn.execute("CREATE OR REPLACE TEMP TABLE dw AS SELECT *, dense_rank() OVER (ORDER BY bucket) - 1 AS w FROM dw0")
+    count = conn.execute("SELECT count(DISTINCT w) FROM dw").fetchone()[0]
+    if count > MAX_WINDOWS:
+        raise workspace.EventLogWorkspaceError(
+            f"{count} windows is more than {MAX_WINDOWS}; choose a longer window or more cases per window")
+    conn.execute(f"""CREATE OR REPLACE TEMP TABLE dcase AS SELECT case_id, w FROM dw
+        QUALIFY row_number() OVER (PARTITION BY w ORDER BY hash(case_id), case_id) <= {SAMPLE_PER_WINDOW}""")
+
+
+def _window_label(bucket, count: int, window: str, window_cases: int) -> str:
+    if window == "cases":
+        start = bucket * window_cases
+        return f"cases {start + 1}–{start + count}"
+    return bucket.isoformat()[:10]
+
+
+def drift(log_id: str, case_type: str | None = None, *, window: str = "month", window_cases: int = 500,
+          min_cases: int = 30, cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+    _validate_window(window, window_cases)
     if not isinstance(min_cases, int) or isinstance(min_cases, bool) or not 10 <= min_cases <= 10_000:
         raise workspace.EventLogWorkspaceError("min_cases must be an integer between 10 and 10000")
     chosen = cohorts.parse_cohort(cohort)
 
     def run(conn):
         cohorts.restrict(conn, chosen, log_id)
-        bucket = (f"date_trunc('{window}', min(ts))" if window != "cases"
-                  else f"(row_number() OVER (ORDER BY min(ts), case_id) - 1) // {window_cases}")
-        conn.execute(f"""CREATE OR REPLACE TEMP TABLE dw0 AS SELECT case_id, {bucket} AS bucket,
-              epoch(max(ts) - min(ts)) AS duration FROM ce GROUP BY case_id""")
-        conn.execute("CREATE OR REPLACE TEMP TABLE dw AS SELECT *, dense_rank() OVER (ORDER BY bucket) - 1 AS w FROM dw0")
+        _windows(conn, window, window_cases)
         buckets = conn.execute("""SELECT bucket, count(*), quantile_cont(duration, 0.5) FROM dw
             GROUP BY bucket ORDER BY bucket""").fetchall()
-        if len(buckets) > MAX_WINDOWS:
-            raise workspace.EventLogWorkspaceError(
-                f"{len(buckets)} windows is more than {MAX_WINDOWS}; choose a longer window or more cases per window")
         # Distinct paths per case: the case contains A → B at least once.
         conn.execute("""CREATE OR REPLACE TEMP TABLE ce_edges AS SELECT DISTINCT case_id, to_json([src, activity])::VARCHAR AS edge
             FROM (SELECT case_id, activity, lag(activity) OVER (PARTITION BY case_id ORDER BY ts, event_id) AS src FROM ce)
             WHERE src IS NOT NULL""")
-        conn.execute(f"""CREATE OR REPLACE TEMP TABLE dcase AS SELECT case_id, w FROM dw
-            QUALIFY row_number() OVER (PARTITION BY w ORDER BY hash(case_id)) <= {SAMPLE_PER_WINDOW}""")
         # The statistical comparison uses dcase (at most SAMPLE_PER_WINDOW
         # deterministic cases per window), not all cases in dw. Disclose the
         # actual analysis denominator rather than only the configured cap.
@@ -84,15 +100,12 @@ def drift(log_id: str, case_type: str | None = None, *, window: str = "month", w
         path_cases_by_window = dict(conn.execute(
             "SELECT c.w, count(DISTINCT c.case_id) FROM dcase c "
             "JOIN ce_edges e USING (case_id) GROUP BY c.w").fetchall())
-        windows = [{"window": str(b) if window == "cases" else b.isoformat()[:10], "cases": n,
+        windows = [{"window": _window_label(b, n, window, window_cases), "cases": n,
                     "sampled_cases": sampled_by_window.get(i, 0),
                     "sampled_cases_with_paths": path_cases_by_window.get(i, 0),
                     "sampling_truncated": sampled_by_window.get(i, 0) < n,
                     "median_case_duration_seconds": med}
                    for i, (b, n, med) in enumerate(buckets)]
-        if window == "cases":
-            for i, w in enumerate(windows):
-                w["window"] = f"cases {i * window_cases + 1}–{i * window_cases + w['cases']}"
         # The statistical test operates on dcase, not every eligible case in
         # dw. Require min_cases actual sampled cases AND min_cases sampled
         # path-bearing cases per side; single-event cases are not evidence
@@ -222,4 +235,58 @@ def drift(log_id: str, case_type: str | None = None, *, window: str = "month", w
     return workspace._query(log_id, case_type, run)
 
 
-__all__ = ["drift", "WINDOWS"]
+def window_cases(log_id: str, case_type: str | None = None, *, window_index: int,
+                 window: str = "month", window_size: int = 500, source: str | None = None,
+                 destination: str | None = None, after: str | None = None, limit: int = 50,
+                 expected_window: str | None = None,
+                 cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+    _validate_window(window, window_size)
+    if type(window_index) is not int or not 0 <= window_index < MAX_WINDOWS:
+        raise workspace.EventLogWorkspaceError("choose a valid drift window index")
+    if (source is None) != (destination is None) or any(
+            not isinstance(value, str) or not value or len(value) > 200
+            for value in (source, destination) if value is not None):
+        raise workspace.EventLogWorkspaceError("a path needs both exact activity labels")
+    if after is not None and (not isinstance(after, str) or not after or len(after) > 200):
+        raise workspace.EventLogWorkspaceError("invalid case key cursor")
+    if expected_window is not None and (not isinstance(expected_window, str) or len(expected_window) > 80):
+        raise workspace.EventLogWorkspaceError("invalid drift window label")
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise workspace.EventLogWorkspaceError("page size must be a whole number from 1 to 100")
+    chosen = cohorts.parse_cohort(cohort)
+
+    def run(conn):
+        cohorts.restrict(conn, chosen, log_id)
+        _windows(conn, window, window_size)
+        bucket, total = conn.execute("SELECT first(bucket), count(*) FROM dw WHERE w = ?", [window_index]).fetchone()
+        if not total:
+            raise workspace.EventLogWorkspaceError("this drift window no longer exists")
+        label = _window_label(bucket, total, window, window_size)
+        if expected_window is not None and expected_window != label:
+            raise workspace.EventLogWorkspaceError("this drift window changed; run the analysis again")
+        sample = conn.execute("SELECT count(*) FROM dcase WHERE w = ?", [window_index]).fetchone()[0]
+        selection, args = "", []
+        if source is not None:
+            selection = """ AND case_id IN (
+                SELECT case_id FROM (
+                    SELECT case_id, activity, lag(activity) OVER (PARTITION BY case_id ORDER BY ts, event_id) AS src
+                    FROM ce JOIN dcase USING (case_id) WHERE w = ?
+                ) AS edges WHERE src = ? AND activity = ?
+            )"""
+            args = [window_index, source, destination]
+        conn.execute("CREATE TEMP TABLE drift_evidence AS SELECT case_id, duration FROM dw WHERE w = ? "
+                     "AND case_id IN (SELECT case_id FROM dcase)" + selection,
+                     [window_index, *args])
+        matching = conn.execute("SELECT count(*) FROM drift_evidence").fetchone()[0]
+        where, cursor = (" WHERE case_id > ?", [after]) if after is not None else ("", [])
+        rows = conn.execute("SELECT case_id, duration FROM drift_evidence" + where + " ORDER BY case_id LIMIT ?",
+                            [*cursor, limit + 1]).fetchall()
+        return {"window": label, "window_index": window_index,
+                "window_cases": total, "sampled_cases": sample, "matching_cases": matching,
+                "cases": [{"case_id": key, "duration_seconds": duration} for key, duration in rows[:limit]],
+                "next_after": rows[limit-1][0] if len(rows) > limit else None}
+
+    return workspace._query(log_id, case_type, run)
+
+
+__all__ = ["drift", "window_cases", "WINDOWS"]
