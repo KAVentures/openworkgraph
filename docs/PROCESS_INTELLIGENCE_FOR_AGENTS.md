@@ -79,9 +79,16 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 | `compare_process_models` | The same comparison between two groups chosen by case attribute values ("region=EU" vs "region=US"): differing orderings, activities only one group has, and cross-fit of each group on the other's model (aggregates level). |
 | `compare_process_cases` | Two cases side by side: aligned steps (shared or only in one), hours from each start, and where the second fell furthest behind (cases level only). |
 | `get_process_activity_profile` | One activity from every side: share of cases, repeats, what comes before and after (with median gaps), time into the case, weekday and hour, and case durations with and without it (aggregates level). |
+| `get_process_rework` | Rework: share of cases that repeat an activity, the activities repeated most, loop patterns (self-loop, short, longer), and how long cases with rework take compared with cases without (median difference with a 95% interval). | aggregates |
+| `get_process_waiting_times` | Processing and waiting time per activity when the log records start/complete (lifecycle) or an end-time attribute; says so when it does not. | aggregates |
+| `get_process_drift` | Concept drift: cases grouped by start week or month, adjacent windows compared on their paths with a permutation test, and for each change point the paths whose share moved most. | aggregates |
+| `get_stuck_process_cases` | Open cases idle much longer than usual after their latest activity, with how many times the usual wait they exceed. | cases |
 | `get_process_signal_scorecard` | The owner's KPI, conformance and due-date signals month by month (by case start), with each month's value and whether the condition held; read-only (aggregates level). |
 | `get_process_breakdown` | Case figures by one or two dimensions (start month or weekday, first or last activity, a case or event attribute), like a pivot table: cases, share, median and p90 duration, events per case, rework rate and optionally the share doing an activity. Cells and totals with fewer than 5 cases are withheld. | aggregates |
 | `find_similar_process_cases` | The recorded cases whose path is closest to a chosen case, with what each does more or less often, its duration and start, and the median duration of those found. | cases |
+| `get_process_cooccurrence` | Which activities happen in the same cases, regardless of order: cases with both, the share of cases with one that also have the other, lift, and the pairs that go together most or never. Activities in fewer than 5 cases and pair counts below 5 are withheld. | aggregates |
+| `get_process_work_in_progress` | Cases arriving, completing and open per day or week, optionally with the activities that complete a case, and a Little's law check. | aggregates |
+| `get_process_batching` | Batch processing per activity: share of events in batches, batch sizes, simultaneous or sequential batches, and the wait before batched events. Resources are counted, never named. | aggregates |
 
 | `tag_process_cases` | Adds an `agent: ` tag with a note to cases (cases level and the tag permission). |
 
@@ -107,6 +114,9 @@ nothing authorizes an action.
 | `GET /v1/process-intelligence/{log_id}/footprints?noise=&case_type=` | Same, `aggregates` or `cases`. |
 | `POST /v1/event-logs/{log_id}/agent-share/tags` (`{"allowed": true \| false}`) | Dashboard session only. |
 | `POST /v1/process-intelligence/{log_id}/case-tags` (`{"tag", "case_ids", "note"?, "case_type"?}`) | Agent, `cases` level and the tag permission (403 without it). |
+| `GET /v1/process-intelligence/{log_id}/co-occurrence?limit=&min_support=&case_type=` | Agent, `aggregates` or `cases` (`min_support` at least 5). |
+| `GET /v1/process-intelligence/{log_id}/work-in-progress?bucket=day\|week&end_activity=&case_type=` | Agent, `aggregates` or `cases`. |
+| `GET /v1/process-intelligence/{log_id}/batching?gap_seconds=&min_batch_size=&by_resource=&case_type=` | Agent, `aggregates` or `cases`. |
 
 Not covered: acting in source systems. That would need separate, explicit action authority,
 which this feature never grants.

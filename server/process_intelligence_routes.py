@@ -315,8 +315,59 @@ async def agent_signals(request: Request, log_id: str):
     return await _answer(sharing.signals, log_id)
 
 
+@router.get("/v1/process-intelligence/{log_id}/rework")
+async def agent_rework(request: Request, log_id: str, limit: int = Query(default=20, ge=1, le=100),
+                       case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.rework, log_id, case_type, limit)
+
+
+@router.get("/v1/process-intelligence/{log_id}/waiting-times")
+async def agent_waiting_times(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.waiting_times, log_id, case_type)
+
+
+@router.get("/v1/process-intelligence/{log_id}/drift")
+async def agent_drift(request: Request, log_id: str, window: str = Query(default="month", pattern="^(week|month)$"),
+                      case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.drift, log_id, case_type, window)
+
+
+@router.get("/v1/process-intelligence/{log_id}/stuck-cases")
+async def agent_stuck_cases(request: Request, log_id: str, limit: int = Query(default=25, ge=1, le=100),
+                            case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.stuck_cases, log_id, case_type, limit)
+
+
 @router.get("/v1/process-intelligence/{log_id}/slowest-cases")
 async def agent_slowest(request: Request, log_id: str, limit: int = Query(default=10, ge=1, le=50),
                         case_type: str | None = Query(default=None, max_length=200)):
     _require_agent_access(request)
     return await _answer(sharing.slowest_cases, log_id, case_type, limit)
+
+
+@router.get("/v1/process-intelligence/{log_id}/co-occurrence")
+async def agent_cooccurrence(request: Request, log_id: str, limit: int = Query(default=12, ge=2, le=25),
+                             min_support: int = Query(default=5, ge=5, le=1_000_000),
+                             case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.cooccurrence, log_id, case_type, limit, min_support)
+
+
+@router.get("/v1/process-intelligence/{log_id}/work-in-progress")
+async def agent_work_in_progress(request: Request, log_id: str, bucket: str = Query(default="week", pattern="^(day|week)$"),
+                                 end_activity: list[str] = Query(default=[], max_length=20),
+                                 case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.work_in_progress, log_id, case_type, bucket, end_activity)
+
+
+@router.get("/v1/process-intelligence/{log_id}/batching")
+async def agent_batching(request: Request, log_id: str, gap_seconds: int = Query(default=60, ge=0, le=86_400),
+                         min_batch_size: int = Query(default=3, ge=2, le=1000), by_resource: bool = True,
+                         case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.batching, log_id, case_type, gap_seconds, min_batch_size, by_resource)

@@ -4,6 +4,7 @@ Declare-style templates checked per case, as in ProM Declare, ABBYY Timeline
 or Signavio process adherence:
 
 - ``response``: every A is eventually followed by B;
+- ``chain_response``: every A is immediately followed by B;
 - ``precedence``: every B is preceded by some A;
 - ``response_within``: every A is followed by B within N seconds;
 - ``existence``: A occurs between ``min`` and ``max`` times;
@@ -38,7 +39,7 @@ class _Strict(BaseModel):
 
 
 class Pair(_Strict):
-    template: Literal["response", "precedence", "not_coexistence", "segregation_of_duties"]
+    template: Literal["response", "chain_response", "precedence", "not_coexistence", "segregation_of_duties"]
     a: Label
     b: Label
 
@@ -107,6 +108,13 @@ def _outcomes(conn, rule) -> tuple[str, list[Any]]:
                      max(pos) FILTER (WHERE activity = ?) > coalesce(max(pos) FILTER (WHERE activity = ?), 0), FALSE,
                      CASE WHEN max(pos) FILTER (WHERE activity = ?) IS NULL THEN 'no later step' ELSE 'last step not followed' END
                    FROM cp GROUP BY case_id""", [rule.a, rule.a, rule.b, rule.b])
+    if rule.template == "chain_response":
+        return ("""WITH ordered AS (SELECT case_id, activity,
+                     lead(activity) OVER (PARTITION BY case_id ORDER BY pos) AS next_activity FROM cp)
+                   SELECT case_id, bool_or(activity = ?),
+                     bool_or(activity = ? AND coalesce(next_activity = ?, FALSE) = FALSE), FALSE,
+                     'next recorded step is not the required step'
+                   FROM ordered GROUP BY case_id""", [rule.a, rule.a, rule.b])
     if rule.template == "precedence":
         return ("""SELECT case_id, bool_or(activity = ?),
                      coalesce(min(pos) FILTER (WHERE activity = ?), 1e18) > min(pos) FILTER (WHERE activity = ?), FALSE,
@@ -149,6 +157,7 @@ def _describe(rule) -> str:
         return f"{rule.a} occurs {bounds} times"
     return {
         "response": f"every {rule.a} is eventually followed by {rule.b}",
+        "chain_response": f"every {rule.a} is immediately followed by {rule.b}",
         "precedence": f"every {rule.b} is preceded by {rule.a}",
         "not_coexistence": f"{rule.a} and {rule.b} never occur in the same case",
         "segregation_of_duties": f"no single resource performs both {rule.a} and {rule.b}",
