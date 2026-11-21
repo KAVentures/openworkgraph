@@ -2238,7 +2238,9 @@
           $("reviewConfirm").checked=false;
           if (submittedInspectedHandoff)
             $("handoffStatus").textContent="Design review acknowledged. Reopen and reinspect before another handoff.";
-          render(reviewResult);
+          // Render the independently fetched, authenticated durable state rather
+          // than the mutation response, which can be stale after concurrent review.
+          render(recordedReview);
           // Display only the Gateway's acknowledged, revision-pinned review
           // result. This is a human design-review acknowledgment, not an
           // agent execution receipt or a durable external-provider outcome.
