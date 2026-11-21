@@ -129,7 +129,8 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
         total_wait = conn.execute("SELECT coalesce(sum(wait), 0) FROM seq2").fetchone()[0] or 0
         activities = conn.execute(f"""SELECT activity, count(*), count(DISTINCT case_id), count(proc),
               quantile_cont(proc, 0.5), quantile_cont(proc, 0.9), avg(proc),
-              count(wait), quantile_cont(wait, 0.5), quantile_cont(wait, 0.9), avg(wait), coalesce(sum(wait), 0)
+              count(wait), quantile_cont(wait, 0.5), quantile_cont(wait, 0.9), avg(wait), coalesce(sum(wait), 0),
+              stddev_pop(proc), stddev_pop(wait), quantile_cont(wait, 0.1)
             FROM seq2 GROUP BY activity ORDER BY coalesce(sum(wait), 0) DESC, activity LIMIT {MAX_ACTIVITIES}""").fetchall()
         transitions = conn.execute(f"""SELECT prev_activity, activity, count(*), quantile_cont(wait, 0.5), sum(wait)
             FROM seq2 WHERE wait IS NOT NULL GROUP BY prev_activity, activity
@@ -152,10 +153,12 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
                           "ignored_lifecycle_events": int(ignored)},
             "activities": [{
                 "activity": a, "instances": n, "cases": cases, "instances_with_processing_time": known,
-                "processing": stats(p50, p90, mean), "waiting_before": {**stats(w50, w90, wmean), "instances": waited,
+                "processing": {**stats(p50, p90, mean), "population_stddev_seconds": pstd},
+                "waiting_before": {**stats(w50, w90, wmean), "p10_seconds": w10,
+                                   "population_stddev_seconds": wstd, "instances": waited,
                                                                        "total_seconds": wsum},
                 "share_of_all_waiting": wsum / total_wait if total_wait else None,
-            } for a, n, cases, known, p50, p90, mean, waited, w50, w90, wmean, wsum in activities],
+            } for a, n, cases, known, p50, p90, mean, waited, w50, w90, wmean, wsum, pstd, wstd, w10 in activities],
             "waiting_hotspots": [{"from": s, "to": d, "count": n, "median_waiting_seconds": med,
                                   "total_waiting_seconds": total,
                                   "share_of_all_waiting": total / total_wait if total_wait else None}

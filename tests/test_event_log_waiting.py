@@ -57,6 +57,10 @@ def test_lifecycle_pairs_split_processing_from_waiting():
     assert acts["Receive"]["processing"]["median_seconds"] == 3600
     assert acts["Review"]["processing"]["median_seconds"] == 7200
     assert acts["Review"]["waiting_before"]["median_seconds"] == 7200
+    assert acts["Review"]["waiting_before"]["p10_seconds"] == 7200
+    assert acts["Review"]["waiting_before"]["population_stddev_seconds"] > 0
+    assert acts["Review"]["waiting_before"]["instances"] == 11
+    assert acts["Receive"]["processing"]["population_stddev_seconds"] == 0
     assert acts["Close"]["waiting_before"]["median_seconds"] == 0
     assert result["activities"][0]["activity"] == "Review"   # ranked by total waiting
     hot = result["waiting_hotspots"][0]
@@ -102,6 +106,9 @@ def test_end_time_attribute_with_offsets_and_bad_values():
     assert acts["Receive"]["processing"]["median_seconds"] == 3600
     # a waits 3 h after Receive ends; b's Receive has no trusted end, so it is an instant and b waits 4 h.
     assert acts["Review"]["waiting_before"]["median_seconds"] == 3.5 * 3600
+    assert acts["Review"]["waiting_before"]["p10_seconds"] == pytest.approx(3.1 * 3600)
+    assert acts["Review"]["waiting_before"]["population_stddev_seconds"] == pytest.approx(1800)
+    assert acts["Review"]["waiting_before"]["instances"] == 2
     assert result["instances"]["without_lifecycle_or_end"] == 1 and result["instances"]["end_before_start"] == 1
 
 
@@ -130,6 +137,7 @@ with TestClient(app) as client:
     result = client.get(path, headers=headers)
     assert result.status_code == 200 and result.headers["cache-control"] == "no-store", result.text
     assert result.json()["waiting_hotspots"][0]["median_waiting_seconds"] == 7200
+    assert result.json()["activities"][0]["waiting_before"]["population_stddev_seconds"] == 0
     assert client.get(path + "?mode=nope", headers=headers).status_code == 422
 '''
     env = os.environ.copy()
