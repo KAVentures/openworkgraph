@@ -368,6 +368,35 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"months": months})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def get_process_breakdown(log_id: str, rows: str, columns: str | None = None, with_activity: str | None = None,
+                              case_type: str | None = None) -> dict[str, Any]:
+        """Case figures of a shared log by one or two dimensions, like a pivot table: cases, share, median and
+        90th-percentile duration, events per case, rework rate and, with with_activity, the share of cases doing
+        that activity. rows/columns are start_month, start_weekday, start_activity, end_activity,
+        attribute:<name> (case attribute) or event_attribute:<name>. Cells with fewer than 5 cases are withheld.
+        Differences between cells describe recorded cases, not causes. Aggregates only.
+        """
+        if not isinstance(rows, str) or not rows:
+            raise ToolError("rows must name a dimension")
+        return _get("get_process_breakdown", f"/v1/process-intelligence/{_log(log_id)}/breakdown",
+                    {"rows": rows, "columns": columns, "with_activity": with_activity, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def find_similar_process_cases(log_id: str, case_id: str, limit: int = 10,
+                                   case_type: str | None = None) -> dict[str, Any]:
+        """The recorded cases of a shared log whose sequence of activities is closest to case_id, with what each
+        does more or less often, its duration and start, and the median duration of the cases found. Use it to
+        ask "have we seen this before, and how did it go?"; follow up with compare_process_cases. Needs a log
+        shared at the cases level. Similar paths do not mean the same cause.
+        """
+        if not isinstance(case_id, str) or not case_id:
+            raise ToolError("case_id must be a case ID")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
+            raise ToolError("limit must be 1 to 50")
+        return _get("find_similar_process_cases", f"/v1/process-intelligence/{_log(log_id)}/similar-cases",
+                    {"case_id": case_id, "limit": limit, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_signals(log_id: str) -> dict[str, Any]:
         """The owner's signal rules on a shared log (KPI thresholds, case and compliance conditions) and their
         last evaluated state: triggered or not, the measured value or matching cases, and whether the owner

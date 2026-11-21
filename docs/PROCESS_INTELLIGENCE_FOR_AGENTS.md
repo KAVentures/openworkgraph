@@ -77,6 +77,8 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 | `compare_process_cases` | Two cases side by side: aligned steps (shared or only in one), hours from each start, and where the second fell furthest behind (cases level only). |
 | `get_process_activity_profile` | One activity from every side: share of cases, repeats, what comes before and after (with median gaps), time into the case, weekday and hour, and case durations with and without it (aggregates level). |
 | `get_process_signal_scorecard` | The owner's KPI, conformance and due-date signals month by month (by case start), with each month's value and whether the condition held; read-only (aggregates level). |
+| `get_process_breakdown` | Case figures by one or two dimensions (start month or weekday, first or last activity, a case or event attribute), like a pivot table: cases, share, median and p90 duration, events per case, rework rate and optionally the share doing an activity. Cells and totals with fewer than 5 cases are withheld. | aggregates |
+| `find_similar_process_cases` | The recorded cases whose path is closest to a chosen case, with what each does more or less often, its duration and start, and the median duration of those found. | cases |
 
 | `tag_process_cases` | Adds an `agent: ` tag with a note to cases (cases level and the tag permission). |
 
