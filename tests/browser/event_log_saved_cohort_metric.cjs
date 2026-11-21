@@ -116,13 +116,16 @@ const path=require('node:path');
   await page.locator('#owgAnalysisRun').click();
   await page.locator('#owgAnalysisJson').waitFor({state:'visible',timeout:60000});
   await page.waitForFunction(()=>!document.querySelector('#owgAnalysisJson').disabled,null,{timeout:60000});
-  const analysisPath='/v1/event-logs/'+encodeURIComponent(logId)+'/analysis';
+  const analysisPath='/v1/event-logs/'+encodeURIComponent(logId)+'/analysis-source-bound';
   let revalidationSeen=false;
   const changedAnalysis=async route=>{
     revalidationSeen=true;
     const original=await route.fetch();
     const body=await original.json();
-    body.columns=[...(body.columns||[]),'unexpected_source_revision'];
+    assert.ok(body.source_content_sha256,'reviewed source must have a complete lineage digest');
+    // Simulate a changed saved-log source that yields exactly the same aggregates.
+    // A result-only comparison would incorrectly permit this download.
+    body.source_content_sha256='0'.repeat(64)===body.source_content_sha256?'1'.repeat(64):'0'.repeat(64);
     await route.fulfill({response:original,contentType:'application/json',body:JSON.stringify(body)});
   };
   await page.route('**'+analysisPath,changedAnalysis);
@@ -130,10 +133,22 @@ const path=require('node:path');
   page.on('download',download=>downloads.push(download.suggestedFilename()));
   await page.locator('#owgAnalysisJson').click();
   await page.locator('#owgAnalysisStatus').filter({hasText:'Saved-log data or analysis results changed'}).waitFor({timeout:30000});
-  assert.equal(revalidationSeen,true,'download must revalidate through authenticated saved-log API');
+  assert.equal(revalidationSeen,true,'download must revalidate through authenticated source-bound saved-log API');
   assert.deepEqual(downloads,[],'changed recomputation must not trigger JSON download');
   assert.equal(await page.locator('#owgAnalysisCsv').isDisabled(),true,'stale CSV must also be disabled');
   await page.unroute('**'+analysisPath,changedAnalysis);
+  // After invalidation the operator must explicitly run and review the current
+  // source again. A valid, unchanged source must still permit both exports.
+  await page.locator('#owgAnalysisRun').click();
+  await page.waitForFunction(()=>!document.querySelector('#owgAnalysisJson').disabled,null,{timeout:60000});
+  const jsonDownloadPromise=page.waitForEvent('download',{timeout:30000});
+  await page.locator('#owgAnalysisJson').click();
+  const jsonDownload=await jsonDownloadPromise;
+  assert.match(jsonDownload.suggestedFilename(),/\.json$/i);
+  const csvDownloadPromise=page.waitForEvent('download',{timeout:30000});
+  await page.locator('#owgAnalysisCsv').click();
+  const csvDownload=await csvDownloadPromise;
+  assert.match(csvDownload.suggestedFilename(),/\.csv$/i);
   await page.locator('#owgCohortMetricDelete').click();
   await page.locator('#owgCohortMetricSaved option').filter({hasText:'Browser acceptance duration'}).waitFor({state:'detached',timeout:60000});
   assert.deepEqual(errors,[]);

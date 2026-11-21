@@ -55,15 +55,15 @@ const path=require('node:path');
   await waitUntil(async()=>(await(await fetch(base+'/test-analysis/state')).json()).jobs===0);
   // Cancel while a successful result is held: a late complete response cannot restore export/save.
   let releaseResult,seenResult;const heldResult=new Promise(r=>seenResult=r);
-  await page.route('**/analysis-jobs/*/result',async route=>{const response=await route.fetch();seenResult();await new Promise(r=>releaseResult=r);await route.fulfill({response});},{times:1});
+  await page.route('**/analysis-source-bound',async route=>{const response=await route.fetch();seenResult();await new Promise(r=>releaseResult=r);await route.fulfill({response});},{times:1});
   await run();await heldResult;await page.locator('#owgAnalysisCancel').click();releaseResult();
   await status.filter({hasText:'no result was displayed'}).waitFor();assert.equal(await out.locator('table').count(),0);
   assert.ok(await page.locator('#owgAnalysisJson').isDisabled());
   // A log/view refresh also suppresses a held completed result.
   let releaseStale,seenStale;const heldStale=new Promise(r=>seenStale=r);
-  await page.route('**/analysis-jobs/*/result',async route=>{const response=await route.fetch();seenStale();await new Promise(r=>releaseStale=r);await route.fulfill({response});},{times:1});
+  await page.route('**/analysis-source-bound',async route=>{const response=await route.fetch();seenStale();await new Promise(r=>releaseStale=r);await route.fulfill({response});},{times:1});
   await run();await heldStale;await page.locator('#owgEventLogAnalyze').click();
-  const staleResponse=page.waitForResponse(r=>r.url().includes('/analysis-jobs/')&&r.url().endsWith('/result'));
+  const staleResponse=page.waitForResponse(r=>r.url().endsWith('/analysis-source-bound'));
   releaseStale();await staleResponse;
   assert.equal(await page.locator('#owgAnalysisResults table').count(),0);
   await page.locator('#owgAnalysisRun').click();await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis complete.'}).waitFor();
