@@ -182,6 +182,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/shared_case_queries.cjs
       - name: Verify saving matching cases as a new event log in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_derive.cjs
+      - name: Verify a derived log trimmed to a time window keeps only its events
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_derive_window.cjs
       - name: Verify the private process map keeps case-level data out of the shareable export
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_private_map.cjs
       - name: Verify linked roster offboarding across company portals
