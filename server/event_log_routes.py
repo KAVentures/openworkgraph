@@ -1322,6 +1322,21 @@ def event_log_variants(request: Request, log_id: str, case_type: str | None = Qu
     return _respond(workspace.variants, log_id, case_type, limit, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/variants.csv")
+def event_log_variants_csv(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                           cohort: dict[str, Any] = Depends(_case_filter)):
+    """Every variant as spreadsheet-safe CSV: path, cases, share, running share, durations. Not stored."""
+    from . import event_log_variant_export as export
+    _require_dashboard(request)
+    try:
+        text, meta = export.variants_csv(log_id, case_type, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(text, media_type="text/csv; charset=utf-8", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-variants.csv"',
+        "X-OWG-Variants": f"variants={meta['variants']}; written={meta['written']}; truncated={str(meta['truncated']).lower()}"})
+
+
 @router.get("/v1/event-logs/{log_id}/variants/preview")
 def event_log_variant_preview(request: Request, log_id: str,
         case_type: str | None = Query(default=None, max_length=200),
