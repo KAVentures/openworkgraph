@@ -46,7 +46,8 @@ def _seconds(ts: Any) -> float:
 
 
 def funnel(log_id: str, steps: list[str], case_type: str | None = None, *, within_hours: float | None = None,
-           cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+           cohort: dict[str, Any] | None = None, evidence_step: int | None = None,
+           evidence_status: str = "reached") -> dict[str, Any]:
     if not isinstance(steps, list) or not MIN_STEPS <= len(steps) <= MAX_STEPS:
         raise EventLogWorkspaceError(f"choose {MIN_STEPS} to {MAX_STEPS} steps")
     if any(not isinstance(s, str) or not s or len(s) > 500 for s in steps):
@@ -54,11 +55,15 @@ def funnel(log_id: str, steps: list[str], case_type: str | None = None, *, withi
     if within_hours is not None and (isinstance(within_hours, bool) or not isinstance(within_hours, (int, float))
                                      or not 0 < within_hours <= MAX_WINDOW_HOURS):
         raise EventLogWorkspaceError("the conversion window must be a positive number of hours")
+    if evidence_step is not None and (type(evidence_step) is not int or not 1 <= evidence_step <= len(steps)):
+        raise EventLogWorkspaceError("evidence step must identify a chosen step")
+    if evidence_status not in ("reached", "dropped") or (evidence_status == "dropped" and evidence_step == 1):
+        raise EventLogWorkspaceError("choose reached or dropped after a previous step")
     window = within_hours * 3600 if within_hours is not None else None
 
     def run(conn):
-        rows = conn.execute("""SELECT list(activity ORDER BY ts, event_id), list(epoch(ts) ORDER BY ts, event_id)
-            FROM ce GROUP BY case_id""").fetchall()
+        rows = conn.execute("""SELECT case_id, list(activity ORDER BY ts, event_id), list(epoch(ts) ORDER BY ts, event_id)
+            FROM ce GROUP BY case_id ORDER BY case_id""").fetchall()
         known = {a for (a,) in conn.execute("SELECT DISTINCT activity FROM ce WHERE activity IN (SELECT unnest(?))",
                                             [list(set(steps))]).fetchall()}
         log_end = conn.execute("SELECT epoch(max(ts)) FROM ce").fetchone()[0]
@@ -75,9 +80,11 @@ def funnel(log_id: str, steps: list[str], case_type: str | None = None, *, withi
     stopped_recent = [0] * len(steps)
     total_seconds: list[float] = []
     # A case whose last event falls in the final 5% of the log's time span may still be in progress.
-    first_ts = min((_seconds(t[0]) for _, t in rows if t), default=None)
+    first_ts = min((_seconds(t[0]) for _, _, t in rows if t), default=None)
     recent_cut = None if first_ts is None or log_end is None else log_end - 0.05 * (log_end - first_ts)
-    for activities, stamps in rows:
+    evidence = []
+    evidence_total = 0
+    for case_id, activities, stamps in rows:
         times = [_seconds(t) for t in stamps]
         k, at, start_at = 0, None, None
         for activity, t in zip(activities, times):
@@ -95,6 +102,12 @@ def funnel(log_id: str, steps: list[str], case_type: str | None = None, *, withi
             at = t
             reached[k] += 1
             k += 1
+        if evidence_step is not None and ((evidence_status == "reached" and k >= evidence_step) or
+                (evidence_status == "dropped" and k == evidence_step - 1)):
+            evidence_total += 1
+            if len(evidence) < 50:
+                evidence.append({"case_id": case_id, "last_activity": activities[-1],
+                                 "steps_reached": k})
         if k == len(steps):
             total_seconds.append(at - start_at)
         elif k:
@@ -124,6 +137,9 @@ def funnel(log_id: str, steps: list[str], case_type: str | None = None, *, withi
     return {
         "format": FORMAT, "log_id": log_id, "case_notion": data.get("case_notion"),
         "cases": cases, "steps": out, "within_hours": within_hours,
+        "evidence": ({"step": evidence_step, "status": evidence_status, "total": evidence_total,
+                      "cases": evidence, "truncated": evidence_total > len(evidence)}
+                     if evidence_step is not None else None),
         "completed": {"cases": reached[-1], "share_of_first_step": out[-1]["share_of_first_step"],
                       "hours_first_to_last": {"median": _hours(_quantile(total_seconds, 0.5)),
                                               "p90": _hours(_quantile(total_seconds, 0.9))}},
