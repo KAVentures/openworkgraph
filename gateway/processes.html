@@ -2330,6 +2330,8 @@
                 current.latest_revision !== record.revision ||
                 current.process.content_sha256 !== record.content_sha256 ||
                 current.review?.status !== "reviewed_design" ||
+                current.your_actor_id !== selection.your_actor_id ||
+                current.access_revision !== selection.access_revision ||
                 selection.archived || selection.viewing_historical_revision)
               throw new Error("Executable project export refused: revision or independent review changed. Reopen the latest authorized process.");
           }
