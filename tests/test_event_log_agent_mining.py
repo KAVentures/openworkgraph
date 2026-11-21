@@ -95,6 +95,21 @@ def test_validation(_data):
             mining.import_agent_runs(bad)
 
 
+def test_subsecond_time_bounds_are_compared_chronologically(_data):
+    # Both values normalize to UTC; string sorting misorders fractional seconds
+    # because '.' sorts before the 'Z' suffix on a whole-second timestamp.
+    for since, until in (
+        ("2026-09-01T00:00:00.500Z", "2026-09-01T00:00:00Z"),
+        ("2026-09-01T01:00:00.500+01:00", "2026-09-01T00:00:00Z"),
+    ):
+        with pytest.raises(workspace.EventLogWorkspaceError, match="since must be before"):
+            mining.import_agent_runs({"since": since, "until": until})
+    valid = mining.import_agent_runs({"name": "agents",
+        "since": "2026-09-01T01:00:00+01:00", "until": "2026-09-01T00:00:00.500Z"})
+    assert valid["runs"] == 12
+
+
+
 def test_no_runs_is_a_clear_error(monkeypatch):
     from server import procedural_memory
     monkeypatch.setattr(procedural_memory, "load_recent_evidence", lambda **kwargs: [])
