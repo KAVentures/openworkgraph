@@ -49,7 +49,8 @@ FORMAT = "openworkgraph.event-log-folder-feed.v1"
 MAX_FEEDS_PER_LOG = 5
 MAX_FILES_PER_RUN = 20
 SETTLE_SECONDS = 60
-_PATTERN = re.compile(r"^[A-Za-z0-9 _.*?\[\]-]{1,80}\.(csv|tsv|txt)$", re.IGNORECASE)
+_PATTERN = re.compile(r"^.{1,80}\.(csv|tsv|txt)$", re.IGNORECASE)
+_UNSAFE_PATTERN = re.compile(r"[/\\\x00-\x1f\x7f-\x9f\ud800-\udfff]")
 _FEED_ID = re.compile(r"^feed_[0-9a-f]{16}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 FAILURE_PAGE_SIZE = 50
@@ -73,14 +74,23 @@ def _latest_mapping(conn, log_id: str) -> dict[str, Any]:
 
 
 def _folder(value: Any) -> Path:
-    if not isinstance(value, str) or not value.strip() or len(value) > 1000 or "\x00" in value:
+    if (not isinstance(value, str) or not value.strip() or len(value) > 1000 or "\x00" in value
+            or any(0xD800 <= ord(char) <= 0xDFFF for char in value)):
         raise EventLogWorkspaceError("give the folder as an absolute path")
-    path = Path(value.strip()).expanduser()
+    # Whitespace can be part of a real path. Trimming it can redirect a feed
+    # to a different, unselected sibling directory.
+    try:
+        path = Path(value).expanduser()
+    except (OSError, RuntimeError):
+        raise EventLogWorkspaceError("give the folder as an absolute path") from None
     if not path.is_absolute():
         raise EventLogWorkspaceError("give the folder as an absolute path")
-    if not path.is_dir():
-        raise EventLogWorkspaceError("the folder does not exist or is not a folder")
-    return path.resolve()
+    try:
+        if not path.is_dir():
+            raise EventLogWorkspaceError("the folder does not exist or is not a folder")
+        return path.resolve()
+    except (OSError, RuntimeError):
+        raise EventLogWorkspaceError("the folder does not exist or is not a folder") from None
 
 
 def create(log_id: str, spec: Any) -> dict[str, Any]:
@@ -89,8 +99,10 @@ def create(log_id: str, spec: Any) -> dict[str, Any]:
     if spec.get("confirm_folder_reads") is not True:
         raise EventLogWorkspaceError("explicit confirmation to read files from this folder is required")
     folder = _folder(spec.get("folder"))
-    pattern = spec.get("pattern") or "*.csv"
-    if not isinstance(pattern, str) or not _PATTERN.fullmatch(pattern):
+    pattern = spec.get("pattern", "*.csv")
+    if pattern is None or pattern == "":
+        pattern = "*.csv"
+    if not isinstance(pattern, str) or not _PATTERN.fullmatch(pattern) or _UNSAFE_PATTERN.search(pattern):
         raise EventLogWorkspaceError("the file pattern must be a simple name pattern ending in .csv, .tsv or .txt")
     with workspace._LOCK:
         conn = workspace._connect()
@@ -351,6 +363,14 @@ def run_scheduled(feed_id: str) -> tuple[str, float]:
         return f"failed:{result['files_failed']}_files_not_appended", 0.0
     if any(item.get("warning") for item in result["files"]):
         return "failed:quality_report_unavailable", 0.0
+    if result['files_previously_failed']:
+        return 'failed:previously_failed_files', 0.0
+    if result['more_files_waiting'] and result['files_still_being_written']:
+        return 'partial:more_files_pending_and_not_ready', 0.0
+    if result['more_files_waiting']:
+        return 'partial:more_files_pending', 0.0
+    if result['files_still_being_written']:
+        return 'partial:files_not_ready', 0.0
     return f"succeeded:{result['files_appended']}_files_appended", 0.0
 
 
