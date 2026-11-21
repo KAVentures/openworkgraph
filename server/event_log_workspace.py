@@ -152,6 +152,12 @@ CREATE TABLE IF NOT EXISTS signal_transitions (
 );
 CREATE INDEX IF NOT EXISTS signal_transitions_by_log_time ON signal_transitions(log_id,occurred_at);
 """
+# The date after which the owner wants a log deleted (event_log_expiry).
+_SCHEMA += """
+CREATE TABLE IF NOT EXISTS log_expiry (
+  log_id VARCHAR NOT NULL, delete_after TIMESTAMP NOT NULL, set_at TIMESTAMP NOT NULL
+);
+"""
 
 _SCHEMA += source_identity.SCHEMA + object_relationships.SCHEMA
 # Analyst case tags (event_log_case_tags); declared here so case filters can always refer to them.
@@ -753,6 +759,8 @@ def delete_log(log_id: str) -> dict[str, Any]:
             try:
                 from .event_log_activity_mappings import erase as erase_mappings
                 erase_mappings(conn, log_id)
+                from .event_log_expiry import erase as erase_expiry
+                erase_expiry(conn, log_id)
                 from .event_log_folder_feeds import erase_log as erase_feeds
                 feed_ids = erase_feeds(conn, log_id)
                 from .jira_retained_profiles import forget_dataset
