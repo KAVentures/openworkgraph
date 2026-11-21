@@ -31,14 +31,26 @@ def _spec(value: Any, keys: set[str]) -> dict[str, Any]:
     return value
 
 
+def _activity_selection(values: Any) -> list[str]:
+    if values is None:
+        return []
+    if not isinstance(values, list) or not 1 <= len(values) <= 10:
+        raise EventLogWorkspaceError("choose from 1 to 10 activity labels")
+    return list(dict.fromkeys(_text(value) for value in values))
+
+
 def cases(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, Any]:
     variant_id = spec.get("variant_id") if isinstance(spec, dict) else None
     if variant_id is not None and (not isinstance(variant_id, str) or not re.fullmatch(r"[a-f0-9]{64}", variant_id)):
         raise EventLogWorkspaceError("invalid exact variant identifier")
-    spec = _spec(spec, {"cohort", "path", "transition", "after", "limit", "variant_id"})
+    spec = _spec(spec, {"cohort", "path", "transition", "after", "limit", "variant_id", "required_activities", "excluded_activities"})
     cohort = cohorts.parse_cohort(spec.get("cohort"))
     limit = _integer(spec.get("limit", 30), 100)
     after = _text(spec["after"]) if spec.get("after") is not None else None
+    required = _activity_selection(spec.get("required_activities"))
+    excluded = _activity_selection(spec.get("excluded_activities"))
+    if set(required).intersection(excluded):
+        raise EventLogWorkspaceError("an activity cannot be both required and excluded")
     path = spec.get("path")
     if path is not None:
         if not isinstance(path, list) or not 0 < len(path) <= MAX_PATH:
@@ -54,6 +66,13 @@ def cases(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, Any
 
     def run(conn):
         predicate, params = cohorts._predicate(cohort, log_id)
+        if required:
+            predicate += """ AND case_id IN (SELECT case_id FROM ce WHERE activity IN (SELECT unnest(?))
+                GROUP BY case_id HAVING count(DISTINCT activity) = ?)"""
+            params.extend([required, len(required)])
+        if excluded:
+            predicate += " AND case_id NOT IN (SELECT case_id FROM ce WHERE activity IN (SELECT unnest(?)))"
+            params.append(excluded)
         if transition is not None:
             predicate += """ AND case_id IN (SELECT case_id FROM (
                 SELECT case_id, activity, lead(activity) OVER (
@@ -83,6 +102,8 @@ def cases(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, Any
         return {
             "selected_cases": total, "cohort": cohorts.describe(cohort), "path": path,
             "transition": transition,
+            **({"required_activities": required} if required else {}),
+            **({"excluded_activities": excluded} if excluded else {}),
             "cases": [{"case_id": key, "events": n, "started_at": start.isoformat() + "Z",
                        "ended_at": end.isoformat() + "Z", "elapsed_seconds": (end-start).total_seconds(),
                        "timestamp_ties": ties} for key, n, start, end, ties in rows],
