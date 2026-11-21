@@ -66,6 +66,7 @@ from .local_auth import dashboard_session_valid
 
 router = APIRouter()
 XLSX_MAX_BYTES = 64 * 1024 * 1024
+SQLITE_MAX_BYTES = 256 * 1024 * 1024
 _SCRIPT = Path(__file__).resolve().parents[1] / "dashboard" / "event_log_workspace.js"
 _TYPES = {"csv": "text/csv", "sourcecsv": "text/csv", "sourcecsv-review": "text/csv", "csv-review": "text/csv", "xes": "application/xml", "xes-attributes": "application/xml", "ocel": "application/json", "ocelxml": "application/xml"}
 _SUFFIX = {"csv": "csv", "sourcecsv": "csv", "sourcecsv-review": "review.csv", "csv-review": "review.csv", "xes": "xes", "xes-attributes": "xes", "ocel": "jsonocel", "ocelxml": "xmlocel"}
@@ -302,6 +303,26 @@ async def convert_xlsx_event_log(request: Request, sheet: str | None = Query(def
         try:
             result = await run_in_threadpool(xlsx.to_csv, spool, sheet)
         except xlsx.XlsxError as exc:
+            raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/sqlite-to-csv")
+async def convert_sqlite_event_log(request: Request, table: str | None = Query(default=None, max_length=200)):
+    """Convert one table of a SQLite database file to CSV for the ordinary CSV import. Nothing is stored."""
+    from . import event_log_sqlite as sqlite_import
+    _require_dashboard(request)
+    with tempfile.SpooledTemporaryFile(max_size=8 << 20, dir=str(DATA_DIR)) as spool:
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > SQLITE_MAX_BYTES:
+                raise HTTPException(413, "the database is larger than the supported limit")
+            spool.write(chunk)
+        spool.seek(0)
+        try:
+            result = await run_in_threadpool(sqlite_import.to_csv, spool, table, folder=DATA_DIR)
+        except sqlite_import.SqliteError as exc:
             raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 

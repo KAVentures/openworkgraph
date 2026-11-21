@@ -112,6 +112,22 @@ Source event identity settings are not reused.
 returns up to five matching mappings, newest first, each with its
 `missing_attribute_columns`. Nothing is stored.
 
+### SQLite database files
+
+A `.sqlite`, `.sqlite3` or `.db` file chosen for import is read like an Excel workbook (below): its tables
+take the place of worksheets (the first table by name is read first; pick another under
+*Worksheet*), and the chosen table becomes CSV for the ordinary column mapping, consent and quality
+report. `POST /v1/event-logs/sqlite-to-csv?table=...` with the file as the body does the same and
+returns `sheets`, `sheet`, `rows`, `columns`, `csv` and `binary_cells_left_empty`. Nothing is stored:
+the upload is copied to a temporary file in the data folder, read and removed.
+
+The file must start with the SQLite header and is opened read-only and immutable, with the schema
+treated as untrusted (`trusted_schema` off, `query_only` on, extensions disabled). Only real tables
+are offered, not views, virtual tables or SQLite's own tables, and each is read with a plain
+`SELECT *`. A read stops after 120 seconds, 2,000,000 rows or 500 columns, and the upload may be at
+most 256 MB. NULL becomes an empty cell and binary values are left empty and counted. SQLite stores
+no time zone, so the import asks which offset times without one use.
+
 ### Excel workbooks
 
 Choosing an `.xlsx` file in the dashboard converts its first worksheet to CSV
