@@ -3265,7 +3265,14 @@ async def read_local_bound_provider_review(request: Request, response: Response)
         "confirm_historical_review", "confirm_run_comparison",
         "confirm_source_verification", "max_cases", "deployment_id",
         "run_id", "record_link",
-    })
+    }, optional={"persist_provider_check", "confirm_provider_evidence_write"})
+    persist = payload.get("persist_provider_check", False)
+    if type(persist) is not bool:
+        raise HTTPException(422, "persist_provider_check must be boolean")
+    if persist and payload.get("confirm_provider_evidence_write") is not True:
+        raise HTTPException(403, "explicit provider evidence persistence approval required")
+    if not persist and "confirm_provider_evidence_write" in payload:
+        raise HTTPException(422, "write approval requires persist_provider_check")
     if (payload["confirm_historical_review"] is not True
             or payload["confirm_run_comparison"] is not True
             or payload["confirm_source_verification"] is not True):
@@ -3292,7 +3299,21 @@ async def read_local_bound_provider_review(request: Request, response: Response)
     before = await replay(read_local_combined_case_review, review_fields)
     await _recheck_source(scope)
     _dashboard_only(request)
-    verified = await replay(verify_local_case_provider_operation, verification_fields)
+    if persist:
+        # Reuse the existing actor/run-bound, guarded CAS evidence ledger.
+        # This persists only a provider-state check, never an attempt receipt
+        # or an independently established customer/agent outcome.
+        bound_fields = dict(review_fields)
+        bound_fields.update({
+            "confirm_source_verification": True,
+            "record_link": payload["record_link"],
+            "persist_provider_check": True,
+        })
+        verified = await replay(verify_local_bound_run_source, bound_fields)
+        if not verified.get("provider_check_persisted"):
+            raise HTTPException(409, "provider evidence was not persisted")
+    else:
+        verified = await replay(verify_local_case_provider_operation, verification_fields)
     # The provider read may have taken arbitrarily long. Re-admit all
     # historical evidence, reviewed dependencies, binding and source scope.
     after = await replay(read_local_combined_case_review, review_fields)
@@ -3312,6 +3333,9 @@ async def read_local_bound_provider_review(request: Request, response: Response)
         "run_ref": final["receipts"]["run_ref"],
         "historical_review": final,
         "independent_provider_verification": verified,
+        "provider_check_persisted": bool(persist),
+        "persisted_evidence_scope": "case_provider_ledger" if persist else None,
+        "persisted_evidence_is_independent_attempt_receipt": False,
         "provider_event_independently_rechecked_on_this_read": True,
         "provider_operation_not_agent_causality": True,
         "customer_outcome_verified": False,
