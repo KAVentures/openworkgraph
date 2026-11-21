@@ -35,6 +35,7 @@
   FILTERED.add('story');
   FILTERED.add('co-occurrence');
   FILTERED.add('activity-profile');
+  FILTERED.add('quality/timestamp-ties');
   FILTERED.add('breakdown');
   FILTERED.add('breakdown.csv');
   FILTERED.add('next-steps');
@@ -4866,8 +4867,24 @@
     const box=section('Data quality');box.id='owgQuality';
     const out=el('div');out.id='owgQualityResults';out.setAttribute('role','status');
     const details=el('details');details.appendChild(el('summary','Import reports, digests and diagnostics'));details.appendChild(out);
-    box.append(el('div','Counts only: no values are shown here, and rejected rows are kept only if you chose to keep them at import. The digests let you check that the same file with the same mapping gives the same stored log.','muted'),details,quarantineBlock());
+    box.append(el('div','Import diagnostics show counts without row values; rejected rows are kept only if you chose to keep them at import. The digests let you check that the same file with the same mapping gives the same stored log.','muted'),details,quarantineBlock());
     const generation=state.generation;
+    const tieBox=el('div');tieBox.id='owgQualityTies';
+    const tieRun=button('Analyze timestamp ordering','secondary');tieRun.id='owgQualityTiesRun';
+    const tieOut=el('div');tieOut.id='owgQualityTiesResults';tieOut.setAttribute('role','status');
+    tieBox.append(el('p','Find activities affected by events with the same timestamp in the selected cases. This displays activity names and scans the selected log on demand.','muted'),tieRun,tieOut);box.appendChild(tieBox);
+    tieRun.onclick=async()=>{
+      tieRun.disabled=true;tieOut.replaceChildren(el('p','Analyzing timestamp ordering…','muted'));
+      try{
+        const r=await getJSON(logPath('quality/timestamp-ties'));
+        if(generation!==state.generation||!tieOut.isConnected)return;
+        tieOut.replaceChildren(el('p',Number(r.tied_case_event_occurrences).toLocaleString()+' of '+Number(r.case_event_occurrences).toLocaleString()+' case-event occurrences share a timestamp in '+Number(r.cases_with_ties).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases. '+Number(r.groups_with_different_activities).toLocaleString()+' timestamp groups contain different activity labels.','muted'),
+          el('p',r.interpretation,'muted'),
+          ...(r.activities_truncated?[el('p','Showing the 100 activities with the most tied occurrences; other activities are omitted.','muted')]:[]),
+          table(['Activity','Occurrences','Tied occurrences','Cases with ties'],r.activities.map(a=>[a.activity,Number(a.occurrences).toLocaleString(),Number(a.tied_occurrences).toLocaleString(),Number(a.cases_with_ties).toLocaleString()])));
+      }catch(error){if(generation===state.generation&&tieOut.isConnected)tieOut.replaceChildren(el('p',error.message,'muted'));}
+      finally{if(generation===state.generation&&tieRun.isConnected)tieRun.disabled=false;}
+    };
     let loaded=false,pending=false;
     const loadQuality=()=>{
       if(loaded||pending||generation!==state.generation)return;

@@ -90,3 +90,8 @@ An event shared by several object-centric cases contributes once per case. Ties
 make relative order unknown even though analyses use event IDs to break them.
 The endpoint computes from the current retained selection, not a historical
 import report, and can require a full scan of that selection.
+
+In Data quality, **Analyze timestamp ordering** runs this report on demand for
+the selected case notion and active case filter. It shows activity labels, so it
+is separate from the counts-only import diagnostics. Changing the selection
+requires running the analysis again.

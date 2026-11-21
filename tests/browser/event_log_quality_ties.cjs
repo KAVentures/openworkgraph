@@ -1,0 +1,38 @@
+const {chromium}=require('playwright');
+const assert=require('node:assert/strict');
+const fs=require('node:fs/promises');
+const {spawn}=require('node:child_process');
+const {tmpdir}=require('node:os');
+const path=require('node:path');
+(async()=>{
+ const scratch=await fs.mkdtemp(path.join(tmpdir(),'owg-ties-'));
+ const base='http://127.0.0.1:8787';
+ const server=spawn(process.env.OWG_BROWSER_PYTHON||'python',['-m','uvicorn','quality_ties_app:app','--app-dir','tests/browser','--host','127.0.0.1','--port','8787'],{env:{...process.env,OWG_BROWSER_TEST_DIR:scratch},stdio:['ignore','pipe','pipe']});
+ let browser,logs='';for(const stream of [server.stdout,server.stderr])stream.on('data',c=>logs=(logs+c).slice(-10000));
+ try{
+  let ready=false;for(let i=0;i<100;i++){if(server.exitCode!==null)throw Error(logs);try{await fs.access(path.join(scratch,'session.txt'));if((await fetch(base+'/')).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,200));}assert.ok(ready,logs);
+  browser=await chromium.launch({...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE}:{}),headless:true,args:['--no-sandbox']});
+  const page=await browser.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.goto(base+'/#session='+(await fs.readFile(path.join(scratch,'session.txt'),'utf8')).trim());
+  await page.locator('[role=tab][data-tab=evidence]').click();await page.locator('#owgEventLogCard').waitFor();
+  const option=page.locator('#owgEventLogPick option').filter({hasText:'Ordering ties'});await option.waitFor({state:'attached'});await page.locator('#owgEventLogPick').selectOption(await option.getAttribute('value'));await page.locator('#owgEventLogAnalyze').click();
+  let requests=0;page.on('request',r=>{if(r.url().includes('/quality/timestamp-ties'))requests++;});
+  assert.equal(requests,0);
+  await page.locator('#owgQualityTiesRun').click();
+  const result=page.locator('#owgQualityTiesResults');
+  await result.filter({hasText:'2 of 3 case-event occurrences'}).waitFor();
+  assert.match(await result.textContent(),/1 timestamp groups contain different activity labels/);
+  assert.match(await result.textContent(),/Open/);assert.match(await result.textContent(),/Review/);
+  assert.equal(requests,1);
+  await page.locator('#owgCaseFilterContainsActivity').fill('Close');
+  await page.locator('#owgCaseFilterApply').click();
+  await page.locator('#owgQualityTiesRun').click();
+  await page.locator('#owgQualityTiesResults').filter({hasText:'0 of 1 case-event occurrences'}).waitFor();
+  assert.doesNotMatch(await page.locator('#owgQualityTiesResults').textContent(),/Review/);
+  await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
+  const axe=await page.evaluate(()=>axe.run(document.querySelector('#owgEventLogCard'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
+  assert.deepEqual(axe.violations.map(v=>v.id),[]);await page.setViewportSize({width:390,height:844});
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));assert.deepEqual(errors,[]);
+  console.log('Timestamp ties browser passed: on-demand inspection, accessibility and mobile.');
+ }finally{if(browser)await browser.close();server.kill('SIGTERM');await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);if(server.exitCode===null)server.kill('SIGKILL');await fs.rm(scratch,{recursive:true,force:true});}
+})().catch(e=>{console.error(e);process.exit(1);});
