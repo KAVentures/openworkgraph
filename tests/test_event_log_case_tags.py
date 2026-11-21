@@ -71,6 +71,23 @@ def test_tags_are_per_log_and_deleted_with_the_log():
         conn.close()
 
 
+def test_listing_pages_tied_timestamps_and_keeps_exact_counts():
+    log = _log()
+    tags.add(log, {"tag": "review", "cohort": {"activity": "Escalate"}})
+    tags.add(log, {"tag": "other", "case_ids": ["c6"]})
+    assert "page" not in tags.listing(log)
+    for offset, expected, next_offset in ((0, ["c0", "c3"], 2), (2, ["c6", "c9"], None), (4, [], None)):
+        result = tags.listing(log, "review", limit=2, offset=offset)
+        assert [item["case_id"] for item in result["cases"]] == expected
+        assert result["page"] == {"total": 4, "offset": offset, "limit": 2, "next_offset": next_offset}
+
+    tags.remove(log, {"tag": "review", "case_ids": ["c6"]})
+    remaining = tags.listing(log, "review", limit=2, offset=2)
+    assert [item["case_id"] for item in remaining["cases"]] == ["c9"]
+    assert remaining["page"] == {"total": 3, "offset": 2, "limit": 2, "next_offset": None}
+    assert tags.listing(log, "other")["cases"][0]["case_id"] == "c6"
+
+
 def test_limits_and_validation(monkeypatch):
     log = _log()
     for bad in (None, {}, {"tag": "x"}, {"tag": "x", "case_ids": ["c1"], "cohort": {"activity": "Pay"}},
@@ -93,6 +110,11 @@ def test_limits_and_validation(monkeypatch):
             tags.remove(log, bad)
     with pytest.raises(workspace.EventLogWorkspaceError):
         tags.listing(log, limit=0)
+    for invalid in (-1, True, 1.5, tags.MAX_TAGGED_ROWS_PER_LOG + 1):
+        with pytest.raises(workspace.EventLogWorkspaceError, match="offset"):
+            tags.listing(log, "one", offset=invalid)
+    with pytest.raises(workspace.EventLogWorkspaceError, match="choose a tag"):
+        tags.listing(log, offset=1)
     with pytest.raises(workspace.EventLogWorkspaceError):
         tags.listing("log_" + "0" * 16)
 
@@ -121,6 +143,10 @@ with TestClient(app) as client:
     assert added.status_code == 200, added.text
     assert client.get(base + "/summary?tag=odd", headers=owner).json()["cases"] == 1
     assert client.get(base + "/case-tags?tag=odd", headers=owner).json()["cases"][0]["case_id"] == "c1"
+    assert client.get(base + "/case-tags?tag=odd&limit=1&offset=1", headers=owner).json()["page"] == {
+        "total": 1, "offset": 1, "limit": 1, "next_offset": None}
+    assert client.get(base + "/case-tags?offset=1", headers=owner).status_code == 422
+    assert client.get(base + "/case-tags?tag=odd&offset=-1", headers=owner).status_code == 422
     assert client.post(base + "/case-tags/remove", json={"tag": "odd"}, headers=owner).json()["removed"] == 1
     assert client.post(base + "/case-tags", json={"tag": "odd"}, headers=owner).status_code == 422
 print("ok")

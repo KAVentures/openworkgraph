@@ -762,11 +762,12 @@ async def event_log_quarantine_discard(request: Request, log_id: str):
 
 @router.get("/v1/event-logs/{log_id}/case-tags")
 def event_log_case_tags(request: Request, log_id: str, tag: str | None = Query(default=None, max_length=60),
-                        limit: int = Query(default=200, ge=1, le=1000)):
+                        limit: int = Query(default=200, ge=1, le=1000),
+                        offset: int = Query(default=0, ge=0, le=200000)):
     """The log's case tags with counts; with ``tag``, the tagged cases and their notes."""
     from . import event_log_case_tags as case_tags
     _require_dashboard(request)
-    return _respond(case_tags.listing, log_id, tag, limit)
+    return _respond(case_tags.listing, log_id, tag, limit, offset)
 
 
 @router.post("/v1/event-logs/{log_id}/case-tags")

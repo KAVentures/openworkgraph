@@ -85,29 +85,27 @@ def add(log_id: str, spec: Any) -> dict[str, Any]:
     def run(conn):
         if chosen is not None:
             cohorts.restrict(conn, chosen, log_id)
-            selected = [r[0] for r in conn.execute(
-                f"SELECT DISTINCT case_id FROM ce ORDER BY 1 LIMIT {MAX_CASES_BY_FILTER + 1}").fetchall()]
-            if len(selected) > MAX_CASES_BY_FILTER:
+            conn.execute("""CREATE TEMP TABLE ct_selected AS SELECT DISTINCT case_id
+                FROM ce LIMIT ?""", [MAX_CASES_BY_FILTER + 1])
+            selected = conn.execute("SELECT count(*) FROM ct_selected").fetchone()[0]
+            if selected > MAX_CASES_BY_FILTER:
                 raise workspace.EventLogWorkspaceError(f"the filter matches more than {MAX_CASES_BY_FILTER:,} cases")
             unknown = 0
         else:
             wanted = list(dict.fromkeys(parsed.case_ids))
-            conn.execute("CREATE OR REPLACE TEMP TABLE ct_wanted (case_id VARCHAR)")
-            conn.executemany("INSERT INTO ct_wanted VALUES (?)", [[c] for c in wanted])
-            selected = [r[0] for r in conn.execute(
-                "SELECT case_id FROM ct_wanted WHERE case_id IN (SELECT case_id FROM ce) ORDER BY 1").fetchall()]
-            unknown = len(wanted) - len(selected)
+            conn.execute("""CREATE TEMP TABLE ct_selected AS SELECT case_id FROM unnest(?) AS wanted(case_id)
+                WHERE case_id IN (SELECT case_id FROM ce)""", [wanted])
+            selected = conn.execute("SELECT count(*) FROM ct_selected").fetchone()[0]
+            unknown = len(wanted) - selected
         if not selected:
             raise workspace.EventLogWorkspaceError("no cases to tag: none of them is in this log")
         existing_tags = {r[0] for r in conn.execute("SELECT DISTINCT tag FROM case_tags WHERE log_id = ?", [log_id]).fetchall()}
         if tag not in existing_tags and len(existing_tags) >= MAX_TAGS_PER_LOG:
             raise workspace.EventLogWorkspaceError(f"a log keeps at most {MAX_TAGS_PER_LOG} tags; remove one first")
-        conn.execute("CREATE OR REPLACE TEMP TABLE ct_selected (case_id VARCHAR)")
-        conn.executemany("INSERT INTO ct_selected VALUES (?)", [[c] for c in selected])
         already = conn.execute("""SELECT count(*) FROM case_tags WHERE log_id = ? AND tag = ?
             AND case_id IN (SELECT case_id FROM ct_selected)""", [log_id, tag]).fetchone()[0]
         total = conn.execute("SELECT count(*) FROM case_tags WHERE log_id = ?", [log_id]).fetchone()[0]
-        if total - already + len(selected) > MAX_TAGGED_ROWS_PER_LOG:
+        if total - already + selected > MAX_TAGGED_ROWS_PER_LOG:
             raise workspace.EventLogWorkspaceError(f"a log keeps at most {MAX_TAGGED_ROWS_PER_LOG:,} case tags")
         conn.execute("BEGIN")
         try:
@@ -119,7 +117,7 @@ def add(log_id: str, spec: Any) -> dict[str, Any]:
         except Exception:
             conn.execute("ROLLBACK")
             raise
-        return {"tagged": len(selected), "already_tagged": already, "unknown_case_ids": unknown,
+        return {"tagged": selected, "already_tagged": already, "unknown_case_ids": unknown,
                 "tags": _summary(conn, log_id)}
 
     result = workspace._query(log_id, parsed.case_type, run)
@@ -148,11 +146,16 @@ def remove(log_id: str, spec: Any) -> dict[str, Any]:
             conn.close()
 
 
-def listing(log_id: str, tag: str | None = None, limit: int = 200) -> dict[str, Any]:
+def listing(log_id: str, tag: str | None = None, limit: int = 200, offset: int = 0) -> dict[str, Any]:
     if tag is not None and not _TAG.fullmatch(tag.strip()):
         raise workspace.EventLogWorkspaceError("a tag is 1 to 60 characters without control characters")
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 1000:
         raise workspace.EventLogWorkspaceError("limit must be an integer from 1 to 1000")
+    if type(offset) is not int or not 0 <= offset <= MAX_TAGGED_ROWS_PER_LOG:
+        raise workspace.EventLogWorkspaceError("invalid case tag page offset")
+    if offset and tag is None:
+        raise workspace.EventLogWorkspaceError("choose a tag before paging cases")
+
     with workspace._LOCK:
         conn = workspace._connect()
         try:
@@ -160,9 +163,13 @@ def listing(log_id: str, tag: str | None = None, limit: int = 200) -> dict[str, 
             result: dict[str, Any] = {"format": FORMAT, "log_id": log_id, "tags": _summary(conn, log_id),
                                       "max_tags": MAX_TAGS_PER_LOG, "tags_are_analyst_judgement": True}
             if tag is not None:
+                tag = tag.strip()
+                total = next((entry["cases"] for entry in result["tags"] if entry["tag"] == tag), 0)
                 rows = conn.execute("""SELECT case_id, note, tagged_at FROM case_tags WHERE log_id = ? AND tag = ?
-                    ORDER BY tagged_at DESC, case_id LIMIT ?""", [log_id, tag.strip(), limit]).fetchall()
+                    ORDER BY tagged_at DESC, case_id LIMIT ? OFFSET ?""", [log_id, tag, limit, offset]).fetchall()
                 result["cases"] = [{"case_id": c, "note": n, "tagged_at": at.isoformat() + "Z"} for c, n, at in rows]
+                result["page"] = {"total": total, "offset": offset, "limit": limit,
+                                  "next_offset": offset + len(rows) if offset + len(rows) < total else None}
             return result
         finally:
             conn.close()
