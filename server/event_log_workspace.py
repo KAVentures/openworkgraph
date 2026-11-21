@@ -730,17 +730,6 @@ def append_history(log_id: str) -> dict[str, Any]:
                         for b, t, f, a, d, r, o in rows]}
 
 
-def list_logs() -> dict[str, Any]:
-    with _LOCK:
-        conn = _connect()
-        try:
-            ids = [r[0] for r in conn.execute("SELECT log_id FROM logs ORDER BY imported_at DESC").fetchall()]
-            return {"logs": [_check_log(conn, i) for i in ids], "limit": MAX_LOGS,
-                    "stored_on_this_computer_only": True}
-        finally:
-            conn.close()
-
-
 def rename_log(log_id: str, name: Any) -> dict[str, Any]:
     """Give a saved log a new name; the same rule as at import. Events and analyses are unchanged."""
     if not isinstance(name, str) or not _NAME.fullmatch(name.strip()):
@@ -751,6 +740,17 @@ def rename_log(log_id: str, name: Any) -> dict[str, Any]:
             _check_log(conn, log_id)
             conn.execute("UPDATE logs SET name = ? WHERE log_id = ?", [name.strip(), log_id])
             return {"renamed": True, **_check_log(conn, log_id)}
+        finally:
+            conn.close()
+
+
+def list_logs() -> dict[str, Any]:
+    with _LOCK:
+        conn = _connect()
+        try:
+            ids = [r[0] for r in conn.execute("SELECT log_id FROM logs ORDER BY imported_at DESC").fetchall()]
+            return {"logs": [_check_log(conn, i) for i in ids], "limit": MAX_LOGS,
+                    "stored_on_this_computer_only": True}
         finally:
             conn.close()
 
