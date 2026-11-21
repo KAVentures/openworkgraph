@@ -3247,3 +3247,75 @@ async def read_local_combined_case_review(request: Request, response: Response):
         "agent_execution_authorized": False,
         "cross_store_atomic_snapshot": False,
     }
+
+
+@router.post("/v1/open-work/declarations/human-outcomes/bound-provider-review")
+async def read_local_bound_provider_review(request: Request, response: Response):
+    """Explicit operator-only fresh provider check joined to one retained agent run.
+
+    The existing case-review admission establishes the actor's exclusive
+    retained-run binding *before* any Stripe I/O. The independent provider
+    check uses a signed record link and the existing source/session guards.
+    No provider write, receipt ingestion, or customer-success claim occurs.
+    """
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_historical_review", "confirm_run_comparison",
+        "confirm_source_verification", "max_cases", "deployment_id",
+        "run_id", "record_link",
+    })
+    if (payload["confirm_historical_review"] is not True
+            or payload["confirm_run_comparison"] is not True
+            or payload["confirm_source_verification"] is not True):
+        raise HTTPException(403, "explicit run review and source verification required")
+
+    async def replay(route, fields):
+        raw = json.dumps(fields, separators=(",", ":")).encode("utf-8")
+        async def receive():
+            return {"type": "http.request", "body": raw, "more_body": False}
+        replay_scope = dict(request.scope)
+        replay_scope["headers"] = list(request.scope.get("headers", []))
+        return await route(Request(replay_scope, receive=receive), Response())
+
+    review_fields = {key: payload[key] for key in (
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_historical_review", "confirm_run_comparison", "max_cases",
+        "deployment_id", "run_id",
+    )}
+    verification_fields = {key: payload[key] for key in (
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_source_verification", "record_link",
+    )}
+    # Never contact the provider before exclusive actor/run/case admission.
+    before = await replay(read_local_combined_case_review, review_fields)
+    await _recheck_source(scope)
+    _dashboard_only(request)
+    verified = await replay(verify_local_case_provider_operation, verification_fields)
+    # The provider read may have taken arbitrarily long. Re-admit all
+    # historical evidence, reviewed dependencies, binding and source scope.
+    after = await replay(read_local_combined_case_review, review_fields)
+    if before != after:
+        raise HTTPException(409, "bound case review changed during provider verification")
+    await _recheck_source(scope)
+    _dashboard_only(request)
+    final = await replay(read_local_combined_case_review, review_fields)
+    if final != after:
+        raise HTTPException(409, "bound case review changed during final admission")
+    await _recheck_source(scope)
+    _dashboard_only(request)
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "format": "openworkgraph.bound-provider-review.v1",
+        "case_ref": final["case_ref"],
+        "run_ref": final["receipts"]["run_ref"],
+        "historical_review": final,
+        "independent_provider_verification": verified,
+        "provider_event_independently_rechecked_on_this_read": True,
+        "provider_operation_not_agent_causality": True,
+        "customer_outcome_verified": False,
+        "customer_outcome": "unknown",
+        "agent_execution_authorized": False,
+        "cross_store_atomic_snapshot": False,
+    }
