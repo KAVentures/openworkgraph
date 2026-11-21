@@ -4374,46 +4374,88 @@
   function unusualCasesSection(){
     const box=section('Unusual cases');box.id='owgUnusual';
     box.appendChild(el('div','Cases that stand out from the rest of this selection, each with the reasons: a rare path, unusually slow or fast, unusually many events, heavy rework, or an activity almost no other case has. Unusual is not wrong; this is a list to look at.','muted'));
-    const limit=select('owgUnusualLimit',[['25','Top 25'],['50','Top 50'],['100','Top 100']]);
+    const label={rare_path:'Rare path',unusually_slow:'Unusually slow',unusually_fast:'Unusually fast',unusually_long:'Unusually many events',heavy_rework:'Heavy rework',rare_activity:'Rare activity'};
+    const signal=select('owgUnusualSignal',[['','Any reason'],...Object.entries(label)]);
+    const limit=select('owgUnusualLimit',[['25','25'],['50','50'],['100','100']]);
     const run=button('Find unusual cases','secondary');run.id='owgUnusualRun';
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Show',limit),run);
-    const statusLine=el('div',null,'muted');statusLine.id='owgUnusualStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Reason',signal),field('Cases per page',limit),run);
+    const statusLine=el('div',null,'muted');statusLine.id='owgUnusualStatus';statusLine.setAttribute('role','status');
     const out=el('div');out.id='owgUnusualResults';
     box.append(row,statusLine,out);
-    const label={rare_path:'Rare path',unusually_slow:'Unusually slow',unusually_fast:'Unusually fast',unusually_long:'Unusually many events',heavy_rework:'Heavy rework',rare_activity:'Rare activity'};
-    run.onclick=async()=>{
-      const generation=state.generation;run.disabled=true;statusLine.textContent='Comparing cases…';out.replaceChildren();
+    const generation=state.generation,logId=state.logId,caseType=state.caseType;
+    const number=n=>Number(n).toLocaleString();
+    let turn=0;
+    limit.onchange=signal.onchange=()=>{
+      ++turn;run.disabled=false;out.replaceChildren();statusLine.textContent='Find unusual cases with these settings.';
+    };
+    async function scan(offset){
+      const request=++turn;
+      const current=()=>generation===state.generation&&request===turn;
+      const params={limit:limit.value,offset};
+      if(signal.value)params.signal=signal.value;
+      run.disabled=true;statusLine.textContent='Comparing cases…';out.replaceChildren();
       try{
-        const r=await getJSON(logPath('unusual-cases',{limit:limit.value}));
-        if(generation!==state.generation)return;
-        const counts=Object.entries(r.by_signal).map(([k,n])=>label[k]+' '+Number(n).toLocaleString()).join(', ');
-        statusLine.textContent=Number(r.unusual_cases).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases stand out'+(counts?' ('+counts+')':'')+'. The median case takes '+r.baseline.median_hours+' h and has '+r.baseline.median_events+' events.';
+        const r=await getJSON(logPath('unusual-cases',params));
+        if(!current())return;
+        const page=r.page;
+        if(offset&&offset>=page.total)return scan(Math.max(0,Math.floor((page.total-1)/page.limit)*page.limit));
+        const counts=Object.entries(r.by_signal).map(([key,n])=>label[key]+' '+number(n)).join(', ');
+        statusLine.textContent=number(r.unusual_cases)+' of '+number(r.cases)+' cases stand out'+(counts?' ('+counts+')':'')+'. The median case takes '+r.baseline.median_hours+' h and has '+r.baseline.median_events+' events.';
+        const shown=r.top.length?'Showing '+number(offset+1)+'–'+number(offset+r.top.length)+' of '+number(page.total)+' matching cases.':'No unusual cases match this selection.';
+        const pageStatus=el('div',shown,'muted');pageStatus.setAttribute('role','status');
+        out.appendChild(pageStatus);
         if(!r.top.length)return;
-        const t=table(['Case','Score','Why','Events','Hours',''],r.top.map(c=>[String(c.case_id),String(c.score),c.reasons.map(x=>label[x.signal]+': '+x.detail).join('; '),String(c.events),String(c.hours),'']));
-        t.querySelector('tbody').querySelectorAll('tr').forEach((tr,i)=>{const id=String(r.top[i].case_id);const b=button('Explain','secondary');b.setAttribute('aria-label','Explain case '+id);
-          b.onclick=()=>{const field=document.querySelector('#owgCaseExplainId'),go=document.querySelector('#owgCaseExplainRun');if(!field||!go)return;field.value=id;go.click();document.querySelector('#owgCaseExplain').scrollIntoView({block:'start'});};
-          tr.cells[5].appendChild(b);});
-        out.appendChild(t);
-        // Tag the listed cases, so the "tag" case filter can focus every analysis on them.
-        const ids=r.top.map(c=>String(c.case_id));
+        const ids=r.top.map(c=>c.case_id),selected=new Set(ids),checks=[];
+        const t=table(['Case','Score','Why','Events','Hours','Explain','Select'],r.top.map(c=>{
+          const id=c.case_id,explain=button('Explain','secondary');
+          explain.setAttribute('aria-label','Explain case '+id);
+          explain.onclick=()=>{
+            const field=document.querySelector('#owgCaseExplainId'),go=document.querySelector('#owgCaseExplainRun');
+            if(!field||!go)return;
+            field.value=id;go.click();document.querySelector('#owgCaseExplain').scrollIntoView({block:'start'});
+          };
+          const checkbox=document.createElement('input');checkbox.type='checkbox';checkbox.checked=true;
+          checkbox.setAttribute('aria-label','Select case '+id);
+          checkbox.onchange=()=>{if(checkbox.checked)selected.add(id);else selected.delete(id);updateTag();};
+          checks.push(checkbox);
+          return [id,String(c.score),c.reasons.map(x=>label[x.signal]+': '+x.detail).join('; '),String(c.events),String(c.hours),explain,checkbox];
+        }));
+        const previous=button('Previous page','secondary'),next=button('Next page','secondary');
+        previous.disabled=offset===0;next.disabled=page.next_offset===null;
+        previous.onclick=()=>scan(offset-page.limit);next.onclick=()=>scan(page.next_offset);
+        const nav=el('div',null,'row');nav.append(previous,next);
+        out.append(t,nav);
         const tagName=input('owgUnusualTagName','text');tagName.value='unusual';tagName.maxLength=60;tagName.autocomplete='off';
-        const tagRun=button('Tag these '+ids.length+' cases','secondary');tagRun.id='owgUnusualTag';
-        const tagMessage=el('div',null,'muted');tagMessage.id='owgUnusualTagMessage';tagMessage.setAttribute('role','status');tagMessage.setAttribute('aria-live','polite');
-        const tagRow=el('div',null,'row');tagRow.style.alignItems='end';tagRow.append(field('Tag',tagName),tagRun);
-        out.append(tagRow,tagMessage);
+        const tagRun=button('','secondary');tagRun.id='owgUnusualTag';
+        const all=button('Select all on page','secondary'),clear=button('Clear selection','secondary');
+        function updateTag(){
+          tagRun.textContent='Tag '+number(selected.size)+' selected '+(selected.size===1?'case':'cases');
+          tagRun.disabled=selected.size===0;all.disabled=selected.size===ids.length;clear.disabled=selected.size===0;
+        }
+        const selectPage=checked=>{
+          checks.forEach(box=>{box.checked=checked;});
+          selected.clear();if(checked)ids.forEach(id=>selected.add(id));updateTag();
+        };
+        all.onclick=()=>selectPage(true);clear.onclick=()=>selectPage(false);updateTag();
+        const tagMessage=el('div',null,'muted');tagMessage.id='owgUnusualTagMessage';tagMessage.setAttribute('role','status');
+        const tagRow=el('div',null,'row');tagRow.style.alignItems='end';tagRow.append(all,clear,field('Tag',tagName),tagRun);
+        out.append(tagRow,tagMessage,el('div',r.caveat,'muted'));
         tagRun.onclick=async()=>{
           if(!tagName.value.trim()){tagMessage.textContent='Enter a tag.';return;}
-          tagRun.disabled=true;
+          tagRun.disabled=all.disabled=clear.disabled=true;checks.forEach(box=>{box.disabled=true;});
           try{
-            const spec={tag:tagName.value.trim(),note:'listed as unusual',case_ids:ids.slice(0,1000)};if(state.caseType)spec.case_type=state.caseType;
-            const t2=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/case-tags',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+            const spec={tag:tagName.value.trim(),note:'listed as unusual',case_ids:[...selected]};if(caseType)spec.case_type=caseType;
+            const result=await (await api('/v1/event-logs/'+encodeURIComponent(logId)+'/case-tags',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+            if(generation!==state.generation)return;
             document.querySelectorAll('#owgCaseTags').forEach(node=>node.dispatchEvent(new CustomEvent('owg-tags-changed')));
-            tagMessage.textContent='Tagged '+Number(t2.tagged).toLocaleString()+' cases “'+t2.tag+'”. Use the tag in the case filter to focus every analysis on them.';
-          }catch(error){tagMessage.textContent=error.message;}
-          finally{tagRun.disabled=false;}};
-        out.appendChild(el('div',r.caveat,'muted'));
-      }catch(error){statusLine.textContent=error.message;}
-      finally{run.disabled=false;}};
+            if(current())tagMessage.textContent='Tagged '+number(result.tagged)+' cases “'+result.tag+'”. Use the tag in the case filter to focus every analysis on them.';
+          }catch(error){if(current())tagMessage.textContent=error.message;}
+          finally{checks.forEach(box=>{box.disabled=false;});updateTag();}
+        };
+      }catch(error){if(current())statusLine.textContent=error.message;}
+      finally{if(current())run.disabled=false;}
+    }
+    run.onclick=()=>scan(0);
     return box;
   }
 

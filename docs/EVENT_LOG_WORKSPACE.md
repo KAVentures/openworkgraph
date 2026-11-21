@@ -2481,12 +2481,14 @@ compared with the selection on transparent signals:
 - **Rare activity**: the case contains an activity found in under 1% of cases, or in no other case.
 
 Each signal adds 0.25 to 1 to the score; robust-z signals grow from 0.25 at the threshold to 1 at
-twice it. The list shows the top cases with their reasons, the median case for comparison, and an
-**Explain** button that opens the case in **Explain a case**. **Tag these cases** tags the listed cases (`unusual`
-by default) in **Case tags**, so the `tag` case filter can focus every other analysis on them. At least 20 cases are needed. Unusual
-is not wrong: rare paths and long durations are often legitimate.
+twice it. The list shows ranked cases, their reasons, and the median case for comparison.
+Use **Reason** to narrow the rows while keeping the original scoring baseline. **Explain** opens
+the case in **Explain a case**. Each page starts with its rows selected. Clear the selection or
+choose individual cases before tagging them. At least 20 cases are needed.
 
-`GET /v1/event-logs/{log_id}/unusual-cases?limit=25` plus the case-filter parameters. Agents use
+`GET /v1/event-logs/{log_id}/unusual-cases?limit=25` takes the case-filter parameters and optional
+`signal`. Send `page.next_offset` as `offset` for the next page. Each page evaluates the current
+log. Agents use
 `get_unusual_process_cases`; case IDs and paths are included only for logs shared at the cases
 level.
 
