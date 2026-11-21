@@ -6283,9 +6283,22 @@
     const player=mapPlayback(box);
     const svgButton=button('Download map (SVG)','secondary');svgButton.id='owgMapDownloadSvg';
     const pngButton=button('Download map (PNG)','secondary');pngButton.id='owgMapDownloadPng';
-    const exportRow=el('div',null,'row');exportRow.append(svgButton,pngButton);
+    const csvButton=button('Download map data (CSV)','secondary');csvButton.id='owgMapDownloadCsv';
+    const exportRow=el('div',null,'row');exportRow.append(svgButton,pngButton,csvButton);
     box.append(row,status,player.node,graphHost,exportRow,slow);
-    const generation=state.generation;let timer=null,request=0,lastCaption='';
+    const generation=state.generation;let timer=null,request=0,lastCaption='',lastMap=null;
+    // The numbers behind the drawn map, one row per activity, start, path and end, for a spreadsheet.
+    const safeCell=v=>{const t=v===null||v===undefined?'':String(v);const s=/^[=+\-@\t\r]/.test(t)?"'"+t:t;return /[",\n\r]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;};
+    csvButton.onclick=()=>{
+      if(!lastMap){status.textContent='No map is drawn to download.';return;}
+      const r=lastMap,lines=[['kind','from','to','count','cases','median_gap_seconds','mean_gap_seconds','p90_gap_seconds']];
+      r.activities.forEach(a=>lines.push(['activity',a.activity,'',a.event_count,a.case_count,'','','']));
+      Object.entries(r.start_activities||{}).forEach(([a,n])=>lines.push(['start','',a,n,'','','','']));
+      r.transitions.forEach(t=>lines.push(['path',t.from,t.to,t.transition_count,t.case_count,t.median_elapsed_gap_seconds,t.mean_elapsed_gap_seconds,t.p90_elapsed_gap_seconds]));
+      Object.entries(r.end_activities||{}).forEach(([a,n])=>lines.push(['end',a,'',n,'','','','']));
+      downloadBlob(new Blob([lines.map(l=>l.map(safeCell).join(',')).join('\n')+'\n'],{type:'text/csv'}),mapFileName('csv'));
+      status.textContent='Downloaded the map data: '+r.activities.length+' activities and '+r.transitions.length+' paths at the current settings.';
+    };
     const currentSvg=()=>graphHost.querySelector('#owgMapDrawing svg')||graphHost.querySelector('svg');
     svgButton.onclick=()=>{const svg=currentSvg();if(!svg){status.textContent='No map is drawn to download.';return;}
       downloadBlob(new Blob([exportableSvg(svg,lastCaption).text],{type:'image/svg+xml'}),mapFileName('svg'));};
@@ -6301,6 +6314,7 @@
       const mine=++request;
       const r=await getJSON(logPath('process-map',{activities:String(Number(acts.node.value)/100),paths:String(Number(paths.node.value)/100)}));
       if(mine!==request||generation!==state.generation)return;
+      lastMap=r;
       const c=r.coverage;
       lastCaption=(document.querySelector('#owgEventLogPick option:checked')?.textContent||'Event log')+' · activities '+acts.node.value+'%, paths '+paths.node.value+'%'+(r.activity_mapping?' · grouped by '+r.activity_mapping.name:'')+
         '\nShowing '+c.activities_shown+' activities ('+pct(c.event_share_shown)+' of events) and '+c.transition_types_shown+' of '+c.transition_types_total+' paths. Derived from the supplied log; not a verified business workflow.';

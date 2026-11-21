@@ -43,10 +43,20 @@ const path=require('node:path');
    const png=await fs.readFile(await pngDownload.path());
    assert.deepEqual([...png.subarray(0,8)],[137,80,78,71,13,10,26,10],'a real PNG');
    assert(png.length>2000,'the PNG has content: '+png.length);
+   // The numbers behind the map: activities, starts, paths and ends.
+   const [csvDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#owgMapDownloadCsv').click()]);
+   assert.match(csvDownload.suggestedFilename(),/^process-map-[A-Za-z0-9_-]+\.csv$/);
+   const csvLines=(await fs.readFile(await csvDownload.path(),'utf8')).trim().split('\n');
+   assert.equal(csvLines[0],'kind,from,to,count,cases,median_gap_seconds,mean_gap_seconds,p90_gap_seconds');
+   assert(csvLines.includes('activity,Receive order,,8,8,,,'),csvLines.join('|'));
+   assert(csvLines.includes('start,,Receive order,8,,,,'),csvLines.join('|'));
+   assert(csvLines.includes('path,Check stock,Ship,4,4,3600,3600,3600'),csvLines.join('|'));
+   assert(csvLines.includes('end,Invoice,,8,,,,'),csvLines.join('|'));
+   assert.equal(csvLines.filter(l=>l.startsWith('path,')).length,5,csvLines.join('|'));
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgEventLogProcessMap'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Process map export browser acceptance passed: self-contained SVG with every activity, slider settings and interpretation, a real 2x PNG, WCAG audit.');
+   console.log('Process map export browser acceptance passed: self-contained SVG with every activity, slider settings and interpretation, a real 2x PNG, map data as CSV, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
