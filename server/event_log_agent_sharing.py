@@ -678,8 +678,19 @@ def time_patterns(log_id: str, case_type: str | None = None, time_zone: str = "U
         spec["activity"] = activity
     if case_type:
         spec["case_type"] = case_type
-    return {**{k: v for k, v in tp.time_patterns(log_id, spec).items() if k != "log"}, "format": FORMAT,
-            "log_id": log_id}
+    result = tp.time_patterns(log_id, spec)
+    # Querying a unique/rare activity's hour-by-weekday grid can disclose when one
+    # individual's case was recorded despite aggregates-only sharing. Require the
+    # same minimum number of supporting cases used by the other agent analyses.
+    support = result["total_case_arrivals"]
+    if activity:
+        support = workspace._query(log_id, case_type, lambda conn: {
+            "support": conn.execute("SELECT count(DISTINCT case_id) FROM ce WHERE activity = ?", [activity]).fetchone()[0]
+        })["support"]
+    if support < AGENT_MIN_CELL_CASES:
+        raise EventLogWorkspaceError(
+            f"agent time patterns require at least {AGENT_MIN_CELL_CASES} supporting cases")
+    return {**{k: v for k, v in result.items() if k != "log"}, "format": FORMAT, "log_id": log_id}
 
 
 AGENT_MIN_CELL_CASES = 5
