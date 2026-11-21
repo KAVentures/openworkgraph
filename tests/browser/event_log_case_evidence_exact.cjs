@@ -67,6 +67,29 @@ const path=require('node:path');
   await page.locator('#owgCaseFilterFromMatches1').selectOption(rare);await page.locator('#owgCaseFilterFromUse1').click();
   await page.locator('#owgCaseFilterApply').click();
   await page.locator('#owgCaseFilterCount').filter({hasText:'Filtered: 1 of 2 cases'}).waitFor();
+  await page.locator('#owgCaseFilterDurationMin').fill('8');
+  await page.locator('#owgCaseFilterDurationMax').fill('8.36');
+  const [filtered]=await Promise.all([
+    page.waitForResponse(response=>response.url().includes('/summary?')&&new URL(response.url()).searchParams.has('duration_max')),
+    page.locator('#owgCaseFilterApply').click()
+  ]);
+  assert.equal((await filtered.json()).cases,1);
+  await page.locator('#owgDurationUnit').selectOption('60');
+  await page.locator('#owgDurationBounds').fill('501, 502');
+  await page.locator('#owgDurationRun').click();
+  const duration=page.locator('#owgDurationResults');
+  const band='501 minutes to less than 502 minutes';
+  await duration.getByRole('button',{name:'Inspect cases with duration '+band}).click();
+  await page.locator('#owgEventLogCasesStatus').getByText('1 matching cases (case filter applied). Showing 1 on this page.').waitFor();
+  await page.locator('#owgEventLogCasesList').getByRole('button',{name:'Open case one',exact:true}).click();
+  await page.locator('#owgEventLogCaseEvents').getByText('Action000',{exact:true}).first().waitFor();
+  assert.equal(await duration.getByRole('button',{name:'Inspect cases with duration 502 minutes or more'}).isDisabled(),true);
+  await duration.getByRole('button',{name:'Use duration band '+band+' as filter'}).click();
+  await page.waitForFunction(()=>document.querySelector('#owgCaseFilterDurationMin')?.value==='8.35');
+  assert.equal(await page.locator('#owgCaseFilterDurationMax').inputValue(),'8.36');
+  assert.equal((await page.locator('#owgCaseFilterFromExact1').inputValue())||(await page.locator('#owgCaseFilterFrom1').inputValue()),rare);
+  assert.equal((await page.locator('#owgCaseFilterToExact1').inputValue())||(await page.locator('#owgCaseFilterTo1').inputValue()),'Finish');
+  await page.locator('#owgCaseFilterCount').filter({hasText:'Filtered: 1 of 2 cases'}).waitFor();
   await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
   const audits=await page.evaluate(async()=>{
     const options={runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']};
@@ -74,6 +97,6 @@ const path=require('node:path');
   });
   for(const audit of audits)assert.deepEqual(audit.violations.map(v=>v.id),[]);await page.setViewportSize({width:390,height:900});
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth+1));assert.deepEqual(errors,[]);
-  console.log('Case evidence browser passed: rare exact label, evidence, suggestion reset, filter lookup, axe/mobile.');
+  console.log('Case evidence browser passed: rare exact label, evidence, suggestion reset, filter lookup, duration-band evidence and filtering, axe/mobile.');
  }finally{if(browser)await browser.close();server.kill('SIGTERM');await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);if(server.exitCode===null)server.kill('SIGKILL');await fs.rm(scratch,{recursive:true,force:true});}
 })().catch(e=>{console.error(e);process.exit(1);});
