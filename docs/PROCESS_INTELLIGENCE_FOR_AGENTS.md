@@ -55,6 +55,9 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 | `get_process_overview` | Cases, events, durations, KPIs (optionally an SLA), top variants, top insights with their case filters. |
 | `get_process_overview_for_cases` | The overview of only the cases matching a case filter (same keys as insight cohorts, e.g. `{"attribute": "region=EU"}` or `{"activity": "Escalate"}`), next to the whole log: case count and share, durations, KPIs and top variants. Refused when fewer than 5 cases match. | aggregates |
 | `get_process_root_cause` | Associations with `duration_over` (hours), `rework`, `contains_activity` or `ends_with` (activity). |
+| `get_process_trace_clusters` | Groups of cases with similar behaviour: each cluster's cases, top variants, activities more or less common than in the whole log, and median throughput time. Clusters and variants with fewer than 5 cases are withheld. | aggregates |
+| `check_process_compliance` | Rules you give (response, precedence, response within a time, not co-existence, segregation of duties, existence) checked against the cases: applicable and violating cases and the violation rate with a 95% interval. Violating case IDs only at the cases level; at the aggregates level a rule's counts are withheld when it applies to fewer than 5 cases or any count is 1 to 4. | aggregates |
+| `get_process_performance_spectrum` | Time between two consecutive activities over the log's span, in fast/normal/slow/very slow classes per bin, with FIFO and batching shares. Segments seen fewer than 5 times are withheld; no individual case lines. | aggregates |
 | `explain_process_case` | One case's steps, gaps over the typical gap, repeats and uncommon steps (cases level). |
 | `get_slowest_process_cases` | Slowest cases first (cases level). |
 | `get_process_signals` | Your signal rules and their last evaluated state: triggered or not, value or matching cases, and whether you reviewed it (aggregates level; case IDs at cases level). Never evaluates, acknowledges or snoozes. |
@@ -119,6 +122,9 @@ nothing authorizes an action.
 | `GET /v1/process-intelligence/{log_id}/open-case-next-activity?end_activity=&history=&limit=&case_type=` | Same, `aggregates` or `cases` (per-case predictions at `cases`). |
 | `GET /v1/process-intelligence/{log_id}/temporal-profile?zeta=&case_type=` | Same, `aggregates` or `cases`. |
 | `GET /v1/process-intelligence/{log_id}/heuristics-net?dependency_threshold=&case_type=` | Same, `aggregates` or `cases`. |
+| `GET /v1/process-intelligence/{log_id}/trace-clusters?k=&max_k=&case_type=` | Same, `aggregates` or `cases`. |
+| `POST /v1/process-intelligence/{log_id}/compliance` (`{"rules": [...], "case_type"?}`) | Same, `aggregates` or `cases` (violating case IDs at `cases`). |
+| `GET /v1/process-intelligence/{log_id}/performance-spectrum?segment=A->B&top=&bins=&case_type=` | Same, `aggregates` or `cases`. |
 | `GET /v1/process-intelligence/{log_id}/footprints?noise=&case_type=` | Same, `aggregates` or `cases`. |
 | `POST /v1/event-logs/{log_id}/agent-share/tags` (`{"allowed": true \| false}`) | Dashboard session only. |
 | `POST /v1/process-intelligence/{log_id}/case-tags` (`{"tag", "case_ids", "note"?, "case_type"?}`) | Agent, `cases` level and the tag permission (403 without it). |
