@@ -10,17 +10,23 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from typing import Any
 
 from . import event_log_workspace as workspace
 from .event_log_workspace import EventLogWorkspaceError
 
 MAX_VARIANTS = 10_000
+_FORMULA_PREFIX = re.compile(r"^[\s\ufeff]*[=+\-@]")
 
 
 def _cell(value: Any) -> str:
     text = "" if value is None else str(value)
-    return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
+    # Spreadsheet software may interpret formulas after leading whitespace or a BOM.
+    # Keep the original cell text, but force it to be treated as literal text.
+    if text.startswith(("\t", "\r", "\n")) or _FORMULA_PREFIX.match(text):
+        return "'" + text
+    return text
 
 
 def variants_csv(log_id: str, case_type: str | None = None, *,
