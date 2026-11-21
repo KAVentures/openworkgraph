@@ -296,6 +296,8 @@ PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_overv
                  "compare_process_models",
                  "compare_process_cases",
                  "get_process_activity_profile",
+                 "get_process_variants", "get_process_map", "get_process_duration_distribution",
+                 "get_process_time_patterns",
                  "get_process_signal_scorecard",
                  "get_process_breakdown",
                  "find_similar_process_cases",

@@ -56,6 +56,10 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 | `list_process_logs` | Shared logs: id, name, level, size, case notions, whether agents may tag cases. |
 | `get_process_overview` | Cases, events, durations, KPIs (optionally an SLA), top variants, top insights with their case filters. |
 | `get_process_overview_for_cases` | The overview of only the cases matching a case filter (same keys as insight cohorts, e.g. `{"attribute": "region=EU"}` or `{"activity": "Escalate"}`), next to the whole log: case count and share, durations, KPIs and top variants. Refused when fewer than 5 cases match. | aggregates |
+| `get_process_variants` | The most common paths with cases, share and median duration, and how much of the log they cover. Variants followed by fewer than 5 cases are withheld and counted. | aggregates |
+| `get_process_map` | The process map: activities, which directly follows which (counts and gaps), start and end activities, with optional activity and path sliders. Activities and transitions in fewer than 5 cases are withheld. | aggregates |
+| `get_process_duration_distribution` | Cases per duration band and the median, p90 and p95 duration (not the single shortest or longest case). | aggregates |
+| `get_process_time_patterns` | Events and case arrivals by weekday and hour in a time zone, optionally for one activity, and the share outside working hours. | aggregates |
 | `get_process_root_cause` | Associations with `duration_over` (hours), `rework`, `contains_activity` or `ends_with` (activity). |
 | `get_process_trace_clusters` | Groups of cases with similar behaviour: each cluster's cases, top variants, activities more or less common than in the whole log, and median throughput time. Clusters and variants with fewer than 5 cases are withheld. | aggregates |
 | `check_process_compliance` | Rules you give (response, precedence, response within a time, not co-existence, segregation of duties, existence) checked against the cases: applicable and violating cases and the violation rate with a 95% interval. Violating case IDs only at the cases level; at the aggregates level a rule's counts are withheld when it applies to fewer than 5 cases or any count is 1 to 4. | aggregates |
@@ -135,6 +139,10 @@ nothing authorizes an action.
 | `POST /v1/process-intelligence/{log_id}/compliance` (`{"rules": [...], "case_type"?}`) | Same, `aggregates` or `cases` (violating case IDs at `cases`). |
 | `GET /v1/process-intelligence/{log_id}/performance-spectrum?segment=A->B&top=&bins=&case_type=` | Same, `aggregates` or `cases`. |
 | `GET /v1/process-intelligence/{log_id}/footprints?noise=&case_type=` | Same, `aggregates` or `cases`. |
+| `GET /v1/process-intelligence/{log_id}/variants?limit=&case_type=` | Same, `aggregates` or `cases`. |
+| `GET /v1/process-intelligence/{log_id}/process-map?activities=&paths=&case_type=` | Same, `aggregates` or `cases`. |
+| `GET /v1/process-intelligence/{log_id}/duration-distribution?cutoffs_seconds=&case_type=` | Same, `aggregates` or `cases`. |
+| `GET /v1/process-intelligence/{log_id}/time-patterns?time_zone=&activity=&case_type=` | Same, `aggregates` or `cases`. |
 | `POST /v1/event-logs/{log_id}/agent-share/tags` (`{"allowed": true \| false}`) | Dashboard session only. |
 | `GET /v1/event-logs/{log_id}/agent-access?limit=` | Dashboard session only: the latest agent calls that reached this log's tools (time, tool, outcome: ok, not_shared, not_allowed, invalid or error), with counts per tool over 30 days. Recorded automatically; requests rejected before any tool runs are not, and no parameters or answers are kept. |
 | `POST /v1/process-intelligence/{log_id}/case-tags` (`{"tag", "case_ids", "note"?, "case_type"?}`) | Agent, `cases` level and the tag permission (403 without it). |

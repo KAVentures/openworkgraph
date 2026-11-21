@@ -1020,6 +1020,96 @@ def signal_scorecard(log_id: str, months: int = 6) -> dict[str, Any]:
             "interpretation": result["interpretation"]}
 
 
+def variants(log_id: str, case_type: str | None = None, limit: int = 20) -> dict[str, Any]:
+    """The most common paths with their cases, share and median duration (aggregates level). Variants followed
+    by fewer than AGENT_MIN_CELL_CASES cases are withheld and only counted, so a unique path cannot single out
+    a case."""
+    require(log_id, "aggregates")
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+        raise EventLogWorkspaceError("limit must be a whole number from 1 to 100")
+    result = workspace.variants(log_id, case_type, 200)
+    listed = result["variants"]
+    shown = [v for v in listed if v["cases"] >= AGENT_MIN_CELL_CASES]
+    rare = result["distinct_variants"] - len(shown)
+    return {"format": FORMAT, "log_id": log_id, "case_notion": result.get("case_notion"), "cases": result["cases"],
+            "distinct_variants": result["distinct_variants"],
+            "variants": [{"rank": i + 1, "path": v["path"], "cases": v["cases"], "share": v["share"],
+                          "median_duration_seconds": v.get("median_duration_seconds")} for i, v in enumerate(shown[:limit])],
+            "shown_cases_share": round(sum(v["cases"] for v in shown[:limit]) / result["cases"], 4) if result["cases"] else 0.0,
+            "withheld": {"variants": rare, "cases": result["cases"] - sum(v["cases"] for v in shown),
+                         "min_cases": AGENT_MIN_CELL_CASES},
+            "caveat": (f"Variants followed by fewer than {AGENT_MIN_CELL_CASES} cases are withheld and counted under "
+                       "withheld. A variant is the recorded order of activities, not a verified procedure.")}
+
+
+def process_map(log_id: str, case_type: str | None = None, activities: float = 1.0, paths: float = 1.0) -> dict[str, Any]:
+    """The directly-follows process map: activities and transitions with counts and gaps (aggregates level).
+    Activities and transitions seen in fewer than AGENT_MIN_CELL_CASES cases are withheld."""
+    require(log_id, "aggregates")
+    from . import event_log_process_map as pm
+    result = pm.process_map(log_id, case_type, activities=activities, paths=paths)
+    nodes = [a for a in result["activities"] if a["case_count"] >= AGENT_MIN_CELL_CASES]
+    names = {a["activity"] for a in nodes}
+    edges = [t for t in result["transitions"]
+             if t["case_count"] >= AGENT_MIN_CELL_CASES and t["from"] in names and t["to"] in names]
+    ends = {key: {a: n for a, n in result.get(key, {}).items() if a in names and n >= AGENT_MIN_CELL_CASES}
+            for key in ("start_activities", "end_activities")}
+    out = {k: v for k, v in result.items() if k not in ("log", "activities", "transitions")}
+    return {**out, **ends, "format": FORMAT, "log_id": log_id, "activities": nodes, "transitions": edges,
+            "withheld": {"activities": len(result["activities"]) - len(nodes),
+                         "transitions": len(result["transitions"]) - len(edges), "min_cases": AGENT_MIN_CELL_CASES},
+            "caveat": (f"Activities and transitions seen in fewer than {AGENT_MIN_CELL_CASES} cases are withheld. "
+                       "Gaps are elapsed time between recorded events, not work time.")}
+
+
+def duration_distribution(log_id: str, cutoffs_seconds: list[int] | None = None,
+                          case_type: str | None = None) -> dict[str, Any]:
+    """How many cases fall in each duration band, with median and upper percentiles (aggregates level). The
+    shortest and longest single case durations are not returned."""
+    require(log_id, "aggregates")
+    from . import event_log_duration_distribution as dd
+    result = dd.distribution(log_id, cutoffs_seconds or [3600, 14400, 86400, 259200], case_type)
+    observed = {k: v for k, v in (result.get("observed_duration_seconds") or {}).items() if k not in ("minimum", "maximum")}
+    out = {k: v for k, v in result.items() if k != "log"}
+    return {**out, "format": FORMAT, "log_id": log_id, "observed_duration_seconds": observed}
+
+
+def time_patterns(log_id: str, case_type: str | None = None, time_zone: str = "UTC",
+                  activity: str | None = None) -> dict[str, Any]:
+    """Events and case arrivals by weekday and hour, and the share outside working hours (aggregates level)."""
+    require(log_id, "aggregates")
+    from . import event_log_time_patterns as tp
+    spec: dict[str, Any] = {"time_zone": time_zone}
+    if activity:
+        spec["activity"] = activity
+    if case_type:
+        spec["case_type"] = case_type
+    result = tp.time_patterns(log_id, spec)
+    # Querying a unique/rare activity's hour-by-weekday grid can disclose when one
+    # individual's case was recorded despite aggregates-only sharing. Require the
+    # same minimum number of supporting cases used by the other agent analyses.
+    support = result["total_case_arrivals"]
+    if activity:
+        support = workspace._query(log_id, case_type, lambda conn: {
+            "support": conn.execute("SELECT count(DISTINCT case_id) FROM ce WHERE activity = ?", [activity]).fetchone()[0]
+        })["support"]
+    if support < AGENT_MIN_CELL_CASES:
+        raise EventLogWorkspaceError(
+            f"agent time patterns require at least {AGENT_MIN_CELL_CASES} supporting cases")
+    out = {k: v for k, v in result.items() if k != "log"}
+    # Event cells count occurrences, NOT distinct supporting cases; five
+    # repeated events may all belong to one case. Without an independent-case
+    # count for every activity/time cell, release detailed temporal series
+    # only under an explicit cases-level share. Otherwise retain totals but
+    # withhold the entire grid and derived hour-specific measurements.
+    if _level(log_id) != "cases":
+        out.update(events=None, case_arrivals=None, busiest=[],
+                   outside_working_hours_share=None, time_bins_withheld=True)
+    else:
+        out["time_bins_withheld"] = False
+    return {**out, "format": FORMAT, "log_id": log_id}
+
+
 AGENT_MIN_CELL_CASES = 5
 
 
