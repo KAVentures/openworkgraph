@@ -2420,17 +2420,41 @@
                 latest.access_revision !== selection.access_revision)
               throw new Error("Executable project export canceled: authorization or independent review changed during download. Reopen the latest authorized revision.");
           }
-          // A successful HTTP status is not proof that the executable archive
-          // is a ZIP: auth proxies can return an HTML login page with 200.
-          // Refuse to expose such responses as an agent project.
+          // A 200 response may be an HTML login page or a truncated archive.
+          // Require a bounded, nonempty ZIP with a complete central directory,
+          // not merely the PK prefix, before exposing executable source.
           if (format === "agent-project") {
+            const maxArchiveBytes = 100 * 1024 * 1024;
+            if (exportedBlob.size < 22 || exportedBlob.size > maxArchiveBytes)
+              throw new Error("Executable project export canceled: empty, incomplete or oversized ZIP.");
             const signature = new Uint8Array(await exportedBlob.slice(0, 4).arrayBuffer());
             const zipHeader = signature.length === 4 &&
               signature[0] === 0x50 && signature[1] === 0x4b &&
-              ((signature[2] === 0x03 && signature[3] === 0x04) ||
-               (signature[2] === 0x05 && signature[3] === 0x06) ||
-               (signature[2] === 0x07 && signature[3] === 0x08));
-            if (!zipHeader || identityTicket !== identityGeneration ||
+              signature[2] === 0x03 && signature[3] === 0x04;
+            // ZIP comments are at most 65535 bytes. EOCD must terminate the
+            // archive and describe a single-disk central directory in bounds.
+            const tailStart = Math.max(0, exportedBlob.size - 65557);
+            const tail = new Uint8Array(await exportedBlob.slice(tailStart).arrayBuffer());
+            const view = new DataView(tail.buffer, tail.byteOffset, tail.byteLength);
+            let directoryValid = false;
+            for (let i = tail.length - 22; i >= 0; i--) {
+              if (view.getUint32(i, true) !== 0x06054b50) continue;
+              const commentLength = view.getUint16(i + 20, true);
+              if (i + 22 + commentLength !== tail.length) continue;
+              const disk = view.getUint16(i + 4, true);
+              const directoryDisk = view.getUint16(i + 6, true);
+              const diskEntries = view.getUint16(i + 8, true);
+              const totalEntries = view.getUint16(i + 10, true);
+              const directorySize = view.getUint32(i + 12, true);
+              const directoryOffset = view.getUint32(i + 16, true);
+              const eocdOffset = tailStart + i;
+              directoryValid = disk === 0 && directoryDisk === 0 &&
+                totalEntries > 0 && diskEntries === totalEntries &&
+                directorySize > 0 && directoryOffset + directorySize <= eocdOffset;
+              break;
+            }
+            if (!zipHeader || !directoryValid ||
+                identityTicket !== identityGeneration ||
                 credential !== authorizedCredential || selected !== selection)
               throw new Error("Executable project export canceled: invalid ZIP or authorization context changed. Reopen and retry.");
           }
