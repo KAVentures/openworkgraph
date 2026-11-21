@@ -372,3 +372,283 @@ def test_reviewer_disagreement_navigation_uses_exact_event_and_window():
     assert "button.textContent='Inspect '+String(item.window)+' · '+String(item.event_id)" in source
     assert "navigation.setAttribute('aria-label','Review event-level disagreements')" in source
     assert "metrics.appendChild(navigation)" in source
+
+
+def test_save_route_validates_live_evidence_before_persisting(monkeypatch):
+    _setup(monkeypatch)
+    from server import work_resumption
+    called = []
+
+    def score(connection, envelope, *, lease, authorize_review):
+        assert authorize_review()
+        called.append("score")
+        return {"f1": 0.0}
+
+    monkeypatch.setattr(work_resumption, "score_live_reconstruction_review", score)
+    monkeypatch.setattr(history_routes, "save_reconstruction_review",
+                        lambda grant, generation, envelope: (
+                            called.append("save") or {"status": "saved_locally"}))
+    response = history_routes.save_reconstruction_review_submission(_request())
+    assert response.headers["cache-control"] == "no-store"
+    assert called == ["score", "save"]
+
+
+def test_save_route_denies_revocation_before_write(monkeypatch):
+    state = _setup(monkeypatch)
+    from server import work_resumption
+
+    def score(connection, envelope, *, lease, authorize_review):
+        state["generation"] += 1
+        return {"f1": None}
+
+    monkeypatch.setattr(work_resumption, "score_live_reconstruction_review", score)
+    monkeypatch.setattr(history_routes, "save_reconstruction_review",
+                        lambda *args: pytest.fail("write after revocation"))
+    with pytest.raises(HTTPException) as error:
+        history_routes.save_reconstruction_review_submission(_request())
+    assert error.value.status_code == 403
+
+
+def test_save_route_revocation_after_write_purges_snapshot(monkeypatch):
+    state = _setup(monkeypatch)
+    from server import work_resumption
+    monkeypatch.setattr(work_resumption, "score_live_reconstruction_review",
+                        lambda *args, **kwargs: {"f1": None})
+    called = []
+    def save(grant, generation, envelope):
+        called.append("save")
+        state["generation"] += 1
+        return {"status": "saved_locally"}
+    monkeypatch.setattr(history_routes, "save_reconstruction_review", save)
+    monkeypatch.setattr(history_routes, "clear_saved_reconstruction_review",
+                        lambda: called.append("purge"))
+    with pytest.raises(HTTPException) as error:
+        history_routes.save_reconstruction_review_submission(_request())
+    assert error.value.status_code == 403
+    assert called == ["save", "purge"]
+
+
+def test_saved_read_denies_without_grant_before_history_query(monkeypatch):
+    _setup(monkeypatch, grant={"mode": "off"})
+    monkeypatch.setattr(history_routes, "connect", lambda: pytest.fail("history query"))
+    with pytest.raises(HTTPException) as error:
+        history_routes.get_saved_reconstruction_review()
+    assert error.value.status_code == 403
+
+
+def test_saved_review_read_suppresses_labels_if_history_changes_during_queue(monkeypatch):
+    """Stale reviewer labels must not escape after a concurrent history mutation."""
+    state = _setup(monkeypatch)
+    from server import work_resumption, reconstruction_review_cli
+
+    def candidates(connection, *, lease):
+        assert lease == {"mode": "all_saved"}
+        state["generation"] += 1
+        return {"coverage": {"scan_truncated": False}}
+
+    monkeypatch.setattr(work_resumption, "resumption_candidates", candidates)
+    monkeypatch.setattr(reconstruction_review_cli, "build_review_queue",
+                        lambda result: {"evidence_sha256": "a" * 64, "event_reviews": []})
+    monkeypatch.setattr(history_routes, "read_saved_reconstruction_review",
+                        lambda *args: {"annotations": [{"event_id": "private"}]})
+    with pytest.raises(HTTPException) as error:
+        history_routes.get_saved_reconstruction_review()
+    assert error.value.status_code == 403
+
+
+def test_saved_review_read_rejects_grant_change_during_queue(monkeypatch):
+    """A changed grant scope cannot authorize an old review snapshot."""
+    state = _setup(monkeypatch)
+    from server import work_resumption, reconstruction_review_cli
+
+    def candidates(connection, *, lease):
+        state["grant"] = {"mode": "off"}
+        return {"coverage": {}}
+
+    monkeypatch.setattr(work_resumption, "resumption_candidates", candidates)
+    monkeypatch.setattr(reconstruction_review_cli, "build_review_queue",
+                        lambda result: {"evidence_sha256": "a" * 64, "event_reviews": []})
+    monkeypatch.setattr(history_routes, "read_saved_reconstruction_review",
+                        lambda *args: {"annotations": [{"event_id": "private"}]})
+    with pytest.raises(HTTPException) as error:
+        history_routes.get_saved_reconstruction_review()
+    assert error.value.status_code == 403
+
+
+def test_review_provenance_reports_http_cap_truncation(monkeypatch):
+    """Never silently claim complete provenance when the HTTP projection clips it."""
+    import json
+    _setup(monkeypatch)
+    from server import work_resumption, reconstruction_review_cli
+
+    monkeypatch.setattr(work_resumption, "resumption_candidates", lambda connection, *, lease: {
+        "observed_pair_event_assignments": [{"event_id": str(i)} for i in range(25)],
+        "observed_group_continuity": [{"event_id": str(i)} for i in range(25)],
+        "observed_case_groups": [{"group_id": str(i)} for i in range(25)],
+        "observed_case_groups_truncated": False,
+        "observed_pair_event_assignments_truncated": False,
+        "observed_group_continuity_truncated": False,
+    })
+    monkeypatch.setattr(reconstruction_review_cli, "build_review_queue", lambda result: {
+        "event_reviews": [], "evidence_sha256": "a" * 64,
+    })
+    payload = json.loads(history_routes.get_reconstruction_review().body)
+    for field in ("observed_pair_event_assignments", "observed_group_continuity", "observed_case_groups"):
+        assert len(payload[field]) == 24
+        assert payload[field + "_truncated"] is True
+    assert payload["authoritative"] is False
+
+
+def test_identity_timeline_projection_reports_incomplete_evidence(monkeypatch):
+    """A clipped interruption timeline must not look like complete provenance."""
+    import json
+    _setup(monkeypatch)
+    from server import work_resumption, reconstruction_review_cli
+
+    monkeypatch.setattr(work_resumption, "resumption_candidates", lambda connection, *, lease: {
+        "identity_timelines": [{"event_id": str(i)} for i in range(13)],
+        "identity_timelines_truncated": False,
+    })
+    monkeypatch.setattr(reconstruction_review_cli, "build_review_queue", lambda result: {
+        "event_reviews": [], "evidence_sha256": "a" * 64,
+    })
+    payload = json.loads(history_routes.get_reconstruction_review().body)
+    assert len(payload["identity_timelines"]) == 12
+    assert payload["identity_timelines_truncated"] is True
+    assert payload["authoritative"] is False
+
+    from server.main import ROOT
+    source = (ROOT / "dashboard" / "history_retention.js").read_text(encoding="utf-8")
+    assert "identity_timelines_truncated:data.identity_timelines_truncated===true" in source
+
+
+def test_identity_timeline_upstream_truncation_is_preserved(monkeypatch):
+    """An upstream capped scan remains marked incomplete even below HTTP cap."""
+    import json
+    _setup(monkeypatch)
+    from server import work_resumption, reconstruction_review_cli
+
+    monkeypatch.setattr(work_resumption, "resumption_candidates", lambda connection, *, lease: {
+        "identity_timelines": [{"event_id": "one"}],
+        "identity_timelines_truncated": True,
+    })
+    monkeypatch.setattr(reconstruction_review_cli, "build_review_queue", lambda result: {
+        "event_reviews": [], "evidence_sha256": "a" * 64,
+    })
+    payload = json.loads(history_routes.get_reconstruction_review().body)
+    assert len(payload["identity_timelines"]) == 1
+    assert payload["identity_timelines_truncated"] is True
+
+
+def test_review_provenance_counts_match_bounded_http_projection(monkeypatch):
+    """Displayed counts describe returned evidence, not unknown upstream totals."""
+    import json
+    _setup(monkeypatch)
+    from server import work_resumption, reconstruction_review_cli
+
+    fields = ("identity_timelines", "observed_pair_event_assignments",
+              "observed_group_continuity", "observed_case_groups")
+    source = {field: [{"event_id": str(i)} for i in range(30)] for field in fields}
+    monkeypatch.setattr(work_resumption, "resumption_candidates",
+                        lambda connection, *, lease: source)
+    monkeypatch.setattr(reconstruction_review_cli, "build_review_queue",
+                        lambda result: {"event_reviews": [], "evidence_sha256": "a" * 64})
+    response = history_routes.get_reconstruction_review()
+    payload = json.loads(response.body)
+    for field in fields:
+        cap = 12 if field == "identity_timelines" else 24
+        assert len(payload[field]) == cap
+        assert payload[field + "_returned_count"] == cap
+        assert payload[field + "_truncated"] is True
+
+
+def test_reviewer_provenance_displays_returned_counts_as_inert_text():
+    from server.main import ROOT
+    source = (ROOT / "dashboard" / "history_retention.js").read_text(encoding="utf-8")
+    for field in ("identity_timelines", "observed_pair_event_assignments",
+                  "observed_group_continuity", "observed_case_groups"):
+        assert field + "_returned_count:Number.isInteger(data." + field + "_returned_count)" in source
+    assert "evidence.textContent=JSON.stringify({" in source
+
+
+def test_live_review_rejects_invalid_engine_evidence_without_leaking_it(monkeypatch):
+    """Malformed provenance must not cause an HTTP 500 or echo source content."""
+    _setup(monkeypatch)
+    from server import work_resumption, reconstruction_review_cli
+
+    monkeypatch.setattr(work_resumption, "resumption_candidates",
+                        lambda connection, *, lease: {"identity_timelines": [], "secret": "private"})
+    def invalid(_response):
+        raise ValueError("private event identifier must not escape")
+    monkeypatch.setattr(reconstruction_review_cli, "build_review_queue", invalid)
+    with pytest.raises(HTTPException) as error:
+        history_routes.get_reconstruction_review()
+    assert error.value.status_code == 422
+    assert error.value.detail == "Invalid reconstruction evidence"
+    assert "private" not in error.value.detail
+
+
+def test_saved_review_rejects_invalid_engine_evidence_before_storage_read(monkeypatch):
+    """A corrupt source must never cause stale reviewer annotations to be returned."""
+    _setup(monkeypatch)
+    from server import work_resumption, reconstruction_review_cli
+
+    monkeypatch.setattr(work_resumption, "resumption_candidates",
+                        lambda connection, *, lease: {"identity_timelines": []})
+    monkeypatch.setattr(reconstruction_review_cli, "build_review_queue",
+                        lambda response: (_ for _ in ()).throw(ValueError("private source detail")))
+    monkeypatch.setattr(history_routes, "read_saved_reconstruction_review",
+                        lambda *args: pytest.fail("read stale labels after invalid source"))
+    with pytest.raises(HTTPException) as error:
+        history_routes.get_saved_reconstruction_review()
+    assert error.value.status_code == 422
+    assert error.value.detail == "Invalid reconstruction evidence"
+
+
+def test_scoring_rejects_invalid_review_without_exposing_source_details(monkeypatch):
+    """Reviewer/API validation failures must not echo event IDs or source text."""
+    _setup(monkeypatch)
+    from server import work_resumption
+    def invalid(*args, **kwargs):
+        raise ValueError("private event identifier in malformed evidence")
+    monkeypatch.setattr(work_resumption, "score_live_reconstruction_review", invalid)
+    from server.history_routes import ReconstructionReviewSubmission
+    request = ReconstructionReviewSubmission(evidence_sha256="a" * 64, annotations=[])
+    with pytest.raises(HTTPException) as error:
+        history_routes.score_reconstruction_review_submission(request)
+    assert error.value.status_code == 422
+    assert error.value.detail == "Invalid reconstruction review submission"
+    assert "private" not in error.value.detail
+
+
+def test_save_rejects_invalid_review_without_persisting_or_leaking(monkeypatch):
+    """Failed validation cannot persist labels or disclose private source text."""
+    _setup(monkeypatch)
+    from server import work_resumption
+    monkeypatch.setattr(work_resumption, "score_live_reconstruction_review",
+                        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("private source record")))
+    monkeypatch.setattr(history_routes, "save_reconstruction_review",
+                        lambda *args, **kwargs: pytest.fail("persisted invalid reviewer annotations"))
+    from server.history_routes import ReconstructionReviewSubmission
+    request = ReconstructionReviewSubmission(evidence_sha256="a" * 64, annotations=[])
+    with pytest.raises(HTTPException) as error:
+        history_routes.save_reconstruction_review_submission(request)
+    assert error.value.status_code == 422
+    assert error.value.detail == "Invalid reconstruction review submission"
+    assert "private" not in error.value.detail
+
+
+def test_live_reconstruction_binds_review_after_identity_and_candidate_evidence():
+    """A reviewer digest must cover the complete response, not a partial scan."""
+    import inspect
+    from server import work_resumption
+    source = inspect.getsource(work_resumption.resumption_candidates)
+    timeline = source.index('result["identity_timelines"] = timelines')
+    candidates = source.index('result["candidates_total"] = len(candidates)')
+    final_queue = source.rindex('result["event_assignment_review"] = build_review_queue(result)')
+    assert timeline < candidates < final_queue
+    # The empty-session early return must also bind a review to its final notice.
+    empty_branch = source.split('if not current["refs"]:', 1)[1].split('return result', 1)[0]
+    assert empty_branch.index('result["notice"]') < empty_branch.index(
+        'result["event_assignment_review"] = build_review_queue(result)'
+    )

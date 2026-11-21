@@ -109,6 +109,30 @@ class TruncatedNavigationEvidenceTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "incomplete source evidence"):
                     score_review_annotations(source, labels)
 
+    def test_hidden_continuity_records_force_incomplete_scoring(self):
+        source = payload([pair("A", "F", ["e1"])])
+        source["observed_group_continuity"] = [{"group_id": str(i)} for i in range(25)]
+        queue = build_review_queue(source)
+        self.assertTrue(queue["coverage_incomplete"])
+        row = queue["event_reviews"][0]
+        labels = [{"window": row["window"], "event_id": row["event_id"],
+                   "true_resource_pairs": row["candidate_resource_pairs"]}]
+        with self.assertRaisesRegex(ValueError, "incomplete source evidence"):
+            score_review_annotations(source, labels)
+        # An explicit false flag must not override the actual source length.
+        source["observed_group_continuity_truncated"] = False
+        self.assertTrue(build_review_queue(source)["coverage_incomplete"])
+
+    def test_hidden_continuity_validation_is_fail_closed(self):
+        source = payload([pair("A", "F", ["e1"])])
+        for records in ([{"group_id": str(i)} for i in range(257)],
+                        [{"group_id": str(i)} for i in range(24)] + [None],
+                        [{"group_id": "x" * 65536}]):
+            with self.subTest(size=len(records)):
+                source["observed_group_continuity"] = records
+                with self.assertRaisesRegex(ValueError, "continuity"):
+                    build_review_queue(source)
+
     def test_complete_navigation_remains_scoreable(self):
         source = payload([pair("A", "F", ["e1"])])
         source["observed_case_groups_truncated"] = False
@@ -623,6 +647,31 @@ class FingerprintScopeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "digest mismatch"):
             score_bound_review_annotations(changed, envelope)
 
+    def test_identity_timeline_truncation_invalidates_labels_and_scoring(self):
+        from server.reconstruction_review_cli import score_bound_review_annotations, score_review_annotations
+        source = payload([pair("A", "F", ["e1"])])
+        queue = build_review_queue(source)
+        row = queue["event_reviews"][0]
+        labels = [{"window": row["window"], "event_id": row["event_id"],
+                   "true_resource_pairs": row["candidate_resource_pairs"]}]
+        changed = dict(source, identity_timelines_truncated=True)
+        incomplete = build_review_queue(changed)
+        self.assertTrue(incomplete["coverage_incomplete"])
+        self.assertNotEqual(queue["evidence_sha256"], incomplete["evidence_sha256"])
+        with self.assertRaisesRegex(ValueError, "incomplete source evidence"):
+            score_review_annotations(changed, labels)
+        with self.assertRaisesRegex(ValueError, "digest mismatch"):
+            score_bound_review_annotations(changed, {
+                "evidence_sha256": queue["evidence_sha256"], "annotations": labels})
+        with self.assertRaisesRegex(ValueError, "invalid identity_timelines_truncated"):
+            build_review_queue(dict(source, identity_timelines_truncated="false"))
+        capped = dict(source, identity_timelines=[{"session": n} for n in range(13)])
+        self.assertTrue(build_review_queue(capped)["coverage_incomplete"])
+        self.assertEqual(build_review_queue(capped)["evidence_sha256"],
+                         build_review_queue(dict(capped, identity_timelines_truncated=True))["evidence_sha256"])
+        with self.assertRaisesRegex(ValueError, "incomplete source evidence"):
+            score_review_annotations(capped, labels)
+
 class LiveReconstructionServiceTests(unittest.TestCase):
     def test_live_service_rebuilds_evidence_and_refuses_stale_envelope(self):
         from unittest.mock import patch
@@ -930,3 +979,131 @@ class ProvisionalGroupAuthorityTests(unittest.TestCase):
                 source["observed_case_groups"] = groups
                 with self.assertRaisesRegex(ValueError, "invalid or unbounded provisional case groups"):
                     build_review_queue(source)
+
+class ReturnedEvidenceCountIntegrityTests(unittest.TestCase):
+    def test_api_adapter_counts_match_bounded_visible_evidence(self):
+        source = payload([pair("A", "F", ["e1"])])
+        source.update({
+            "identity_timelines": [{"id": "timeline"}],
+            "identity_timelines_returned_count": 1,
+            "observed_pair_event_assignments_returned_count": 1,
+            "observed_group_continuity": [],
+            "observed_group_continuity_returned_count": 0,
+            "observed_case_groups": [],
+            "observed_case_groups_returned_count": 0,
+        })
+        self.assertEqual(build_review_queue(source)["event_reviews_count"], 1)
+        for field in ("identity_timelines_returned_count",
+                      "observed_pair_event_assignments_returned_count",
+                      "observed_group_continuity_returned_count",
+                      "observed_case_groups_returned_count"):
+            with self.subTest(field=field):
+                tampered = dict(source, **{field: source[field] + 1})
+                with self.assertRaisesRegex(ValueError, "inconsistent " + field):
+                    build_review_queue(tampered)
+                tampered = dict(source, **{field: True})
+                with self.assertRaisesRegex(ValueError, "inconsistent " + field):
+                    build_review_queue(tampered)
+
+    def test_http_cap_count_must_not_claim_unshown_records(self):
+        source = payload([pair("A", "F", ["e1"])])
+        source["identity_timelines"] = [{"id": str(i)} for i in range(13)]
+        source["identity_timelines_returned_count"] = 12
+        self.assertTrue(build_review_queue(source)["coverage_incomplete"])
+        source["identity_timelines_returned_count"] = 13
+        with self.assertRaisesRegex(ValueError, "inconsistent identity_timelines_returned_count"):
+            build_review_queue(source)
+
+
+
+class IdentityTimelineResourceBoundsTests(unittest.TestCase):
+    def test_oversized_hidden_timeline_refused_before_digest(self):
+        source = payload([pair("A", "F", ["e1"])])
+        source["identity_timelines"] = [{"id": str(i)} for i in range(12)] + [
+            {"id": "hidden", "data": "x" * 65536}
+        ]
+        with self.assertRaisesRegex(ValueError, "unbounded identity timeline evidence"):
+            build_review_queue(source)
+
+    def test_malformed_hidden_timeline_refused(self):
+        source = payload([pair("A", "F", ["e1"])])
+        source["identity_timelines"] = [{"id": str(i)} for i in range(12)] + [None]
+        with self.assertRaisesRegex(ValueError, "invalid identity timeline evidence"):
+            build_review_queue(source)
+
+    def test_unbounded_timeline_collection_refused(self):
+        source = payload([pair("A", "F", ["e1"])])
+        source["identity_timelines"] = [{"id": str(i)} for i in range(257)]
+        with self.assertRaisesRegex(ValueError, "invalid or unbounded identity timelines"):
+            build_review_queue(source)
+
+    def test_bounded_over_cap_marks_incomplete(self):
+        source = payload([pair("A", "F", ["e1"])])
+        source["identity_timelines"] = [{"id": str(i)} for i in range(13)]
+        self.assertTrue(build_review_queue(source)["coverage_incomplete"])
+
+
+class MalformedAnnotationIdentityTests(unittest.TestCase):
+    def test_non_scalar_annotation_identity_refused_as_validation_error(self):
+        source = payload([pair("A", "F", ["e1"])])
+        for field in ("window", "event_id"):
+            for invalid in ([], {}, None, 1, True):
+                with self.subTest(field=field, invalid=invalid):
+                    annotation = {"window": "current", "event_id": "e1",
+                                  "true_resource_pairs": []}
+                    annotation[field] = invalid
+                    with self.assertRaisesRegex(ValueError, "invalid annotated event identity"):
+                        score_review_annotations(source, [annotation])
+
+    def test_valid_annotation_identity_still_scores(self):
+        source = payload([pair("A", "F", ["e1"])])
+        annotation = {"window": "current", "event_id": "e1",
+                      "true_resource_pairs": []}
+        result = score_review_annotations(source, [annotation])
+        self.assertEqual(result["false_positive_pairs"], 1)
+        self.assertFalse(result["held_out_verified"])
+
+
+class MalformedUnicodeEvidenceTests(unittest.TestCase):
+    def test_unpaired_surrogates_are_validation_errors_not_server_crashes(self):
+        # JSON transports can carry escaped lone surrogates. UTF-8 evidence
+        # hashing must reject them with a handled ValueError, not UnicodeError.
+        for field, value in (
+            ("observed_case_groups", [{"proves_same_case": False, "label": chr(0xD800)}]),
+            ("identity_timelines", [{"label": chr(0xD800)}]),
+            ("observed_group_continuity", [{"label": chr(0xD800)}]),
+            ("coverage", {"scan_truncated": False, "label": chr(0xD800)}),
+        ):
+            with self.subTest(field=field):
+                source = payload([pair("A", "F", ["e1"])])
+                source[field] = value
+                with self.assertRaises(ValueError):
+                    build_review_queue(source)
+
+
+class AdversarialInterleavingIsolationTests(unittest.TestCase):
+    def test_shared_resource_does_not_create_transitive_cross_case_event_links(self):
+        # Two interleaved workflows mention a common file, but no source event
+        # observes both outer issues. A connected-component case inference
+        # would incorrectly invent a cross-case pair here.
+        source = payload([
+            pair("case-A", "shared", ["a-before", "a-after"]),
+            pair("case-B", "shared", ["b-between"]),
+        ])
+        rows = build_review_queue(source)["event_reviews"]
+        by_event = {row["event_id"]: row for row in rows}
+        self.assertEqual(set(by_event), {"a-before", "b-between", "a-after"})
+        self.assertEqual(by_event["a-before"]["candidate_resource_pairs"],
+                         by_event["a-after"]["candidate_resource_pairs"])
+        self.assertNotEqual(by_event["a-before"]["candidate_resource_pairs"],
+                            by_event["b-between"]["candidate_resource_pairs"])
+        self.assertTrue(all(len(row["candidate_resource_pairs"]) == 1 for row in rows))
+        self.assertTrue(all(row["confirmed_case"] is False for row in rows))
+        labels = [{"window": row["window"], "event_id": row["event_id"],
+                   "true_resource_pairs": row["candidate_resource_pairs"]}
+                  for row in rows]
+        score = score_review_annotations(source, labels)
+        self.assertEqual(score["false_positive_pairs"], 0)
+        # This is a synthetic regression, NOT an independently labeled holdout.
+        self.assertFalse(score["held_out_verified"])
+        self.assertFalse(score["cross_case_contamination_measured"])

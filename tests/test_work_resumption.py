@@ -144,6 +144,9 @@ def test_scans_stay_bounded_on_large_histories():
     full = resumption_candidates(db, lease=ALL)
     assert full["coverage"]["sessions_considered"] == 28 and len(full["candidates"]) == 6
     assert full["candidates_total"] == 27
+    assert all(len(t["episodes"]) <= 8 for t in full["identity_timelines"])
+    assert all(len(e["segments"]) <= 8 for t in full["identity_timelines"] for e in t["episodes"])
+    assert all(t["episodes_truncated"] for t in full["identity_timelines"])
 
 
 def test_real_http_route_requires_ai_context_and_honours_the_grant(tmp_path):
@@ -439,3 +442,20 @@ def test_transitive_group_reports_missing_direct_edge_without_inventing_case():
     assert all(not ({REF["a"], REF["c"]} <=
                     {str(p.get("resource_ref")) for p in pair.get("resource_pointers", [])})
                for pair in assignments)
+
+
+def test_identity_interruption_burst_reports_omitted_evidence():
+    # A busy identity must not silently claim its six displayed IDs are complete.
+    from server.work_resumption import _identity_bursts, _visible_bursts
+    # _iso consumes SQLite julianday values, not Python ordinal days.
+    # This is a valid Julian day near 2026, so timestamp formatting is exercised.
+    observations = [(2461000.0 + i / 86400, f"e{i}") for i in range(11)]
+    bursts = _identity_bursts(observations, 30 / 1440)
+    assert len(bursts) == 1
+    assert bursts[0]["observed_count"] == 11
+    visible = _visible_bursts({"observations": observations}, 30 / 1440)
+    assert len(visible["segments"][0]["evidence_event_ids"]) == 6
+    assert visible["segments"][0]["evidence_truncated"] is True
+    assert visible["segments"][0]["last_observed_at"] != visible["segments"][0]["first_observed_at"]
+    short = _visible_bursts({"observations": observations[:3]}, 30 / 1440)
+    assert short["segments"][0]["evidence_truncated"] is False
