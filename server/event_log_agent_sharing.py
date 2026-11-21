@@ -637,7 +637,17 @@ def trace_clusters(log_id: str, case_type: str | None = None, k: int | None = No
         if cluster["cases"] < floor:
             continue
         variants = [v for v in cluster["top_variants"] if v["cases"] >= floor]
-        shown.append({**{key: value for key, value in cluster.items() if key != "cohort"},
+        # A large cluster can still contain a one-case activity. Only expose
+        # activity contrasts supported by at least five cases both locally
+        # and in the complete log; do not return internal support counters.
+        def safe_contrast(items):
+            return [{key: value for key, value in item.items()
+                     if key not in ("cases_in_cluster", "cases_in_log")}
+                    for item in items if item["cases_in_cluster"] >= floor and item["cases_in_log"] >= floor]
+        shown.append({**{key: value for key, value in cluster.items()
+                         if key not in ("cohort", "more_common_activities", "less_common_activities")},
+                      "more_common_activities": safe_contrast(cluster["more_common_activities"]),
+                      "less_common_activities": safe_contrast(cluster["less_common_activities"]),
                       "top_variants": variants,
                       "top_variants_withheld": len(cluster["top_variants"]) - len(variants)})
     return {**{key: value for key, value in result.items() if key != "log"}, "format": FORMAT, "log_id": log_id,
@@ -691,15 +701,42 @@ def performance_spectrum(log_id: str, case_type: str | None = None, segments: li
     from . import event_log_performance_spectrum as ps
     result = ps.spectrum(log_id, case_type, segments=ps.parse_segments(list(segments or [])), top=top, bins=bins)
     floor = AGENT_MIN_CELL_CASES
+    # Repeated events from one case are not five independent supporting cases.
+    # The dashboard spectrum counts occurrences; separately measure case support
+    # in the same mapped case notion before sharing any segment with agents.
+    def support(conn):
+        return conn.execute("""SELECT activity, next_activity, count(DISTINCT case_id)
+            FROM (SELECT case_id, activity,
+                         lead(activity) OVER (PARTITION BY case_id ORDER BY ts, event_id) AS next_activity
+                  FROM ce) WHERE next_activity IS NOT NULL GROUP BY activity, next_activity""").fetchall()
+    counts = {(a, b): int(n) for a, b, n in workspace._query(log_id, case_type, support)["result"]}
+    with_cases = _level(log_id) == "cases"
     kept = []
+    bins_withheld = False
     for segment in result["segments"]:
-        if segment["occurrences"] < floor:
+        if counts.get((segment["from"], segment["to"]), 0) < floor:
             continue
         durations = {key: value for key, value in segment["duration_seconds"].items() if key != "max"}
-        kept.append({**{key: value for key, value in segment.items() if key not in ("lines", "lines_sampled")},
+        # A time-bin containing 1-4 cases can single out a specific event time.
+        # Withhold the whole series (not one cell, since totals permit subtraction)
+        # unless the owner granted cases-level access.
+        cells = [n for bucket in segment["bins"] for n in bucket["counts"].values() if n is not None]
+        safe_bins = with_cases or all(n == 0 or n >= floor for n in cells)
+        bins_withheld = bins_withheld or not safe_bins
+        kept.append({**{key: value for key, value in segment.items()
+                         if key not in ("lines", "lines_sampled", "bins")},
+                     "bins": segment["bins"] if safe_bins else [],
+                     "bins_withheld_for_small_cells": not safe_bins,
                      "duration_seconds": durations})
-    return {**result, "format": FORMAT, "log_id": log_id, "segments": kept,
-            "withheld": {"segments": len(result["segments"]) - len(kept), "min_occurrences": floor},
+    # No source log details or exact global time origin when some bins/segments
+    # were hidden from an aggregates-only share.
+    hide_clock = not with_cases and (bins_withheld or len(kept) != len(result["segments"]))
+    return {**{k: v for k, v in result.items() if k != "log"},
+            "time_origin": None if hide_clock else result.get("time_origin"),
+            "bin_seconds": None if hide_clock else result.get("bin_seconds"),
+            "format": FORMAT, "log_id": log_id, "segments": kept,
+            "withheld": {"segments": len(result["segments"]) - len(kept), "min_cases": floor,
+                         "spectrum_bins_withheld": bins_withheld},
             "case_lines_returned": False}
 
 
