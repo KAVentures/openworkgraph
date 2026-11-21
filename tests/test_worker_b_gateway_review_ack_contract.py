@@ -33,3 +33,13 @@ def test_interrupted_review_submission_requires_fresh_user_confirmation():
     assert "Review submission outcome is uncertain." in failure
     assert "Reopen the latest authorized revision" in failure
     assert 'encodeURIComponent(record.workflow_id)' in submission
+
+
+def test_acknowledged_review_consumes_explicit_confirmation():
+    """Successful submissions must not leave a reusable approval checkbox."""
+    source = (Path(__file__).resolve().parents[1] / "gateway" / "processes.html").read_text()
+    start = source.index("if(!acknowledged)")
+    end = source.index("render(reviewResult)", start)
+    success = source[start:end]
+    assert '$("reviewConfirm").checked=false' in success
+    assert success.index('$("reviewConfirm").checked=false', success.index("return;")) < success.index('$("handoffStatus").textContent="Design review acknowledged.')
