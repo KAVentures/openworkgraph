@@ -59,6 +59,7 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 | `get_slowest_process_cases` | Slowest cases first (cases level). |
 | `get_process_signals` | Your signal rules and their last evaluated state: triggered or not, value or matching cases, and whether you reviewed it (aggregates level; case IDs at cases level). Never evaluates, acknowledges or snoozes. |
 | `get_process_automation_candidates` | Activities ranked as automation candidates with every score component and routing pattern (aggregates level). See "Automation candidates" in EVENT_LOG_WORKSPACE.md. |
+| `simulate_process_scenario` | What-if simulation calibrated from the log: baseline and scenario (arrivals, activity times, resources, paths, calendar, pools, priorities) with shared random numbers, cycle time, waiting and utilization for both, and optionally replications for uncertainty. At most 5,000 cases and 20 replications; calibrated paths are not returned. | aggregates |
 | `get_process_decision_rules` | Without `activity`: the decision points and their branches. With `activity`: rules learned from data recorded at or before it, with held-out accuracy against the majority baseline (aggregates level). See "Decision rules" in EVENT_LOG_WORKSPACE.md. |
 | `get_process_temporal_profile` | For each ordered pair of activities, the mean and standard deviation of the time between them and how many occurrences deviate by more than `zeta` standard deviations, slower or faster (aggregates level, no case IDs). See "Temporal profile" in EVENT_LOG_WORKSPACE.md. |
 | `get_process_heuristics_net` | The heuristics-miner model: arrows whose dependency is at or above `dependency_threshold`, splits and joins marked AND or XOR, and self- and two-step loops (aggregates level). See "Heuristics net" in EVENT_LOG_WORKSPACE.md. |
@@ -98,6 +99,7 @@ nothing authorizes an action.
 | `GET /v1/process-intelligence/{log_id}/overview?case_type=&sla_hours=` | Same, `aggregates` or `cases`. |
 | `GET /v1/process-intelligence/{log_id}/root-cause?outcome=&hours=&activity=&case_type=` | Same, `aggregates` or `cases`. |
 | `GET /v1/process-intelligence/{log_id}/case?case_id=&case_type=` | Same, `cases` only. |
+| `POST /v1/process-intelligence/{log_id}/simulate` (`{"scenario": {...}, "case_type"?}`) | Agent, `aggregates` or `cases`. |
 | `GET /v1/process-intelligence/{log_id}/slowest-cases?limit=&case_type=` | Same, `cases` only. |
 | `GET /v1/process-intelligence/{log_id}/signals` | Same, `aggregates` or `cases` (case IDs only at `cases`). |
 | `GET /v1/process-intelligence/{log_id}/automation-candidates?limit=&case_type=` | Same, `aggregates` or `cases`. |
