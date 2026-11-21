@@ -357,3 +357,16 @@ def test_review_acknowledgment_rejects_ambiguous_duplicate_actor_entries():
     assert 'entry.decision===decision' in block
     assert block.index(').length===1') < block.index('reviewResult.review.reviews.some((entry)=>')
     assert block.index('if(!acknowledged){') < block.index('render(reviewResult);')
+
+
+def test_handoff_live_reads_bind_reviewer_permission_and_actor_identity():
+    """A valid digest and review status cannot substitute for live reviewer access."""
+    html = PAGE.read_text(encoding="utf-8")
+    review = html.split("async function review(decision) {", 1)[1].split('$("approve").onclick', 1)[0]
+    navigation = html.split('$("handoffReview").addEventListener("click"', 1)[1].split('$("handoffRefresh").addEventListener', 1)[0]
+    inspection = html.split('$("handoffCheck").addEventListener("click"', 1)[1]
+    for block in (review, navigation, inspection):
+        assert "current.permissions?.review!==true" in block
+        assert "current.your_actor_id!==chosen.your_actor_id" in block
+        assert 'current.review?.status!=="reviewed_design"' in block
+        assert block.index("current.permissions?.review!==true") < block.index("resetHandoff(") if block is navigation else True
