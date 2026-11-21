@@ -80,3 +80,23 @@ def test_agent_project_export_revalidates_latest_reviewed_revision():
     # missing-selection refusal at the beginning of the same function.
     review_guard = block.index('current.review?.status !== "reviewed_design"')
     assert review_guard < block.index("throw new Error", review_guard)
+
+
+def test_executable_export_requires_bounded_complete_zip_central_directory():
+    """Reject HTML, truncated ZIP, empty ZIP and oversized downloads before exposing source."""
+    source = (Path(__file__).resolve().parents[1] / "gateway" / "processes.html").read_text()
+    block = source.split("async function download(format) {", 1)[1].split("const url = URL.createObjectURL(exportedBlob)", 1)[0]
+    for guard in (
+        "exportedBlob.size < 22",
+        "exportedBlob.size > maxArchiveBytes",
+        "exportedBlob.size - 65557",
+        "view.getUint32(i, true) !== 0x06054b50",
+        "i + 22 + commentLength !== tail.length",
+        "totalEntries > 0",
+        "diskEntries === totalEntries",
+        "directoryOffset + directorySize <= eocdOffset",
+        "!zipHeader || !directoryValid",
+        "identityTicket !== identityGeneration",
+    ):
+        assert guard in block
+    assert block.index("!zipHeader || !directoryValid") < len(block)
