@@ -438,6 +438,30 @@ class ReviewedTransactionTests(unittest.TestCase):
                 tx.execute(**inputs())
             commit.assert_not_called()
 
+    def test_post_checkpoint_audit_failure_is_not_reported_as_success_or_retried(self):
+        """A lost final audit after a durable commit requires operator reconciliation."""
+        if os.name != "posix":
+            self.skipTest("Private audit writer is POSIX-only")
+        calls = []
+        def audit(name, result, **kwargs):
+            calls.append("audit:" + name)
+            if name == "checkpoint-commit":
+                raise tx.AuditWriteError("final audit unavailable")
+        with patch.dict("os.environ", {"OWG_M365_AUDIT_DIR": "/audit"}), \
+             patch.object(tx, "preflight_operator_audit"), \
+             patch.object(tx, "record_operator_phase", side_effect=audit), \
+             patch.object(tx, "inspect_checkpoint", return_value=None), \
+             patch.object(tx.cycle, "review", return_value={"status": "review_ready", "csv_sha256": DIGEST, "event_snapshots": 1, "removal_markers_for_review": 0, "pages": 1}), \
+             patch.object(tx.cycle, "append", return_value={"status": "receipt_persisted"}) as append, \
+             patch.object(tx.cycle, "handoff", return_value={"status": "next_round_handoff_prepared"}) as handoff, \
+             patch.object(tx.cycle, "checkpoint_commit", return_value={"status": "checkpoint_committed", "generation": 1}) as commit:
+            with self.assertRaises(tx.AuditWriteError):
+                tx.execute(**inputs())
+            append.assert_called_once()
+            handoff.assert_called_once()
+            commit.assert_called_once()
+        self.assertEqual(calls[-1], "audit:checkpoint-commit")
+
     def test_audit_preflight_failure_prevents_any_mutation(self):
         with patch.dict("os.environ", {"OWG_M365_AUDIT_DIR": "/audit"}), \
              patch.object(tx, "preflight_operator_audit", side_effect=OSError("unsafe")), \
