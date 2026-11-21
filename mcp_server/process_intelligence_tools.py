@@ -144,7 +144,8 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         "hourly_open_case_cost": 0.4}. Returns total, activity and holding cost, cost per case (mean, median, p90),
         cost per activity, the cost of repeated executions (an activity done again in the same case) and the
         costliest variants. The log does not record what work cost; these are the model's figures. Per-resource
-        costs are not returned, and activities and variants seen in fewer than 5 cases are withheld. Aggregates.
+        costs are not returned, activities and variants seen in fewer than 5 cases are withheld, and in prices you
+        supply such activities are priced at zero. Aggregates.
         """
         if model is not None and not isinstance(model, dict):
             raise ToolError("model must be an object of prices")

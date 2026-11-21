@@ -413,7 +413,8 @@ def costs(log_id: str, model: dict[str, Any] | None = None, case_type: str | Non
     """Process cost from the owner's saved cost model, or from prices the agent supplies for a what-if
     (aggregates level): totals, cost per case, cost per activity, the cost of repeated executions and the
     costliest variants. Per-resource costs and the single costliest case are not returned, and activities and
-    variants seen in fewer than 5 cases are withheld."""
+    variants seen in fewer than 5 cases are withheld. In a model the agent supplies, activities seen in
+    fewer than 5 cases are priced at zero, so prices cannot single them out."""
     require(log_id, "aggregates")
     from . import event_log_costs as cm
     if model is None:
@@ -430,8 +431,19 @@ def costs(log_id: str, model: dict[str, Any] | None = None, case_type: str | Non
     spec["limit"] = 200
     if case_type:
         spec["case_type"] = case_type
-    result = cm.costs(log_id, spec)
     floor = 5
+    zeroed = 0
+    if source == "agent_supplied_model":
+        # Prices chosen by the agent could single out a rare activity (price it alone and read the total), so
+        # activities seen in fewer than 5 cases always cost nothing in an agent's model.
+        listed = workspace.activities(log_id, case_type)["activities"]
+        if len(listed) >= 500 and spec.get("default_activity_cost"):
+            raise EventLogWorkspaceError("this log has too many activities for a default price; price activities by name")
+        rare = {a["activity"] for a in listed if a["cases"] < floor}
+        prices = spec.get("activity_costs") if isinstance(spec.get("activity_costs"), dict) else {}
+        spec["activity_costs"] = {**prices, **{a: 0 for a in rare}}
+        zeroed = len(rare)
+    result = cm.costs(log_id, spec)
     activities = [a for a in result["activities"] if a["cases"] >= floor]
     variants = [v for v in result["costliest_variants"] if v["cases"] >= floor][:limit]
     unpriced = [u for u in result["unpriced_activities"] if u["events"] >= floor]
@@ -444,7 +456,8 @@ def costs(log_id: str, model: dict[str, Any] | None = None, case_type: str | Non
                          "variants": sum(1 for v in result["costliest_variants"] if v["cases"] < floor),
                          "unpriced_activities": len(result["unpriced_activities"]) - len(unpriced),
                          "min_cases": floor},
-            "resources_returned": False}
+            "resources_returned": False,
+            "rare_activities_priced_at_zero": zeroed}
 
 
 def decision_rules(log_id: str, activity: str | None = None, case_type: str | None = None,

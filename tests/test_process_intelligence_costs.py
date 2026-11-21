@@ -57,6 +57,11 @@ def test_saved_model_and_agent_prices():
     assert r["withheld"]["activities"] == 1 and r["withheld"]["variants"] == 2     # 4-case and 1-case paths
     what_if = sharing.costs(log, {"currency": "EUR", "activity_costs": {"Check": 5}, "default_activity_cost": 0})
     assert what_if["model_source"] == "agent_supplied_model" and what_if["total_cost"] == 80
+    probe = sharing.costs(log, {"activity_costs": {"Escalate": 1000}, "default_activity_cost": 0})
+    assert probe["total_cost"] == 0 and probe["rare_activities_priced_at_zero"] == 1   # cannot single out Escalate
+    by_default = sharing.costs(log, {"activity_costs": {"Open": 0, "Check": 0, "Close": 0}, "default_activity_cost": 7})
+    assert by_default["total_cost"] == 0
+    assert sharing.costs(log)["rare_activities_priced_at_zero"] == 0       # the owner's own prices are kept
     for bad in ({"activity_costs": {"Check": -1}}, {"limit": 3}, "x"):
         with pytest.raises(EventLogWorkspaceError):
             sharing.costs(log, bad)
