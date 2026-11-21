@@ -432,3 +432,14 @@ def test_handoff_inspection_pins_membership_revision_for_review_navigation():
     assert 'current.permissions?.review!==true' in navigation
     assert 'current.your_actor_id!==chosen.your_actor_id' in inspection
     assert 'current.your_actor_id!==chosen.your_actor_id' in navigation
+
+
+def test_handoff_review_submission_rejects_membership_revision_drift():
+    """A consented, digest-identical packet must not survive a membership change at POST time."""
+    html = PAGE.read_text(encoding="utf-8")
+    review = html.split("async function review(decision) {", 1)[1].split('$("approve").onclick', 1)[0]
+    assert "current.access_revision!==pinned.access_revision" in review
+    assert "current.permissions?.review!==true" in review
+    assert "current.your_actor_id!==chosen.your_actor_id" in review
+    assert review.index("current.access_revision!==pinned.access_revision") < review.index('"/reviews"')
+    assert review.index("resetHandoff(\"REFUSED: Reviewed handoff") < review.index('"/reviews"')
