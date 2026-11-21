@@ -369,3 +369,18 @@ def test_handoff_live_reads_bind_reviewer_permission_and_actor_identity():
         assert "current.permissions?.review!==true" in block
         assert "current.your_actor_id!==chosen.your_actor_id" in block
         assert 'current.review?.status!=="reviewed_design"' in block
+
+
+def test_export_response_is_discarded_after_session_or_selection_changes():
+    """An in-flight export must not download after logout, credential rotation or revision switch."""
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split("async function download(format) {", 1)[1].split('$("download', 1)[0]
+    assert "const identityTicket = identityGeneration, authorizedCredential = credential;" in block
+    assert "const exportedBlob = await response.blob();" in block
+    assert "identityTicket !== identityGeneration" in block
+    assert "credential !== authorizedCredential || selected !== selection" in block
+    assert "selected?.process?.workflow_id !== record.workflow_id" in block
+    assert "selected?.process?.revision !== record.revision" in block
+    assert "selected?.process?.content_sha256 !== record.content_sha256" in block
+    assert "Export canceled: session or selected revision changed" in block
+    assert block.index("const exportedBlob = await response.blob();") < block.index("URL.createObjectURL(exportedBlob)")
