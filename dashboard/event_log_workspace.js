@@ -30,6 +30,7 @@
   FILTERED.add('model-change');
   FILTERED.add('model-comparison');
   FILTERED.add('funnel');
+  FILTERED.add('variants.csv');
   FILTERED.add('unusual-cases');
   FILTERED.add('due-dates');
   FILTERED.add('story');
@@ -891,6 +892,18 @@
       else open.onclick=()=>inspection.path(v.path);
       return [v.path.join(' → ')+(v.path_truncated?' … ('+Number(v.path_activity_count).toLocaleString()+' activities; shortened)':''),Number(v.cases).toLocaleString(),pct(v.share),duration(v.median_duration_seconds),open];})));
     variantBox.appendChild(el('div',Number(variants.distinct_variants).toLocaleString()+' distinct variants.','muted'));
+    // Every variant (not just the top ones) for review in a spreadsheet, with running share and durations.
+    const variantsCsv=button('Download all variants (CSV)','secondary');variantsCsv.id='owgVariantsCsv';
+    const variantsCsvStatus=el('span',null,'muted');variantsCsvStatus.id='owgVariantsCsvStatus';variantsCsvStatus.setAttribute('role','status');
+    variantsCsv.onclick=async()=>{
+      variantsCsv.disabled=true;
+      try{const response=await api(logPath('variants.csv',{}));const blob=await response.blob();
+        downloadBlob(blob,(state.logId||'log')+'-variants.csv');
+        const info=response.headers.get('X-OWG-Variants')||'';
+        variantsCsvStatus.textContent=' Downloaded '+(/written=(\d+)/.exec(info)||[,'the'])[1]+' variants'+(/truncated=true/.test(info)?' (the most common; the list was cut)':'')+'.';}
+      catch(error){variantsCsvStatus.textContent=' '+error.message;}
+      finally{variantsCsv.disabled=false;}};
+    const csvRow=el('div',null,'row');csvRow.append(variantsCsv,variantsCsvStatus);variantBox.appendChild(csvRow);
     results.appendChild(variantBox);
     results.appendChild(variantCoverageSection(names));
     results.appendChild(reworkSection());
@@ -1817,7 +1830,7 @@
   }
 
   function toCSV(rows){
-    const cell=v=>{const t=v===null||v===undefined?'':String(v);const safe=typeof v!=='number'&&/^[=+\-@\t\r]/.test(t)?"'"+t:t;return /[",\n\r]/.test(safe)?'"'+safe.replace(/"/g,'""')+'"':safe;};
+    const cell=v=>{const t=v===null||v===undefined?'':String(v);const safe=typeof v!=='number'&&(/^[\t\r\n]/.test(t)||/^[\s\ufeff]*[=+\-@]/.test(t))?"'"+t:t;return /[",\n\r]/.test(safe)?'"'+safe.replace(/"/g,'""')+'"':safe;};
     return rows.map(r=>r.map(cell).join(',')).join('\r\n')+'\r\n';
   }
   function download(name,text,type){
@@ -6330,7 +6343,6 @@
     box.append(row,status,player.node,graphHost,exportRow,slow);
     const generation=state.generation;let timer=null,request=0,lastCaption='',lastMap=null;
     // The numbers behind the drawn map, one row per activity, start, path and end, for a spreadsheet.
-    const safeCell=v=>{const t=v===null||v===undefined?'':String(v);const s=/^[=+\-@\t\r]/.test(t)?"'"+t:t;return /[",\n\r]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;};
     csvButton.onclick=()=>{
       if(!lastMap){status.textContent='No map is drawn to download.';return;}
       const r=lastMap,lines=[['kind','from','to','count','cases','median_gap_seconds','mean_gap_seconds','p90_gap_seconds']];
@@ -6338,7 +6350,7 @@
       Object.entries(r.start_activities||{}).forEach(([a,n])=>lines.push(['start','',a,n,'','','','']));
       r.transitions.forEach(t=>lines.push(['path',t.from,t.to,t.transition_count,t.case_count,t.median_elapsed_gap_seconds,t.mean_elapsed_gap_seconds,t.p90_elapsed_gap_seconds]));
       Object.entries(r.end_activities||{}).forEach(([a,n])=>lines.push(['end',a,'',n,'','','','']));
-      downloadBlob(new Blob([lines.map(l=>l.map(safeCell).join(',')).join('\n')+'\n'],{type:'text/csv'}),mapFileName('csv'));
+      downloadBlob(new Blob([toCSV(lines)],{type:'text/csv'}),mapFileName('csv'));
       status.textContent='Downloaded the map data: '+r.activities.length+' activities and '+r.transitions.length+' paths at the current settings.';
     };
     const currentSvg=()=>graphHost.querySelector('#owgMapDrawing svg')||graphHost.querySelector('svg');

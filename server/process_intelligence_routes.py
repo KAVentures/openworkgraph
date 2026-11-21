@@ -85,6 +85,35 @@ async def agent_logs(request: Request):
     return await _answer(sharing.shared_logs)
 
 
+@router.get("/v1/process-intelligence/{log_id}/trace-clusters")
+async def agent_trace_clusters(request: Request, log_id: str, k: int | None = Query(default=None, ge=2, le=12),
+                               max_k: int = Query(default=8, ge=2, le=12),
+                               case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.trace_clusters, log_id, case_type, k, max_k)
+
+
+@router.post("/v1/process-intelligence/{log_id}/compliance")
+async def agent_compliance(request: Request, log_id: str):
+    """POST because the rules are a JSON list. Body: {"rules": [...], "case_type": optional text}."""
+    _require_agent_access(request)
+    spec = await _json_body(request, "compliance rules", strict=True, limit=65536)
+    if not isinstance(spec, dict) or "rules" not in spec or set(spec) - {"rules", "case_type"}:
+        raise HTTPException(422, 'send {"rules": [...]} with optional case_type')
+    case_type = spec.get("case_type")
+    if case_type is not None and (not isinstance(case_type, str) or not 0 < len(case_type) <= 200):
+        raise HTTPException(422, "case_type must be a short text")
+    return await _answer(sharing.compliance, log_id, spec["rules"], case_type)
+
+
+@router.get("/v1/process-intelligence/{log_id}/performance-spectrum")
+async def agent_performance_spectrum(request: Request, log_id: str, segment: list[str] = Query(default=[], max_length=12),
+                                     top: int = Query(default=6, ge=1, le=12), bins: int = Query(default=30, ge=2, le=100),
+                                     case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.performance_spectrum, log_id, case_type, segment, top, bins)
+
+
 @router.get("/v1/process-intelligence/{log_id}/overview")
 async def agent_overview(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                          sla_hours: float | None = Query(default=None, gt=0, le=100000)):
@@ -190,6 +219,12 @@ async def agent_heuristics_net(request: Request, log_id: str,
                                case_type: str | None = Query(default=None, max_length=200)):
     _require_agent_access(request)
     return await _answer(sharing.heuristics_net, log_id, case_type, dependency_threshold)
+
+
+@router.get("/v1/process-intelligence/{log_id}/data-quality")
+async def agent_data_quality(request: Request, log_id: str):
+    _require_agent_access(request)
+    return await _answer(sharing.data_quality, log_id)
 
 
 @router.get("/v1/process-intelligence/{log_id}/footprints")
