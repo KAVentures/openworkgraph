@@ -56,6 +56,8 @@ const path=require('node:path');
    const saved=page.locator('#owgFilterSetList');await saved.filter({hasText:'not tagged "off-model"'}).waitFor();
    s=await summaryAfter(()=>saved.getByRole('button',{name:'Apply saved filter Fitting cases'}).click());
    assert.equal(s.body.cases,7);
+   // The summary arrives before the sections are rebuilt: wait for the re-rendered filter before auditing it.
+   await page.locator('#owgCaseFilterStatus').filter({hasText:'Active: not tagged "off-model".'}).waitFor();
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgCaseFilter'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
