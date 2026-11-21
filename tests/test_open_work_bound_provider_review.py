@@ -31,8 +31,8 @@ def install(monkeypatch, data, review, provider, scope_check=None):
     async def admitted_scope():
         return "tenant-1"
 
-    async def body(request, allowed):
-        assert set(data) == allowed
+    async def body(request, allowed, optional=None):
+        assert (set(data) == allowed if optional is None else allowed <= set(data) <= allowed | optional)
         return data
 
     async def recheck(scope):
@@ -165,3 +165,129 @@ def test_source_revocation_after_provider_read_denies_disclosure(monkeypatch):
         asyncio.run(routes.read_local_bound_provider_review(request(), Response()))
     assert exc.value.status_code == 403
     assert calls == ["review", "provider", "review"]
+
+
+def test_persistence_requires_separate_explicit_write_approval(monkeypatch):
+    data = payload()
+    data["persist_provider_check"] = True
+    calls = []
+
+    async def review(request, response):
+        calls.append("review")
+        return {"case_ref": "case-1", "receipts": {"run_ref": "run-1"}}
+
+    async def provider(request, response):
+        calls.append("provider")
+        return {"provider_operation": "verified"}
+
+    install(monkeypatch, data, review, provider)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.read_local_bound_provider_review(request(), Response()))
+    assert exc.value.status_code == 403
+    assert calls == []
+
+
+def test_persisted_case_evidence_is_not_independent_attempt_receipt(monkeypatch):
+    data = payload()
+    data.update(persist_provider_check=True, confirm_provider_evidence_write=True)
+    calls = []
+    historical = {"case_ref": "case-1", "receipts": {"run_ref": "run-1"}}
+
+    async def review(request, response):
+        calls.append("review")
+        return historical
+
+    async def provider(request, response):
+        raise AssertionError("unbound provider path must not run on persistence")
+
+    async def bound(request, response):
+        calls.append("bound")
+        return {"provider_check_persisted": True, "provider_operation": "verified"}
+
+    install(monkeypatch, data, review, provider)
+    monkeypatch.setattr(routes, "verify_local_bound_run_source", bound)
+    result = asyncio.run(routes.read_local_bound_provider_review(request(), Response()))
+    assert calls == ["review", "bound", "review", "review"]
+    assert result["provider_check_persisted"] is True
+    assert result["persisted_evidence_scope"] == "case_provider_ledger"
+    assert result["persisted_evidence_is_independent_attempt_receipt"] is False
+    assert result["customer_outcome"] == "unknown"
+    assert result["agent_execution_authorized"] is False
+
+
+def test_failed_guarded_persistence_cannot_report_success(monkeypatch):
+    data = payload()
+    data.update(persist_provider_check=True, confirm_provider_evidence_write=True)
+    calls = []
+
+    async def review(request, response):
+        calls.append("review")
+        return {"case_ref": "case-1", "receipts": {"run_ref": "run-1"}}
+
+    async def provider(request, response):
+        raise AssertionError("unbound provider read")
+
+    async def bound(request, response):
+        calls.append("bound")
+        return {"provider_check_persisted": False}
+
+    install(monkeypatch, data, review, provider)
+    monkeypatch.setattr(routes, "verify_local_bound_run_source", bound)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.read_local_bound_provider_review(request(), Response()))
+    assert exc.value.status_code == 409
+    assert calls == ["review", "bound"]
+
+
+def test_direct_bound_run_source_persistence_requires_separate_approval(monkeypatch):
+    """The older public route must not bypass the combined route's write consent."""
+    data = payload()
+    data["persist_provider_check"] = True
+    calls = []
+
+    def dashboard(request):
+        calls.append("auth")
+
+    async def scope():
+        calls.append("scope")
+        return "tenant-1"
+
+    async def body(request, required, optional=None):
+        calls.append("body")
+        assert "confirm_provider_evidence_write" in optional
+        return data
+
+    monkeypatch.setattr(routes, "_dashboard_only", dashboard)
+    monkeypatch.setattr(routes, "_require_scope", scope)
+    monkeypatch.setattr(routes, "_body", body)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.verify_local_bound_run_source(request(), Response()))
+    assert exc.value.status_code == 403
+    assert calls == ["auth", "scope", "body"]
+
+
+def test_bound_provider_persistence_forwards_write_approval(monkeypatch):
+    data = payload()
+    data.update(persist_provider_check=True, confirm_provider_evidence_write=True)
+    historical = {"case_ref": "case-1", "receipts": {"run_ref": "run-1"}}
+    calls = []
+
+    async def review(request, response):
+        return historical
+
+    async def provider(request, response):
+        raise AssertionError("unbound verification must not run")
+
+    async def bound(request, response):
+        raw = await request.body()
+        fields = json.loads(raw)
+        assert fields["persist_provider_check"] is True
+        assert fields["confirm_provider_evidence_write"] is True
+        calls.append("bound")
+        return {"provider_check_persisted": True}
+
+    install(monkeypatch, data, review, provider)
+    monkeypatch.setattr(routes, "verify_local_bound_run_source", bound)
+    result = asyncio.run(routes.read_local_bound_provider_review(request(), Response()))
+    assert result["provider_check_persisted"] is True
+    assert calls == ["bound"]
