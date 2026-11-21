@@ -2315,7 +2315,24 @@
         }
         $("history").onclick = () => run(() => history());
         async function download(format) {
-          const record = selected.process;
+          if (!selected || !credential) throw new Error("Sign in and select an authorized process.");
+          const selection = selected, record = selection.process;
+          const identityTicket = identityGeneration, authorizedCredential = credential;
+          // An agent-project is executable source, not an execution grant.
+          // Never export it from a stale/archived or withdrawn design review.
+          if (format === "agent-project") {
+            const current = await call("/v1/human/processes/" + encodeURIComponent(record.workflow_id));
+            if (identityTicket !== identityGeneration || credential !== authorizedCredential ||
+                selected !== selection || !current?.process ||
+                current.archived || current.viewing_historical_revision ||
+                current.process.workflow_id !== record.workflow_id ||
+                current.process.revision !== record.revision ||
+                current.latest_revision !== record.revision ||
+                current.process.content_sha256 !== record.content_sha256 ||
+                current.review?.status !== "reviewed_design" ||
+                selection.archived || selection.viewing_historical_revision)
+              throw new Error("Executable project export refused: revision or independent review changed. Reopen the latest authorized process.");
+          }
           const response = await fetch(
             "/v1/human/processes/" +
               record.workflow_id +
