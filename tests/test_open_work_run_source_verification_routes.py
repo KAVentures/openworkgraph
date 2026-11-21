@@ -184,6 +184,7 @@ def test_revoked_session_before_optional_persistence_never_appends(monkeypatch, 
     async def exercise():
         payload, source = setup(monkeypatch, tmp_path)
         payload["persist_provider_check"] = True
+        payload["confirm_provider_evidence_write"] = True
         import hashlib
         from unittest.mock import Mock
         actor = hashlib.sha256(Request.headers["authorization"].encode()).hexdigest()
@@ -216,6 +217,7 @@ def test_revocation_inside_optional_persistence_guard_denies_commit(monkeypatch,
     async def exercise():
         payload, source = setup(monkeypatch, tmp_path)
         payload["persist_provider_check"] = True
+        payload["confirm_provider_evidence_write"] = True
         import hashlib
         from unittest.mock import Mock
         actor = hashlib.sha256(Request.headers["authorization"].encode()).hexdigest()
