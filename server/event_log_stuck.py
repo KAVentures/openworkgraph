@@ -5,7 +5,8 @@ next event. An open case (its latest activity is not an end activity) is **stuck
 time since its latest event, measured to the end of the log, exceeds the chosen percentile
 (default the 90th) of those waits. A percentile is used only with at least ``min_support``
 observed waits after that activity; cases at an activity with less history are counted as
-not judged.
+not judged. The case filter selects the open cases to check. Wait history and the cutoff use
+the selected case notion.
 
 Without end activities, every case whose latest activity is ever followed by another event
 elsewhere in the log is treated as open. A stuck case is a prompt to look, not a finding that
@@ -33,7 +34,7 @@ class StuckSpec(BaseModel):
 
 def _parse(spec: Any) -> StuckSpec:
     try:
-        parsed = StuckSpec.model_validate(spec or {})
+        parsed = StuckSpec.model_validate({} if spec is None else spec)
     except ValidationError as exc:
         first = exc.errors()[0]
         raise workspace.EventLogWorkspaceError(
@@ -46,19 +47,20 @@ def _parse(spec: Any) -> StuckSpec:
 
 def stuck_cases(log_id: str, spec: Any = None) -> dict[str, Any]:
     settings = _parse(spec)
+    selected = cohorts.parse_cohort(settings.cohort)
 
     def run(conn):
-        cohorts.restrict(conn, cohorts.parse_cohort(settings.cohort), log_id)
         as_of = conn.execute("SELECT max(ts) FROM ce").fetchone()[0]
         if as_of is None:
-            return {"as_of": None, "open_cases": 0, "stuck_cases": 0, "cases": [], "by_activity": []}
+            return None, []
         conn.execute("""CREATE OR REPLACE TEMP TABLE st_gaps AS SELECT activity,
               epoch(lead(ts) OVER (PARTITION BY case_id ORDER BY ts, event_id) - ts) AS gap
             FROM ce""")
         conn.execute("""CREATE OR REPLACE TEMP TABLE st_norm AS SELECT activity, count(gap) AS n,
               quantile_cont(gap, ?) AS threshold, quantile_cont(gap, 0.5) AS median_gap
             FROM st_gaps WHERE gap IS NOT NULL GROUP BY activity""", [float(settings.percentile)])
-        ends = [a.strip() for a in settings.end_activities]
+        cohorts.restrict(conn, selected, log_id)
+        ends = settings.end_activities
         follow = "TRUE" if ends else "a.activity IN (SELECT activity FROM st_norm)"
         conn.execute(f"""CREATE OR REPLACE TEMP TABLE st_open AS SELECT a.case_id, a.activity, a.last_ts,
               epoch(?::TIMESTAMP - a.last_ts) AS idle, a.events, a.started
@@ -89,9 +91,11 @@ def stuck_cases(log_id: str, spec: Any = None) -> dict[str, Any]:
                           "threshold_seconds": round(threshold, 3), "usual_wait_seconds": round(median_gap, 3),
                           "times_usual_threshold": round(idle / threshold, 2) if threshold else None,
                           "events_so_far": events, "age_seconds": round(age, 3)})
-    stuck.sort(key=lambda c: (-(c["times_usual_threshold"] or 0), c["case_id"]))
+    stuck.sort(key=lambda c: (c["times_usual_threshold"] is not None,
+                             -(c["times_usual_threshold"] if c["times_usual_threshold"] is not None else c["idle_seconds"]),
+                             c["case_id"]))
     return {**result, "settings": settings.model_dump(exclude={"cohort", "case_type"}),
-            "cohort": cohorts.describe(cohorts.parse_cohort(settings.cohort)),
+            "cohort": cohorts.describe(selected),
             "as_of": as_of.isoformat() + "Z" if as_of else None,
             "open_cases": len(rows), "judged_open_cases": judged, "not_judged_open_cases": unjudged,
             "stuck_cases": len(stuck), "cases": stuck[:settings.limit], "cases_truncated": len(stuck) > settings.limit,

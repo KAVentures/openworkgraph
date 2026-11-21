@@ -2496,6 +2496,18 @@ optionally `early_days=7`) plus the case-filter parameters, in which `activity` 
 contain an activity. Agents use `get_process_due_dates`; case IDs only for
 logs shared at the cases level.
 
+## Stuck open cases
+
+The case filter selects the open cases to check. The observation cutoff is the latest event in the
+selected case notion, and the usual waits come from observed next events in that same case notion.
+Choose **Open case** to review the event history behind a flagged case.
+
+`POST /v1/event-logs/{log_id}/stuck-cases` takes `end_activities`, `percentile`,
+`min_support`, and the optional `cohort` and `case_type`. End activities match their exact
+labels. The response gives the total flagged count and up to `limit` cases (default 50,
+maximum 500).
+In the dashboard, use a JSON array to enter an end activity with a comma or surrounding spaces.
+
 ## Unusual cases
 
 **Unusual cases** ranks the cases that stand out from the rest of the selection, as the outlier
