@@ -2436,6 +2436,8 @@
                current.review?.status!=="reviewed_design"||
                current.permissions?.review!==true||
                current.your_actor_id!==chosen.your_actor_id||
+               current.access_revision!==inspected.access_revision||
+               chosen.access_revision!==inspected.access_revision||
                chosen.viewing_historical_revision||chosen.archived||
                chosen.process?.revision!==inspected.revision||
                chosen.process?.content_sha256!==inspected.content_sha256){
@@ -2517,7 +2519,8 @@
                current.process.content_sha256!==p.content_sha256||
                current.review?.status!=="reviewed_design"||
                current.permissions?.review!==true||
-               current.your_actor_id!==chosen.your_actor_id){
+               current.your_actor_id!==chosen.your_actor_id||
+               current.access_revision!==chosen.access_revision){
               fail("Current authorized process is archived, changed, inaccessible, mismatched or lacks independent design review of this revision.");return;
             }
             // Inspection may fetch the latest revision while the UI still shows
@@ -2529,7 +2532,7 @@
               return;
             }
             $("handoffStatus").textContent="MATCH: Fresh authorized, independently design-reviewed process revision "+p.revision+" and SHA-256 match. Eligible only for further human review. Consent, owner approval, source access, retention and execution authorization remain unverified.";
-            inspectedHandoff={workflow_id:p.workflow_id,revision:p.revision,content_sha256:p.content_sha256};
+            inspectedHandoff={workflow_id:p.workflow_id,revision:p.revision,content_sha256:p.content_sha256,access_revision:current.access_revision};
             $("handoffReview").disabled=false;
           }catch(_){fail("Fresh authenticated read failed or access was withdrawn.");}
         }));
