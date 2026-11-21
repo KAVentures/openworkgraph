@@ -244,7 +244,7 @@ analysis reads them.
 
 An export is often needed for one project and not after it. **Automatic deletion** lets the owner choose a date after which the log is deleted from this computer, with everything derived from it, exactly as **Delete log** would. Saving the date asks for confirmation. **Keep the log** clears the date, and the date can be changed at any time.
 
-Expired logs are deleted when the list of logs is read, and when an agent asks for a shared log. An expired log is never answered again, even by an agent that asks before anyone opens the dashboard. The date must have a UTC offset, be in the future and be at most 10 years ahead; in the dashboard it is the end of the chosen day, UTC.
+Expired logs are deleted when the list of logs is read (the dashboard does this every time it loads), and when an agent lists or asks for a shared log. Agents are never answered for an expired log, even if they ask before anyone opens the dashboard; your own direct requests for it keep working until the next of those sweeps. Each deletion re-checks the date in the same locked transaction that deletes, so clearing or extending the date always wins over a sweep that had already picked the log. The date must have a UTC offset, be in the future and be at most 10 years ahead; in the dashboard it is the end of the chosen day, UTC.
 
 ## Limits
 

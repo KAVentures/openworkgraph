@@ -74,6 +74,31 @@ def test_sweep_deletes_only_expired_logs_and_agents_never_see_them(monkeypatch):
             conn.close()
 
 
+def test_clearing_or_extending_the_date_wins_over_a_sweep_already_under_way(monkeypatch):
+    """The sweep reads the expired IDs, then the owner acts before it deletes: the log must survive."""
+    cleared, extended, due = _log("cleared"), _log("extended"), _log("due")
+    for log in (cleared, extended, due):
+        expiry.set_expiry(log, _iso(timedelta(days=1)))
+    future = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=2)
+    original = expiry._expired
+
+    def selected_then_owner_acts():
+        ids = original()                                  # the sweep has picked all three
+        monkeypatch.setattr(expiry, "_now", lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+        expiry.set_expiry(cleared, None)                  # Keep the log
+        expiry.set_expiry(extended, _iso(timedelta(days=30)))
+        monkeypatch.setattr(expiry, "_now", lambda: future)
+        return ids
+
+    monkeypatch.setattr(expiry, "_now", lambda: future)
+    monkeypatch.setattr(expiry, "_expired", selected_then_owner_acts)
+    assert sorted(original()) == sorted([cleared, extended, due])
+    assert expiry.sweep()["deleted"] == [due]
+    assert {l["name"] for l in workspace.list_logs()["logs"]} == {"cleared", "extended"}
+    assert expiry.status(cleared)["delete_after"] is None
+    assert workspace.delete_log(extended, only_if_expired_at=future)["deleted"] is False
+
+
 def test_routes(tmp_path):
     code = r'''
 from io import BytesIO

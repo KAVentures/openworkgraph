@@ -3,8 +3,10 @@
 An exported log is often needed for a project and not after it. The owner can set a date after which
 the log is deleted from this computer, with everything derived from it (the same deletion as the Delete
 log button), and change or clear the date at any time. Expired logs are deleted when the list of logs is
-read, when an agent asks for a shared log, and by ``sweep()``; an expired log is never answered again,
-even before the sweep that removes it.
+read (the dashboard does this on every load), when an agent lists or asks for a shared log, and by
+``sweep()``. Agents are never answered for an expired log, even before the sweep removes it; the owner's
+own direct requests for it keep working until that sweep. Each deletion re-checks the date under the
+workspace lock in its own transaction, so clearing or extending the date always wins over a sweep.
 """
 from __future__ import annotations
 
@@ -91,7 +93,9 @@ def sweep() -> dict[str, Any]:
     deleted = []
     for log_id in _expired():
         try:
-            workspace.delete_log(log_id)
+            # Re-checked under the lock and in the deletion's transaction, so a date the owner cleared or
+            # extended after this list was read keeps the log.
+            result = workspace.delete_log(log_id, only_if_expired_at=_now())
         except EventLogWorkspaceError:
             with workspace._LOCK:
                 conn = workspace._connect()
@@ -100,7 +104,8 @@ def sweep() -> dict[str, Any]:
                 finally:
                     conn.close()
             continue
-        deleted.append(log_id)
+        if result.get("deleted"):
+            deleted.append(log_id)
     return {"format": FORMAT, "deleted": deleted}
 
 
