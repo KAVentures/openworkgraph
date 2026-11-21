@@ -29,6 +29,38 @@ def test_range_preview_release_and_stale_scope(log_id):
     assert workspace.summary(log_id)['events']==3
 
 
+def test_discard_range_preserves_other_rows_batches_and_events(log_id):
+    workspace.append_log(log_id, BytesIO(ROWS.encode()), source_format="csv",
+                         mapping={**MAPPING, "keep_rejected": True})
+    original = q.quarantine(log_id)
+    summary_before = workspace.summary(log_id)
+    first_row, second_row = [item["row"] for item in original["rows"] if item["batch"] == 0][:2]
+    selected = {"batch": 0, "row_start": first_row, "row_end": second_row}
+    assert q.discard(log_id, selected)["decision"] == {**selected, "kind": "discard", "rows_discarded": 2}
+    remaining = q.quarantine(log_id)
+    assert remaining["rows"] == [item for item in original["rows"]
+                                 if item["batch"] != 0 or not first_row <= item["row"] <= second_row]
+    assert {item["batch"] for item in remaining["rows"]} == {0, 1}
+    assert remaining["decisions"][0]["row_start"] == first_row
+    assert remaining["decisions"][0]["row_end"] == second_row
+    assert workspace.summary(log_id) == summary_before
+    assert q.discard(log_id, selected)["decision"]["rows_discarded"] == 0
+    assert q.quarantine(log_id)["rows"] == remaining["rows"]
+
+
+def test_discard_rolls_back_when_decision_cannot_be_recorded(log_id, monkeypatch):
+    before = q.quarantine(log_id)
+    row = before["rows"][0]["row"]
+
+    def fail_to_record(*args):
+        raise RuntimeError("decision write failed")
+
+    monkeypatch.setattr(q, "_record", fail_to_record)
+    with pytest.raises(RuntimeError, match="decision write failed"):
+        q.discard(log_id, {"batch": 0, "row_start": row, "row_end": row})
+    assert q.quarantine(log_id) == before
+
+
 @pytest.mark.parametrize('extra',[{'row_start':1}, {'row_start':1,'row_end':2},
     {'batch':0,'row_start':True,'row_end':2},{'batch':0,'row_start':5,'row_end':2},
     {'batch':0,'row_start':0,'row_end':1000000000},{'batch':2147483648}])
@@ -36,6 +68,8 @@ def test_invalid_selection_fails_without_mutation(log_id,extra):
     before=q.quarantine(log_id)
     for action in (q.preview,q.release):
         with pytest.raises(workspace.EventLogWorkspaceError):action(log_id,{'naive_timestamp_offset':'+01:00',**extra})
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        q.discard(log_id, extra)
     assert q.quarantine(log_id)==before
 
 
@@ -77,7 +111,7 @@ def test_review_pagination_handles_batch_numbers_above_two(log_id):
     assert page['rows'][0]['position']==3_000_000_001
 
 
-def test_http_scoped_preview_and_release_require_owner(tmp_path):
+def test_http_scoped_decisions_require_owner(tmp_path):
     import os,subprocess,sys
     from pathlib import Path
     code=r'''
@@ -104,6 +138,13 @@ with TestClient(app) as client:
     assert stale.status_code==422,stale.text
     r=client.post(base+'/release',json={**body,'expected_preview_sha256':token},headers=owner)
     assert r.status_code==200 and r.json()['decision']['rows_released']==1,r.text
+    discard={'batch':0,'row_start':3,'row_end':3}
+    assert client.post(base+'/discard',json=discard,headers=ai).status_code in (401,403)
+    assert client.post(base+'/discard',json={'row_start':3,'row_end':3},headers=owner).status_code==422
+    d=client.post(base+'/discard',json=discard,headers=owner)
+    assert d.status_code==200 and d.headers['cache-control']=='no-store',d.text
+    assert d.json()['decision']=={**discard,'kind':'discard','rows_discarded':1}
+    assert client.get(base,headers=owner).json()['rows_kept']==2
 '''
     env={**os.environ,'WORKFLOW_OBSERVER_DATA':str(tmp_path/'data'),'WORKFLOW_OBSERVER_AUTH_DIR':str(tmp_path/'auth'),'WORKFLOW_OBSERVER_CONFIG':str(tmp_path/'config.json')}
     run=subprocess.run([sys.executable,'-c',code],cwd=Path(__file__).resolve().parents[1],env=env,capture_output=True,text=True,timeout=120)
