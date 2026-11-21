@@ -92,6 +92,35 @@ class AnnotationCliTests(unittest.TestCase):
                     self.assertEqual(main(), 2)
             self.assertIn("must be distinct", errors.getvalue())
 
+class PositiveEventContaminationMetricsTests(unittest.TestCase):
+    def test_positive_false_link_detected_even_with_true_link_present(self):
+        source = payload([pair("A", "F", ["shared"]), pair("B", "G", ["shared"])])
+        row = build_review_queue(source)["event_reviews"][0]
+        score = score_review_annotations(source, [{
+            "window": row["window"], "event_id": row["event_id"],
+            "true_resource_pairs": [row["candidate_resource_pairs"][0]],
+        }])
+        self.assertEqual(score["explicit_positive_events"], 1)
+        self.assertEqual(score["explicit_positive_events_with_false_links"], 1)
+        self.assertEqual(score["explicit_positive_false_link_rate"], 1.0)
+        self.assertEqual(score["explicit_negative_events"], 0)
+        self.assertIsNone(score["explicit_negative_false_link_rate"])
+        self.assertFalse(score["held_out_verified"])
+        self.assertFalse(score["cross_case_contamination_measured"])
+
+    def test_negative_only_probe_does_not_inflate_positive_denominator(self):
+        source = payload([pair("A", "F", ["negative"])])
+        row = build_review_queue(source)["event_reviews"][0]
+        score = score_review_annotations(source, [{
+            "window": row["window"], "event_id": row["event_id"],
+            "true_resource_pairs": [],
+        }])
+        self.assertEqual(score["explicit_positive_events"], 0)
+        self.assertEqual(score["explicit_positive_events_with_false_links"], 0)
+        self.assertIsNone(score["explicit_positive_false_link_rate"])
+        self.assertEqual(score["explicit_negative_false_link_rate"], 1.0)
+
+
 class TruncatedNavigationEvidenceTests(unittest.TestCase):
     def test_group_or_continuity_truncation_blocks_scoring(self):
         # Pair rows may be complete even when case navigation is not.
