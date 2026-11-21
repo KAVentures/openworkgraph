@@ -31,8 +31,8 @@ def install(monkeypatch, data, review, provider, scope_check=None):
     async def admitted_scope():
         return "tenant-1"
 
-    async def body(request, allowed):
-        assert set(data) == allowed
+    async def body(request, allowed, optional=None):
+        assert (set(data) == allowed if optional is None else allowed <= set(data) <= allowed | optional)
         return data
 
     async def recheck(scope):
