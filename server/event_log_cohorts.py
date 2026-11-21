@@ -19,7 +19,7 @@ from .event_log_workspace import EventLogWorkspaceError
 _SEP = workspace._SEP
 _KEYS = {"label", "started_from", "started_before", "resource", "activity", "attribute", "attribute_range", "event_attribute", "tag",
          "follows", "variants", "duration", "starts_with", "ends_with", "ended_from", "ended_before", "events",
-         "path_cases", "rework"}
+         "path_cases", "rework", "without_tag"}
 MAX_FOLLOW_RULES = 5
 MAX_FOLLOW_HOURS = 24 * 3650
 MAX_COHORT_VARIANTS = 500
@@ -41,7 +41,7 @@ def parse_cohort(spec: Any) -> dict[str, Any]:
     if not isinstance(spec, dict) or set(spec) - _KEYS:
         raise EventLogWorkspaceError(
             "cohort accepts label, started_from, started_before, resource, activity, attribute, attribute_range, event_attribute, "
-            "tag, follows, variants, duration, starts_with, ends_with, ended_from, ended_before, events, path_cases, rework")
+            "tag, follows, variants, duration, starts_with, ends_with, ended_from, ended_before, events, path_cases, rework, without_tag")
     cohort: dict[str, Any] = {}
     if spec.get("label") not in (None, ""):
         cohort["label"] = _short(spec["label"], "label")[:80]
@@ -51,7 +51,7 @@ def parse_cohort(spec: Any) -> dict[str, Any]:
             if stamp is None:
                 raise EventLogWorkspaceError(f"cohort {key} must be a timezone-qualified ISO time")
             cohort[key] = stamp.astimezone(timezone.utc).replace(tzinfo=None)
-    for key in ("resource", "activity", "tag", "starts_with", "ends_with"):
+    for key in ("resource", "activity", "tag", "without_tag", "starts_with", "ends_with"):
         if spec.get(key) not in (None, ""):
             cohort[key] = _short(spec[key], key)
     # ``attribute`` matches the case object; ``event_attribute`` matches any event of the case,
@@ -215,6 +215,10 @@ def _predicate(cohort: dict[str, Any], log_id: str) -> tuple[str, list[Any]]:
         clauses.append("case_id IN (SELECT case_id FROM ce WHERE resource = ?)"); params.append(cohort["resource"])
     if "activity" in cohort:
         clauses.append("case_id IN (SELECT case_id FROM ce WHERE activity = ?)"); params.append(cohort["activity"])
+    if "without_tag" in cohort:
+        # Cases that do not carry the tag (for example everything except the off-model cases).
+        clauses.append("case_id NOT IN (SELECT case_id FROM case_tags WHERE log_id = ? AND tag = ?)")
+        params += [log_id, cohort["without_tag"].strip()]
     if "tag" in cohort:
         # Cases the analyst tagged (event_log_case_tags); a tag is a judgement, not source data.
         clauses.append("case_id IN (SELECT case_id FROM case_tags WHERE log_id = ? AND tag = ?)")
