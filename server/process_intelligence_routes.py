@@ -220,6 +220,20 @@ async def agent_open_case_next_activity(request: Request, log_id: str,
     return await _answer(sharing.open_case_next_activity, log_id, end_activity, case_type, history, limit)
 
 
+@router.post("/v1/process-intelligence/{log_id}/impact")
+async def agent_impact(request: Request, log_id: str):
+    """POST because the cohorts are JSON objects. Body: {"intervention_at", "metric"?, "activity"?, "sla_hours"?,
+    "window_days"?, "exclude_recent_days"?, "exclude_spanning"?, "treated"?, "control"?, "case_type"?}."""
+    _require_agent_access(request)
+    spec = await _json_body(request, "impact settings", strict=True, limit=32768)
+    if not isinstance(spec, dict):
+        raise HTTPException(422, "send the impact settings as an object")
+    case_type = spec.pop("case_type", None)
+    if case_type is not None and (not isinstance(case_type, str) or not 0 < len(case_type) <= 200):
+        raise HTTPException(422, "case_type must be a short text")
+    return await _answer(sharing.impact, log_id, spec, case_type)
+
+
 @router.get("/v1/process-intelligence/{log_id}/temporal-profile")
 async def agent_temporal_profile(request: Request, log_id: str, zeta: float = Query(default=3.0, ge=0.5, le=10),
                                  case_type: str | None = Query(default=None, max_length=200)):

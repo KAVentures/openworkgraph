@@ -297,6 +297,37 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"end_activity": ends, "history": history, "limit": limit, "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def get_process_intervention_impact(log_id: str, intervention_at: str, metric: str = "cycle_time",
+                                        activity: str | None = None, sla_hours: float | None = None,
+                                        window_days: int | None = None, exclude_recent_days: int = 0,
+                                        treated: dict[str, Any] | None = None, control: dict[str, Any] | None = None,
+                                        case_type: str | None = None) -> dict[str, Any]:
+        """Did a change help? For a shared log, compares cases started before intervention_at (ISO time with an
+        offset, e.g. when an automation went live) with cases started on or after it: metric "cycle_time",
+        "rework", "sla_breach" (needs sla_hours) or "activity_count" (needs activity), as mean and median per
+        period and their difference with bootstrap 95% intervals. window_days keeps both periods equally long;
+        exclude_recent_days leaves out cases that may still be running. treated and control are case filters (as
+        for get_process_overview_for_cases) for a difference-in-differences. A placebo date inside the baseline
+        shows whether the metric was already moving. Periods with too few cases show only their count.
+        Associations between periods, not causal proof or verified savings. Aggregates only.
+        """
+        if metric not in ("cycle_time", "rework", "sla_breach", "activity_count"):
+            raise ToolError("metric must be cycle_time, rework, sla_breach or activity_count")
+        payload: dict[str, Any] = {"intervention_at": intervention_at, "metric": metric,
+                                   "exclude_recent_days": exclude_recent_days}
+        for key, value in (("activity", activity), ("sla_hours", sla_hours), ("window_days", window_days),
+                           ("treated", treated), ("control", control), ("case_type", case_type)):
+            if value is not None:
+                payload[key] = value
+        runtime_module.authorize_tool("get_process_intervention_impact")
+        try:
+            result = runtime_module.secure_post(f"/v1/process-intelligence/{_log(log_id)}/impact", payload)
+        except Exception as exc:
+            raise ToolError(str(exc) or "process intelligence request failed") from None
+        result["interpretation"] = _NOTE
+        return runtime_module.core._finish("get_process_intervention_impact", result)
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_temporal_profile(log_id: str, zeta: float = 3.0, case_type: str | None = None) -> dict[str, Any]:
         """Temporal profile of a shared log: for each ordered pair of activities in a case, the mean and
         standard deviation of the time between them, and how many occurrences lie more than zeta standard

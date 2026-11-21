@@ -572,6 +572,52 @@ def open_case_next_activity(log_id: str, end_activities: list[str], case_type: s
     return {**out, "format": FORMAT, "log_id": log_id, "case_ids_returned": with_cases}
 
 
+AGENT_IMPACT_KEYS = {"intervention_at", "metric", "activity", "sla_hours", "window_days", "exclude_recent_days",
+                     "exclude_spanning", "treated", "control"}
+
+
+def impact(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, Any]:
+    """What changed after an intervention went live (aggregates level): cycle time, rework, SLA breach or an
+    activity's count per case before and after a date, with bootstrap intervals, an optional treated/control
+    difference-in-differences and a placebo check. A period or cohort with fewer cases than the analysis needs
+    for an estimate shows only its case count, so a chosen date or cohort cannot describe a single case."""
+    require(log_id, "aggregates")
+    from . import event_log_impact as im
+    if not isinstance(spec, dict) or set(spec) - AGENT_IMPACT_KEYS or "intervention_at" not in spec:
+        raise EventLogWorkspaceError("impact takes intervention_at and optionally " +
+                                     ", ".join(sorted(AGENT_IMPACT_KEYS - {"intervention_at"})))
+    body = {k: v for k, v in spec.items() if k != "sla_hours"}
+    if "sla_hours" in spec:
+        hours = spec["sla_hours"]
+        if isinstance(hours, bool) or not isinstance(hours, (int, float)) or not 0 < hours <= 10 ** 5:
+            raise EventLogWorkspaceError("sla_hours must be a number of hours above 0")
+        body["sla_seconds"] = max(1, int(round(float(hours) * 3600)))
+    if case_type:
+        body["case_type"] = case_type
+    if spec.get("metric") == "activity_count" and isinstance(spec.get("activity"), str):
+        # Per-period counts of a rare activity would say how many of a handful of cases did it.
+        # Counted directly: workspace.activities lists only the 500 most frequent labels.
+        support = workspace._query(log_id, case_type, lambda conn: {"cases": conn.execute(
+            "SELECT count(DISTINCT case_id) FROM ce WHERE activity = ?", [spec["activity"]]).fetchone()[0]})["cases"]
+        if support < AGENT_MIN_CELL_CASES:
+            raise EventLogWorkspaceError(f"activity_count needs an activity seen in at least {AGENT_MIN_CELL_CASES} cases")
+    result = im.analyze(log_id, body)
+    floor = im.MIN_CASES
+    blanked = 0
+    groups = {}
+    for name, group in (result.get("groups") or {}).items():
+        shown = dict(group)
+        for period in ("baseline", "follow_up"):
+            summary = group.get(period) or {}
+            if summary.get("cases", 0) < floor:
+                if summary.get("cases"):
+                    blanked += 1
+                shown[period] = {"cases": summary.get("cases", 0), "mean": None, "median": None}
+        groups[name] = shown
+    return {**{k: v for k, v in result.items() if k not in ("log", "groups")}, "format": FORMAT, "log_id": log_id,
+            "groups": groups, "withheld": {"period_summaries": blanked, "min_cases": floor}}
+
+
 def temporal_profile(log_id: str, case_type: str | None = None, zeta: float = 3.0) -> dict[str, Any]:
     """Usual times between activity pairs and how often they are broken (aggregates level, no case IDs)."""
     require(log_id, "aggregates")
