@@ -1363,7 +1363,7 @@ const path=require('node:path');
    await page.locator('#owgWaitingRun').click();
    await page.locator('#owgWaitingStatus').filter({hasText:'8 of 8 activity instances have a start and an end'}).waitFor();
    const waitingText=await page.locator('#owgWaitingResults').textContent();
-   assert.match(waitingText,/Review4\s*2\.0 h\s*2\.0 h\s*2\.0 h/,'Review: 2 h processing and 2 h waiting');
+   assert.match(waitingText,/Review4\s*4\s*2\.0 h\s*2\.0 h/,'Review: four complete instances with 2 h median processing');
    assert.doesNotMatch(waitingText,/comment|note/);
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
