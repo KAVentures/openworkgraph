@@ -1800,6 +1800,73 @@ async def event_log_prediction_monitoring(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.get("/v1/event-logs/{log_id}/activity-glossary")
+def event_log_activity_glossary(request: Request, log_id: str):
+    """The owner's notes per activity (description, owner team, system, automation) with coverage."""
+    from . import event_log_activity_glossary as glossary
+    _require_dashboard(request)
+    return _respond(glossary.glossary, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/activity-glossary")
+async def event_log_set_activity_note(request: Request, log_id: str):
+    """Body: {"activity", "description"?, "owner_team"?, "system"?, "automation"?}. All fields empty removes the entry."""
+    from . import event_log_activity_glossary as glossary
+    _require_dashboard(request)
+    spec = await _json_body(request, "glossary entry", strict=True, limit=16384)
+    try:
+        result = await run_in_threadpool(glossary.set_note, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/activity-glossary/delete")
+async def event_log_delete_activity_note(request: Request, log_id: str):
+    from . import event_log_activity_glossary as glossary
+    _require_dashboard(request)
+    spec = await _json_body(request, "glossary entry", strict=True, limit=2048)
+    if not isinstance(spec, dict) or set(spec) != {"activity"}:
+        raise HTTPException(422, 'send {"activity": "..."}')
+    try:
+        result = await run_in_threadpool(glossary.delete_note, log_id, spec["activity"])
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/activity-glossary/import")
+async def event_log_import_activity_glossary(request: Request, log_id: str):
+    """Body: the glossary as CSV text (activity, description, owner_team, system, automation)."""
+    from . import event_log_activity_glossary as glossary
+    _require_dashboard(request)
+    body = await request.body()
+    if len(body) > glossary.MAX_IMPORT_BYTES:
+        raise HTTPException(413, "the glossary CSV is larger than 1 MB")
+    try:
+        text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(422, "the glossary CSV must be UTF-8") from None
+    try:
+        result = await run_in_threadpool(glossary.import_csv, log_id, text)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/v1/event-logs/{log_id}/activity-glossary.csv")
+def event_log_activity_glossary_csv(request: Request, log_id: str):
+    """The glossary as spreadsheet-safe CSV, one line per activity. Not stored."""
+    from . import event_log_activity_glossary as glossary
+    _require_dashboard(request)
+    try:
+        text = glossary.glossary_csv(log_id)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(text, media_type="text/csv; charset=utf-8", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-activity-glossary.csv"'})
+
+
 @router.post("/v1/event-logs/{log_id}/batching")
 async def event_log_batching(request: Request, log_id: str):
     """Batch processing inferred from timestamps and resources, with simulation proposals (R14)."""

@@ -345,6 +345,12 @@ async def agent_similar_cases(request: Request, log_id: str, case_id: str = Quer
     return await _answer(sharing.similar_cases, log_id, case_id, case_type, limit)
 
 
+@router.get("/v1/process-intelligence/{log_id}/activity-glossary")
+async def agent_activity_glossary(request: Request, log_id: str):
+    _require_agent_access(request)
+    return await _answer(sharing.activity_glossary, log_id)
+
+
 @router.get("/v1/process-intelligence/{log_id}/signals")
 async def agent_signals(request: Request, log_id: str):
     _require_agent_access(request)
