@@ -206,7 +206,8 @@ def clusters(log_id: str, spec: Any = None) -> dict[str, Any]:
             contrast = []
             for activity, overall in presence.items():
                 share_in, share_all = inside[activity] / size, overall / cases
-                contrast.append({"activity": activity, "case_share_in_cluster": round(share_in, 4),
+                contrast.append({"activity": activity, "cases_in_cluster": inside[activity],
+                                 "cases_in_log": overall, "case_share_in_cluster": round(share_in, 4),
                                  "case_share_in_log": round(share_all, 4),
                                  "lift": round(share_in / share_all, 3) if share_all else None,
                                  "difference": round(share_in - share_all, 4)})
