@@ -651,6 +651,42 @@ def similar_cases(log_id: str, case_id: str, case_type: str | None = None, limit
             "format": FORMAT, "log_id": log_id}
 
 
+def rework(log_id: str, case_type: str | None = None, limit: int = 20) -> dict[str, Any]:
+    """Repeated activities, loop patterns and how cases with rework compare (aggregates level)."""
+    require(log_id, "aggregates")
+    from . import event_log_rework as rw
+    spec: dict[str, Any] = {"limit": max(1, min(int(limit), 100))}
+    if case_type:
+        spec["case_type"] = case_type
+    return {**rw.rework(log_id, spec), "format": FORMAT, "log_id": log_id}
+
+
+def waiting_times(log_id: str, case_type: str | None = None) -> dict[str, Any]:
+    """Processing and waiting time per activity from start/complete lifecycle data (aggregates level)."""
+    require(log_id, "aggregates")
+    from . import event_log_waiting as waiting
+    return {**waiting.waiting_time(log_id, case_type), "format": FORMAT, "log_id": log_id}
+
+
+def drift(log_id: str, case_type: str | None = None, window: str = "month") -> dict[str, Any]:
+    """When the way cases run changed: change points between windows of cases (aggregates level)."""
+    require(log_id, "aggregates")
+    from . import event_log_drift as dr
+    if window not in ("week", "month"):
+        raise EventLogWorkspaceError("window must be week or month")
+    return {**dr.drift(log_id, case_type, window=window), "format": FORMAT, "log_id": log_id}
+
+
+def stuck_cases(log_id: str, case_type: str | None = None, limit: int = 25) -> dict[str, Any]:
+    """Open cases idle much longer than usual after their latest activity (cases level only)."""
+    require(log_id, "cases")
+    from . import event_log_stuck as st
+    spec: dict[str, Any] = {"limit": max(1, min(int(limit), 100))}
+    if case_type:
+        spec["case_type"] = case_type
+    return {**st.stuck_cases(log_id, spec), "format": FORMAT, "log_id": log_id}
+
+
 def slowest_cases(log_id: str, case_type: str | None = None, limit: int = 10) -> dict[str, Any]:
     require(log_id, "cases")
     from . import event_log_case_explain as case_explain

@@ -272,6 +272,7 @@ async def _listed_tools(tmp_path: Path, enabled: bool) -> set[str]:
 
 PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_overview_for_cases", "get_process_root_cause",
                  "explain_process_case", "get_slowest_process_cases", "tag_process_cases",
+                 "get_process_rework", "get_process_waiting_times", "get_process_drift", "get_stuck_process_cases",
                  "get_process_automation_candidates", "get_process_signals", "get_process_decision_rules",
                  "get_process_temporal_profile", "get_process_heuristics_net",
                  "get_process_footprints", "get_process_model_quality",
