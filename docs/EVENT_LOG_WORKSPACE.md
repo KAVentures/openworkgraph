@@ -1567,6 +1567,7 @@ Signavio process adherence:
 | Template | Holds when | Applies to |
 |---|---|---|
 | `response` (`a`, `b`) | every A is eventually followed by B | cases containing A |
+| `chain_response` (`a`, `b`) | every A is immediately followed by B | cases containing A |
 | `precedence` (`a`, `b`) | every B has an earlier A | cases containing B |
 | `response_within` (`a`, `b`, `seconds`) | every A is followed by B within the limit | cases containing A |
 | `existence` (`a`, `min`, `max`) | A occurs between min and max times | every case |
@@ -1592,6 +1593,12 @@ A rule can also be saved as a signal with `{"kind": "compliance", "rule": {…}}
 triggers on violating cases and reports new violations since the previous check, for example
 after appending a newer export. In the dashboard, "Compliance rules" builds the rule list,
 checks it and offers "Save as signal" for each rule.
+
+Choose **Review violations** to page through the case keys and reasons for a rule, then
+**Open case** to inspect its event history. The dashboard-only endpoint
+`POST /v1/event-logs/{log_id}/compliance/violations` takes a single `rule`, the same optional
+`case_type` and `cohort` as the check, and `limit` from 1 to 100 (default 50). For the next
+page, send the returned `next_after` as `after`. Each page evaluates the current log.
 
 Six rules over one million events take about 7 seconds locally
 (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_compliance.py`). These checks describe the
