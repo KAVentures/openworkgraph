@@ -913,7 +913,7 @@
     results.appendChild(breakdownSection(names));
     results.appendChild(pathExplorerSection());
     results.appendChild(cooccurrenceSection());
-    results.appendChild(dueDatesSection(names));
+    results.appendChild(dueDatesSection(names,inspection));
     results.appendChild(unusualCasesSection());
     results.appendChild(funnelSection(names));
     results.appendChild(modelQualitySection());
@@ -1362,7 +1362,7 @@
       }
       more.onclick=page;await page();
     }
-    return {node:box,path(value,comparisonCohort){
+    return {node:box,open:openCase,path(value,comparisonCohort){
       if(value.length>500){message.textContent='This path exceeds the 500-step case selector limit. Browse by activity or cohort instead.';box.scrollIntoView({block:'nearest'});return;}
       association=false;path=value.slice();transition=null;chosen.textContent='Exact path: '+JSON.stringify(path);
       if(comparisonCohort!==undefined){
@@ -4316,7 +4316,7 @@
     return box;
   }
 
-  function dueDatesSection(activityNames){
+  function dueDatesSection(activityNames,inspection){
     const box=section('Due dates');box.id='owgDue';
     box.appendChild(el('div','Did the step that matters (a payment, a shipment) happen by the date it was due? The due date comes from an attribute such as a payment due date column, or is a fixed number of days after the case started.','muted'));
     const activity=select('owgDueActivity',activityNames.slice(0,500).map(a=>[a,a]));
@@ -4331,11 +4331,12 @@
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activity that is due',activity),field('Due date',mode),attributeField,daysField,field('Early window',early),run);
     const statusLine=el('div',null,'muted');statusLine.id='owgDueStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgDueResults';
+    const review=el('div');review.id='owgDueCaseReview';
     const alertCount=input('owgDueAlertCount','number');alertCount.min='0';alertCount.step='1';alertCount.value='0';
     const alertSave=button('Alert me','secondary');alertSave.id='owgDueAlertSave';
     const alertMessage=el('div',null,'muted');alertMessage.id='owgDueAlertMessage';alertMessage.setAttribute('role','status');alertMessage.setAttribute('aria-live','polite');
     const alertRow=el('div',null,'row');alertRow.style.alignItems='end';alertRow.append(field('Signal when open overdue cases are more than',alertCount),alertSave);
-    box.append(row,statusLine,out,alertRow,alertMessage);
+    box.append(row,statusLine,out,review,alertRow,alertMessage);
     alertSave.onclick=async()=>{
       const when={kind:'due_date',activity:activity.value,metric:'open_overdue_cases',operator:'above',threshold:Math.max(0,Math.floor(Number(alertCount.value)||0))};
       if(mode.value==='attribute'){if(!attribute.value.trim()){alertMessage.textContent='Enter the name of the due-date attribute.';return;}when.due_attribute=attribute.value.trim();}
@@ -4349,18 +4350,61 @@
       finally{alertSave.disabled=false;}};
     const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
     const names={on_time:'On time',early:'Early',late:'Late',open_overdue:'Open, overdue',open_not_due:'Open, not yet due',no_due_date:'No due date',unreadable_due_date:'Unreadable due date'};
+    let reviewTurn=0;
+    function showGroup(url,group){
+      const generation=state.generation,turn=++reviewTurn;
+      const current=()=>generation===state.generation&&turn===reviewTurn;
+      const title=el('h4',names[group]);title.tabIndex=-1;
+      const message=el('div');message.setAttribute('role','status');
+      const rows=el('div'),nav=el('div',null,'row');
+      const previous=button('Previous page','secondary'),next=button('Next page','secondary');
+      nav.append(previous,next);
+      review.replaceChildren(title,message,rows,nav);
+      title.focus();
+      const cursors=[null];let index=0,following=null;
+      const date=value=>value?value.replace('T',' ').slice(0,16)+' UTC':'—';
+      async function load(page){
+        previous.disabled=next.disabled=true;
+        message.textContent='Loading cases…';
+        try{
+          const path=new URL(url,window.location.origin);
+          path.pathname+='/cases';
+          path.searchParams.set('due_group',group);
+          if(cursors[page]!==null)path.searchParams.set('after',cursors[page]);
+          const result=await getJSON(path.pathname+path.search);
+          if(!current())return;
+          index=page;following=result.next_after;
+          message.textContent=Number(result.total).toLocaleString()+' cases in this group. Showing '+result.cases.length+' on this page.';
+          rows.replaceChildren(result.cases.length?table(['Case','Due','Done','Days from due','Evidence'],result.cases.map(c=>{
+            const open=button('Open case','secondary');open.setAttribute('aria-label','Open case '+c.case_id);
+            open.onclick=()=>inspection.open(c.case_id);
+            return [c.case_id,date(c.due_at),date(c.done_at),c.days_from_due??'—',open];
+          })):el('div','No cases on this page.','muted'));
+        }catch(error){if(current())message.textContent=error.message;}
+        finally{if(current()){previous.disabled=index===0;next.disabled=following===null;}}
+      }
+      previous.onclick=()=>load(index-1);
+      next.onclick=()=>{cursors[index+1]=following;load(index+1);};
+      load(0);
+    }
     run.onclick=async()=>{
+      ++reviewTurn;review.replaceChildren();
       const params={due_activity:activity.value};
       if(mode.value==='attribute'){if(!attribute.value.trim()){statusLine.textContent='Enter the name of the due-date attribute.';out.replaceChildren();return;}params.due_attribute=attribute.value.trim();}
       else{if(!(Number(days.value)>0)){statusLine.textContent='Enter a number of days above 0.';out.replaceChildren();return;}params.due_days=days.value;}
       if(early.value)params.early_days=early.value;
       const generation=state.generation;run.disabled=true;statusLine.textContent='Checking due dates…';out.replaceChildren();
       try{
-        const r=await getJSON(logPath('due-dates',params));
+        const url=logPath('due-dates',params);
+        const r=await getJSON(url);
         if(generation!==state.generation)return;
         const g=r.groups;
         statusLine.textContent=r.activity+' happened on time in '+pct(r.on_time_share_of_done)+' of the cases where it happened ('+Number(g.on_time).toLocaleString()+' on time, '+Number(g.late).toLocaleString()+' late'+(r.early_days?', '+Number(g.early).toLocaleString()+' early':'')+'). '+Number(g.open_overdue).toLocaleString()+' open cases are overdue.'+(r.days_late.median!==null?' Late cases were a median '+r.days_late.median+' days late.':'')+((g.no_due_date+g.unreadable_due_date)?' '+Number(g.no_due_date+g.unreadable_due_date).toLocaleString()+' cases have no readable due date.':'');
-        out.appendChild(table(['Group','Cases'],Object.keys(names).filter(k=>g[k]||k==='on_time'||k==='late').map(k=>[names[k],Number(g[k]).toLocaleString()])));
+        out.appendChild(table(['Group','Cases','Evidence'],Object.keys(names).filter(k=>g[k]||k==='on_time'||k==='late').map(k=>{
+          const inspect=button('Inspect cases','secondary');inspect.setAttribute('aria-label','Inspect '+names[k]+' cases');
+          inspect.disabled=!g[k];inspect.onclick=()=>showGroup(url,k);
+          return [names[k],Number(g[k]).toLocaleString(),inspect];
+        })));
         if(r.by_due_month.length>1){out.appendChild(el('h4','By due month'));
           out.appendChild(table(['Due month','Due','On time','Late','Open, overdue','On time of done'],r.by_due_month.map(m=>[m.due_month,String(m.due),String(m.on_time),String(m.late),String(m.open_overdue),pct(m.on_time_share_of_done)])));}
         if(r.most_late_cases&&r.most_late_cases.length){const more=document.createElement('details');more.appendChild(el('summary','Most late cases ('+r.most_late_cases.length+')'));

@@ -48,6 +48,15 @@ const path=require('node:path');
    assert(status.includes('2 open cases are overdue.')&&status.includes('a median 2.38 days late'),status);
    await page.locator('#owgDueResults details summary').click();
    assert.match(await page.locator('#owgDueResults details').textContent(),/inv1[2-7]2\.38/);
+   await box.getByRole('button',{name:'Inspect Open, overdue cases'}).click();
+   const review=page.locator('#owgDueCaseReview');
+   await review.getByText('2 cases in this group. Showing 2 on this page.').waitFor();
+   await review.getByRole('button',{name:'Open case inv18'}).click();
+   const events=page.locator('#owgEventLogCaseEvents');
+   await events.getByRole('heading',{name:'Case inv18'}).waitFor();
+   await events.getByRole('cell',{name:'Remind',exact:true}).waitFor();
+   await box.getByRole('button',{name:'Inspect Late cases',exact:true}).click();
+   await review.getByText('6 cases in this group. Showing 6 on this page.').waitFor();
    await page.locator('#owgDueMode').selectOption('days');await page.locator('#owgDueDays').fill('3');await page.locator('#owgDueRun').click();
    await page.locator('#owgDueStatus').filter({hasText:'(0 on time, 18 late)'}).waitFor();
    // Keep it as a signal: 2 open invoices are overdue, more than 1.
