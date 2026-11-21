@@ -64,7 +64,8 @@ def _private_read(path, limit):
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         with os.fdopen(fd, "rb") as stream:
             info = os.fstat(stream.fileno())
-            if (not stat.S_ISREG(info.st_mode) or info.st_size > limit
+            if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                    or info.st_size > limit
                     or (os.name == "posix" and info.st_mode & 0o077)):
                 raise DeltaError("Private artifact invalid")
             data = stream.read(limit + 1)

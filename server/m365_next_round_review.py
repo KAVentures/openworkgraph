@@ -74,24 +74,56 @@ def prepare(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
     # uncommitted for manual inspection; never automatically retry extraction.
     checked = cycle.review(**scope, candidate=Path(candidate),
                            consent_local_read=True)
-    digest = checked["csv_sha256"]
+    # Treat every adapter response as untrusted, even after a successful Graph
+    # request. A candidate cannot become review-ready without a valid digest
+    # and nonnegative, exact integer event/removal counts.
+    for result in (extracted, checked):
+        if (type(result) is not dict
+                or type(result.get("event_snapshots")) is not int
+                or result["event_snapshots"] < 0
+                or type(result.get("removal_markers_for_review")) is not int
+                or result["removal_markers_for_review"] < 0):
+            raise ReceiptError("Malformed extraction or candidate review metadata")
+    digest = checked.get("csv_sha256")
+    if (type(digest) is not str or len(digest) != 64
+            or any(ch not in "0123456789abcdef" for ch in digest)):
+        raise ReceiptError("Invalid candidate review digest")
+    # A provider summary and independently parsed candidate must agree before
+    # transaction preflight observes either as review-ready evidence.
+    if (checked["event_snapshots"] != extracted["event_snapshots"]
+            or checked["removal_markers_for_review"] != extracted["removal_markers_for_review"]):
+        raise ReceiptError("Extracted candidate review count mismatch")
     proposal = transaction.preflight(
         **scope, log_id=log_id, confirm_log_id=confirm_log_id,
         candidate=Path(candidate), ledger_dir=Path(ledger_dir),
         expected_review_csv_sha256=digest,
         expected_previous_candidate_sha256=expected_previous_candidate_sha256,
         consent_local_read=True)
-    if proposal["proposed_generation"] != expected_generation + 1:
-        raise ReceiptError("Concurrent checkpoint transition")
+    if (type(proposal) is not dict
+            or proposal.get("status") != "review_ready_for_explicit_commit"
+            or type(proposal.get("proposed_generation")) is not int
+            or proposal["proposed_generation"] != expected_generation + 1
+            or type(proposal.get("checkpoint_predecessor_generation")) is not int
+            or proposal["checkpoint_predecessor_generation"] != expected_generation
+            or type(proposal.get("reviewed_event_snapshots")) is not int
+            or proposal["reviewed_event_snapshots"] != checked["event_snapshots"]
+            or type(proposal.get("removal_markers_for_review")) is not int
+            or proposal["removal_markers_for_review"] != checked["removal_markers_for_review"]
+            or proposal.get("reviewed_csv_sha256") != digest
+            or proposal.get("manual_review_and_separate_commit_required") is not True
+            or type(proposal.get("provider_requests")) is not int
+            or proposal["provider_requests"] != 0
+            or type(proposal.get("owg_writes")) is not int
+            or proposal["owg_writes"] != 0
+            or proposal.get("checkpoint_advanced") is not False
+            or proposal.get("automatic_retry_allowed") is not False):
+        raise ReceiptError("Invalid or concurrent checkpoint review preflight")
     # The preflight is read-only, not a lock. Refuse to present a review
     # as current if another operator committed while it was running.
     current = inspect_checkpoint(
         **scope, ledger_dir=Path(ledger_dir), consent_local_read=True)
     if current != predecessor:
         raise ReceiptError("Checkpoint changed during review preflight")
-    if (checked["event_snapshots"] != extracted["event_snapshots"]
-            or checked["removal_markers_for_review"] != extracted["removal_markers_for_review"]):
-        raise ReceiptError("Extracted candidate review count mismatch")
     result = {"format": FORMAT, "status": "operator_review_required",
               "reviewed_csv_sha256": digest,
               "proposed_generation": proposal["proposed_generation"],
