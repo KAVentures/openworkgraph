@@ -305,6 +305,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs/{log_id}/playback?activities=&max_cases=` | Per-case event offsets for animating cases along the process map (below). |
 | `GET`/`POST /v1/event-logs/{log_id}/filter-sets`, `POST .../filter-sets/{set_id}/delete` | Saved, reusable case filters (below). |
 | `GET`/`POST /v1/event-logs/{log_id}/case-tags`, `POST .../case-tags/remove` | Analyst tags on cases (below). |
+| `GET`/`POST /v1/event-logs/{log_id}/activity-glossary`, `POST .../activity-glossary/delete`, `GET .../activity-glossary.csv` | The owner's notes per activity (below). |
 | `GET /v1/event-logs/{log_id}/root-cause?outcome=...` | Case features associated with an outcome, with confidence intervals. |
 | `GET /v1/event-logs/{log_id}/export?format=csv\|xes\|ocel\|ocelxml` | Download the log. |
 | `GET /v1/event-logs/{log_id}/report.html?sla_seconds=&variants=` | Download a self-contained HTML report (below). |
@@ -1165,6 +1166,24 @@ and the log's events are never changed.
 
 A log keeps at most 100 tags and 200,000 tagged cases. Deleting the log deletes
 its tags. A log saved from matching cases does not copy them.
+
+## Activity glossary
+
+Activity names in an export are often terse ("ZF02 posted", "Chk 2"). The **Activity glossary** section keeps the owner's own documentation next to the log, as the knowledge models of process mining tools do. For each activity you can record:
+
+* **Description:** what happens in the step.
+* **Team:** who usually performs it.
+* **System:** the application where it happens.
+* **Automation:** *manual*, *partly automated*, *automated* or *automation candidate*.
+
+The section shows how many activities are described and the share of events they cover. **Download glossary (CSV)** saves the glossary as a spreadsheet; cells that would start a formula are prefixed with `'`.
+
+The notes are stored locally and never change the log's events. A note stays when its activity is no longer in the log, for example after re-importing, and is marked as no longer in the log. Deleting the log deletes its glossary.
+
+* **Listing:** `GET /v1/event-logs/{log_id}/activity-glossary` lists every activity with its events, its notes and the coverage.
+* **Saving an entry:** `POST /v1/event-logs/{log_id}/activity-glossary` with `{"activity", "description"?, "owner_team"?, "system"?, "automation"?}` saves one entry. Sending only the activity clears it.
+* **Deleting an entry:** `POST .../activity-glossary/delete` with `{"activity"}` removes it.
+* **Agents:** when the log is shared with agents, they can read the glossary with `get_process_activity_glossary`. Activities with fewer than 5 events are left out.
 
 ## Explain a case
 

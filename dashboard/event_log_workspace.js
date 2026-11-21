@@ -886,6 +886,7 @@
     results.appendChild(dottedSection());
     results.appendChild(spectrumSection());
     results.appendChild(heuristicsSection());
+    results.appendChild(glossarySection());
     results.appendChild(activityProfileSection(names));
     results.appendChild(breakdownSection(names));
     results.appendChild(pathExplorerSection());
@@ -4242,6 +4243,48 @@
         out.appendChild(el('div',r.caveat,'muted'));
       }catch(error){statusLine.textContent=error.message;}
       finally{run.disabled=false;}};
+    return box;
+  }
+
+  function glossarySection(){
+    const box=section('Activity glossary');box.id='owgGlossary';
+    box.appendChild(el('div','Write down what each activity means, which team usually does it, the system it happens in and how automated it is, so the map can be read by anyone. Your notes are stored locally with the log, never change its events, and agents can read them when you share the log.','muted'));
+    const load=button('Show glossary','secondary');load.id='owgGlossaryLoad';
+    const csv=button('Download glossary (CSV)','secondary');csv.id='owgGlossaryCsv';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(load,csv);
+    const statusLine=el('div',null,'muted');statusLine.id='owgGlossaryStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgGlossaryResults';
+    box.append(row,statusLine,out);
+    const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/activity-glossary';
+    const levels=[['','Not set'],['manual','Manual'],['partly','Partly automated'],['automated','Automated'],['candidate','Automation candidate']];
+    const summary=r=>r.coverage.described+' of '+r.coverage.activities_in_log+' activities described, covering '+Math.round(r.coverage.events_described_share*100)+'% of events.'+(r.automation.candidate?' '+r.automation.candidate+' marked as automation candidates.':'');
+    const render=r=>{
+      out.replaceChildren();
+      const t=table(['Activity','Events','Description','Team','System','Automation',''],r.activities.map(()=>['','','','','','','']));t.id='owgGlossaryTable';
+      t.querySelector('tbody').querySelectorAll('tr').forEach((tr,i)=>{const a=r.activities[i];
+        tr.cells[0].textContent=a.activity+(a.in_log?'':' (no longer in the log)');
+        tr.cells[1].textContent=Number(a.events).toLocaleString();
+        const text=(value,label,max)=>{const node=document.createElement('input');node.type='text';node.value=value||'';node.maxLength=max;node.setAttribute('aria-label',label+' for '+a.activity);return node;};
+        const description=text(a.description,'Description',2000),team=text(a.owner_team,'Team',200),system=text(a.system,'System',200);
+        const automation=document.createElement('select');setOptions(automation,levels);automation.value=a.automation||'';automation.setAttribute('aria-label','Automation for '+a.activity);
+        const save=button('Save','secondary');save.setAttribute('aria-label','Save notes for '+a.activity);
+        save.onclick=async()=>{save.disabled=true;
+          try{const body={activity:a.activity,description:description.value,owner_team:team.value,system:system.value,automation:automation.value||null};
+            const updated=await (await api(base(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+            statusLine.textContent=(updated.removed?'Cleared notes for ':'Saved notes for ')+a.activity+'. '+summary(updated);}
+          catch(error){statusLine.textContent=error.message;}
+          finally{save.disabled=false;}};
+        tr.cells[2].appendChild(description);tr.cells[3].appendChild(team);tr.cells[4].appendChild(system);tr.cells[5].appendChild(automation);tr.cells[6].appendChild(save);});
+      out.append(t,el('div',r.caveat,'muted'));};
+    load.onclick=async()=>{
+      const generation=state.generation;load.disabled=true;statusLine.textContent='Loading the glossary…';out.replaceChildren();
+      try{const r=await getJSON(base());if(generation!==state.generation)return;statusLine.textContent=summary(r);render(r);}
+      catch(error){statusLine.textContent=error.message;}
+      finally{load.disabled=false;}};
+    csv.onclick=async()=>{csv.disabled=true;
+      try{const response=await api(base()+'.csv');downloadBlob(await response.blob(),(state.logId||'log')+'-activity-glossary.csv');statusLine.textContent='Glossary downloaded.';}
+      catch(error){statusLine.textContent=error.message;}
+      finally{csv.disabled=false;}};
     return box;
   }
 

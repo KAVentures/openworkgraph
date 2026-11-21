@@ -1,0 +1,135 @@
+"""The owner's activity glossary: notes per activity, coverage, CSV, deletion with the log, agent view."""
+from __future__ import annotations
+
+import csv
+import io
+import os
+import subprocess
+import sys
+from io import BytesIO
+
+import pytest
+
+from server import event_log_activity_glossary as gl
+from server import event_log_agent_sharing as sharing
+from server import event_log_workspace as workspace
+from server.event_log_workspace import EventLogWorkspaceError
+
+MAPPING = {"case_column": "case", "activity_column": "activity", "timestamp_column": "time"}
+
+
+@pytest.fixture(autouse=True)
+def _dirs(tmp_path, monkeypatch):
+    monkeypatch.setattr(workspace, "DATA_DIR", tmp_path / "data")
+    (tmp_path / "data").mkdir()
+    monkeypatch.setenv("WORKFLOW_OBSERVER_AUTH_DIR", str(tmp_path / "auth"))
+    (tmp_path / "auth").mkdir()
+    monkeypatch.delenv("OWG_PROCESS_INTELLIGENCE_TOOLS", raising=False)
+
+
+def _log():
+    """8 cases Open > Approve > Close, 2 of them also Escalate."""
+    rows = ["case,activity,time"]
+    for i in range(8):
+        steps = ["Open", "Approve"] + (["Escalate"] if i < 2 else []) + ["Close"]
+        rows += [f"c{i},{a},2024-01-{1 + i:02d}T{8 + j:02d}:00:00Z" for j, a in enumerate(steps)]
+    return workspace.import_log(BytesIO("\n".join(rows).encode()), name="g", source_format="csv", mapping=MAPPING)["log_id"]
+
+
+def test_notes_coverage_and_clearing():
+    log = _log()
+    empty = gl.glossary(log)
+    assert [a["activity"] for a in empty["activities"]] == ["Approve", "Close", "Open", "Escalate"]
+    assert empty["coverage"] == {"activities_in_log": 4, "described": 0, "events_described_share": 0.0,
+                                 "notes_not_in_log": 0}
+    r = gl.set_note(log, {"activity": "Approve", "description": "Manager approves the request",
+                          "owner_team": "Finance", "system": "SAP", "automation": "candidate"})
+    row = {a["activity"]: a for a in r["activities"]}["Approve"]
+    assert row["described"] and row["owner_team"] == "Finance" and row["automation"] == "candidate" and row["updated_at"]
+    assert r["coverage"]["described"] == 1 and r["coverage"]["events_described_share"] == round(8 / 26, 4)
+    assert r["automation"]["candidate"] == 1
+    gl.set_note(log, {"activity": "Approve", "description": "  Approves  ", "automation": None})
+    again = {a["activity"]: a for a in gl.glossary(log)["activities"]}["Approve"]
+    assert again["description"] == "Approves" and again["owner_team"] == "" and again["automation"] is None
+    cleared = gl.set_note(log, {"activity": "Approve"})
+    assert cleared["removed"] and cleared["coverage"]["described"] == 0
+
+
+def test_validation_unknown_activities_and_delete():
+    log = _log()
+    for bad in ({"activity": "Nope", "description": "x"}, {"activity": "Open", "automation": "robot"},
+                {"activity": "Open", "extra": 1}, {"description": "x"}, {"activity": "Open", "system": "a\x01b"},
+                {"activity": "Open", "description": "x" * 2001}):
+        with pytest.raises(EventLogWorkspaceError):
+            gl.set_note(log, bad)
+    gl.set_note(log, {"activity": "Open", "description": "Request arrives"})
+    assert gl.delete_note(log, "Open")["coverage"]["described"] == 0
+    with pytest.raises(EventLogWorkspaceError, match="no glossary entry"):
+        gl.delete_note(log, "Open")
+
+
+def test_csv_is_spreadsheet_safe():
+    log = _log()
+    gl.set_note(log, {"activity": "Close", "description": "=HYPERLINK(\"x\")", "system": "@sys"})
+    rows = list(csv.reader(io.StringIO(gl.glossary_csv(log))))
+    assert rows[0] == ["activity", "in_log", "events", "description", "owner_team", "system", "automation"]
+    close = [r for r in rows if r[0] == "Close"][0]
+    assert close[3].startswith("'=") and close[5] == "'@sys" and close[1] == "yes"
+
+
+def test_deleting_the_log_deletes_the_glossary():
+    log = _log()
+    gl.set_note(log, {"activity": "Open", "description": "Request arrives"})
+    workspace.delete_log(log)
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            assert conn.execute("SELECT count(*) FROM activity_notes WHERE log_id = ?", [log]).fetchone()[0] == 0
+        finally:
+            conn.close()
+
+
+def test_agent_view_lists_described_common_activities():
+    log = _log()
+    gl.set_note(log, {"activity": "Approve", "description": "Manager approves", "automation": "manual"})
+    gl.set_note(log, {"activity": "Escalate", "description": "Rare escalation"})
+    with pytest.raises(sharing.NotShared):
+        sharing.activity_glossary(log)
+    sharing.set_share(log, "aggregates")
+    r = sharing.activity_glossary(log)
+    assert [a["activity"] for a in r["activities"]] == ["Approve"]
+    assert r["activities"][0] == {"activity": "Approve", "events": 8, "description": "Manager approves",
+                                  "owner_team": "", "system": "", "automation": "manual"}
+    assert r["withheld"] == {"activities_under_min_events": 1, "min_events": 5}
+
+
+def test_owner_and_agent_routes(tmp_path):
+    code = r'''
+from fastapi.testclient import TestClient
+from server.secure_app import app
+from server import local_auth, event_log_agent_sharing as sharing
+doc = "case,activity,time\n" + "".join(f"c{i},A,2024-01-0{i+1}T00:00:00Z\nc{i},B,2024-01-0{i+1}T01:00:00Z\n" for i in range(6))
+with TestClient(app) as client:
+    owner={'Authorization':'OWG-Session '+local_auth.create_dashboard_session()}
+    bearer={'Authorization':'Bearer '+local_auth.ensure_api_token()}
+    made=client.post('/v1/event-logs/import?format=csv&name=q&case_column=case&activity_column=activity&timestamp_column=time',
+        content=doc.encode(),headers={**owner,'x-owg-local-storage-confirmed':'true'})
+    log=made.json()['log_id']; url='/v1/event-logs/'+log+'/activity-glossary'
+    assert client.get(url).status_code in (401,403) and client.get(url,headers=bearer).status_code in (401,403)
+    assert client.post(url,json={"activity":"A","description":"x"},headers=bearer).status_code in (401,403)
+    r=client.post(url,json={"activity":"A","description":"Start","automation":"automated"},headers=owner)
+    assert r.status_code==200 and r.headers['cache-control']=='no-store', r.text
+    assert r.json()['coverage']['described']==1
+    assert client.post(url,json={"activity":"Z","description":"x"},headers=owner).status_code==422
+    c=client.get(url+'.csv',headers=owner)
+    assert c.status_code==200 and c.headers['content-type'].startswith('text/csv') and 'Start' in c.text
+    assert client.post(url+'/delete',json={"activity":"A","x":1},headers=owner).status_code==422
+    agent='/v1/process-intelligence/'+log+'/activity-glossary'
+    assert client.get(agent,headers=bearer).status_code==404
+    sharing.set_share(log,'aggregates')
+    a=client.get(agent,headers=bearer)
+    assert a.status_code==200 and a.json()['activities'][0]['description']=='Start', a.text
+    assert client.post(url+'/delete',json={"activity":"A"},headers=owner).json()['removed'] is True
+'''
+    env = {**os.environ, 'WORKFLOW_OBSERVER_DATA': str(tmp_path / 'data'), 'WORKFLOW_OBSERVER_AUTH_DIR': str(tmp_path / 'auth')}
+    subprocess.run([sys.executable, '-c', code], env=env, check=True, timeout=60)
