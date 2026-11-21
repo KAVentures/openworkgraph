@@ -156,13 +156,13 @@ def test_one_case_aligned_on_the_discovered_or_given_net(tmp_path, monkeypatch):
 def test_non_fitting_cases_csv_lists_each_deviating_case():
     import csv
     import io
-    log = _import([["A", "B", "C"]] * 3 + [["A", "C"]] * 2 + [["A", "B", "=X", "C"]])
+    log = _import([["A", "B", "C"]] * 3 + [["A", "C"]] * 2 + [["A", "B", "  =X", "C"]])
     text, meta = al.non_fitting_cases_csv(log, _sequence_net(["A", "B", "C"]))
     rows = list(csv.DictReader(io.StringIO(text)))
     assert meta == {"cases": 6, "non_fitting_cases": 3, "unaligned_cases": 0, "truncated": False}
     by_id = {r["case_id"]: r for r in rows}
     assert by_id["c3"]["skipped_steps"] == "B" and by_id["c3"]["extra_steps"] == ""
-    assert by_id["c5"]["extra_steps"] == "'=X" and by_id["c5"]["activities"] == "A > B > =X > C"
+    assert by_id["c5"]["extra_steps"] == "'  =X" and by_id["c5"]["activities"] == "A > B >   =X > C"
     assert by_id["c3"]["alignment_fitness"] == str(round(1 - 1 / 5, 4))
 
 

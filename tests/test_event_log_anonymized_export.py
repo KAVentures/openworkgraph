@@ -88,11 +88,11 @@ def test_summary_only_cohort_and_errors():
 
 
 def test_formula_cells_are_neutralized(tmp_path):
-    rows = ["case,activity,time"] + [f"c{i},=HYPERLINK(1),2024-01-01T0{i}:00:00Z" for i in range(3)]
+    rows = ["case,activity,time"] + [f"c{i},  =HYPERLINK(1),2024-01-01T0{i}:00:00Z" for i in range(3)]
     log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="f", source_format="csv",
                                mapping={k: v for k, v in MAPPING.items() if k != "resource_column"})["log_id"]
     out = _read(ax.anonymized_export(log, min_cases=3)["csv"])
-    assert {row["activity"] for row in out} == {"'=HYPERLINK(1)"}
+    assert {row["activity"] for row in out} == {"'  =HYPERLINK(1)"}
 
 
 def test_owner_only_routes(tmp_path):
