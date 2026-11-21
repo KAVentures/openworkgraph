@@ -73,6 +73,9 @@ def test_bad_requests_are_refused():
         fn.funnel(log, ("A", "B"), evidence_step=2)
     with pytest.raises(EventLogWorkspaceError, match="each step"):
         fn.funnel(log, [1, "B"], evidence_step=2)
+    for steps in ("AB", {"A": 1, "B": 2}, ["A", None], ["A", 1]):
+        with pytest.raises(EventLogWorkspaceError):
+            fn.funnel(log, steps)
 
 
 def test_case_evidence_matches_funnel_and_filters():
@@ -128,6 +131,3 @@ with TestClient(app) as client:
     env = {**os.environ, 'WORKFLOW_OBSERVER_DATA': str(tmp_path / 'data'),
            'WORKFLOW_OBSERVER_AUTH_DIR': str(tmp_path / 'auth')}
     subprocess.run([sys.executable, '-c', code], env=env, check=True, timeout=60)
-    for steps in ("AB", {"A": 1, "B": 2}, ["A", None], ["A", 1]):
-        with pytest.raises(EventLogWorkspaceError):
-            fn.funnel(log, steps)
