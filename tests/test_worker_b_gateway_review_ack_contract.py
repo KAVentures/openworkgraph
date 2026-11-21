@@ -76,4 +76,7 @@ def test_agent_project_export_revalidates_latest_reviewed_revision():
         'current.review?.status !== "reviewed_design"',
     ):
         assert guard in block
-    assert block.index('current.review?.status !== "reviewed_design"') < block.index("throw new Error")
+    # Compare against the refusal belonging to this guard, not the earlier
+    # missing-selection refusal at the beginning of the same function.
+    review_guard = block.index('current.review?.status !== "reviewed_design"')
+    assert review_guard < block.index("throw new Error", review_guard)
