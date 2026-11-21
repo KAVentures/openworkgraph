@@ -393,3 +393,27 @@ def test_executable_sdk_export_revalidates_actor_and_access_revision():
     assert 'current.your_actor_id !== selection.your_actor_id' in block
     assert 'current.access_revision !== selection.access_revision' in block
     assert block.index('current.access_revision !== selection.access_revision') < block.index('const response = await fetch(')
+
+
+def test_acknowledged_review_requires_authenticated_durable_readback():
+    """A POST response alone cannot claim that a human review was recorded."""
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split("async function review(decision) {", 1)[1].split('$("approve").onclick', 1)[0]
+    assert 'recordedReview=await call("/v1/human/processes/"+encodeURIComponent(record.workflow_id));' in block
+    assert 'recordedReview.process.content_sha256===record.content_sha256' in block
+    assert 'recordedReview.your_actor_id===reviewSelection.your_actor_id' in block
+    assert 'entry.decision===decision' in block
+    assert 'recordedEntries.filter(entry=>entry?.reviewer_actor_id===reviewSelection.your_actor_id).length===1' in block
+    assert block.index('reviewResult=await call(') < block.index('recordedReview=await call(')
+    assert block.index('recordedReview=await call(') < block.index('render(reviewResult);')
+
+
+def test_durable_review_readback_failure_requires_recovery_without_retry():
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split("async function review(decision) {", 1)[1].split('$("approve").onclick', 1)[0]
+    assert 'durable Gateway read-back failed' in block
+    assert 'Gateway read-back did not verify this exact review decision' in block
+    assert 'reviewIdentity!==identityGeneration||reviewCredential!==credential' in block
+    assert 'selected!==reviewSelection)return;' in block
+    assert 'if(!recorded) {' in block
+    assert block.index('if(!recorded) {') < block.index('render(reviewResult);')
