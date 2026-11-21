@@ -651,7 +651,9 @@ enter; it is not treated as approved policy.
 ### Root cause
 
 Choose an outcome: case takes longer than N hours, case has rework, case
-contains an activity, or case ends with an activity. Every case feature
+contains an activity, case ends with an activity, or **case has tag** (the cases
+you or an alignment tagged, such as `off-model`; `outcome=tagged&outcome_tag=…`
+in the API). Every case feature
 (activity present, resource involved, case-object attribute value) that both
 5+ cases have and 5+ cases lack is compared:
 
