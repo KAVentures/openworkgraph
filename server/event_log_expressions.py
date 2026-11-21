@@ -122,6 +122,10 @@ def materialize(conn, metric: Arithmetic, columns: dict[str, str], column: str) 
     conn.execute(f"""UPDATE qc SET {column} =
         CASE WHEN isfinite(qexpr_result.result) THEN qexpr_result.result ELSE NULL END
         FROM qexpr_result WHERE qc.case_id = qexpr_result.case_id""")
-    return {"cases_with_missing_operand": missing,
-            "cases_with_zero_divisor": zeros if metric.operation == "divide" else 0,
-            "cases_with_nonfinite_result": nonfinite}
+    # Preserve the established sparse coverage contract used by the query API:
+    # only nonzero non-finite counts are reported, under the existing key.
+    coverage = {"cases_with_missing_operand": missing,
+                "cases_with_zero_divisor": zeros if metric.operation == "divide" else 0}
+    if nonfinite:
+        coverage["cases_with_non_finite_value"] = nonfinite
+    return coverage
