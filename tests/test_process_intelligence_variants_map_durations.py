@@ -77,6 +77,8 @@ def test_durations_and_time_patterns():
     t = sharing.time_patterns(log, time_zone="Europe/Berlin", activity="Open")
     assert t["settings"]["time_zone"] == "Europe/Berlin" and t["settings"]["activity"] == "Open"
     assert sum(map(sum, t["events"])) == 15 and t["events"][0][10] > 0   # 09:00 UTC is 10:00 in Berlin
+    with pytest.raises(EventLogWorkspaceError, match="at least 5 supporting cases"):
+        sharing.time_patterns(log, time_zone="Europe/Berlin", activity="Rare")
     with pytest.raises(EventLogWorkspaceError):
         sharing.time_patterns(log, time_zone="Not/AZone")
 
@@ -104,6 +106,7 @@ with TestClient(app) as client:
     assert d.status_code==200 and [b['cases'] for b in d.json()['bands']]==[0,8,0], d.text
     assert client.get(base+'/duration-distribution?cutoffs_seconds=x',headers=bearer).status_code==422
     assert client.get(base+'/time-patterns?time_zone=UTC',headers=bearer).status_code==200
+    assert client.get(base+'/time-patterns?time_zone=UTC&activity=D',headers=bearer).status_code==422
     assert client.get(base+'/process-map?paths=0',headers=bearer).status_code==422
     assert client.get(base+'/variants').status_code in (401,403)
 '''
