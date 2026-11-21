@@ -2461,11 +2461,14 @@ and 90th percentile), the median hours from it to the case end, and how many cas
 
 **From anywhere in the case** looks for the first place the chosen steps occur one right after
 another, instead of requiring the case to begin with them, which answers "what usually happens after
-Reject → Rework?". The explorer shows recorded order and timing, not why cases branch.
+Reject → Rework?". Continuing down a branch keeps that first occurrence fixed in each case. If a
+case repeats the sequence later, the later occurrence does not change which branch it took.
 
 `GET /v1/event-logs/{log_id}/next-steps?step=Open&step=Check&anchor=start` plus the case-filter
 parameters. Agents use `get_process_next_steps` (aggregates only) and call it again with a step
 appended to go deeper.
+For anchored continuation with `anchor=anywhere`, pass `anchor_steps`, the length of the initial
+sequence. The API's `is_end` field distinguishes a case ending from an activity named `(end)`.
 
 ## Due dates
 
