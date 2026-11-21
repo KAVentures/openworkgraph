@@ -174,6 +174,44 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"activity": activity, "max_depth": max(1, min(int(max_depth), 4)), "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def predict_open_process_cases(log_id: str, end_activities: list[str], outcome: str | None = None,
+                                   outcome_hours: float | None = None, outcome_activity: str | None = None,
+                                   limit: int = 25, case_type: str | None = None) -> dict[str, Any]:
+        """Predictive monitoring for a shared log: for open cases (latest activity not one of end_activities), the
+        estimated remaining time (median and 10th to 90th percentile) learned from completed cases in a comparable
+        state, and optionally the risk of an outcome: "duration_over" (outcome_hours) or "contains_activity"
+        (outcome_activity). A temporal backtest says how good the estimates are. Per-case estimates and case IDs
+        only for logs shared at the cases level; otherwise counts and the backtest. Estimates, not commitments.
+        """
+        ends = list(end_activities or [])
+        if not 1 <= len(ends) <= 20 or any(not isinstance(a, str) or not a for a in ends):
+            raise ToolError("end_activities must be 1 to 20 activity names that end a case")
+        if outcome not in (None, "duration_over", "contains_activity"):
+            raise ToolError("outcome must be duration_over or contains_activity")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ToolError("limit must be 1 to 100")
+        return _get("predict_open_process_cases", f"/v1/process-intelligence/{_log(log_id)}/open-case-predictions",
+                    {"end_activity": ends, "outcome": outcome, "outcome_hours": outcome_hours,
+                     "outcome_activity": outcome_activity, "limit": limit, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def predict_next_process_activity(log_id: str, end_activities: list[str], history: int = 2, limit: int = 25,
+                                      case_type: str | None = None) -> dict[str, Any]:
+        """What usually happens next in the open cases of a shared log, learned from completed cases with the same
+        last 1 to 4 activities (history), with the expected next activities across all open cases and a backtest
+        of how often the top guess was right. Per-case predictions and case IDs only for logs shared at the cases
+        level. Estimates from history, not instructions.
+        """
+        ends = list(end_activities or [])
+        if not 1 <= len(ends) <= 20 or any(not isinstance(a, str) or not a for a in ends):
+            raise ToolError("end_activities must be 1 to 20 activity names that end a case")
+        for name, value, low, high in (("history", history, 1, 4), ("limit", limit, 1, 100)):
+            if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+                raise ToolError(f"{name} must be {low} to {high}")
+        return _get("predict_next_process_activity", f"/v1/process-intelligence/{_log(log_id)}/open-case-next-activity",
+                    {"end_activity": ends, "history": history, "limit": limit, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_temporal_profile(log_id: str, zeta: float = 3.0, case_type: str | None = None) -> dict[str, Any]:
         """Temporal profile of a shared log: for each ordered pair of activities in a case, the mean and
         standard deviation of the time between them, and how many occurrences lie more than zeta standard

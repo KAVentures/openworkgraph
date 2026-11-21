@@ -154,6 +154,29 @@ async def agent_decision_rules(request: Request, log_id: str, activity: str | No
     return await _answer(sharing.decision_rules, log_id, activity, case_type, max_depth)
 
 
+@router.get("/v1/process-intelligence/{log_id}/open-case-predictions")
+async def agent_open_case_predictions(request: Request, log_id: str,
+                                      end_activity: list[str] = Query(min_length=1, max_length=20),
+                                      outcome: str | None = Query(default=None, pattern="^(duration_over|contains_activity)$"),
+                                      outcome_hours: float | None = Query(default=None, gt=0, le=100000),
+                                      outcome_activity: str | None = Query(default=None, min_length=1, max_length=200),
+                                      limit: int = Query(default=25, ge=1, le=100),
+                                      case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.open_case_predictions, log_id, end_activity, case_type, outcome, outcome_hours,
+                         outcome_activity, limit)
+
+
+@router.get("/v1/process-intelligence/{log_id}/open-case-next-activity")
+async def agent_open_case_next_activity(request: Request, log_id: str,
+                                        end_activity: list[str] = Query(min_length=1, max_length=20),
+                                        history: int = Query(default=2, ge=1, le=4),
+                                        limit: int = Query(default=25, ge=1, le=100),
+                                        case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.open_case_next_activity, log_id, end_activity, case_type, history, limit)
+
+
 @router.get("/v1/process-intelligence/{log_id}/temporal-profile")
 async def agent_temporal_profile(request: Request, log_id: str, zeta: float = Query(default=3.0, ge=0.5, le=10),
                                  case_type: str | None = Query(default=None, max_length=200)):
