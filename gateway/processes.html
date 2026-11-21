@@ -2190,6 +2190,37 @@
             note("Review outcome unverified. Reopen the latest authorized revision before taking further action.");
             return;
           }
+          // The POST acknowledgment is not itself a durable read-back receipt.
+          // Verify the recorded decision through a second authenticated Gateway
+          // read before presenting it as confirmed. A lost/denied read leaves
+          // an uncertain outcome and never invites an unsafe blind retry.
+          let recordedReview;
+          try {
+            recordedReview=await call("/v1/human/processes/"+encodeURIComponent(record.workflow_id));
+          } catch (_) {
+            if(reviewIdentity===identityGeneration &&
+               reviewCredential===credential && selected===reviewSelection) {
+              $("reviewConfirm").checked=false;
+              $("reviewOutcome").textContent="Review response acknowledged, but durable Gateway read-back failed. Reopen the latest authorized revision and verify the recorded decision before retrying.";
+            }
+            return;
+          }
+          if(reviewIdentity!==identityGeneration||reviewCredential!==credential||
+             selected!==reviewSelection)return;
+          const recordedEntries=recordedReview?.review?.reviews;
+          const recorded=recordedReview?.process?.workflow_id===record.workflow_id &&
+            recordedReview.process.revision===record.revision &&
+            recordedReview.process.content_sha256===record.content_sha256 &&
+            recordedReview.your_actor_id===reviewSelection.your_actor_id &&
+            Array.isArray(recordedEntries) &&
+            recordedEntries.filter(entry=>entry?.reviewer_actor_id===reviewSelection.your_actor_id).length===1 &&
+            recordedEntries.some(entry=>entry?.reviewer_actor_id===reviewSelection.your_actor_id &&
+              entry.decision===decision);
+          if(!recorded) {
+            $("reviewConfirm").checked=false;
+            $("reviewOutcome").textContent="Gateway read-back did not verify this exact review decision. Reopen the latest authorized revision and inspect its review history before any retry.";
+            return;
+          }
           // An acknowledged decision consumes the explicit human confirmation.
           // A subsequent review, including the opposite decision, must be
           // consciously reconfirmed against the freshly loaded revision.
