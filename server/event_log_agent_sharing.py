@@ -697,8 +697,12 @@ def activity_glossary(log_id: str) -> dict[str, Any]:
     from . import event_log_activity_glossary as gl
     result = gl.glossary(log_id)
     floor = AGENT_MIN_CELL_CASES
-    cases = {a["activity"]: a["cases"] for a in workspace.activities(log_id)["activities"]}
     described = [r for r in result["activities"] if r["in_log"] and r["described"]]
+    # Counted directly for the described activities: workspace.activities lists only the 500 most frequent.
+    names = [r["activity"] for r in described]
+    cases = workspace._query(log_id, None, lambda conn: {"cases": dict(conn.execute(
+        "SELECT activity, count(DISTINCT case_id) FROM ce WHERE list_contains(?, activity) GROUP BY activity",
+        [names]).fetchall()) if names else {}})["cases"]
     listed = [{**{k: r[k] for k in ("activity", "events", "description", "owner_team", "system", "automation")},
                "cases": cases[r["activity"]]}
               for r in described if cases.get(r["activity"], 0) >= floor]

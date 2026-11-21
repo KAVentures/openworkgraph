@@ -179,3 +179,16 @@ def test_csv_import_round_trips_and_skips_unknown():
                        ("", "CSV text"), ("activity,system\nOpen,a\x01b\n", "line 2")):
         with pytest.raises(EventLogWorkspaceError, match=match):
             gl.import_csv(log, bad)
+
+
+def test_agent_view_finds_activities_beyond_the_500_most_frequent():
+    rows = ["case,activity,time"]
+    for k in range(500):
+        rows += [f"c{j},Label {k:03d},2024-01-0{1 + j}T08:{k % 60:02d}:00Z" for j in range(7)]
+    rows += [f"c{j},Late step,2024-01-0{1 + j}T09:00:00Z" for j in range(5)]
+    log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="w", source_format="csv", mapping=MAPPING)["log_id"]
+    assert "Late step" not in {a["activity"] for a in workspace.activities(log)["activities"]}
+    gl.set_note(log, {"activity": "Late step", "description": "Rarely needed, still in 5 cases"})
+    sharing.set_share(log, "aggregates")
+    listed = sharing.activity_glossary(log)["activities"]
+    assert [(a["activity"], a["cases"]) for a in listed] == [("Late step", 5)]
