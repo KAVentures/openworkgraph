@@ -417,3 +417,18 @@ def test_durable_review_readback_failure_requires_recovery_without_retry():
     assert 'selected!==reviewSelection)return;' in block
     assert 'if(!recorded) {' in block
     assert block.index('if(!recorded) {') < block.index('render(reviewResult);')
+
+
+def test_handoff_inspection_pins_membership_revision_for_review_navigation():
+    """A content-identical membership change must invalidate an inspected packet."""
+    html = PAGE.read_text(encoding="utf-8")
+    inspection = html.split('$("handoffCheck").addEventListener("click"', 1)[1]
+    navigation = html.split('$("handoffReview").addEventListener("click"', 1)[1].split('$("handoffRefresh").addEventListener', 1)[0]
+    assert 'current.access_revision!==chosen.access_revision' in inspection
+    assert 'access_revision:current.access_revision' in inspection
+    assert 'current.access_revision!==inspected.access_revision' in navigation
+    assert 'chosen.access_revision!==inspected.access_revision' in navigation
+    assert 'current.permissions?.review!==true' in inspection
+    assert 'current.permissions?.review!==true' in navigation
+    assert 'current.your_actor_id!==chosen.your_actor_id' in inspection
+    assert 'current.your_actor_id!==chosen.your_actor_id' in navigation
