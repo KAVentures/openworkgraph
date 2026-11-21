@@ -705,10 +705,11 @@ def performance_spectrum(log_id: str, case_type: str | None = None, segments: li
     # The dashboard spectrum counts occurrences; separately measure case support
     # in the same mapped case notion before sharing any segment with agents.
     def support(conn):
-        return conn.execute("""SELECT activity, next_activity, count(DISTINCT case_id)
+        rows = conn.execute("""SELECT activity, next_activity, count(DISTINCT case_id)
             FROM (SELECT case_id, activity,
                          lead(activity) OVER (PARTITION BY case_id ORDER BY ts, event_id) AS next_activity
                   FROM ce) WHERE next_activity IS NOT NULL GROUP BY activity, next_activity""").fetchall()
+        return {"result": rows}
     counts = {(a, b): int(n) for a, b, n in workspace._query(log_id, case_type, support)["result"]}
     with_cases = _level(log_id) == "cases"
     kept = []
