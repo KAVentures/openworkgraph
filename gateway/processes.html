@@ -2217,8 +2217,7 @@
             // revoked or its membership revision changed during POST/read-back.
             (!submittedInspectedHandoff ||
               (recordedReview.access_revision===reviewSelection.access_revision &&
-               recordedReview.permissions?.review===true &&
-               recordedReview.review?.status==="reviewed_design")) &&
+               recordedReview.permissions?.review===true)) &&
             Array.isArray(recordedEntries) &&
             recordedEntries.filter(entry=>entry?.reviewer_actor_id===reviewSelection.your_actor_id).length===1 &&
             recordedEntries.some(entry=>entry?.reviewer_actor_id===reviewSelection.your_actor_id &&
