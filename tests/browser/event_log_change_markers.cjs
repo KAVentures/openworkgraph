@@ -31,7 +31,7 @@ const path=require('node:path');
    await page.locator('#owgEventLogStatus').filter({hasText:'Imported 12 events'}).waitFor();
    await page.locator('#owgEventLogAnalyze').click();
       const box=page.locator('#owgImpact');await box.waitFor();await box.scrollIntoViewIfNeeded();
-   await page.waitForFunction(()=>document.querySelector('#owgImpactMarker').options[0].textContent==='No saved changes yet');
+   await page.waitForFunction(()=>{const s=document.querySelector('#owgImpactMarker');return !!s&&s.options[0].textContent==='No saved changes yet';});
    await page.locator('#owgImpactMarkerSave').click();
    await page.locator('#owgImpactMarkerStatus').filter({hasText:'Choose the date the change went live first.'}).waitFor();
    await page.locator('#owgImpactDate').fill('2024-03-04');
@@ -44,7 +44,7 @@ const path=require('node:path');
    assert.deepEqual(options,['Pick a saved change','2024-03-04 \u2014 Automation went live'],options.join('|'));
    // After re-analysis the saved change is still there and fills the date.
    await page.locator('#owgEventLogAnalyze').click();
-   await page.waitForFunction(()=>document.querySelector('#owgImpactMarker').options.length===2);
+   await page.waitForFunction(()=>{const s=document.querySelector('#owgImpactMarker');return !!s&&s.options.length===2;});
    assert.equal(await page.locator('#owgImpactDate').inputValue(),'');
    const value=await page.locator('#owgImpactMarker option').nth(1).getAttribute('value');
    await page.locator('#owgImpactMarker').selectOption(value);
