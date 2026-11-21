@@ -33,6 +33,7 @@
   FILTERED.add('unusual-cases');
   FILTERED.add('due-dates');
   FILTERED.add('story');
+  FILTERED.add('co-occurrence');
   FILTERED.add('activity-profile');
   FILTERED.add('breakdown');
   FILTERED.add('breakdown.csv');
@@ -888,6 +889,7 @@
     results.appendChild(activityProfileSection(names));
     results.appendChild(breakdownSection(names));
     results.appendChild(pathExplorerSection());
+    results.appendChild(cooccurrenceSection());
     results.appendChild(dueDatesSection(names));
     results.appendChild(unusualCasesSection());
     results.appendChild(funnelSection(names));
@@ -4205,6 +4207,36 @@
         out.appendChild(table(['Weekday','Times'],r.by_weekday.map(d=>[d.day,Number(d.times).toLocaleString()])));
         const busy=r.by_hour.filter(h=>h.times).sort((a,b)=>b.times-a.times).slice(0,3).map(h=>String(h.hour).padStart(2,'0')+':00 ('+h.times+')');
         if(busy.length)out.appendChild(el('div','Busiest hours (UTC): '+busy.join(', ')+'.'));
+        out.appendChild(el('div',r.caveat,'muted'));
+      }catch(error){statusLine.textContent=error.message;}
+      finally{run.disabled=false;}};
+    return box;
+  }
+
+  function cooccurrenceSection(){
+    const box=section('Activities that happen together');box.id='owgCooccurrence';
+    box.appendChild(el('div','For the most common activities: when a case has the activity in the row, how often it also has the one in the column, in any order. Lift above 1 means the two go together more than chance would give; 0 means they never occur in the same case, which often marks alternative branches.','muted'));
+    const sizePick=select('owgCooccurrenceSize',[['8','8 most common activities'],['12','12 most common activities'],['20','20 most common activities']]);sizePick.value='12';
+    const run=button('Show activities that happen together','secondary');run.id='owgCooccurrenceRun';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities',sizePick),run);
+    const statusLine=el('div',null,'muted');statusLine.id='owgCooccurrenceStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgCooccurrenceResults';
+    box.append(row,statusLine,out);
+    const pct=x=>x===null||x===undefined?'—':Math.round(x*100)+'%';
+    run.onclick=async()=>{
+      const generation=state.generation;run.disabled=true;statusLine.textContent='Comparing activities…';out.replaceChildren();
+      try{
+        const r=await getJSON(logPath('co-occurrence',{limit:sizePick.value}));
+        if(generation!==state.generation)return;
+        statusLine.textContent=r.activities.length+' activities over '+Number(r.cases).toLocaleString()+' cases. '+(r.never_together.length?r.never_together.length+' pairs never occur in the same case.':'Every pair occurs together in some case.');
+        const names=r.activities.map(a=>a.activity);
+        const cell=w=>{const s=el('span',pct(w.share_of_a));s.title=w.both+' cases'+(w.lift===null?'':', lift '+w.lift);return s;};
+        const t=table(['When a case has … it also has',...names],r.matrix.map(m=>[m.activity+' ('+Number(m.cases).toLocaleString()+')',...m.with.map(cell)]));t.id='owgCooccurrenceMatrix';
+        out.appendChild(t);
+        if(r.go_together.length){out.appendChild(el('h4','Go together most'));
+          out.appendChild(table(['Activities','Cases with both','Lift'],r.go_together.map(p=>[p.a+' + '+p.b,Number(p.both).toLocaleString(),String(p.lift)])));}
+        if(r.never_together.length){out.appendChild(el('h4','Never in the same case'));
+          const nt=table(['Activities','Cases with each'],r.never_together.map(p=>[p.a+' / '+p.b,Number(p.cases_a).toLocaleString()+' / '+Number(p.cases_b).toLocaleString()]));nt.id='owgCooccurrenceNever';out.appendChild(nt);}
         out.appendChild(el('div',r.caveat,'muted'));
       }catch(error){statusLine.textContent=error.message;}
       finally{run.disabled=false;}};
