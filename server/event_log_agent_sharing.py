@@ -690,7 +690,19 @@ def time_patterns(log_id: str, case_type: str | None = None, time_zone: str = "U
     if support < AGENT_MIN_CELL_CASES:
         raise EventLogWorkspaceError(
             f"agent time patterns require at least {AGENT_MIN_CELL_CASES} supporting cases")
-    return {**{k: v for k, v in result.items() if k != "log"}, "format": FORMAT, "log_id": log_id}
+    out = {k: v for k, v in result.items() if k != "log"}
+    # A five-case total does not make a single weekday/hour bucket safe.
+    # Even one occurrence can identify a case. Drop the entire fine-grained
+    # series when sparse, rather than hiding one bucket that can be recovered
+    # by subtracting the other buckets from the displayed total.
+    cells = [v for grid in (result["events"], result["case_arrivals"])
+             for row in grid for v in row]
+    if any(0 < n < AGENT_MIN_CELL_CASES for n in cells):
+        out.update(events=None, case_arrivals=None, busiest=[],
+                   outside_working_hours_share=None, time_bins_withheld=True)
+    else:
+        out["time_bins_withheld"] = False
+    return {**out, "format": FORMAT, "log_id": log_id}
 
 
 AGENT_MIN_CELL_CASES = 5
