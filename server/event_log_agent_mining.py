@@ -174,7 +174,8 @@ def import_agent_runs(spec: Any) -> dict[str, Any]:
     for label, value in (("since", since), ("until", until)):
         if value is not None and (not isinstance(value, str) or _iso(value) is None):
             raise EventLogWorkspaceError(f"{label} must be a time with a UTC offset")
-    if since and until and _iso(since) > _iso(until):
+    # Compare instants, not ISO strings: "00:00:00.5Z" sorts before "00:00:00Z" as text.
+    if since and until and datetime.fromisoformat(_iso(since).replace("Z", "+00:00")) > datetime.fromisoformat(_iso(until).replace("Z", "+00:00")):
         raise EventLogWorkspaceError("since must be before or equal to until")
     max_runs = spec.get("max_runs", 1000)
     if type(max_runs) is not int or not 1 <= max_runs <= MAX_RUNS:
