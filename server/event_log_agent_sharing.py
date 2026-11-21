@@ -434,6 +434,39 @@ def temporal_profile(log_id: str, case_type: str | None = None, zeta: float = 3.
     return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
 
 
+def object_map(log_id: str) -> dict[str, Any]:
+    """The object-centric map: per object type, its activities and which activity follows which for the same
+    object, plus how often objects of two types share events (aggregates level). Object types, activities,
+    transitions, start and end activities and links seen for fewer than 5 objects are withheld, and the single
+    largest object lifecycle and link count are not returned."""
+    require(log_id, "aggregates")
+    from . import event_log_objects as objects
+    result = objects.object_graph(log_id)
+    floor = 5
+    types, withheld = [], {"object_types": 0, "activities": 0, "transitions": 0, "min_objects": floor}
+    for item in result["object_types"]:
+        if item["objects"] < floor:
+            withheld["object_types"] += 1
+            continue
+        acts = [a for a in item["activities"] if a["case_count"] >= floor]
+        names = {a["activity"] for a in acts}
+        edges = [t for t in item["transitions"] if t["case_count"] >= floor and t["from"] in names and t["to"] in names]
+        withheld["activities"] += len(item["activities"]) - len(acts)
+        withheld["transitions"] += len(item["transitions"]) - len(edges)
+        types.append({**{k: v for k, v in item.items() if k != "max_events_per_object"}, "activities": acts,
+                      "transitions": edges,
+                      "start_activities": {a: n for a, n in item["start_activities"].items() if a in names and n >= floor},
+                      "end_activities": {a: n for a, n in item["end_activities"].items() if a in names and n >= floor}})
+    shown = {t["object_type"] for t in types}
+    relations = [{k: v for k, v in r.items() if k != "max_linked_per_object"} for r in result["relations"]
+                 if r["from_type"] in shown and r["to_type"] in shown and r["objects_with_link"] >= floor]
+    shared = [s for s in result["activities_touching_several_types"] if s["events"] >= floor]
+    return {**{k: v for k, v in result.items() if k not in ("log", "object_types", "relations",
+                                                             "activities_touching_several_types")},
+            "format": FORMAT, "log_id": log_id, "object_types": types, "relations": relations,
+            "activities_touching_several_types": shared, "withheld": withheld}
+
+
 def heuristics_net(log_id: str, case_type: str | None = None, dependency_threshold: float = 0.5) -> dict[str, Any]:
     """The heuristics-miner dependency graph with AND/XOR splits and loops (aggregates level)."""
     require(log_id, "aggregates")

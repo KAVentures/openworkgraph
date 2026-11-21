@@ -148,6 +148,12 @@ async def agent_temporal_profile(request: Request, log_id: str, zeta: float = Qu
     return await _answer(sharing.temporal_profile, log_id, case_type, zeta)
 
 
+@router.get("/v1/process-intelligence/{log_id}/object-map")
+async def agent_object_map(request: Request, log_id: str):
+    _require_agent_access(request)
+    return await _answer(sharing.object_map, log_id)
+
+
 @router.get("/v1/process-intelligence/{log_id}/heuristics-net")
 async def agent_heuristics_net(request: Request, log_id: str,
                                dependency_threshold: float = Query(default=0.5, ge=0, le=1),
