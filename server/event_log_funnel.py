@@ -47,10 +47,9 @@ def _seconds(ts: Any) -> float:
 
 def funnel(log_id: str, steps: list[str], case_type: str | None = None, *, within_hours: float | None = None,
            cohort: dict[str, Any] | None = None) -> dict[str, Any]:
-    steps = [str(s) for s in (steps or [])]
-    if not MIN_STEPS <= len(steps) <= MAX_STEPS:
+    if not isinstance(steps, list) or not MIN_STEPS <= len(steps) <= MAX_STEPS:
         raise EventLogWorkspaceError(f"choose {MIN_STEPS} to {MAX_STEPS} steps")
-    if any(not s or len(s) > 500 for s in steps):
+    if any(not isinstance(s, str) or not s or len(s) > 500 for s in steps):
         raise EventLogWorkspaceError("each step must name an activity")
     if within_hours is not None and (isinstance(within_hours, bool) or not isinstance(within_hours, (int, float))
                                      or not 0 < within_hours <= MAX_WINDOW_HOURS):

@@ -6187,7 +6187,7 @@
     return box;
   }
 
-  const COMPLIANCE_TEMPLATES=[['response','Every A is eventually followed by B'],['precedence','Every B needs an earlier A'],['response_within','Every A is followed by B within N hours'],['segregation_of_duties','A and B are done by different people'],['not_coexistence','A and B never happen in the same case'],['existence','A happens a set number of times']];
+  const COMPLIANCE_TEMPLATES=[['response','Every A is eventually followed by B'],['chain_response','Every A is immediately followed by B'],['precedence','Every B needs an earlier A'],['response_within','Every A is followed by B within N hours'],['segregation_of_duties','A and B are done by different people'],['not_coexistence','A and B never happen in the same case'],['existence','A happens a set number of times']];
   // Builds one compliance rule from form values; throws a readable error.
   function complianceRule(values){
     const rule={template:values.template,a:values.a};
@@ -6273,7 +6273,7 @@
           r.candidates.length?table(['Suggested rule','Followed by (95% CI)','Applies to','Violating cases',''],rows):el('div','No rule meets these thresholds. Lower them to see more.','muted'));
       }catch(error){suggestions.replaceChildren(el('div',error.message,'muted'));}
     };
-    const label=r=>({response:'every '+r.a+' is eventually followed by '+r.b,precedence:'every '+r.b+' needs an earlier '+r.a,response_within:'every '+r.a+' is followed by '+r.b+' within '+duration(r.seconds),segregation_of_duties:r.a+' and '+r.b+' are done by different people',not_coexistence:r.a+' and '+r.b+' never happen together',existence:r.a+' happens '+(r.max===undefined?'at least '+r.min:r.min===r.max?'exactly '+r.min:r.min+'–'+r.max)+' times'}[r.template]);
+    const label=r=>({response:'every '+r.a+' is eventually followed by '+r.b,chain_response:'every '+r.a+' is immediately followed by '+r.b,precedence:'every '+r.b+' needs an earlier '+r.a,response_within:'every '+r.a+' is followed by '+r.b+' within '+duration(r.seconds),segregation_of_duties:r.a+' and '+r.b+' are done by different people',not_coexistence:r.a+' and '+r.b+' never happen together',existence:r.a+' happens '+(r.max===undefined?'at least '+r.min:r.min===r.max?'exactly '+r.min:r.min+'–'+r.max)+' times'}[r.template]);
     function drawPending(){
       pending.replaceChildren(rules.length?table(['Rule',''],rules.map((r,i)=>{const del=button('Remove','secondary');del.setAttribute('aria-label','Remove rule '+label(r));del.onclick=()=>{rules.splice(i,1);drawPending();};return [label(r),del];})):el('div','No rules added yet.','muted'));
       run.disabled=!rules.length;

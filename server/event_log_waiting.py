@@ -89,10 +89,17 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
                   CASE WHEN st IS NULL THEN 'complete_only' WHEN en < st THEN 'invalid_pair' ELSE 'paired' END AS kind
                 FROM paired WHERE en IS NOT NULL
                 UNION ALL SELECT case_id, activity, ts, ts, NULL, 'no_lifecycle' FROM lc WHERE tr = ''""")
-            # Starts without a k-th complete are still running (or lost their completion).
-            open_starts, unmatched_starts = conn.execute("""SELECT count(*), coalesce(sum(d), 0) FROM (
-                SELECT count(*) FILTER (WHERE tr = 'start') - count(*) FILTER (WHERE tr = 'complete') AS d
-                FROM lc GROUP BY case_id, activity) WHERE d > 0""").fetchone()
+            # An earlier k-th completion is invalid and does not close its start.
+            open_starts, unmatched_starts = conn.execute("""WITH s AS (
+                SELECT case_id, activity, ts, row_number() OVER (
+                    PARTITION BY case_id, activity ORDER BY ts, event_id) AS k FROM lc WHERE tr = 'start'),
+                c AS (SELECT case_id, activity, ts, row_number() OVER (
+                    PARTITION BY case_id, activity ORDER BY ts, event_id) AS k FROM lc WHERE tr = 'complete'),
+                unmatched AS (SELECT s.case_id, s.activity FROM s LEFT JOIN c
+                    ON s.case_id = c.case_id AND s.activity = c.activity AND s.k = c.k
+                    WHERE c.ts IS NULL OR c.ts < s.ts)
+                SELECT count(*), coalesce(sum(n), 0) FROM (
+                    SELECT count(*) AS n FROM unmatched GROUP BY case_id, activity)""").fetchone()
             ignored = conn.execute("SELECT count(*) FROM lc WHERE tr NOT IN ('', 'start', 'complete')").fetchone()[0]
         else:
             conn.execute(f"""CREATE OR REPLACE TEMP TABLE inst AS
