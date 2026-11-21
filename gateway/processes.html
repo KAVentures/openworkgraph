@@ -2213,6 +2213,12 @@
             recordedReview.process.revision===record.revision &&
             recordedReview.process.content_sha256===record.content_sha256 &&
             recordedReview.your_actor_id===reviewSelection.your_actor_id &&
+            // An inspected handoff must not be acknowledged after access was
+            // revoked or its membership revision changed during POST/read-back.
+            (!submittedInspectedHandoff ||
+              (recordedReview.access_revision===reviewSelection.access_revision &&
+               recordedReview.permissions?.review===true &&
+               recordedReview.review?.status==="reviewed_design")) &&
             Array.isArray(recordedEntries) &&
             recordedEntries.filter(entry=>entry?.reviewer_actor_id===reviewSelection.your_actor_id).length===1 &&
             recordedEntries.some(entry=>entry?.reviewer_actor_id===reviewSelection.your_actor_id &&
