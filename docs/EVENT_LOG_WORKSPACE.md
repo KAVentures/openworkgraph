@@ -1158,7 +1158,11 @@ and the log's events are never changed.
   tag everywhere.
 * **Listing tags:** `GET /v1/event-logs/{log_id}/case-tags` lists the tags with
   their case counts. Add `?tag=checked` to also get the tagged cases and their
-  notes (`limit` 1–1000).
+  notes. Use `limit` (1–1000) and `offset` to page through them. The `page`
+  object includes `total` and `next_offset`, which is null on the last page.
+  In the dashboard, use **Show cases** to review notes page by page. Select cases
+  on the current page and use **Remove tag from selected cases** to remove their
+  tag.
 * **Filtering by tag:** the `tag` key of the case filter (`?tag=` on GET
   analyses, `"tag"` in `cohort` bodies, and **Tagged** in the dashboard)
   selects tagged cases in every analysis.
