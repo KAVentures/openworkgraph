@@ -741,6 +741,20 @@ def list_logs() -> dict[str, Any]:
             conn.close()
 
 
+def rename_log(log_id: str, name: Any) -> dict[str, Any]:
+    """Give a saved log a new name; the same rule as at import. Events and analyses are unchanged."""
+    if not isinstance(name, str) or not _NAME.fullmatch(name.strip()):
+        raise EventLogWorkspaceError("a short log name is required")
+    with _LOCK:
+        conn = _connect()
+        try:
+            _check_log(conn, log_id)
+            conn.execute("UPDATE logs SET name = ? WHERE log_id = ?", [name.strip(), log_id])
+            return {"renamed": True, **_check_log(conn, log_id)}
+        finally:
+            conn.close()
+
+
 def delete_log(log_id: str) -> dict[str, Any]:
     from .event_log_jobs import jobs
     # Cancel before waiting for the workspace lock held by a running query.

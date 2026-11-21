@@ -266,6 +266,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | Route | Purpose |
 | --- | --- |
 | `GET /v1/event-logs` | List stored logs. |
+| `POST /v1/event-logs/{log_id}/rename` (`{"name"}`) | Give a stored log a new name (1 to 120 characters, no `<`, `>` or control characters, as at import); its events and analyses are unchanged. In the dashboard: **Rename log**. |
 | `POST /v1/event-logs/import?format=csv\|xes\|ocel\|ocelxml&name=...` | Import the request body. Requires `X-OWG-Local-Storage-Confirmed: true`. CSV also takes `case_column`, `activity_column`, `timestamp_column`, `resource_column`, `delimiter` (`t` for tab) and repeated `attribute_column` for up to 32 extra columns to keep as event attributes (nothing else is stored). |
 | `POST /v1/event-logs/timestamp-formats?column=...&delimiter=...` | Suggest a timestamp format from the start of a CSV file (body, at most 256 KB): `candidates` (each with `pattern`, `order`, `has_offset` and how the first value reads), `ambiguous`, `suggested`. Nothing is stored. Imports and appends take `timestamp_format=`. |
 | `POST /v1/event-logs/xlsx-to-csv?sheet=...` | Convert one worksheet of the `.xlsx` request body to CSV (`csv`, `sheet`, `sheets`, `rows`, `columns`, `date_columns`, `dates_have_no_offset`). Nothing is stored. |

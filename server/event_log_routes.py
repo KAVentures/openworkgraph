@@ -800,6 +800,16 @@ def event_log_appends(request: Request, log_id: str):
     return _respond(workspace.append_history, log_id)
 
 
+@router.post("/v1/event-logs/{log_id}/rename")
+async def rename_event_log(request: Request, log_id: str):
+    """Body: {"name": "..."}; the same name rule as at import."""
+    _require_dashboard(request)
+    spec = await _json_body(request, "new name", strict=True, limit=1024)
+    if not isinstance(spec, dict) or set(spec) != {"name"}:
+        raise HTTPException(422, 'send {"name": "..."}')
+    return _respond(workspace.rename_log, log_id, spec["name"])
+
+
 @router.post("/v1/event-logs/{log_id}/delete")
 def delete_event_log(request: Request, log_id: str):
     _require_dashboard(request)
