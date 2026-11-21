@@ -964,7 +964,7 @@ const path=require('node:path');
      finally { sharingSettled(); }
    },{times:1});
    await page.locator('#owgAnalysisPrepareShare').click();await sharingSeen;
-   const rerunSeen=page.waitForResponse(r=>r.url().endsWith('/analysis'));await page.locator('#owgAnalysisRun').click();await rerunSeen;
+   const rerunSeen=page.waitForResponse(r=>r.url().endsWith('/analysis-source-bound'));await page.locator('#owgAnalysisRun').click();await rerunSeen;
    // Re-running analysis may cancel the old request rather than deliver its response.
    // Either outcome must leave the stale preview hidden. Do not require a response event
    // after the app has correctly invalidated the request.
@@ -1003,7 +1003,7 @@ const path=require('node:path');
    await page.locator('#owgAnalysisStatus').filter({hasText:'Remove dependent metric half_wait first.'}).waitFor();
    await page.locator('#owgMetricSave').click();await page.getByRole('button',{name:'Add saved metric half_wait',exact:true}).waitFor();
    await page.locator('#owgAnalysisMeasure1').selectOption('median:metric:half_wait');
-   const [arithmeticResponse]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/analysis')),page.locator('#owgAnalysisRun').click()]);
+   const [arithmeticResponse]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/analysis-source-bound')),page.locator('#owgAnalysisRun').click()]);
    const arithmeticResult=await arithmeticResponse.json();assert.equal(arithmeticResponse.status(),200);
    assert.deepEqual(arithmeticResult.rows,[['rework',21600],['no rework',900]]);
    assert.equal(arithmeticResult.metrics[1].unit,'seconds');assert.equal(arithmeticResult.metrics[1].cases_with_missing_operand,6);
@@ -1024,7 +1024,7 @@ const path=require('node:path');
    await page.locator('#owgMetricList').filter({hasText:'half_wait: to_approval ÷ 2 ratio'}).waitFor();
    await page.locator('#owgAnalysisMeasure1').selectOption('median:metric:half_wait');
    assert.equal(await page.locator('#owgAnalysisSave').isDisabled(),true);
-   const [bundledResponse]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/analysis')),page.locator('#owgAnalysisRun').click()]);
+   const [bundledResponse]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/analysis-source-bound')),page.locator('#owgAnalysisRun').click()]);
    assert.equal(bundledResponse.status(),200);
    assert.deepEqual((await bundledResponse.json()).rows,arithmeticResult.rows);
    const [bundledCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
@@ -1032,7 +1032,7 @@ const path=require('node:path');
    await page.locator('#owgAnalysisName').fill('Bundled approval wait');
    await page.locator('#owgAnalysisSave').click();
    await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis saved.'}).waitFor();
-   const [bundledReplay]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/analysis')),page.getByRole('button',{name:'Run saved analysis Bundled approval wait',exact:true}).click()]);
+   const [bundledReplay]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/analysis-source-bound')),page.getByRole('button',{name:'Run saved analysis Bundled approval wait',exact:true}).click()]);
    assert.deepEqual((await bundledReplay.json()).rows,arithmeticResult.rows);
    await page.getByRole('button',{name:'Add saved metric to_approval',exact:true}).click();
    await page.locator('#owgAnalysisStatus').filter({hasText:'already has a metric named to_approval'}).waitFor();
@@ -1065,7 +1065,7 @@ const path=require('node:path');
    assert.match(bundleCases.cycle,/dependency cycle/);
    assert.match(bundleCases.capacity,/exceed four case metrics/);
    assert.equal(bundleCases.unchanged,true);
-   const [rerunArithmetic]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/analysis')),page.getByRole('button',{name:'Run saved analysis Half approval wait',exact:true}).click()]);
+   const [rerunArithmetic]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/analysis-source-bound')),page.getByRole('button',{name:'Run saved analysis Half approval wait',exact:true}).click()]);
    assert.deepEqual((await rerunArithmetic.json()).rows,arithmeticResult.rows);
    await page.getByRole('button',{name:'Add saved metric to_approval',exact:true}).click();
    await page.locator('#owgMetricName').fill('bad_units');await page.locator('#owgMetricOperation').selectOption('add');await page.locator('#owgMetricRightUnit').fill('EUR');
@@ -1420,7 +1420,7 @@ const path=require('node:path');
    await page.locator('#owgAnalysisDim2').selectOption('');
    await page.locator('#owgAnalysisMeasure1').selectOption('count');
    await page.locator('#owgAnalysisMeasure2').selectOption('');
-   const literalResponse=page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis'));
+   const literalResponse=page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis-source-bound'));
    await page.locator('#owgAnalysisBackground').uncheck();
    await page.locator('#owgAnalysisRun').click();const literalResult=await(await literalResponse).json();
    assert.equal(literalResult.variant_encoding,'ordered_activity_json_array');
@@ -1484,7 +1484,7 @@ const path=require('node:path');
    await page.locator('#owgAnalysisMeasure1').selectOption('avg:metric:last_review_avg');
    await page.locator('#owgAnalysisMeasure2').selectOption('');
    await page.locator('#owgAnalysisBackground').uncheck();
-   const [lastStageResponse]=await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),page.locator('#owgAnalysisRun').click()]);
+   const [lastStageResponse]=await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis-source-bound')&&r.request().method()==='POST'),page.locator('#owgAnalysisRun').click()]);
    assert.equal(lastStageResponse.status(),200);
    const lastSpec=JSON.parse(lastStageResponse.request().postData());
    assert.deepEqual(lastSpec.metrics[0],{name:'last_review_avg',kind:'event_attribute_statistic',
@@ -1499,7 +1499,7 @@ const path=require('node:path');
    await page.locator('#owgAnalysisName').fill('Last completed review amounts');
    await page.locator('#owgAnalysisSave').click();
    await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis saved.'}).waitFor();
-   const [savedStatResponse]=await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')),
+   const [savedStatResponse]=await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis-source-bound')),
      page.getByRole('button',{name:'Run saved analysis Last completed review amounts',exact:true}).click()]);
    assert.deepEqual((await savedStatResponse.json()).rows,[[9]]);
    const [numericCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
@@ -1512,7 +1512,7 @@ const path=require('node:path');
    await page.locator('#owgMetricStageOccurrence').selectOption('first');
    await page.locator('#owgMetricAdd').click();
    await page.locator('#owgAnalysisMeasure1').selectOption('sum:metric:first_review_total');
-   const [firstStageResponse]=await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')),page.locator('#owgAnalysisRun').click()]);
+   const [firstStageResponse]=await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis-source-bound')),page.locator('#owgAnalysisRun').click()]);
    assert.equal(firstStageResponse.status(),200);
    const firstStage=await firstStageResponse.json();
    assert.deepEqual(firstStage.rows,[[11]],'A first-stage 2+4 and B observed 5; invalid B Work omitted');
@@ -1536,7 +1536,7 @@ const path=require('node:path');
      await page.locator('#owgMetricList').filter({hasText:metricName+': '+description+' first_review_total and last_review_avg'}).waitFor();
      await page.locator('#owgAnalysisMeasure1').selectOption('avg:metric:'+metricName);
      const [pairResponse]=await Promise.all([
-       page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
+       page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis-source-bound')&&r.request().method()==='POST'),
        page.locator('#owgAnalysisRun').click()]);
      assert.equal(pairResponse.status(),200,operation+' should be accepted by authenticated analysis');
      const spec=JSON.parse(pairResponse.request().postData());
@@ -1557,7 +1557,7 @@ const path=require('node:path');
        await page.locator('#owgAnalysisSave').click();
        await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis saved.'}).waitFor();
        const [savedPair]=await Promise.all([
-         page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')),
+         page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis-source-bound')),
          page.getByRole('button',{name:'Run saved analysis Pairwise recorded EUR difference',exact:true}).click()]);
        assert.deepEqual((await savedPair.json()).rows,[[3]]);
      }
@@ -1624,7 +1624,7 @@ const path=require('node:path');
    assert.equal(await page.locator('#owgAnalysisMeasure1').inputValue(),'avg:metric:review_delta');
    assert.match(await page.locator('#owgMetricList').textContent(),/review_delta: review_last − review_first/);
    const [stageDeltaResponse]=await Promise.all([
-     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis-source-bound')&&r.request().method()==='POST'),
      page.locator('#owgAnalysisRun').click()]);
    assert.equal(stageDeltaResponse.status(),200);
    const deltaSpec=JSON.parse(stageDeltaResponse.request().postData());
@@ -1642,7 +1642,7 @@ const path=require('node:path');
    await page.locator('#owgAnalysisSave').click();
    await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis saved.'}).waitFor();
    const [replayedDelta]=await Promise.all([
-     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')),
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis-source-bound')),
      page.getByRole('button',{name:'Run saved analysis First to last review change',exact:true}).click()]);
    assert.deepEqual((await replayedDelta.json()).rows,[[6]]);
    const [deltaCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
@@ -1681,7 +1681,7 @@ const path=require('node:path');
    assert.equal(await page.locator('#owgAnalysisMeasure1').inputValue(),'avg:metric:review_relative');
    assert.match(await page.locator('#owgMetricList').textContent(),/review_relative: review_delta ÷ review_first/);
    const [relativeResponse]=await Promise.all([
-     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis-source-bound')&&r.request().method()==='POST'),
      page.locator('#owgAnalysisRun').click()]);
    assert.equal(relativeResponse.status(),200);
    const relativeSpec=JSON.parse(relativeResponse.request().postData());
@@ -1698,7 +1698,7 @@ const path=require('node:path');
    await page.locator('#owgAnalysisSave').click();
    await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis saved.'}).waitFor();
    const [replayedRelative]=await Promise.all([
-     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')),
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis-source-bound')),
      page.getByRole('button',{name:'Run saved analysis First to last review fractional change',exact:true}).click()]);
    assert.deepEqual((await replayedRelative.json()).rows,[[2]]);
    const [relativeCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
@@ -1719,7 +1719,7 @@ const path=require('node:path');
    await page.locator('#owgMetricAdd').click();
    await page.locator('#owgAnalysisMeasure1').selectOption('avg:metric:zero_denominator');
    const [zeroResponse]=await Promise.all([
-     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis-source-bound')&&r.request().method()==='POST'),
      page.locator('#owgAnalysisRun').click()]);
    assert.equal(zeroResponse.status(),200);
    const zeroResult=await zeroResponse.json();
@@ -1796,7 +1796,7 @@ const path=require('node:path');
    assert.equal(await page.locator('#owgMetricList button[aria-label^="Remove metric "]').count(),3);
    assert.equal(await page.locator('#owgAnalysisMeasure1').inputValue(),'avg:metric:step_delta');
    const [activityComparisonResponse]=await Promise.all([
-     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis-source-bound')&&r.request().method()==='POST'),
      page.locator('#owgAnalysisRun').click()]);
    assert.equal(activityComparisonResponse.status(),200);
    const activitySpec=JSON.parse(activityComparisonResponse.request().postData());
@@ -1811,7 +1811,7 @@ const path=require('node:path');
    await page.locator('#owgAnalysisSave').click();
    await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis saved.'}).waitFor();
    const [activitySaved]=await Promise.all([
-     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')),
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis-source-bound')),
      page.getByRole('button',{name:'Run saved analysis Recorded Start versus Work totals',exact:true}).click()]);
    assert.deepEqual((await activitySaved.json()).rows,[[-96]]);
    const [activityCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
@@ -1877,7 +1877,7 @@ const path=require('node:path');
    assert.equal(await page.locator('#owgMetricList button[aria-label^="Remove metric "]').count(),3);
    assert.equal(await page.locator('#owgAnalysisMeasure1').inputValue(),'avg:metric:work_fraction');
    const [shareResponse]=await Promise.all([
-     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis-source-bound')&&r.request().method()==='POST'),
      page.locator('#owgAnalysisRun').click()]);
    assert.equal(shareResponse.status(),200);
    const shareSpec=JSON.parse(shareResponse.request().postData());
@@ -1893,7 +1893,7 @@ const path=require('node:path');
    await page.locator('#owgAnalysisSave').click();
    await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis saved.'}).waitFor();
    const [savedShare]=await Promise.all([
-     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')),
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis-source-bound')),
      page.getByRole('button',{name:'Run saved analysis Observed Work contribution',exact:true}).click()]);
    assert.ok(Math.abs((await savedShare.json()).rows[0][0]-14/124)<1e-6);
    const [shareCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
@@ -1962,7 +1962,7 @@ const path=require('node:path');
    assert.equal(await page.locator('#owgAnalysisSave').isDisabled(),true,'editing requires a fresh run before saving');
    assert.equal(await page.locator('#owgAnalysisJson').isDisabled(),true,'editing cannot export an older result');
    const [loadedResponse]=await Promise.all([
-     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis-source-bound')&&r.request().method()==='POST'),
      page.locator('#owgAnalysisRun').click()]);
    assert.equal(loadedResponse.status(),200);
    const editedSpec=JSON.parse(loadedResponse.request().postData());
@@ -1975,7 +1975,7 @@ const path=require('node:path');
    await page.getByRole('button',{name:'Run saved analysis Revised Work contribution',exact:true}).waitFor();
    await page.getByRole('button',{name:'Run saved analysis Observed Work contribution',exact:true}).waitFor();
    const [replayedRevision]=await Promise.all([
-     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis-source-bound')&&r.request().method()==='POST'),
      page.getByRole('button',{name:'Run saved analysis Revised Work contribution',exact:true}).click()]);
    assert.equal(replayedRevision.status(),200);
    const replayedSpec=JSON.parse(replayedRevision.request().postData());
@@ -1986,7 +1986,7 @@ const path=require('node:path');
      'saved revision keeps rewritten dependencies');
    assert.deepEqual(replayedSpec.measures,editedSpec.measures,'saved revision keeps rewritten measure');
    const [replayedOriginal]=await Promise.all([
-     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis-source-bound')&&r.request().method()==='POST'),
      page.getByRole('button',{name:'Run saved analysis Observed Work contribution',exact:true}).click()]);
    assert.deepEqual(echoedDefaultsRemoved(JSON.parse(replayedOriginal.request().postData()).metrics),sharePure,'original saved analysis is unchanged');
    const numericAxe=await page.evaluate(()=>axe.run(document.querySelector('#owgEventLogAnalysis'),{
