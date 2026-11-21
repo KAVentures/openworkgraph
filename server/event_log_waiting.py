@@ -136,16 +136,22 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
         # A lifecycle activity with only unfinished starts has no row in inst/seq2.
         # Keep it visible instead of silently hiding a completely unobserved activity.
         observed_names = {row[0] for row in activities}
+        # Count all cases contributing lifecycle evidence, including cases whose
+        # only evidence for this activity is an unfinished start. Otherwise the
+        # displayed case denominator understates the population being measured.
+        lifecycle_case_counts = {}
+        if used == 'lifecycle':
+            lifecycle_case_counts = dict(conn.execute("""SELECT activity, count(DISTINCT case_id)
+                FROM lc WHERE tr IN ('start', 'complete') OR tr = ''
+                GROUP BY activity""").fetchall())
         # Keep the documented response cap even when the log has many activities
         # with starts but no completions. Rank those missing-duration activities
         # deterministically after the observed waiting-time hotspots.
         open_only = sorted(set(open_by_activity) - observed_names)
         remaining = max(0, MAX_ACTIVITIES - len(activities))
         if remaining and open_only:
-            open_case_counts = dict(conn.execute("""SELECT activity, count(DISTINCT case_id)
-                FROM lc WHERE tr = 'start' GROUP BY activity""").fetchall())
             activities = list(activities) + [
-                (name, 0, int(open_case_counts.get(name, 0)), 0, None, None, None,
+                (name, 0, int(lifecycle_case_counts.get(name, 0)), 0, None, None, None,
                  0, None, None, None, 0, None, None, None)
                 for name in open_only[:remaining]
             ]
@@ -169,7 +175,7 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
                           "unmatched_starts": int(unmatched_starts), "activities_with_open_starts": int(open_starts),
                           "ignored_lifecycle_events": int(ignored)},
             "activities": [{
-                "activity": a, "instances": n, "cases": cases, "instances_with_processing_time": known,
+                "activity": a, "instances": n, "cases": lifecycle_case_counts.get(a, cases), "instances_with_processing_time": known,
                 "processing_observation_share": known / (n + open_by_activity.get(a, 0)) if n + open_by_activity.get(a, 0) else None,
                 "open_starts": int(open_by_activity.get(a, 0)),
                 "waiting_observation_share": waited / n if n else None,
