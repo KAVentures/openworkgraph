@@ -232,6 +232,7 @@ def test_source_revoked_during_last_review_denied(monkeypatch):
 
 def test_internal_admission_requests_have_json_content_type(monkeypatch):
     """Real _body requires JSON media type; synthetic subrequests must supply it."""
+    parse_actual_body = routes._body
     install(monkeypatch)
     from server import local_source_credentials
     from server import open_work_provider_attempt_verification as verifier
@@ -243,7 +244,7 @@ def test_internal_admission_requests_have_json_content_type(monkeypatch):
     seen = []
     async def reviewed(req, resp):
         assert req.headers.get("content-type") == "application/json"
-        parsed = await routes._body(req, {
+        parsed = await parse_actual_body(req, {
             "work_item_ref", "expected_revision", "expected_edit_token",
             "confirm_historical_review", "confirm_run_comparison", "max_cases",
             "deployment_id", "run_id",
@@ -253,7 +254,7 @@ def test_internal_admission_requests_have_json_content_type(monkeypatch):
         return {"case_ref": "case-1", "receipts": {"run_ref": "run-1"}}
     async def receipts(req, resp):
         assert req.headers.get("content-type") == "application/json"
-        parsed = await routes._body(req, {
+        parsed = await parse_actual_body(req, {
             "work_item_ref", "expected_revision", "expected_edit_token",
             "confirm_historical_review", "confirm_run_comparison", "max_cases",
             "deployment_id", "run_id",
