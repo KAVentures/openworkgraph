@@ -82,6 +82,28 @@ def test_lifecycle_pairs_split_processing_from_waiting():
 
 
 
+
+def test_hotspot_limit_reports_omitted_transitions_without_hiding_denominator():
+    # 30 distinct observed handoffs: only the top 25 can appear in the response.
+    rows = []
+    for i in range(waiting.MAX_TRANSITIONS + 5):
+        case = f"case{i}"
+        rows.extend([
+            (case, f"Source{i:02d}", _at(i, 0), "start"),
+            (case, f"Source{i:02d}", _at(i, 1), "complete"),
+            (case, f"Target{i:02d}", _at(i, 2), "start"),
+            (case, f"Target{i:02d}", _at(i, 3), "complete"),
+        ])
+    result = waiting.waiting_time(_import(
+        ["case", "activity", "time", "lifecycle:transition"], rows))
+    assert result["waiting_hotspot_result_limit"] == waiting.MAX_TRANSITIONS
+    assert result["waiting_hotspot_total"] == waiting.MAX_TRANSITIONS + 5
+    assert len(result["waiting_hotspots"]) == waiting.MAX_TRANSITIONS
+    assert result["waiting_hotspots_omitted"] == 5
+    assert result["waiting_hotspots"][0]["from"] == "Source00"
+    assert result["waiting_hotspots"][0]["to"] == "Target00"
+
+
 def test_hotspot_paging_adapter_restricts_source_and_bounds_cursor():
     log = _lifecycle_log()
     first = waiting.waiting_hotspot_cases(log, source="Receive", destination="Review", limit=3)
