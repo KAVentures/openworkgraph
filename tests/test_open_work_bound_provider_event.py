@@ -355,6 +355,8 @@ def test_empty_run_identities_block_provider_io(monkeypatch):
 
 @pytest.mark.parametrize("verdict", [
     {"status": "verified_provider_event", "provider_operation": "succeeded", "customer_outcome": "unknown"},
+    {"status": "verified_provider_operation", "provider_operation": "succeeded", "customer_outcome": "unknown"},
+    {"status": "verified_provider_operation", "provider_operation": "failed", "customer_outcome": "unknown"},
     {"status": "verified_provider_operation", "provider_operation": "unknown", "customer_outcome": "unknown"},
     {"status": "unknown", "provider_operation": "unknown", "customer_outcome": "succeeded"},
     {"status": "verified_provider_event", "customer_outcome": "unknown"},
