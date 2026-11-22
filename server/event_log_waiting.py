@@ -206,6 +206,11 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
                  0, None, None, None, 0, None, None, None)
                 for name in open_only[:remaining]
             ]
+        # The hotspot list is capped; expose how many distinct observed transitions
+        # were excluded so operators do not mistake a top-N view for the full cohort.
+        transition_total = conn.execute("""SELECT count(*) FROM (
+            SELECT prev_activity, activity FROM seq2 WHERE wait IS NOT NULL
+            GROUP BY prev_activity, activity)""").fetchone()[0]
         transitions = conn.execute(f"""SELECT prev_activity, activity, count(*), quantile_cont(wait, 0.5), sum(wait)
             FROM seq2 WHERE wait IS NOT NULL GROUP BY prev_activity, activity
             ORDER BY sum(wait) DESC, prev_activity, activity LIMIT {MAX_TRANSITIONS}""").fetchall()
@@ -241,6 +246,9 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
                                                                        "total_seconds": wsum},
                 "share_of_all_waiting": wsum / total_wait if total_wait else None,
             } for a, n, cases, known, p50, p90, mean, waited, w50, w90, wmean, wsum, pstd, wstd, w10 in activities],
+            "waiting_hotspot_result_limit": MAX_TRANSITIONS,
+            "waiting_hotspot_total": transition_total,
+            "waiting_hotspots_omitted": max(0, transition_total - len(transitions)),
             "waiting_hotspots": [{"from": s, "to": d, "count": n, "median_waiting_seconds": med,
                                   "total_waiting_seconds": total,
                                   "share_of_all_waiting": total / total_wait if total_wait else None}
