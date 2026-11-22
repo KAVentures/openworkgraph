@@ -156,6 +156,11 @@ with TestClient(app) as client:
  assert client.post(base+'/cases/query',json={'path':['A','B']},headers=h).json()['selected_cases']==1
  assert client.post(base+'/cases/query',json={'transition':['A','B']},headers=h).json()['cases'][0]['events']==2
  assert client.post(base+'/cases/query',json={'transition':['B','A']},headers=h).json()['selected_cases']==0
+ branch=base+'/next-steps/cases?step=A'
+ assert client.post(branch,json={'activity':'B'}).status_code==401
+ assert client.post(branch,json={'activity':'B'},headers={'Authorization':'Bearer '+local_auth.ensure_api_token()}).status_code==403
+ assert client.post(branch,json={'activity':'B'},headers=h).json()['cases']==[{'case_id':'C','events':2}]
+ assert client.post(branch,json=[],headers=h).status_code==422
  assert client.post(base+'/cases/query',json={'required_activities':['B','A']},headers=h).json()['selected_cases']==1
  assert client.post(base+'/cases/query',json={'required_activities':['A'],'excluded_activities':['B']},headers=h).json()['selected_cases']==0
  assert client.post(base+'/cases/query',content=b'x',headers={**h,'Content-Type':'text/plain'}).status_code==415
