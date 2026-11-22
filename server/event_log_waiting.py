@@ -258,4 +258,19 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
     return workspace._query(log_id, case_type, run)
 
 
-__all__ = ["waiting_time", "MODES"]
+def waiting_hotspot_cases(log_id: str, case_type: str | None = None, *, source: str, destination: str,
+                          after: str | None = None, limit: int = 50, mode: str = "auto",
+                          lifecycle_attribute: str = "lifecycle:transition", end_attribute: str = "",
+                          cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Return a bounded, source-backed page for an exact waiting-time hotspot."""
+    if any(not isinstance(value, str) or not value or len(value) > 200 for value in (source, destination)):
+        raise workspace.EventLogWorkspaceError("choose the exact source and destination activity labels")
+    if after is not None and (not isinstance(after, str) or not after or len(after) > 200):
+        raise workspace.EventLogWorkspaceError("invalid case key cursor")
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise workspace.EventLogWorkspaceError("page size must be a whole number from 1 to 100")
+    return waiting_time(log_id, case_type, mode=mode, lifecycle_attribute=lifecycle_attribute, end_attribute=end_attribute,
+                        cohort=cohort, _hotspot=_HotspotPage(source, destination, after, limit))
+
+
+__all__ = ["waiting_time", "waiting_hotspot_cases", "MODES"]
