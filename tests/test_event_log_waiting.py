@@ -94,7 +94,8 @@ def test_only_unfinished_activity_remains_visible_with_zero_coverage():
     assert unfinished["instances"] == 0
     assert unfinished["processing_observation_share"] == 0
     assert unfinished["processing"]["median_seconds"] is None
-    assert unfinished["waiting_observation_share"] is None
+    assert unfinished["waiting_observation_share"] == 0
+    assert unfinished["waiting_observations"] == {"observed": 0, "eligible": 2}
     assert _by(result)["Finished"]["processing_observation_share"] == 1
 
 
