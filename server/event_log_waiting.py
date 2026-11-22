@@ -128,8 +128,7 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
                 unmatched AS (SELECT s.case_id, s.activity FROM s LEFT JOIN c
                     ON s.case_id = c.case_id AND s.activity = c.activity AND s.k = c.k
                     WHERE c.ts IS NULL OR c.ts < s.ts)
-                SELECT count(*), coalesce(sum(n), 0) FROM (
-                    SELECT count(*) AS n FROM unmatched GROUP BY case_id, activity)""").fetchone()
+                SELECT count(DISTINCT activity), count(*) FROM unmatched""").fetchone()
             ignored = conn.execute("SELECT count(*) FROM lc WHERE tr NOT IN ('', 'start', 'complete')").fetchone()[0]
         else:
             conn.execute(f"""CREATE OR REPLACE TEMP TABLE inst AS
