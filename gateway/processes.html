@@ -2070,6 +2070,18 @@
               "Ownership and collaborator roles saved. OIDC process scopes are still required.",
             );
           });
+        // A failed current-authorization read invalidates the entire displayed
+        // selection, not just the review checkbox. Other actions (editing,
+        // access changes and exports) must not remain armed on a revoked view.
+        function invalidateDeniedReviewSelection(message) {
+          processOpenGeneration++;
+          selected = null;
+          $("selected").hidden = true;
+          $("reviewConfirm").checked = false;
+          $("handoffConsent").checked = false;
+          resetHandoff("REFUSED: Review authorization could not be verified. Reopen an authorized process.");
+          note(message);
+        }
         let reviewMutationInFlight = false;
         async function review(decision) {
           if (reviewMutationInFlight) throw new Error("A review submission is already in progress. Wait for its outcome or reopen the latest revision.");
@@ -2095,8 +2107,7 @@
             } catch (error) {
               if(ticket===handoffGeneration && identityTicket===identityGeneration &&
                  credential===authorizedCredential && selected===chosen) {
-                $("reviewConfirm").checked=false;
-                resetHandoff("REFUSED: Authorization read failed. Sign in, reopen the latest revision and inspect again.");
+                invalidateDeniedReviewSelection("Review access could not be verified. Reopen the latest authorized revision before any action.");
               }
               throw error;
             }
@@ -2140,8 +2151,7 @@
               // read-only failure; no review POST has been attempted.
               if (identityTicket===identityGeneration &&
                   credential===authorizedCredential && selected===chosen) {
-                $("reviewConfirm").checked=false;
-                $("reviewOutcome").textContent="Could not verify current review access. Reopen the latest authorized revision before submitting.";
+                invalidateDeniedReviewSelection("Could not verify current review access. Reopen an authorized process before any action.");
               }
               throw error;
             }
