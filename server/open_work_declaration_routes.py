@@ -3525,6 +3525,13 @@ async def read_local_bound_provider_event(request: Request, response: Response):
     last_admission = await review()
     if last_admission != final:
         raise HTTPException(409, "run/case admission changed during final disclosure")
+    # The last case admission is asynchronous. A journal can be revoked while
+    # that admission yields, even when the earlier journal checks all passed.
+    # Re-read the retained attempt under its own actor/tenant permissions before
+    # disclosing provider evidence; equality is not an atomic snapshot.
+    last_retained = await retained_attempt_review()
+    if last_retained != retained:
+        raise HTTPException(409, "retained receipt journal changed during final disclosure")
     await _recheck_source(scope)
     _dashboard_only(request)
     await require_same_provider_account()
