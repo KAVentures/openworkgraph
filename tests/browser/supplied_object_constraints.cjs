@@ -53,6 +53,11 @@ const path=require('node:path');
   assert.equal(data.results[0].units,2);assert.equal(data.results[0].violating,1);
   assert.deepEqual(data.results[0].violating_examples,[{unit:'order2',detail:'0 related'}]);
   assert.equal(data.supplied_relationship_basis.retained_relationships,4);
+  const violations=page.locator('#owgObjectRuleViolations');
+  await page.locator('#owgObjectRuleResults').getByRole('button',{name:/^Inspect violations for /}).click();
+  await violations.getByRole('status').filter({hasText:'1 violation. Showing 1 on this page.'}).waitFor();
+  await violations.getByRole('cell',{name:'order2',exact:true}).waitFor();
+  await violations.getByRole('cell',{name:'No retained events',exact:true}).waitFor();
   async function downloaded(id,extension){
    const [download]=await Promise.all([page.waitForEvent('download'),page.locator(id).click()]);
    const file=path.join(scratch,'rules.'+extension);await download.saveAs(file);return fs.readFile(file,'utf8');
@@ -62,6 +67,9 @@ const path=require('node:path');
   assert.match(await downloaded('#owgObjectRuleExportCsv','csv'),new RegExp(before));
   await page.locator('#owgObjectRuleExactQualifier').check();await page.locator('#owgObjectRuleQualifier').fill(' ');await page.locator('#owgObjectRuleAdd').click();
   data=await check();assert.equal(data.results[1].violating,2);assert.equal(data.results[1].rule.qualifier,' ');
+  await page.locator('#owgObjectRuleResults').getByRole('button',{name:/^Inspect violations for /}).nth(1).click();
+  await violations.getByRole('button',{name:'Open event history for order1',exact:true}).click();
+  await page.locator('#owgObjectRuleObjectHistory').getByRole('status').filter({hasText:'Showing 1 of 1 events.'}).waitFor();
   await page.locator('#owgObjectRuleQualifier').fill('');await page.locator('#owgObjectRuleAdd').click();
   data=await check();assert.equal(data.results[2].violating,2);assert.equal(data.results[2].rule.qualifier,'');
   // Edits invalidate a held response and its downloads, even within the same view.

@@ -1764,8 +1764,16 @@ the log onto one of them:
   that the rule reports `complete: false` with a fixed reason, never partial counts.
 
 In the dashboard, the object-centric map adds "Object rules" when the log has more than one
-object type. 100,000 OCEL events with 20,000 orders take under a second for three rules. Results
+object type. Choose **Inspect violations** to page through the events, objects or event–object
+pairs for a completed rule. An object with retained events links to its event history.
+100,000 OCEL events with 20,000 orders take under a second for three rules. Results
 describe recorded links, not verified business relationships, audit evidence or legal compliance.
+
+`POST /v1/event-logs/{log_id}/object-constraints/violations` takes the report's exact `rule` and
+optionally its `log_revision` as `expected_revision`. For a supplied relationship rule,
+`expected_graph` can also pin the report's `relationships_sha256` and `object_index_sha256`.
+Keep these settings for subsequent pages and send the returned `next_after` as `after`.
+The optional `limit` is 1–100 (default 50).
 
 ## Process model discovery
 

@@ -1841,6 +1841,13 @@ async def event_log_object_constraints(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/object-constraints/violations")
+async def event_log_object_constraint_violations(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "object rule evidence", strict=True)
+    return await run_in_threadpool(_respond, object_constraints.violations, log_id, spec)
+
+
 @router.post("/v1/event-logs/{log_id}/object-process-model/discovery")
 async def event_log_object_process_model_discovery(request: Request, log_id: str):
     _require_dashboard(request)

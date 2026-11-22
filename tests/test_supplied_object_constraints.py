@@ -121,6 +121,26 @@ def test_work_budget_is_unknown_not_partial_or_zero_and_other_templates_still_ru
     result=checked(log,rule(),{'template':'event_cardinality','object_type':'order','activity':'Open','min':1})
     assert result['results'][0]['complete'] is False and 'violating' not in result['results'][0]
     assert result['results'][1]['complete'] is True and result['rules_unknown']==1
+    evidence=constraints.violations(log,{'rule':rule()})
+    assert evidence['complete'] is False and 'violations' not in evidence and 'total' not in evidence
+
+
+def test_violation_pages_pin_supplied_graph_and_object_index():
+    doc=payload();log=imported(doc);report=checked(log,rule(min=2,max=2))
+    basis=report['supplied_relationship_basis']
+    pin={key:basis[key] for key in ('relationships_sha256','object_index_sha256')}
+    spec={'rule':rule(min=2,max=2),'expected_revision':report['log_revision'],'expected_graph':pin,'limit':1}
+    first=constraints.violations(log,spec)
+    second=constraints.violations(log,{**spec,'after':first['next_after']})
+    assert first['total']==second['total']==2
+    assert first['violations'][0]['object_id']=='o2' and first['violations'][0]['has_events']
+    assert second['violations'][0]['object_id']=='o3' and not second['violations'][0]['has_events']
+    with pytest.raises(workspace.EventLogWorkspaceError,match='graph has changed'):
+        constraints.violations(log,{**spec,'expected_graph':{**pin,'object_index_sha256':'0'*64}})
+    doc['objects'].append({'id':'new-order','type':'order','attributes':[],'relationships':[]})
+    workspace.append_log(log,BytesIO(json.dumps(doc).encode()),source_format='ocel')
+    with pytest.raises(workspace.EventLogWorkspaceError,match='log has changed'):
+        constraints.violations(log,{**spec,'after':first['next_after']})
 
 
 def test_corrupt_retained_graph_refuses_the_whole_check():

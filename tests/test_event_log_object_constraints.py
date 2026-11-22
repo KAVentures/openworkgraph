@@ -50,6 +50,9 @@ def test_object_cardinality_relates_objects_through_shared_events():
         {"template": "object_cardinality", "object_type": "item", "related_type": "delivery", "via_activity": "Ship",
          "min": 1, "max": 1})
     assert _counts(items) == (2, 1, 0) and items["violating_examples"] == [{"unit": "o1", "detail": "3 related"}]
+    evidence = constraints.violations(log, {"rule": items["rule"]})
+    assert evidence["violations"] == [{"event_id": None, "object_id": "o1", "detail": "3 related",
+                                       "timestamp": None, "has_events": True}]
     # Deliveries never share an event with an order, so none is related to one.
     assert _counts(delivered) == (3, 3, 0)
     assert _counts(shipped) == (4, 0, 0) and shipped["description"].endswith("through Ship events")
@@ -124,6 +127,42 @@ def test_rule_count_is_bounded():
         constraints.parse({"rules": [rule] * (constraints.MAX_RULES + 1)})
 
 
+def test_violation_pages_preserve_event_and_object_keys():
+    doc = _order_to_cash()
+    doc["events"].extend({"id": f"pay{i:02}", "type": "Pay", "time": "2024-01-07T08:00:00Z",
+                           "relationships": [{"objectId": "o1", "qualifier": ""}]} for i in range(65))
+    log = _ocel(doc)
+    rule = {"template": "event_cardinality", "activity": "Pay", "object_type": "order", "min": 2}
+    report = constraints.check(log, {"rules": [rule]})
+    assert report["results"][0]["examples_truncated"]
+    spec = {"rule": rule, "expected_revision": report["log_revision"], "limit": 10}
+    page = constraints.violations(log, spec)
+    seen = [row["event_id"] for row in page["violations"]]
+    while page["next_after"] is not None:
+        page = constraints.violations(log, {**spec, "after": page["next_after"]})
+        seen.extend(row["event_id"] for row in page["violations"])
+    assert len(seen) == page["total"] == report["results"][0]["violating"]
+    assert seen == sorted(set(seen)) and set(seen) >= {f"pay{i:02}" for i in range(65)}
+
+
+def test_synchronization_keeps_ambiguous_display_labels_as_distinct_pairs():
+    doc = {"objects": [{"id": key, "type": kind} for key, kind in (("b / c", "order"), ("c", "order"), ("i", "item"))],
+           "events": [{"id": key, "type": "Send", "time": "2024-01-01T08:00:00Z",
+                       "relationships": [{"objectId": obj, "qualifier": ""} for obj in ("i", focus)]}
+                      for key, focus in (("a", "b / c"), ("a / b", "c"))]}
+    log = _ocel(doc)
+    rule = {"template": "synchronization", "activity": "Send", "object_type": "order",
+            "related_type": "item", "required_activity": "Approve"}
+    settings = {"rule": rule, "limit": 1}
+    first = constraints.violations(log, settings)
+    second = constraints.violations(log, {**settings, "after": first["next_after"]})
+    assert first["total"] == second["total"] == 2
+    assert [(v["event_id"], v["object_id"]) for v in first["violations"] + second["violations"]] == [
+        ("a", "b / c"), ("a / b", "c")]
+    assert first["violations"][0]["has_events"] and first["violations"][0]["timestamp"] == "2024-01-01T08:00:00Z"
+    assert second["next_after"] is None
+
+
 def test_real_http_route_requires_a_dashboard_session(tmp_path):
     code = r'''
 import json
@@ -145,6 +184,12 @@ with TestClient(app) as client:
     result = client.post(path, json=rule, headers=headers)
     assert result.status_code == 200 and result.headers["cache-control"] == "no-store", result.text
     assert result.json()["results"][0]["violating"] == 1
+    evidence = {"rule": rule["rules"][0], "expected_revision": result.json()["log_revision"]}
+    assert client.post(path+"/violations", json=evidence, headers=bearer).status_code in (401, 403)
+    found = client.post(path+"/violations", json=evidence, headers=headers)
+    assert found.status_code == 200 and found.headers["cache-control"] == "no-store", found.text
+    assert found.json()["violations"] == [{"event_id": "p", "object_id": None,
+                                           "detail": "1 linked", "timestamp": "2024-01-01T08:00:00Z"}]
     assert client.post(path, json={"rules": []}, headers=headers).status_code == 422
     assert client.post("/v1/event-logs/log_0000000000000000/object-constraints", json=rule,
                        headers=headers).status_code in (404, 422)

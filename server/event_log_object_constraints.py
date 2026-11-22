@@ -99,6 +99,30 @@ class RuleSet(_Strict):
     rules: list[Rule] = Field(min_length=1, max_length=MAX_RULES)
 
 
+class _GraphPin(_Strict):
+    relationships_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    object_index_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class _ViolationSpec(_Strict):
+    rule: Rule
+    expected_revision: StrictInt | None = Field(default=None, ge=0)
+    expected_graph: _GraphPin | None = None
+    after: tuple[Annotated[str, Field(max_length=200)], Annotated[str, Field(max_length=200)]] | None = None
+    limit: StrictInt = Field(default=50, ge=1, le=100)
+
+
+def _validate_rule(rule) -> None:
+    if isinstance(rule, (EventCardinality, ObjectCardinality, SuppliedObjectCardinality)):
+        if rule.max is not None and rule.max < rule.min:
+            raise workspace.EventLogWorkspaceError("a rule's max must not be below its min")
+        if rule.min == 0 and rule.max is None:
+            raise workspace.EventLogWorkspaceError("a cardinality rule needs a min above 0 or a max")
+    if isinstance(rule, Synchronization) and rule.activity == rule.required_activity \
+            and rule.object_type == rule.related_type:
+        raise workspace.EventLogWorkspaceError("a synchronization needs a different activity or object type")
+
+
 def parse(spec: Any) -> RuleSet:
     try:
         parsed = RuleSet.model_validate(spec)
@@ -107,14 +131,7 @@ def parse(spec: Any) -> RuleSet:
         raise workspace.EventLogWorkspaceError(
             "object rules are invalid: " + ".".join(str(p) for p in first["loc"]) + " " + first["msg"]) from None
     for rule in parsed.rules:
-        if isinstance(rule, (EventCardinality, ObjectCardinality, SuppliedObjectCardinality)):
-            if rule.max is not None and rule.max < rule.min:
-                raise workspace.EventLogWorkspaceError("a rule's max must not be below its min")
-            if rule.min == 0 and rule.max is None:
-                raise workspace.EventLogWorkspaceError("a cardinality rule needs a min above 0 or a max")
-        if isinstance(rule, Synchronization) and rule.activity == rule.required_activity \
-                and rule.object_type == rule.related_type:
-            raise workspace.EventLogWorkspaceError("a synchronization needs a different activity or object type")
+        _validate_rule(rule)
     return parsed
 
 
@@ -143,7 +160,7 @@ def describe(rule) -> str:
 # Each template materializes ``oc`` as (unit, activated, violated, detail); ``unit`` is an event ID, an
 # object ID, or "event / object" for synchronization occurrences.
 def _event_cardinality(conn, log_id: str, rule: EventCardinality) -> None:
-    conn.execute("""CREATE OR REPLACE TEMP TABLE oc AS SELECT e.event_id AS unit, TRUE AS activated,
+    conn.execute("""CREATE OR REPLACE TEMP TABLE oc AS SELECT e.event_id AS unit, e.event_id, NULL::VARCHAR AS object_id, TRUE AS activated,
           n < ? OR n > coalesce(?, 9223372036854775807) AS violated, CAST(n AS VARCHAR) || ' linked' AS detail
         FROM (SELECT e.event_id, count(DISTINCT eo.object_id) FILTER (WHERE o.object_type = ?) AS n
               FROM events e LEFT JOIN event_objects eo ON eo.log_id = e.log_id AND eo.event_id = e.event_id
@@ -185,7 +202,7 @@ def _object_cardinality(conn, log_id: str, rule: ObjectCardinality) -> bool:
 
 
 def _cardinality_counts(conn,log_id,rule):
-    conn.execute("""CREATE OR REPLACE TEMP TABLE oc AS SELECT o.object_id AS unit, TRUE AS activated,
+    conn.execute("""CREATE OR REPLACE TEMP TABLE oc AS SELECT o.object_id AS unit, NULL::VARCHAR AS event_id, o.object_id, TRUE AS activated,
           n < ? OR n > coalesce(?, 9223372036854775807) AS violated, CAST(n AS VARCHAR) || ' related' AS detail
         FROM (SELECT o.object_id, count(r.related_id) AS n FROM objects o
               LEFT JOIN rel r ON r.object_id = o.object_id
@@ -226,10 +243,10 @@ def _synchronization(conn, log_id: str, rule: Synchronization) -> bool:
         FROM (SELECT *, min(ts) OVER (PARTITION BY object_id) AS min_ts FROM lu WHERE activity = ?) GROUP BY 1""",
                  [rule.required_activity])
     # A required event counts when it precedes the trigger: earlier time, or the same time and a smaller event ID.
-    conn.execute("""CREATE OR REPLACE TEMP TABLE oc AS SELECT unit, related > 0 AS activated,
+    conn.execute("""CREATE OR REPLACE TEMP TABLE oc AS SELECT event_id || ' / ' || object_id AS unit, event_id, object_id, related > 0 AS activated,
           missing + later > 0 AS violated,
           CAST(missing AS VARCHAR) || ' related without it, ' || CAST(later AS VARCHAR) || ' only later' AS detail
-        FROM (SELECT t.event_id || ' / ' || t.object_id AS unit, count(r.related_id) AS related,
+        FROM (SELECT t.event_id, t.object_id, count(r.related_id) AS related,
                 count(r.related_id) FILTER (WHERE q.object_id IS NULL) AS missing,
                 count(r.related_id) FILTER (WHERE q.ts > t.ts OR (q.ts = t.ts AND q.event_id >= t.event_id)) AS later
               FROM lt t LEFT JOIN rel r ON r.object_id = t.object_id LEFT JOIN req q ON q.object_id = r.related_id
@@ -292,6 +309,16 @@ def evaluate(conn, log_id: str, rule) -> dict[str, Any]:
     }
 
 
+def _snapshot(conn, log_id: str) -> dict[str, Any]:
+    try:
+        return supplied_relationships.snapshot(conn, log_id)
+    except EventLogFormatError as error:
+        raise workspace.EventLogWorkspaceError(str(error)) from None
+    except duckdb.OutOfMemoryException:
+        raise workspace.EventLogWorkspaceError(
+            "The supplied graph snapshot exceeds available analysis memory. No partial result was returned.") from None
+
+
 def check(log_id: str, spec: Any) -> dict[str, Any]:
     rules = parse(spec)
     supplied=any(isinstance(rule,SuppliedObjectCardinality) for rule in rules.rules)
@@ -300,16 +327,14 @@ def check(log_id: str, spec: Any) -> dict[str, Any]:
         conn = workspace._connect()
         try:
             info = workspace._check_log(conn, log_id)
+            revision = supplied_relationships._revision(conn, log_id)
             if supplied:
-                try:basis=supplied_relationships.snapshot(conn,log_id)
-                except EventLogFormatError as error:raise workspace.EventLogWorkspaceError(str(error)) from None
-                except duckdb.OutOfMemoryException:
-                    raise workspace.EventLogWorkspaceError('The supplied graph snapshot exceeds available analysis memory. No partial result was returned.') from None
+                basis = _snapshot(conn, log_id)
             results = [evaluate(conn, log_id, rule) for rule in rules.rules]
         finally:
             conn.close()
     response = {
-        "log": info, "results": results,
+        "log": info, "log_revision": revision, "results": results,
         "rules_with_violations": sum(1 for r in results if r.get("violating")),
         "rules_unknown": sum(1 for r in results if not r["complete"]),
         "ordering_basis": "timestamp_then_event_id",
@@ -331,4 +356,53 @@ def check(log_id: str, spec: Any) -> dict[str, Any]:
     return response
 
 
-__all__ = ["check", "describe", "parse"]
+def violations(log_id: str, spec: Any) -> dict[str, Any]:
+    """Return exact retained violations for one completed rule, ordered by event and object key."""
+    try:
+        settings = _ViolationSpec.model_validate(spec)
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        raise workspace.EventLogWorkspaceError(
+            "object rule evidence is invalid: " + ".".join(str(p) for p in first["loc"]) + " " + first["msg"]) from None
+    rule = settings.rule
+    _validate_rule(rule)
+    supplied = isinstance(rule, SuppliedObjectCardinality)
+    if settings.expected_graph is not None and not supplied:
+        raise workspace.EventLogWorkspaceError("a supplied graph pin requires a supplied relationship rule")
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            revision = supplied_relationships._revision(conn, log_id)
+            if settings.expected_revision is not None and settings.expected_revision != revision:
+                raise workspace.EventLogWorkspaceError("the retained log has changed; check the object rules again")
+            basis = _snapshot(conn, log_id) if supplied else None
+            if settings.expected_graph is not None:
+                if any(basis[key] != value for key, value in settings.expected_graph.model_dump().items()):
+                    raise workspace.EventLogWorkspaceError("the retained graph has changed; check the object rules again")
+            summary = evaluate(conn, log_id, rule)
+            response = {"complete": summary["complete"], "unit": summary["unit"], "log_revision": revision}
+            if basis is not None:
+                response["supplied_relationship_basis"] = basis
+            if not summary["complete"]:
+                return {**response, "unknown_reason": summary["unknown_reason"], "limits": summary["limits"]}
+            after_event, after_object = settings.after or ("", "")
+            rows = conn.execute("""SELECT oc.event_id, oc.object_id, oc.detail, e.ts,
+                coalesce(oc.event_id, '') AS event_key, coalesce(oc.object_id, '') AS object_key
+                FROM oc LEFT JOIN events e ON e.log_id = ? AND e.event_id = oc.event_id
+                WHERE oc.violated AND (coalesce(oc.event_id, ''), coalesce(oc.object_id, '')) > (?, ?)
+                ORDER BY event_key, object_key LIMIT ?""", [log_id, after_event, after_object, settings.limit + 1]).fetchall()
+            keys = [row[1] for row in rows[:settings.limit] if row[1] is not None]
+            linked = {row[0] for row in conn.execute("""SELECT DISTINCT object_id FROM event_objects
+                WHERE log_id = ? AND object_id IN (SELECT unnest(?))""", [log_id, keys]).fetchall()} if keys else set()
+        finally:
+            conn.close()
+    return {**response, "total": summary["violating"],
+            "violations": [{"event_id": event, "object_id": obj, "detail": detail,
+                            **({"has_events": obj in linked} if obj is not None else {}),
+                            "timestamp": timestamp.isoformat() + "Z" if timestamp is not None else None}
+                           for event, obj, detail, timestamp, _, _ in rows[:settings.limit]],
+            "next_after": list(rows[settings.limit - 1][4:]) if len(rows) > settings.limit else None}
+
+
+__all__ = ["check", "violations", "describe", "parse"]
