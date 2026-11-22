@@ -1370,6 +1370,28 @@ const path=require('node:path');
    assert.doesNotMatch(waitingText,/comment|note/);
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
+   // More than 25 returned activities must be visible; the API itself caps at 100.
+   const manyRows=['case_id,activity,time,lifecycle:transition'];
+   for(let j=0;j<30;j++){
+     const activity='Step'+String(j).padStart(2,'0');
+     manyRows.push('C'+j+','+activity+',2024-02-01T00:00:00Z,start');
+     manyRows.push('C'+j+','+activity+',2024-02-01T00:01:00Z,complete');
+   }
+   await page.locator('#owgEventLogFile').setInputFiles({name:'many-lifecycle.csv',mimeType:'text/csv',buffer:Buffer.from(manyRows.join('\\n'))});
+   await page.locator('#owgEventLogDelimiter').selectOption(',');
+   await page.waitForFunction(()=>document.querySelector('#owgEventLogAttributes').options.length===4);
+   await page.locator('#owgEventLogAttributes').selectOption(['lifecycle:transition']);
+   await page.locator('#owgEventLogCase').selectOption('case_id');await page.locator('#owgEventLogActivity').selectOption('activity');
+   await page.locator('#owgEventLogTime').selectOption('time');await page.locator('#owgEventLogResource').selectOption('');
+   await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Imported 60 events'}).waitFor();
+   await page.locator('#owgEventLogAnalyze').click();
+   await page.locator('#owgWaitingRun').click();
+   await page.locator('#owgWaitingStatus').filter({hasText:'30 of 30 activity instances'}).waitFor();
+   assert.equal(await page.locator('#owgWaitingResults table').first().locator('tbody tr').count(),30,
+     'all 30 returned activities, including ranks 26–30, are visible');
+   page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    // Use the real 10,000-case history cap, without a server-side test override.
    const ageRows=['case_id,activity,time','ARecent,Receive,2024-01-01T00:00:00Z','ARecent,Check,2024-01-05T03:00:00Z'];
    for(let i=0;i<10000;i++)ageRows.push('B'+String(i).padStart(5,'0')+',Receive,2024-01-01T00:00:00Z');
