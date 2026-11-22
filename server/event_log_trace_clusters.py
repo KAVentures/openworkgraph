@@ -23,15 +23,16 @@ root causes or a judgement of how well any case was handled.
 from __future__ import annotations
 
 from collections import Counter
+from hashlib import sha256
+import json
 import math
-from typing import Any
+from typing import Any, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
 
 from . import event_log_cohorts as cohorts
 from . import event_log_workspace as workspace
 
-_SEP = workspace._SEP
 MAX_K = 12
 MAX_VARIANTS = 500
 MAX_ACTIVITIES = 60
@@ -48,9 +49,19 @@ class ClusterSpec(BaseModel):
     case_type: str | None = Field(default=None, min_length=1, max_length=200)
 
 
-def _parse(spec: Any) -> ClusterSpec:
+class _ClusterCaseSpec(ClusterSpec):
+    cluster_key: str = Field(pattern=r"^[0-9a-f]{64}$")
+    after: str | None = Field(default=None, min_length=1, max_length=200)
+    limit: StrictInt = Field(default=50, ge=1, le=100)
+
+
+_Settings = TypeVar("_Settings", bound=ClusterSpec)
+_Vector = dict[tuple[str, ...], float]
+
+
+def _parse(spec: Any, model: type[_Settings]) -> _Settings:
     try:
-        parsed = ClusterSpec.model_validate(spec or {})
+        parsed = model.model_validate(spec or {})
     except ValidationError as exc:
         first = exc.errors()[0]
         raise workspace.EventLogWorkspaceError(
@@ -59,40 +70,40 @@ def _parse(spec: Any) -> ClusterSpec:
     return parsed
 
 
-def _features(path: list[str], vocabulary: set[str]) -> dict[str, float]:
+def _features(path: list[str], vocabulary: set[str]) -> _Vector:
     counts = Counter(a for a in path if a in vocabulary)
-    vector = {"a:" + a: math.log1p(n) for a, n in counts.items()}
+    vector: _Vector = {("activity", a): math.log1p(n) for a, n in counts.items()}
     for x, y in zip(path, path[1:]):
         if x in vocabulary and y in vocabulary:
-            vector["d:" + x + _SEP + y] = 1.0
+            vector[("follows", x, y)] = 1.0
     norm = math.sqrt(sum(v * v for v in vector.values()))
     return {k: v / norm for k, v in vector.items()} if norm else {}
 
 
-def _dot(a: dict[str, float], b: dict[str, float]) -> float:
+def _dot(a: _Vector, b: _Vector) -> float:
     if len(a) > len(b):
         a, b = b, a
     return sum(v * b.get(k, 0.0) for k, v in a.items())
 
 
-def _distance(a: dict[str, float], na: float, b: dict[str, float], nb: float) -> float:
+def _distance(a: _Vector, na: float, b: _Vector, nb: float) -> float:
     return math.sqrt(max(0.0, na + nb - 2 * _dot(a, b)))
 
 
-def _norm2(v: dict[str, float]) -> float:
+def _norm2(v: _Vector) -> float:
     return sum(x * x for x in v.values())
 
 
-def _centroid(members: list[int], vectors: list[dict[str, float]], weights: list[int]) -> dict[str, float]:
+def _centroid(members: list[int], vectors: list[_Vector], weights: list[int]) -> _Vector:
     total = sum(weights[i] for i in members)
-    out: dict[str, float] = {}
+    out: _Vector = {}
     for i in members:
         for key, value in vectors[i].items():
             out[key] = out.get(key, 0.0) + value * weights[i] / total
     return out
 
 
-def _kmeans(vectors: list[dict[str, float]], norms: list[float], weights: list[int], k: int) -> list[int]:
+def _kmeans(vectors: list[_Vector], norms: list[float], weights: list[int], k: int) -> list[int]:
     """Case-weighted k-means with a deterministic farthest-point start."""
     order = sorted(range(len(vectors)), key=lambda i: (-weights[i], i))
     position = {i: r for r, i in enumerate(order)}
@@ -140,26 +151,50 @@ def _silhouette(distances: list[list[float]], labels: list[int]) -> float:
     return score / len(labels)
 
 
-def clusters(log_id: str, spec: Any = None) -> dict[str, Any]:
-    settings = _parse(spec)
+def _cluster_key(members: list[tuple[list[str], int]]) -> str:
+    digest = sha256()
+    for path, count in members:
+        digest.update(json.dumps([path, count], ensure_ascii=False, separators=(",", ":")).encode())
+    return digest.hexdigest()
+
+
+def _case_page(conn, review: _ClusterCaseSpec, key_to_group: dict[str, int],
+               sizes: Counter[int], ranks: dict[int, int]) -> dict[str, Any]:
+    if review.cluster_key not in key_to_group:
+        raise workspace.EventLogWorkspaceError("the cluster has changed; run the cluster report again")
+    group = key_to_group[review.cluster_key]
+    rank = ranks[group]
+    rows = conn.execute("""SELECT t.case_id, t.seconds, t.events, t.path[1], t.path[-1]
+        FROM tc t JOIN tcv v USING (path) WHERE v.cluster = ? AND (? IS NULL OR t.case_id > ?)
+        ORDER BY t.case_id LIMIT ?""", [rank, review.after, review.after, review.limit + 1]).fetchall()
+    return {"cluster": rank, "cluster_key": review.cluster_key, "total": sizes[group],
+            "cases": [{"case_id": key, "duration_seconds": seconds, "events": events,
+                       "first_activity": first, "last_activity": last}
+                      for key, seconds, events, first, last in rows[:review.limit]],
+            "next_after": rows[review.limit - 1][0] if len(rows) > review.limit else None}
+
+
+def _analyse(log_id: str, settings: ClusterSpec, review: _ClusterCaseSpec | None = None) -> dict[str, Any]:
 
     def run(conn):
         cohorts.restrict(conn, cohorts.parse_cohort(settings.cohort), log_id)
-        conn.execute(f"""CREATE OR REPLACE TEMP TABLE tc AS SELECT case_id,
-                string_agg(activity, '{_SEP}' ORDER BY ts, event_id) AS path,
+        conn.execute("""CREATE TEMP TABLE tc AS SELECT case_id,
+                list(activity ORDER BY ts, event_id) AS path,
                 date_diff('millisecond', min(ts), max(ts)) / 1000.0 AS seconds, count(*) AS events
             FROM ce GROUP BY case_id""")
         rows = conn.execute("SELECT path, count(*) AS n FROM tc GROUP BY path ORDER BY n DESC, path").fetchall()
         cases = sum(n for _, n in rows)
         if not cases:
+            if review is not None:
+                raise workspace.EventLogWorkspaceError("the cluster has changed; run the cluster report again")
             return {"cases": 0, "clusters": [], "variants": 0}
         presence = Counter()
         for path, n in rows:
-            for activity in set(path.split(_SEP)):
+            for activity in set(path):
                 presence[activity] += n
         vocabulary = {a for a, _ in sorted(presence.items(), key=lambda p: (-p[1], p[0]))[:settings.max_activities]}
         top, rest = rows[:settings.max_variants], rows[settings.max_variants:]
-        paths = [p.split(_SEP) for p, _ in top]
+        paths = [p for p, _ in top]
         weights = [n for _, n in top]
         vectors = [_features(p, vocabulary) for p in paths]
         norms = [_norm2(v) for v in vectors]
@@ -182,26 +217,31 @@ def clusters(log_id: str, spec: Any = None) -> dict[str, Any]:
         groups = sorted(set(labels))
         centres = {c: _centroid([i for i, label in enumerate(labels) if label == c], vectors, weights) for c in groups}
         centre_norms = {c: _norm2(v) for c, v in centres.items()}
-        assigned: list[tuple[str, int, int]] = [(p, n, labels[i]) for i, (p, n) in enumerate(top)]
+        assigned: list[tuple[list[str], int, int]] = [(p, n, labels[i]) for i, (p, n) in enumerate(top)]
         for path, n in rest:
-            v = _features(path.split(_SEP), vocabulary)
+            v = _features(path, vocabulary)
             nv = _norm2(v)
             assigned.append((path, n, min(groups, key=lambda c: (_distance(v, nv, centres[c], centre_norms[c]), c))))
-        sizes = Counter()
-        for _, n, c in assigned:
+        sizes: Counter[int] = Counter()
+        members_by_group: dict[int, list[tuple[list[str], int]]] = {group: [] for group in groups}
+        for path, n, c in assigned:
             sizes[c] += n
+            members_by_group[c].append((path, n))
+        cluster_keys = {c: _cluster_key(members) for c, members in members_by_group.items()}
         rank = {c: r for r, c in enumerate(sorted(groups, key=lambda c: (-sizes[c], c)), start=1)}
         conn.execute("CREATE OR REPLACE TEMP TABLE tcv AS SELECT unnest(?) AS path, unnest(?) AS cluster",
                      [[p for p, _, _ in assigned], [rank[c] for _, _, c in assigned]])
+        if review is not None:
+            return _case_page(conn, review, {key: c for c, key in cluster_keys.items()}, sizes, rank)
         stats = {r[0]: r[1:] for r in conn.execute("""SELECT v.cluster, quantile_cont(t.seconds, 0.5), avg(t.seconds),
                 avg(t.events) FROM tc t JOIN tcv v USING (path) GROUP BY v.cluster""").fetchall()}
         out = []
         for c in sorted(groups, key=lambda c: rank[c]):
-            members = [(p, n) for p, n, label in assigned if label == c]
+            members = members_by_group[c]
             size = sizes[c]
             inside = Counter()
             for path, n in members:
-                for activity in set(path.split(_SEP)):
+                for activity in set(path):
                     inside[activity] += n
             contrast = []
             for activity, overall in presence.items():
@@ -214,17 +254,19 @@ def clusters(log_id: str, spec: Any = None) -> dict[str, Any]:
             more = sorted((x for x in contrast if x["difference"] > 0.05), key=lambda x: (-x["difference"], x["activity"]))[:6]
             less = sorted((x for x in contrast if x["difference"] < -0.05), key=lambda x: (x["difference"], x["activity"]))[:6]
             median, mean, events = stats.get(rank[c], (None, None, None))
-            variants = [p.split(_SEP) for p, _ in members]
+            variants = [p for p, _ in members]
             out.append({
-                "cluster": rank[c], "cases": size, "share": round(size / cases, 6), "variants": len(members),
-                "top_variants": [{"activities": p.split(_SEP), "cases": n, "share_of_cluster": round(n / size, 6)}
+                "cluster": rank[c], "cluster_key": cluster_keys[c], "cases": size, "share": round(size / cases, 6),
+                "variants": len(members),
+                "top_variants": [{"activities": p, "cases": n, "share_of_cluster": round(n / size, 6)}
                                  for p, n in members[:5]],
                 "more_common_activities": more, "less_common_activities": less,
                 "median_throughput_seconds": round(median, 3) if median is not None else None,
                 "mean_throughput_seconds": round(mean, 3) if mean is not None else None,
                 "mean_events_per_case": round(events, 3) if events is not None else None,
                 "cohort": {"label": f"Cluster {rank[c]}", "variants": variants}
-                if len(variants) <= cohorts.MAX_COHORT_VARIANTS else None,
+                if len(variants) <= cohorts.MAX_COHORT_VARIANTS
+                and all(len(path) <= cohorts.MAX_VARIANT_LENGTH for path in variants) else None,
             })
         return {"cases": cases, "variants": len(rows), "variants_clustered": len(top),
                 "variants_assigned_to_nearest": len(rest), "activities_in_features": len(vocabulary),
@@ -240,4 +282,14 @@ def clusters(log_id: str, spec: Any = None) -> dict[str, Any]:
     return workspace._query(log_id, settings.case_type, run)
 
 
-__all__ = ["clusters"]
+def clusters(log_id: str, spec: Any = None) -> dict[str, Any]:
+    return _analyse(log_id, _parse(spec, ClusterSpec))
+
+
+def cluster_cases(log_id: str, spec: Any) -> dict[str, Any]:
+    settings = _parse(spec, _ClusterCaseSpec)
+    data = _analyse(log_id, settings, settings)
+    return {key: data[key] for key in ("case_notion", "cluster", "cluster_key", "total", "cases", "next_after")}
+
+
+__all__ = ["clusters", "cluster_cases"]

@@ -117,6 +117,46 @@ def test_rare_variants_join_their_nearest_cluster():
     assert returns["cases"] == 13, "the odd return joins the returns, the odd order the orders"
 
 
+def test_case_pages_include_rare_variants_even_without_a_cohort_export(monkeypatch):
+    log = _log()
+    monkeypatch.setattr(cohorts, "MAX_COHORT_VARIANTS", 1)
+    spec = {"max_variants": 2, "k": 2}
+    result = trace_clusters.clusters(log, spec)
+    assert result["variants_assigned_to_nearest"] == 3
+    assert any(cluster["cohort"] is None for cluster in result["clusters"])
+    members = []
+    for cluster in result["clusters"]:
+        selection = {**spec, "cluster_key": cluster["cluster_key"], "limit": 4}
+        first = trace_clusters.cluster_cases(log, selection)
+        assert first["total"] == cluster["cases"]
+        ids, cursor = [case["case_id"] for case in first["cases"]], first["next_after"]
+        while cursor is not None:
+            page = trace_clusters.cluster_cases(log, {**selection, "after": cursor})
+            ids.extend(item["case_id"] for item in page["cases"])
+            cursor = page["next_after"]
+        assert ids == sorted(set(ids)) and len(ids) == cluster["cases"]
+        members.extend(ids)
+    assert sorted(members) == sorted(_cases())
+
+
+def test_case_membership_preserves_literal_activity_paths_and_rejects_stale_keys():
+    literal = "A → B"
+    log = _log({"c0": ([literal, "Finish"], 1), "c1": (["A", "B", "Finish"], 1),
+                "c2": ([literal, "Finish"], 1)})
+    result = trace_clusters.clusters(log, {"k": 2})
+    assert result["variants"] == 2
+    clustered = next(c for c in result["clusters"] if c["top_variants"][0]["activities"][0] == literal)
+    assert analytics.kpis(log, cohort={"variants": [[literal, "Finish"]]})["cases"] == 2
+    selection = {"k": 2, "cluster_key": clustered["cluster_key"]}
+    page = trace_clusters.cluster_cases(log, selection)
+    assert [row["case_id"] for row in page["cases"]] == ["c0", "c2"]
+    assert page["cases"][0]["first_activity"] == literal and page["cases"][0]["last_activity"] == "Finish"
+    with pytest.raises(workspace.EventLogWorkspaceError, match="cluster has changed"):
+        trace_clusters.cluster_cases(log, {**selection, "cohort": {"activity": literal, "started_before": "2024-03-02T00:00:00Z"}})
+    with pytest.raises(workspace.EventLogWorkspaceError, match="limit"):
+        trace_clusters.cluster_cases(log, {**selection, "limit": True})
+
+
 def test_route_requires_the_dashboard(tmp_path):
     code = r'''
 from fastapi.testclient import TestClient
@@ -138,6 +178,10 @@ with TestClient(app) as client:
     found = client.post(path, json={}, headers=owner)
     assert found.status_code == 200, found.text
     assert [c["cases"] for c in found.json()["clusters"]] == [6, 6]
+    selected = {"cluster_key": found.json()["clusters"][0]["cluster_key"], "limit": 1}
+    assert client.post(path+"/cases", json=selected, headers=bearer).status_code == 403
+    cases = client.post(path+"/cases", json=selected, headers=owner)
+    assert cases.status_code == 200 and cases.json()["total"] == 6 and len(cases.json()["cases"]) == 1, cases.text
     assert client.post(path, json={"k": 99}, headers=owner).status_code == 422
 '''
     env = os.environ.copy()
