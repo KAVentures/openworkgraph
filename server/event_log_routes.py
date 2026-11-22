@@ -716,6 +716,37 @@ async def derive_event_log(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.get("/v1/event-logs/{log_id}/case-notes")
+def event_log_case_notes(request: Request, log_id: str, case_id: str | None = Query(default=None, min_length=1, max_length=500)):
+    """The owner's notes on cases of this log, newest first; ``case_id`` narrows them to one case."""
+    from . import event_log_case_notes as case_notes
+    _require_dashboard(request)
+    return _respond(case_notes.notes, log_id, case_id)
+
+
+@router.post("/v1/event-logs/{log_id}/case-notes")
+async def event_log_add_case_note(request: Request, log_id: str):
+    from . import event_log_case_notes as case_notes
+    _require_dashboard(request)
+    spec = await _json_body(request, "case note", strict=True, limit=16384)
+    try:
+        result = await run_in_threadpool(case_notes.add, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/case-notes/{note_id}/delete")
+async def event_log_delete_case_note(request: Request, log_id: str, note_id: str):
+    from . import event_log_case_notes as case_notes
+    _require_dashboard(request)
+    try:
+        result = await run_in_threadpool(case_notes.remove, log_id, note_id)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/v1/event-logs/{log_id}/quarantine")
 def event_log_quarantine(request: Request, log_id: str, batch: int | None = Query(default=None, ge=0),
                          after: int = Query(default=0, ge=0), limit: int = Query(default=50, ge=1, le=100)):

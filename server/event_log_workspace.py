@@ -783,6 +783,8 @@ def delete_log(log_id: str) -> dict[str, Any]:
                 from .event_log_activity_mappings import erase as erase_mappings
                 erase_mappings(conn, log_id)
                 from .event_log_folder_feeds import erase_log as erase_feeds
+                from .event_log_case_notes import erase as erase_case_notes
+                erase_case_notes(conn, log_id)
                 feed_ids = erase_feeds(conn, log_id)
                 from .event_log_change_markers import erase as erase_change_markers
                 erase_change_markers(conn, log_id)       # in the deletion's transaction: no orphan markers

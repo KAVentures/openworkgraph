@@ -953,6 +953,7 @@
     results.appendChild(caseAttributeSection());
     results.appendChild(caseTableExportSection());
     results.appendChild(caseExplainSection());
+    results.appendChild(caseNotesSection());
     results.appendChild(discoverySection());
     results.appendChild(driftSection(inspection));
     results.appendChild(automationSection());
@@ -2120,6 +2121,42 @@
         consent.checked=false;out.replaceChildren(el('div','Feed created. Run it now or every day.'));render(await getJSON(base));}
       catch(error){out.replaceChildren(el('div',error.message,'muted'));ready();}};
     getJSON(base).then(r=>{if(generation===state.generation)render(r);}).catch(error=>list.replaceChildren(el('div',error.message,'muted')));
+    return box;
+  }
+
+  // The owner's notes on single cases: findings, phone calls, reasons for a delay.
+  function caseNotesSection(){
+    const box=section('Case notes');box.id='owgCaseNotes';
+    box.appendChild(el('div','Write down what you found about a case. Notes stay on this computer, are never shared with AI agents and are deleted with the log.','muted'));
+    const caseId=input('owgCaseNoteCase','text','case ID');caseId.maxLength=500;caseId.autocomplete='off';
+    const text=document.createElement('textarea');text.id='owgCaseNoteText';text.maxLength=2000;text.rows=2;
+    const add=button('Add note','secondary');add.id='owgCaseNoteAdd';
+    const msg=el('div',null,'muted');msg.id='owgCaseNoteStatus';msg.setAttribute('role','status');msg.setAttribute('aria-live','polite');
+    const list=el('div');list.id='owgCaseNoteList';
+    const generation=state.generation;
+    const url=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/case-notes';
+    const render=r=>{
+      if(generation!==state.generation)return;
+      if(!r.notes.length){list.replaceChildren(el('div','No case notes yet.','muted'));return;}
+      const t=table(['Case','Note','Written',''],r.notes.map(n=>[n.case_id,n.text,n.created_at.slice(0,16).replace('T',' ')+' UTC','']));
+      t.querySelectorAll('tbody tr').forEach((tr,i)=>{const n=r.notes[i];tr.cells[1].style.whiteSpace='pre-wrap';
+        const del=button('Delete','secondary');del.setAttribute('aria-label','Delete note on case '+n.case_id);
+        del.onclick=async()=>{try{render(await (await api(url()+'/'+encodeURIComponent(n.note_id)+'/delete',{method:'POST'})).json());msg.textContent='Note deleted.';}catch(e){msg.textContent=e.message;}};
+        tr.cells[3].appendChild(del);});
+      const plural=(n,w)=>Number(n).toLocaleString()+' '+w+(n===1?'':'s');
+      list.replaceChildren(el('div',plural(r.notes_total,'note')+' on '+plural(r.cases_with_notes,'case')+(r.notes_total>r.notes.length?' (newest '+r.notes.length+' shown)':'')+'.','muted'),t);
+    };
+    add.onclick=async()=>{
+      if(!caseId.value.trim()||!text.value.trim()){msg.textContent='Enter a case ID and a note.';return;}
+      add.disabled=true;
+      try{await api(url(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({case_id:caseId.value.trim(),text:text.value})});
+        text.value='';msg.textContent='Note added to case '+caseId.value.trim()+'.';render(await getJSON(url()));}
+      catch(e){msg.textContent=e.message;}
+      finally{add.disabled=false;}
+    };
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Case',caseId),field('Note',text),add);
+    box.append(row,msg,list);
+    getJSON(url()).then(render).catch(e=>{msg.textContent=e.message;});
     return box;
   }
 
