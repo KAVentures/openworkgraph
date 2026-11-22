@@ -27,6 +27,7 @@ from typing import Any
 
 from . import event_log_workspace as workspace
 from .event_log_petri_replay import parse_pnml
+from .event_log_variant_coverage import VARIANT_KEY_SQL
 from .event_log_workspace import EventLogWorkspaceError
 
 FORMAT = "openworkgraph.event_log_alignments.v1"
@@ -120,7 +121,8 @@ def alignments(log_id: str, pnml: bytes, case_type: str | None = None, *,
     labels = {label for label in net["transitions"].values() if label is not None}
 
     def run(conn):
-        rows = conn.execute("""SELECT path, count(*) AS cases FROM (
+        variant_key = VARIANT_KEY_SQL.format(path="path")
+        rows = conn.execute(f"""SELECT path, count(*) AS cases, {variant_key} FROM (
               SELECT list(activity ORDER BY ts, event_id) AS path FROM ce GROUP BY case_id HAVING count(*) <= ?)
             GROUP BY path ORDER BY cases DESC, path LIMIT ?""", [MAX_TRACE_LENGTH, MAX_VARIANTS]).fetchall()
         total = conn.execute("SELECT count(DISTINCT case_id) FROM ce").fetchone()[0]
@@ -152,12 +154,12 @@ def alignments(log_id: str, pnml: bytes, case_type: str | None = None, *,
     model_move_cases: Counter = Counter()
     variants, unaligned = [], []
     aligned_cost: dict[tuple, tuple[int, int]] = {}
-    for path, n in rows:
+    for path, n, variant_id in rows:
         trace = tuple(path)
         result, used = (None, 0) if remaining <= 0 else _align(net, trace, labels, min(MAX_STATES_PER_VARIANT, remaining))
         remaining -= used
         if result is None or result["cost"] is None:
-            unaligned.append({"path": list(trace), "cases": n})
+            unaligned.append({"path": list(trace), "variant_id": variant_id, "cases": n})
             continue
         cost = result["cost"]
         worst = len(trace) + shortest_run
@@ -179,7 +181,7 @@ def alignments(log_id: str, pnml: bytes, case_type: str | None = None, *,
         for a, k in models.items():
             model_moves[a] += k * n
             model_move_cases[a] += n
-        variants.append({"path": list(trace), "cases": n, "cost": cost, "fitness": round(fitness, 4),
+        variants.append({"path": list(trace), "variant_id": variant_id, "cases": n, "cost": cost, "fitness": round(fitness, 4),
                          "alignment": [{"log": s[0], "model": s[1], "move": s[2]} for s in steps if s[2] != SILENT]})
     variants.sort(key=lambda v: (-v["cases"], v["fitness"]))
     month_totals: dict[str, list[int]] = {}
@@ -196,7 +198,7 @@ def alignments(log_id: str, pnml: bytes, case_type: str | None = None, *,
                  "fitness": round(1 - t[2] / t[3], 4) if t[3] else None}
                 for m, t in sorted(month_totals.items())][-MAX_MONTHS:]
     unaligned_cases = sum(u["cases"] for u in unaligned)
-    observed = {a for path, _ in rows for a in path}
+    observed = {a for path, _, _ in rows for a in path}
 
     def deviations(times: Counter, in_cases: Counter) -> list[dict[str, Any]]:
         order = sorted(times, key=lambda a: (-in_cases[a], -times[a], a))
