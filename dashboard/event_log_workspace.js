@@ -209,7 +209,8 @@
     const manage=el('div',null,'row');manage.id='owgEventLogManage';manage.style.cssText='align-items:end;margin-top:12px';show(manage,false);
     const reportButton=button('Download report','secondary');reportButton.id='owgEventLogReport';reportButton.title='A self-contained HTML report: overview, KPIs, top variants and activities';
     const savedButton=button('Saved copies','secondary');savedButton.id='owgEventLogSavedReports';savedButton.setAttribute('aria-expanded','false');savedButton.setAttribute('aria-controls','owgEventLogSavedList');
-    manage.append(field('Stored log',pick),field('Case notion',caseType),analyze,field('Export as',exportFormat),exportButton,reportButton,savedButton,remove);
+    const renameButton=button('Rename log','secondary');renameButton.id='owgEventLogRename';
+    manage.append(field('Stored log',pick),field('Case notion',caseType),analyze,field('Export as',exportFormat),exportButton,reportButton,savedButton,renameButton,remove);
     const savedList=el('div');savedList.id='owgEventLogSavedList';savedList.setAttribute('role','region');savedList.setAttribute('aria-label','Saved report copies');show(savedList,false);
     const results=el('div');results.id='owgEventLogResults';
     let salesforceStagedFile=null;
@@ -476,6 +477,14 @@
         document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
         status('Report ready: a single HTML file with no scripts that opens offline.');
       }catch(error){status(error.message);}
+    };
+    renameButton.onclick=async()=>{
+      const chosen=state.logs.find(l=>l.log_id===state.logId);if(!chosen)return;
+      const name=window.prompt('New name for the event log "'+chosen.name+'":',chosen.name);
+      if(name===null||name.trim()===chosen.name)return;
+      try{const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/rename',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})})).json();
+        await refreshLogs(state.logId);status('Renamed the event log to "'+r.name+'".');}
+      catch(error){status(error.message);}
     };
     remove.onclick=async()=>{
       const chosen=state.logs.find(l=>l.log_id===state.logId);if(!chosen)return;
