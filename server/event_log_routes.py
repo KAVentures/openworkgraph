@@ -1063,6 +1063,17 @@ def event_log_footprints(request: Request, log_id: str, case_type: str | None = 
     return _respond(footprints.footprints, log_id, case_type, noise=noise, activities=activities, cohort=cohort)
 
 
+@router.post("/v1/event-logs/{log_id}/footprints/cases")
+async def event_log_footprint_cases(request: Request, log_id: str,
+                                    case_type: str | None = Query(default=None, max_length=200),
+                                    cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_footprints as footprints
+    _require_dashboard(request)
+    selection = await _json_body(request, "footprint case settings", strict=True, limit=65536)
+    return await run_in_threadpool(_respond, footprints.footprint_cases, log_id, case_type,
+                                   selection=selection, cohort=cohort)
+
+
 @router.post("/v1/event-logs/{log_id}/petri-net-replay")
 async def event_log_petri_net_replay(request: Request, log_id: str,
                                      case_type: str | None = Query(default=None, max_length=200),

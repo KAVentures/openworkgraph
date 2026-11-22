@@ -58,15 +58,76 @@ def test_fitting_log_agrees_everywhere():
 
 def test_noise_filtered_ordering_shows_as_difference():
     traces = [["A", "B", "C"]] * 30 + [["A", "C", "B"]] * 2
-    result = fp.footprints(_import(traces), noise=0.2)
+    log = _import(traces)
+    result = fp.footprints(log, noise=0.2)
     diffs = {(d["from"], d["to"]): d for d in result["differences"]}
     assert ("C", "B") in diffs and diffs[("C", "B")]["kind"] == "in_log_not_in_model"
     assert diffs[("C", "B")]["cases"] == 2
     assert result["conformance"]["footprint_fitness"] < 1
     assert "C" in result["end_activities"]["model"] or "B" in result["end_activities"]["log_only"]
+    selection = {"retained_activities": result["activities"], "group": "transition", "activities": ["C", "B"]}
+    evidence = fp.footprint_cases(log, selection=selection)
+    assert evidence["total"] == diffs[("C", "B")]["cases"] and evidence["occurrences"] == 2
+    assert evidence["projected_occurrences"] == 0
+    for group in ("start", "end"):
+        for activity, count in result[group + "_activities"]["log_only_counts"].items():
+            cases = fp.footprint_cases(log, selection={**selection, "group": group, "activities": [activity]})
+            assert cases["total"] == count
+
+
+def test_evidence_counts_adjacency_and_boundaries_in_the_displayed_projection():
+    log = _import([["Hidden start", "A", "Middle", "B", "Hidden end"],
+                   ["A", "B", "A", "Middle", "B"], ["A", "C", "B"]])
+    spec = {"retained_activities": ["A", "B", "C"], "activities": ["A", "B"], "group": "transition", "limit": 1}
+    first = fp.footprint_cases(log, selection=spec)
+    second = fp.footprint_cases(log, selection={**spec, "after": first["next_after"]})
+    assert first["total"] == second["total"] == 2 and first["occurrences"] == 3
+    assert first["projected_occurrences"] == 2
+    assert first["cases"][0]["occurrences"] == 1 and second["cases"][0]["occurrences"] == 2
+    assert second["next_after"] is None
+    filtered = fp.footprint_cases(log, selection=spec, cohort={"activity": "Hidden start"})
+    assert filtered["total"] == filtered["occurrences"] == filtered["projected_occurrences"] == 1
+    for group, activity in (("start", "A"), ("end", "B")):
+        evidence = fp.footprint_cases(log, selection={**spec, "activities": [activity], "group": group})
+        assert evidence["total"] == evidence["occurrences"] == 3 and evidence["projected_occurrences"] == 1
+    for patch in ({"activities": ["A"]}, {"retained_activities": ["C"]}, {"limit": True}, {"after": ""}):
+        with pytest.raises(EventLogWorkspaceError):
+            fp.footprint_cases(log, selection={**spec, **patch})
 
 
 def test_bad_input():
     log = _import([["A", "B"]] * 3)
     with pytest.raises(EventLogWorkspaceError):
         fp.footprints(log, noise=1.5)
+
+
+def test_footprint_evidence_route_requires_dashboard_session(tmp_path):
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = r'''
+from fastapi.testclient import TestClient
+from server.secure_app import app
+from server import local_auth
+csv = b"case,activity,time\nc,A,2024-03-01T08:00:00Z\nc,B,2024-03-01T09:00:00Z"
+with TestClient(app) as client:
+    owner = {"Authorization": "OWG-Session " + local_auth.create_dashboard_session()}
+    bearer = {"Authorization": "Bearer " + local_auth.ensure_api_token()}
+    imported = client.post("/v1/event-logs/import?format=csv&name=t&case_column=case&activity_column=activity&timestamp_column=time",
+                           content=csv, headers={**owner, "X-OWG-Local-Storage-Confirmed": "true"})
+    assert imported.status_code == 200, imported.text
+    path = f"/v1/event-logs/{imported.json()['log_id']}/footprints/cases"
+    spec = {"retained_activities": ["A", "B"], "group": "transition", "activities": ["A", "B"]}
+    assert client.post(path, json=spec, headers=bearer).status_code == 403
+    found = client.post(path, json=spec, headers=owner)
+    assert found.status_code == 200 and found.headers["cache-control"] == "no-store", found.text
+    assert found.json()["cases"][0]["case_id"] == "c"
+    assert client.post(path, json={**spec, "group": "bad"}, headers=owner).status_code == 422
+'''
+    env = {**os.environ, "WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"),
+           "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth"), "WORKFLOW_OBSERVER_CONFIG": str(tmp_path / "config.json")}
+    result = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1],
+                            env=env, capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stderr

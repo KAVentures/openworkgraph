@@ -2695,12 +2695,23 @@ drafts (the same draft exported as BPMN and PNML), over the activities that mode
 ordering only the log has with how many cases took it, each ordering only the model allows, and
 start or end activities only the log has, and shows the full matrix with disagreeing cells marked.
 The *Model* choice is the discovery noise filter: at 0 the model keeps every ordering it can.
+**Activity coverage** controls which activities the model displays, based on their share of events.
+The differences table shows up to 40 orderings and reports the full difference count.
+Choose **Inspect cases** to review a log-only ordering or a start or end activity. The list uses
+the same activity projection and case filter as the table and shows when excluded activities
+changed an adjacency or boundary. Open a case to see its original event history.
 
 Footprints compare order only: not frequency, timing or how often a loop repeats. A disagreement
 shows where the draft and the recorded cases differ, not which one is right.
 
 `GET /v1/event-logs/{log_id}/footprints?noise=&activities=` plus the case-filter parameters. Agents
 with access to a shared log use `get_process_footprints` (aggregates only).
+
+`POST /v1/event-logs/{log_id}/footprints/cases` keeps the case-filter parameters from the report.
+Send `retained_activities` from the report's `activities`, plus a `group` of `transition`, `start`
+or `end`. The body also needs `activities` containing the two transition labels or one start or
+end label. The dashboard-only response gives the exact totals and cases in literal key order.
+Send `next_after` as `after` to continue, and use `limit` from 1 to 100 (default 50).
 
 ## Check against a Petri net (PNML import and token replay)
 

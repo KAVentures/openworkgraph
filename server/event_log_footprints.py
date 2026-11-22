@@ -174,8 +174,10 @@ def footprints(log_id: str, case_type: str | None = None, *, noise: float = 0.2,
             "model_pairs_not_in_log": sum(1 for d in differences if d["kind"] == "in_model_not_in_log"),
             "case_pair_occurrences_not_in_model": log_only_cases,
         },
-        "start_activities": {"log": sorted(starts), "model": sorted(fp.start), "log_only": start_diff},
-        "end_activities": {"log": sorted(ends), "model": sorted(fp.end), "log_only": end_diff},
+        "start_activities": {"log": sorted(starts), "model": sorted(fp.start), "log_only": start_diff,
+                             "log_only_counts": {a: starts[a] for a in start_diff}},
+        "end_activities": {"log": sorted(ends), "model": sorted(fp.end), "log_only": end_diff,
+                           "log_only_counts": {a: ends[a] for a in end_diff}},
         "differences": differences[:TOP_DIFFERENCES], "differences_total": len(differences),
         "matrix": matrix,
         "legend": {CAUSAL: "row is directly followed by column, never the reverse",
@@ -189,4 +191,61 @@ def footprints(log_id: str, case_type: str | None = None, *, noise: float = 0.2,
     }
 
 
-__all__ = ["footprints", "FORMAT"]
+def footprint_cases(log_id: str, case_type: str | None = None, *, selection: dict[str, Any],
+                    cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Case evidence for one recorded ordering in the displayed activity projection."""
+    keys = {"retained_activities", "group", "activities", "after", "limit"}
+    if not isinstance(selection, dict) or selection.keys() - keys:
+        raise EventLogWorkspaceError("unknown footprint case setting")
+    retained = selection.get("retained_activities")
+    if (not isinstance(retained, list) or not 1 <= len(retained) <= MAX_ACTIVITIES
+            or any(not isinstance(a, str) or not a or len(a) > 200 for a in retained)):
+        raise EventLogWorkspaceError(f"choose 1 to {MAX_ACTIVITIES} retained activity labels from the report")
+    group, labels = selection.get("group"), selection.get("activities")
+    if group not in ("transition", "start", "end"):
+        raise EventLogWorkspaceError("choose a transition, start or end")
+    if (not isinstance(labels, list) or len(labels) != (2 if group == "transition" else 1)
+            or any(a not in retained for a in labels)):
+        raise EventLogWorkspaceError("choose the ordering's exact activity labels from the report")
+    after, limit = selection.get("after"), selection.get("limit", 50)
+    if after is not None and (not isinstance(after, str) or not after or len(after) > 200):
+        raise EventLogWorkspaceError("invalid case key cursor")
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise EventLogWorkspaceError("limit must be a whole number from 1 to 100")
+    predicate, hidden = {
+        "transition": ("activity = ? AND next_activity = ?", "next_position - position - 1"),
+        "start": ("activity = ? AND previous_activity IS NULL", "position - 1"),
+        "end": ("activity = ? AND next_activity IS NULL", "case_events - position"),
+    }[group]
+
+    def run(conn):
+        conn.execute(f"""CREATE TEMP TABLE footprint_cases AS
+            WITH ordered AS (
+                SELECT case_id, activity, row_number() OVER w AS position,
+                       count(*) OVER (PARTITION BY case_id) AS case_events FROM ce
+                WINDOW w AS (PARTITION BY case_id ORDER BY ts, event_id)
+            ), kept AS (
+                SELECT *, lag(activity) OVER w AS previous_activity, lead(activity) OVER w AS next_activity,
+                       lead(position) OVER w AS next_position
+                FROM ordered WHERE activity IN (SELECT unnest(?))
+                WINDOW w AS (PARTITION BY case_id ORDER BY position)
+            )
+            SELECT case_id, count(*) AS occurrences, count(*) FILTER (WHERE {hidden} > 0) AS projected_occurrences,
+                   max(case_events) AS events
+            FROM kept WHERE {predicate} GROUP BY case_id""", [retained, *labels])
+        total, occurrences, projected = conn.execute("""SELECT count(*), coalesce(sum(occurrences), 0),
+            coalesce(sum(projected_occurrences), 0) FROM footprint_cases""").fetchone()
+        rows = conn.execute("""SELECT case_id, occurrences, projected_occurrences, events FROM footprint_cases
+            WHERE ? IS NULL OR case_id > ? ORDER BY case_id LIMIT ?""", [after, after, limit + 1]).fetchall()
+        return {"total": total, "occurrences": occurrences, "projected_occurrences": projected, "rows": rows}
+
+    data = workspace._query_filtered(log_id, case_type, cohort, run)
+    rows = data["rows"]
+    return {"group": group, "activities": labels, "case_notion": data["case_notion"],
+            "total": data["total"], "occurrences": data["occurrences"], "projected_occurrences": data["projected_occurrences"],
+            "cases": [{"case_id": key, "occurrences": n, "projected_occurrences": projected, "events": events}
+                      for key, n, projected, events in rows[:limit]],
+            "next_after": rows[limit - 1][0] if len(rows) > limit else None}
+
+
+__all__ = ["footprints", "footprint_cases", "FORMAT"]
