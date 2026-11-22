@@ -2220,9 +2220,10 @@
             recordedReview.latest_revision===record.revision &&
             // An inspected handoff must not be acknowledged after access was
             // revoked or its membership revision changed during POST/read-back.
-            (!submittedInspectedHandoff ||
-              (recordedReview.access_revision===reviewSelection.access_revision &&
-               recordedReview.permissions?.review===true)) &&
+            // Even reviews opened without an inspected packet must not be
+            // confirmed after reviewer membership changes during POST/read-back.
+            recordedReview.access_revision===reviewSelection.access_revision &&
+            recordedReview.permissions?.review===true &&
             Array.isArray(recordedEntries) &&
             recordedEntries.filter(entry=>entry?.reviewer_actor_id===reviewSelection.your_actor_id).length===1 &&
             recordedEntries.some(entry=>entry?.reviewer_actor_id===reviewSelection.your_actor_id &&
