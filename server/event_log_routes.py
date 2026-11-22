@@ -2776,6 +2776,27 @@ async def event_log_activity_mappings(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.get("/v1/event-logs/{log_id}/hidden-activities")
+def event_log_hidden_activities(request: Request, log_id: str):
+    """The activities left out of case-centric analyses, and every activity with its event count."""
+    from . import event_log_hidden_activities as hidden_activities
+    _require_dashboard(request)
+    return _respond(hidden_activities.hidden, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/hidden-activities")
+async def event_log_set_hidden_activities(request: Request, log_id: str):
+    """Body ``{"activities": [...]}`` replaces the hidden list; an empty list shows every activity."""
+    from . import event_log_hidden_activities as hidden_activities
+    _require_dashboard(request)
+    spec = await _json_body(request, "hidden activities", strict=True, limit=131072)
+    try:
+        result = await run_in_threadpool(hidden_activities.set_hidden, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/v1/event-logs/{log_id}/activity-label-suggestions")
 def event_log_activity_label_suggestions(request: Request, log_id: str):
     """Groups of original activity names that are probably the same activity (mapping suggestions)."""
