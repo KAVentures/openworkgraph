@@ -58,3 +58,23 @@ keeps meaning *Type name*.
 | `POST /v1/event-logs/{log_id}/activity-mappings/applied` | `{"mapping_id": "amap_…"}` applies one; `{"mapping_id": null}` removes it |
 | `POST /v1/event-logs/{log_id}/activity-mappings/{mapping_id}/delete` | Delete a mapping |
 | `GET /v1/event-logs/{log_id}/activity-label-suggestions` | Suggested groups of similar activity names |
+
+## Hiding activities
+
+Some activities are noise for the question at hand: system heartbeats, *Comment added*, automatic
+status syncs. **Hide activities** leaves the chosen activities out of every case-centric analysis
+of the log (variants, maps, KPIs, conformance, predictions, simulation, ...), the event filter of
+other process-mining tools. Their events are removed from what the analysis sees; a case whose
+events are all hidden is not shown. Every result computed with hidden activities carries
+`hidden_activities` (`activities`, `events_hidden`, `cases_with_only_hidden_events`), and the
+dashboard overview says what is left out. **Show all activities** restores them.
+
+Hidden activities are matched on the **stored** activity names, before an applied mapping relabels
+them, so changing or removing a mapping never changes what is hidden. At least one activity must
+stay visible. As with mappings, the stored events are never changed, saved signal rules and
+object-centric views keep every event, and deleting the log deletes the list.
+
+| Route | Purpose |
+|---|---|
+| `GET /v1/event-logs/{log_id}/hidden-activities` | Hidden activities and every stored activity with its event count |
+| `POST /v1/event-logs/{log_id}/hidden-activities` | `{"activities": [...]}` replaces the list; `[]` shows every activity |

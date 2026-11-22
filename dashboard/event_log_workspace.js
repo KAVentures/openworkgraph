@@ -887,6 +887,36 @@
     return box;
   }
 
+  // Leave noise activities (heartbeats, comments, status syncs) out of every case-centric analysis.
+  function hiddenActivitiesSection(){
+    const box=section('Hide activities');box.id='owgHiddenActivities';
+    box.appendChild(el('div','Leave chosen activities out of variants, maps, KPIs and the other case analyses of this log. The stored events are never changed, and saved signals and object views keep every event.','muted'));
+    const pick=document.createElement('select');pick.id='owgHiddenActivitiesPick';pick.multiple=true;pick.size=6;
+    const save=button('Hide selected','secondary');save.id='owgHiddenActivitiesSave';
+    const clear=button('Show all activities','secondary');clear.id='owgHiddenActivitiesClear';
+    const msg=el('div',null,'muted');msg.id='owgHiddenActivitiesStatus';msg.setAttribute('role','status');msg.setAttribute('aria-live','polite');
+    const generation=state.generation;
+    const url=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/hidden-activities';
+    const render=r=>{
+      if(generation!==state.generation)return;
+      pick.replaceChildren(...r.activities.map(a=>{const o=el('option',a.activity+' ('+Number(a.events).toLocaleString()+' events)');o.value=a.activity;o.selected=a.hidden;return o;}));
+      clear.disabled=!r.hidden.length;
+      msg.textContent=r.hidden.length?'Hidden: '+r.hidden.map(h=>h.activity).join(', ')+' · '+Number(r.events_hidden).toLocaleString()+' of '+Number(r.events_total).toLocaleString()+' events left out.':'No activities are hidden.';
+    };
+    const store=async names=>{
+      save.disabled=clear.disabled=true;
+      try{await api(url(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({activities:names})});
+        if(generation===state.generation)await analyse();}
+      catch(e){msg.textContent=e.message;save.disabled=false;clear.disabled=false;}
+    };
+    save.onclick=()=>{const names=[...pick.selectedOptions].map(o=>o.value);if(!names.length){msg.textContent='Choose at least one activity to hide, or use Show all activities.';return;}store(names);};
+    clear.onclick=()=>store([]);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities to hide (stored names)',pick),save,clear);
+    box.append(row,msg);
+    getJSON(url()).then(render).catch(e=>{msg.textContent=e.message;});
+    return box;
+  }
+
   async function analyse(){
     const generation=++state.generation;
     const results=document.getElementById('owgEventLogResults');results.replaceChildren();
@@ -900,9 +930,11 @@
     overview.appendChild(table(['Cases','Events','Activities','Median case time','90th percentile'],[[Number(summary.cases).toLocaleString(),Number(summary.events).toLocaleString(),summary.activities,duration(d.median),duration(d.p90)]]));
     if(summary.cases_before_filter!==undefined){const note=el('div','Filtered: '+Number(summary.cases).toLocaleString()+' of '+Number(summary.cases_before_filter).toLocaleString()+' cases match the case filter.','muted');note.id='owgCaseFilterCount';overview.appendChild(note);}
     if(summary.activity_mapping){const m=summary.activity_mapping;const note=el('div','Activities are grouped by the mapping “'+m.name+'”: '+Number(m.events_relabeled).toLocaleString()+' events relabelled'+(m.repeats_collapsed?', '+Number(m.repeats_collapsed).toLocaleString()+' consecutive repeats collapsed':'')+'. The stored events are unchanged; remove the mapping under Group activities to see the original activities.','note');note.id='owgActivityMappingNotice';overview.appendChild(note);}
+    if(summary.hidden_activities){const h=summary.hidden_activities;const note=el('div','Hidden activities left out: '+h.activities.join(', ')+' ('+Number(h.events_hidden).toLocaleString()+' events'+(h.cases_with_only_hidden_events?'; '+Number(h.cases_with_only_hidden_events).toLocaleString()+' cases had only hidden events and are not shown':'')+'). The stored events are unchanged; use Show all activities under Hide activities to include them.','note');note.id='owgHiddenActivitiesNotice';overview.appendChild(note);}
     results.appendChild(overview);
     results.appendChild(insightSection());
     results.appendChild(activityMappingSection());
+    results.appendChild(hiddenActivitiesSection());
     results.appendChild(qualitySection());
     results.appendChild(attributeProfileSection());
     results.appendChild(caseFilterSection(names));
