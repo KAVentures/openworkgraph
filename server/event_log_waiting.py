@@ -90,8 +90,9 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
                 FROM paired WHERE en IS NOT NULL
                 UNION ALL SELECT case_id, activity, ts, ts, NULL, 'no_lifecycle' FROM lc WHERE tr = ''""")
             # Starts without a k-th complete are still running (or lost their completion).
-            open_starts, unmatched_starts = conn.execute("""SELECT count(*), coalesce(sum(d), 0) FROM (
-                SELECT count(*) FILTER (WHERE tr = 'start') - count(*) FILTER (WHERE tr = 'complete') AS d
+            open_starts, unmatched_starts = conn.execute("""SELECT count(DISTINCT activity), coalesce(sum(d), 0) FROM (
+                SELECT activity, count(*) FILTER (WHERE tr = 'start') -
+                    count(*) FILTER (WHERE tr = 'complete') AS d
                 FROM lc GROUP BY case_id, activity) WHERE d > 0""").fetchone()
             ignored = conn.execute("SELECT count(*) FROM lc WHERE tr NOT IN ('', 'start', 'complete')").fetchone()[0]
         else:
