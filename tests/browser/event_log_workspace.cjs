@@ -1377,7 +1377,7 @@ const path=require('node:path');
      manyRows.push('C'+j+','+activity+',2024-02-01T00:00:00Z,start');
      manyRows.push('C'+j+','+activity+',2024-02-01T00:01:00Z,complete');
    }
-   await page.locator('#owgEventLogFile').setInputFiles({name:'many-lifecycle.csv',mimeType:'text/csv',buffer:Buffer.from(manyRows.join('\\n'))});
+   await page.locator('#owgEventLogFile').setInputFiles({name:'many-lifecycle.csv',mimeType:'text/csv',buffer:Buffer.from(manyRows.join('\n'))});
    await page.locator('#owgEventLogDelimiter').selectOption(',');
    await page.waitForFunction(()=>document.querySelector('#owgEventLogAttributes').options.length===4);
    await page.locator('#owgEventLogAttributes').selectOption(['lifecycle:transition']);
