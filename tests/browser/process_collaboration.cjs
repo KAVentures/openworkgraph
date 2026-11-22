@@ -822,10 +822,12 @@ results={'format':'openworkgraph.shadow-plan-results.v1','process_reference':ref
     await bob
       .getByRole("button", { name: "Record design review", exact: true })
       .click();
-    await waitStatus(
-      bob,
-      "Process revision changed; reload and review the current design",
-    );
+    // A current, authorized reviewer should receive a durable Gateway review
+    // acknowledgment; design review never grants agent execution permission.
+    await bob.locator("#reviewOutcome").getByText(
+      /Gateway acknowledged approved for revision 2.*Human design review only; no agent handoff or execution occurred\./,
+    ).waitFor();
+    assert.equal(await bob.locator("#reviewConfirm").isChecked(), false);
     await bob
       .getByRole("button", { name: "Load shared processes", exact: true })
       .click();
