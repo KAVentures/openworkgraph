@@ -180,6 +180,13 @@ CREATE TABLE IF NOT EXISTS cost_models (
   log_id VARCHAR NOT NULL, model VARCHAR NOT NULL, saved_at TIMESTAMP NOT NULL
 );
 """
+# The owner's activity glossary (event_log_activity_glossary): what each activity means, who owns it, where it runs.
+_SCHEMA += """
+CREATE TABLE IF NOT EXISTS activity_notes (
+  log_id VARCHAR NOT NULL, activity VARCHAR NOT NULL, description VARCHAR NOT NULL, owner_team VARCHAR NOT NULL,
+  system VARCHAR NOT NULL, automation VARCHAR, updated_at TIMESTAMP NOT NULL
+);
+"""
 
 DESCRIPTIVE_ONLY = {
     "derived_from_supplied_log": True,
@@ -793,7 +800,7 @@ def delete_log(log_id: str) -> dict[str, Any]:
                 from .event_log_agent_access import erase as erase_agent_access
                 erase_agent_access(conn, log_id)
                 for table in ("object_relationships", "event_source_keys", "event_source_namespaces", "discovery_snapshots", "log_appends", "log_quality", "quarantine", "quarantine_decisions", "filter_sets",
-                              "domain_pack_installs", "cohort_metric_definitions", "metric_definitions", "saved_analyses", "signal_snoozes", "signal_reviews", "signal_transitions", "signal_rules", "reference_nets", "case_tags", "case_attribute_upload_changes", "case_attribute_uploads", "event_log_agent_shares", "event_log_agent_tag_grants", "event_log_agent_run_sources", "cost_models", "event_objects", "events", "objects",
+                              "domain_pack_installs", "cohort_metric_definitions", "metric_definitions", "saved_analyses", "signal_snoozes", "signal_reviews", "signal_transitions", "signal_rules", "reference_nets", "case_tags", "case_attribute_upload_changes", "case_attribute_uploads", "event_log_agent_shares", "event_log_agent_tag_grants", "event_log_agent_run_sources", "cost_models", "activity_notes", "event_objects", "events", "objects",
                               "object_attribute_values",
                               "logs"):
                     conn.execute(f"DELETE FROM {table} WHERE log_id = ?", [log_id])
