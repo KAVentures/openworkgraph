@@ -5185,7 +5185,7 @@
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Window',windowKind),casesField,run);
     const statusLine=el('div',null,'muted');statusLine.id='owgConceptDriftStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgConceptDriftResults';
-    const review=el('div');review.id='owgConceptDriftCases';
+    const review=el('div');review.id='owgConceptDriftCaseReview';
     box.append(row,statusLine,out,review);
     const generation=state.generation;
     let revision=0,selection=0;
