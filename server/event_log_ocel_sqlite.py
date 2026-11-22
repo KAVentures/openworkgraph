@@ -56,6 +56,24 @@ def write(log_id: str, path: Path) -> dict[str, Any]:
     events, objects = doc["events"], doc["objects"]
     event_types = _table_names(sorted({e["type"] for e in events}))
     object_types = _table_names(sorted({o["type"] for o in objects}))
+    # Attribute names are SQL column identifiers in OCEL SQLite. SQLite treats column names
+    # case-insensitively; a supplied name must not shadow mandatory OCEL columns or another
+    # supplied attribute. JSON/XML export remains available for such names.
+    for kind, rows, reserved in (
+        ("event", events, {"ocel_id", "ocel_time"}),
+        ("object", objects, {"ocel_id", "ocel_time", "ocel_changed_field"}),
+    ):
+        by_type: dict[str, set[str]] = {}
+        for entry in rows:
+            seen = by_type.setdefault(entry["type"], set(reserved))
+            for attribute in entry["attributes"]:
+                name = attribute["name"]
+                key = name.casefold()
+                if key in seen:
+                    raise workspace.EventLogWorkspaceError(
+                        f"OCEL SQLite attribute column {name[:80]!r} conflicts with a required "
+                        f"column or another attribute of the same {kind} type; use OCEL JSON or XML instead")
+                seen.add(key)
     conn = sqlite3.connect(path)
     try:
         conn.executescript("""
