@@ -26,7 +26,7 @@ def test_search_pages_literal_labels_and_respects_mapping(tmp_path, monkeypatch)
         conn.execute('''INSERT INTO event_objects SELECT log_id, event_id, 'private-case', '' FROM events
             WHERE log_id = ? AND starts_with(event_id, 'fixture_')''', [log])
         conn.execute("INSERT INTO objects VALUES (?, 'invoice-1', 'invoice', '{}')", [log])
-        conn.execute("INSERT INTO events VALUES (?, 'invoice-event', 'Invoice-only', TIMESTAMP '2024-01-01', '', '{}')", [log])
+        conn.execute("INSERT INTO events VALUES (?, 'invoice-event', 'Invoice-only', TIMESTAMP '2024-01-01', 'Invoice clerk', '{}')", [log])
         conn.execute("INSERT INTO event_objects VALUES (?, 'invoice-event', 'invoice-1', '')", [log])
     finally:
         conn.close()
@@ -40,6 +40,8 @@ def test_search_pages_literal_labels_and_respects_mapping(tmp_path, monkeypatch)
     assert lookup.search(other, 'rare%_')['labels'] == []
     assert lookup.search(log, 'Invoice', case_type='case')['labels'] == []
     assert lookup.search(log, 'Invoice', case_type='invoice')['labels'] == ['Invoice-only']
+    assert lookup.resource_search(log, 'clerk', case_type='case')['labels'] == []
+    assert lookup.resource_search(log, 'clerk', case_type='invoice')['labels'] == ['Invoice clerk']
     assert lookup.search(log, "%' OR 1=1 --")['labels'] == []
     assert 'private-case' not in json.dumps(first)
     made = mappings.create(log, {'name':'group', 'groups':[{'label':'Grouped 雪', 'activities':['A','B']}], 'collapse_repeats':False})
@@ -70,6 +72,9 @@ with TestClient(app) as client:
     assert result.status_code==200 and result.headers['cache-control']=='no-store'
     assert result.json()['labels']==['A']
     assert client.post(url,json={'search':'A','extra':1},headers=owner).status_code==422
+    resource_url=url.replace('/activity-labels/','/resource-labels/')
+    assert client.post(resource_url,json={'search':'A'},headers=bearer).status_code==403
+    assert client.post(resource_url,json={'search':'A'},headers=owner).json()['labels']==[]
     assert client.post(url,content='{"search":"A","search":"B"}',headers={**owner,'content-type':'application/json'}).status_code==422
 '''
     env = {**os.environ, 'WORKFLOW_OBSERVER_DATA': str(tmp_path / 'data'), 'WORKFLOW_OBSERVER_AUTH_DIR': str(tmp_path / 'auth')}
