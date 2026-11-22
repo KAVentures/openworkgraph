@@ -3525,6 +3525,17 @@ async def read_local_bound_provider_event(request: Request, response: Response):
     await _recheck_source(scope)
     _dashboard_only(request)
     await require_same_provider_account()
+    # Adapter output is evidence, never permission to assert customer success.
+    # Fail closed on malformed or contradictory verdicts before disclosure.
+    if (not isinstance(verdict, dict)
+            or verdict.get("status") not in ("unknown", "verified_provider_event", "verified_provider_operation")
+            or verdict.get("customer_outcome") != "unknown"
+            or verdict.get("provider_operation") not in ("unknown", "succeeded", "failed")
+            or (verdict["status"] != "verified_provider_operation"
+                and verdict["provider_operation"] != "unknown")
+            or (verdict["status"] == "verified_provider_operation"
+                and verdict["provider_operation"] == "unknown")):
+        raise HTTPException(409, "provider verification verdict unavailable or contradictory")
     response.headers["Cache-Control"] = "no-store"
     return {
         "format": "openworkgraph.bound-provider-event.v1",
