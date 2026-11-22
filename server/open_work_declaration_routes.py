@@ -3395,6 +3395,31 @@ async def read_local_bound_provider_event(request: Request, response: Response):
     # Full actor-scoped retained run, reviewed declaration and dependency
     # admission precedes any network access.
     before = await review()
+    # Show retained attempt evidence alongside the independent provider observation.
+    # This is a separate fully admitted actor/tenant-scoped read, never a
+    # correlation assertion: journal rows remain untrusted until an independent
+    # run-to-event provenance binding is established.
+    async def retained_attempt_review():
+        raw = json.dumps({key: payload[key] for key in (
+            "work_item_ref", "expected_revision", "expected_edit_token",
+            "confirm_historical_review", "confirm_run_comparison", "max_cases",
+            "deployment_id", "run_id",
+        )}, separators=(",", ":")).encode("utf-8")
+        async def receive():
+            return {"type": "http.request", "body": raw, "more_body": False}
+        return await read_local_bound_attempt_receipts(
+            Request({**request.scope, "headers": [
+                (key, value) for key, value in request.scope.get("headers", [])
+                if key.lower() != b"content-type"
+            ] + [(b"content-type", b"application/json")]}, receive=receive), Response(),
+        )
+
+    # Require an actor-scoped retained journal before contacting the provider.
+    retained = await retained_attempt_review()
+    if (not isinstance(retained, dict) or not isinstance(before, dict)
+            or not isinstance(before.get("receipts"), dict)
+            or retained.get("run_ref") != before["receipts"].get("run_ref")):
+        raise HTTPException(409, "retained receipt run does not match admitted run")
     await _recheck_source(scope)
     _dashboard_only(request)
     from .local_source_credentials import _metadata_path, _read_metadata
@@ -3467,26 +3492,9 @@ async def read_local_bound_provider_event(request: Request, response: Response):
     _dashboard_only(request)
     await require_same_provider_account()
     _dashboard_only(request)
-    # Show retained attempt evidence alongside the independent provider observation.
-    # This is a separate fully admitted actor/tenant-scoped read, never a
-    # correlation assertion: journal rows remain untrusted until an independent
-    # run-to-event provenance binding is established.
-    async def retained_attempt_review():
-        raw = json.dumps({key: payload[key] for key in (
-            "work_item_ref", "expected_revision", "expected_edit_token",
-            "confirm_historical_review", "confirm_run_comparison", "max_cases",
-            "deployment_id", "run_id",
-        )}, separators=(",", ":")).encode("utf-8")
-        async def receive():
-            return {"type": "http.request", "body": raw, "more_body": False}
-        return await read_local_bound_attempt_receipts(
-            Request({**request.scope, "headers": [
-                (key, value) for key, value in request.scope.get("headers", [])
-                if key.lower() != b"content-type"
-            ] + [(b"content-type", b"application/json")]}, receive=receive), Response(),
-        )
-
-    retained = await retained_attempt_review()
+    current_retained = await retained_attempt_review()
+    if current_retained != retained:
+        raise HTTPException(409, "retained receipt journal changed during provider read")
     await _recheck_source(scope)
     _dashboard_only(request)
     await require_same_provider_account()
