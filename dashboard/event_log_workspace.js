@@ -716,9 +716,13 @@
     formats.onchange=describeFormat;describeFormat();
     const out=el('div');out.id='owgDeriveResult';out.setAttribute('role','status');
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('New log name',name),run);
+    // Optional time window: keep only the events inside it (trim to timeframe).
+    const windowFrom=input('owgDeriveEventsFrom','datetime-local'),windowBefore=input('owgDeriveEventsBefore','datetime-local');
+    const windowRow=el('div',null,'row');windowRow.style.alignItems='end';
+    windowRow.append(field('Only events from (optional, local time)',windowFrom),field('Only events before (optional)',windowBefore));
     const exportRow=el('div',null,'row');exportRow.style.alignItems='end';
     exportRow.append(field('Matching case export format',formats),download);
-    box.append(filter.node,row,exportRow,formatNote,out);
+    box.append(filter.node,windowRow,row,exportRow,formatNote,out);
     const generation=state.generation;
     function selectedCases(missingFilter){
       const cohort=filter.read();delete cohort.label;
@@ -748,7 +752,13 @@
     run.onclick=async()=>{
       run.disabled=true;
       try{
-        const spec={...selectedCases('Choose which cases to copy.'),name:name.value.trim()};
+        const window={};
+        if(windowFrom.value)window.events_from=new Date(windowFrom.value).toISOString();
+        if(windowBefore.value)window.events_before=new Date(windowBefore.value).toISOString();
+        let cases;
+        try{cases=selectedCases('Choose which cases to copy. Or set a time window.');}
+        catch(error){if(!Object.keys(window).length)throw error;cases=state.caseType?{cohort:{},case_type:state.caseType}:{cohort:{}};}
+        const spec={...cases,...window,name:name.value.trim()};
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/derive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
         if(generation!==state.generation)return;
         // Add the new log to the picker without leaving the current analysis.
@@ -756,7 +766,8 @@
         const pick=document.getElementById('owgEventLogPick');setOptions(pick,state.logs.map(l=>[l.log_id,l.name+' · '+Number(l.events).toLocaleString()+' events']));pick.value=state.logId;
         const open=button('Open '+r.log.name,'secondary');open.id='owgDeriveOpen';
         open.onclick=()=>refreshLogs(r.log.log_id,r.derived_from.case_notion).then(()=>status('Opened '+r.log.name+'. Select Analyse to explore it.')).catch(error=>status(error.message));
-        out.replaceChildren(el('div','Saved '+r.log.name+': '+Number(r.derived_from.cases_matched).toLocaleString()+' of '+Number(r.derived_from.cases_in_source).toLocaleString()+' cases, '+Number(r.copied.events).toLocaleString()+' events.'),open);
+        const trimmed=r.time_window?' Only events in the time window were kept: '+Number(r.time_window.cases_with_events_in_window).toLocaleString()+' cases have events in it; '+Number(r.time_window.events_outside_left_out).toLocaleString()+' events outside it were left out.':'';
+        out.replaceChildren(el('div','Saved '+r.log.name+': '+Number(r.derived_from.cases_matched).toLocaleString()+' of '+Number(r.derived_from.cases_in_source).toLocaleString()+' cases, '+Number(r.copied.events).toLocaleString()+' events.'+trimmed),open);
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
       finally{run.disabled=false;}
     };
