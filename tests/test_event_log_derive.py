@@ -150,6 +150,12 @@ with TestClient(app) as client:
         assert response.status_code == 200, response.text
         assert response.headers["content-disposition"].endswith(suffix + '"')
         assert response.headers["cache-control"] == "no-store"
+    assert client.post(export, json={"cohort": {}}, headers=owner).status_code == 422
+    explicit = {"cohort": {}, "case_type": "case", "include_unfiltered": True}
+    assert client.post(export, json=explicit, headers=bearer).status_code == 403
+    all_cases = client.post(export, json=explicit, headers=owner)
+    assert all_cases.status_code == 200 and len(all_cases.text.splitlines()) == 4
+    assert client.post(export, json={**explicit, "include_unfiltered": "true"}, headers=owner).status_code == 422
     assert client.post(export + "?format=ocel", json=cohort, headers=owner).status_code == 422
 
     assert client.post(path, json=body, headers=bearer).status_code == 403

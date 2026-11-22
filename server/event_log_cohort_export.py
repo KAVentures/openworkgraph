@@ -15,6 +15,7 @@ MatchingExportFormat = Literal["csv", "csv-review", "xes", "xes-attributes"]
 class ExportSpec(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     cohort: dict[str, Any]
+    include_unfiltered: bool = False
     case_type: str | None = Field(default=None, min_length=1, max_length=200)
 
 
@@ -25,7 +26,7 @@ def export_matching_cases(log_id: str, spec: Any, out: IO[str], *,
     except ValidationError:
         raise workspace.EventLogWorkspaceError("Invalid matching-case export settings") from None
     chosen = cohorts.parse_cohort(settings.cohort)
-    if not any(key != "label" for key in chosen):
+    if not settings.include_unfiltered and not any(key != "label" for key in chosen):
         raise workspace.EventLogWorkspaceError("Choose a case filter before exporting matching cases")
 
     def run(conn):
