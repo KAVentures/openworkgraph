@@ -16,6 +16,27 @@ from server.event_log_workspace import EventLogWorkspaceError
 MAPPING = {"case_column": "case", "activity_column": "activity", "timestamp_column": "time",
            "resource_column": "who"}
 
+# Test case IDs are literal c0..c23; scanning repr(response) for "c0" is incorrect:
+# randomly generated log IDs can contain that substring without disclosing a case.
+_CASE_IDS = {f"c{i}" for i in range(24)}
+
+
+def _exposes_case_ids(value):
+    if isinstance(value, dict):
+        return any(k in ("case_id", "case_ids") for k in value) or any(
+            _exposes_case_ids(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(_exposes_case_ids(item) for item in value)
+    return isinstance(value, str) and value in _CASE_IDS
+
+
+def test_case_id_leak_check_ignores_log_id_substrings():
+    assert not _exposes_case_ids({"log_id": "log_randomc0suffix", "cases": 24})
+    assert _exposes_case_ids({"cases": ["c0"]})
+    assert _exposes_case_ids({"nested": {"case_id": "c7"}})
+
+
+
 
 @pytest.fixture(autouse=True)
 def _dirs(tmp_path, monkeypatch):
@@ -49,7 +70,7 @@ def test_trace_clusters_withhold_small_groups_and_cohorts():
     assert all(c["cases"] >= 5 and "cohort" not in c for c in r["clusters"])
     assert all(v["cases"] >= 5 for c in r["clusters"] for v in c["top_variants"])
     assert sum(c["top_variants_withheld"] for c in r["clusters"]) >= 1   # the 3-case variant
-    assert r["withheld"]["min_cases"] == 5 and "c0" not in repr(r)
+    assert r["withheld"]["min_cases"] == 5 and not _exposes_case_ids(r)
 
 
 def test_compliance_rates_with_case_ids_only_at_cases_level():
@@ -83,7 +104,7 @@ def test_performance_spectrum_without_case_lines():
     names = {(s["from"], s["to"]) for s in r["segments"]}
     assert ("Order", "Check") in names and ("Pay", "Ship") in names
     assert all(s["occurrences"] >= 5 and "lines" not in s and "max" not in s["duration_seconds"] for s in r["segments"])
-    assert r["case_lines_returned"] is False and "c0" not in repr(r)
+    assert r["case_lines_returned"] is False and not _exposes_case_ids(r)
     chosen = sharing.performance_spectrum(log, segments=["Order->Cancel"], bins=4)
     assert [(s["from"], s["occurrences"]) for s in chosen["segments"]] == [("Order", 9)]
     with pytest.raises(EventLogWorkspaceError):
