@@ -30,6 +30,10 @@ from .event_log_workspace import EventLogWorkspaceError
 FORMAT = "openworkgraph.event_log_heuristics_net.v1"
 MAX_ACTIVITIES = 64
 START, END = "▶ start", "■ end"
+_SEQUENCE = """CREATE TEMP TABLE hm_seq AS SELECT case_id, activity, ts,
+    lead(activity) OVER w AS nxt, lead(activity, 2) OVER w AS nxt2,
+    row_number() OVER w AS rn, count(*) OVER (PARTITION BY case_id) AS len
+    FROM ce WINDOW w AS (PARTITION BY case_id ORDER BY ts, event_id)"""
 
 
 def _check(name: str, value: Any, low: float, high: float) -> float:
@@ -50,10 +54,7 @@ def heuristics_net(log_id: str, case_type: str | None = None, *, dependency_thre
         raise EventLogWorkspaceError("all_connected must be true or false")
 
     def run(conn):
-        conn.execute("""CREATE OR REPLACE TEMP TABLE hm_seq AS SELECT case_id, activity,
-            lead(activity) OVER w AS nxt, lead(activity, 2) OVER w AS nxt2,
-            row_number() OVER w AS rn, count(*) OVER (PARTITION BY case_id) AS len
-            FROM ce WINDOW w AS (PARTITION BY case_id ORDER BY ts, event_id)""")
+        conn.execute(_SEQUENCE)
         acts = conn.execute("""SELECT activity, count(*), count(DISTINCT case_id) FROM hm_seq
             GROUP BY 1 ORDER BY 2 DESC, 1""").fetchall()
         if len(acts) > MAX_ACTIVITIES:
@@ -86,7 +87,8 @@ def heuristics_net(log_id: str, case_type: str | None = None, *, dependency_thre
     for a in names:
         if df[(a, a)] >= min_occurrences and dependency(a, a) >= dependency_threshold:
             kept[(a, a)] = "threshold"
-            loops.append({"kind": "self", "activities": [a], "measure": round(dependency(a, a), 4)})
+            loops.append({"kind": "self", "activities": [a], "measure": round(dependency(a, a), 4),
+                          "occurrences": df[(a, a)]})
     in_self_loop = {a for (a, b) in kept if a == b}
     for a in names:
         for b in names:
@@ -101,7 +103,8 @@ def heuristics_net(log_id: str, case_type: str | None = None, *, dependency_thre
             n = l2[(a, b)] + l2[(b, a)]
             measure = n / (n + 1)
             if n >= min_occurrences and measure >= loop_two_threshold:
-                loops.append({"kind": "length_two", "activities": [a, b], "measure": round(measure, 4)})
+                loops.append({"kind": "length_two", "activities": [a, b], "measure": round(measure, 4),
+                              "occurrences": n})
                 for edge in ((a, b), (b, a)):
                     if df[edge]:
                         kept.setdefault(edge, "short_loop")
@@ -163,4 +166,49 @@ def heuristics_net(log_id: str, case_type: str | None = None, *, dependency_thre
                      "from how often branches follow each other in both orders, not from a modelled gateway.")}
 
 
-__all__ = ["heuristics_net", "FORMAT"]
+def evidence_cases(log_id: str, case_type: str | None = None, *, selection: dict[str, Any],
+                   cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Review recorded occurrences supporting one structural observation."""
+    if not isinstance(selection, dict) or selection.keys() - {"group", "activities", "after", "limit"}:
+        raise EventLogWorkspaceError("unknown heuristics case setting")
+    group, labels = selection.get("group"), selection.get("activities")
+    if group not in ("transition", "length_two", "start", "end"):
+        raise EventLogWorkspaceError("choose a transition, back-and-forth loop, start or end")
+    if (not isinstance(labels, list) or len(labels) != (2 if group in ("transition", "length_two") else 1)
+            or any(not isinstance(a, str) or not a or len(a) > 200 for a in labels)):
+        raise EventLogWorkspaceError("choose the exact activity labels from the report")
+    if group == "length_two" and labels[0] == labels[1]:
+        raise EventLogWorkspaceError("a back-and-forth loop needs two different activities")
+    after, limit = selection.get("after"), selection.get("limit", 50)
+    if after is not None and (not isinstance(after, str) or not after or len(after) > 200):
+        raise EventLogWorkspaceError("invalid case key cursor")
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise EventLogWorkspaceError("limit must be a whole number from 1 to 100")
+    where = {
+        "transition": "activity = ? AND nxt = ?",
+        "length_two": "nxt2 = activity AND ((activity = ? AND nxt = ?) OR (nxt = ? AND activity = ?))",
+        "start": "activity = ? AND rn = 1",
+        "end": "activity = ? AND rn = len",
+    }[group]
+    params = labels * 2 if group == "length_two" else labels
+
+    def run(conn):
+        conn.execute(_SEQUENCE)
+        conn.execute(f"""CREATE TEMP TABLE hm_cases AS
+            SELECT case_id, count(*) AS occurrences, min(ts) AS first_at, max(ts) AS last_at
+            FROM hm_seq WHERE {where} GROUP BY case_id""", params)
+        total, occurrences = conn.execute("SELECT count(*), coalesce(sum(occurrences), 0) FROM hm_cases").fetchone()
+        rows = conn.execute("""SELECT case_id, occurrences, first_at, last_at FROM hm_cases
+            WHERE ? IS NULL OR case_id > ? ORDER BY case_id LIMIT ?""", [after, after, limit + 1]).fetchall()
+        return {"total": total, "occurrences": occurrences, "rows": rows}
+
+    data = workspace._query_filtered(log_id, case_type, cohort, run)
+    rows = data["rows"]
+    return {"group": group, "activities": labels, "case_notion": data["case_notion"],
+            "total": data["total"], "occurrences": data["occurrences"],
+            "cases": [{"case_id": key, "occurrences": n, "first_at": first.isoformat() + "Z",
+                       "last_at": last.isoformat() + "Z"} for key, n, first, last in rows[:limit]],
+            "next_after": rows[limit - 1][0] if len(rows) > limit else None}
+
+
+__all__ = ["heuristics_net", "evidence_cases", "FORMAT"]
