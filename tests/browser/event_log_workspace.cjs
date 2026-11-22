@@ -336,13 +336,14 @@ const path=require('node:path');
    assert.match(firstRow,/^C\d+/);assert.match(firstRow,/15\.0 h/,'longest case first');
    await page.locator('#owgConceptDriftRun').click();
    await page.locator('#owgConceptDriftStatus').filter({hasText:'among 0 window boundaries tested'}).waitFor();
+   assert.equal(await page.locator('#owgConceptDriftCases').count(),1,'concept-drift window-size input needs a unique ID');
    await page.locator('#owgConceptDriftWindow').selectOption('cases');await page.locator('#owgConceptDriftCases').fill('20');
    await page.locator('#owgConceptDriftRun').click();
    await page.locator('#owgConceptDriftStatus').filter({hasText:'0 change points among 2 window boundaries tested.'}).waitFor();
    assert.match(await page.locator('#owgConceptDriftResults').textContent(),/cases 1–20\s*20/);
    await page.getByRole('button',{name:'Inspect sampled cases in cases 1–20',exact:true}).click();
-   await page.locator('#owgConceptDriftCases').getByText('20 matches in 20 sampled cases (20 cases in the window). Showing 20.').waitFor();
-   assert.equal(await page.locator('#owgConceptDriftCases tbody tr').count(),20);
+   await page.locator('#owgConceptDriftCaseReview').getByText('20 matches in 20 sampled cases (20 cases in the window). Showing 20.').waitFor();
+   assert.equal(await page.locator('#owgConceptDriftCaseReview tbody tr').count(),20);
    // Save a reviewed graph through the actual catalog and pin a historical revision.
    const saved=await page.evaluate(async()=>{
      const labels=['Receive','Check','Approve','Close'];
