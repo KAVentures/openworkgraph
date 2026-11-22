@@ -78,6 +78,7 @@ def compare_maps(log_id: str, cohort_specs: Any, case_type: str | None = None, *
         for src, dst, ta, tb, ca, cb, ma, mb in rows:
             d, low, high = risk_difference(cb, nb, ca, na)
             paths.append({"from": src, "to": dst, "transitions_in_first": ta, "transitions_in_second": tb,
+                          "cases_in_first": ca, "cases_in_second": cb,
                           "case_share_in_first": round(ca / na, 6), "case_share_in_second": round(cb / nb, 6),
                           "case_share_difference": round(d, 6), "ci95": [round(low, 6), round(high, 6)],
                           "ci_excludes_zero": low > 0 or high < 0,
