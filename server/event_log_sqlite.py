@@ -72,6 +72,7 @@ def to_csv(source: IO[bytes], table: str | None = None, *, folder: Path) -> dict
             conn = sqlite3.connect(f"{path.as_uri()}?mode=ro&immutable=1", uri=True)
         except sqlite3.Error:
             raise SqliteError("the SQLite database could not be opened") from None
+        cursor = None
         try:
             deadline = time.monotonic() + MAX_SECONDS
             conn.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 10_000)
@@ -114,7 +115,14 @@ def to_csv(source: IO[bytes], table: str | None = None, *, folder: Path) -> dict
             except sqlite3.Error:
                 raise SqliteError("the table could not be read") from None
         finally:
-            conn.close()
+            # Windows will not unlink the temporary SQLite file while a cursor
+            # still holds a native statement handle, including on error paths.
+            # Finalize the statement before closing the connection and temp dir.
+            try:
+                if cursor is not None:
+                    cursor.close()
+            finally:
+                conn.close()
     if not rows:
         raise SqliteError("the table has no rows")
     return {"format": FORMAT, "sheets": tables, "sheet": chosen, "kind": "table", "rows": rows,
