@@ -2643,9 +2643,17 @@
         });
         window.addEventListener("pageshow",event=>{
           if(!event.persisted)return;
+          // Browser history may restore an old tenant's process after its
+          // membership, revision or review permission has changed remotely.
+          // Clearing the packet alone is insufficient: direct design review,
+          // collaborator edits and exports also use the selected process.
+          // Invalidate pending process reads before hiding all selected actions.
+          processOpenGeneration++;
+          selected=null;
+          $("selected").hidden=true;
           $("handoffConsent").checked=false;
           $("reviewConfirm").checked=false;
-          resetHandoff("Restored page. Reopen the latest authorized revision and reinspect.");
+          resetHandoff("Restored page. Reopen an authorized process and reinspect before taking any action.");
         });
         $("handoffPacket").addEventListener("change",()=>{ $("handoffConsent").checked=false; resetHandoff("Packet changed. Reauthorize inspection."); });
         $("handoffConsent").addEventListener("change",()=>resetHandoff("Authorization changed. Check again."));
