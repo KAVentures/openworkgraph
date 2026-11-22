@@ -1513,6 +1513,14 @@ under the chosen case notion and the source's activity mapping.
   signals, domain packs, source-identity keys, object-to-object relationships
   and quality reports. The new log starts without them.
 * **The source log:** unchanged.
+* **Time window (optional):** `events_from` and/or `events_before` (times with
+  a UTC offset; the dashboard's *Only events from / before* fields) trim the
+  copy to the events inside the window, the "trim to timeframe" of other
+  process-mining tools. A matching case keeps only its events in the window and
+  is left out if it has none. With a window the case filter may be empty, so
+  `{"name": "Q1", "events_from": "2024-01-01T00:00:00Z", "events_before":
+  "2024-04-01T00:00:00Z"}` saves the whole log's first quarter. The response's
+  `time_window` reports the cases with events in it and the events left out.
 * **The new log:** counts against the 50-log limit. It can be analysed,
   exported, compared with the source (see *Comparing two logs*) or deleted like
   any other log.
