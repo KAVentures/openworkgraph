@@ -3419,6 +3419,12 @@ async def read_local_bound_provider_event(request: Request, response: Response):
 
     # Require an actor-scoped retained journal before contacting the provider.
     retained = await retained_attempt_review()
+    # A run-scoped journal with zero attempts is not an attempt binding.
+    # Deny provider network I/O before verifying any operator-supplied event.
+    if (not isinstance(retained, dict)
+            or not isinstance(retained.get("entries"), list)
+            or not retained["entries"]):
+        raise HTTPException(409, "no retained attempts available for provider review")
     admitted_run_ref = (before.get("receipts", {}).get("run_ref")
                         if isinstance(before, dict) and isinstance(before.get("receipts"), dict)
                         else None)
