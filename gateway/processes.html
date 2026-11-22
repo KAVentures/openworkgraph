@@ -1742,13 +1742,23 @@
         async function open(id, revision) {
           const openTicket = ++processOpenGeneration;
           const identityTicket = identityGeneration;
+          const authorizedCredential = credential;
+          // A new authorized read is a security boundary: never leave a prior
+          // process's edit, review, export or access controls usable in flight
+          // or after a denied/failed request.
+          selected = null;
+          $("selected").hidden = true;
+          $("reviewConfirm").checked = false;
+          $("handoffConsent").checked = false;
+          resetHandoff("Reopening current authorization. Previous inspection invalidated.");
           const params = revision
             ? "?" + new URLSearchParams({ revision: String(revision) })
             : "";
           const data = await call(
             "/v1/human/processes/" + encodeURIComponent(id) + params,
           );
-          if (openTicket !== processOpenGeneration || identityTicket !== identityGeneration) return;
+          if (openTicket !== processOpenGeneration || identityTicket !== identityGeneration ||
+              credential !== authorizedCredential) return;
           render(data);
           note("Opened exact saved revision " + data.process.revision + ".");
         }
