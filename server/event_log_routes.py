@@ -2089,6 +2089,22 @@ async def event_log_batching(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/batching/batches")
+async def event_log_batches(request: Request, log_id: str):
+    from . import event_log_batching as batch_detection
+    _require_dashboard(request)
+    spec = await _json_body(request, "batch list settings", strict=True, limit=16384)
+    return await run_in_threadpool(_respond, batch_detection.batches, log_id, spec)
+
+
+@router.post("/v1/event-logs/{log_id}/batching/batches/cases")
+async def event_log_batch_cases(request: Request, log_id: str):
+    from . import event_log_batching as batch_detection
+    _require_dashboard(request)
+    spec = await _json_body(request, "batch case settings", strict=True, limit=16384)
+    return await run_in_threadpool(_respond, batch_detection.batch_cases, log_id, spec)
+
+
 @router.post("/v1/event-logs/{log_id}/linked-attribute-analysis")
 async def event_log_linked_attribute_analysis(request: Request, log_id: str):
     """Read-only cardinality-aware joined object attribute breakdown (R9)."""

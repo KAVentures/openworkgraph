@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from datetime import datetime, timedelta, timezone
 from io import BytesIO, StringIO
 
@@ -70,6 +71,51 @@ def test_gap_size_and_resource_settings():
             batching.batching(log, bad)
 
 
+def test_batch_and_case_pages_share_the_summary_cutoff_and_settings():
+    log = _log()
+    spec = {"activity": "Approve", "limit": 1}
+    first = batching.batches(log, spec)
+    second = batching.batches(log, {**spec, "after": first["next_after"]})
+    batch = first["batches"][0]
+    assert first["total"] == second["total"] == 2
+    assert first["batches"][0]["started_at"] == "2024-03-05T17:00:00Z"
+    assert second["batches"][0]["started_at"] == "2024-03-04T17:00:00Z"
+    assert second["next_after"] is None and not batch["simultaneous"]
+    selection = {**spec, "batch_id": batch["batch_id"], "limit": 3}
+    members = batching.batch_cases(log, selection)
+    tail = batching.batch_cases(log, {**selection, "after": members["next_after"]})
+    assert members["events"] == members["total"] == tail["total"] == batch["events"] == 5
+    assert [m["case_id"] for m in members["cases"] + tail["cases"]] == [f"d1i{i}" for i in range(5)]
+    filter_spec = {"cohort": {"ended_before": "2024-03-05T00:00:00Z"}}
+    filtered = batching.batches(log, {**spec, **filter_spec})
+    assert filtered["total"] == 1 and filtered["batches"] == second["batches"]
+    with pytest.raises(workspace.EventLogWorkspaceError, match="no longer in the selection"):
+        batching.batch_cases(log, {**selection, **filter_spec})
+    with pytest.raises(workspace.EventLogWorkspaceError, match="batch page has changed"):
+        batching.batches(log, {**spec, **filter_spec, "after": first["next_after"]})
+    exports = batching.batches(log, {"activity": "Export"})
+    assert all(b["simultaneous"] for b in exports["batches"])
+
+
+def test_one_batch_event_can_contribute_to_several_object_cases():
+    objects = [{"id": key, "type": "order"} for key in ("a", "b")]
+    events = [
+        {"id": "e1", "type": "Approve", "time": "2024-03-04T12:00:00Z",
+         "relationships": [{"objectId": key, "qualifier": "item"} for key in ("a", "b")]},
+        {"id": "e2", "type": "Approve", "time": "2024-03-04T12:00:05Z",
+         "relationships": [{"objectId": "a", "qualifier": "item"}]},
+    ]
+    log = workspace.import_log(BytesIO(json.dumps({"objects": objects, "events": events}).encode()),
+                               name="shared events", source_format="ocel")["log_id"]
+    settings = {"case_type": "order", "min_batch_size": 2}
+    assert batching.batching(log, settings)["batched_events"] == 2
+    selected = {**settings, "activity": "Approve"}
+    batch = batching.batches(log, selected)["batches"][0]
+    result = batching.batch_cases(log, {**selected, "batch_id": batch["batch_id"]})
+    assert result["events"] == 2 and result["total"] == 2
+    assert [(row["case_id"], row["events"]) for row in result["cases"]] == [("a", 2), ("b", 1)]
+
+
 def test_route_requires_the_dashboard(tmp_path):
     import os
     import subprocess
@@ -91,6 +137,14 @@ with TestClient(app) as client:
     found = client.post(path, json={}, headers=owner)
     assert found.status_code == 200, found.text
     assert found.json()["activities"][0]["batches"] == 1
+    body = {"activity": "Approve"}
+    assert client.post(path+"/batches", json=body, headers=bearer).status_code == 403
+    rows = client.post(path+"/batches", json=body, headers=owner)
+    assert rows.status_code == 200, rows.text
+    body["batch_id"] = rows.json()["batches"][0]["batch_id"]
+    assert client.post(path+"/batches/cases", json=body, headers=bearer).status_code == 403
+    assert client.post(path+"/batches/cases", json=body, headers=owner).json()["total"] == 4
+    assert client.post(path+"/batches/cases", json={**body, "batch_id":"wrong"}, headers=owner).status_code == 422
     assert client.post(path, json={"gap_seconds": -5}, headers=owner).status_code == 422
 '''
     env = os.environ.copy()

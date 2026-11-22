@@ -940,7 +940,7 @@
     results.appendChild(kpiSection(names));
     results.appendChild(workInProgressSection(inspection));
     results.appendChild(durationDistributionSection(inspection));
-    results.appendChild(batchingSection());
+    results.appendChild(batchingSection(inspection));
     results.appendChild(benchmarkSection(names));
     results.appendChild(timePatternSection(names,inspection));
     results.appendChild(impactSection(names));
@@ -7811,7 +7811,7 @@
   }
 
   // Builds prediction settings from form values; throws a readable error.
-  function batchingSection(){
+  function batchingSection(inspection){
     const box=section('Batch processing');box.id='owgEventLogBatching';
     box.appendChild(el('div','Find work done in batches: events of one activity by the same resource that follow each other within a short gap. Batches are inferred from timestamps and are not proof that work was deliberately batched.','muted'));
     const gap=input('owgBatchGap','number');gap.min='0';gap.max='86400';gap.value='60';
@@ -7819,27 +7819,87 @@
     const byResource=input('owgBatchByResource','checkbox');byResource.checked=true;
     const run=button('Find batches','secondary');run.id='owgBatchRun';
     const out=el('div');out.id='owgBatchResults';out.setAttribute('role','status');
+    const batches=el('div');batches.id='owgBatchList';
+    const cases=el('div');cases.id='owgBatchCases';
     const resWrap=el('div');const resLabel=el('label',' Separate by resource');resLabel.htmlFor=byResource.id;resWrap.append(byResource,resLabel);
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Gap within a batch (seconds)',gap),field('Smallest batch',size),resWrap,run);
-    box.append(row,out);
-    const generation=state.generation;
+    box.append(row,out,batches,cases);
+    const generation=state.generation,endpoint='/v1/event-logs/'+encodeURIComponent(state.logId)+'/batching';
+    const number=n=>Number(n).toLocaleString();
+    const utc=value=>value.replace('T',' ').replace('Z',' UTC');
+    let batchTurn=0,caseTurn=0;
+    const clearCases=()=>{++caseTurn;cases.replaceChildren();};
+    const request=async(suffix,spec)=>(await api(endpoint+suffix,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+    function review(panel,titleText,spec,suffix,current,render,reset){
+      const title=el('h4',titleText);title.tabIndex=-1;
+      const status=el('div');status.setAttribute('role','status');
+      const rows=el('div'),nav=el('div',null,'row');
+      const previous=button('Previous page','secondary'),next=button('Next page','secondary');
+      nav.append(previous,next);panel.replaceChildren(title,status,rows,nav);title.focus();
+      const cursors=[null];let index=0,following=null;
+      async function load(page){
+        if(reset)reset();
+        previous.disabled=next.disabled=true;status.textContent='Loading…';
+        try{
+          const r=await request(suffix,{...spec,...(cursors[page]!==null?{after:cursors[page]}:{})});
+          if(!current())return;
+          index=page;following=r.next_after;
+          const view=render(r);status.textContent=view.message;rows.replaceChildren(view.table);
+        }catch(error){if(current())status.textContent=error.message;}
+        finally{if(current()){previous.disabled=index===0;next.disabled=following===null;}}
+      }
+      previous.onclick=()=>load(index-1);
+      next.onclick=()=>{cursors[index+1]=following;load(index+1);};
+      load(0);
+    }
+    function showCases(spec,batch){
+      const turn=++caseTurn,current=()=>generation===state.generation&&turn===caseTurn;
+      review(cases,'Cases in the '+spec.activity+' batch at '+utc(batch.started_at),{...spec,batch_id:batch.batch_id},
+        '/batches/cases',current,r=>({
+          message:number(r.total)+' matching '+(r.total===1?'case':'cases')+' across '+number(r.events)+' batch events. Showing '+number(r.cases.length)+' on this page.',
+          table:table(['Case','Events in this batch','First batch event','Last batch event','Evidence'],r.cases.map(c=>{
+            const open=button('Open case','secondary');open.setAttribute('aria-label','Open case '+c.case_id);
+            open.onclick=()=>inspection.open(c.case_id);
+            return [c.case_id,number(c.events),utc(c.started_at),utc(c.ended_at),open];
+          }))
+        }));
+    }
+    function showBatches(spec,activity){
+      const turn=++batchTurn,current=()=>generation===state.generation&&turn===batchTurn;
+      const selection={...spec,activity};
+      review(batches,'Batches for '+activity,selection,'/batches',current,r=>({
+        message:number(r.total)+' '+(r.total===1?'batch.':'batches.')+' Showing '+number(r.batches.length)+' on this page.',
+        table:r.batches.length?table(['First event','Last event','Events','Timing','Evidence'],r.batches.map((b,i)=>{
+          const inspect=button('Inspect cases','secondary');
+          inspect.setAttribute('aria-label','Inspect cases for batch '+(i+1)+' on this page, starting '+utc(b.started_at));
+          inspect.onclick=()=>showCases(selection,b);
+          return [utc(b.started_at),utc(b.ended_at),number(b.events),b.simultaneous?'Simultaneous':'Sequential',inspect];
+        })):el('div','No matching batches.','muted')
+      }),clearCases);
+    }
     run.onclick=async()=>{
-      run.disabled=true;
+      ++batchTurn;batches.replaceChildren();clearCases();run.disabled=true;
+      out.replaceChildren(el('div','Finding batches…','muted'));
       try{
         const spec={gap_seconds:Number(gap.value),min_batch_size:Number(size.value),by_resource:byResource.checked};
         if(state.caseType)spec.case_type=state.caseType;
-        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/batching',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(filterOn())spec.cohort=globalCohort();
+        const r=await request('',spec);
         if(generation!==state.generation)return;
         const shown=r.activities.filter(a=>a.batches>0);
-        const rows=shown.map(a=>[a.activity,pct(a.batched_share)+' of '+Number(a.events).toLocaleString(),String(a.batches)+(a.simultaneous_batches?' ('+a.simultaneous_batches+' at one instant)':''),
+        const rows=shown.map(a=>{
+          const inspect=button('View batches','secondary');inspect.setAttribute('aria-label','View batches for '+a.activity);
+          inspect.onclick=()=>showBatches(spec,a.activity);
+          return [a.activity,pct(a.batched_share)+' of '+Number(a.events).toLocaleString(),String(a.batches)+(a.simultaneous_batches?' ('+a.simultaneous_batches+' at one instant)':''),
           a.batch_size?a.batch_size.median+' (90th '+a.batch_size.p90+', max '+a.batch_size.max+')':'—',
           duration(a.median_wait_before_batched_seconds)+' vs '+duration(a.median_wait_before_unbatched_seconds),
-          a.simulation_batch_proposal?'size '+a.simulation_batch_proposal.size+(a.simulation_batch_proposal.max_wait_minutes?', wait up to '+a.simulation_batch_proposal.max_wait_minutes+' min':''):'—']);
+          a.simulation_batch_proposal?'size '+a.simulation_batch_proposal.size+(a.simulation_batch_proposal.max_wait_minutes?', wait up to '+a.simulation_batch_proposal.max_wait_minutes+' min':''):'—',inspect];
+        });
         out.replaceChildren(
           el('div',Number(r.batched_events).toLocaleString()+' of '+Number(r.events).toLocaleString()+' events were in batches ('+r.grouping+(r.resources_recorded?'':'; no resources are recorded in this log')+').','muted'),
-          shown.length?table(['Activity','Events in batches','Batches','Batch size (median)','Wait before: batched vs not','Simulation proposal'],rows):el('div','No batches with these settings.','muted'),
+          shown.length?table(['Activity','Events in batches','Batches','Batch size (median)','Wait before: batched vs not','Simulation proposal','Evidence'],rows):el('div','No batches with these settings.','muted'),
           el('div',r.interpretation,'muted'));
-      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      }catch(error){if(generation===state.generation)out.replaceChildren(el('div',error.message,'muted'));}
       finally{run.disabled=false;}
     };
     return box;
