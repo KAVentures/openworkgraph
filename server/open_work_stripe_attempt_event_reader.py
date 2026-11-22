@@ -83,7 +83,8 @@ def read_exact_stripe_attempt_event(
         if recheck_authorization is not None and recheck_authorization() is not True:
             return {**unknown, "revoked": True}
         source_account = reader("/v1/account", key)
-        if source_account.get("object") != "account" or source_account.get("id") != account:
+        if (not isinstance(source_account, dict) or source_account.get("object") != "account"
+                or source_account.get("id") != account):
             return unknown
         # The account lookup and exact event GET are separate network calls.
         # A revoked grant between them must prevent the second provider read.
@@ -115,7 +116,7 @@ def read_exact_stripe_attempt_event(
         # environment is part of the independently authenticated source
         # identity; an exact ID match in the wrong mode is not evidence.
         expected_live = key.startswith("rk_live_")
-        if (event.get("object") != "event"
+        if (not isinstance(event, dict) or event.get("object") != "event"
                 or event.get("id") != expected_event_id
                 or type(event.get("livemode")) is not bool
                 or event["livemode"] is not expected_live):
