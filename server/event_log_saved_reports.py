@@ -1,7 +1,7 @@
 """Saved copies of an event log's HTML report, made by hand or on a local schedule.
 
 Each copy is the same self-contained report as ``GET /v1/event-logs/{id}/report.html``
-(overview, KPIs, variants, activities, weekly completions) for the whole log,
+(overview, KPIs, variants, activities, weekly completions) for a case selection,
 written to this computer's data folder so a weekly snapshot can be compared with
 the last one. The newest ``KEEP`` copies per log are kept; older ones are
 removed after a new copy is written. Copies are deleted with their log. Nothing
@@ -53,33 +53,35 @@ def _copies(folder: Path) -> list[Path]:
     return sorted((p for p in folder.iterdir() if p.is_file() and _NAME.fullmatch(p.name)), key=order)
 
 
-def save(log_id: str) -> dict[str, Any]:
+def save(log_id: str, case_type: str | None = None,
+         cohort: dict[str, Any] | None = None) -> dict[str, Any]:
     """Write a new copy of the report and keep the newest ``KEEP``."""
     _known(log_id)
-    data = report.build(log_id)
+    data = report.build(log_id, case_type, cohort)
     html = report.render(data)
-    folder = _folder(log_id)
-    folder.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    # A copy made in the same second as earlier ones gets a higher sequence number than any of them,
-    # even if pruning already removed some, so it always sorts as the newest.
-    same_second = [int(m.group(2) or 0) for p in _copies(folder) if (m := _NAME.fullmatch(p.name)) and m.group(1) == stamp]
-    name = f"report-{stamp}.html" if not same_second else f"report-{stamp}-{max(same_second) + 1}.html"
-    handle, temp = tempfile.mkstemp(dir=folder, prefix=".writing-", suffix=".html")
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8") as out:
-            out.write(html)
-        os.replace(temp, folder / name)
-    except BaseException:
-        Path(temp).unlink(missing_ok=True)
-        raise
-    # The figures behind the copy, so two copies can be compared without parsing HTML.
-    _write_atomic(folder, _sidecar(folder / name), json.dumps(figures(data), sort_keys=True))
-    copies = _copies(folder)
-    for old in copies[:-KEEP]:
-        old.unlink(missing_ok=True)
-        _sidecar(old).unlink(missing_ok=True)
-    return {"format": FORMAT, "log_id": log_id, "saved": _describe(folder / name), "kept": min(len(copies), KEEP)}
+    figures_json = json.dumps(figures(data), sort_keys=True)
+    with workspace._LOCK:
+        _known(log_id)
+        folder = _folder(log_id)
+        folder.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        same_second = [int(match.group(2) or 0) for copy in _copies(folder)
+                       if (match := _NAME.fullmatch(copy.name)) and match.group(1) == stamp]
+        name = f"report-{stamp}.html" if not same_second else f"report-{stamp}-{max(same_second) + 1}.html"
+        target = folder / name
+        sidecar = _sidecar(target)
+        # Publish the visible copy once its comparison figures are in place.
+        _write_atomic(folder, sidecar, figures_json)
+        try:
+            _write_atomic(folder, target, html)
+        except BaseException:
+            sidecar.unlink(missing_ok=True)
+            raise
+        copies = _copies(folder)
+        for old in copies[:-KEEP]:
+            old.unlink(missing_ok=True)
+            _sidecar(old).unlink(missing_ok=True)
+        return {"format": FORMAT, "log_id": log_id, "saved": _describe(target), "kept": min(len(copies), KEEP)}
 
 
 def _sidecar(copy: Path) -> Path:
@@ -87,7 +89,7 @@ def _sidecar(copy: Path) -> Path:
 
 
 def _write_atomic(folder: Path, target: Path, text: str) -> None:
-    handle, temp = tempfile.mkstemp(dir=folder, prefix=".writing-", suffix=".json")
+    handle, temp = tempfile.mkstemp(dir=folder, prefix=".writing-", suffix=target.suffix)
     try:
         with os.fdopen(handle, "w", encoding="utf-8") as out:
             out.write(text)
@@ -107,6 +109,8 @@ def figures(data: dict[str, Any]) -> dict[str, Any]:
     costs = data.get("costs")
     return {
         "generated_at": data["generated_at"],
+        "scope": {"case_notion": summary.get("case_notion") or data.get("case_type"),
+                  "cohort": data.get("cohort") or {}},
         "cases": summary["cases"], "events": summary["events"], "activities": summary["activities"],
         "median_case_seconds": summary["case_duration_seconds"]["median"],
         "p90_case_seconds": summary["case_duration_seconds"]["p90"],
@@ -145,11 +149,15 @@ def changes(log_id: str, older: str | None = None, newer: str | None = None) -> 
     moved = sorted(({"activity": k, "older_cases": acts_a[k], "newer_cases": acts_b[k], "change": acts_b[k] - acts_a[k]}
                     for k in set(acts_a) & set(acts_b) if acts_a[k] != acts_b[k]),
                    key=lambda r: (-abs(r["change"]), r["activity"]))[:10]
+    older_scope, newer_scope = a.get("scope"), b.get("scope")
+    comparison_scope = ("unknown" if not older_scope or not newer_scope else
+                        "same" if older_scope == newer_scope else "different")
     same_currency = a.get("currency") and a.get("currency") == b.get("currency")
     return {
         "format": FORMAT, "log_id": log_id, "available": True,
-        "older": {"name": first.name, "generated_at": a["generated_at"]},
-        "newer": {"name": second.name, "generated_at": b["generated_at"]},
+        "older": {"name": first.name, "generated_at": a["generated_at"], "scope": older_scope},
+        "newer": {"name": second.name, "generated_at": b["generated_at"], "scope": newer_scope},
+        "comparison_scope": comparison_scope,
         "figures": {key: {"older": a.get(key), "newer": b.get(key), "change": _delta(a.get(key), b.get(key))}
                     for key in ("cases", "events", "activities", "distinct_variants", "median_case_seconds",
                                 "p90_case_seconds", "events_per_case", "repeat_rate")},
