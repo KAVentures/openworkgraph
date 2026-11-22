@@ -825,7 +825,7 @@ results={'format':'openworkgraph.shadow-plan-results.v1','process_reference':ref
     // A current, authorized reviewer should receive a durable Gateway review
     // acknowledgment; design review never grants agent execution permission.
     await bob.locator("#reviewOutcome").getByText(
-      /Gateway acknowledged approved for revision 2.*Human design review only; no agent handoff or execution occurred\./,
+      /Gateway acknowledged reviewed design for revision 2.*Human design review only; no agent handoff or execution occurred\./,
     ).waitFor();
     assert.equal(await bob.locator("#reviewConfirm").isChecked(), false);
     await bob
