@@ -2124,6 +2124,29 @@
               throw new Error("Reviewed handoff changed; reopen latest revision and inspect again.");
             }
           }
+          // Direct revision reviews also need an authorization preflight. A
+          // previously rendered review permission is not a capability token:
+          // membership, revision and digest may change while the form is open.
+          if (!inspectedHandoff) {
+            const identityTicket=identityGeneration, authorizedCredential=credential;
+            const chosen=selected;
+            const current=await call("/v1/human/processes/"+encodeURIComponent(record.workflow_id));
+            if (identityTicket!==identityGeneration || credential!==authorizedCredential ||
+                selected!==chosen) return;
+            if (!$("reviewConfirm").checked || $("comment").value!==confirmedComment ||
+                !current?.process || current.archived || current.viewing_historical_revision ||
+                current.process.workflow_id!==record.workflow_id ||
+                current.latest_revision!==record.revision ||
+                current.process.revision!==record.revision ||
+                current.process.content_sha256!==record.content_sha256 ||
+                current.access_revision!==chosen.access_revision ||
+                current.permissions?.review!==true ||
+                current.your_actor_id!==chosen.your_actor_id) {
+              $("reviewConfirm").checked=false;
+              $("reviewOutcome").textContent="Review permission or revision changed. Reopen the latest authorized revision before submitting.";
+              throw new Error("Review authorization or saved revision changed; reopen before submitting.");
+            }
+          }
           // Do not let an old review response repopulate a different user's
           // session or a newly selected process after the POST is in flight.
           const reviewIdentity=identityGeneration, reviewCredential=credential;
