@@ -3487,8 +3487,23 @@ async def read_local_bound_provider_event(request: Request, response: Response):
     final_admission = await review()
     if final_admission != final:
         raise HTTPException(409, "run/case admission changed during receipt review")
-    if retained.get("run_ref") not in (None, final["receipts"]["run_ref"]):
+    if retained.get("run_ref") != final["receipts"]["run_ref"]:
         raise HTTPException(409, "retained receipt run does not match admitted run")
+    # The final review can yield while consent, source identity or the retained
+    # journal changes. Re-admit both projections after that await. Never return
+    # an earlier journal snapshot under a newer authorization decision.
+    repeated_retained = await retained_attempt_review()
+    if repeated_retained != retained:
+        raise HTTPException(409, "retained receipt journal changed during review")
+    await _recheck_source(scope)
+    _dashboard_only(request)
+    await require_same_provider_account()
+    last_admission = await review()
+    if last_admission != final:
+        raise HTTPException(409, "run/case admission changed during final disclosure")
+    await _recheck_source(scope)
+    _dashboard_only(request)
+    await require_same_provider_account()
     response.headers["Cache-Control"] = "no-store"
     return {
         "format": "openworkgraph.bound-provider-event.v1",
