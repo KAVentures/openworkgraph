@@ -124,7 +124,7 @@ def test_review_submission_revalidates_inspected_handoff_before_post():
     for guard in (
         "ticket!==handoffGeneration", "identityTicket!==identityGeneration",
         "credential!==authorizedCredential", "selected!==chosen",
-        'current.review?.status!=="reviewed_design"',
+        "current.permissions?.review!==true",
         "current.latest_revision!==pinned.revision",
         "current.process.content_sha256!==pinned.content_sha256",
         "record.content_sha256!==pinned.content_sha256",
@@ -507,3 +507,17 @@ def test_executable_export_rejects_non_zip_success_payload_and_session_rotation(
     assert "credential !== authorizedCredential || selected !== selection" in guard
     assert block.index("const latest = await call(") < block.index("const signature = new Uint8Array(")
     assert block.index("const signature = new Uint8Array(") < block.index("URL.createObjectURL(exportedBlob)")
+
+
+def test_pending_design_review_is_not_circularly_blocked_by_preflight():
+    """Review navigation may precede approval, but inspection cannot grant execution."""
+    html = PAGE.read_text(encoding="utf-8")
+    inspection = html.split('$("handoffCheck").addEventListener("click",', 1)[1].split("      })();", 1)[0]
+    navigation = html.split('$("handoffReview").addEventListener("click",', 1)[1].split('$("handoffRefresh").addEventListener', 1)[0]
+    submission = html.split("async function review(decision) {", 1)[1].split('$("approve").onclick', 1)[0]
+    for block in (inspection, navigation, submission):
+        assert 'current.review?.status!=="reviewed_design"' not in block
+        assert 'current.permissions?.review!==true' in block
+    assert "execution_authorized!==false" in inspection
+    assert "independent approval and execution are not granted by inspection" in inspection
+    assert 'latest.review?.status !== "reviewed_design"' in html
