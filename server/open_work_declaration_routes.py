@@ -3386,7 +3386,10 @@ async def read_local_bound_provider_event(request: Request, response: Response):
         async def receive():
             return {"type": "http.request", "body": raw, "more_body": False}
         return await read_local_combined_case_review(
-            Request({**request.scope, "headers": [\n                (key, value) for key, value in request.scope.get("headers", [])\n                if key.lower() != b"content-type"\n            ] + [(b"content-type", b"application/json")]}, receive=receive), Response(),
+            Request({**request.scope, "headers": [
+                (key, value) for key, value in request.scope.get("headers", [])
+                if key.lower() != b"content-type"
+            ] + [(b"content-type", b"application/json")]}, receive=receive), Response(),
         )
 
     # Full actor-scoped retained run, reviewed declaration and dependency
@@ -3477,7 +3480,10 @@ async def read_local_bound_provider_event(request: Request, response: Response):
         async def receive():
             return {"type": "http.request", "body": raw, "more_body": False}
         return await read_local_bound_attempt_receipts(
-            Request({**request.scope, "headers": [\n                (key, value) for key, value in request.scope.get("headers", [])\n                if key.lower() != b"content-type"\n            ] + [(b"content-type", b"application/json")]}, receive=receive), Response(),
+            Request({**request.scope, "headers": [
+                (key, value) for key, value in request.scope.get("headers", [])
+                if key.lower() != b"content-type"
+            ] + [(b"content-type", b"application/json")]}, receive=receive), Response(),
         )
 
     retained = await retained_attempt_review()
