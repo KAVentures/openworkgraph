@@ -48,10 +48,26 @@ const path=require('node:path');
    // With one activity of history the two routes cannot be told apart.
    await page.locator('#owgNextHistory').selectOption('1');await page.locator('#owgNextRun').click();
    await out.filter({hasText:'Approve 50.0%, Reject 50.0%'}).waitFor();
+   await page.locator('#owgNextCaseKey').fill('c040');await page.locator('#owgNextRun').click();
+   await out.getByRole('heading',{name:'Selected case'}).waitFor();
+   assert.equal(await out.getByRole('button',{name:'Open case c041',exact:true}).count(),0);
+   await out.getByRole('button',{name:'Open case c040',exact:true}).click();
+   const evidence=page.locator('#owgEventLogCaseEvents');
+   await evidence.getByRole('heading',{name:'Case c040',exact:true}).waitFor();
+   await evidence.getByRole('status').filter({hasText:'Showing 2 of 2 events'}).waitFor();
+   await page.locator('#owgNextCaseKey').fill('C040');await page.locator('#owgNextRun').click();
+   await out.getByText('This case key does not match any case in the current selection.').waitFor();
+   await page.locator('#owgPredictEnds').fill('Pay, Close');
+   await page.locator('#owgPredictCaseKey').fill('c041');await page.locator('#owgPredictRun').click();
+   const time=page.locator('#owgPredictResults');
+   await time.getByRole('button',{name:'Open case c041',exact:true}).click();
+   await evidence.getByRole('heading',{name:'Case c041',exact:true}).waitFor();
+   await page.locator('#owgPredictCaseKey').fill('c000');await page.locator('#owgPredictRun').click();
+   await time.getByText('This case has reached one of the selected end activities.').waitFor();
    await page.addScriptTag({content:axeSource});
-   const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgNextActivity'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
+   const audit=await page.evaluate(async()=>window.axe.run({include:['#owgNextActivity','#owgEventLogPredictions']},{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Next-activity browser acceptance passed: history-specific predictions, backtest against baselines, history setting, WCAG audit.');
+   console.log('Prediction browser acceptance passed: history and backtest, exact case lookup, recorded event history, completed and unmatched case status, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
