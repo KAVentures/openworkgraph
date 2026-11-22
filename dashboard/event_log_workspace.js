@@ -4035,6 +4035,7 @@
               duration(a.waiting_before.population_stddev_seconds),duration(a.waiting_before.total_seconds),pct(a.share_of_all_waiting)])),
           el('p','Spread is population standard deviation of observed durations, not a confidence interval. Percentiles and spread exclude missing durations; processing coverage includes unfinished lifecycle starts in its denominator. Tied timestamps and incomplete lifecycle data can affect these descriptive results.','muted'),
           el('h4','Where cases wait'),
+          el('p','Showing '+Math.min(10,r.waiting_hotspots.length).toLocaleString()+' of '+(Number.isSafeInteger(r.waiting_hotspot_total)?r.waiting_hotspot_total:r.waiting_hotspots.length).toLocaleString()+' observed handoff types. The API returns at most '+(r.waiting_hotspot_result_limit||25)+' ranked types; omitted types are not zero-wait transitions.','muted'),
           table(['After','Before','Times','Median waiting','Share of all waiting','Evidence'],r.waiting_hotspots.slice(0,10).map(h=>{const inspect=button('Inspect cases','secondary');inspect.setAttribute('aria-label','Inspect cases waiting from '+h.from+' to '+h.to);inspect.onclick=()=>showHotspot(url,h);return [h.from,h.to,Number(h.count).toLocaleString(),duration(h.median_waiting_seconds),pct(h.share_of_all_waiting),inspect];})),
           el('div',r.interpretation,'muted'));
         if(r.working_calendar?.available){
