@@ -38,7 +38,7 @@ def install(monkeypatch, *, review=None, source=None, body=None):
     monkeypatch.setattr(routes, "_recheck_source", recheck)
     monkeypatch.setattr(routes, "read_local_combined_case_review", admitted)
     async def receipts(req, resp):
-        return {"run_ref": "run-1", "entries": [], "status": "retained_untrusted"}
+        return {"run_ref": "run-1", "entries": [{"attempt_ref": "attempt-1"}], "status": "retained_untrusted"}
     monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", receipts)
 
 def test_no_provider_read_without_retained_run(monkeypatch):
@@ -271,7 +271,7 @@ def test_internal_admission_requests_have_json_content_type(monkeypatch):
         })
         assert parsed["run_id"] == DATA["run_id"]
         seen.append("receipts")
-        return {"run_ref": "run-1", "entries": []}
+        return {"run_ref": "run-1", "entries": [{"attempt_ref": "attempt-1"}]}
     # The top-level request remains stubbed, but both nested requests use the
     # actual JSON parser and its strict content-type requirement.
     monkeypatch.setattr(routes, "read_local_combined_case_review", reviewed)
@@ -372,3 +372,36 @@ def test_contradictory_adapter_verdict_never_disclosed(monkeypatch, verdict):
     with pytest.raises(HTTPException) as exc:
         asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
     assert exc.value.status_code == 409
+
+
+def test_empty_retained_attempt_journal_blocks_provider_io(monkeypatch):
+    """A retained run without any attempts cannot authorize an exact provider read."""
+    install(monkeypatch)
+    from server import open_work_provider_attempt_verification as verifier
+    calls = []
+    monkeypatch.setattr(verifier, "verify_provider_attempt",
+                        lambda **kwargs: calls.append("provider"))
+    async def empty_journal(req, resp):
+        return {"run_ref": "run-1", "entries": []}
+    monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", empty_journal)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
+    assert exc.value.status_code == 409
+    assert calls == []
+
+
+@pytest.mark.parametrize("entries", [None, {}, "untrusted", 3])
+def test_malformed_retained_attempt_journal_blocks_provider_io(monkeypatch, entries):
+    """Malformed journal projections cannot initiate provider network access."""
+    install(monkeypatch)
+    from server import open_work_provider_attempt_verification as verifier
+    calls = []
+    monkeypatch.setattr(verifier, "verify_provider_attempt",
+                        lambda **kwargs: calls.append("provider"))
+    async def malformed(req, resp):
+        return {"run_ref": "run-1", "entries": entries}
+    monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", malformed)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
+    assert exc.value.status_code == 409
+    assert calls == []
