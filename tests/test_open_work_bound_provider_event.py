@@ -139,7 +139,7 @@ def test_retained_receipt_run_mismatch_denied(monkeypatch):
                         lambda path: {"account": "acct_12345678"})
     monkeypatch.setattr(routes, "_source_scope", lambda: "tenant-1")
     monkeypatch.setattr(verifier, "verify_provider_attempt",
-                        lambda **kwargs: {"status": "unknown", "customer_outcome": "unknown"})
+                        lambda **kwargs: {"status": "unknown", "provider_operation": "unknown", "customer_outcome": "unknown"})
     async def wrong_run(req, resp):
         return {"run_ref": "other-run", "entries": []}
     monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", wrong_run)
@@ -158,7 +158,7 @@ def test_retained_attempts_are_not_provider_causality(monkeypatch):
     monkeypatch.setattr(routes, "_source_scope", lambda: "tenant-1")
     monkeypatch.setattr(verifier, "verify_provider_attempt",
                         lambda **kwargs: {"status": "verified_provider_event",
-                                          "customer_outcome": "unknown"})
+                                          "provider_operation": "unknown", "customer_outcome": "unknown"})
     result = asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
     assert result["retained_attempt_receipts"]["run_ref"] == "run-1"
     assert result["retained_attempt_receipts_are_untrusted"] is True
@@ -176,7 +176,7 @@ def test_missing_retained_run_provenance_denied(monkeypatch):
                         lambda path: {"account": "acct_12345678"})
     monkeypatch.setattr(routes, "_source_scope", lambda: "tenant-1")
     monkeypatch.setattr(verifier, "verify_provider_attempt",
-                        lambda **kwargs: {"status": "unknown", "customer_outcome": "unknown"})
+                        lambda **kwargs: {"status": "unknown", "provider_operation": "unknown", "customer_outcome": "unknown"})
     async def missing_run(req, resp):
         return {"entries": []}
     monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", missing_run)
@@ -194,7 +194,7 @@ def test_retained_journal_mutation_during_disclosure_denied(monkeypatch):
                         lambda path: {"account": "acct_12345678"})
     monkeypatch.setattr(routes, "_source_scope", lambda: "tenant-1")
     monkeypatch.setattr(verifier, "verify_provider_attempt",
-                        lambda **kwargs: {"status": "unknown", "customer_outcome": "unknown"})
+                        lambda **kwargs: {"status": "unknown", "provider_operation": "unknown", "customer_outcome": "unknown"})
     calls = []
     async def changing(req, resp):
         calls.append(1)
@@ -214,7 +214,7 @@ def test_source_revoked_during_last_review_denied(monkeypatch):
                         lambda path: {"account": "acct_12345678"})
     monkeypatch.setattr(routes, "_source_scope", lambda: "tenant-1")
     monkeypatch.setattr(verifier, "verify_provider_attempt",
-                        lambda **kwargs: {"status": "unknown", "customer_outcome": "unknown"})
+                        lambda **kwargs: {"status": "unknown", "provider_operation": "unknown", "customer_outcome": "unknown"})
     state = {"revoked": False, "reviews": 0}
     async def review(req, resp):
         state["reviews"] += 1
@@ -240,7 +240,7 @@ def test_internal_admission_requests_have_json_content_type(monkeypatch):
                         lambda path: {"account": "acct_12345678"})
     monkeypatch.setattr(routes, "_source_scope", lambda: "tenant-1")
     monkeypatch.setattr(verifier, "verify_provider_attempt",
-                        lambda **kwargs: {"status": "unknown", "customer_outcome": "unknown"})
+                        lambda **kwargs: {"status": "unknown", "provider_operation": "unknown", "customer_outcome": "unknown"})
     seen = []
     async def reviewed(req, resp):
         assert req.headers.get("content-type") == "application/json"
@@ -342,3 +342,23 @@ def test_empty_run_identities_block_provider_io(monkeypatch):
         asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
     assert exc.value.status_code == 409
     assert calls == []
+
+@pytest.mark.parametrize("verdict", [
+    {"status": "verified_provider_event", "provider_operation": "succeeded", "customer_outcome": "unknown"},
+    {"status": "verified_provider_operation", "provider_operation": "unknown", "customer_outcome": "unknown"},
+    {"status": "unknown", "provider_operation": "unknown", "customer_outcome": "succeeded"},
+    {"status": "verified_provider_event", "customer_outcome": "unknown"},
+    None,
+])
+def test_contradictory_adapter_verdict_never_disclosed(monkeypatch, verdict):
+    """No adapter response may manufacture a customer outcome or operation result."""
+    install(monkeypatch)
+    from server import local_source_credentials
+    from server import open_work_provider_attempt_verification as verifier
+    monkeypatch.setattr(local_source_credentials, "_read_metadata",
+                        lambda path: {"account": "acct_12345678"})
+    monkeypatch.setattr(routes, "_source_scope", lambda: "tenant-1")
+    monkeypatch.setattr(verifier, "verify_provider_attempt", lambda **kwargs: verdict)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
+    assert exc.value.status_code == 409
