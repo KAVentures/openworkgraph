@@ -11,6 +11,11 @@ cases arrived, how many completed, and how many were still open at the end of th
 At most 400 buckets are shown; use weeks or a cohort for longer logs. The chart draws open
 cases, arrivals and completions, and the table lists every bucket.
 
+Select a count in the table to see its cases, when each started, and any completion recorded
+before the bucket ended. **Open case** shows the case's event history. The chart and case list
+both use the active workspace case filter. Buckets use UTC, with weeks beginning on Monday.
+Events exactly at the next bucket's start belong to that next bucket.
+
 ## Little's law
 
 Over the log's span, the time-averaged number of open cases should be close to the arrival
@@ -27,3 +32,9 @@ export. This is not a capacity plan or a rating of anyone.
 `POST /v1/event-logs/{log_id}/work-in-progress` with
 `{"bucket": "day"|"week", "end_activities": [...], "cohort": {...}, "case_type": "..."}`.
 All fields are optional.
+
+`POST /v1/event-logs/{log_id}/work-in-progress/cases` uses the same settings plus
+`bucket_start` (the bucket's UTC date as `YYYY-MM-DD`) and `group` (`arrivals`, `completions`
+or `open_at_end`). It returns the exact group total and a page of cases ordered by literal key.
+The optional `limit` is 1–100 and defaults to 50. Send the returned `next_after` as `after`
+to continue. Each page reflects the current log.
