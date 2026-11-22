@@ -196,7 +196,7 @@ class ReviewedTransactionTests(unittest.TestCase):
              patch.object(tx.cycle, "append") as append:
             with self.assertRaisesRegex(ReceiptError, "Stale"):
                 tx.execute(**inputs(expected_previous_candidate_sha256="c" * 64))
-            inspect.assert_called_once()
+            self.assertEqual(inspect.call_count, 2)
             append.assert_not_called()
 
     def test_wrong_destination_log_refused_before_append(self):
