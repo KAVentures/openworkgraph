@@ -104,6 +104,7 @@ def to_csv(source: IO[bytes], table: str | None = None, *, folder: Path) -> dict
         out = io.StringIO()
         writer = csv.writer(out, lineterminator="\n")
         rows, blobs = 0, [0]
+        cursor = None
         try:
             cursor = conn.execute(f"SELECT * FROM {quoted}")
             columns = [d[0] for d in cursor.description or []]
@@ -123,6 +124,11 @@ def to_csv(source: IO[bytes], table: str | None = None, *, folder: Path) -> dict
             raise SqliteError("the table could not be read") from None
         except sqlite3.Error:
             raise SqliteError("the table could not be read") from None
+        finally:
+            # Explicitly finish failed SELECT statements before the shared
+            # context closes and Windows unlinks the temporary database.
+            if cursor is not None:
+                cursor.close()
     if not rows:
         raise SqliteError("the table has no rows")
     return {"format": FORMAT, "sheets": tables, "sheet": chosen, "kind": "table", "rows": rows,
