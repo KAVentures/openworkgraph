@@ -203,6 +203,14 @@ async def event_log_costs(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/costs/cases")
+async def event_log_cost_cases(request: Request, log_id: str):
+    from . import event_log_costs as cost_model
+    _require_dashboard(request)
+    spec = await _json_body(request, "case cost settings", strict=True, limit=131072)
+    return await run_in_threadpool(_respond, cost_model.case_costs, log_id, spec)
+
+
 @router.post("/v1/event-logs/prepare-salesforce")
 async def prepare_salesforce_export(request: Request):
     """Prepare a selected offline export without retaining it as an event log."""
