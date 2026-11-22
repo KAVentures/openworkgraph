@@ -2457,6 +2457,27 @@ async def event_log_simulation_validation(request: Request, log_id: str,
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.get("/v1/event-logs/{log_id}/ocel.sqlite")
+def export_event_log_ocel_sqlite(request: Request, log_id: str):
+    """The log as an OCEL 2.0 SQLite database (the same content as the OCEL 2.0 JSON export). Not stored."""
+    import shutil
+    from . import event_log_ocel_sqlite as ocel_sqlite
+    _require_dashboard(request)
+    folder = tempfile.mkdtemp(prefix="owg-ocel-sqlite-", dir=str(DATA_DIR))
+    path = Path(folder) / "log.sqlite"
+    try:
+        ocel_sqlite.write(log_id, path)
+    except workspace.EventLogWorkspaceError as exc:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise HTTPException(422, str(exc)) from None
+    except BaseException:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+    return FileResponse(str(path), media_type="application/vnd.sqlite3", filename=f"{log_id}.ocel.sqlite",
+                        headers={"Cache-Control": "no-store"},
+                        background=BackgroundTask(shutil.rmtree, folder, ignore_errors=True))
+
+
 @router.get("/v1/event-logs/{log_id}/export")
 def export_event_log(request: Request, log_id: str, format: str = Query(pattern="^(csv|sourcecsv|csv-review|sourcecsv-review|xes|xes-attributes|ocel|ocelxml)$"),
                      case_type: str | None = Query(default=None, max_length=200)):

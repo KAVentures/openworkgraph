@@ -323,6 +323,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET`/`POST /v1/event-logs/{log_id}/case-tags`, `POST .../case-tags/remove` | Analyst tags on cases (below). |
 | `GET /v1/event-logs/{log_id}/root-cause?outcome=...` | Case features associated with an outcome, with confidence intervals. |
 | `GET /v1/event-logs/{log_id}/export?format=csv\|xes\|ocel\|ocelxml` | Download the log. |
+| `GET /v1/event-logs/{log_id}/ocel.sqlite` | Download the log as an OCEL 2.0 SQLite database (**Export as → OCEL 2.0 SQLite**): the same content as the OCEL 2.0 JSON export in the standard relational tables `event`, `object`, `event_object`, `object_object`, `event_map_type`/`object_map_type` and one `event_<Type>`/`object_<Type>` table per type (`ocel_id`, `ocel_time`, `ocel_changed_field` for objects, one text column per attribute). An object's first values are dated 1970-01-01 with no changed field; each later value is a row naming the attribute that changed. Built in a temporary folder and not kept. |
 | `GET /v1/event-logs/{log_id}/report.html?sla_seconds=&variants=` | Download a self-contained HTML report (below). |
 | `GET`/`POST /v1/event-logs/{log_id}/saved-reports`, `GET .../saved-reports/{name}` | Copies of the report saved on this computer (below). |
 
