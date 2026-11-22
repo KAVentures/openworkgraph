@@ -230,3 +230,16 @@ def test_browser_history_restore_consumes_handoff_and_review_confirmation():
         assert '$("reviewConfirm").checked=false' in block
         assert 'resetHandoff(' in block
     assert 'if(!event.persisted)return;' in source.split('window.addEventListener("pageshow"', 1)[1].split('});', 1)[0]
+
+
+def test_bfcache_restore_invalidates_selected_process_and_pending_reads():
+    """A restored page must not allow direct review, edits or export from stale access."""
+    source = (Path(__file__).resolve().parents[1] / "gateway" / "processes.html").read_text()
+    block = source.split('window.addEventListener("pageshow"', 1)[1].split('});', 1)[0]
+    assert 'if(!event.persisted)return;' in block
+    assert 'processOpenGeneration++;' in block
+    assert 'selected=null;' in block
+    assert '$("selected").hidden=true;' in block
+    assert '$("reviewConfirm").checked=false;' in block
+    assert '$("handoffConsent").checked=false;' in block
+    assert 'resetHandoff(' in block
