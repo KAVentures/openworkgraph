@@ -3421,10 +3421,13 @@ async def read_local_bound_provider_event(request: Request, response: Response):
     retained = await retained_attempt_review()
     # A run-scoped journal with zero attempts is not an attempt binding.
     # Deny provider network I/O before verifying any operator-supplied event.
-    if (not isinstance(retained, dict)
-            or not isinstance(retained.get("entries"), list)
-            or not retained["entries"]):
-        raise HTTPException(409, "no retained attempts available for provider review")
+    # A retained journal is still untrusted. Bound its size and require
+    # structurally valid rows before any network I/O or disclosure; a single
+    # placeholder, scalar, or oversized projection is not an attempt record.
+    entries = retained.get("entries") if isinstance(retained, dict) else None
+    if (not isinstance(entries, list) or not 0 < len(entries) <= 200
+            or any(not isinstance(row, dict) or not row for row in entries)):
+        raise HTTPException(409, "no valid bounded retained attempts for provider review")
     admitted_run_ref = (before.get("receipts", {}).get("run_ref")
                         if isinstance(before, dict) and isinstance(before.get("receipts"), dict)
                         else None)
