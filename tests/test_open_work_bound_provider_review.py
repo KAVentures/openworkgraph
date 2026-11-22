@@ -295,3 +295,30 @@ def test_bound_provider_persistence_forwards_write_approval(monkeypatch):
     result = asyncio.run(routes.read_local_bound_provider_review(request(), Response()))
     assert result["provider_check_persisted"] is True
     assert calls == ["bound"]
+
+
+def test_bound_provider_replay_uses_json_parser_and_preserves_auth(monkeypatch):
+    """Both nested admission and provider routes must receive valid JSON headers."""
+    data = payload()
+    historical = {"case_ref": "case-1", "receipts": {"run_ref": "run-1"}}
+    calls = []
+
+    async def strict_review(request, response):
+        assert request.headers.get("content-type") == "application/json"
+        assert request.headers.get("authorization") == "Bearer operator"
+        assert (await request.json())["work_item_ref"] == "case-1"
+        calls.append("review")
+        return historical
+
+    async def strict_provider(request, response):
+        assert request.headers.get("content-type") == "application/json"
+        assert request.headers.get("authorization") == "Bearer operator"
+        assert (await request.json())["confirm_source_verification"] is True
+        calls.append("provider")
+        return {"provider_operation": "unknown"}
+
+    install(monkeypatch, data, strict_review, strict_provider)
+    result = asyncio.run(routes.read_local_bound_provider_review(request(), Response()))
+    assert calls == ["review", "provider", "review", "review"]
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_execution_authorized"] is False
