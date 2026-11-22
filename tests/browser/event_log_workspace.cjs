@@ -673,6 +673,13 @@ const path=require('node:path');
    assert.equal(clustered.k,2);assert.equal(clustered.clusters.reduce((n,c)=>n+c.cases,0),clustered.cases);
    await page.locator('#owgClusterResults table').waitFor();
    assert.match(await page.locator('#owgClusterResults').textContent(),/2 clusters as requested/);
+   await page.locator('#owgClusterResults').getByRole('button',{name:'Inspect cases in cluster 1',exact:true}).click();
+   const clusterCases=page.locator('#owgClusterCaseReview');
+   await clusterCases.getByRole('status').filter({hasText:new RegExp('^'+clustered.clusters[0].cases+' cases?\\.')}).waitFor();
+   const firstClusterCase=clusterCases.getByRole('button',{name:/^Open case /}).first();
+   const clusterCaseLabel=await firstClusterCase.getAttribute('aria-label');
+   await firstClusterCase.click();
+   await page.locator('#owgEventLogCaseEvents').getByRole('heading',{name:clusterCaseLabel.replace('Open case ','Case '),exact:true}).waitFor();
 
    await page.locator('#owgEventLogOutcomeHours').fill('5');
    await page.locator('#owgEventLogRootCauseRun').click();

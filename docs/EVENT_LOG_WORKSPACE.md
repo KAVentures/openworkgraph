@@ -656,11 +656,19 @@ Disco or ProM. Send a JSON body; every field is optional:
   - the activities more and less common in its cases than in the whole log, with
     both shares and the lift;
   - its median and mean throughput time and its events per case.
-- **Using a cluster as a case filter.** Each cluster includes a `cohort`,
+- **Inspect cases** opens a cluster's member list, including rare variants that joined
+  their nearest cluster. Each row opens the recorded event history.
+- **Using a cluster as a case filter.** When its paths fit the limits, a cluster includes a `cohort`,
   `{"label": "Cluster 1", "variants": [[...], ...]}`. The `variants` cohort key keeps
   cases whose exact activity sequence is one of those listed (up to 500 variants of
   up to 1,000 activities). It works wherever cohorts do: KPIs, benchmarks (compare
   a cluster with the rest of the log) and the other cohort-aware analyses.
+
+`POST /v1/event-logs/{log_id}/trace-clusters/cases` accepts the same settings and the
+selected cluster's `cluster_key`. It returns the total and a page of members ordered
+by literal case key, with an optional `limit` of 1–100 (default 50). Send the returned
+`next_after` as `after` to continue. If the cluster changes, rerun the report to get
+its current key. This route requires a dashboard session.
 
 Clusters describe the structure of the imported log. They are not process types,
 causes, or a judgement of how any case was handled.

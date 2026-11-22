@@ -2466,7 +2466,14 @@ async def event_log_benchmark(request: Request, log_id: str,
 async def event_log_trace_clusters(request: Request, log_id: str):
     _require_dashboard(request)
     spec = await _json_body(request, "trace clustering")
-    return _respond(trace_clusters.clusters, log_id, spec)
+    return await run_in_threadpool(_respond, trace_clusters.clusters, log_id, spec)
+
+
+@router.post("/v1/event-logs/{log_id}/trace-clusters/cases")
+async def event_log_trace_cluster_cases(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "trace cluster case settings", strict=True)
+    return await run_in_threadpool(_respond, trace_clusters.cluster_cases, log_id, spec)
 
 
 @router.post("/v1/event-logs/{log_id}/conformance")
