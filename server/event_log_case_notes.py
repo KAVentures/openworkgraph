@@ -8,11 +8,12 @@ are never shared with AI agents and are deleted with the log.
 """
 from __future__ import annotations
 
+import re
 import secrets
 from datetime import datetime, timezone
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
 
 from . import event_log_workspace as workspace
 from .event_log_workspace import EventLogWorkspaceError
@@ -32,19 +33,45 @@ class NoteSpec(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
 
 
+class NoteQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    case_id: str | None = Field(default=None, min_length=1, max_length=500)
+    search: str | None = Field(default=None, min_length=1, max_length=200)
+    after: str | None = Field(default=None, min_length=1, max_length=80)
+    limit: StrictInt = Field(default=30, ge=1, le=MAX_LISTED)
+
+
 def _ensure(conn) -> None:
     conn.execute(_DDL)
 
 
-def _listing(conn, log_id: str, case_id: str | None) -> dict[str, Any]:
-    where, args = ("AND case_id = ?", [log_id, case_id]) if case_id is not None else ("", [log_id])
-    total = conn.execute(f"SELECT count(*) FROM case_notes WHERE log_id = ? {where}", args).fetchone()[0]
-    rows = conn.execute(f"""SELECT note_id, case_id, text, created_at FROM case_notes WHERE log_id = ? {where}
-        ORDER BY created_at DESC, note_id LIMIT ?""", [*args, MAX_LISTED]).fetchall()
-    cases = conn.execute("SELECT count(DISTINCT case_id) FROM case_notes WHERE log_id = ?", [log_id]).fetchone()[0]
+def _listing(conn, log_id: str, case_id: str | None, search: str | None = None,
+             after: tuple[datetime, str] | None = None, limit: int = MAX_LISTED) -> dict[str, Any]:
+    where, args = ["n.log_id = ?"], [log_id]
+    if case_id is not None:
+        where.append("n.case_id = ?")
+        args.append(case_id)
+    if search:
+        where.append("(contains(lower(n.text), lower(?)) OR contains(lower(n.case_id), lower(?)))")
+        args.extend([search, search])
+    scope = " AND ".join(where)
+    total, matched_cases = conn.execute(
+        f"SELECT count(*), count(DISTINCT n.case_id) FROM case_notes n WHERE {scope}", args).fetchone()
+    if after is not None:
+        scope += " AND (n.created_at < ? OR (n.created_at = ? AND n.note_id > ?))"
+        args.extend([after[0], after[0], after[1]])
+    rows = conn.execute(f"""SELECT n.note_id, n.case_id, n.text, n.created_at, o.object_type,
+        EXISTS (SELECT 1 FROM event_objects eo WHERE eo.log_id = n.log_id AND eo.object_id = n.case_id)
+        FROM case_notes n LEFT JOIN objects o ON o.log_id = n.log_id AND o.object_id = n.case_id
+        WHERE {scope} ORDER BY n.created_at DESC, n.note_id LIMIT ?""", [*args, limit + 1]).fetchall()
+    cursor = rows[limit - 1] if len(rows) > limit else None
+    cases = matched_cases if case_id is None and not search else conn.execute(
+        "SELECT count(DISTINCT case_id) FROM case_notes WHERE log_id = ?", [log_id]).fetchone()[0]
     return {"format": FORMAT, "log_id": log_id, **({"case_id": case_id} if case_id is not None else {}),
-            "notes": [{"note_id": n, "case_id": c, "text": t, "created_at": at.isoformat() + "Z"} for n, c, t, at in rows],
-            "notes_total": total, "cases_with_notes": cases, "listed_limit": MAX_LISTED,
+            "notes": [{"note_id": n, "case_id": c, "text": t, "created_at": at.isoformat() + "Z",
+                       "object_type": kind, "has_events": linked} for n, c, t, at, kind, linked in rows[:limit]],
+            "notes_total": total, "cases_with_notes": cases, "matching_cases": matched_cases, "listed_limit": limit,
+            "next_after": cursor[3].isoformat() + "Z|" + cursor[0] if cursor else None,
             "note": "Your notes stay on this computer and are never shared with AI agents."}
 
 
@@ -59,11 +86,33 @@ def _with_conn(log_id: str, fn):
             conn.close()
 
 
-def notes(log_id: str, case_id: str | None = None) -> dict[str, Any]:
-    return _with_conn(log_id, lambda conn: _listing(conn, log_id, case_id))
+def notes(log_id: str, case_id: str | None = None, *, search: str | None = None,
+          after: str | None = None, limit: int = MAX_LISTED) -> dict[str, Any]:
+    cursor = None
+    if after is not None:
+        try:
+            stamp, key = after.split("|")
+            stamp_at = datetime.fromisoformat(stamp.removesuffix("Z"))
+            if stamp != stamp_at.isoformat() + "Z" or not re.fullmatch(r"note_[0-9a-f]{16}", key):
+                raise ValueError
+            cursor = (stamp_at, key)
+        except (TypeError, ValueError, AttributeError):
+            raise EventLogWorkspaceError("invalid case note cursor") from None
+    if type(limit) is not int or not 1 <= limit <= MAX_LISTED:
+        raise EventLogWorkspaceError(f"limit must be a whole number from 1 to {MAX_LISTED}")
+    return _with_conn(log_id, lambda conn: _listing(conn, log_id, case_id, search, cursor, limit))
 
 
-def add(log_id: str, spec: Any) -> dict[str, Any]:
+def query(log_id: str, spec: Any) -> dict[str, Any]:
+    try:
+        selection = NoteQuery.model_validate(spec)
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        raise EventLogWorkspaceError("case note search is invalid: " + first["msg"]) from None
+    return notes(log_id, **selection.model_dump())
+
+
+def add(log_id: str, spec: Any, *, compact: bool = False) -> dict[str, Any]:
     try:
         note = NoteSpec.model_validate(spec)
     except ValidationError as exc:
@@ -84,17 +133,19 @@ def add(log_id: str, spec: Any) -> dict[str, Any]:
         note_id = "note_" + secrets.token_hex(8)
         conn.execute("INSERT INTO case_notes VALUES (?, ?, ?, ?, ?)",
                      [log_id, note_id, note.case_id, text, datetime.now(timezone.utc).replace(tzinfo=None)])
-        return {**_listing(conn, log_id, note.case_id), "added": note_id}
+        result = {"added": note_id, "case_id": note.case_id}
+        return result if compact else {**_listing(conn, log_id, note.case_id), **result}
     return _with_conn(log_id, run)
 
 
-def remove(log_id: str, note_id: str) -> dict[str, Any]:
+def remove(log_id: str, note_id: str, *, compact: bool = False) -> dict[str, Any]:
     def run(conn):
         row = conn.execute("SELECT case_id FROM case_notes WHERE log_id = ? AND note_id = ?", [log_id, note_id]).fetchone()
         if not row:
             raise EventLogWorkspaceError("no case note with this id in this log")
         conn.execute("DELETE FROM case_notes WHERE log_id = ? AND note_id = ?", [log_id, note_id])
-        return {**_listing(conn, log_id, None), "removed": note_id, "removed_from_case": row[0]}
+        result = {"removed": note_id, "removed_from_case": row[0]}
+        return result if compact else {**_listing(conn, log_id, None), **result}
     return _with_conn(log_id, run)
 
 
@@ -104,4 +155,4 @@ def erase(conn, log_id: str) -> None:
     conn.execute("DELETE FROM case_notes WHERE log_id = ?", [log_id])
 
 
-__all__ = ["notes", "add", "remove", "erase", "FORMAT"]
+__all__ = ["notes", "query", "add", "remove", "erase", "FORMAT"]
