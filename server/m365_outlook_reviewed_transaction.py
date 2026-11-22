@@ -20,6 +20,19 @@ from .m365_outlook_checkpoint import inspect_checkpoint
 FORMAT = "openworkgraph.m365-reviewed-transaction.v1"
 
 
+def _verified_review(checked, expected_digest):
+    """Reject malformed reviewer results before any local OWG mutation."""
+    if (type(checked) is not dict
+            or checked.get("status") != "review_ready"
+            or checked.get("csv_sha256") != expected_digest
+            or any(type(checked.get(key)) is not int or checked[key] < 0
+                   for key in ("event_snapshots", "removal_markers_for_review"))
+            or type(checked.get("pages")) is not int
+            or not 1 <= checked["pages"] <= 1000):
+        raise ReceiptError("Candidate review unavailable or changed")
+    return checked
+
+
 def preflight(*, tenant, mailbox, folder, log_id, confirm_log_id,
               grant_file, candidate, ledger_dir, expected_review_csv_sha256,
               expected_previous_candidate_sha256=None, consent_local_read=False):
@@ -42,8 +55,7 @@ def preflight(*, tenant, mailbox, folder, log_id, confirm_log_id,
     initial_checkpoint = inspect_checkpoint(
         **scope, ledger_dir=Path(ledger_dir), consent_local_read=True)
     checked = cycle.review(candidate=Path(candidate), consent_local_read=True, **scope)
-    if checked.get("csv_sha256") != expected_review_csv_sha256:
-        raise ReceiptError("Candidate changed since explicit review")
+    _verified_review(checked, expected_review_csv_sha256)
     predecessor = inspect_checkpoint(
         **scope, ledger_dir=Path(ledger_dir), consent_local_read=True)
     if predecessor != initial_checkpoint:
@@ -106,15 +118,20 @@ def execute(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
             record_operator_phase(phase, result, directory=Path(audit_dir),
                                   tenant=tenant, mailbox=mailbox,
                                   folder=folder, log_id=log_id)
+    # Snapshot the predecessor before reviewing the candidate. A concurrent
+    # checkpoint transition during review must refuse before any OWG append.
+    initial_predecessor = inspect_checkpoint(
+        **scope, ledger_dir=Path(ledger_dir), consent_local_read=True)
     checked = cycle.review(candidate=Path(candidate), consent_local_read=True, **scope)
-    audit("review", checked)
-    if checked.get("csv_sha256") != expected_review_csv_sha256:
-        raise ReceiptError("Candidate changed since explicit review")
+    # Only validated, digest-matched review evidence may enter the audit trail.
+    _verified_review(checked, expected_review_csv_sha256)
     # Refuse a stale predecessor BEFORE the first append. The checkpoint
     # commit still performs its authoritative exclusive-create CAS after
     # authenticated membership verification; this is only an early guard.
     predecessor = inspect_checkpoint(
         **scope, ledger_dir=Path(ledger_dir), consent_local_read=True)
+    if predecessor != initial_predecessor:
+        raise ReceiptError("Checkpoint changed during candidate review; append refused")
     if predecessor is None:
         if expected_previous_candidate_sha256 is not None:
             raise ReceiptError("Missing predecessor checkpoint; append refused")
@@ -122,6 +139,9 @@ def execute(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
           or predecessor["candidate_sha256"] != expected_previous_candidate_sha256
           or predecessor["log_id"] != log_id):
         raise ReceiptError("Stale or different predecessor checkpoint; append refused")
+    # Only record review evidence after the checkpoint race guard passes.
+    # A stale review must not leave a misleading accepted-review audit entry.
+    audit("review", checked)
     shared = dict(**scope, log_id=log_id, confirm_log_id=confirm_log_id,
                   candidate=Path(candidate), csv_path=Path(csv_path),
                   receipt_file=Path(receipt_file), port=port, session=session)
@@ -130,15 +150,16 @@ def execute(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
                             consent_local_append=True,
                             confirm_candidate_reviewed=True,
                             expected_review_csv_sha256=expected_review_csv_sha256)
-    audit("append", appended)
-    if appended["status"] != "receipt_persisted":
+    if type(appended) is not dict or appended.get("status") != "receipt_persisted":
         raise UncertainReceipt("Append outcome uncertain")
+    # An untrusted adapter result cannot establish a verified append audit receipt.
+    audit("append", appended)
     handoff = cycle.handoff(**shared, journal_dir=Path(journal_dir),
                             handoff_dir=Path(handoff_dir),
                             successor_label=successor_label,
                             consent_local_read=True,
                             confirm_removals_reviewed=True)
-    if handoff["status"] != "next_round_handoff_prepared":
+    if type(handoff) is not dict or handoff.get("status") != "next_round_handoff_prepared":
         raise UncertainReceipt("Handoff outcome uncertain")
     # Persist an independently verifiable handoff receipt before checkpoint
     # advancement. Audit failure after append requires manual reconciliation.
@@ -149,6 +170,14 @@ def execute(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
         expected_previous_candidate_sha256=expected_previous_candidate_sha256,
         consent_local_read=True, confirm_removals_reviewed=True,
         confirm_checkpoint_commit=True)
+    # Checkpoint writes are irreversible. Never report success from an
+    # untrusted/malformed adapter receipt; require manual reconciliation.
+    if (type(committed) is not dict
+            or committed.get("status") != "checkpoint_committed"
+            or type(committed.get("generation")) is not int
+            or committed["generation"] != (1 if predecessor is None else predecessor["generation"] + 1)
+            or type(committed.get("idempotent_replay", False)) is not bool):
+        raise UncertainReceipt("Checkpoint outcome uncertain; inspect persisted ledger")
     audit("checkpoint-commit", committed)
     return {"format": FORMAT, "status": "checkpoint_committed",
             "generation": committed["generation"],
