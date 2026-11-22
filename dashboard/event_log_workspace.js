@@ -5748,6 +5748,7 @@
       if(generation!==state.generation||(!r.rows_kept&&!r.decisions.length))return;
       show(wrap,true);
       const offset=input('owgQuarantineOffset','text','+01:00');offset.maxLength=6;
+      const timeFormat=input('owgQuarantineTimestampFormat','text','e.g. %d/%m/%Y %H:%M');timeFormat.maxLength=64;
       const batch=input('owgQuarantineBatch','number');batch.min='0';batch.max='2147483647';batch.step='1';
       const rowStart=input('owgQuarantineRowStart','number');rowStart.min='0';rowStart.max='999999999';rowStart.step='1';
       const rowEnd=input('owgQuarantineRowEnd','number');rowEnd.min='0';rowEnd.max='999999999';rowEnd.step='1';
@@ -5844,10 +5845,14 @@
         if(start==null)return 'all kept rows in batch '+batch;
         return (start===end?'row '+start:'rows '+start+'–'+end)+' in batch '+batch;
       };
+      const timestampDecisionText=({timestamp_format:format,naive_timestamp_offset:assumed})=>{
+        const offsetText=assumed?'assuming UTC'+(assumed==='Z'?'+00:00':assumed):'';
+        return [format?'using '+format:'',offsetText].filter(Boolean).join(' ');
+      };
       const renderDecisions=(page)=>{
         const decisions=page.decisions||[],total=Number(page.total??r.decisions_total??decisions.length),start=Number(page.offset||0);
         decisionNextOffset=page.next_offset??null;
-        decisionHost.replaceChildren(...(decisions.length?[table(['Decision','Scope','When','Result'],decisions.map(d=>[d.kind==='release'?'Released with offset '+d.naive_timestamp_offset:'Discarded',scopeText(d),d.decided_at.slice(0,16).replace('T',' ')+' UTC',
+        decisionHost.replaceChildren(...(decisions.length?[table(['Decision','Scope','When','Result'],decisions.map(d=>[d.kind==='release'?(d.timestamp_format?'Released '+timestampDecisionText(d):'Released with offset '+d.naive_timestamp_offset):'Discarded',scopeText(d),d.decided_at.slice(0,16).replace('T',' ')+' UTC',
           d.kind==='release'?d.rows_released+' of '+d.rows_considered+' rows released, '+(d.events_added||0)+' events added, '+(d.duplicates_skipped||0)+' already in the log':d.rows_discarded+' rows discarded']))]:[]));
         decisionStatus.textContent=total?(decisions.length?'Showing '+(start+1).toLocaleString()+'–'+(start+decisions.length).toLocaleString()+' of '+total.toLocaleString()+' decisions':'No decisions on this page; '+total.toLocaleString()+' in total')+'. History can change between pages.':'';
         show(decisionFirst,total>100);show(decisionNext,total>100);
@@ -5862,13 +5867,13 @@
       decisionFirst.onclick=()=>loadDecisions(0);decisionNext.onclick=()=>{if(decisionNextOffset!==null)loadDecisions(decisionNextOffset);};
       renderDecisions({decisions:r.decisions,total:r.decisions_total??r.decisions.length,offset:0,next_offset:r.decisions_next_offset??null});
       const row=el('div',null,'row');row.style.alignItems='end';
-      row.append(field('UTC offset to assume for times written without one',offset),field('Batch (blank for all)',batch),field('First row (optional)',rowStart),field('Last row (optional)',rowEnd),preview,release,discard);
+      row.append(field('Timestamp format (blank for ISO 8601)',timeFormat),field('UTC offset to assume for times written without one',offset),field('Batch (blank for all)',batch),field('First row (optional)',rowStart),field('Last row (optional)',rowEnd),preview,release,discard);
       wrap.append(el('h4','Rejected rows kept for review'),
         el('div',Number(r.rows_kept).toLocaleString()+' rows kept ('+reasonText(r.reasons)+'). '+r.note,'muted'),
         batchesStatus,batchesHost,batchesFirst,batchesNext,pageHost,firstPage,nextPage,
-        el('div','Batch and row range apply to release and discard. Leave them blank to include all kept rows.','muted'),row,message,
+        el('div','Batch and row range apply to release and discard. Leave them blank to include all kept rows. For release, leave the assumed offset blank if the format includes %z.','muted'),row,message,
         decisionStatus,decisionHost,decisionFirst,decisionNext);
-      for(const control of [offset,batch,rowStart,rowEnd])control.addEventListener('input',()=>{
+      for(const control of [offset,timeFormat,batch,rowStart,rowEnd])control.addEventListener('input',()=>{
         previewGeneration++;reviewed=null;release.disabled=true;
         message.textContent='Selection changed. Preview again before releasing.';
       });
@@ -5877,21 +5882,22 @@
         const requestId=++previewGeneration;
         reviewed=null;release.disabled=true;
         const chosen=offset.value.trim();
+        const pattern=timeFormat.value.trim();
         let scope;try{scope=readScope();}catch(error){message.textContent=error.message;return;}
         message.textContent='Checking retained rows without changing the log…';
         try{
           const result=await (await api(base+'/preview',{method:'POST',
             headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({naive_timestamp_offset:chosen,...scope})})).json();
-          if(generation!==state.generation||requestId!==previewGeneration||offset.value.trim()!==chosen)return;
-          if(result.naive_timestamp_offset!==chosen){
-            message.textContent='Offset was normalized to '+result.naive_timestamp_offset+'. Enter that offset and preview again.';
+            body:JSON.stringify({naive_timestamp_offset:chosen,...(pattern?{timestamp_format:pattern}:{}),...scope})})).json();
+          if(generation!==state.generation||requestId!==previewGeneration||offset.value.trim()!==chosen||timeFormat.value.trim()!==pattern)return;
+          if(result.naive_timestamp_offset!==chosen||(result.timestamp_format||'')!==pattern){
+            message.textContent='The preview used different timestamp settings. Check the format and offset, then preview again.';
             return;
           }
           reviewed={...result,scope};
           release.disabled=!(Number.isSafeInteger(result.rows_eligible)&&result.rows_eligible>0);
           message.textContent='Preview: '+result.rows_eligible+' of '+result.rows_considered+
-            ' retained rows parseable with UTC'+result.naive_timestamp_offset+'; '+
+            ' retained rows parseable '+timestampDecisionText(result)+'; '+
             result.rows_still_rejected+' remain rejected. No rows changed. '+
             'Duplicate skipping may reduce the number of events added. Release is a separate decision.';
         }catch(error){if(generation===state.generation&&requestId===previewGeneration)message.textContent=error.message;}
@@ -5904,11 +5910,12 @@
           const result=await (await api(base+'/release',{method:'POST',
             headers:{'Content-Type':'application/json'},
             body:JSON.stringify({naive_timestamp_offset:selected.naive_timestamp_offset,
+              ...(selected.timestamp_format?{timestamp_format:selected.timestamp_format}:{}),
               ...selected.scope,expected_preview_sha256:selected.expected_preview_sha256})})).json();
           if(generation!==state.generation)return;
           const d=result.decision;
           await refreshLogs(state.logId);await analyse();
-          status('Released '+d.rows_released+' of '+d.rows_considered+' kept rows assuming UTC'+d.naive_timestamp_offset+': '+(d.events_added||0)+' events added; '+d.rows_still_kept+' rows still kept.');
+          status('Released '+d.rows_released+' of '+d.rows_considered+' kept rows '+timestampDecisionText(d)+': '+(d.events_added||0)+' events added; '+d.rows_still_kept+' rows still kept.');
         }catch(error){if(generation===state.generation)message.textContent=error.message+' Preview again before releasing.';}
       };
       discard.onclick=async()=>{
