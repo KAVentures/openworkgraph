@@ -705,6 +705,19 @@ def event_log_anonymized_export_csv(request: Request, log_id: str,
                             f"min_cases={result['min_cases']}"})
 
 
+@router.post("/v1/event-logs/combine")
+async def combine_event_logs(request: Request):
+    """Combine 2 to 10 saved logs into a new saved log; the sources are unchanged."""
+    from . import event_log_combine as combined_logs
+    _require_dashboard(request)
+    spec = await _json_body(request, "combine settings", strict=True, limit=8192)
+    try:
+        result = await run_in_threadpool(combined_logs.combine, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/{log_id}/derive")
 async def derive_event_log(request: Request, log_id: str):
     """Save the cases matching a filter as a new event log; the source log is unchanged."""
