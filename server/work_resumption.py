@@ -89,9 +89,10 @@ def _identity_bursts(observations: list[tuple[float, str]], threshold_days: floa
     bursts: list[dict[str, Any]] = []
     for instant, event_id in sorted(observations):
         if not bursts or instant - bursts[-1]["last"] > threshold_days:
-            bursts.append({"first": instant, "last": instant, "event_ids": []})
+            bursts.append({"first": instant, "last": instant, "event_ids": [], "observed_count": 0})
         burst = bursts[-1]
         burst["last"] = instant
+        burst["observed_count"] += 1
         if len(burst["event_ids"]) < 6:
             burst["event_ids"].append(event_id)
     return bursts
@@ -99,12 +100,13 @@ def _identity_bursts(observations: list[tuple[float, str]], threshold_days: floa
 
 def _visible_bursts(track: dict[str, Any], threshold_days: float) -> dict[str, Any]:
     bursts = _identity_bursts(track["observations"], threshold_days)
-    selected = bursts[-20:]
+    selected = bursts[-8:]
     return {
         "segments": [{
             "first_observed_at": _iso(burst["first"]),
             "last_observed_at": _iso(burst["last"]),
-            "evidence_event_ids": burst["event_ids"],
+            "evidence_event_ids": burst["event_ids"][:8],
+            "evidence_truncated": burst["observed_count"] > len(burst["event_ids"]),
             "gap_from_previous_seconds": (
                 max(0, round((burst["first"] - bursts[len(bursts) - len(selected) + i - 1]["last"]) * 86400))
                 if len(bursts) - len(selected) + i > 0 else None
@@ -401,15 +403,14 @@ def resumption_candidates(
     result["observed_pair_event_assignments_truncated"] = len(pair_assignments) > 24
     result["observed_group_continuity"] = group_matches[:24]
     result["observed_group_continuity_truncated"] = len(group_matches) > 24
-    # Bind reviewer evidence only after the full continuity result is populated.
-    # A partial response must not be fingerprinted as a complete inspection.
-    # Denied, revoked or unknown history access gets no review queue at all.
-    from .reconstruction_review_cli import REVIEWABLE_ACCESS, build_review_queue
-    if result.get("saved_history_access") in REVIEWABLE_ACCESS:
-        result["event_assignment_review"] = build_review_queue(result)
     if not current["refs"]:
         result["notice"] = ("The latest session has no observed stable pointer, so resumption "
                             "cannot be assessed; this does not mean the work is new.")
+        # Even an empty current session has a reviewable evidence projection.
+        # Keep the queue available, but bind its digest to the final notice.
+        from .reconstruction_review_cli import REVIEWABLE_ACCESS, build_review_queue
+        if result.get("saved_history_access") in REVIEWABLE_ACCESS:
+            result["event_assignment_review"] = build_review_queue(result)
         return result
 
     # Each identity gets a separate chronological evidence trail, even when
@@ -420,7 +421,7 @@ def resumption_candidates(
                        if identity in bucket["tracks"]]
         if len(occurrences) < 2:
             continue
-        selected = occurrences[-20:]
+        selected = occurrences[-8:]
         episodes: list[dict[str, Any]] = []
         for position, (index, track) in enumerate(selected):
             previous_end = selected[position - 1][1]["last"] if position else None
@@ -428,7 +429,8 @@ def resumption_candidates(
                 "first_observed_at": _iso(track["first"]),
                 "last_observed_at": _iso(track["last"]),
                 "idle_gap_session_started_at": _iso(sessions[index][0]),
-                "evidence_event_ids": list(reversed(track["event_ids"])),
+                "evidence_event_ids": list(reversed(track["event_ids"][-8:])),
+                "evidence_truncated": len(track["event_ids"]) > 8,
                 **_visible_bursts(track, IDENTITY_INTERRUPTION_MINUTES / 1440),
                 "gap_from_previous_seconds": (
                     max(0, round((track["first"] - previous_end) * 86400))
@@ -530,6 +532,11 @@ def resumption_candidates(
     if truncated:
         result["notice"] = ("Only the newest activity inside the grant was scanned; "
                             "older sessions may also share these pointers.")
+    # Bind the reviewer queue only after all evidence and coverage metadata
+    # have been populated. A digest of a partial projection is not sufficient.
+    from .reconstruction_review_cli import REVIEWABLE_ACCESS, build_review_queue
+    if result.get("saved_history_access") in REVIEWABLE_ACCESS:
+        result["event_assignment_review"] = build_review_queue(result)
     return result
 
 
