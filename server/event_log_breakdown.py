@@ -18,6 +18,9 @@ table describes the recorded cases; a difference between cells is not a cause.
 """
 from __future__ import annotations
 
+from collections import Counter
+from hashlib import sha256
+from heapq import nsmallest
 from typing import Any
 
 from . import event_log_workspace as workspace
@@ -57,8 +60,8 @@ def _expr(kind: str) -> str:
             "rework": "CASE WHEN cs.rework THEN 'repeats an activity' ELSE 'no repeats' END"}[kind]
 
 
-def breakdown(log_id: str, rows: str, columns: str | None = None, case_type: str | None = None, *,
-              with_activity: str | None = None, cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+def _read(log_id: str, rows: str, columns: str | None, case_type: str | None,
+          with_activity: str | None, cohort: dict[str, Any] | None):
     row_kind, row_attr = _dimension(rows, "rows")
     col_kind, col_attr = _dimension(columns, "columns") if columns not in (None, "") else (None, None)
     if columns not in (None, "") and columns == rows:
@@ -105,39 +108,61 @@ def breakdown(log_id: str, rows: str, columns: str | None = None, case_type: str
                 dims.append(f"(SELECT value FROM dim_{slot} d WHERE d.case_id = cs.case_id)")
             else:
                 dims.append(_expr(kind))
-        cells = conn.execute(f"""SELECT coalesce({dims[0]}, ?) AS r, coalesce({dims[1]}, ?) AS c, case_id, duration,
-              events, rework, did FROM cs""", [MISSING, MISSING]).fetchall()
+        cells = conn.execute(f"""SELECT {dims[0]} AS r, {dims[1]} AS c, case_id, duration,
+              events, rework, did FROM cs""").fetchall()
         return {"cells": cells, "total": total}
 
     data = workspace._query_filtered(log_id, case_type, cohort, run)
+    return data, (row_kind, row_attr), (col_kind, col_attr)
+
+
+def _unused_label(preferred: str, fallback: str, occupied: set[str]) -> str:
+    if preferred not in occupied:
+        return preferred
+    candidate, number = fallback, 2
+    while candidate in occupied:
+        candidate = f"{fallback} {number}"
+        number += 1
+    return candidate
+
+
+def _axis(raw: list, index: int, limit: int, kind: str | None):
+    """Use separate keys for literal dimension values and report buckets."""
+    if kind is None:
+        return {None: "all"}, {"all": "all cases"}
+    counts = Counter(cell[index] for cell in raw)
+    values = [v for v in counts if v is not None]
+    if kind in ("start_month", "start_weekday", "duration_band"):
+        shown = sorted(values)[-limit:]
+    else:
+        shown = sorted(values, key=lambda v: (-counts[v], v))[:limit]
+    mappings = dict.fromkeys(values, "other")
+    labels: dict[str, str] = {}
+    for value in shown:
+        key = "value:" + sha256(value.encode()).hexdigest()
+        mappings[value] = key
+        if kind == "start_weekday":
+            labels[key] = WEEKDAYS[int(value) - 1]
+        elif kind == "duration_band":
+            labels[key] = DURATION_BANDS[value]
+        else:
+            labels[key] = value
+    occupied = set(values) | set(labels.values())
+    if len(values) > len(shown):
+        labels["other"] = _unused_label(OTHER, "(other grouped values)", occupied)
+    if None in counts:
+        mappings[None] = "missing"
+        labels["missing"] = _unused_label(MISSING, "(missing value)", occupied)
+    return mappings, labels
+
+
+def breakdown(log_id: str, rows: str, columns: str | None = None, case_type: str | None = None, *,
+              with_activity: str | None = None, cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+    data, (row_kind, row_attr), (col_kind, col_attr) = _read(log_id, rows, columns, case_type, with_activity, cohort)
     total = data["total"]
     raw = data["cells"]
-
-    def label(kind: str | None, value: str) -> str:
-        if kind == "start_weekday" and value != MISSING:
-            return WEEKDAYS[int(value) - 1]
-        if kind == "duration_band" and value != MISSING:
-            return DURATION_BANDS[value]
-        return value
-
-    def keep(index: int, limit: int, kind: str | None) -> tuple[dict[str, str], list[str]]:
-        """Map each raw value to its shown label; less common (or, for time, older) values become (other)."""
-        counts: dict[str, int] = {}
-        for cell in raw:
-            counts[cell[index]] = counts.get(cell[index], 0) + 1
-        values = [v for v in counts if v != MISSING]
-        if kind in ("start_month", "start_weekday", "duration_band"):
-            shown = sorted(values)[-limit:]
-        else:
-            shown = sorted(values, key=lambda v: (-counts[v], v))[:limit]
-        mapping = {v: (label(kind, v) if v in shown else OTHER) for v in values}
-        if MISSING in counts:
-            mapping[MISSING] = MISSING
-        order = [label(kind, v) for v in shown] + [x for x in (OTHER, MISSING) if x in mapping.values()]
-        return mapping, order
-
-    row_map, order_r = keep(0, MAX_ROWS, row_kind)
-    col_map, order_c = keep(1, MAX_COLUMNS, col_kind) if col_kind else ({MISSING: "all cases"}, ["all cases"])
+    row_map, row_labels = _axis(raw, 0, MAX_ROWS, row_kind)
+    col_map, col_labels = _axis(raw, 1, MAX_COLUMNS, col_kind)
     groups: dict[tuple[str, str], list] = {}
     for r, c, _cid, duration, events, rework, did in raw:
         groups.setdefault((row_map[r], col_map[c]), []).append((duration, events, rework, did))
@@ -164,9 +189,13 @@ def breakdown(log_id: str, rows: str, columns: str | None = None, case_type: str
             out["with_activity_share"] = round(sum(1 for *_, did in items if did) / n, 4)
         return out
 
-    table = [{"row": r, "column": c, **stats(groups[(r, c)])} for r in order_r for c in order_c if (r, c) in groups]
-    row_totals = [{"row": r, **stats([x for c in order_c for x in groups.get((r, c), [])])} for r in order_r]
-    col_totals = [{"column": c, **stats([x for r in order_r for x in groups.get((r, c), [])])} for c in order_c]
+    table = [{"row": row_labels[r], "row_key": r, "column": col_labels[c],
+              "column_key": c if col_kind else None, **stats(groups[(r, c)])}
+             for r in row_labels for c in col_labels if (r, c) in groups]
+    row_totals = [{"row": row_labels[r], "row_key": r,
+                   **stats([x for c in col_labels for x in groups.get((r, c), [])])} for r in row_labels]
+    col_totals = [{"column": col_labels[c], "column_key": c,
+                   **stats([x for r in row_labels for x in groups.get((r, c), [])])} for c in col_labels]
     every = [x for items in groups.values() for x in items]
 
     def describe(raw_name: str | None, kind: str | None, attr: str | None) -> dict[str, Any] | None:
@@ -179,7 +208,8 @@ def breakdown(log_id: str, rows: str, columns: str | None = None, case_type: str
     return {
         "format": FORMAT, "log_id": log_id, "case_notion": data.get("case_notion"),
         "rows": describe(rows, row_kind, row_attr), "columns": describe(columns, col_kind, col_attr),
-        "row_values": order_r, "column_values": order_c if col_kind else [],
+        "row_values": list(row_labels.values()), "column_values": list(col_labels.values()) if col_kind else [],
+        "total_label": _unused_label("All", "All cases", set(row_labels.values()) | set(col_labels.values())),
         "with_activity": with_activity, "cases": total,
         "cells": table, "row_totals": row_totals, "column_totals": col_totals if col_kind else [],
         "overall": stats(every),
@@ -189,6 +219,47 @@ def breakdown(log_id: str, rows: str, columns: str | None = None, case_type: str
         "caveat": ("Figures describe the recorded cases in each cell. A difference between cells is not a cause, and "
                    "cells with fewer than 5 cases move a lot with one case."),
     }
+
+
+def cell_cases(log_id: str, rows: str, columns: str | None = None, case_type: str | None = None, *,
+               selection: dict[str, Any], with_activity: str | None = None,
+               cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Review the cases contributing to a displayed cell or total."""
+    if not isinstance(selection, dict) or selection.keys() - {"row_key", "column_key", "after", "limit"}:
+        raise EventLogWorkspaceError("unknown breakdown case setting")
+    row, column = selection.get("row_key"), selection.get("column_key")
+    if any(key is not None and (not isinstance(key, str) or not key or len(key) > 70) for key in (row, column)):
+        raise EventLogWorkspaceError("use the group keys returned by the breakdown")
+    if column is not None and not columns:
+        raise EventLogWorkspaceError("a column key requires a column dimension")
+    after, limit = selection.get("after"), selection.get("limit", 50)
+    if after is not None and (not isinstance(after, str) or not after or len(after) > 200):
+        raise EventLogWorkspaceError("invalid case key cursor")
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise EventLogWorkspaceError("limit must be a whole number from 1 to 100")
+    data, (row_kind, _), (col_kind, _) = _read(log_id, rows, columns, case_type, with_activity, cohort)
+    raw = data["cells"]
+    row_map, row_labels = _axis(raw, 0, MAX_ROWS, row_kind)
+    col_map, col_labels = _axis(raw, 1, MAX_COLUMNS, col_kind)
+    if (row is not None and row not in row_labels) or (column is not None and column not in col_labels):
+        raise EventLogWorkspaceError("the group is no longer displayed; refresh the breakdown")
+    total = 0
+
+    def matching():
+        nonlocal total
+        for r, c, key, duration, events, rework, did in raw:
+            if (row is None or row_map[r] == row) and (column is None or col_map[c] == column):
+                total += 1
+                if after is None or key > after:
+                    yield key, duration, events, rework, did
+
+    page = nsmallest(limit + 1, matching(), key=lambda result: result[0])
+    return {"case_notion": data["case_notion"], "total": total,
+            "row": row_labels.get(row), "column": col_labels.get(column),
+            "cases": [{"case_id": key, "duration_seconds": duration, "events": events, "rework": rework,
+                       **({"did_activity": did} if with_activity is not None else {})}
+                      for key, duration, events, rework, did in page[:limit]],
+            "next_after": page[limit - 1][0] if len(page) > limit else None}
 
 
 MAX_DIMENSION_ATTRIBUTES = 100
@@ -233,7 +304,7 @@ def breakdown_csv(log_id: str, rows: str, columns: str | None = None, case_type:
     out = io.StringIO()
     writer = csv.writer(out, lineterminator="\n")
     writer.writerow([_cell(r["rows"]["label"]), _cell(r["columns"]["label"]) if r["columns"] else "column", *figures, "fewer_than_5_cases"])
-    every = "All"
+    every = r["total_label"]
     lines = [(c["row"], c["column"], c) for c in r["cells"]]
     lines += [(t["row"], every, t) for t in r["row_totals"]] if r["columns"] else []
     lines += [(every, t["column"], t) for t in r["column_totals"]]
@@ -243,4 +314,4 @@ def breakdown_csv(log_id: str, rows: str, columns: str | None = None, case_type:
     return out.getvalue()
 
 
-__all__ = ["breakdown", "breakdown_csv", "dimensions", "FORMAT", "BUILT_IN"]
+__all__ = ["breakdown", "breakdown_csv", "cell_cases", "dimensions", "FORMAT", "BUILT_IN"]

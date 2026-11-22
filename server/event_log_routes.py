@@ -1434,6 +1434,19 @@ def event_log_breakdown(request: Request, log_id: str, rows: str = Query(min_len
     return _respond(breakdown.breakdown, log_id, rows, columns, case_type, with_activity=with_activity, cohort=cohort)
 
 
+@router.post("/v1/event-logs/{log_id}/breakdown/cases")
+async def event_log_breakdown_cases(request: Request, log_id: str, rows: str = Query(min_length=1, max_length=220),
+                                    columns: str | None = Query(default=None, max_length=220),
+                                    with_activity: str | None = Query(default=None, min_length=1, max_length=500),
+                                    case_type: str | None = Query(default=None, max_length=200),
+                                    cohort: dict = Depends(_case_filter)):
+    from . import event_log_breakdown as breakdown
+    _require_dashboard(request)
+    selection = await _json_body(request, "breakdown case settings", strict=True, limit=8192)
+    return await run_in_threadpool(_respond, breakdown.cell_cases, log_id, rows, columns, case_type,
+                                   selection=selection, with_activity=with_activity, cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/breakdown.csv")
 def event_log_breakdown_csv(request: Request, log_id: str, rows: str = Query(min_length=1, max_length=220),
                             columns: str | None = Query(default=None, max_length=220),

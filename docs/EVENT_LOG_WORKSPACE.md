@@ -525,9 +525,15 @@ repeat an activity). With **Share doing an activity**, it also gives the share
 of cases that do the chosen activity. The table ends with an **All** column
 and row, the totals for each value.
 
+Select any populated cell or total to see the cases behind its figures, then open a case to
+review its event history. For an activity share, the list shows whether each case did the
+selected activity.
+
 At most 30 row values and 12 column values are shown. For a time dimension
 the latest values are kept; otherwise the most common. The rest are grouped
-as `(other)`, and cases with no value as `(missing)`. Cells with fewer than 5
+as `(other)`, and cases with no value as `(missing)`. Literal values with these names keep
+their own groups. The report uses distinct labels for its buckets and totals when needed.
+Cells with fewer than 5
 cases are marked `*`, because one case moves their figures a lot. The table
 honours the case filter.
 
@@ -536,6 +542,11 @@ honours the case filter.
 totals. `GET /v1/event-logs/{log_id}/breakdown/dimensions` lists the
 dimensions available in the log. Both need the dashboard session. A
 difference between cells describes the recorded cases, not a cause.
+
+For case evidence, `POST /v1/event-logs/{log_id}/breakdown/cases` with the same query parameters.
+Send the report's `row_key` and `column_key` in the body. Omit either key for the corresponding
+total and omit both for the overall selection. Pages use literal case-key order. The optional
+`limit` is 1–100 (default 50). Send the returned `next_after` as `after` to continue.
 
 **Download as CSV** saves the same table for a spreadsheet: one line per cell (row value, column
 value and every figure), then the row totals, the column totals and the overall figures, labelled

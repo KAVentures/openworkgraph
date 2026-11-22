@@ -970,7 +970,7 @@
     results.appendChild(heuristicsSection());
     results.appendChild(glossarySection());
     results.appendChild(activityProfileSection(names));
-    results.appendChild(breakdownSection(names));
+    results.appendChild(breakdownSection(names,inspection));
     results.appendChild(pathExplorerSection());
     results.appendChild(cooccurrenceSection(inspection));
     results.appendChild(dueDatesSection(names,inspection));
@@ -4677,7 +4677,7 @@
     return box;
   }
 
-  function breakdownSection(activityNames){
+  function breakdownSection(activityNames,inspection){
     const box=section('Breakdown table');box.id='owgBreakdown';
     box.appendChild(el('div','Case figures by one or two dimensions, like a pivot table: choose what goes in the rows and, optionally, the columns. Less common values are grouped as (other); cells with fewer than 5 cases are marked *.','muted'));
     const builtIn=[['start_month','Month the case started'],['start_weekday','Weekday the case started'],['start_activity','First activity'],['end_activity','Last activity'],['duration_band','Case duration (bands)'],['rework','Rework (repeats an activity or not)']];
@@ -4693,7 +4693,8 @@
     row.append(field('Rows',rowsPick),field('Columns',colsPick),field('Figure',measurePick),activityField,run,csv);
     const statusLine=el('div',null,'muted');statusLine.id='owgBreakdownStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgBreakdownResults';
-    box.append(row,statusLine,out);
+    const review=el('div');review.id='owgBreakdownCaseReview';
+    box.append(row,statusLine,out,review);
     // Attribute dimensions are listed once the section exists; the built-in ones work without them.
     const generation=state.generation;
     getJSON(logPath('breakdown/dimensions',{})).then(r=>{
@@ -4707,6 +4708,38 @@
     const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
     const hrs=x=>x===null||x===undefined?'—':(x<48?(Math.round(x*10)/10)+' h':(Math.round(x/24*10)/10)+' d');
     const show={cases:x=>Number(x).toLocaleString(),share:pct,median_hours:hrs,p90_hours:hrs,rework_rate:pct,events_per_case:x=>String(Math.round(x*10)/10),with_activity_share:pct};
+    let reviewTurn=0;
+    function inspect(url,cell,label,withActivity){
+      const turn=++reviewTurn,current=()=>generation===state.generation&&turn===reviewTurn;
+      const title=el('h4',label);title.tabIndex=-1;
+      const status=el('div');status.setAttribute('role','status');
+      const rows=el('div'),nav=el('div',null,'row');
+      const previous=button('Previous case page','secondary'),next=button('Next case page','secondary');
+      nav.append(previous,next);review.replaceChildren(title,status,rows,nav);title.focus();
+      const selection={row_key:cell.row_key??null,column_key:cell.column_key??null};
+      const cursors=[null];let index=0,following=null;
+      async function load(page){
+        previous.disabled=next.disabled=true;status.textContent='Loading cases…';
+        try{
+          const spec={...selection,...(cursors[page]!==null?{after:cursors[page]}:{})};
+          const r=await (await api(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+          if(!current())return;
+          index=page;following=r.next_after;
+          status.textContent=Number(r.total).toLocaleString()+(r.total===1?' case.':' cases.')+' Showing '+r.cases.length+' on this page.';
+          const headers=['Case','Duration','Events','Repeated an activity',...(withActivity?['Did '+withActivity]:[]),'Evidence'];
+          rows.replaceChildren(r.cases.length?table(headers,r.cases.map(c=>{
+            const open=button('Open case','secondary');open.setAttribute('aria-label','Open case '+c.case_id);
+            open.onclick=()=>inspection.open(c.case_id);
+            return [c.case_id,duration(c.duration_seconds),Number(c.events).toLocaleString(),c.rework?'Yes':'No',
+              ...(withActivity?[c.did_activity?'Yes':'No']:[]),open];
+          })):el('div','No matching cases.','muted'));
+        }catch(error){if(current())status.textContent=error.message;}
+        finally{if(current()){previous.disabled=index===0;next.disabled=following===null;}}
+      }
+      previous.onclick=()=>load(index-1);
+      next.onclick=()=>{cursors[index+1]=following;load(index+1);};
+      load(0);
+    }
     csv.onclick=async()=>{
       if(colsPick.value&&colsPick.value===rowsPick.value){statusLine.textContent='Choose two different dimensions.';return;}
       const params={rows:rowsPick.value};if(colsPick.value)params.columns=colsPick.value;
@@ -4715,31 +4748,42 @@
       try{const response=await api(logPath('breakdown.csv',params));const blob=await response.blob();
         const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=(state.logId||'log')+'-breakdown.csv';
         document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(link.href),1000);
-        statusLine.textContent='Downloaded the breakdown: one line per cell, then the totals ("All").';}
+        statusLine.textContent='Downloaded the breakdown with one line per cell followed by the totals.';}
       catch(error){statusLine.textContent=error.message;}
       finally{csv.disabled=false;}};
     run.onclick=async()=>{
+      ++reviewTurn;review.replaceChildren();
       if(colsPick.value&&colsPick.value===rowsPick.value){statusLine.textContent='Choose two different dimensions.';out.replaceChildren();return;}
       const measure=measurePick.value;
       const params={rows:rowsPick.value};if(colsPick.value)params.columns=colsPick.value;
       if(measure==='with_activity_share'){if(!activityPick.value){statusLine.textContent='Choose an activity.';return;}params.with_activity=activityPick.value;}
-      const generation=state.generation;run.disabled=true;statusLine.textContent='Grouping cases…';out.replaceChildren();
+      run.disabled=true;statusLine.textContent='Grouping cases…';out.replaceChildren();
       try{
-        const r=await getJSON(logPath('breakdown',params));
+        const url=logPath('breakdown',params),r=await getJSON(url);
         if(generation!==state.generation)return;
+        const endpoint=new URL(url,window.location.origin);endpoint.pathname+='/cases';
+        const evidenceURL=endpoint.pathname+endpoint.search;
         const fmt=show[measure],cols=r.columns?r.column_values:['All cases'];
-        const cell={};r.cells.forEach(c=>{cell[c.row+'\u0000'+c.column]=c;});
+        const cells=new Map();
+        r.cells.forEach(c=>{if(!cells.has(c.row))cells.set(c.row,new Map());cells.get(c.row).set(c.column,c);});
         const values=r.cells.map(c=>c[measure]).filter(v=>v!==null&&v!==undefined),top=Math.max(...values,0);
-        const shown=c=>{if(!c)return '';const wrap=el('div');wrap.appendChild(el('span',fmt(c[measure])+(c.small?' *':'')));
+        const shown=c=>{
+          if(!c)return '';
+          const wrap=el('div'),value=fmt(c[measure])+(c.small?' *':'');
+          const label=[c.row,c.column].filter(v=>v!==undefined).join(' · ')||r.total_label;
+          const open=button(value,'secondary');
+          open.setAttribute('aria-label','Inspect cases for '+label+' ('+value+')');
+          open.onclick=()=>inspect(evidenceURL,c,label,r.with_activity);wrap.appendChild(open);
           if(top>0&&c[measure]!==null){const bar=el('div');bar.setAttribute('aria-hidden','true');bar.style.cssText='height:4px;background:currentColor;opacity:.35;margin-top:4px;width:'+Math.round(c[measure]/top*100)+'%';wrap.appendChild(bar);}
           return wrap;};
-        const totals={};r.row_totals.forEach(t=>{totals[t.row]=t;});
-        const header=[r.rows.label.charAt(0).toUpperCase()+r.rows.label.slice(1),...(r.columns?cols:[]),'All'];
-        const body=r.row_values.map(v=>[v,...(r.columns?cols.map(c=>shown(cell[v+'\u0000'+c])):[]),shown(totals[v])]);
-        if(r.columns){const ct={};r.column_totals.forEach(t=>{ct[t.column]=t;});body.push(['All',...cols.map(c=>shown(ct[c])),shown(r.overall)]);}
+        const totals=new Map(r.row_totals.map(t=>[t.row,t]));
+        const header=[r.rows.label.charAt(0).toUpperCase()+r.rows.label.slice(1),...(r.columns?cols:[]),r.total_label];
+        const body=r.row_values.map(v=>[v,...(r.columns?cols.map(c=>shown(cells.get(v)?.get(c))):[]),shown(totals.get(v))]);
+        const colTotals=new Map(r.column_totals.map(t=>[t.column,t]));
+        body.push([r.total_label,...(r.columns?cols.map(c=>shown(colTotals.get(c))):[]),shown(r.overall)]);
         statusLine.textContent=measures.find(m=>m[0]===measure)[1]+' by '+r.rows.label+(r.columns?' and '+r.columns.label:'')+', over '+Number(r.cases).toLocaleString()+' cases. Overall: '+fmt(r.overall[measure])+'.';
         out.append(table(header,body),el('div',r.caveat,'muted'));
-      }catch(error){statusLine.textContent=error.message;}
+      }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
       finally{run.disabled=false;}};
     return box;
   }
