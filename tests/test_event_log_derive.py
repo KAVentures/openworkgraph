@@ -225,3 +225,31 @@ def test_matching_xes_projection_preserves_only_selected_trace_attributes():
     assert list(csv.reader(StringIO(exact.getvalue())))[1][0] == "=included"
     assert list(csv.reader(StringIO(review.getvalue())))[1][0] == "'=included"
     assert len(workspace.list_logs()["logs"]) == 1
+
+
+def test_a_time_window_trims_the_copy_to_its_events():
+    log = _csv_log()                       # c0..c9 start on 4..13 March 08:00, one step per hour
+    r = derive.derive(log, {"name": "week", "events_from": "2024-03-05T08:30:00Z", "events_before": "2024-03-07T00:00:00Z"})
+    window = r["time_window"]
+    assert window["events_from"] == "2024-03-05T08:30:00Z" and window["events_before"] == "2024-03-07T00:00:00Z"
+    # c1 keeps only Pay (09:00); c2 keeps Receive and Pay; c0 and c3.. are outside.
+    assert window["cases_with_events_in_window"] == 2 and r["copied"]["events"] == 3
+    assert window["events_outside_left_out"] == 24 - 3            # 4 cases of 3 steps, 6 of 2
+    paths = {tuple(v["path"]): v["cases"] for v in workspace.variants(r["log"]["log_id"])["variants"]}
+    assert paths == {("Pay",): 1, ("Receive", "Pay"): 1}
+    # Combined with a case filter, and open-ended.
+    south = derive.derive(log, {"name": "late escalations", "cohort": {"activity": "Escalate"},
+                                "events_from": "2024-03-12T00:00:00+01:00"})     # only c9 (13 March) is late
+    assert south["copied"]["events"] == 3
+    assert south["time_window"]["events_before"] is None and south["time_window"]["cases_with_events_in_window"] == 1
+    assert "time_window" not in derive.derive(log, {"name": "esc", "cohort": {"activity": "Escalate"}})
+
+
+def test_time_window_validation():
+    log = _csv_log()
+    for bad, match in (({"name": "x", "events_from": "2024-03-05"}, "UTC offset"),
+                       ({"name": "x", "events_from": "2024-03-06T00:00:00Z", "events_before": "2024-03-05T00:00:00Z"}, "before"),
+                       ({"name": "x"}, "case filter or a time window"),
+                       ({"name": "x", "events_from": "2030-01-01T00:00:00Z"}, "no event")):
+        with pytest.raises(workspace.EventLogWorkspaceError, match=match):
+            derive.derive(log, bad)
