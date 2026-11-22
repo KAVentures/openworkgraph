@@ -178,6 +178,28 @@ class OperatorCycleTests(unittest.TestCase):
                               consent_local_export=True,
                               confirm_removals_reviewed=True)
 
+    def test_extract_rejects_untrusted_provider_summary_without_success(self):
+        """Never present malformed Graph counts as a reviewed candidate."""
+        for response in (None, [], {}, {"status": "next_round_review_ready"},
+                         {"status": "next_round_review_ready",
+                          "event_snapshots": True, "removal_markers_for_review": 0},
+                         {"status": "next_round_review_ready",
+                          "event_snapshots": -1, "removal_markers_for_review": 0},
+                         {"status": "next_round_review_ready",
+                          "event_snapshots": 1, "removal_markers_for_review": "0"},
+                         {"status": "next_round_review_ready",
+                          "event_snapshots": 1, "removal_markers_for_review": -1}):
+            with self.subTest(response=response), \
+                 patch.object(cycle, "run_verified_next_round", return_value=response), \
+                 patch.object(cycle, "append_and_record") as append, \
+                 patch.object(cycle, "commit_checkpoint") as checkpoint:
+                with self.assertRaisesRegex(ReceiptError, "metadata invalid"):
+                    cycle.extract(consent_local_read=True, consent_delta_read=True,
+                                  consent_local_export=True,
+                                  confirm_removals_reviewed=True)
+                append.assert_not_called()
+                checkpoint.assert_not_called()
+
     def test_recover_requires_separate_consents_before_readback(self):
         with patch.object(cycle, "recovery_triage") as delegate:
             with self.assertRaises(ReceiptError):
