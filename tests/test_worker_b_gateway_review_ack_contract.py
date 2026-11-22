@@ -150,3 +150,23 @@ def test_direct_review_preflight_rechecks_live_gateway_permission_and_revision()
         assert guard in direct
     assert '$("reviewConfirm").checked=false' in direct
     assert "throw new Error" in direct
+
+
+def test_review_recovery_denial_hides_stale_actionable_process_and_never_replays_post():
+    """Denied recovery cannot leave a revoked review form looking authorized."""
+    source = (Path(__file__).resolve().parents[1] / "gateway" / "processes.html").read_text()
+    block = source.split('$("reviewRecover").onclick =', 1)[1].split('$("approve").onclick', 1)[0]
+    assert 'const recoveryOpenTicket = processOpenGeneration + 1;' in block
+    assert 'await open(workflowId);' in block
+    assert 'catch (error)' in block
+    assert 'identityTicket === identityGeneration' in block
+    assert 'credential === authorizedCredential' in block
+    assert 'recoveryOpenTicket === processOpenGeneration' in block
+    assert 'selected = null;' in block
+    assert '$("selected").hidden = true;' in block
+    assert 'REFUSED: Could not reopen an authorized review.' in block
+    assert 'recoveryOpenTicket !== processOpenGeneration' in block
+    assert 'selected?.process?.workflow_id !== workflowId' in block
+    assert '$("reviewConfirm").checked = false;' in block
+    assert '"/reviews"' not in block
+    assert block.index('await open(workflowId);') < block.index('Latest authorized review loaded.')
