@@ -6273,6 +6273,7 @@
     const run=button('Compare logs','secondary');run.id='owgLogCompareRun';
     const save=button('Download comparison JSON','secondary');save.id='owgLogCompareJson';save.disabled=true;
     const out=el('div');out.id='owgLogCompareResults';out.setAttribute('role','status');
+    const evidence=el('div');evidence.id='owgLogCompareEvidence';
     const options=document.createElement('details');options.appendChild(el('summary','Case selection'));
     const baseFrom=input('owgLogCompareBaselineFrom','date'),baseBefore=input('owgLogCompareBaselineBefore','date');
     const otherFrom=input('owgLogCompareOtherFrom','date'),otherBefore=input('owgLogCompareOtherBefore','date');
@@ -6284,11 +6285,11 @@
     const typeStatus=el('div',null,'muted');typeStatus.setAttribute('role','status');
     options.append(field('Comparison case notion',otherType),typeStatus,dates,field('Use the workspace case filter for the baseline',active));
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Comparison log',other),run,save);
-    box.append(row,options,out);
+    box.append(row,options,out,evidence);
     const generation=state.generation,baseId=state.logId,baseType=state.caseType;
     const enabled=()=>generation===state.generation&&box.isConnected;
     let typeTurn=0,runTurn=0,result=null,loadedTypes=null;
-    const invalidate=()=>{++runTurn;run.disabled=false;save.disabled=true;result=null;out.replaceChildren();};
+    const invalidate=()=>{++runTurn;run.disabled=false;save.disabled=true;result=null;out.replaceChildren();evidence.replaceChildren();};
     async function loadTypes(){
       const selected=other.value,ticket=++typeTurn;
       const current=()=>enabled()&&ticket===typeTurn&&other.value===selected;
@@ -6323,11 +6324,74 @@
     };
     const shareCell=r=>r.share_difference===null?'—':(r.share_difference>0?'+':'')+(r.share_difference*100).toFixed(1)+' pts'+(r.interval_excludes_zero?' *':'');
     const signed=(v,f)=>v===null||v===undefined?'—':(v>0?'+':v<0?'−':'')+f(Math.abs(v));
+    function reviewCases(side,scope,selector,label,reportCurrent){
+      const panel=el('div');
+      const heading=el('h4',label);heading.tabIndex=-1;
+      const status=el('div',null,'muted');status.setAttribute('role','status');
+      const list=el('div'),events=el('div');
+      const next=button('Next case page','secondary'),first=button('First case page','secondary');
+      const controls=el('div',null,'row');controls.append(first,next);
+      panel.append(heading,status,list,controls,events);
+      evidence.replaceChildren(panel);heading.focus();
+      const current=()=>reportCurrent()&&panel.isConnected;
+      const endpoint='/v1/event-logs/'+encodeURIComponent(side.log_id)+'/';
+      const query='?case_type='+encodeURIComponent(side.case_notion);
+      const post=async(route,body)=>(await api(endpoint+route+query,{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+      let cursor=null;
+      async function loadCases(after){
+        first.disabled=next.disabled=true;list.replaceChildren();events.replaceChildren();
+        status.textContent='Loading cases…';
+        try{
+          const found=await post('cases/query',{cohort:scope.cohort,...selector,limit:30,after});
+          if(!current())return;
+          cursor=found.next_after;
+          status.textContent=found.selected_cases.toLocaleString()+' matching cases in '+side.name+
+            ' ('+found.case_notion+'). Showing '+found.cases.length+' on this page.';
+          if(found.cases.length)list.appendChild(table(['Supplied case key','Events','Elapsed time','Equal-timestamp events'],
+            found.cases.map(c=>{
+              const open=button(c.case_id,'secondary');open.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%';
+              open.setAttribute('aria-label','Open case '+c.case_id);open.onclick=()=>openCase(c.case_id);
+              return [open,c.events,duration(c.elapsed_seconds),c.timestamp_ties];
+            })));
+          first.disabled=after===null;next.disabled=cursor===null;
+        }catch(error){
+          if(!current())return;
+          status.textContent=error.message;
+          const retry=button('Retry loading cases','secondary');retry.onclick=()=>loadCases(after);list.appendChild(retry);
+        }
+      }
+      function openCase(caseId){
+        const detail=el('div'),title=el('h4','Case '+caseId);title.tabIndex=-1;
+        const progress=el('div',null,'muted');progress.setAttribute('role','status');
+        const rows=el('div'),more=button('More case events','secondary');
+        detail.append(title,progress,rows,more);events.replaceChildren(detail);title.focus();
+        let offset=0;
+        async function loadEvents(){
+          more.disabled=true;progress.textContent='Loading events…';
+          try{
+            const found=await post('case-events/query',{case_id:caseId,offset,limit:100});
+            if(!current()||!detail.isConnected)return;
+            progress.textContent='Showing '+(offset+found.events.length)+' of '+found.total_events+' events. '+
+              found.timestamp_ties+' equal-timestamp events. '+found.ordering;
+            rows.appendChild(table(['Activity','Timestamp (UTC)','Resource label','Event ID'],
+              found.events.map(e=>[e.activity,e.timestamp,e.resource||'(missing)',e.event_id])));
+            offset=found.next_offset;show(more,offset!==null);more.disabled=offset===null;
+            more.textContent='More case events';
+          }catch(error){
+            if(!current()||!detail.isConnected)return;
+            progress.textContent=error.message;more.textContent='Retry loading events';more.disabled=false;
+          }
+        }
+        more.onclick=loadEvents;loadEvents();
+      }
+      first.onclick=()=>loadCases(null);next.onclick=()=>loadCases(cursor);loadCases(null);
+    }
     run.onclick=async()=>{
       const ticket=++runTurn;
       const current=()=>enabled()&&ticket===runTurn;
       result=null;save.disabled=true;
-      run.disabled=true;out.replaceChildren(el('div','Comparing…','muted'));
+      run.disabled=true;evidence.replaceChildren();out.replaceChildren(el('div','Comparing…','muted'));
       try{
         const spec={baseline:{log_id:baseId,cohort:datesIn(baseFrom,baseBefore,active.checked?globalCohort():{})},
           comparison:{log_id:other.value,cohort:datesIn(otherFrom,otherBefore)},limit:15};
@@ -6336,8 +6400,18 @@
         const r=await (await api('/v1/event-logs/comparison',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
         if(!current())return;
         const b=r.kpis.baseline,c=r.kpis.comparison,d=r.kpis.difference;
+        const casesButton=(side,count,selector,label,share)=>{
+          const text=count.toLocaleString()+(count===1?' case':' cases')+(share===undefined?'':' · '+pct(share));
+          if(!count)return text;
+          const sideLabel=side==='baseline'?'Baseline':'Comparison';
+          const control=button(text,'secondary');
+          control.setAttribute('aria-label','Review '+sideLabel.toLowerCase()+' cases for '+label+' ('+count+')');
+          control.setAttribute('aria-controls',evidence.id);
+          control.onclick=()=>reviewCases(r[side],spec[side],selector,sideLabel+' cases for '+label,current);
+          return control;
+        };
         const kpiTable=table(['Measure',r.baseline.name+' (this log)',r.comparison.name,'Difference'],[
-          ['Cases',Number(b.cases).toLocaleString(),Number(c.cases).toLocaleString(),signed(d.cases,v=>Number(v).toLocaleString())],
+          ['Cases',casesButton('baseline',b.cases,{},'entire selection'),casesButton('comparison',c.cases,{},'entire selection'),signed(d.cases,v=>Number(v).toLocaleString())],
           ['Median case time',duration(b.duration_seconds.median),duration(c.duration_seconds.median),signed(d.median_duration_seconds,duration)],
           ['90th percentile case time',duration(b.duration_seconds.p90),duration(c.duration_seconds.p90),signed(d.p90_duration_seconds,duration)],
           ['Events per case',String(b.events_per_case),String(c.events_per_case),signed(d.events_per_case,v=>v.toFixed(2))],
@@ -6345,18 +6419,30 @@
           ['Distinct variants',Number(b.distinct_variants).toLocaleString(),Number(c.distinct_variants).toLocaleString(),'']]);
         const longer=r.duration.probability_comparison_case_takes_longer;
         const only=(label,list)=>list.length?el('div',label+': '+list.slice(0,20).join(', ')+(list.length>20?' and '+(list.length-20)+' more':'')+'.'):null;
-        const actRows=r.activities.largest_share_differences.map(a=>[a.activity,pct(a.baseline_share),pct(a.comparison_share),shareCell(a)]);
-        const pathRows=r.paths.largest_share_differences.map(e=>[e.from+' → '+e.to,pct(e.baseline_share),pct(e.comparison_share),shareCell(e)]);
+        const shareRows=(rows,describe)=>rows.map(item=>{
+          const {label,selector}=describe(item);
+          return [label,casesButton('baseline',item.baseline_cases,selector,label,item.baseline_share),
+            casesButton('comparison',item.comparison_cases,selector,label,item.comparison_share),shareCell(item)];
+        });
+        const actRows=shareRows(r.activities.largest_share_differences,item=>({
+          label:item.activity,selector:{required_activities:[item.activity]}}));
+        const pathRows=shareRows(r.paths.largest_share_differences,item=>({
+          label:item.from+' → '+item.to,selector:{transition:[item.from,item.to]}}));
+        const variantRows=shareRows(r.variants.largest_share_differences,item=>({
+          label:item.path.slice(0,20).join(' → ')+(item.path.length>20?' … ('+item.path.length+' steps)':''),
+          selector:{variant_id:item.variant_id}}));
         const selection=side=>{
           const {started_from:start,started_before:end}=side.cohort;
           return side.name+' uses '+side.case_notion+(start||end?' cases starting'+
             (start?' on or after '+start.slice(0,10):'')+(start&&end?' and':'')+(end?' before '+end.slice(0,10):'')+' UTC':' cases')+'.';
         };
+        const headers=label=>[label,'Baseline · '+r.baseline.name,'Comparison · '+r.comparison.name,'Difference'];
         out.replaceChildren(el('p','Baseline '+selection(r.baseline)+' Comparison '+selection(r.comparison),'muted'),kpiTable,
           el('div','A random case in '+r.comparison.name+' takes longer than a random case in '+r.baseline.name+' '+pct(longer)+' of the time (50% means no shift).','muted'),
           ...[only('Only in '+r.baseline.name,r.activities.only_baseline),only('Only in '+r.comparison.name,r.activities.only_comparison)].filter(Boolean),
-          el('h4','Activities: share of cases'),table(['Activity',r.baseline.name,r.comparison.name,'Difference'],actRows),
-          el('h4','Paths: share of cases'),table(['Path',r.baseline.name,r.comparison.name,'Difference'],pathRows),
+          el('h4','Activities: share of cases'),table(headers('Activity'),actRows),
+          el('h4','Paths: share of cases'),table(headers('Path'),pathRows),
+          el('h4','Variants: share of cases'),table(headers('Variant'),variantRows),
           el('div',r.variants.shared_variants.toLocaleString()+' variants occur in both logs; they cover '+pct(r.variants.baseline_cases_in_shared_variants)+' of '+r.baseline.name+' cases and '+pct(r.variants.comparison_cases_in_shared_variants)+' of '+r.comparison.name+' cases.','muted'),
           el('div','* the 95% interval of the difference excludes zero. '+r.interpretation,'muted'));
         result=r;save.disabled=false;

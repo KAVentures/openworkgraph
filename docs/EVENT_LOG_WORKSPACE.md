@@ -2371,7 +2371,7 @@ or the same process before and after a system migration. The REST form accepts t
 
 ```json
 {"baseline": {"log_id": "log_…", "case_type": null, "cohort": {}},
- "comparison": {"log_id": "log_…", "cohort": {"started_from": "2024-07-01"}},
+ "comparison": {"log_id": "log_…", "cohort": {"started_from": "2024-07-01T00:00:00Z"}},
  "limit": 25}
 ```
 
@@ -2379,6 +2379,11 @@ Choose the comparison log's case notion and use **Case selection** to set separa
 ranges. The lower date is inclusive and the upper date is exclusive. The baseline can also use
 the current workspace case filter. **Download comparison JSON** saves the displayed results,
 including the case notions and applied filters, to a local file.
+
+Select a case count to review cases from that side of the report. The activity, path and
+variant tables list only cases that match that row and the side's case selection. Select a
+supplied case key to see its event history. Case keys and event rows are available in the
+local dashboard and are excluded from the comparison download.
 
 `cohort` takes the same keys as other analyses. `limit` (1–200) caps each ranked
 list. The response contains:
@@ -2392,7 +2397,8 @@ list. The response contains:
   only in the comparison, and the largest differences in the share of cases
   that contain each one. Each difference has a Newcombe 95% interval.
 * **Variants:** how many variants occur in both logs and what share of each
-  log's cases they cover, plus the variants whose share differs most.
+  log's cases they cover, plus the variants whose share differs most. Each ranked
+  variant includes an exact identifier for the existing case-query endpoint.
 
 Activities are matched by exact name after each log's applied activity
 mapping. Define a mapping to harmonize names that differ between source
