@@ -129,6 +129,54 @@ def test_an_edited_arc_changes_only_the_arc_check():
         ("Place order", "item", "several_objects_on_single_arc"): 1, ("Pay", "order", "type_without_arc"): 2}
 
 
+def test_arc_event_pages_match_the_summary_beyond_its_examples():
+    model = ocpm.discover(_ocel(_order_to_cash()))["model"]
+    doc = _deviating()
+    doc["events"] += [
+        {"id": f"pay{i:02}", "type": "Pay", "time": "2024-01-04T09:00:00Z",
+         "relationships": [{"objectId": "d4", "qualifier": "payment"}]}
+        for i in range(25)
+    ]
+    log = _ocel(doc)
+    report = ocpm.check(log, {"model": model})["arcs"]
+    assert len(report["examples"]) == ocpm.MAX_EXAMPLES
+    for group in report["issues_by_arc"]:
+        settings = {"model": model, **{k: v for k, v in group.items() if k != "events"}, "limit": 9}
+        page = ocpm.arc_evidence(log, settings)
+        ids = [row["event_id"] for row in page["events"]]
+        while page["next_after"] is not None:
+            page = ocpm.arc_evidence(log, {**settings, "after": page["next_after"]})
+            ids.extend(row["event_id"] for row in page["events"])
+        assert ids == sorted(set(ids)) and len(ids) == page["total"] == group["events"]
+    missing = {"model": model, "activity": "Pay", "object_type": "order", "issue": "missing_object"}
+    assert ocpm.arc_evidence(log, missing)["events"][0]["objects"] == 0
+
+
+def test_arc_event_links_show_other_types_and_deduplicate_objects():
+    model = ocpm.discover(_ocel(_order_to_cash()))["model"]
+    doc = _deviating()
+    orphan = next(e for e in doc["events"] if e["id"] == "orphan-pay")
+    orphan["relationships"].append({"objectId": "d4", "qualifier": "different"})
+    log = _ocel(doc)
+    spec = {"model": model, "activity": "Pay", "object_type": "order", "issue": "missing_object",
+            "event_id": "orphan-pay"}
+    detail = ocpm.arc_evidence(log, spec)
+    assert detail["objects_of_type"] == 0 and detail["total"] == 1
+    assert detail["objects"] == [{"object_id": "d4", "object_type": "delivery", "links": 2}]
+    assert detail["timestamp"] == "2024-01-03T19:00:00Z"
+    selection = {**spec, "issue": "several_objects_on_single_arc", "event_id": "o3-pay", "limit": 1}
+    first = ocpm.arc_evidence(log, selection)
+    second = ocpm.arc_evidence(log, {**selection, "after": first["next_after"]})
+    assert first["objects_of_type"] == second["total"] == 2
+    assert [r["object_id"] for r in first["objects"] + second["objects"]] == ["o2", "o3"]
+    assert second["next_after"] is None
+    with pytest.raises(workspace.EventLogWorkspaceError, match="no longer matches"):
+        ocpm.arc_evidence(log, {**spec, "event_id": "o3-pay"})
+    for change in ({"issue": "arbitrary"}, {"limit": True}, {"after": ""}):
+        with pytest.raises(workspace.EventLogWorkspaceError):
+            ocpm.arc_evidence(log, {**spec, **change})
+
+
 def test_long_lifecycles_and_the_variant_limit_are_counted_as_unknown():
     doc = _order_to_cash()
     doc["objects"].append({"id": "big", "type": "item"})
@@ -236,6 +284,14 @@ with TestClient(app) as client:
     checked = client.post(base + "conformance", json={"model": model}, headers=headers)
     assert checked.status_code == 200 and checked.headers["cache-control"] == "no-store", checked.text
     assert checked.json()["summary"]["fitting_objects"] == 2
+    model["arcs"] = [arc for arc in model["arcs"] if (arc["activity"], arc["object_type"]) != ("Place order", "item")]
+    evidence = {"model": model, "activity": "Place order", "object_type": "item", "issue": "type_without_arc"}
+    route = base + "conformance/arc-evidence"
+    assert client.post(route, json=evidence, headers=bearer).status_code in (401, 403)
+    events = client.post(route, json=evidence, headers=headers)
+    assert events.status_code == 200 and events.headers["cache-control"] == "no-store", events.text
+    assert events.json()["events"][0]["event_id"] == "p"
+    assert client.post(route, json={**evidence, "event_id": "p"}, headers=headers).json()["total"] == 2
     assert client.post(base + "conformance", json={"model": {}}, headers=headers).status_code == 422
     json_headers = {**headers, "Content-Type": "application/json"}
     # Models of up to eight types exceed the usual 64 KiB body limit; the route allows 256 KiB.

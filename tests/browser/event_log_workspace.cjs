@@ -1342,6 +1342,15 @@ const path=require('node:path');
    assert.deepEqual(sentArcs.find(a=>a.activity==='Place order'&&a.object_type==='item'),{activity:'Place order',object_type:'item',variable:false});
    await page.locator('#owgObjectModelResults').getByRole('cell',{name:'Several objects where one is expected',exact:true}).waitFor();
    assert.match(await page.locator('#owgObjectModelResults').textContent(),/replayed objects fit their type’s model; \d+ of \d+ events match their arcs/);
+   await page.locator('#owgObjectModelArcIssues').getByRole('button',{name:'Inspect events for Place order · item · Several objects where one is expected',exact:true}).click();
+   const arcEvents=page.locator('#owgObjectModelArcEvents'),arcObjects=page.locator('#owgObjectModelEventObjects');
+   await arcEvents.getByRole('status').filter({hasText:'1 matching event.'}).waitFor();
+   await arcEvents.getByRole('button',{name:'View linked objects for p',exact:true}).click();
+   await arcObjects.getByRole('status').filter({hasText:'3 linked objects. 2 of type item.'}).waitFor();
+   await arcObjects.getByRole('button',{name:'Open event history for o1',exact:true}).click();
+   const objectHistory=page.locator('#owgObjectModelObjectEvents');
+   await objectHistory.getByRole('status').filter({hasText:'Showing 2 of 2 events.'}).waitFor();
+   assert.match(await objectHistory.textContent(),/Place order.*Ship/);
    // The global analysis still selects item; map evidence must explicitly select order.
    assert.equal(await page.locator('#owgEventLogCaseType').inputValue(),'item');
    await page.locator('#owgEventLogObjectGraph').getByRole('button',{name:'Inspect observed transition Place order → Ship',exact:true}).focus();

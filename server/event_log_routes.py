@@ -1799,6 +1799,13 @@ async def event_log_object_process_model_conformance(request: Request, log_id: s
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/object-process-model/conformance/arc-evidence")
+async def event_log_object_process_arc_evidence(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "object arc evidence", strict=True, limit=object_process_model.MAX_REQUEST_BYTES + 4096)
+    return await run_in_threadpool(_respond, object_process_model.arc_evidence, log_id, spec)
+
+
 @router.post("/v1/event-logs/{log_id}/impact")
 async def event_log_impact(request: Request, log_id: str):
     _require_dashboard(request)

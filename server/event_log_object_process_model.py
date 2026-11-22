@@ -46,6 +46,8 @@ MAX_EXAMPLES = 20
 MAX_REQUEST_BYTES = 262_144   # a conformance request carries up to eight bounded type models
 _UNMODELLED = "\x00"          # prefix that no model label can carry, so a raw name never matches a label
 Label = Annotated[str, Field(min_length=1, max_length=200)]
+ArcIssue = Literal["missing_object", "several_objects_on_single_arc", "type_without_arc"]
+ARC_ISSUES = ("missing_object", "several_objects_on_single_arc", "type_without_arc")
 
 
 class _Strict(BaseModel):
@@ -87,6 +89,16 @@ class Model(_Strict):
 class CheckSpec(_Strict):
     model: Model
     max_variants: StrictInt = Field(default=200, ge=1, le=MAX_VARIANTS)
+
+
+class ArcEvidenceSpec(_Strict):
+    model: Model
+    activity: Label
+    object_type: Label
+    issue: ArcIssue
+    event_id: Label | None = None
+    after: Label | None = None
+    limit: StrictInt = Field(default=50, ge=1, le=100)
 
 
 class DiscoverSpec(_Strict):
@@ -260,36 +272,44 @@ def _lifecycles(log_id: str, type_model: TypeModel, max_variants: int) -> dict[s
     return {k: v for k, v in result.items() if k not in ("log", "case_notion", *workspace.DESCRIPTIVE_ONLY)}
 
 
-def _arc_check(log_id: str, parsed: Model) -> dict[str, Any]:
-    """Events of modelled activities against their arcs, over the modelled object types."""
+def _prepare_arc_issues(conn, log_id: str, parsed: Model, *,
+                        activity: str | None = None, event_id: str | None = None) -> list[str]:
     types = [t.object_type for t in parsed.types]
     modelled = sorted({a for t in parsed.types for a in _activity_names(t.model_dump())} |
                       {a.activity for a in parsed.arcs})
     arcs = [(a.activity, a.object_type, a.variable) for a in parsed.arcs]
+    conn.execute("""CREATE TEMP TABLE arc_links AS
+        SELECT e.event_id, e.activity, e.ts, o.object_type, count(DISTINCT eo.object_id) AS n
+        FROM events e LEFT JOIN event_objects eo ON eo.log_id = e.log_id AND eo.event_id = e.event_id
+        LEFT JOIN objects o ON o.log_id = eo.log_id AND o.object_id = eo.object_id
+            AND list_contains(?, o.object_type)
+        WHERE e.log_id = ? AND list_contains(?, e.activity)
+          AND (? IS NULL OR e.activity = ?) AND (? IS NULL OR e.event_id = ?)
+        GROUP BY 1, 2, 3, 4""", [types, log_id, modelled, activity, activity, event_id, event_id])
+    conn.execute("CREATE TEMP TABLE arc_model (activity VARCHAR, object_type VARCHAR, variable BOOLEAN)")
+    if arcs:
+        conn.executemany("INSERT INTO arc_model VALUES (?, ?, ?)", arcs)
+    conn.execute("""CREATE TEMP TABLE arc_issues AS
+        SELECT e.event_id, e.activity, e.ts, m.object_type, 'missing_object' AS issue, 0 AS n
+        FROM (SELECT DISTINCT event_id, activity, ts FROM arc_links) e JOIN arc_model m USING (activity)
+        WHERE NOT EXISTS (SELECT 1 FROM arc_links l WHERE l.event_id = e.event_id AND l.object_type = m.object_type)
+        UNION ALL
+        SELECT l.event_id, l.activity, l.ts, l.object_type, 'several_objects_on_single_arc', l.n
+        FROM arc_links l JOIN arc_model m USING (activity, object_type) WHERE NOT m.variable AND l.n > 1
+        UNION ALL
+        SELECT l.event_id, l.activity, l.ts, l.object_type, 'type_without_arc', l.n
+        FROM arc_links l WHERE l.object_type IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM arc_model m WHERE m.activity = l.activity AND m.object_type = l.object_type)""")
+    return modelled
+
+
+def _arc_check(log_id: str, parsed: Model) -> dict[str, Any]:
+    """Events of modelled activities against their arcs, over the modelled object types."""
     with workspace._LOCK:
         conn = workspace._connect()
         try:
             workspace._check_log(conn, log_id)
-            conn.execute("""CREATE OR REPLACE TEMP TABLE arc_links AS
-                SELECT e.event_id, e.activity, e.ts, o.object_type, count(DISTINCT eo.object_id) AS n
-                FROM events e LEFT JOIN event_objects eo ON eo.log_id = e.log_id AND eo.event_id = e.event_id
-                LEFT JOIN objects o ON o.log_id = eo.log_id AND o.object_id = eo.object_id
-                    AND list_contains(?, o.object_type)
-                WHERE e.log_id = ? AND list_contains(?, e.activity) GROUP BY 1, 2, 3, 4""", [types, log_id, modelled])
-            conn.execute("CREATE OR REPLACE TEMP TABLE arc_model (activity VARCHAR, object_type VARCHAR, variable BOOLEAN)")
-            if arcs:
-                conn.executemany("INSERT INTO arc_model VALUES (?, ?, ?)", arcs)
-            conn.execute("""CREATE OR REPLACE TEMP TABLE arc_issues AS
-                SELECT e.event_id, e.activity, e.ts, m.object_type, 'missing_object' AS issue, 0 AS n
-                FROM (SELECT DISTINCT event_id, activity, ts FROM arc_links) e JOIN arc_model m USING (activity)
-                WHERE NOT EXISTS (SELECT 1 FROM arc_links l WHERE l.event_id = e.event_id AND l.object_type = m.object_type)
-                UNION ALL
-                SELECT l.event_id, l.activity, l.ts, l.object_type, 'several_objects_on_single_arc', l.n
-                FROM arc_links l JOIN arc_model m USING (activity, object_type) WHERE NOT m.variable AND l.n > 1
-                UNION ALL
-                SELECT l.event_id, l.activity, l.ts, l.object_type, 'type_without_arc', l.n
-                FROM arc_links l WHERE l.object_type IS NOT NULL AND NOT EXISTS (
-                    SELECT 1 FROM arc_model m WHERE m.activity = l.activity AND m.object_type = l.object_type)""")
+            modelled = _prepare_arc_issues(conn, log_id, parsed)
             events = conn.execute("SELECT count(DISTINCT event_id) FROM arc_links").fetchone()[0]
             failing = conn.execute("SELECT count(DISTINCT event_id) FROM arc_issues").fetchone()[0]
             by_arc = conn.execute("""SELECT activity, object_type, issue, count(*) FROM arc_issues
@@ -305,11 +325,59 @@ def _arc_check(log_id: str, parsed: Model) -> dict[str, Any]:
         issues[issue] += n
     return {"events_checked": events, "fitting_events": events - failing,
             "fitting_event_share": (events - failing) / events if events else None,
-            "issues": {k: issues.get(k, 0) for k in ("missing_object", "several_objects_on_single_arc", "type_without_arc")},
+            "issues": {k: issues.get(k, 0) for k in ARC_ISSUES},
             "issues_by_arc": [{"activity": a, "object_type": t, "issue": i, "events": n} for a, t, i, n in by_arc],
             "examples": [{"event_id": e, "activity": a, "object_type": t, "issue": i, "objects": n}
                          for e, a, t, i, n in examples],
             "modelled_activities_absent_from_log": [a for a in modelled if a not in activity_events]}
+
+
+def arc_evidence(log_id: str, spec: Any) -> dict[str, Any]:
+    """Page through events for an arc issue or the retained object links for one such event."""
+    settings = _parse(ArcEvidenceSpec, spec)
+    for item in settings.model.types:
+        _validated(item)
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            present = {row[0] for row in conn.execute(
+                "SELECT DISTINCT object_type FROM objects WHERE log_id = ?", [log_id]).fetchall()}
+            _validate_types(present, settings.model)
+            _prepare_arc_issues(conn, log_id, settings.model, activity=settings.activity, event_id=settings.event_id)
+            if settings.event_id is not None:
+                match = conn.execute("""SELECT ts, n FROM arc_issues WHERE object_type = ? AND issue = ?""",
+                                     [settings.object_type, settings.issue]).fetchone()
+                if match is None:
+                    raise workspace.EventLogWorkspaceError("this event no longer matches the selected arc issue")
+                return _linked_objects(conn, log_id, settings, match)
+            args = [settings.object_type, settings.issue]
+            total = conn.execute("SELECT count(*) FROM arc_issues WHERE object_type = ? AND issue = ?", args).fetchone()[0]
+            rows = conn.execute("""SELECT event_id, ts, n FROM arc_issues WHERE object_type = ? AND issue = ?
+                AND (? IS NULL OR event_id > ?) ORDER BY event_id LIMIT ?""",
+                                [*args, settings.after, settings.after, settings.limit + 1]).fetchall()
+        finally:
+            conn.close()
+    return {"total": total, "events": [{"event_id": event, "timestamp": ts.isoformat() + "Z", "objects": count}
+                                       for event, ts, count in rows[:settings.limit]],
+            "next_after": rows[settings.limit - 1][0] if len(rows) > settings.limit else None}
+
+
+def _linked_objects(conn, log_id: str, settings: ArcEvidenceSpec, match) -> dict[str, Any]:
+    conn.execute("""CREATE TEMP TABLE arc_event_objects AS
+        SELECT o.object_id, o.object_type, count(DISTINCT eo.qualifier) AS links
+        FROM event_objects eo JOIN objects o ON o.log_id = eo.log_id AND o.object_id = eo.object_id
+        WHERE eo.log_id = ? AND eo.event_id = ? GROUP BY 1, 2""", [log_id, settings.event_id])
+    total = conn.execute("SELECT count(*) FROM arc_event_objects").fetchone()[0]
+    rows = conn.execute("""SELECT object_id, object_type, links FROM arc_event_objects
+        WHERE ? IS NULL OR object_id > ? ORDER BY object_id LIMIT ?""",
+                        [settings.after, settings.after, settings.limit + 1]).fetchall()
+    ts, count = match
+    return {"event_id": settings.event_id, "timestamp": ts.isoformat() + "Z", "objects_of_type": count,
+            "total": total,
+            "objects": [{"object_id": key, "object_type": kind, "links": links}
+                        for key, kind, links in rows[:settings.limit]],
+            "next_after": rows[settings.limit - 1][0] if len(rows) > settings.limit else None}
 
 
 def check(log_id: str, spec: Any) -> dict[str, Any]:
@@ -318,11 +386,15 @@ def check(log_id: str, spec: Any) -> dict[str, Any]:
         return _check(log_id, parsed)
 
 
-def _check(log_id: str, parsed: CheckSpec) -> dict[str, Any]:
-    present = {t["object_type"] for t in workspace.object_types(log_id)["object_types"]}
-    for name in [t.object_type for t in parsed.model.types] + [a.object_type for a in parsed.model.arcs]:
+def _validate_types(present: set[str], model: Model) -> None:
+    for name in [t.object_type for t in model.types] + [a.object_type for a in model.arcs]:
         if name not in present:
             raise workspace.EventLogWorkspaceError(f"unknown object type for this log: {name}")
+
+
+def _check(log_id: str, parsed: CheckSpec) -> dict[str, Any]:
+    present = {t["object_type"] for t in workspace.object_types(log_id)["object_types"]}
+    _validate_types(present, parsed.model)
     lifecycles = [_lifecycles(log_id, t, parsed.max_variants) for t in parsed.model.types]
     arcs = _arc_check(log_id, parsed.model)
     objects = sum(t["objects"] for t in lifecycles)
@@ -349,4 +421,4 @@ def _check(log_id: str, parsed: CheckSpec) -> dict[str, Any]:
     }
 
 
-__all__ = ["VERSION", "check", "discover"]
+__all__ = ["VERSION", "check", "discover", "arc_evidence"]
