@@ -521,3 +521,13 @@ def test_pending_design_review_is_not_circularly_blocked_by_preflight():
     assert "execution_authorized!==false" in inspection
     assert "independent approval and execution are not granted by inspection" in inspection
     assert 'latest.review?.status !== "reviewed_design"' in html
+
+
+def test_review_readback_rejects_access_revocation_even_without_packet_inspection():
+    """A direct review must not show success after membership changes mid-flight."""
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split("const recordedEntries=recordedReview?.review?.reviews;", 1)[1].split("if(!recorded)", 1)[0]
+    assert "recordedReview.access_revision===reviewSelection.access_revision" in block
+    assert "recordedReview.permissions?.review===true" in block
+    assert "!submittedInspectedHandoff ||" not in block
+    assert block.index("recordedReview.access_revision===reviewSelection.access_revision") < block.index("Array.isArray(recordedEntries)")
