@@ -2380,7 +2380,7 @@
           }
           const response = await fetch(
             "/v1/human/processes/" +
-              record.workflow_id +
+              encodeURIComponent(record.workflow_id) +
               "/export?" +
               new URLSearchParams({
                 revision: String(record.revision),
