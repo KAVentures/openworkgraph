@@ -120,6 +120,23 @@ def read_exact_stripe_attempt_event(
                 or type(event.get("livemode")) is not bool
                 or event["livemode"] is not expected_live):
             return unknown
+        # Connect events may be returned with a connected-account identity.
+        # Never treat a different account's event as evidence for this source,
+        # even when the supplied event/object/idempotency identifiers agree.
+        if "account" in event and event["account"] != account:
+            return unknown
+        # Reject provider events dated in the future rather than allowing the
+        # downstream verifier to infer a historical observation from them.
+        created = event.get("created")
+        if type(created) is not int or created <= 0:
+            return unknown
+        now = datetime.now(timezone.utc)
+        try:
+            occurred = datetime.fromtimestamp(created, timezone.utc)
+        except (ValueError, OverflowError, OSError):
+            return unknown
+        if occurred > now:
+            return unknown
         data = event.get("data")
         obj = data.get("object") if isinstance(data, dict) else None
         request = event.get("request")
@@ -128,10 +145,6 @@ def read_exact_stripe_attempt_event(
                 or request.get("idempotency_key") != correlation_id
                 or event.get("type") != operation):
             return unknown
-        created = event.get("created")
-        if type(created) is not int or created <= 0:
-            return unknown
-        occurred = datetime.fromtimestamp(created, timezone.utc)
         # Stripe's event existence does not prove a successful provider action.
         # Status observed is the maximum justified claim without a separate
         # operation-specific, independently verified status contract.
