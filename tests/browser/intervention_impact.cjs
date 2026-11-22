@@ -52,6 +52,11 @@ const path=require('node:path');
   assert.ok(Math.abs(body.control_adjusted.difference_in_differences+24*3600)<0.5*3600,JSON.stringify(body.control_adjusted));
   await out.getByText(/^Against the control cohort: −2[34]\.\d h/).waitFor();
   assert.equal(await out.getByRole('cell',{name:'Treated',exact:true}).count(),1);
+  await out.getByRole('button',{name:'Review treated baseline cases'}).click();
+  const review=page.locator('#owgImpactCaseReview');
+  await review.getByText(/matching cases/).waitFor();
+  await review.getByRole('button',{name:/Open case /}).first().click();
+  await page.locator('#owgEventLogCaseEvents').getByText(/Showing .* events/).waitFor();
   // The SLA field appears only for SLA breaches.
   assert.equal(await page.locator('#owgImpactSla').isVisible(),false);
   await page.locator('#owgImpactMetric').selectOption('sla_breach');

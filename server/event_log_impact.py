@@ -204,6 +204,51 @@ def _split(rows, at: datetime, start: datetime | None, end: datetime | None, rec
     return before, after, {**left, "baseline_partly_after_intervention": spanning}
 
 
+def cases(log_id: str, request: Any) -> dict[str, Any]:
+    from .event_log_cases import _integer, _spec, _text
+    request = _spec(request, {"analysis", "group", "period", "after", "limit"})
+    parsed = parse(request.get("analysis"))
+    group, period = request.get("group"), request.get("period")
+    if group not in ("all", "treated", "control") or period not in ("baseline", "follow_up"):
+        raise workspace.EventLogWorkspaceError("choose an impact group and period")
+    if (parsed.treated is None) != (group == "all"):
+        raise workspace.EventLogWorkspaceError("group does not match the analysis")
+    after = _text(request["after"]) if request.get("after") is not None else None
+    limit = _integer(request.get("limit", 30), 100)
+    at = datetime.fromisoformat(parsed.intervention_at.replace("Z", "+00:00")).replace(tzinfo=None)
+    window = timedelta(days=parsed.window_days) if parsed.window_days else None
+
+    def run(conn):
+        _case_values(conn, parsed)
+        rows = conn.execute("SELECT case_id, started, ended, value FROM impact_cases ORDER BY case_id").fetchall()
+        if not rows:
+            raise workspace.EventLogWorkspaceError("the log has no cases to compare")
+        first, last = min(row[1] for row in rows), max(row[2] for row in rows)
+        if not first < at <= last:
+            raise workspace.EventLogWorkspaceError("the intervention date must fall inside the log's time span")
+        treated, control = _members(conn, parsed.treated, log_id), _members(conn, parsed.control, log_id)
+        if treated is not None:
+            if control is None:
+                control = {row[0] for row in rows} - treated
+            if treated & control:
+                raise workspace.EventLogWorkspaceError("treated and control cohorts must not share cases")
+            members = treated if group == "treated" else control
+            rows = [row for row in rows if row[0] in members]
+        start, end = (at - window, at + window) if window else (None, None)
+        recent = last - timedelta(days=parsed.exclude_recent_days) if parsed.exclude_recent_days else None
+        selected = []
+        for row in rows:
+            before, follow_up, _ = _split([row], at, start, end, recent, parsed.exclude_spanning)
+            if (before if period == "baseline" else follow_up):
+                selected.append(row)
+        page = [row for row in selected if after is None or row[0] > after][:limit + 1]
+        return {"selected_cases": len(selected), "unit": UNITS[parsed.metric],
+                "cases": [{"case_id": key, "value": value, "started_at": started.isoformat() + "Z",
+                           "ended_at": ended.isoformat() + "Z"} for key, started, ended, value in page[:limit]],
+                "next_after": page[limit - 1][0] if len(page) > limit else None}
+    return workspace._query(log_id, parsed.case_type, run)
+
+
 def analyze(log_id: str, spec: Any) -> dict[str, Any]:
     parsed = parse(spec)
     at = datetime.fromisoformat(parsed.intervention_at.replace("Z", "+00:00")).replace(tzinfo=None)
