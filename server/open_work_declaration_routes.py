@@ -3412,6 +3412,7 @@ async def read_local_bound_provider_event(request: Request, response: Response):
             operation=payload["provider_operation"],
             correlation_id=payload["provider_correlation_id"],
             expected_event_id=payload["provider_event_id"],
+            recheck_authorization=provider_read_still_authorized,
         )
     # Check the same local grant immediately before AND after the synchronous
     # provider reader. Async case admission is repeated below before disclosure.
