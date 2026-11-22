@@ -76,3 +76,35 @@ def test_reject_untrusted_identity_without_network():
         raise AssertionError("unexpected I/O")
     assert _read(expected_event_id="../../secret", reader=forbidden)["complete"] is False
     assert _read(operation="invoice.finalized?foo", reader=forbidden)["complete"] is False
+
+
+def test_revocation_between_account_and_event_prevents_second_network_call():
+    calls = []
+    def reader(path, key):
+        calls.append(path)
+        return _reader(path, key)
+    checks = iter([True, False])
+    snapshot = _read(reader=reader, recheck_authorization=lambda: next(checks))
+    assert snapshot["complete"] is False
+    assert snapshot["revoked"] is True
+    assert calls == ["/v1/account"]
+
+
+def test_revocation_after_event_read_discards_provider_evidence():
+    calls = []
+    def reader(path, key):
+        calls.append(path)
+        return _reader(path, key)
+    checks = iter([True, True, False])
+    snapshot = _read(reader=reader, recheck_authorization=lambda: next(checks))
+    assert snapshot["complete"] is False
+    assert snapshot["revoked"] is True
+    assert calls == ["/v1/account", "/v1/events/" + EVENT]
+
+
+def test_authorization_guard_error_fails_closed():
+    def denied():
+        raise OSError("source disconnected")
+    snapshot = _read(recheck_authorization=denied,
+                     reader=lambda *args: (_ for _ in ()).throw(AssertionError("network")))
+    assert snapshot["complete"] is False
