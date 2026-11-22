@@ -2633,6 +2633,20 @@
              selected.process?.workflow_id!==workflowId)return;
           $("handoffStatus").textContent="Latest authorized revision reopened. Select the packet, authorize inspection and check again.";
         }));
+        // A restored back/forward-cache document must not resurrect an inspection,
+        // human confirmation, or a previously enabled review action. The Gateway
+        // must be consulted again after navigation, with fresh explicit consent.
+        window.addEventListener("pagehide",()=>{
+          $("handoffConsent").checked=false;
+          $("reviewConfirm").checked=false;
+          resetHandoff("Page left. Reopen the latest authorized revision and reinspect.");
+        });
+        window.addEventListener("pageshow",event=>{
+          if(!event.persisted)return;
+          $("handoffConsent").checked=false;
+          $("reviewConfirm").checked=false;
+          resetHandoff("Restored page. Reopen the latest authorized revision and reinspect.");
+        });
         $("handoffPacket").addEventListener("change",()=>{ $("handoffConsent").checked=false; resetHandoff("Packet changed. Reauthorize inspection."); });
         $("handoffConsent").addEventListener("change",()=>resetHandoff("Authorization changed. Check again."));
         $("handoffClear").addEventListener("click",()=>{
