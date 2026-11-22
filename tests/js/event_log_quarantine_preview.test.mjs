@@ -27,8 +27,8 @@ function harness(previewJSON) {
     el:(tag,value)=>node(tag,value),
     show:()=>{},
     getJSON:async()=>({rows_kept:2, decisions:[], rows:[], reasons:{}, note:'Local review'}),
-    input:(id,kind,value='')=>{
-      const x={id,kind,value,disabled:false,listeners:{},
+    input:(id,kind)=>{
+      const x={id,kind,value:id==='owgQuarantineOffset'?'+01:00':'',disabled:false,listeners:{},
         addEventListener(type,handler){const old=this.listeners[type];this.listeners[type]=old?()=>{old();handler();}:handler;}};
       inputs.set(id,x);
       return x;
