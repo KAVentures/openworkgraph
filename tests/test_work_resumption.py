@@ -459,3 +459,30 @@ def test_identity_interruption_burst_reports_omitted_evidence():
     assert visible["segments"][0]["last_observed_at"] != visible["segments"][0]["first_observed_at"]
     short = _visible_bursts({"observations": observations[:3]}, 30 / 1440)
     assert short["segments"][0]["evidence_truncated"] is False
+
+
+def test_identity_evidence_caps_are_disclosed_in_review_timelines_and_candidate_tracks():
+    # The UI must not present six retained event IDs as an exhaustive provenance set.
+    rows = []
+    for day in (12, 14):
+        for minute in range(9):
+            rows.append((_day(day, f"09:{minute:02d}"), _ref("a")))
+    result = resumption_candidates(_database(rows), lease=ALL)
+    [timeline] = result["identity_timelines"]
+    assert len(timeline["episodes"]) == 2
+    for episode in timeline["episodes"]:
+        assert len(episode["evidence_event_ids"]) == 6
+        assert episode["evidence_truncated"] is True
+        assert episode["segments"][0]["evidence_truncated"] is True
+    [candidate] = result["candidates"]
+    [track] = candidate["pointer_tracks"]
+    assert track["earlier"]["evidence_truncated"] is True
+    assert track["current"]["evidence_truncated"] is True
+
+    # Exact-cap observations are complete; truncation must not be reported.
+    complete = _database([
+        (_day(12, "09:00"), _ref("a")),
+        (_day(14, "09:00"), _ref("a")),
+    ])
+    [short] = resumption_candidates(complete, lease=ALL)["identity_timelines"]
+    assert all(episode["evidence_truncated"] is False for episode in short["episodes"])
