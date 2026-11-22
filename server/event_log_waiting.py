@@ -189,6 +189,8 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
                 "activity": a, "instances": n, "cases": lifecycle_case_counts.get(a, cases), "instances_with_processing_time": known,
                 "processing_observation_share": known / (n + open_by_activity.get(a, 0)) if n + open_by_activity.get(a, 0) else None,
                 "open_starts": int(open_by_activity.get(a, 0)),
+                "processing_observations": {"observed": known, "eligible": n + open_by_activity.get(a, 0)},
+                "waiting_observations": {"observed": waited, "eligible": n + open_by_activity.get(a, 0)},
                 "waiting_observation_share": waited / (n + open_by_activity.get(a, 0)) if n + open_by_activity.get(a, 0) else None,
                 "processing": {**stats(p50, p90, mean), "population_stddev_seconds": pstd},
                 "waiting_before": {**stats(w50, w90, wmean), "p10_seconds": w10,
