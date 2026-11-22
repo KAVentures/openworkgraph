@@ -38,6 +38,7 @@ from .db import DATA_DIR
 from . import event_log_source_identity as source_identity
 from . import event_log_object_relationships as object_relationships
 from . import event_log_timestamp_formats as timestamp_formats
+from . import event_log_same_source as same_source
 
 MAX_LOGS = 50
 MAX_IMPORT_BYTES = 4 * 1024 * 1024 * 1024
@@ -526,7 +527,8 @@ def import_log(source: IO[bytes], *, name: str, source_format: str, mapping: dic
                                      rejection_reasons=reasons if source_format == "csv" else None, kept=kept,
                                      **source_identity.metadata(conn,log_id,stats))
             return {**_check_log(conn, log_id), "quality": report, **_history_counts(source_format, stats),
-                    **source_identity.metadata(conn,log_id,stats)}
+                    **source_identity.metadata(conn,log_id,stats),
+                    **same_source.matches(conn, log_id, 0)}
         except EventLogFormatError as exc:
             raise EventLogWorkspaceError(str(exc)) from None
         finally:
@@ -638,7 +640,8 @@ def append_log(log_id: str, source: IO[bytes], *, source_format: str,
                     **_history_counts(source_format, stats, added=new_values, over_limit=values_over_limit,
                                       over_names=values_over_names),
                     "appended_event_id_prefix": prefix, "quality": report,
-                    **source_identity.metadata(conn,log_id,stats)}
+                    **source_identity.metadata(conn,log_id,stats),
+                    **same_source.matches(conn, log_id, batch)}
         except EventLogFormatError as exc:
             raise EventLogWorkspaceError(str(exc)) from None
         finally:
