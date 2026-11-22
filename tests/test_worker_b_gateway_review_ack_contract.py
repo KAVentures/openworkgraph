@@ -56,7 +56,6 @@ def test_denied_review_preflight_invalidates_entire_selected_process():
     block = source.split("async function review(decision) {", 1)[1].split('"/reviews",', 1)[0]
     assert block.count("invalidateDeniedReviewSelection(") == 2
     assert 'resetHandoff("REFUSED: Reviewed handoff is no longer current' in block
-    assert block.index('invalidateDeniedReviewSelection(') < block.index('"/v1/human/processes/" + encodeURIComponent(record.workflow_id) + "/reviews"') if '"/v1/human/processes/" + encodeURIComponent(record.workflow_id) + "/reviews"' in block else True
 
 
 def test_agent_project_export_revalidates_latest_reviewed_revision():
