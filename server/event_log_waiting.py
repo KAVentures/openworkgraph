@@ -21,6 +21,7 @@ includes off-hours and unrecorded work, and nothing is attributed to a person.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from . import event_log_cohorts as cohorts
@@ -33,6 +34,34 @@ _OFFSET = r"([zZ]|[+-][0-9]{2}:?[0-9]{2})$"
 MODES = ("auto", "lifecycle", "end_attribute")
 
 
+@dataclass(frozen=True)
+class _HotspotPage:
+    source: str
+    destination: str
+    after: str | None
+    limit: int
+
+
+def _hotspot_cases(conn, page: _HotspotPage) -> dict[str, Any]:
+    conn.execute("""CREATE TEMP TABLE waiting_case_evidence AS
+        SELECT case_id, count(*) AS instances, sum(wait) AS waiting, max(wait) AS longest
+        FROM seq2 WHERE wait IS NOT NULL AND prev_activity = ? AND activity = ? GROUP BY case_id""",
+                 [page.source, page.destination])
+    total, occurrences, waiting_seconds = conn.execute(
+        "SELECT count(*), coalesce(sum(instances), 0), coalesce(sum(waiting), 0) FROM waiting_case_evidence"
+    ).fetchone()
+    where, params = (" WHERE case_id > ?", [page.after]) if page.after is not None else ("", [])
+    rows = conn.execute("SELECT * FROM waiting_case_evidence" + where + " ORDER BY case_id LIMIT ?",
+                        [*params, page.limit + 1]).fetchall()
+    return {
+        "from": page.source, "to": page.destination,
+        "total_cases": total, "total_instances": occurrences, "total_waiting_seconds": waiting_seconds,
+        "next_after": rows[page.limit - 1][0] if len(rows) > page.limit else None,
+        "cases": [{"case_id": key, "instances": count, "waiting_seconds": waiting, "longest_wait_seconds": longest}
+                  for key, count, waiting, longest in rows[:page.limit]],
+    }
+
+
 def _path(name: str) -> str:
     if not _ATTRIBUTE.match(name or ""):
         raise workspace.EventLogWorkspaceError("Attribute names are 1–120 characters without quotes or backslashes")
@@ -41,7 +70,8 @@ def _path(name: str) -> str:
 
 def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto",
                  lifecycle_attribute: str = "lifecycle:transition", end_attribute: str = "",
-                 cohort: dict[str, Any] | None = None, working_calendar: dict[str, Any] | None = None) -> dict[str, Any]:
+                 cohort: dict[str, Any] | None = None, working_calendar: dict[str, Any] | None = None,
+                 _hotspot: _HotspotPage | None = None) -> dict[str, Any]:
     if mode not in MODES:
         raise workspace.EventLogWorkspaceError("mode must be auto, lifecycle or end_attribute")
     lifecycle_path = _path(lifecycle_attribute)
@@ -89,11 +119,17 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
                   CASE WHEN st IS NULL THEN 'complete_only' WHEN en < st THEN 'invalid_pair' ELSE 'paired' END AS kind
                 FROM paired WHERE en IS NOT NULL
                 UNION ALL SELECT case_id, activity, ts, ts, NULL, 'no_lifecycle' FROM lc WHERE tr = ''""")
-            # Starts without a k-th complete are still running (or lost their completion).
-            open_starts, unmatched_starts = conn.execute("""SELECT count(DISTINCT activity), coalesce(sum(d), 0) FROM (
-                SELECT activity, count(*) FILTER (WHERE tr = 'start') -
-                    count(*) FILTER (WHERE tr = 'complete') AS d
-                FROM lc GROUP BY case_id, activity) WHERE d > 0""").fetchone()
+            # An earlier k-th completion is invalid and does not close its start.
+            open_starts, unmatched_starts = conn.execute("""WITH s AS (
+                SELECT case_id, activity, ts, row_number() OVER (
+                    PARTITION BY case_id, activity ORDER BY ts, event_id) AS k FROM lc WHERE tr = 'start'),
+                c AS (SELECT case_id, activity, ts, row_number() OVER (
+                    PARTITION BY case_id, activity ORDER BY ts, event_id) AS k FROM lc WHERE tr = 'complete'),
+                unmatched AS (SELECT s.case_id, s.activity FROM s LEFT JOIN c
+                    ON s.case_id = c.case_id AND s.activity = c.activity AND s.k = c.k
+                    WHERE c.ts IS NULL OR c.ts < s.ts)
+                SELECT count(*), coalesce(sum(n), 0) FROM (
+                    SELECT count(*) AS n FROM unmatched GROUP BY case_id, activity)""").fetchone()
             ignored = conn.execute("SELECT count(*) FROM lc WHERE tr NOT IN ('', 'start', 'complete')").fetchone()[0]
         else:
             conn.execute(f"""CREATE OR REPLACE TEMP TABLE inst AS
@@ -115,6 +151,8 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
               CASE WHEN prev_end IS NULL THEN NULL ELSE greatest(0, epoch(st - prev_end)) END AS wait,
               CASE WHEN proc IS NULL THEN 0 ELSE greatest(0, epoch(en - greatest(st, coalesce(prev_end, st)))) END AS busy
             FROM seq""")
+        if _hotspot is not None:
+            return {**base, "available": True, **_hotspot_cases(conn, _hotspot)}
         calendar_result = calendars.measure(conn,calendar) if calendar is not None else None
         if calendar_result is not None:
             calendar_result['case_filter_sha256']=calendars.digest(cohorts.describe(chosen))
@@ -126,10 +164,16 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
         # Otherwise an activity with one completed pair and many unfinished starts appears 100% observed.
         open_by_activity = {}
         if used == 'lifecycle':
-            open_by_activity = dict(conn.execute("""SELECT activity, sum(missing) FROM (
-                SELECT activity, greatest(0, count(*) FILTER (WHERE tr = 'start') -
-                    count(*) FILTER (WHERE tr = 'complete')) AS missing
-                FROM lc GROUP BY case_id, activity) GROUP BY activity""").fetchall())
+            # Use the same k-th pairing rule as unmatched_starts, including
+            # completions timestamped before their corresponding start.
+            open_by_activity = dict(conn.execute("""WITH s AS (
+                SELECT case_id, activity, ts, row_number() OVER (
+                    PARTITION BY case_id, activity ORDER BY ts, event_id) AS k FROM lc WHERE tr = 'start'),
+                c AS (SELECT case_id, activity, ts, row_number() OVER (
+                    PARTITION BY case_id, activity ORDER BY ts, event_id) AS k FROM lc WHERE tr = 'complete')
+                SELECT s.activity, count(*) FROM s LEFT JOIN c
+                    ON s.case_id = c.case_id AND s.activity = c.activity AND s.k = c.k
+                WHERE c.ts IS NULL OR c.ts < s.ts GROUP BY s.activity""").fetchall())
         activities = conn.execute(f"""SELECT activity, count(*), count(DISTINCT case_id), count(proc),
               quantile_cont(proc, 0.5), quantile_cont(proc, 0.9), avg(proc),
               count(wait), quantile_cont(wait, 0.5), quantile_cont(wait, 0.9), avg(wait), coalesce(sum(wait), 0),
