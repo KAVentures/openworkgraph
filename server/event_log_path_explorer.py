@@ -53,9 +53,7 @@ def _find(path: list[str], prefix: list[str], anchor: str, anchor_steps: int | N
     return None
 
 
-def next_steps(log_id: str, prefix: list[str] | None = None, case_type: str | None = None, *,
-               anchor: str = "start", cohort: dict[str, Any] | None = None,
-               anchor_steps: int | None = None) -> dict[str, Any]:
+def _validated_prefix(prefix: list[str] | None, anchor: str, anchor_steps: int | None) -> list[str]:
     prefix = [str(p) for p in (prefix or [])]
     if len(prefix) > MAX_PREFIX or any(not p or len(p) > 500 for p in prefix):
         raise EventLogWorkspaceError(f"the sequence has at most {MAX_PREFIX} named steps")
@@ -66,6 +64,13 @@ def next_steps(log_id: str, prefix: list[str] | None = None, case_type: str | No
     if anchor_steps is not None and (anchor != "anywhere" or type(anchor_steps) is not int
                                      or not 1 <= anchor_steps <= len(prefix)):
         raise EventLogWorkspaceError("anchor_steps requires an anywhere sequence and must fit within that sequence")
+    return prefix
+
+
+def next_steps(log_id: str, prefix: list[str] | None = None, case_type: str | None = None, *,
+               anchor: str = "start", cohort: dict[str, Any] | None = None,
+               anchor_steps: int | None = None) -> dict[str, Any]:
+    prefix = _validated_prefix(prefix, anchor, anchor_steps)
 
     def run(conn):
         rows = conn.execute("""SELECT list(activity ORDER BY ts, event_id), list(epoch(ts) ORDER BY ts, event_id)
@@ -119,4 +124,47 @@ def next_steps(log_id: str, prefix: list[str] | None = None, case_type: str | No
     }
 
 
-__all__ = ["next_steps", "FORMAT", "END"]
+def branch_cases(log_id: str, prefix: list[str] | None, case_type: str | None, *,
+                 selection: dict[str, Any], anchor: str = "start", anchor_steps: int | None = None,
+                 cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+    """List literal case keys for a single branch, ordered by key."""
+    prefix = _validated_prefix(prefix, anchor, anchor_steps)
+    if not isinstance(selection, dict) or selection.keys() - {"activity", "ends_here", "after", "limit"}:
+        raise EventLogWorkspaceError("unknown path branch setting")
+    activity = selection.get("activity")
+    if "ends_here" in selection:
+        if selection["ends_here"] is not True or "activity" in selection:
+            raise EventLogWorkspaceError("choose an activity or a case ending")
+    elif not isinstance(activity, str) or not activity or len(activity) > 500:
+        raise EventLogWorkspaceError("choose an activity or a case ending")
+    after, limit = selection.get("after"), selection.get("limit", 50)
+    if after is not None and (not isinstance(after, str) or not after or len(after) > 200):
+        raise EventLogWorkspaceError("invalid case key cursor")
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise EventLogWorkspaceError("limit must be a whole number from 1 to 100")
+
+    def run(conn):
+        cursor = conn.execute("""SELECT case_id, list(activity ORDER BY ts, event_id)
+            FROM ce GROUP BY case_id ORDER BY case_id""")
+        rows = []
+        total = 0
+        while batch := cursor.fetchmany(1024):
+            for key, path in batch:
+                index = _find(path, prefix, anchor, anchor_steps)
+                if index is None:
+                    continue
+                next_activity = path[index] if index < len(path) else None
+                if next_activity == activity:
+                    total += 1
+                    if len(rows) <= limit and (after is None or key > after):
+                        rows.append({"case_id": key, "events": len(path)})
+        return {"total": total, "cases": rows[:limit],
+                "next_after": rows[limit - 1]["case_id"] if len(rows) > limit else None}
+
+    data = workspace._query_filtered(log_id, case_type, cohort, run)
+    return {"log_id": log_id, "activity": activity, "is_end": activity is None,
+            "case_notion": data["case_notion"], "total": data["total"], "cases": data["cases"],
+            "next_after": data["next_after"]}
+
+
+__all__ = ["next_steps", "branch_cases", "FORMAT", "END"]
