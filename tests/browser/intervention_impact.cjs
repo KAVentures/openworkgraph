@@ -42,7 +42,7 @@ const path=require('node:path');
   await page.locator('#owgImpactDate').fill('2024-03-01');
   const [plain]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/impact')),page.locator('#owgImpactRun').click()]);
   assert.equal(plain.status(),200,await plain.text());
-  assert.deepEqual(JSON.parse(plain.request().postData()),{intervention_at:'2024-03-01T00:00:00Z',metric:'cycle_time'});
+  assert.deepEqual(JSON.parse(plain.request().postData()),{intervention_at:'2024-03-01T00:00:00Z',metric:'cycle_time',case_type:await page.locator('#owgEventLogCaseType').inputValue()});
   await out.getByText(/^The mean cycle time went down after the intervention/).waitFor();
   assert.match(await out.textContent(),/Placebo check at .*no earlier change\./);
   // Team A only: compared with team B over the same periods, about 24 h faster.
