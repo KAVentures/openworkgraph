@@ -3416,9 +3416,16 @@ async def read_local_bound_provider_event(request: Request, response: Response):
 
     # Require an actor-scoped retained journal before contacting the provider.
     retained = await retained_attempt_review()
-    if (not isinstance(retained, dict) or not isinstance(before, dict)
-            or not isinstance(before.get("receipts"), dict)
-            or retained.get("run_ref") != before["receipts"].get("run_ref")):
+    admitted_run_ref = (before.get("receipts", {}).get("run_ref")
+                        if isinstance(before, dict) and isinstance(before.get("receipts"), dict)
+                        else None)
+    retained_run_ref = retained.get("run_ref") if isinstance(retained, dict) else None
+    # Equality of two absent identities is NOT an authenticated run binding.
+    # Require a concrete, bounded identity before any provider network I/O.
+    if (not isinstance(admitted_run_ref, str) or not admitted_run_ref
+            or len(admitted_run_ref) > 256
+            or not isinstance(retained_run_ref, str)
+            or retained_run_ref != admitted_run_ref):
         raise HTTPException(409, "retained receipt run does not match admitted run")
     await _recheck_source(scope)
     _dashboard_only(request)
