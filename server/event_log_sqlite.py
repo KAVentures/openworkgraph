@@ -12,7 +12,8 @@ Safety and limits:
 * only real tables are offered (``sqlite_master`` type ``table``, not views, virtual tables or
   SQLite's own tables), and each is read with a plain ``SELECT *``;
 * a progress handler stops a read that runs longer than ``MAX_SECONDS``;
-* at most ``MAX_ROWS`` rows and ``MAX_COLUMNS`` columns are read.
+* at most ``MAX_ROWS`` rows and ``MAX_COLUMNS`` columns are read; the generated CSV is also
+  capped before it is returned as JSON to avoid unbounded process memory usage.
 
 Values become text: NULL as an empty cell, integers and reals as written, text as stored. Binary
 (BLOB) values are left empty and counted. SQLite stores no time zone, so the CSV import asks which
@@ -35,6 +36,7 @@ MAX_ROWS = 2_000_000
 MAX_COLUMNS = 500
 MAX_TABLES = 500
 MAX_SECONDS = 120
+MAX_CSV_CHARS = 32 * 1024 * 1024
 _HEADER = b"SQLite format 3\x00"
 
 
@@ -96,11 +98,15 @@ def to_csv(source: IO[bytes], table: str | None = None, *, folder: Path) -> dict
                 if len(columns) > MAX_COLUMNS:
                     raise SqliteError(f"the table has more than {MAX_COLUMNS} columns")
                 writer.writerow(columns)
+                if out.tell() > MAX_CSV_CHARS:
+                    raise SqliteError("the converted CSV exceeds the supported response size")
                 for record in cursor:
                     rows += 1
                     if rows > MAX_ROWS:
                         raise SqliteError(f"the table has more than {MAX_ROWS:,} rows")
                     writer.writerow([_cell(v, blobs) for v in record])
+                    if out.tell() > MAX_CSV_CHARS:
+                        raise SqliteError("the converted CSV exceeds the supported response size")
             except sqlite3.OperationalError as exc:
                 if "interrupted" in str(exc):
                     raise SqliteError(f"reading the table took longer than {MAX_SECONDS} seconds") from None
