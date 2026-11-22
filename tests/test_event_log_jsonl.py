@@ -55,6 +55,28 @@ def test_bom_depth_and_refusals(monkeypatch):
         jl.to_csv(_lines({"a": 1}, {"a": 2}))
 
 
+
+def test_generated_jsonl_csv_is_bounded_and_input_is_reread(monkeypatch):
+    source = BytesIO(b"".join(json.dumps({"case": i, "activity": "a"}).encode() + bytes([10]) for i in range(300)))
+    calls = []
+    original_seek = source.seek
+
+    def count_seek(*args, **kwargs):
+        calls.append(args)
+        return original_seek(*args, **kwargs)
+
+    source.seek = count_seek
+    result = jl.to_csv(source)
+    assert result["rows"] == 300
+    assert result["csv"].startswith("case,activity" + chr(10))
+    assert result["csv"].endswith("299,a" + chr(10))
+    assert calls == [(0,)]  # second pass, without retaining the flattened record list
+    monkeypatch.setattr(jl, "MAX_CSV_CHARS", 10)
+    with pytest.raises(jl.JsonlError, match="supported response size"):
+        jl.to_csv(_lines({"case": "x" * 50}))
+
+
+
 def test_route_is_owner_only(tmp_path):
     code = r'''
 from fastapi.testclient import TestClient
