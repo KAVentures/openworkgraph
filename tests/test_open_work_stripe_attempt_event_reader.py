@@ -108,3 +108,27 @@ def test_authorization_guard_error_fails_closed():
     snapshot = _read(recheck_authorization=denied,
                      reader=lambda *args: (_ for _ in ()).throw(AssertionError("network")))
     assert snapshot["complete"] is False
+
+
+def test_credential_rotation_between_provider_calls_prevents_event_get():
+    calls = []
+    credentials = iter([CREDS, {**CREDS, "OWG_STRIPE_RESTRICTED_READ_KEY": "rk_test_rotated"}])
+    def reader(path, key):
+        calls.append(path)
+        return _reader(path, key)
+    snapshot = _read(credentials=lambda: next(credentials), reader=reader)
+    assert snapshot["complete"] is False
+    assert snapshot["revoked"] is True
+    assert calls == ["/v1/account"]
+
+
+def test_source_disabled_during_event_read_discards_evidence():
+    calls = []
+    credentials = iter([CREDS, CREDS, {**CREDS, "OWG_STRIPE_SOURCE_READ_ENABLED": "false"}])
+    def reader(path, key):
+        calls.append(path)
+        return _reader(path, key)
+    snapshot = _read(credentials=lambda: next(credentials), reader=reader)
+    assert snapshot["complete"] is False
+    assert snapshot["revoked"] is True
+    assert calls == ["/v1/account", "/v1/events/" + EVENT]
