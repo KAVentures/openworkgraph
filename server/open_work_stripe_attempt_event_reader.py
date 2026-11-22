@@ -7,6 +7,7 @@ admit a retained run/case and recheck consent after this network operation.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hmac
 import re
 from typing import Any, Callable
 
@@ -88,8 +89,27 @@ def read_exact_stripe_attempt_event(
         # A revoked grant between them must prevent the second provider read.
         if recheck_authorization is not None and recheck_authorization() is not True:
             return {**unknown, "revoked": True}
+        # A source credential can be disabled or rotated independently of the
+        # dashboard grant. Never reuse the old key for a second provider GET.
+        current_env = credentials()
+        if (not isinstance(current_env, dict)
+                or str(current_env.get("OWG_STRIPE_SOURCE_READ_ENABLED", "")).lower()
+                   not in ("true", "1", "on", "yes")
+                or current_env.get("OWG_STRIPE_ACCOUNT_ID") != account
+                or not isinstance(current_env.get("OWG_STRIPE_RESTRICTED_READ_KEY"), str)
+                or not hmac.compare_digest(current_env["OWG_STRIPE_RESTRICTED_READ_KEY"], key)):
+            return {**unknown, "revoked": True}
         event = reader("/v1/events/" + expected_event_id, key)
         if recheck_authorization is not None and recheck_authorization() is not True:
+            return {**unknown, "revoked": True}
+        # Discard evidence if credentials were revoked or rotated during I/O.
+        final_env = credentials()
+        if (not isinstance(final_env, dict)
+                or str(final_env.get("OWG_STRIPE_SOURCE_READ_ENABLED", "")).lower()
+                   not in ("true", "1", "on", "yes")
+                or final_env.get("OWG_STRIPE_ACCOUNT_ID") != account
+                or not isinstance(final_env.get("OWG_STRIPE_RESTRICTED_READ_KEY"), str)
+                or not hmac.compare_digest(final_env["OWG_STRIPE_RESTRICTED_READ_KEY"], key)):
             return {**unknown, "revoked": True}
         if event.get("object") != "event" or event.get("id") != expected_event_id:
             return unknown
