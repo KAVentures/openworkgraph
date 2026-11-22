@@ -170,3 +170,17 @@ def test_review_recovery_denial_hides_stale_actionable_process_and_never_replays
     assert '$("reviewConfirm").checked = false;' in block
     assert '"/reviews"' not in block
     assert block.index('await open(workflowId);') < block.index('Latest authorized review loaded.')
+
+
+def test_direct_review_denied_gateway_preflight_disarms_confirmation():
+    """A failed live authorization read cannot leave a direct review ready to retry."""
+    source = (Path(__file__).resolve().parents[1] / "gateway" / "processes.html").read_text()
+    block = source.split("if (!inspectedHandoff) {", 1)[1].split("// Do not let an old review response", 1)[0]
+    assert 'current=await call("/v1/human/processes/"+encodeURIComponent(record.workflow_id));' in block
+    assert 'catch (error)' in block
+    assert 'identityTicket===identityGeneration' in block
+    assert 'credential===authorizedCredential && selected===chosen' in block
+    assert '$("reviewConfirm").checked=false;' in block
+    assert 'Could not verify current review access.' in block
+    assert 'throw error;' in block
+    assert '"/reviews"' not in block
