@@ -771,6 +771,8 @@ def delete_log(log_id: str) -> dict[str, Any]:
             _check_log(conn, log_id)
             conn.execute("BEGIN")
             try:
+                from .event_log_description import erase as erase_description
+                erase_description(conn, log_id)          # in the deletion's transaction: no orphan note
                 from .event_log_activity_mappings import erase as erase_mappings
                 erase_mappings(conn, log_id)
                 from .event_log_folder_feeds import erase_log as erase_feeds

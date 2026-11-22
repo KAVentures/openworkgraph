@@ -1433,6 +1433,25 @@ def event_log_activities(request: Request, log_id: str, case_type: str | None = 
     return _respond(workspace.activities, log_id, case_type, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/description")
+def event_log_description(request: Request, log_id: str):
+    """The owner's description of this log ("" when none)."""
+    from . import event_log_description as log_description
+    _require_dashboard(request)
+    return _respond(log_description.description, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/description")
+async def event_log_set_description(request: Request, log_id: str):
+    """Body: {"description": "..."}; an empty text removes it."""
+    from . import event_log_description as log_description
+    _require_dashboard(request)
+    spec = await _json_body(request, "description", strict=True, limit=16384)
+    if not isinstance(spec, dict) or set(spec) != {"description"}:
+        raise HTTPException(422, 'send {"description": "..."}')
+    return _respond(log_description.set_description, log_id, spec["description"])
+
+
 @router.get("/v1/event-logs/{log_id}/kpis")
 def event_log_kpis(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                    sla_seconds: int | None = Query(default=None, ge=1, le=10 ** 9),
