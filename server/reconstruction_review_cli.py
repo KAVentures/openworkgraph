@@ -149,6 +149,9 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(episode, dict):
                 raise ValueError("invalid identity timeline episode")
             nested_timeline_truncated |= _truncation_flag(episode, "evidence_truncated")
+            # The engine may omit interruption bursts even when every
+            # retained burst has complete event evidence.
+            nested_timeline_truncated |= _truncation_flag(episode, "segments_truncated")
             # An interruption segment may omit evidence independently of its episode.
             # Do not certify partial nested provenance as a complete cohort.
             segments = episode.get("segments", [])
