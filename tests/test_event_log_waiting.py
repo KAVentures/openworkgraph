@@ -81,6 +81,28 @@ def test_lifecycle_pairs_split_processing_from_waiting():
 
 
 
+
+def test_hotspot_paging_adapter_restricts_source_and_bounds_cursor():
+    log = _lifecycle_log()
+    first = waiting.waiting_hotspot_cases(log, source="Receive", destination="Review", limit=3)
+    assert first["available"] is True
+    assert first["total_cases"] >= 10
+    assert len(first["cases"]) == 3
+    assert first["next_after"] == first["cases"][-1]["case_id"]
+    second = waiting.waiting_hotspot_cases(log, source="Receive", destination="Review",
+                                        after=first["next_after"], limit=3)
+    assert len(second["cases"]) == 3
+    assert set(row["case_id"] for row in first["cases"]).isdisjoint(
+        row["case_id"] for row in second["cases"])
+    assert all(row["waiting_seconds"] >= 0 for row in first["cases"] + second["cases"])
+    for kwargs in ({"source": "", "destination": "Review"},
+                   {"source": "Receive", "destination": "Review", "limit": 0},
+                   {"source": "Receive", "destination": "Review", "limit": True},
+                   {"source": "Receive", "destination": "Review", "after": ""}):
+        with pytest.raises(workspace.EventLogWorkspaceError):
+            waiting.waiting_hotspot_cases(log, **kwargs)
+
+
 def test_only_unfinished_activity_remains_visible_with_zero_coverage():
     log = _import(["case", "activity", "time", "lifecycle:transition"], [
         ("x", "Unfinished", _at(0, 0), "start"),
