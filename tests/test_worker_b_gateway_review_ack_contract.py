@@ -45,16 +45,18 @@ def test_acknowledged_review_consumes_explicit_confirmation():
     assert success.index('$("reviewConfirm").checked=false', success.index("return;")) < success.index('$("handoffStatus").textContent="Design review acknowledged.')
 
 
-def test_revoked_or_stale_inspected_review_consumes_human_confirmation():
-    """A denied pre-POST authorization read must require deliberate reconfirmation."""
+def test_denied_review_preflight_invalidates_entire_selected_process():
+    """Denied live access must disable editing, exporting and review, not only the checkbox."""
     source = (Path(__file__).resolve().parents[1] / "gateway" / "processes.html").read_text()
-    block = source.split("async function review(decision) {", 1)[1].split('$("approve").onclick', 1)[0]
-    read_failure = block.split("current=await call(", 1)[1].split("throw error;", 1)[0]
-    assert '$("reviewConfirm").checked=false;' in read_failure
-    stale = block.split('resetHandoff("REFUSED: Authorization read failed.', 1)[1]
-    stale = stale.split('resetHandoff("REFUSED: Reviewed handoff is no longer current', 1)[0]
-    assert '$("reviewConfirm").checked=false;' in stale
-    assert block.index('resetHandoff("REFUSED: Reviewed handoff is no longer current') < block.index('"/reviews"')
+    helper = source.split("function invalidateDeniedReviewSelection(message) {", 1)[1].split("let reviewMutationInFlight", 1)[0]
+    for guard in ('processOpenGeneration++', 'selected = null', '$("selected").hidden = true',
+                  '$("reviewConfirm").checked = false', '$("handoffConsent").checked = false',
+                  'resetHandoff('):
+        assert guard in helper
+    block = source.split("async function review(decision) {", 1)[1].split('"/reviews",', 1)[0]
+    assert block.count("invalidateDeniedReviewSelection(") == 2
+    assert 'resetHandoff("REFUSED: Reviewed handoff is no longer current' in block
+    assert block.index('invalidateDeniedReviewSelection(') < block.index('"/v1/human/processes/" + encodeURIComponent(record.workflow_id) + "/reviews"') if '"/v1/human/processes/" + encodeURIComponent(record.workflow_id) + "/reviews"' in block else True
 
 
 def test_agent_project_export_revalidates_latest_reviewed_revision():
@@ -172,16 +174,15 @@ def test_review_recovery_denial_hides_stale_actionable_process_and_never_replays
     assert block.index('await open(workflowId);') < block.index('Latest authorized review loaded.')
 
 
-def test_direct_review_denied_gateway_preflight_disarms_confirmation():
-    """A failed live authorization read cannot leave a direct review ready to retry."""
+def test_direct_review_denied_gateway_preflight_disarms_selection():
+    """A failed live authorization read cannot leave any process action enabled."""
     source = (Path(__file__).resolve().parents[1] / "gateway" / "processes.html").read_text()
     block = source.split("if (!inspectedHandoff) {", 1)[1].split("// Do not let an old review response", 1)[0]
     assert 'current=await call("/v1/human/processes/"+encodeURIComponent(record.workflow_id));' in block
     assert 'catch (error)' in block
     assert 'identityTicket===identityGeneration' in block
     assert 'credential===authorizedCredential && selected===chosen' in block
-    assert '$("reviewConfirm").checked=false;' in block
-    assert 'Could not verify current review access.' in block
+    assert 'invalidateDeniedReviewSelection("Could not verify current review access.' in block
     assert 'throw error;' in block
     assert '"/reviews"' not in block
 
