@@ -71,6 +71,25 @@ def test_history_one_cannot_separate_the_two_routes():
     assert r["backtest"]["top1_accuracy"] < 1.0
 
 
+def test_exact_case_outside_the_preview_does_not_change_history_or_forecast_totals():
+    log = _log(_paths())
+    spec = {"end_activities": ["Pay", "Close"], "limit": 1}
+    preview = nxt.next_activity(log, spec)
+    assert preview["predictions"][0]["case_id"] == "c043"
+    exact = nxt.next_activity(log, spec, case_id="c040")
+    assert exact["case_selection"] == "predicted"
+    assert exact["predictions"][0]["case_id"] == "c040"
+    assert exact["predictions"][0]["next"][0]["activity"] == "Approve"
+    assert exact["backtest"] == preview["backtest"]
+    assert exact["expected_next_across_open_cases"] == preview["expected_next_across_open_cases"]
+    excluded = nxt.next_activity(log, {**spec, "cohort": {"activity": "Import"}}, case_id="c040")
+    assert excluded["case_selection"] == "not_in_selection" and not excluded["predictions"]
+    assert nxt.next_activity(log, spec, case_id="c000")["case_selection"] == "completed"
+    assert nxt.next_activity(log, spec, case_id="C040")["case_selection"] == "not_in_selection"
+    no_history = nxt.next_activity(log, {"end_activities": ["Other"]}, case_id="c040")
+    assert no_history["case_selection"] == "unsupported" and not no_history["predictions"]
+
+
 def test_backoff_case_ending_and_errors():
     log = _log(_paths())
     # With a high support bar, two-step histories (20 cases each) fall back to all transitions.
@@ -116,6 +135,10 @@ with TestClient(app) as client:
     found = client.post(path, json=body, headers=owner)
     assert found.status_code == 200, found.text
     assert found.json()["predictions"][0]["next"][0]["activity"] == "B"
+    selection = {**body, "case_id": "c3"}
+    assert client.post(path, json=selection, headers=bearer).status_code == 403
+    assert client.post(path, json=selection, headers=owner).json()["case_selection"] == "predicted"
+    assert client.post(path, json={**body, "case_id": ""}, headers=owner).status_code == 422
     assert client.post(path, json={"end_activities": []}, headers=owner).status_code == 422
 print("ok")
 '''
