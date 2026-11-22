@@ -62,7 +62,17 @@ def test_provider_read_revocation_never_discloses(monkeypatch):
         if len(calls) >= 2:
             raise HTTPException(409, "revoked")
     install(monkeypatch, source=source)
-    # Admission succeeds, but source consent disappears before the reader.
+    # Supply a valid provider account so this test isolates source revocation,
+    # rather than failing earlier on a missing local source installation.
+    from server import local_source_credentials
+    monkeypatch.setattr(local_source_credentials, "_read_metadata",
+                        lambda path: {"account": "acct_12345678"})
+    monkeypatch.setattr(routes, "_source_scope", lambda: "tenant-1")
+    from server import open_work_provider_attempt_verification as verifier
+    monkeypatch.setattr(verifier, "verify_provider_attempt",
+                        lambda **kwargs: {"status": "unknown", "provider_operation": "unknown",
+                                          "customer_outcome": "unknown"})
+    # Admission succeeds, but source consent disappears before disclosure.
     with pytest.raises(HTTPException) as exc:
         asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
     assert exc.value.status_code == 409
