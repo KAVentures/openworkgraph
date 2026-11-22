@@ -50,6 +50,13 @@ def _by(result):
     return {a["activity"]: a for a in result["activities"]}
 
 
+@pytest.mark.parametrize("bad_attribute", [None, 12, [], {}, "bad\\nname", "bad\\\"name"])
+def test_invalid_lifecycle_attribute_is_rejected_as_workspace_error(bad_attribute):
+    log = _lifecycle_log()
+    with pytest.raises(workspace.EventLogWorkspaceError, match="Attribute names"):
+        waiting.waiting_time(log, lifecycle_attribute=bad_attribute)
+
+
 def test_lifecycle_pairs_split_processing_from_waiting():
     result = waiting.waiting_time(_lifecycle_log())
     assert result["available"] and result["mode_used"] == "lifecycle"
