@@ -304,3 +304,41 @@ def test_journal_revocation_before_provider_io_blocks_read(monkeypatch):
         asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
     assert exc.value.status_code == 403
     assert calls == []
+
+
+def test_both_missing_run_identities_block_provider_io(monkeypatch):
+    """Two absent run IDs must not compare equal and authorize a provider read."""
+    install(monkeypatch)
+    from server import open_work_provider_attempt_verification as verifier
+    calls = []
+    monkeypatch.setattr(verifier, "verify_provider_attempt",
+                        lambda **kwargs: calls.append("provider"))
+    async def missing_admitted(req, resp):
+        return {"case_ref": "case-1", "receipts": {}}
+    async def missing_journal(req, resp):
+        return {"entries": []}
+    monkeypatch.setattr(routes, "read_local_combined_case_review", missing_admitted)
+    monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", missing_journal)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
+    assert exc.value.status_code == 409
+    assert calls == []
+
+
+def test_empty_run_identities_block_provider_io(monkeypatch):
+    """Empty strings cannot establish an admitted retained-run binding."""
+    install(monkeypatch)
+    from server import open_work_provider_attempt_verification as verifier
+    calls = []
+    monkeypatch.setattr(verifier, "verify_provider_attempt",
+                        lambda **kwargs: calls.append("provider"))
+    async def empty_admitted(req, resp):
+        return {"case_ref": "case-1", "receipts": {"run_ref": ""}}
+    async def empty_journal(req, resp):
+        return {"run_ref": "", "entries": []}
+    monkeypatch.setattr(routes, "read_local_combined_case_review", empty_admitted)
+    monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", empty_journal)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
+    assert exc.value.status_code == 409
+    assert calls == []
