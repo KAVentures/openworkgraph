@@ -33,27 +33,53 @@ TOP_PAIRS = 50
 TOP_CASES = 25
 
 
-def temporal_profile(log_id: str, case_type: str | None = None, *, zeta: float = DEFAULT_ZETA,
-                     min_occurrences: int = DEFAULT_MIN_OCCURRENCES,
-                     cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+def _validate(zeta: float, min_occurrences: int) -> None:
     if isinstance(zeta, bool) or not isinstance(zeta, (int, float)) or not 0.5 <= zeta <= 10:
         raise EventLogWorkspaceError("zeta must be a number of standard deviations from 0.5 to 10")
     if type(min_occurrences) is not int or not 2 <= min_occurrences <= 10_000:
         raise EventLogWorkspaceError("min_occurrences must be an integer from 2 to 10000")
 
+
+def _prepare(conn, zeta: float, min_occurrences: int, pair: tuple[str, str] | None = None) -> None:
+    where = " WHERE a.activity = ? AND b.activity = ?" if pair is not None else ""
+    conn.execute(f"""CREATE OR REPLACE TEMP TABLE tp_pairs AS
+        WITH e AS (SELECT case_id, activity, ts,
+                          row_number() OVER (PARTITION BY case_id ORDER BY ts, event_id) AS rn FROM ce)
+        SELECT a.case_id, a.activity AS src, b.activity AS dst, epoch(b.ts - a.ts) AS d
+        FROM e a JOIN e b ON a.case_id = b.case_id AND b.rn > a.rn AND b.rn <= a.rn + {MAX_SPAN}{where}""",
+                 list(pair) if pair is not None else [])
+    conn.execute("""CREATE OR REPLACE TEMP TABLE tp_profile AS
+        SELECT src, dst, count(*) AS n, avg(d) AS mean, stddev_samp(d) AS std
+        FROM tp_pairs GROUP BY 1, 2 HAVING count(*) >= ? AND stddev_samp(d) > 0""", [min_occurrences])
+    conn.execute("""CREATE OR REPLACE TEMP TABLE tp_dev AS
+        SELECT p.case_id, p.src, p.dst, p.d, f.mean, (p.d - f.mean) / f.std AS z
+        FROM tp_pairs p JOIN tp_profile f USING (src, dst)
+        WHERE abs(p.d - f.mean) > ? * f.std""", [float(zeta)])
+
+
+def _case_deviations(conn, direction: str = "all") -> None:
+    where = {"all": "", "slower": "WHERE z > 0", "faster": "WHERE z < 0"}[direction]
+    conn.execute(f"""CREATE TEMP TABLE tp_case_evidence AS
+        SELECT case_id, count(*) OVER (PARTITION BY case_id) AS deviations, src, dst, d, mean, z
+        FROM tp_dev {where}
+        QUALIFY row_number() OVER (PARTITION BY case_id ORDER BY abs(z) DESC, src, dst, d) = 1""")
+
+
+def _format_case(row) -> dict[str, Any]:
+    key, count, source, destination, seconds, mean, z = row
+    return {"case_id": key, "deviations": count,
+            "strongest": {"from": source, "to": destination,
+                          "seconds": round(seconds, 3), "mean_seconds": round(mean, 3),
+                          "standard_deviations": round(abs(z), 2)}}
+
+
+def temporal_profile(log_id: str, case_type: str | None = None, *, zeta: float = DEFAULT_ZETA,
+                     min_occurrences: int = DEFAULT_MIN_OCCURRENCES,
+                     cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+    _validate(zeta, min_occurrences)
+
     def run(conn):
-        conn.execute(f"""CREATE OR REPLACE TEMP TABLE tp_pairs AS
-            WITH e AS (SELECT case_id, activity, ts,
-                              row_number() OVER (PARTITION BY case_id ORDER BY ts, event_id) AS rn FROM ce)
-            SELECT a.case_id, a.activity AS src, b.activity AS dst, epoch(b.ts - a.ts) AS d
-            FROM e a JOIN e b ON a.case_id = b.case_id AND b.rn > a.rn AND b.rn <= a.rn + {MAX_SPAN}""")
-        conn.execute("""CREATE OR REPLACE TEMP TABLE tp_profile AS
-            SELECT src, dst, count(*) AS n, avg(d) AS mean, stddev_samp(d) AS std
-            FROM tp_pairs GROUP BY 1, 2 HAVING count(*) >= ? AND stddev_samp(d) > 0""", [min_occurrences])
-        conn.execute("""CREATE OR REPLACE TEMP TABLE tp_dev AS
-            SELECT p.case_id, p.src, p.dst, p.d, f.mean, f.std, (p.d - f.mean) / f.std AS z
-            FROM tp_pairs p JOIN tp_profile f USING (src, dst)
-            WHERE abs(p.d - f.mean) > ? * f.std""", [float(zeta)])
+        _prepare(conn, zeta, min_occurrences)
         cases, pairs_checked = conn.execute(
             "SELECT (SELECT count(DISTINCT case_id) FROM ce), (SELECT count(*) FROM tp_pairs p "
             "JOIN tp_profile f USING (src, dst))").fetchone()
@@ -62,10 +88,10 @@ def temporal_profile(log_id: str, case_type: str | None = None, *, zeta: float =
                 count(v.case_id) FILTER (WHERE v.z > 0) AS slower
             FROM tp_profile f LEFT JOIN tp_dev v USING (src, dst)
             GROUP BY 1, 2, 3, 4, 5 ORDER BY dev DESC, f.n DESC, f.src, f.dst LIMIT ?""", [TOP_PAIRS]).fetchall()
-        deviating_cases = conn.execute("SELECT count(DISTINCT case_id) FROM tp_dev").fetchone()[0]
-        top = conn.execute("""SELECT case_id, count(*) AS n,
-                arg_max(src, abs(z)), arg_max(dst, abs(z)), arg_max(d, abs(z)), arg_max(mean, abs(z)), max(abs(z))
-            FROM tp_dev GROUP BY 1 ORDER BY n DESC, max(abs(z)) DESC, case_id LIMIT ?""", [TOP_CASES]).fetchall()
+        _case_deviations(conn)
+        deviating_cases = conn.execute("SELECT count(*) FROM tp_case_evidence").fetchone()[0]
+        top = conn.execute("""SELECT * FROM tp_case_evidence
+            ORDER BY deviations DESC, abs(z) DESC, case_id LIMIT ?""", [TOP_CASES]).fetchall()
         return {"cases": cases, "pairs_checked": pairs_checked, "profile_pairs": profile_size,
                 "pairs": pairs, "deviating_cases": deviating_cases, "top": top}
 
@@ -75,10 +101,7 @@ def temporal_profile(log_id: str, case_type: str | None = None, *, zeta: float =
                   "allowed_seconds": [round(max(0.0, m - zeta * sd), 3), round(m + zeta * sd, 3)],
                   "deviations": dev, "slower": slower, "faster": dev - slower,
                   "deviation_share": round(dev / n, 4)} for s, t, n, m, sd, dev, slower in data.pop("pairs")]
-    out_cases = [{"case_id": c, "deviations": n,
-                  "strongest": {"from": s, "to": t, "seconds": round(d, 3), "mean_seconds": round(m, 3),
-                                "standard_deviations": round(z, 2)}}
-                 for c, n, s, t, d, m, z in data.pop("top")]
+    out_cases = [_format_case(row) for row in data.pop("top")]
     deviating = data.pop("deviating_cases")
     return {"format": FORMAT, "log_id": log_id, **data, "zeta": float(zeta), "min_occurrences": min_occurrences,
             "max_span_events": MAX_SPAN, "cases": cases, "deviating_cases": deviating,
@@ -92,4 +115,35 @@ def temporal_profile(log_id: str, case_type: str | None = None, *, zeta: float =
                        "time are not checked.")}
 
 
-__all__ = ["temporal_profile", "FORMAT"]
+def temporal_cases(log_id: str, case_type: str | None = None, *, zeta: float = DEFAULT_ZETA,
+                  min_occurrences: int = DEFAULT_MIN_OCCURRENCES, source: str | None = None,
+                  destination: str | None = None, direction: str = "all", after: str | None = None,
+                  limit: int = 50, cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+    _validate(zeta, min_occurrences)
+    if (source is None) != (destination is None) or any(
+            not isinstance(value, str) or not value or len(value) > 200
+            for value in (source, destination) if value is not None):
+        raise EventLogWorkspaceError("a timing pair needs both exact activity labels")
+    if not isinstance(direction, str) or direction not in ("all", "slower", "faster"):
+        raise EventLogWorkspaceError("direction must be all, slower or faster")
+    if after is not None and (not isinstance(after, str) or not after or len(after) > 200):
+        raise EventLogWorkspaceError("invalid case key cursor")
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise EventLogWorkspaceError("page size must be a whole number from 1 to 100")
+
+    def run(conn):
+        _prepare(conn, zeta, min_occurrences, (source, destination) if source is not None else None)
+        _case_deviations(conn, direction)
+        total, occurrences = conn.execute("SELECT count(*), coalesce(sum(deviations), 0) FROM tp_case_evidence").fetchone()
+        where, args = (" WHERE case_id > ?", [after]) if after is not None else ("", [])
+        rows = conn.execute("SELECT * FROM tp_case_evidence" + where + " ORDER BY case_id LIMIT ?",
+                            [*args, limit + 1]).fetchall()
+        return {"deviating_cases": total, "deviations": occurrences, "direction": direction,
+                "next_after": rows[limit-1][0] if len(rows) > limit else None,
+                "cases": [{**_format_case(row), "direction": "slower" if row[-1] > 0 else "faster"}
+                          for row in rows[:limit]]}
+
+    return workspace._query_filtered(log_id, case_type, cohort, run)
+
+
+__all__ = ["temporal_profile", "temporal_cases", "FORMAT"]
