@@ -67,8 +67,13 @@ def extract(*, consent_local_read=False, consent_delta_read=False,
             # Graph may already have written private review artifacts. Never
             # claim them as the next safe round or retry automatically.
             raise ReceiptError("Checkpoint changed during Graph extraction; manual review required")
-    if result.get("status") != "next_round_review_ready":
-        raise ReceiptError("Extraction not ready for human review")
+    if (type(result) is not dict
+            or result.get("status") != "next_round_review_ready"
+            or type(result.get("event_snapshots")) is not int
+            or result["event_snapshots"] < 0
+            or type(result.get("removal_markers_for_review")) is not int
+            or result["removal_markers_for_review"] < 0):
+        raise ReceiptError("Extraction metadata invalid; manual review required")
     return {"format": FORMAT, "phase": "extract", "status": "review_required",
             "event_snapshots": result["event_snapshots"],
             "removal_markers_for_review": result["removal_markers_for_review"],
