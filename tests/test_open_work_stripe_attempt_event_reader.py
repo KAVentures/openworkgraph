@@ -19,7 +19,7 @@ def _reader(path, key):
     if path == "/v1/account":
         return {"object": "account", "id": ACCOUNT}
     assert path == "/v1/events/" + EVENT
-    return {"object": "event", "id": EVENT, "type": OPERATION,
+    return {"object": "event", "id": EVENT, "type": OPERATION, "livemode": False,
             "created": 1700000000, "request": {"idempotency_key": CORRELATION},
             "data": {"object": {"id": OBJECT}}}
 
@@ -132,3 +132,25 @@ def test_source_disabled_during_event_read_discards_evidence():
     assert snapshot["complete"] is False
     assert snapshot["revoked"] is True
     assert calls == ["/v1/account", "/v1/events/" + EVENT]
+
+
+def test_event_environment_must_match_restricted_key_mode():
+    # A test-mode key must not authenticate a live event, even with exact
+    # event, account, object and idempotency identifiers.
+    def live_event(path, key):
+        result = _reader(path, CREDS["OWG_STRIPE_RESTRICTED_READ_KEY"])
+        return {**result, "livemode": True} if path.startswith("/v1/events/") else result
+    assert _read(reader=live_event)["complete"] is False
+
+    def missing_mode(path, key):
+        result = _reader(path, CREDS["OWG_STRIPE_RESTRICTED_READ_KEY"])
+        if path.startswith("/v1/events/"):
+            result.pop("livemode")
+        return result
+    assert _read(reader=missing_mode)["complete"] is False
+
+    live_creds = {**CREDS, "OWG_STRIPE_RESTRICTED_READ_KEY": "rk_live_dummy"}
+    def live_reader(path, key):
+        result = _reader(path, CREDS["OWG_STRIPE_RESTRICTED_READ_KEY"])
+        return {**result, "livemode": True} if path.startswith("/v1/events/") else result
+    assert _read(credentials=lambda: live_creds, reader=live_reader)["complete"] is True
