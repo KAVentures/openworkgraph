@@ -24,8 +24,8 @@ def test_handoff_preflight_reads_fresh_authorized_process_without_upload():
     assert 'current.latest_revision!==p.revision' in block
     assert 'current.process.content_sha256!==p.content_sha256' in block
     assert 'current.archived' in block
-    assert 'current.review?.status!=="reviewed_design"' in block
-    assert "lacks independent design review of this revision" in block
+    assert 'current.permissions?.review!==true' in block
+    assert "lacks review permission for this revision" in block
     assert 'ticket!==handoffGeneration||identityTicket!==identityGeneration||\n               credential!==authorizedCredential||selected!==chosen' in block
     assert 'execution_authorized!==false' in block
     assert 'source_read_authorized!==false' in block
@@ -56,10 +56,10 @@ def test_handoff_state_initialized_before_oidc_callback_restores_session():
 def test_handoff_match_never_grants_execution_or_source_access():
     html = PAGE.read_text(encoding="utf-8")
     block = html.split('function resetHandoff(message=', 1)[1].split('      })();', 1)[0]
-    assert 'current.review?.status!=="reviewed_design"' in block
+    assert 'current.permissions?.review!==true' in block
     assert 'source_read_authorized!==false' in block
     assert 'execution_authorized!==false' in block
-    assert 'Eligible only for further human review.' in block
+    assert 'Eligible for human design review only; independent approval and execution are not granted by inspection.' in block
     assert 'Consent, owner approval, source access, retention and execution authorization remain unverified.' in block
 
 
@@ -72,7 +72,7 @@ def test_verified_handoff_only_navigates_to_existing_revision_review():
     assert 'if($("handoffReview").disabled||!selected||!credential||!$("handoffConsent").checked||!inspectedHandoff)return;' in html
     assert '$("revisionReview").scrollIntoView({block:"start"});' in html
     assert '$("comment").focus();' in html
-    assert html.index('$("handoffReview").disabled=false;') > html.index('current.review?.status!=="reviewed_design"')
+    assert html.index('$("handoffReview").disabled=false;') > html.index('current.permissions?.review!==true')
 
 
 def test_review_navigation_revalidates_fresh_authorized_revision_and_fails_closed():
@@ -82,12 +82,12 @@ def test_review_navigation_revalidates_fresh_authorized_revision_and_fails_close
     assert 'const current=await call("/v1/human/processes/"+encodeURIComponent(inspected.workflow_id));' in block
     assert 'current.latest_revision!==inspected.revision' in block
     assert 'current.process.content_sha256!==inspected.content_sha256' in block
-    assert 'current.review?.status!=="reviewed_design"' in block
+    assert 'current.permissions?.review!==true' in block
     assert 'ticket!==handoffGeneration||identityTicket!==identityGeneration||\n               credential!==authorizedCredential||selected!==chosen||!$("handoffConsent").checked' in block
     assert 'resetHandoff("REFUSED: Process changed or access/review was withdrawn.' in block
     assert 'resetHandoff("REFUSED: Could not revalidate authorized revision.' in block
     assert block.index('const current=await call(') < block.index('$("revisionReview").scrollIntoView')
-    assert 'inspectedHandoff={workflow_id:p.workflow_id,revision:p.revision,content_sha256:p.content_sha256};' in html
+    assert 'inspectedHandoff={workflow_id:p.workflow_id,revision:p.revision,content_sha256:p.content_sha256,access_revision:current.access_revision};' in html
 
 
 def test_review_navigation_rejects_inflight_identity_and_credential_changes():
@@ -194,7 +194,7 @@ def test_stale_review_authorization_response_does_not_clear_new_handoff():
     assert "credential!==authorizedCredential||selected!==chosen)return;" in block
     assert block.index(stale) < block.index('resetHandoff("REFUSED: Reviewed handoff is no longer current')
     # Server-side revision/review denial still invalidates the CURRENT inspection.
-    assert 'current.review?.status!=="reviewed_design"' in block
+    assert 'current.permissions?.review!==true' in block
     assert 'current.process.content_sha256!==pinned.content_sha256' in block
 
 
@@ -368,7 +368,7 @@ def test_handoff_live_reads_bind_reviewer_permission_and_actor_identity():
     for block in (review, navigation, inspection):
         assert "current.permissions?.review!==true" in block
         assert "current.your_actor_id!==chosen.your_actor_id" in block
-        assert 'current.review?.status!=="reviewed_design"' in block
+        assert 'current.permissions?.review!==true' in block
 
 
 def test_export_response_is_discarded_after_session_or_selection_changes():
