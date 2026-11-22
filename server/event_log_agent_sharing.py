@@ -218,12 +218,18 @@ def _level(log_id: Any) -> str | None:
 
 
 def require(log_id: Any, level: str) -> None:
+    from . import event_log_expiry as expiry
+    if expiry.is_expired(log_id):          # past the owner's deletion date: deleted now, never answered
+        expiry.sweep()
+        raise NotShared("no process log shared with agents at that level has this id")
     shared = _level(log_id)
     if shared is None or (level == "cases" and shared != "cases"):
         raise NotShared("no process log shared with agents at that level has this id")
 
 
 def shared_logs() -> dict[str, Any]:
+    from . import event_log_expiry as expiry
+    expiry.sweep()
     with workspace._LOCK:
         conn = workspace._connect()
         try:

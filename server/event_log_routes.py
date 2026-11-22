@@ -262,7 +262,9 @@ def event_log_workspace_script() -> FileResponse:
 
 @router.get("/v1/event-logs")
 def list_event_logs(request: Request):
+    from . import event_log_expiry as expiry
     _require_dashboard(request)
+    expiry.sweep()                       # logs past the owner's deletion date are deleted before listing
     return _respond(workspace.list_logs)
 
 
@@ -839,6 +841,25 @@ async def event_log_remove_case_tags(request: Request, log_id: str):
 def event_log_appends(request: Request, log_id: str):
     _require_dashboard(request)
     return _respond(workspace.append_history, log_id)
+
+
+@router.get("/v1/event-logs/{log_id}/expiry")
+def event_log_expiry_status(request: Request, log_id: str):
+    """The date after which this log is deleted automatically, or null."""
+    from . import event_log_expiry as expiry
+    _require_dashboard(request)
+    return _respond(expiry.status, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/expiry")
+async def event_log_set_expiry(request: Request, log_id: str):
+    """Body: {"delete_after": ISO time with an offset, or null to keep the log}."""
+    from . import event_log_expiry as expiry
+    _require_dashboard(request)
+    spec = await _json_body(request, "deletion date", strict=True, limit=1024)
+    if not isinstance(spec, dict) or set(spec) != {"delete_after"}:
+        raise HTTPException(422, 'send {"delete_after": "2025-01-31T00:00:00Z"} or {"delete_after": null}')
+    return _respond(expiry.set_expiry, log_id, spec["delete_after"])
 
 
 @router.post("/v1/event-logs/{log_id}/delete")

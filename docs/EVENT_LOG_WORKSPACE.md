@@ -240,6 +240,12 @@ recorded values; they do not verify when the business change really happened. Di
 snapshots fingerprint events, objects and links. They do not yet include timed values, because no
 analysis reads them.
 
+## Automatic deletion
+
+An export is often needed for one project and not after it. **Automatic deletion** lets the owner choose a date after which the log is deleted from this computer, with everything derived from it, exactly as **Delete log** would. Saving the date asks for confirmation. **Keep the log** clears the date, and the date can be changed at any time.
+
+Expired logs are deleted when the list of logs is read (the dashboard does this every time it loads), and when an agent lists or asks for a shared log. Agents are never answered for an expired log, even if they ask before anyone opens the dashboard; your own direct requests for it keep working until the next of those sweeps. Each deletion re-checks the date in the same locked transaction that deletes, so clearing or extending the date always wins over a sweep that had already picked the log. The date must have a UTC offset, be in the future and be at most 10 years ahead; in the dashboard it is the end of the chosen day, UTC.
+
 ## Limits
 
 - 4 GB per import, 50 stored logs (delete one to import another).
@@ -283,6 +289,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `POST /v1/event-logs/timestamp-formats?column=...&delimiter=...` | Suggest a timestamp format from the start of a CSV file (body, at most 256 KB): `candidates` (each with `pattern`, `order`, `has_offset` and how the first value reads), `ambiguous`, `suggested`. Nothing is stored. Imports and appends take `timestamp_format=`. |
 | `POST /v1/event-logs/xlsx-to-csv?sheet=...` | Convert one worksheet of the `.xlsx` request body to CSV (`csv`, `sheet`, `sheets`, `rows`, `columns`, `date_columns`, `dates_have_no_offset`). Nothing is stored. |
 | `POST /v1/event-logs/{log_id}/delete` | Delete the log and every row that belongs to it. |
+| `GET`/`POST /v1/event-logs/{log_id}/expiry` (`{"delete_after": ISO time \| null}`) | Read, set or clear the date after which the log is deleted automatically (below). |
 | `POST /v1/event-logs/{log_id}/export/matching-cases` | Download complete matching cases. Body contains `cohort` and optional `case_type`. Query `format` is `csv` (default), `csv-review`, `xes`, or `xes-attributes`. |
 | `POST /v1/event-logs/{log_id}/derive` | Save the cases matching a filter as a new log (below). |
 | `GET /v1/event-logs/{log_id}/quality` | Stored quality and mapping reports per import and append, plus current whole-log diagnostics (below). |

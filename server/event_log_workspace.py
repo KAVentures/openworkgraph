@@ -152,6 +152,12 @@ CREATE TABLE IF NOT EXISTS signal_transitions (
 );
 CREATE INDEX IF NOT EXISTS signal_transitions_by_log_time ON signal_transitions(log_id,occurred_at);
 """
+# The date after which the owner wants a log deleted (event_log_expiry).
+_SCHEMA += """
+CREATE TABLE IF NOT EXISTS log_expiry (
+  log_id VARCHAR NOT NULL, delete_after TIMESTAMP NOT NULL, set_at TIMESTAMP NOT NULL
+);
+"""
 
 _SCHEMA += source_identity.SCHEMA + object_relationships.SCHEMA
 # Dated notes on a log's timeline (event_log_change_markers), such as "Automation went live".
@@ -775,20 +781,33 @@ def list_logs() -> dict[str, Any]:
             conn.close()
 
 
-def delete_log(log_id: str) -> dict[str, Any]:
+def delete_log(log_id: str, *, only_if_expired_at: datetime | None = None) -> dict[str, Any]:
+    """Delete a log and everything that belongs to it.
+
+    With ``only_if_expired_at`` (automatic deletion, event_log_expiry) the log is deleted only if its deletion
+    date is still at or before that time when checked under the workspace lock, in the same transaction as the
+    deletion: an owner who clears or extends the date first always wins.
+    """
     from .event_log_jobs import jobs
-    # Cancel before waiting for the workspace lock held by a running query.
-    jobs.erase_log(log_id)
+    if only_if_expired_at is None:
+        # Cancel before waiting for the workspace lock held by a running query.
+        jobs.erase_log(log_id)
     with _LOCK:
         conn = _connect()
         try:
             _check_log(conn, log_id)
+            if only_if_expired_at is not None:
+                row = conn.execute("SELECT delete_after FROM log_expiry WHERE log_id = ?", [log_id]).fetchone()
+                if row is None or row[0] > only_if_expired_at:
+                    return {"deleted": False, "log_id": log_id, "reason": "no longer due for deletion"}
             conn.execute("BEGIN")
             try:
                 from .event_log_description import erase as erase_description
                 erase_description(conn, log_id)          # in the deletion's transaction: no orphan note
                 from .event_log_activity_mappings import erase as erase_mappings
                 erase_mappings(conn, log_id)
+                from .event_log_expiry import erase as erase_expiry
+                erase_expiry(conn, log_id)
                 from .event_log_folder_feeds import erase_log as erase_feeds
                 from .event_log_case_notes import erase as erase_case_notes
                 erase_case_notes(conn, log_id)

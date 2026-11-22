@@ -962,6 +962,7 @@
     results.appendChild(agentRunsRefreshSection());
     results.appendChild(folderFeedSection());
     results.appendChild(agentShareSection());
+    results.appendChild(expirySection());
     results.appendChild(deriveSection(names));
     results.appendChild(anonymizedExportSection());
     results.appendChild(dottedSection());
@@ -1910,6 +1911,33 @@
       try{await api('/v1/schedules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'event_log_agent_runs',target_id:logId,interval_minutes:1440,confirm_scheduled_runs:true})});
         out.textContent='Scheduled daily. Manage it under scheduled jobs. Signal rules on this log then watch your agents.';}
       catch(error){out.textContent=error.message;}};
+    return box;
+  }
+
+  // Automatic deletion: the owner picks a date after which this log is deleted from this computer.
+  function expirySection(){
+    const box=section('Automatic deletion');box.id='owgExpiry';
+    box.appendChild(el('div','Choose a date after which this log, and everything derived from it, is deleted from this computer automatically. You can change or clear the date at any time. Until then nothing changes.','muted'));
+    const date=input('owgExpiryDate','date','');
+    const save=button('Delete automatically after this date','secondary');save.id='owgExpirySave';
+    const clear=button('Keep the log','secondary');clear.id='owgExpiryClear';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Delete after (end of day, UTC)',date),save,clear);
+    const statusLine=el('div',null,'muted');statusLine.id='owgExpiryStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
+    box.append(row,statusLine);
+    const base='/v1/event-logs/'+encodeURIComponent(state.logId)+'/expiry',generation=state.generation;
+    const tomorrow=new Date(Date.now()+86400000).toISOString().slice(0,10);date.min=tomorrow;
+    const show=r=>{if(generation!==state.generation)return;
+      date.value=r.delete_after?r.delete_after.slice(0,10):'';clear.disabled=!r.delete_after;
+      statusLine.textContent=r.delete_after?'This log will be deleted after '+r.delete_after.slice(0,16).replace('T',' ')+' UTC.':'This log is kept until you delete it.';};
+    const send=async body=>{save.disabled=clear.disabled=true;
+      try{show(await (await api(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json());}
+      catch(error){statusLine.textContent=error.message;clear.disabled=false;}
+      finally{save.disabled=false;}};
+    save.onclick=()=>{if(!date.value){statusLine.textContent='Choose a date first.';return;}
+      if(!window.confirm('Delete this log automatically after '+date.value+'? It cannot be recovered afterwards.'))return;
+      send({delete_after:date.value+'T23:59:59Z'});};
+    clear.onclick=()=>send({delete_after:null});
+    getJSON(base).then(show).catch(error=>{statusLine.textContent=error.message;});
     return box;
   }
 
