@@ -30,6 +30,11 @@ For every activity:
 - the median **wait before** a batched event, from the case's previous event, next to the
   wait before an unbatched event. This is a rough sign of time spent waiting to be batched.
 
+Choose **View batches** to see an activity's inferred batches, newest first. **Inspect cases**
+shows the cases contributing to a batch, with their event counts and time ranges within the batch.
+**Open case** shows the recorded event history. The active case filter applies to all three views.
+A shared event counts once toward the batch size and can appear under each case it belongs to.
+
 Each batched activity also gets a **simulation proposal**: the median batch size and, as the
 maximum wait, the 90th-percentile wait before batched events. Enter it as that activity's
 `batch` setting in [what-if simulation](EVENT_LOG_WORKSPACE.md) if it fits. It is never
@@ -43,3 +48,9 @@ deliberately batched. Resources are pseudonymous labels, never ratings of people
 `POST /v1/event-logs/{log_id}/batching` with
 `{"gap_seconds": 60, "min_batch_size": 3, "by_resource": true, "cohort": {...}, "case_type": "..."}`.
 All fields are optional.
+
+`POST /v1/event-logs/{log_id}/batching/batches` uses the same settings plus the exact `activity`.
+Send a returned `batch_id` with those settings to `POST /v1/event-logs/{log_id}/batching/batches/cases`
+to get its cases in literal case-key order. Both endpoints take an optional `limit` of 1–100
+(default 50). Pass the returned `next_after` as `after` to continue. Each page reflects the
+current log.

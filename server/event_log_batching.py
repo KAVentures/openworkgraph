@@ -17,7 +17,7 @@ deliberately batched, and resources are pseudonymous labels, never ratings of pe
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, ValidationError
 
@@ -36,9 +36,25 @@ class BatchSpec(BaseModel):
     case_type: str | None = Field(default=None, min_length=1, max_length=200)
 
 
-def _parse(spec: Any) -> BatchSpec:
+class _BatchPageSpec(BatchSpec):
+    activity: str = Field(min_length=1, max_length=200)
+    after: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    limit: StrictInt = Field(default=50, ge=1, le=100)
+
+
+class _BatchCaseSpec(BatchSpec):
+    activity: str = Field(min_length=1, max_length=200)
+    batch_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    after: str | None = Field(default=None, min_length=1, max_length=200)
+    limit: StrictInt = Field(default=50, ge=1, le=100)
+
+
+_Settings = TypeVar("_Settings", bound=BatchSpec)
+
+
+def _parse(spec: Any, model: type[_Settings]) -> _Settings:
     try:
-        parsed = BatchSpec.model_validate(spec or {})
+        parsed = model.model_validate(spec or {})
     except ValidationError as exc:
         first = exc.errors()[0]
         raise workspace.EventLogWorkspaceError(
@@ -47,28 +63,34 @@ def _parse(spec: Any) -> BatchSpec:
     return parsed
 
 
+def _prepare(conn, log_id: str, settings: BatchSpec) -> None:
+    cohorts.restrict(conn, cohorts.parse_cohort(settings.cohort), log_id)
+    resource = "coalesce(resource, '')" if settings.by_resource else "''"
+    # An event linked to several cases counts once, using the latest previous event among those cases.
+    conn.execute(f"""CREATE TEMP TABLE bt_events AS
+        SELECT event_id, any_value(activity) AS activity, any_value({resource}) AS who, any_value(ts) AS ts,
+               max(prev_ts) AS prev_ts
+        FROM (SELECT event_id, activity, resource, ts,
+                     lag(ts) OVER (PARTITION BY case_id ORDER BY ts, event_id) AS prev_ts FROM ce)
+        GROUP BY event_id""")
+    conn.execute("""CREATE TEMP TABLE bt_runs AS
+        SELECT *, sum(new_run) OVER (PARTITION BY activity, who ORDER BY ts, event_id) AS run_id FROM (
+          SELECT *, CASE WHEN lag(ts) OVER (PARTITION BY activity, who ORDER BY ts, event_id) IS NULL
+                          OR epoch(ts - lag(ts) OVER (PARTITION BY activity, who ORDER BY ts, event_id)) > ?
+                    THEN 1 ELSE 0 END AS new_run
+          FROM bt_events)""", [settings.gap_seconds])
+    conn.execute("""CREATE TEMP TABLE bt_batches AS
+        SELECT activity, who, run_id, count(*) AS size, min(ts) = max(ts) AS simultaneous,
+               min(ts) AS started, max(ts) AS ended, epoch(max(ts) - min(ts)) AS span,
+               sha256(arg_min(event_id, struct_pack(t := ts, e := event_id))) AS batch_id
+        FROM bt_runs GROUP BY activity, who, run_id""")
+
+
 def batching(log_id: str, spec: Any = None) -> dict[str, Any]:
-    settings = _parse(spec)
+    settings = _parse(spec, BatchSpec)
 
     def run(conn):
-        cohorts.restrict(conn, cohorts.parse_cohort(settings.cohort), log_id)
-        resource = "coalesce(resource, '')" if settings.by_resource else "''"
-        # One row per event (an event linked to several cases counts once), with its case's previous event time.
-        conn.execute(f"""CREATE OR REPLACE TEMP TABLE bt_events AS
-            SELECT event_id, any_value(activity) AS activity, any_value({resource}) AS who, any_value(ts) AS ts,
-                   max(prev_ts) AS prev_ts
-            FROM (SELECT event_id, activity, resource, ts,
-                         lag(ts) OVER (PARTITION BY case_id ORDER BY ts, event_id) AS prev_ts FROM ce)
-            GROUP BY event_id""")
-        conn.execute("""CREATE OR REPLACE TEMP TABLE bt_runs AS
-            SELECT *, sum(new_run) OVER (PARTITION BY activity, who ORDER BY ts, event_id) AS run_id FROM (
-              SELECT *, CASE WHEN lag(ts) OVER (PARTITION BY activity, who ORDER BY ts, event_id) IS NULL
-                              OR epoch(ts - lag(ts) OVER (PARTITION BY activity, who ORDER BY ts, event_id)) > ?
-                        THEN 1 ELSE 0 END AS new_run
-              FROM bt_events)""", [settings.gap_seconds])
-        conn.execute("""CREATE OR REPLACE TEMP TABLE bt_batches AS
-            SELECT activity, who, run_id, count(*) AS size, min(ts) = max(ts) AS simultaneous,
-                   epoch(max(ts) - min(ts)) AS span FROM bt_runs GROUP BY activity, who, run_id""")
+        _prepare(conn, log_id, settings)
         conn.execute("""CREATE OR REPLACE TEMP TABLE bt_flag AS
             SELECT r.*, b.size, b.size >= ? AS batched, b.simultaneous,
                    CASE WHEN r.prev_ts IS NOT NULL THEN epoch(r.ts - r.prev_ts) END AS wait
@@ -120,4 +142,64 @@ def batching(log_id: str, spec: Any = None) -> dict[str, Any]:
     return workspace._query(log_id, settings.case_type, run)
 
 
-__all__ = ["batching"]
+def batches(log_id: str, spec: Any) -> dict[str, Any]:
+    """Page through the inferred batches for one literal activity, newest first."""
+    settings = _parse(spec, _BatchPageSpec)
+
+    def run(conn):
+        _prepare(conn, log_id, settings)
+        conn.execute("""CREATE TEMP TABLE bt_selected AS SELECT * FROM bt_batches
+            WHERE activity = ? AND size >= ?""", [settings.activity, settings.min_batch_size])
+        total = conn.execute("SELECT count(*) FROM bt_selected").fetchone()[0]
+        where, params = "", []
+        if settings.after is not None:
+            anchor = conn.execute("SELECT started FROM bt_selected WHERE batch_id = ?", [settings.after]).fetchone()
+            if anchor is None:
+                raise workspace.EventLogWorkspaceError("the batch page has changed; start again from the first page")
+            where, params = "WHERE started < ? OR (started = ? AND batch_id > ?)", [anchor[0], anchor[0], settings.after]
+        rows = conn.execute(f"""SELECT batch_id, size, started, ended, simultaneous FROM bt_selected
+            {where} ORDER BY started DESC, batch_id LIMIT ?""", [*params, settings.limit + 1]).fetchall()
+        return {"total": total, "rows": rows}
+
+    data = workspace._query(log_id, settings.case_type, run)
+    rows = data["rows"]
+    return {"activity": settings.activity, "case_notion": data["case_notion"], "total": data["total"],
+            "batches": [{"batch_id": key, "events": count, "started_at": start.isoformat() + "Z",
+                         "ended_at": end.isoformat() + "Z", "simultaneous": simultaneous}
+                        for key, count, start, end, simultaneous in rows[:settings.limit]],
+            "next_after": rows[settings.limit - 1][0] if len(rows) > settings.limit else None}
+
+
+def batch_cases(log_id: str, spec: Any) -> dict[str, Any]:
+    """Page through the distinct cases contributing events to an inferred batch."""
+    settings = _parse(spec, _BatchCaseSpec)
+
+    def run(conn):
+        _prepare(conn, log_id, settings)
+        batch = conn.execute("""SELECT who, run_id, size FROM bt_batches
+            WHERE activity = ? AND batch_id = ? AND size >= ?""",
+                             [settings.activity, settings.batch_id, settings.min_batch_size]).fetchone()
+        if batch is None:
+            raise workspace.EventLogWorkspaceError("this batch is no longer in the selection")
+        who, run_id, events = batch
+        conn.execute("""CREATE TEMP TABLE bt_case_members AS
+            SELECT c.case_id, count(DISTINCT r.event_id) AS events, min(r.ts) AS started, max(r.ts) AS ended
+            FROM bt_runs r JOIN ce c USING (event_id)
+            WHERE r.activity = ? AND r.who = ? AND r.run_id = ? GROUP BY c.case_id""",
+                     [settings.activity, who, run_id])
+        total = conn.execute("SELECT count(*) FROM bt_case_members").fetchone()[0]
+        rows = conn.execute("""SELECT case_id, events, started, ended FROM bt_case_members
+            WHERE ? IS NULL OR case_id > ? ORDER BY case_id LIMIT ?""",
+                            [settings.after, settings.after, settings.limit + 1]).fetchall()
+        return {"events": events, "total": total, "rows": rows}
+
+    data = workspace._query(log_id, settings.case_type, run)
+    rows = data["rows"]
+    return {"activity": settings.activity, "case_notion": data["case_notion"],
+            "events": data["events"], "total": data["total"],
+            "cases": [{"case_id": key, "events": count, "started_at": start.isoformat() + "Z",
+                       "ended_at": end.isoformat() + "Z"} for key, count, start, end in rows[:settings.limit]],
+            "next_after": rows[settings.limit - 1][0] if len(rows) > settings.limit else None}
+
+
+__all__ = ["batching", "batches", "batch_cases"]
