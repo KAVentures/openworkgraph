@@ -3990,10 +3990,10 @@
         }
         const i=r.instances,f=r.flow_efficiency;
         statusLine.textContent=Number(i.with_processing_time).toLocaleString()+' of '+Number(i.total).toLocaleString()+' activity instances have a start and an end'+(f.median===null?'.':'; in the median case, recorded intervals cover '+pct(f.median)+' of the elapsed time.')+(i.unmatched_starts?' '+Number(i.unmatched_starts).toLocaleString()+' starts have no completion yet.':'');
-        if(r.activities_omitted)out.append(el('p',Number(r.activities_omitted).toLocaleString()+' additional activities are omitted by the '+Number(r.activity_result_limit).toLocaleString()+'-activity API limit. The table below displays at most 25 of the returned activities; use a narrower case cohort to investigate excluded activities.','muted'));
+        if(r.activities_omitted)out.append(el('p',Number(r.activities_omitted).toLocaleString()+' additional activities are omitted by the '+Number(r.activity_result_limit).toLocaleString()+'-activity API limit. The table shows all '+Number(r.activities.length).toLocaleString()+' returned activities; use a narrower case cohort to investigate excluded activities.','muted'));
         out.append(
           table(['Activity','Instances','Processing with known duration','Median processing','90th percentile processing','Processing spread (population SD)','Waiting observations','Median waiting before','10th–90th percentile waiting','Waiting spread (population SD)','Total waiting before','Share of all waiting'],
-            r.activities.slice(0,25).map(a=>[a.activity,Number(a.instances).toLocaleString(),
+            r.activities.map(a=>[a.activity,Number(a.instances).toLocaleString(),
               (a.processing_observations ? Number(a.processing_observations.observed).toLocaleString()+' / '+Number(a.processing_observations.eligible).toLocaleString() : Number(a.instances_with_processing_time).toLocaleString())+' ('+pct(a.processing_observation_share)+')'+(a.open_starts?' · '+Number(a.open_starts).toLocaleString()+' unfinished starts':''),duration(a.processing.median_seconds),
               duration(a.processing.p90_seconds),duration(a.processing.population_stddev_seconds),
               (a.waiting_observations ? Number(a.waiting_observations.observed).toLocaleString()+' / '+Number(a.waiting_observations.eligible).toLocaleString() : Number(a.waiting_before.instances).toLocaleString())+' ('+pct(a.waiting_observation_share)+')',duration(a.waiting_before.median_seconds),
