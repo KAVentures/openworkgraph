@@ -173,6 +173,11 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
                 SELECT s.activity, count(*) FROM s LEFT JOIN c
                     ON s.case_id = c.case_id AND s.activity = c.activity AND s.k = c.k
                 WHERE c.ts IS NULL OR c.ts < s.ts GROUP BY s.activity""").fetchall())
+        # Invalid start/completion pairs already contribute an inst row. They are
+        # also unmatched starts, so subtract them from coverage eligibility once.
+        invalid_by_activity = dict(conn.execute(
+            "SELECT activity, count(*) FROM inst WHERE kind = 'invalid_pair' GROUP BY activity"
+        ).fetchall())
         activities = conn.execute(f"""SELECT activity, count(*), count(DISTINCT case_id), count(proc),
               quantile_cont(proc, 0.5), quantile_cont(proc, 0.9), avg(proc),
               count(wait), quantile_cont(wait, 0.5), quantile_cont(wait, 0.9), avg(wait), coalesce(sum(wait), 0),
@@ -235,11 +240,11 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
                           "ignored_lifecycle_events": int(ignored)},
             "activities": [{
                 "activity": a, "instances": n, "cases": lifecycle_case_counts.get(a, cases), "instances_with_processing_time": known,
-                "processing_observation_share": known / (n + open_by_activity.get(a, 0)) if n + open_by_activity.get(a, 0) else None,
+                "processing_observation_share": known / (n + open_by_activity.get(a, 0) - invalid_by_activity.get(a, 0)) if n + open_by_activity.get(a, 0) - invalid_by_activity.get(a, 0) else None,
                 "open_starts": int(open_by_activity.get(a, 0)),
-                "processing_observations": {"observed": known, "eligible": n + open_by_activity.get(a, 0)},
-                "waiting_observations": {"observed": waited, "eligible": n + open_by_activity.get(a, 0)},
-                "waiting_observation_share": waited / (n + open_by_activity.get(a, 0)) if n + open_by_activity.get(a, 0) else None,
+                "processing_observations": {"observed": known, "eligible": n + open_by_activity.get(a, 0) - invalid_by_activity.get(a, 0)},
+                "waiting_observations": {"observed": waited, "eligible": n + open_by_activity.get(a, 0) - invalid_by_activity.get(a, 0)},
+                "waiting_observation_share": waited / (n + open_by_activity.get(a, 0) - invalid_by_activity.get(a, 0)) if n + open_by_activity.get(a, 0) - invalid_by_activity.get(a, 0) else None,
                 "processing": {**stats(p50, p90, mean), "population_stddev_seconds": pstd},
                 "waiting_before": {**stats(w50, w90, wmean), "p10_seconds": w10,
                                    "population_stddev_seconds": wstd, "instances": waited,
