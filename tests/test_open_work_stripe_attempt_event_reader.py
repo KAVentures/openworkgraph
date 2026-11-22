@@ -154,3 +154,23 @@ def test_event_environment_must_match_restricted_key_mode():
         result = _reader(path, CREDS["OWG_STRIPE_RESTRICTED_READ_KEY"])
         return {**result, "livemode": True} if path.startswith("/v1/events/") else result
     assert _read(credentials=lambda: live_creds, reader=live_reader)["complete"] is True
+
+
+def test_connected_account_event_cannot_cross_source_boundary():
+    def connected_event(path, key):
+        value = _reader(path, key)
+        return {**value, "account": "acct_other123"} if path.startswith("/v1/events/") else value
+    assert _read(reader=connected_event)["complete"] is False
+
+    def same_account_event(path, key):
+        value = _reader(path, key)
+        return {**value, "account": ACCOUNT} if path.startswith("/v1/events/") else value
+    assert _read(reader=same_account_event)["complete"] is True
+
+
+def test_future_event_timestamp_is_not_historical_evidence():
+    future = int(datetime.now(timezone.utc).timestamp()) + 3600
+    def future_event(path, key):
+        value = _reader(path, key)
+        return {**value, "created": future} if path.startswith("/v1/events/") else value
+    assert _read(reader=future_event)["complete"] is False
