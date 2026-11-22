@@ -126,3 +126,27 @@ def test_review_recovery_is_authenticated_read_only_and_consumes_consent():
     open_block = source.split("async function open(id, revision)", 1)[1].split("function render(data)", 1)[0]
     assert 'encodeURIComponent(id)' in open_block
     assert 'render(data)' in open_block
+
+
+
+def test_direct_review_preflight_rechecks_live_gateway_permission_and_revision():
+    """Direct review cannot rely on stale permissions from a previously rendered form."""
+    source = (Path(__file__).resolve().parents[1] / "gateway" / "processes.html").read_text()
+    block = source.split("async function review(decision) {", 1)[1].split('"/reviews",', 1)[0]
+    direct = block.split("if (!inspectedHandoff) {", 1)[1].split("// Do not let an old review response", 1)[0]
+    assert 'await call("/v1/human/processes/"+encodeURIComponent(record.workflow_id))' in direct
+    for guard in (
+        "identityTicket!==identityGeneration",
+        "credential!==authorizedCredential",
+        "selected!==chosen",
+        "current.archived",
+        "current.viewing_historical_revision",
+        "current.latest_revision!==record.revision",
+        "current.process.content_sha256!==record.content_sha256",
+        "current.access_revision!==chosen.access_revision",
+        "current.permissions?.review!==true",
+        "current.your_actor_id!==chosen.your_actor_id",
+    ):
+        assert guard in direct
+    assert '$("reviewConfirm").checked=false' in direct
+    assert "throw new Error" in direct
