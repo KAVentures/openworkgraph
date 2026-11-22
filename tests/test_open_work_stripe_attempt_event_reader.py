@@ -174,3 +174,24 @@ def test_future_event_timestamp_is_not_historical_evidence():
         value = _reader(path, key)
         return {**value, "created": future} if path.startswith("/v1/events/") else value
     assert _read(reader=future_event)["complete"] is False
+
+
+def test_malformed_provider_json_shapes_fail_closed_without_event_disclosure():
+    """A valid HTTP 200 can still contain a non-object JSON response."""
+    for malformed in (None, [], "unexpected", 42):
+        calls = []
+        def bad_account(path, key):
+            calls.append(path)
+            return malformed
+        snapshot = _read(reader=bad_account)
+        assert snapshot["complete"] is False
+        assert calls == ["/v1/account"]
+
+        def bad_event(path, key):
+            calls.append(path)
+            return malformed if path.startswith("/v1/events/") else _reader(path, key)
+        calls.clear()
+        snapshot = _read(reader=bad_event)
+        assert snapshot["complete"] is False
+        assert snapshot["authenticated"] is False
+        assert calls == ["/v1/account", "/v1/events/" + EVENT]
