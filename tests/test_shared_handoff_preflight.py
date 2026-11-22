@@ -533,3 +533,21 @@ def test_review_readback_rejects_access_revocation_even_without_packet_inspectio
     assert "recordedReview.permissions?.review===true" in block
     assert "!submittedInspectedHandoff ||" not in block
     assert block.index("recordedReview.access_revision===reviewSelection.access_revision") < block.index("Array.isArray(recordedEntries)")
+
+
+def test_authorized_reopen_disarms_prior_process_while_gateway_read_is_pending():
+    """A failed or delayed live read cannot expose actions for an old selection."""
+    source = (Path(__file__).resolve().parents[1] / "gateway" / "processes.html").read_text()
+    block = source.split("async function open(id, revision) {", 1)[1].split("function render(data)", 1)[0]
+    before_read = block.split("const data = await call(", 1)[0]
+    for guard in (
+        "selected = null;",
+        '$("selected").hidden = true;',
+        '$("reviewConfirm").checked = false;',
+        '$("handoffConsent").checked = false;',
+        "resetHandoff(",
+    ):
+        assert guard in before_read
+    assert "const authorizedCredential = credential;" in before_read
+    assert "credential !== authorizedCredential" in block
+    assert block.index('const data = await call(') < block.index("render(data);")
