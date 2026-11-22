@@ -1444,6 +1444,36 @@ def event_log_variants_csv(request: Request, log_id: str, case_type: str | None 
         "X-OWG-Variants": f"variants={meta['variants']}; written={meta['written']}; truncated={str(meta['truncated']).lower()}"})
 
 
+@router.get("/v1/event-logs/{log_id}/activities.csv")
+def event_log_activities_csv(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                         cohort: dict[str, Any] = Depends(_case_filter)):
+    """Every activity of the selection with frequency, repeats, start/end shares and waits, as CSV. Not stored."""
+    from . import event_log_statistics_export as export
+    _require_dashboard(request)
+    try:
+        text, meta = export.activities_csv(log_id, case_type, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(text, media_type="text/csv; charset=utf-8", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-activities.csv"',
+        "X-OWG-Rows": f"rows={meta['rows']}; written={meta['written']}; truncated={str(meta['truncated']).lower()}"})
+
+
+@router.get("/v1/event-logs/{log_id}/resources.csv")
+def event_log_resources_csv(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                         cohort: dict[str, Any] = Depends(_case_filter)):
+    """Every resource of the selection with events, cases, activities and waits, as CSV. Not stored."""
+    from . import event_log_statistics_export as export
+    _require_dashboard(request)
+    try:
+        text, meta = export.resources_csv(log_id, case_type, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(text, media_type="text/csv; charset=utf-8", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-resources.csv"',
+        "X-OWG-Rows": f"rows={meta['rows']}; written={meta['written']}; truncated={str(meta['truncated']).lower()}"})
+
+
 @router.get("/v1/event-logs/{log_id}/variants/preview")
 def event_log_variant_preview(request: Request, log_id: str,
         case_type: str | None = Query(default=None, max_length=200),

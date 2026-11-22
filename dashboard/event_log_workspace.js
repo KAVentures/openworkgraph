@@ -39,6 +39,8 @@
   FILTERED.add('quality/timestamp-ties');
   FILTERED.add('breakdown');
   FILTERED.add('breakdown.csv');
+  FILTERED.add('activities.csv');
+  FILTERED.add('resources.csv');
   FILTERED.add('next-steps');
   FILTERED.add('petri-net-replay');
   FILTERED.add('petri-net-alignments');
@@ -930,6 +932,7 @@
     results.appendChild(variantBox);
     results.appendChild(variantCoverageSection(names));
     results.appendChild(reworkSection());
+    results.appendChild(statisticsExportSection());
     results.appendChild(objectMapSection());
     if(summary.log&&summary.log.object_relationships)results.appendChild(objectRelationshipSection());
     results.appendChild(processMapSection());
@@ -3364,6 +3367,28 @@
   }
 
   // Exact, non-overlapping bands of observed first-to-last event duration.
+  // Every activity and every resource of the selection, as spreadsheet-safe CSV for review elsewhere.
+  function statisticsExportSection(){
+    const box=section('Activity and resource statistics');box.id='owgStatisticsExport';
+    box.appendChild(el('div','Download every activity or resource of the selection with its frequency, cases, repeats and waiting time. The case filter, grouped and hidden activities apply.','muted'));
+    const status=el('div',null,'muted');status.id='owgStatisticsExportStatus';status.setAttribute('role','status');status.setAttribute('aria-live','polite');
+    const row=el('div',null,'row');
+    for(const [kind,label] of [['activities','Download activity statistics'],['resources','Download resource statistics']]){
+      const b=button(label,'secondary');b.id='owgStatisticsExport'+kind[0].toUpperCase()+kind.slice(1);
+      b.onclick=async()=>{
+        b.disabled=true;
+        try{const response=await api(logPath(kind+'.csv',{}));const blob=await response.blob();
+          downloadBlob(blob,(state.logId||'log')+'-'+kind+'.csv');
+          const info=response.headers.get('X-OWG-Rows')||'';
+          status.textContent='Downloaded '+(/written=(\d+)/.exec(info)||[,'the'])[1]+' '+kind+(/truncated=true/.test(info)?' (the most frequent; the list was cut)':'')+'.';}
+        catch(error){status.textContent=error.message;}
+        finally{b.disabled=false;}};
+      row.appendChild(b);
+    }
+    box.append(row,status);
+    return box;
+  }
+
   function reworkSection(){
     const box=section('Rework and loops');box.id='owgEventLogRework';
     box.appendChild(el('div','Activities that happen again in the same case, the loops they form, and how cases with rework compare with cases without.','muted'));
