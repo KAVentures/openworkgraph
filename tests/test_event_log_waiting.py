@@ -170,6 +170,23 @@ def test_unfinished_only_activities_have_case_counts_and_respect_response_limit(
     assert [a["activity"] for a in unfinished] == sorted(a["activity"] for a in unfinished)
 
 
+def test_invalid_lifecycle_pair_does_not_double_count_coverage_eligibility():
+    log = _import(["case", "activity", "time", "lifecycle:transition"], [
+        ("x", "Review", _at(0, 2), "start"),
+        ("x", "Review", _at(0, 1), "complete"),
+        ("y", "Review", _at(1, 0), "start"),
+        ("y", "Review", _at(1, 1), "complete"),
+    ])
+    result = waiting.waiting_time(log)
+    review = _by(result)["Review"]
+    assert result["instances"]["end_before_start"] == 1
+    assert result["instances"]["unmatched_starts"] == 1
+    assert review["open_starts"] == 1
+    assert review["processing_observations"] == {"observed": 1, "eligible": 2}
+    assert review["waiting_observations"]["eligible"] == 2
+    assert review["processing_observation_share"] == 0.5
+
+
 def test_open_start_activity_count_deduplicates_across_cases():
     log = _import(["case", "activity", "time", "lifecycle:transition"], [
         ("a", "Review", _at(0, 0), "start"),
