@@ -18,8 +18,8 @@ def _require_dashboard(request: Request) -> None:
         raise HTTPException(status_code=403, detail="explicit local dashboard session required")
 
 
-async def _body(request: Request) -> dict:
-    if len(await request.body()) > 1024:
+async def _body(request: Request, limit: int = 1024) -> dict:
+    if len(await request.body()) > limit:
         raise HTTPException(status_code=413, detail="request too large")
     data = await request.json()
     if not isinstance(data, dict):
@@ -43,12 +43,15 @@ async def schedules(request: Request):
 @router.post("/v1/schedules")
 async def create_schedule(request: Request):
     _require_dashboard(request)
-    data = await _body(request)
+    data = await _body(request, limit=32768)
+    if "report_scope" in data and not isinstance(data["report_scope"], dict):
+        raise HTTPException(status_code=422, detail="report_scope must be an object")
     return await _run(scheduler.create, data.get("kind"), data.get("target_id"),
                       interval_minutes=data.get("interval_minutes"),
                       confirm_scheduled_runs=data.get("confirm_scheduled_runs"),
                       confirm_unencrypted_local_backup=data.get("confirm_unencrypted_local_backup"),
-                      quiet_hours=data.get("quiet_hours"))
+                      quiet_hours=data.get("quiet_hours"),
+                      report_scope=data.get("report_scope"))
 
 
 @router.post("/v1/schedules/update")
