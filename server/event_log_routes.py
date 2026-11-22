@@ -726,24 +726,32 @@ def event_log_case_notes(request: Request, log_id: str, case_id: str | None = Qu
     return _respond(case_notes.notes, log_id, case_id)
 
 
+@router.post("/v1/event-logs/{log_id}/case-notes/query")
+async def event_log_query_case_notes(request: Request, log_id: str):
+    from . import event_log_case_notes as case_notes
+    _require_dashboard(request)
+    spec = await _json_body(request, "case note search", strict=True, limit=4096)
+    return await run_in_threadpool(_respond, case_notes.query, log_id, spec)
+
+
 @router.post("/v1/event-logs/{log_id}/case-notes")
-async def event_log_add_case_note(request: Request, log_id: str):
+async def event_log_add_case_note(request: Request, log_id: str, compact: bool = Query(default=False)):
     from . import event_log_case_notes as case_notes
     _require_dashboard(request)
     spec = await _json_body(request, "case note", strict=True, limit=16384)
     try:
-        result = await run_in_threadpool(case_notes.add, log_id, spec)
+        result = await run_in_threadpool(case_notes.add, log_id, spec, compact=compact)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/v1/event-logs/{log_id}/case-notes/{note_id}/delete")
-async def event_log_delete_case_note(request: Request, log_id: str, note_id: str):
+async def event_log_delete_case_note(request: Request, log_id: str, note_id: str, compact: bool = Query(default=False)):
     from . import event_log_case_notes as case_notes
     _require_dashboard(request)
     try:
-        result = await run_in_threadpool(case_notes.remove, log_id, note_id)
+        result = await run_in_threadpool(case_notes.remove, log_id, note_id, compact=compact)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})

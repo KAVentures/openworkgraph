@@ -953,7 +953,7 @@
     results.appendChild(caseAttributeSection());
     results.appendChild(caseTableExportSection());
     results.appendChild(caseExplainSection());
-    results.appendChild(caseNotesSection());
+    results.appendChild(caseNotesSection(inspection));
     results.appendChild(discoverySection());
     results.appendChild(driftSection(inspection));
     results.appendChild(automationSection());
@@ -1350,9 +1350,9 @@
     const box=section('Case evidence');box.id=prefix;
     const generation=state.generation;
     const current=()=>box.isConnected&&generation===state.generation;
-    const queryPath=suffix=>{
+    const queryPath=(suffix,caseType=options.caseType)=>{
       const url=new URL(logPath(suffix),window.location.origin);
-      if(options.caseType!==undefined)url.searchParams.set('case_type',options.caseType);
+      if(caseType!==undefined)url.searchParams.set('case_type',caseType);
       return url.pathname+url.search;
     };
     const filters=cohortFields(prefix+'Filter','Select complete cases',activityNames);
@@ -1402,17 +1402,24 @@
       catch(error){message.textContent=error.message;}
     }
     browse.onclick=start;first.onclick=()=>load(null);next.onclick=()=>load(nextAfter);
-    async function openCase(caseId){
+    async function openCase(caseId,caseType){
       const ticket=++opening;
       const heading=el('h4','Case '+caseId);heading.tabIndex=-1;
       const progress=el('div','Loading events…');progress.setAttribute('role','status');
       const rows=el('div'),more=button('More case events','secondary');more.id=prefix==='owgEventLogCases'?'owgEventLogCaseEventsMore':prefix+'EventsMore';more.disabled=true;
-      detail.replaceChildren(heading,progress,rows,more);
+      const notes=document.createElement('details');notes.id=prefix+'InlineNotes';
+      notes.append(el('summary','Case notes'));
+      notes.ontoggle=()=>{
+        if(notes.open&&notes.childElementCount===1&&current()&&ticket===opening){
+          notes.append(caseNotesPanel(prefix+'InlineNote',caseId,null));
+        }
+      };
+      detail.replaceChildren(heading,progress,rows,more,notes);
       heading.focus();let offset=0,shown=0;
       async function page(){
         more.disabled=true;
         try{
-          const result=await (await api(queryPath('case-events/query'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({case_id:caseId,offset,limit:100})})).json();
+          const result=await (await api(queryPath('case-events/query',caseType),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({case_id:caseId,offset,limit:100})})).json();
           if(!current()||ticket!==opening)return;
           shown+=result.events.length;offset=result.next_offset;
           progress.textContent='Showing '+shown+' of '+result.total_events+' events. '+result.timestamp_ties+' equal-timestamp events. '+result.ordering;
@@ -2160,39 +2167,107 @@
   }
 
   // The owner's notes on single cases: findings, phone calls, reasons for a delay.
-  function caseNotesSection(){
+  function caseNotesSection(inspection){
     const box=section('Case notes');box.id='owgCaseNotes';
-    box.appendChild(el('div','Write down what you found about a case. Notes stay on this computer, are never shared with AI agents and are deleted with the log.','muted'));
-    const caseId=input('owgCaseNoteCase','text','case ID');caseId.maxLength=500;caseId.autocomplete='off';
-    const text=document.createElement('textarea');text.id='owgCaseNoteText';text.maxLength=2000;text.rows=2;
-    const add=button('Add note','secondary');add.id='owgCaseNoteAdd';
-    const msg=el('div',null,'muted');msg.id='owgCaseNoteStatus';msg.setAttribute('role','status');msg.setAttribute('aria-live','polite');
-    const list=el('div');list.id='owgCaseNoteList';
-    const generation=state.generation;
-    const url=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/case-notes';
-    const render=r=>{
-      if(generation!==state.generation)return;
-      if(!r.notes.length){list.replaceChildren(el('div','No case notes yet.','muted'));return;}
-      const t=table(['Case','Note','Written',''],r.notes.map(n=>[n.case_id,n.text,n.created_at.slice(0,16).replace('T',' ')+' UTC','']));
-      t.querySelectorAll('tbody tr').forEach((tr,i)=>{const n=r.notes[i];tr.cells[1].style.whiteSpace='pre-wrap';
-        const del=button('Delete','secondary');del.setAttribute('aria-label','Delete note on case '+n.case_id);
-        del.onclick=async()=>{try{render(await (await api(url()+'/'+encodeURIComponent(n.note_id)+'/delete',{method:'POST'})).json());msg.textContent='Note deleted.';}catch(e){msg.textContent=e.message;}};
-        tr.cells[3].appendChild(del);});
-      const plural=(n,w)=>Number(n).toLocaleString()+' '+w+(n===1?'':'s');
-      list.replaceChildren(el('div',plural(r.notes_total,'note')+' on '+plural(r.cases_with_notes,'case')+(r.notes_total>r.notes.length?' (newest '+r.notes.length+' shown)':'')+'.','muted'),t);
-    };
-    add.onclick=async()=>{
-      if(!caseId.value.trim()||!text.value.trim()){msg.textContent='Enter a case ID and a note.';return;}
-      add.disabled=true;
-      try{await api(url(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({case_id:caseId.value.trim(),text:text.value})});
-        text.value='';msg.textContent='Note added to case '+caseId.value.trim()+'.';render(await getJSON(url()));}
-      catch(e){msg.textContent=e.message;}
-      finally{add.disabled=false;}
-    };
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Case',caseId),field('Note',text),add);
-    box.append(row,msg,list);
-    getJSON(url()).then(render).catch(e=>{msg.textContent=e.message;});
+    box.append(el('div','Write down what you found about a case. Notes stay on this computer, are never shared with AI agents and are deleted with the log.','muted'),
+      caseNotesPanel('owgCaseNote',null,inspection));
     return box;
+  }
+
+  function caseNotesPanel(prefix,fixedCase,inspection){
+    const panel=el('div');
+    const generation=state.generation,logId=state.logId;
+    const endpoint='/v1/event-logs/'+encodeURIComponent(logId)+'/case-notes';
+    const current=()=>panel.isConnected&&generation===state.generation;
+    panel.dataset.owgCaseNotesView=logId;
+    const caseId=input(prefix+'Case','text','case ID');caseId.maxLength=500;caseId.autocomplete='off';
+    const text=document.createElement('textarea');text.id=prefix+'Text';text.maxLength=2000;text.rows=2;
+    const add=button('Add note','secondary');add.id=prefix+'Add';
+    const form=el('div',null,'row');form.style.alignItems='end';
+    form.append(...(fixedCase===null?[field('Case',caseId)]:[]),field('Note',text),add);
+    const msg=el('div',null,'muted');msg.id=prefix+'Status';msg.setAttribute('aria-live','polite');
+    if(fixedCase===null)msg.setAttribute('role','status');
+    const search=input(prefix+'Search','search');search.maxLength=200;
+    const find=button('Search notes','secondary'),clear=button('Clear search','secondary');
+    const searchRow=el('div',null,'row');searchRow.style.alignItems='end';searchRow.append(field('Search by note text or case key',search),find,clear);
+    const list=el('div');list.id=prefix+'List';
+    const nav=el('div',null,'row'),previous=button('Previous note page','secondary'),next=button('Next note page','secondary');
+    nav.append(previous,next);show(nav,false);
+    panel.append(form,msg,...(fixedCase===null?[searchRow]:[]),list,nav);
+    const plural=(n,w)=>Number(n).toLocaleString()+' '+w+(n===1?'':'s');
+    let searchText='',loadTurn=0,pageIndex=0,following=null,cursors=[null],writing=false;
+    const post=async(url,body)=>(await api(url,{method:'POST',...(body===undefined?{}:{headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})})).json();
+    function refreshViews(changedCase){
+      document.querySelectorAll('[data-owg-case-notes-view]').forEach(view=>{
+        if(view.dataset.owgCaseNotesView===logId)view.dispatchEvent(new CustomEvent('owg-case-note-change',{detail:changedCase}));
+      });
+    }
+    async function load(page){
+      if(!current())return;
+      const ticket=++loadTurn,valid=()=>current()&&ticket===loadTurn;
+      previous.disabled=next.disabled=true;list.inert=true;
+      try{
+        const r=await post(endpoint+'/query',{...(fixedCase!==null?{case_id:fixedCase}:{}),
+          ...(searchText?{search:searchText}:{}),...(cursors[page]!==null?{after:cursors[page]}:{})});
+        if(!valid())return;
+        pageIndex=page;following=r.next_after;show(nav,pageIndex>0||following!==null);
+        if(!r.notes.length){
+          list.replaceChildren(el('div',searchText?'No notes match this search.':'No case notes yet.','muted'));
+          return;
+        }
+        const headers=[...(fixedCase===null?['Case','Object type']:[]),'Note','Written','Actions'];
+        const t=table(headers,r.notes.map(n=>{
+          const actions=el('div',null,'row');
+          if(inspection&&n.has_events&&n.object_type){
+            const open=button('Open case','secondary');open.setAttribute('aria-label','Open case '+n.case_id);
+            open.onclick=()=>inspection.open(n.case_id,n.object_type);actions.appendChild(open);
+          }
+          const del=button('Delete','secondary');del.setAttribute('aria-label','Delete note on case '+n.case_id);
+          del.onclick=async()=>{
+            if(writing||!current())return;
+            writing=true;del.disabled=add.disabled=true;
+            try{
+              await post(endpoint+'/'+encodeURIComponent(n.note_id)+'/delete?compact=true');
+              if(current())msg.textContent='Note deleted.';
+              refreshViews(n.case_id);
+            }catch(error){if(current())msg.textContent=error.message;}
+            finally{writing=false;if(current())del.disabled=add.disabled=false;}
+          };
+          actions.appendChild(del);
+          const body=el('div',n.text);body.style.whiteSpace='pre-wrap';
+          return [...(fixedCase===null?[n.case_id,n.object_type||'—']:[]),body,n.created_at.slice(0,16).replace('T',' ')+' UTC',actions];
+        }));
+        const count=plural(r.notes_total,'note')+' on '+plural(r.matching_cases,'case')+'.';
+        list.replaceChildren(el('div',count+(r.notes_total>r.notes.length?' Showing '+r.notes.length+' on this page.':''),'muted'),t);
+      }catch(error){if(valid())msg.textContent=error.message;}
+      finally{if(valid()){list.inert=false;previous.disabled=pageIndex===0;next.disabled=following===null;}}
+    }
+    const restart=()=>{cursors=[null];pageIndex=0;following=null;load(0);};
+    previous.onclick=()=>load(pageIndex-1);
+    next.onclick=()=>{cursors[pageIndex+1]=following;load(pageIndex+1);};
+    find.onclick=()=>{searchText=search.value.trim();msg.textContent='';restart();};
+    search.onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();find.click();}};
+    clear.onclick=()=>{search.value='';find.click();};
+    panel.addEventListener('owg-case-note-change',event=>{
+      if(fixedCase===null||event.detail===fixedCase)restart();
+    });
+    add.onclick=async()=>{
+      if(writing||!current())return;
+      const key=fixedCase??caseId.value,draft=text.value;
+      if(!key||!draft.trim()){msg.textContent=fixedCase===null?'Enter a case ID and a note.':'Enter a note.';return;}
+      writing=true;add.disabled=true;
+      try{
+        await post(endpoint+'?compact=true',{case_id:key,text:draft});
+        if(current()){
+          if(text.value===draft)text.value='';
+          msg.textContent='Note added to case '+key+'.';
+        }
+        refreshViews(key);
+      }catch(error){if(current())msg.textContent=error.message;}
+      finally{writing=false;if(current())add.disabled=false;}
+    };
+    queueMicrotask(restart);
+    return panel;
   }
 
   function caseExplainSection(){

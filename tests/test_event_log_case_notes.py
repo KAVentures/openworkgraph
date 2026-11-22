@@ -1,6 +1,7 @@
 """Case notes: the owner's notes on single cases, owner-only, deleted with the log."""
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -56,6 +57,39 @@ def test_validation_and_limit(monkeypatch):
         cn.add(log, {"case_id": "c2", "text": "two"})
 
 
+def test_note_search_is_literal_and_cursor_survives_deleting_the_anchor():
+    log = _log()
+    oldest = cn.add(log, {"case_id": "c1", "text": "Called about 50%_OFF"}, compact=True)
+    cn.add(log, {"case_id": "c2", "text": "50X_OFFER"})
+    newest = cn.add(log, {"case_id": "c3", "text": "Reviewed 50%_off"}, compact=True)
+    first = cn.query(log, {"search": "%_off", "limit": 1})
+    assert first["notes_total"] == first["matching_cases"] == 2
+    assert first["cases_with_notes"] == 3 and first["notes"][0]["note_id"] == newest["added"]
+    assert first["notes"][0]["has_events"] and first["notes"][0]["object_type"]
+    assert cn.remove(log, newest["added"], compact=True)["removed_from_case"] == "c3"
+    second = cn.query(log, {"search": "%_OFF", "limit": 1, "after": first["next_after"]})
+    assert second["notes_total"] == 1 and second["notes"][0]["note_id"] == oldest["added"]
+    assert second["next_after"] is None
+    assert cn.query(log, {"search": "C1"})["notes_total"] == 1
+    assert cn.query(log, {"search": "offer", "case_id": "c1"})["notes_total"] == 0
+    for bad in ({"limit": True}, {"search": ""}, {"after": "garbage"}):
+        with pytest.raises(EventLogWorkspaceError):
+            cn.query(log, bad)
+
+
+def test_note_results_include_the_object_type_and_whether_it_has_an_event_history():
+    payload = {
+        "objects": [{"id": "order/a", "type": "order"}, {"id": "item a", "type": "item"}],
+        "events": [{"id": "paid", "type": "Pay", "time": "2024-03-01T00:00:00Z",
+                    "relationships": [{"objectId": "order/a", "qualifier": ""}]}],
+    }
+    log = workspace.import_log(BytesIO(json.dumps(payload).encode()), name="linked", source_format="ocel")["log_id"]
+    for key in ("order/a", "item a"):
+        cn.add(log, {"case_id": key, "text": "Reviewed"})
+    notes = {row["case_id"]: (row["object_type"], row["has_events"]) for row in cn.query(log, {})["notes"]}
+    assert notes == {"order/a": ("order", True), "item a": ("item", False)}
+
+
 def test_deleting_the_log_deletes_its_notes_only():
     log, other = _log(), _log()
     cn.add(log, {"case_id": "c1", "text": "gone with the log"})
@@ -102,6 +136,9 @@ with TestClient(app) as client:
     assert r.status_code==200 and r.headers['cache-control']=='no-store', r.text
     note=r.json()['added']
     assert client.get(url+'?case_id=c1',headers=owner).json()['notes'][0]['text']=='Called'
+    assert client.post(url+'/query',json={'search':'call'},headers=bearer).status_code in (401,403)
+    found=client.post(url+'/query',json={'search':'call'},headers=owner)
+    assert found.headers['cache-control']=='no-store' and found.json()['notes'][0]['note_id']==note
     assert client.post(url,json={"case_id":"zz","text":"x"},headers=owner).status_code==422
     assert client.post(url+'/'+note+'/delete',headers=bearer).status_code in (401,403)
     assert client.post(url+'/'+note+'/delete',headers=owner).json()['notes']==[]

@@ -1293,9 +1293,14 @@ events of the log: they never change its data or any analysis, stay on this comp
 shared with AI agents and are deleted with the log in the same transaction. A log keeps at most
 5,000 notes.
 
+Open **Case notes** inside a case's event history to read or add notes right there. The main
+**Case notes** section searches note text and case keys and opens event histories in the
+object type recorded for each note. The two views refresh after a note is added or deleted.
+
 | Route | Purpose |
 |---|---|
 | `GET /v1/event-logs/{log_id}/case-notes` | Notes, newest first (at most 500 listed); `?case_id=` for one case |
+| `POST /v1/event-logs/{log_id}/case-notes/query` | Dashboard-only search with optional `search`, exact `case_id`, and `limit` (1–500, default 30). Use the returned `next_after` as `after` for the next page. |
 | `POST /v1/event-logs/{log_id}/case-notes` | `{"case_id": ..., "text": ...}` adds a note |
 | `POST /v1/event-logs/{log_id}/case-notes/{note_id}/delete` | Delete a note |
 
