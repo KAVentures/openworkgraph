@@ -203,3 +203,19 @@ def test_denied_packet_refresh_hides_revoked_review_actions():
     ):
         assert guard in failure
     assert '"/reviews"' not in block
+
+
+def test_review_generation_is_rechecked_across_inspection_navigation_and_submission():
+    """A concurrent decision by this reviewer invalidates an older reviewed handoff."""
+    source = (Path(__file__).resolve().parents[1] / "gateway" / "processes.html").read_text()
+    expected = "current.your_review_number!==chosen.your_review_number"
+    # Each independent live Gateway read must pin the review generation:
+    # inspected submission, direct submission, navigation, and packet check.
+    assert source.count(expected) == 4
+    inspected = source.split("if (inspectedHandoff) {", 1)[1].split("if (!inspectedHandoff) {", 1)[0]
+    direct = source.split("if (!inspectedHandoff) {", 1)[1].split("// Do not let an old review response", 1)[0]
+    navigation = source.split('$("handoffReview").addEventListener', 1)[1].split('$("handoffRefresh").addEventListener', 1)[0]
+    packet = source.split('$("handoffCheck").addEventListener', 1)[1]
+    for block in (inspected, direct, navigation, packet):
+        assert expected in block
+        assert 'current.permissions?.review!==true' in block
