@@ -2113,7 +2113,6 @@
                current.process.revision!==pinned.revision||
                current.process.content_sha256!==pinned.content_sha256||
                current.access_revision!==pinned.access_revision||
-               current.review?.status!=="reviewed_design"||
                current.permissions?.review!==true||
                current.your_actor_id!==chosen.your_actor_id||
                record.workflow_id!==pinned.workflow_id||
@@ -2500,7 +2499,6 @@
                current.process.revision!==inspected.revision||
                current.latest_revision!==inspected.revision||
                current.process.content_sha256!==inspected.content_sha256||
-               current.review?.status!=="reviewed_design"||
                current.permissions?.review!==true||
                current.your_actor_id!==chosen.your_actor_id||
                current.access_revision!==inspected.access_revision||
@@ -2511,7 +2509,7 @@
               resetHandoff("REFUSED: Process changed or access/review was withdrawn. Reopen latest revision and inspect again.");
               return;
             }
-            $("handoffStatus").textContent="Current authorization and revision rechecked. Human review only; no execution authorization.";
+            $("handoffStatus").textContent="Current authorization and revision rechecked. You may review this revision; no execution authorization.";
             $("handoffReview").disabled=false;
             $("revisionReview").scrollIntoView({block:"start"});
             $("comment").focus();
@@ -2584,11 +2582,10 @@
                current.process.revision!==p.revision||
                current.latest_revision!==p.revision||
                current.process.content_sha256!==p.content_sha256||
-               current.review?.status!=="reviewed_design"||
                current.permissions?.review!==true||
                current.your_actor_id!==chosen.your_actor_id||
                current.access_revision!==chosen.access_revision){
-              fail("Current authorized process is archived, changed, inaccessible, mismatched or lacks independent design review of this revision.");return;
+              fail("Current authorized process is archived, changed, inaccessible, mismatched or lacks review permission for this revision.");return;
             }
             // Inspection may fetch the latest revision while the UI still shows
             // an older one. Never enable navigation into a mismatched review form.
@@ -2598,7 +2595,7 @@
               fail("The displayed review form is not the inspected latest revision. Open the latest revision and reauthorize inspection.");
               return;
             }
-            $("handoffStatus").textContent="MATCH: Fresh authorized, independently design-reviewed process revision "+p.revision+" and SHA-256 match. Eligible only for further human review. Consent, owner approval, source access, retention and execution authorization remain unverified.";
+            $("handoffStatus").textContent="MATCH: Fresh authorized process revision "+p.revision+" and SHA-256 match. Eligible for human design review only; independent approval and execution are not granted by inspection. Consent, owner approval, source access, retention and execution authorization remain unverified.";
             inspectedHandoff={workflow_id:p.workflow_id,revision:p.revision,content_sha256:p.content_sha256,access_revision:current.access_revision};
             $("handoffReview").disabled=false;
           }catch(_){fail("Fresh authenticated read failed or access was withdrawn.");}
