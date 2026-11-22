@@ -104,6 +104,9 @@ def test_unfinished_only_activities_have_case_counts_and_respect_response_limit(
     result = waiting.waiting_time(_import(
         ["case", "activity", "time", "lifecycle:transition"], rows))
     assert len(result["activities"]) == waiting.MAX_ACTIVITIES
+    assert result["activity_result_limit"] == waiting.MAX_ACTIVITIES
+    assert result["activity_total"] == waiting.MAX_ACTIVITIES + 16
+    assert result["activities_omitted"] == 16
     assert result["activities"][0]["activity"] == "Finished"
     unfinished = result["activities"][1:]
     assert len(unfinished) == waiting.MAX_ACTIVITIES - 1
