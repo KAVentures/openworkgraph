@@ -1387,8 +1387,33 @@ const path=require('node:path');
    await page.locator('#owgWaitingRun').click();
    await page.locator('#owgWaitingStatus').filter({hasText:'8 of 8 activity instances have a start and an end'}).waitFor();
    const waitingText=await page.locator('#owgWaitingResults').textContent();
-   assert.match(waitingText,/Review4\s*2\.0 h\s*2\.0 h\s*2\.0 h/,'Review: 2 h processing and 2 h waiting');
+   assert.match(waitingText,/Review4\s*4\s*2\.0 h\s*2\.0 h/,'Review: four complete instances with 2 h median processing');
+   assert.match(waitingText,/Processing with known duration/,'coverage denominator is labeled in the dashboard');
+   assert.match(waitingText,/Waiting observations/,'waiting coverage denominator is labeled in the dashboard');
+   assert.match(waitingText,/Review4\s*4 \/ 4 \(100%\)/,'observed and eligible processing counts render for the real authenticated saved log');
    assert.doesNotMatch(waitingText,/comment|note/);
+   page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
+   // More than 25 returned activities must be visible; the API itself caps at 100.
+   const manyRows=['case_id,activity,time,lifecycle:transition'];
+   for(let j=0;j<30;j++){
+     const activity='Step'+String(j).padStart(2,'0');
+     manyRows.push('C'+j+','+activity+',2024-02-01T00:00:00Z,start');
+     manyRows.push('C'+j+','+activity+',2024-02-01T00:01:00Z,complete');
+   }
+   await page.locator('#owgEventLogFile').setInputFiles({name:'many-lifecycle.csv',mimeType:'text/csv',buffer:Buffer.from(manyRows.join('\n'))});
+   await page.locator('#owgEventLogDelimiter').selectOption(',');
+   await page.waitForFunction(()=>document.querySelector('#owgEventLogAttributes').options.length===4);
+   await page.locator('#owgEventLogAttributes').selectOption(['lifecycle:transition']);
+   await page.locator('#owgEventLogCase').selectOption('case_id');await page.locator('#owgEventLogActivity').selectOption('activity');
+   await page.locator('#owgEventLogTime').selectOption('time');await page.locator('#owgEventLogResource').selectOption('');
+   await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Imported 60 events'}).waitFor();
+   await page.locator('#owgEventLogAnalyze').click();
+   await page.locator('#owgWaitingRun').click();
+   await page.locator('#owgWaitingStatus').filter({hasText:'30 of 30 activity instances'}).waitFor();
+   assert.equal(await page.locator('#owgWaitingResults table').first().locator('tbody tr').count(),30,
+     'all 30 returned activities, including ranks 26–30, are visible');
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    // Use the real 10,000-case history cap, without a server-side test override.
