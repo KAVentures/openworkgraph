@@ -63,17 +63,17 @@ def write(log_id: str, path: Path) -> dict[str, Any]:
         ("event", events, {"ocel_id", "ocel_time"}),
         ("object", objects, {"ocel_id", "ocel_time", "ocel_changed_field"}),
     ):
-        by_type: dict[str, set[str]] = {}
+        by_type: dict[str, dict[str, str]] = {}
         for entry in rows:
-            seen = by_type.setdefault(entry["type"], set(reserved))
+            known = by_type.setdefault(entry["type"], {})
             for attribute in entry["attributes"]:
                 name = attribute["name"]
                 key = name.casefold()
-                if key in seen:
+                if key in reserved or (key in known and known[key] != name):
                     raise workspace.EventLogWorkspaceError(
                         f"OCEL SQLite attribute column {name[:80]!r} conflicts with a required "
                         f"column or another attribute of the same {kind} type; use OCEL JSON or XML instead")
-                seen.add(key)
+                known[key] = name
     conn = sqlite3.connect(path)
     try:
         conn.executescript("""
