@@ -2789,15 +2789,15 @@
     return arcs.map((a,i)=>[a,choices[i]??(a.variable?'variable':'single')]).filter(([,c])=>c!=='remove')
       .map(([a,c])=>({activity:a.activity,object_type:a.object_type,variable:c==='variable'}));
   }
+  const OBJECT_ARC_ISSUES={missing_object:'No object of the type',several_objects_on_single_arc:'Several objects where one is expected',type_without_arc:'Type involved without an arc'};
   // Plain reading of an object-centric conformance result.
   function objectModelText(r){
     const s=r.summary,ratio=(n,d)=>Number(n).toLocaleString()+' of '+Number(d).toLocaleString();
-    const issue={missing_object:'No object of the type',several_objects_on_single_arc:'Several objects where one is expected',type_without_arc:'Type involved without an arc'};
     const deviating=t=>Object.entries({...t.missing_tokens_by_activity}).slice(0,3).map(([a,n])=>a+' ('+n+')').join(', ')||'—';
     return {
       summary:ratio(s.fitting_objects,s.replayed_objects)+' replayed objects fit their type’s model; '+ratio(s.fitting_events,s.events_checked)+' events match their arcs.'+(s.complete?'':' Some objects were not replayed (see Unknown).'),
       lifecycles:r.lifecycles.map(t=>[t.object_type,Number(t.objects).toLocaleString(),ratio(t.fitting_objects,t.replayed_objects),t.token_fitness===null?'—':Number(t.token_fitness).toFixed(3),Number(t.unknown_objects).toLocaleString(),deviating(t)]),
-      issues:r.arcs.issues_by_arc.slice(0,20).map(i=>[i.activity,i.object_type,issue[i.issue]||i.issue,Number(i.events).toLocaleString()]),
+      issues:r.arcs.issues_by_arc.slice(0,20).map(i=>[i.activity,i.object_type,OBJECT_ARC_ISSUES[i.issue]||i.issue,Number(i.events).toLocaleString()]),
       examples:r.arcs.examples.slice(0,5).map(e=>e.event_id+' ('+e.activity+', '+e.object_type+': '+e.objects+')')};
   }
 
@@ -2809,12 +2809,115 @@
     const message=el('div',null,'muted');message.id='owgObjectModelStatus';message.setAttribute('role','status');
     const arcsOut=el('div');arcsOut.id='owgObjectModelArcs';
     const out=el('div');out.id='owgObjectModelResults';
-    box.append(discover,arcsOut,check,message,out);
+    const issueList=el('div');issueList.id='owgObjectModelArcIssues';
+    const eventList=el('div');eventList.id='owgObjectModelArcEvents';
+    const objectList=el('div');objectList.id='owgObjectModelEventObjects';
+    const lifecycle=el('div');lifecycle.id='owgObjectModelObjectEvents';
+    box.append(discover,arcsOut,check,message,out,eventList,objectList,lifecycle);
     const generation=state.generation,logId=state.logId;let turn=0,model=null,selects=[];
     const current=t=>generation===state.generation&&box.isConnected&&t===turn;
-    const path=p=>'/v1/event-logs/'+encodeURIComponent(logId)+'/object-process-model/'+p;
+    const base='/v1/event-logs/'+encodeURIComponent(logId);
+    const path=p=>base+'/object-process-model/'+p;
+    const post=async(url,spec)=>(await api(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+    const number=n=>Number(n).toLocaleString();
+    const utc=timestamp=>timestamp.replace('T',' ').replace('Z',' UTC');
+    let eventTurn=0,objectTurn=0,lifecycleTurn=0;
+    const clearLifecycle=()=>{++lifecycleTurn;lifecycle.replaceChildren();};
+    const clearObjects=()=>{++objectTurn;objectList.replaceChildren();clearLifecycle();};
+    const clearEvents=()=>{++eventTurn;eventList.replaceChildren();clearObjects();};
+    function pageReview(panel,titleText,url,spec,valid,render,reset){
+      const heading=el('h4',titleText);heading.tabIndex=-1;
+      const status=el('div');status.setAttribute('role','status');
+      const rows=el('div'),nav=el('div',null,'row'),previous=button('Previous page','secondary'),next=button('Next page','secondary');
+      nav.append(previous,next);panel.replaceChildren(heading,status,rows,nav);heading.focus();
+      const cursors=[null];let index=0,following=null;
+      async function load(page){
+        reset();previous.disabled=next.disabled=true;status.textContent='Loading evidence…';rows.inert=true;
+        try{
+          const r=await post(url,{...spec,...(cursors[page]!==null?{after:cursors[page]}:{})});
+          if(!valid())return;
+          index=page;following=r.next_after;
+          const content=render(r);status.textContent=content.text;rows.replaceChildren(content.table);
+        }catch(error){if(valid())status.textContent=error.message;}
+        finally{if(valid()){rows.inert=false;previous.disabled=index===0;next.disabled=following===null;}}
+      }
+      previous.onclick=()=>load(index-1);
+      next.onclick=()=>{cursors[index+1]=following;load(index+1);};
+      load(0);
+    }
+    function showLifecycle(t,item){
+      const ticket=++lifecycleTurn,valid=()=>current(t)&&ticket===lifecycleTurn;
+      const heading=el('h4','Event history for '+item.object_id);heading.tabIndex=-1;
+      const status=el('div');status.setAttribute('role','status');
+      const rows=el('div'),more=button('More events','secondary');
+      lifecycle.replaceChildren(heading,status,rows,more);heading.focus();
+      let offset=0,shown=0;
+      async function load(){
+        more.disabled=true;
+        try{
+          const r=await post(base+'/case-events/query?case_type='+encodeURIComponent(item.object_type),{case_id:item.object_id,offset,limit:50});
+          if(!valid())return;
+          offset=r.next_offset;shown+=r.events.length;
+          status.textContent='Showing '+number(shown)+' of '+number(r.total_events)+' events.';
+          rows.appendChild(table(['Activity','Timestamp (UTC)','Event'],r.events.map(e=>[e.activity,utc(e.timestamp),e.event_id])));
+          show(more,offset!==null);
+        }catch(error){if(valid())status.textContent=error.message;}
+        finally{if(valid())more.disabled=offset===null;}
+      }
+      more.onclick=load;load();
+    }
+    function showObjects(t,selection,event){
+      const ticket=++objectTurn,valid=()=>current(t)&&ticket===objectTurn;
+      pageReview(objectList,'Linked objects for '+event.event_id,path('conformance/arc-evidence'),
+        {...selection,event_id:event.event_id},valid,r=>({
+          text:number(r.total)+(r.total===1?' linked object.':' linked objects.')+' '+number(r.objects_of_type)+' of type '+selection.object_type+'. Showing '+number(r.objects.length)+' on this page.',
+          table:r.objects.length?table(['Object','Type','Distinct link labels','Evidence'],r.objects.map(item=>{
+            const open=button('Open event history','secondary');open.setAttribute('aria-label','Open event history for '+item.object_id);
+            open.onclick=()=>showLifecycle(t,item);
+            return [item.object_id,item.object_type,number(item.links),open];
+          })):el('div','No retained objects linked to this event.','muted')
+        }),clearLifecycle);
+    }
+    function showIssue(t,spec,issue){
+      const ticket=++eventTurn,valid=()=>current(t)&&ticket===eventTurn;
+      const selection={model:spec.model,activity:issue.activity,object_type:issue.object_type,issue:issue.issue};
+      pageReview(eventList,issue.activity+' · '+issue.object_type+' · '+OBJECT_ARC_ISSUES[issue.issue],
+        path('conformance/arc-evidence'),selection,valid,r=>({
+          text:number(r.total)+(r.total===1?' matching event.':' matching events.')+' Showing '+number(r.events.length)+' on this page.',
+          table:r.events.length?table(['Event','Timestamp','Objects of this type','Evidence'],r.events.map(e=>{
+            const open=button('View linked objects','secondary');open.setAttribute('aria-label','View linked objects for '+e.event_id);
+            open.onclick=()=>showObjects(t,selection,e);
+            return [e.event_id,utc(e.timestamp),number(e.objects),open];
+          })):el('div','No matching events.','muted')
+        }),clearObjects);
+    }
+    function showIssues(t,spec,issues){
+      issueList.replaceChildren();clearEvents();
+      if(!issues.length)return;
+      const rows=el('div'),notice=el('div');notice.setAttribute('role','status');
+      const nav=el('div',null,'row'),previous=button('Previous issue page','secondary'),next=button('Next issue page','secondary');
+      nav.append(previous,next);show(nav,issues.length>20);
+      issueList.append(el('h4','Object arc issues'),notice,rows,nav);
+      let offset=0;
+      function render(){
+        clearEvents();
+        const page=issues.slice(offset,offset+20);
+        notice.textContent='Showing issue groups '+number(offset+1)+'–'+number(offset+page.length)+' of '+number(issues.length)+'.';
+        rows.replaceChildren(table(['Activity','Object type','Arc issue','Events','Evidence'],page.map(item=>{
+          const label=OBJECT_ARC_ISSUES[item.issue];
+          const inspect=button('Inspect events','secondary');
+          inspect.setAttribute('aria-label','Inspect events for '+item.activity+' · '+item.object_type+' · '+label);
+          inspect.onclick=()=>showIssue(t,spec,item);
+          return [item.activity,item.object_type,label,number(item.events),inspect];
+        })));
+        previous.disabled=offset===0;next.disabled=offset+20>=issues.length;
+      }
+      previous.onclick=()=>{offset-=20;render();};
+      next.onclick=()=>{offset+=20;render();};
+      render();
+    }
     discover.onclick=async()=>{
-      const t=++turn;discover.disabled=check.disabled=true;out.replaceChildren();message.textContent='Discovering…';
+      const t=++turn;discover.disabled=check.disabled=true;out.replaceChildren();issueList.replaceChildren();clearEvents();message.textContent='Discovering…';
       try{
         const r=await (await api(path('discovery'),{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();
         if(!current(t))return;
@@ -2829,15 +2932,16 @@
       finally{if(current(t))discover.disabled=false;}
     };
     check.onclick=async()=>{
-      const t=++turn;check.disabled=true;out.replaceChildren(el('div','Checking…','muted'));
+      const t=++turn;check.disabled=true;out.replaceChildren(el('div','Checking…','muted'));issueList.replaceChildren();clearEvents();
       try{
         const spec={model:{...model,arcs:objectModelArcs(model.arcs,selects.map(s=>s.value))}};
-        const r=await (await api(path('conformance'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        const r=await post(path('conformance'),spec);
         if(!current(t))return;
         const v=objectModelText(r);
         out.replaceChildren(el('div',v.summary,'note'),table(['Object type','Objects','Fitting','Token fitness','Unknown','Missing tokens at'],v.lifecycles),
-          ...(v.issues.length?[table(['Activity','Object type','Arc issue','Events'],v.issues),el('div','Examples: '+v.examples.join(', '),'muted')]:[el('div','Every checked event matches its arcs.','muted')]),
-          el('div',r.interpretation,'muted'));
+          ...(v.issues.length?[]:[el('div','Every checked event matches its arcs.','muted')]),
+          el('div',r.interpretation,'muted'),issueList);
+        showIssues(t,spec,r.arcs.issues_by_arc);
       }catch(error){if(current(t))out.replaceChildren(el('div',error.message,'muted'));}
       finally{if(current(t))check.disabled=false;}
     };

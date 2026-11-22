@@ -68,7 +68,14 @@ The object-centric map has an **Object process model** section next to Object ru
 - **Discover object model** shows each arc with its measured objects per event and a choice: *Exactly one*,
   *One or more* or *Not involved*.
 - **Check object model** sends the edited model. Its results show fitting objects and token fitness per type,
-  where tokens went missing, arc issues and examples.
+  where tokens went missing, and arc issues. **Inspect events** opens the exact events for an issue.
+  **View linked objects** shows the recorded objects across types and how many distinct link labels each has.
+  **Open event history** shows the selected object's retained events.
+
+`POST /v1/event-logs/{log_id}/object-process-model/conformance/arc-evidence` takes the checked
+`model`, the literal `activity`, `object_type`, and the `issue` from the report. It returns matching
+events in event-key order. Add a matching `event_id` to page through its linked objects in object-key
+order. Both views accept `limit` 1–100 (default 50). Send `next_after` as `after` to continue.
 
 ## Validation
 
