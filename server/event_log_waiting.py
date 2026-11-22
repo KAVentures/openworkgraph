@@ -63,7 +63,7 @@ def _hotspot_cases(conn, page: _HotspotPage) -> dict[str, Any]:
 
 
 def _path(name: str) -> str:
-    if not _ATTRIBUTE.match(name or ""):
+    if not isinstance(name, str) or not _ATTRIBUTE.fullmatch(name):
         raise workspace.EventLogWorkspaceError("Attribute names are 1–120 characters without quotes or backslashes")
     return '$."' + name + '"'
 
