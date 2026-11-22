@@ -228,3 +228,44 @@ def test_source_revoked_during_last_review_denied(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
     assert exc.value.status_code == 403
+
+
+def test_internal_admission_requests_have_json_content_type(monkeypatch):
+    """Real _body requires JSON media type; synthetic subrequests must supply it."""
+    install(monkeypatch)
+    from server import local_source_credentials
+    from server import open_work_provider_attempt_verification as verifier
+    monkeypatch.setattr(local_source_credentials, "_read_metadata",
+                        lambda path: {"account": "acct_12345678"})
+    monkeypatch.setattr(routes, "_source_scope", lambda: "tenant-1")
+    monkeypatch.setattr(verifier, "verify_provider_attempt",
+                        lambda **kwargs: {"status": "unknown", "customer_outcome": "unknown"})
+    seen = []
+    async def reviewed(req, resp):
+        assert req.headers.get("content-type") == "application/json"
+        parsed = await routes._body(req, {
+            "work_item_ref", "expected_revision", "expected_edit_token",
+            "confirm_historical_review", "confirm_run_comparison", "max_cases",
+            "deployment_id", "run_id",
+        })
+        assert parsed["run_id"] == DATA["run_id"]
+        seen.append("review")
+        return {"case_ref": "case-1", "receipts": {"run_ref": "run-1"}}
+    async def receipts(req, resp):
+        assert req.headers.get("content-type") == "application/json"
+        parsed = await routes._body(req, {
+            "work_item_ref", "expected_revision", "expected_edit_token",
+            "confirm_historical_review", "confirm_run_comparison", "max_cases",
+            "deployment_id", "run_id",
+        })
+        assert parsed["run_id"] == DATA["run_id"]
+        seen.append("receipts")
+        return {"run_ref": "run-1", "entries": []}
+    # The top-level request remains stubbed, but both nested requests use the
+    # actual JSON parser and its strict content-type requirement.
+    monkeypatch.setattr(routes, "read_local_combined_case_review", reviewed)
+    monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", receipts)
+    result = asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
+    assert result["receipt_persisted"] is False
+    assert seen.count("review") >= 3
+    assert seen.count("receipts") == 2
