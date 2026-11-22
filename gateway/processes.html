@@ -2613,8 +2613,14 @@
             // Denial, revocation, or an unavailable Gateway must not leave the
             // previous process looking like a successful recovery.
             if(recoveryOpenTicket===processOpenGeneration&&
-               identityTicket===identityGeneration&&selected?.process?.workflow_id===workflowId)
-              $("handoffStatus").textContent="REFUSED: Could not reopen an authorized revision. Check access and sign in again before inspecting.";
+               identityTicket===identityGeneration&&selected?.process?.workflow_id===workflowId) {
+              // A denied refresh invalidates the displayed review actions too.
+              // Never leave an old revision selectable after access revocation.
+              selected=null;
+              $("selected").hidden=true;
+              $("reviewConfirm").checked=false;
+              $("handoffStatus").textContent="REFUSED: Could not reopen an authorized revision. Sign in and select a currently accessible process before inspecting.";
+            }
             throw error;
           }
           // A later open of even the same workflow supersedes this recovery.
