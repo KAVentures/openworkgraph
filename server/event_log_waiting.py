@@ -148,6 +148,11 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
         # with starts but no completions. Rank those missing-duration activities
         # deterministically after the observed waiting-time hotspots.
         open_only = sorted(set(open_by_activity) - observed_names)
+        # Surface truncation explicitly: a top-100 table is not a complete cohort.
+        # Count distinct activities across both observed and unfinished-only rows,
+        # including observed activities omitted by the ranked SQL LIMIT.
+        observed_activity_total = conn.execute("SELECT count(DISTINCT activity) FROM seq2").fetchone()[0]
+        activity_total = observed_activity_total + len(open_only)
         remaining = max(0, MAX_ACTIVITIES - len(activities))
         if remaining and open_only:
             activities = list(activities) + [
@@ -167,6 +172,9 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
             return {"median_seconds": median, "p90_seconds": p90, "mean_seconds": mean}
         return {
             **base, "available": True, "events": events,
+            "activity_result_limit": MAX_ACTIVITIES,
+            "activity_total": activity_total,
+            "activities_omitted": max(0, activity_total - len(activities)),
             **({"working_calendar":calendar_result} if calendar_result is not None else {}),
             "instances": {"total": sum(kinds.values()), "with_processing_time": kinds.get("paired", 0),
                           "complete_without_start": kinds.get("complete_only", 0),
