@@ -149,6 +149,15 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(episode, dict):
                 raise ValueError("invalid identity timeline episode")
             nested_timeline_truncated |= _truncation_flag(episode, "evidence_truncated")
+            # An interruption segment may omit evidence independently of its episode.
+            # Do not certify partial nested provenance as a complete cohort.
+            segments = episode.get("segments", [])
+            if not isinstance(segments, list) or len(segments) > 8:
+                raise ValueError("invalid or unbounded identity timeline segments")
+            for segment in segments:
+                if not isinstance(segment, dict):
+                    raise ValueError("invalid identity timeline segment")
+                nested_timeline_truncated |= _truncation_flag(segment, "evidence_truncated")
     continuity_flag = _truncation_flag(response, "observed_group_continuity_truncated")
     identity_timelines_flag = _truncation_flag(response, "identity_timelines_truncated")
     continuity_truncated = continuity_flag or len(continuity) > 24
