@@ -59,7 +59,7 @@ def _flat_records(source: IO[bytes]):
         line = raw.strip()
         if not line:
             continue
-        if number == 1 and line.startswith(b"\\xef\\xbb\\xbf"):
+        if number == 1 and line.startswith(b"\xef\xbb\xbf"):
             line = line[3:]
         try:
             value = json.loads(line)
@@ -96,7 +96,7 @@ def to_csv(source: IO[bytes]) -> dict[str, Any]:
     except (OSError, AttributeError):
         raise JsonlError("the JSON Lines input must be seekable") from None
     out = io.StringIO()
-    writer = csv.writer(out, lineterminator="\\n")
+    writer = csv.writer(out, lineterminator="\n")
     names = list(columns)
     writer.writerow(names)
     if out.tell() > MAX_CSV_CHARS:
