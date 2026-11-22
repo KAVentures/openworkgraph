@@ -405,3 +405,20 @@ def test_malformed_retained_attempt_journal_blocks_provider_io(monkeypatch, entr
         asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
     assert exc.value.status_code == 409
     assert calls == []
+
+
+@pytest.mark.parametrize("entries", [[{}], [None], ["not-a-row"], [1], [{"attempt_ref": "a"}] * 201])
+def test_unusable_or_oversized_journal_never_contacts_provider(monkeypatch, entries):
+    """An empty placeholder or unbounded journal is not a retained attempt."""
+    install(monkeypatch)
+    from server import open_work_provider_attempt_verification as verifier
+    calls = []
+    monkeypatch.setattr(verifier, "verify_provider_attempt",
+                        lambda **kwargs: calls.append("provider"))
+    async def invalid(req, resp):
+        return {"run_ref": "run-1", "entries": entries}
+    monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", invalid)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
+    assert exc.value.status_code == 409
+    assert calls == []
