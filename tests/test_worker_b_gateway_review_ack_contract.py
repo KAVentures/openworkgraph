@@ -100,3 +100,12 @@ def test_executable_export_requires_bounded_complete_zip_central_directory():
     ):
         assert guard in block
     assert block.index("!zipHeader || !directoryValid") < len(block)
+
+
+def test_executable_export_encodes_workflow_identity_in_authenticated_route():
+    """Workflow IDs are opaque; they must not alter export path or query parameters."""
+    source = (Path(__file__).resolve().parents[1] / "gateway" / "processes.html").read_text()
+    block = source.split("async function download(format) {", 1)[1].split("const response = await fetch(", 1)[1].split("if (!response.ok)", 1)[0]
+    assert 'encodeURIComponent(record.workflow_id) +' in block
+    assert 'record.workflow_id +' not in block
+    assert 'new URLSearchParams({' in block
