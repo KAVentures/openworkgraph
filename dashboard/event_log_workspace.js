@@ -966,7 +966,7 @@
     results.appendChild(deriveSection(names));
     results.appendChild(anonymizedExportSection());
     results.appendChild(dottedSection());
-    results.appendChild(spectrumSection());
+    results.appendChild(spectrumSection(inspection));
     results.appendChild(heuristicsSection());
     results.appendChild(glossarySection());
     results.appendChild(activityProfileSection(names));
@@ -4591,19 +4591,60 @@
   // Performance spectrum: each occurrence of a step-to-step segment as a line from its start to its end.
   const SPECTRUM_COLOURS={fast:'#2a78c5',normal:'#8a8a84',slow:'#d08a1f',very_slow:'#c0392b'};
   const SPECTRUM_NAMES={fast:'Fast',normal:'Normal',slow:'Slow',very_slow:'Very slow'};
-  function spectrumSection(){
+  function spectrumSection(inspection){
     const box=section('Performance spectrum');box.id='owgSpectrum';
     box.appendChild(el('div','For the busiest step-to-step segments, each occurrence is a line from when the first step happened (top) to when the next one did (bottom), coloured by how long it took compared with the segment’s other occurrences. Lines that meet at the bottom show work released together; crossing lines show later work overtaking earlier work.','muted'));
     const run=button('Draw performance spectrum','secondary');run.id='owgSpectrumRun';
     const statusLine=el('div',null,'muted');statusLine.id='owgSpectrumStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgSpectrumResults';
-    box.append(run,statusLine,out);
+    const review=el('div');review.id='owgSpectrumCaseReview';
+    box.append(run,statusLine,out,review);
     const pct=x=>x===null?'—':Math.round(x*100)+'%';
+    const number=n=>Number(n).toLocaleString();
+    const classes=['fast','normal','slow','very_slow'];
+    let reviewTurn=0;
+    function inspect(url,seg,period,category){
+      const generation=state.generation,turn=++reviewTurn;
+      const current=()=>generation===state.generation&&turn===reviewTurn;
+      const selection={segment:[seg.from,seg.to]};
+      if(period!==null){selection.bin=period.bin;selection.class=category;}
+      const label=seg.from+' → '+seg.to+(period!==null?' · '+SPECTRUM_NAMES[category]+' · period '+(period.bin+1):'');
+      const title=el('h4',label);title.tabIndex=-1;
+      const status=el('div');status.setAttribute('role','status');
+      const rows=el('div'),nav=el('div',null,'row');
+      const previous=button('Previous case page','secondary'),next=button('Next case page','secondary');
+      nav.append(previous,next);review.replaceChildren(title,status,rows,nav);title.focus();
+      const cursors=[null];let index=0,following=null;
+      const dateTime=value=>value.replace('T',' ').replace('Z',' UTC');
+      async function load(page){
+        previous.disabled=next.disabled=true;status.textContent='Loading cases…';
+        try{
+          const spec={...selection,...(cursors[page]!==null?{after:cursors[page]}:{})};
+          const r=await (await api(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+          if(!current())return;
+          index=page;following=r.next_after;
+          status.textContent=number(r.occurrences)+(r.occurrences===1?' occurrence in ':' occurrences in ')+
+            number(r.total)+(r.total===1?' case.':' cases.')+' Showing '+number(r.cases.length)+' on this page.';
+          rows.replaceChildren(r.cases.length?table(['Case','Occurrences','First start','Last finish','Median duration','Evidence'],r.cases.map(c=>{
+            const open=button('Open case','secondary');open.setAttribute('aria-label','Open case '+c.case_id);
+            open.onclick=()=>inspection.open(c.case_id);
+            return [c.case_id,number(c.occurrences),dateTime(c.first_started_at),dateTime(c.last_finished_at),duration(c.median_seconds),open];
+          })):el('div','No matching cases.','muted'));
+        }catch(error){if(current())status.textContent=error.message;}
+        finally{if(current()){previous.disabled=index===0;next.disabled=following===null;}}
+      }
+      previous.onclick=()=>load(index-1);
+      next.onclick=()=>{cursors[index+1]=following;load(index+1);};
+      load(0);
+    }
     run.onclick=async()=>{
       const generation=state.generation;run.disabled=true;statusLine.textContent='Drawing…';out.replaceChildren();
+      ++reviewTurn;review.replaceChildren();
       try{
-        const r=await getJSON(logPath('performance-spectrum',{top:'6',bins:'30'}));
+        const url=logPath('performance-spectrum',{top:'6',bins:'30'}),r=await getJSON(url);
         if(generation!==state.generation)return;
+        const endpoint=new URL(url,window.location.origin);endpoint.pathname+='/cases';endpoint.searchParams.delete('top');
+        const evidenceURL=endpoint.pathname+endpoint.search;
         if(!r.segments.length){statusLine.textContent='No case has two consecutive events.';return;}
         statusLine.textContent=r.segments.length+' of '+r.segments_total+' segments, busiest first.'+(r.cases_before_filter?' Filtered from '+Number(r.cases_before_filter).toLocaleString()+' cases.':'');
         const legend=el('ul');legend.style.cssText='list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:4px 14px;margin:6px 0';
@@ -4611,8 +4652,8 @@
           sw.style.cssText='display:inline-block;width:14px;height:3px;vertical-align:middle;margin-right:6px;background:'+SPECTRUM_COLOURS[k];
           item.append(sw,document.createTextNode(SPECTRUM_NAMES[k]+' — '+r.classes[k]));legend.appendChild(item);}
         out.appendChild(legend);
-        const span=Math.max(1,r.bin_seconds*r.bins);
-        const stamp=s=>new Date(Date.parse(r.time_origin)+s*1000).toISOString().slice(0,16).replace('T',' ');
+        const span=r.bin_width_seconds*r.bins;
+        const stamp=s=>new Date(Date.parse(r.time_origin)+s*1000).toISOString().slice(0,23).replace('T',' ');
         const ink=getComputedStyle(box).color||'#52514e';
         for(const seg of r.segments){
           const title=el('h4',seg.from+' → '+seg.to);title.style.margin='12px 0 4px';
@@ -4630,10 +4671,21 @@
           ctx.globalAlpha=1;ctx.fillStyle=ink;ctx.font='11px system-ui,sans-serif';ctx.textAlign='left';
           const d=seg.duration_seconds;
           const facts=el('div',seg.occurrences.toLocaleString()+' occurrences'+(seg.lines_sampled?' ('+seg.lines.length+' drawn)':'')+' · median '+duration(d.median)+', 25th–75th percentile '+duration(d.p25)+'–'+duration(d.p75)+', 95th '+duration(d.p95)+' · '+pct(seg.fifo_share)+' finish in start order · '+pct(seg.batched_share)+' released together (≥'+r.batch_min+' ending at one instant).','muted');
+          const open=button('Inspect cases','secondary');
+          open.setAttribute('aria-label','Inspect cases from '+seg.from+' to '+seg.to);
+          open.onclick=()=>inspect(evidenceURL,seg,null,null);
           const busy=seg.bins.filter(b=>Object.values(b.counts).some(n=>n));
-          const tbl=table(['Started from','Fast','Normal','Slow','Very slow','Median'],busy.map(b=>[stamp(b.bin*r.bin_seconds),...['fast','normal','slow','very_slow'].map(k=>String(b.counts[k])),duration(b.median_seconds)]));
+          const tbl=table(['Started from (UTC)','Fast','Normal','Slow','Very slow','Median'],busy.map(b=>{
+            const start=stamp(b.bin*r.bin_width_seconds);
+            return [start,...classes.map(k=>{
+              const n=b.counts[k];if(!n)return '0';
+              const pick=button(number(n),'secondary');
+              pick.setAttribute('aria-label','Inspect '+number(n)+' '+SPECTRUM_NAMES[k].toLowerCase()+' in period '+(b.bin+1)+' starting '+start+' UTC');
+              pick.onclick=()=>inspect(evidenceURL,seg,b,k);return pick;
+            }),duration(b.median_seconds)];
+          }));
           const more=document.createElement('details');more.appendChild(el('summary','Occurrences per period'));more.appendChild(tbl);
-          out.append(title,canvas,facts,more);
+          out.append(title,canvas,facts,open,more);
         }
         out.appendChild(el('div',r.caveat,'muted'));
         statusLine.textContent+=' Time runs from '+stamp(0)+' to '+stamp(span)+'.';

@@ -1695,6 +1695,18 @@ def event_log_performance_spectrum(request: Request, log_id: str, case_type: str
     return _respond(run)
 
 
+@router.post("/v1/event-logs/{log_id}/performance-spectrum/cases")
+async def event_log_performance_spectrum_cases(request: Request, log_id: str,
+                                                case_type: str | None = Query(default=None, max_length=200),
+                                                bins: int = Query(default=30, ge=2, le=100),
+                                                cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_performance_spectrum as spectrum
+    _require_dashboard(request)
+    selection = await _json_body(request, "performance-spectrum case settings", strict=True, limit=8192)
+    return await run_in_threadpool(_respond, spectrum.segment_cases, log_id, case_type, selection=selection,
+                                   bins=bins, cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/dotted-chart")
 def event_log_dotted_chart(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                            time: str = Query(default="absolute", pattern="^(absolute|relative)$"),
