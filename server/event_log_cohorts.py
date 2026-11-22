@@ -19,7 +19,7 @@ from .event_log_workspace import EventLogWorkspaceError
 _SEP = workspace._SEP
 _KEYS = {"label", "started_from", "started_before", "resource", "activity", "attribute", "attribute_range", "event_attribute", "tag",
          "follows", "variants", "duration", "starts_with", "ends_with", "ended_from", "ended_before", "events",
-         "path_cases", "rework", "without_tag", "without_activity"}
+         "path_cases", "rework", "without_tag", "without_activity", "all_of"}
 MAX_FOLLOW_RULES = 5
 MAX_FOLLOW_HOURS = 24 * 3650
 MAX_COHORT_VARIANTS = 500
@@ -41,7 +41,7 @@ def parse_cohort(spec: Any) -> dict[str, Any]:
     if not isinstance(spec, dict) or set(spec) - _KEYS:
         raise EventLogWorkspaceError(
             "cohort accepts label, started_from, started_before, resource, activity, attribute, attribute_range, event_attribute, "
-            "tag, follows, variants, duration, starts_with, ends_with, ended_from, ended_before, events, path_cases, rework, without_tag, without_activity")
+            "tag, follows, variants, duration, starts_with, ends_with, ended_from, ended_before, events, path_cases, rework, without_tag, without_activity, all_of")
     cohort: dict[str, Any] = {}
     if spec.get("label") not in (None, ""):
         cohort["label"] = _short(spec["label"], "label")[:80]
@@ -78,6 +78,15 @@ def parse_cohort(spec: Any) -> dict[str, Any]:
         if not isinstance(spec["rework"], bool):
             raise EventLogWorkspaceError("cohort rework must be true (cases that repeat an activity) or false")
         cohort["rework"] = spec["rework"]
+    if "all_of" in spec:
+        parts = spec["all_of"]
+        if (not isinstance(parts, list) or not 2 <= len(parts) <= 4
+                or any(not isinstance(part, dict) or "all_of" in part for part in parts)):
+            raise EventLogWorkspaceError("cohort all_of needs 2–4 case filters without nested all_of")
+        filters = [parse_cohort(part) for part in parts]
+        if any(not (part.keys() - {"label"}) for part in filters):
+            raise EventLogWorkspaceError("each cohort all_of member needs a case filter")
+        cohort["all_of"] = filters
     if "started_from" in cohort and "started_before" in cohort and cohort["started_from"] >= cohort["started_before"]:
         raise EventLogWorkspaceError("cohort period is empty")
     if "ended_from" in cohort and "ended_before" in cohort and cohort["ended_from"] >= cohort["ended_before"]:
@@ -192,6 +201,8 @@ def describe(cohort: dict[str, Any]) -> dict[str, Any]:
     for key, value in cohort.items():
         if key in ("started_from", "started_before", "ended_from", "ended_before"):
             out[key] = value.isoformat() + "Z"
+        elif key == "all_of":
+            out[key] = [describe(part) for part in value]
         elif key in ("attribute", "event_attribute"):
             out[key] = f"{value[0]}={value[1]}"
         elif key in ("attribute_range", "duration", "events", "path_cases"):
@@ -313,6 +324,10 @@ def _predicate(cohort: dict[str, Any], log_id: str) -> tuple[str, list[Any]]:
         clauses.append(f"""case_id IN (SELECT case_id FROM ce GROUP BY case_id
             HAVING string_agg(activity, '{_SEP}' ORDER BY ts, event_id) IN (SELECT unnest(?)))""")
         params.append([_SEP.join(v) for v in cohort["variants"]])
+    for part in cohort.get("all_of", ()):
+        predicate, arguments = _predicate(part, log_id)
+        clauses.append(f"({predicate})")
+        params.extend(arguments)
     return (" AND ".join(clauses) or "TRUE"), params
 
 
