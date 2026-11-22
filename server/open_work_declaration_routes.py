@@ -3287,7 +3287,10 @@ async def read_local_bound_provider_review(request: Request, response: Response)
         async def receive():
             return {"type": "http.request", "body": raw, "more_body": False}
         replay_scope = dict(request.scope)
-        replay_scope["headers"] = list(request.scope.get("headers", []))
+        replay_scope["headers"] = [
+            (key, value) for key, value in request.scope.get("headers", [])
+            if key.lower() != b"content-type"
+        ] + [(b"content-type", b"application/json")]
         return await route(Request(replay_scope, receive=receive), Response())
 
     review_fields = {key: payload[key] for key in (
