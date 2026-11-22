@@ -59,6 +59,47 @@ def test_literal_end_activity_and_case_completion_are_separate_branches():
         ("(end)", False), (terminal, True),
     }
     assert set(result["evaluation"]["holdout_confusion"]) == {"(end)", terminal}
+    literal = decisions.branch_cases(log, selection={"activity": "Check", "next_activity": "(end)"})
+    ended = decisions.branch_cases(log, selection={"activity": "Check", "ends_here": True})
+    assert literal["total"] == ended["total"] == 100
+    assert literal["cases"][0] == {"case_id": "c1", "occurrences": 1}
+    assert ended["cases"][0] == {"case_id": "c0", "occurrences": 1}
+    assert decisions.branch_cases(log, selection={"activity": "Check", "next_activity": terminal})["total"] == 0
+
+
+def test_observed_branch_pages_keep_case_counts_and_occurrences_distinct():
+    rows = ["case,activity,time"]
+    for key, path in {"c1": ["Check", "Review", "Check", "Review"],
+                      "c2": ["Start", "Check", "Review"],
+                      "c10": ["Check", "Review", "Other"],
+                      "c11": ["Start", "Check", "Other"]}.items():
+        for hour, activity in enumerate(path):
+            rows.append(f"{key},{activity},2024-03-01T{hour:02d}:00:00Z")
+    log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="repeated reviews", source_format="csv",
+                               mapping={k: MAPPING[k] for k in ("case_column", "activity_column", "timestamp_column")}
+                               )["log_id"]
+    selection = {"activity": "Check", "next_activity": "Review", "limit": 2}
+    first = decisions.branch_cases(log, selection=selection)
+    second = decisions.branch_cases(log, selection={**selection, "after": first["next_after"]})
+    assert first["total"] == second["total"] == 3
+    assert first["occurrences"] == second["occurrences"] == 4
+    assert first["cases"] == [{"case_id": "c1", "occurrences": 2}, {"case_id": "c10", "occurrences": 1}]
+    assert second["cases"] == [{"case_id": "c2", "occurrences": 1}]
+    assert second["next_after"] is None
+    filtered = decisions.branch_cases(log, selection=selection, cohort={"activity": "Start"})
+    assert filtered["total"] == filtered["occurrences"] == 1
+    assert filtered["cases"] == second["cases"]
+
+
+@pytest.mark.parametrize("selection", [
+    "Check", {}, {"activity": "Check"}, {"activity": "Check", "ends_here": False},
+    {"activity": "Check", "ends_here": True, "next_activity": "(end)"},
+    {"activity": "Check", "ends_here": True, "limit": True},
+    {"activity": "Check", "ends_here": True, "after": ""},
+])
+def test_observed_branch_rejects_invalid_selection(selection):
+    with pytest.raises(EventLogWorkspaceError):
+        decisions.branch_cases("unused", selection=selection)
 
 
 def test_decision_points_list_branches():
