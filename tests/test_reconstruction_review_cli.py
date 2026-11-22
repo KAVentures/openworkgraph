@@ -180,6 +180,8 @@ class TruncatedNavigationEvidenceTests(unittest.TestCase):
         for timeline in (
             {"episodes_truncated": True, "episodes": []},
             {"episodes_truncated": False, "episodes": [{"evidence_truncated": True}]},
+            {"episodes": [{"evidence_truncated": False, "segments": [
+                {"evidence_truncated": True}]}]},
         ):
             with self.subTest(timeline=timeline):
                 source = payload([pair("A", "F", ["e1"])])
@@ -197,6 +199,9 @@ class TruncatedNavigationEvidenceTests(unittest.TestCase):
             {"episodes_truncated": "false", "episodes": []},
             {"episodes": [{"evidence_truncated": 0}]},
             {"episodes": [None]},
+            {"episodes": [{"segments": [{"evidence_truncated": "false"}]}]},
+            {"episodes": [{"segments": [None]}]},
+            {"episodes": [{"segments": [{}] * 9}]},
             {"episodes": [{}] * 9},
         ):
             with self.subTest(timeline=timeline):
