@@ -942,7 +942,7 @@
     results.appendChild(durationDistributionSection(inspection));
     results.appendChild(batchingSection());
     results.appendChild(benchmarkSection(names));
-    results.appendChild(timePatternSection(names));
+    results.appendChild(timePatternSection(names,inspection));
     results.appendChild(impactSection(names));
     results.appendChild(stuckSection(inspection));
     results.appendChild(savedGraphSection(names,inspection));
@@ -3467,7 +3467,7 @@
     return box;
   }
 
-  function timePatternSection(activityNames){
+  function timePatternSection(activityNames,inspection){
     const box=section('When work happens');box.id='owgEventLogTimePatterns';
     box.appendChild(el('div','Events and new cases by weekday and hour in your time zone, and the share of events outside working hours. Recorded time is not proof of when people worked.','muted'));
     const zone=input('owgPatternZone','text');zone.maxLength=64;
@@ -3475,31 +3475,109 @@
     const act=select('owgPatternActivity',[['','All activities'],...activityNames.slice(0,500).map(a=>[a,a])]);
     const startH=input('owgPatternStart','number');startH.min='0';startH.max='23';startH.value='8';
     const endH=input('owgPatternEnd','number');endH.min='1';endH.max='24';endH.value='18';
+    const workingDays=document.createElement('fieldset');
+    workingDays.appendChild(el('legend','Working days'));
+    const days=el('div',null,'row');workingDays.appendChild(days);
+    const weekdays=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+    const dayChecks=weekdays.map((weekday,i)=>{
+      const check=input('owgPatternDay'+(i+1),'checkbox');check.checked=i<5;
+      const label=el('label',' '+weekday);label.prepend(check);days.appendChild(label);
+      return check;
+    });
+    const mode=select('owgPatternMode',[['events','Recorded events'],['case_arrivals','Case arrivals']]);
     const run=button('Show when work happens','secondary');run.id='owgPatternRun';
     const out=el('div');out.id='owgPatternResults';out.setAttribute('role','status');
+    const grid=el('div');grid.id='owgPatternDisplay';
+    const review=el('div');review.id='owgPatternCaseReview';
     const row=el('div',null,'row');row.style.alignItems='end';
     row.append(field('Time zone',zone),field('Activity',act),field('Working hours from',startH),field('to',endH),run);
-    box.append(row,out);
-    const generation=state.generation;
+    const gridControl=field('Show in the grid',mode);gridControl.hidden=true;
+    box.append(row,workingDays,out,gridControl,grid,review);
+    const generation=state.generation,endpoint='/v1/event-logs/'+encodeURIComponent(state.logId)+'/time-patterns';
+    const number=n=>Number(n).toLocaleString();
+    const hourText=h=>String(h).padStart(2,'0')+':00';
+    const dateTime=value=>value.replace('T',' ').replace('Z',' UTC');
+    let reviewTurn=0,report=null;
+    const clearReview=()=>{++reviewTurn;review.replaceChildren();};
+    const request=async(suffix,spec)=>(await api(endpoint+suffix,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+    function inspect(spec,group,label,cell={}){
+      const turn=++reviewTurn,current=()=>generation===state.generation&&turn===reviewTurn;
+      const title=el('h4',label+' in '+spec.time_zone);title.tabIndex=-1;
+      const status=el('div');status.setAttribute('role','status');
+      const rows=el('div'),nav=el('div',null,'row');
+      const previous=button('Previous case page','secondary'),next=button('Next case page','secondary');
+      nav.append(previous,next);review.replaceChildren(title,status,rows,nav);title.focus();
+      const cursors=[null];let index=0,following=null;
+      const arrivals=group==='case_arrivals';
+      async function load(page){
+        previous.disabled=next.disabled=true;status.textContent='Loading cases…';
+        try{
+          const r=await request('/cases',{...spec,group,...cell,...(cursors[page]!==null?{after:cursors[page]}:{})});
+          if(!current())return;
+          index=page;following=r.next_after;
+          status.textContent=(arrivals?'':number(r.events)+(r.events===1?' event in ':' events in '))+
+            number(r.total)+(r.total===1?' case.':' cases.')+' Showing '+number(r.cases.length)+' on this page.';
+          const headers=arrivals?['Case','Arrival','Evidence']:['Case','Matching events','First matching event','Last matching event','Evidence'];
+          rows.replaceChildren(r.cases.length?table(headers,r.cases.map(c=>{
+            const open=button('Open case','secondary');open.setAttribute('aria-label','Open case '+c.case_id);
+            open.onclick=()=>inspection.open(c.case_id);
+            return arrivals?[c.case_id,dateTime(c.first_at),open]:[c.case_id,number(c.matches),dateTime(c.first_at),dateTime(c.last_at),open];
+          })):el('div','No matching cases.','muted'));
+        }catch(error){if(current())status.textContent=error.message;}
+        finally{if(current()){previous.disabled=index===0;next.disabled=following===null;}}
+      }
+      previous.onclick=()=>load(index-1);
+      next.onclick=()=>{cursors[index+1]=following;load(index+1);};
+      load(0);
+    }
+    function drawGrid(){
+      clearReview();
+      if(!report)return;
+      const {r,spec}=report,group=mode.value,counts=r[group];
+      const noun=group==='events'?'events':'case arrivals';
+      const max=Math.max(1,...counts.flat());
+      const wrap=el('div',null,'table-wrap'),t=el('table'),head=el('tr');t.id='owgPatternGrid';
+      wrap.tabIndex=0;wrap.setAttribute('role','region');wrap.setAttribute('aria-label','Hourly grid for '+noun);
+      const corner=el('th','Weekday');corner.scope='col';head.appendChild(corner);
+      for(let h=0;h<24;h++){const th=el('th',String(h).padStart(2,'0'));th.scope='col';head.appendChild(th);}
+      const thead=el('thead');thead.appendChild(head);const body=el('tbody');
+      counts.forEach((rowCounts,d)=>{
+        const tr=el('tr'),th=el('th',r.weekdays[d].slice(0,3));th.scope='row';tr.appendChild(th);
+        rowCounts.forEach((n,h)=>{
+          const td=el('td');td.style.textAlign='center';
+          if(n){
+            td.style.background='rgba(37,99,235,'+(0.12+0.6*n/max).toFixed(3)+')';
+            const location=r.weekdays[d]+' '+hourText(h);
+            const matching=group==='events'?(n===1?'event':'events'):(n===1?'case arrival':'case arrivals');
+            const open=button(number(n),'secondary');
+            open.setAttribute('aria-label','Inspect '+number(n)+' '+matching+' for '+location);
+            open.onclick=()=>inspect(spec,group,location+' '+noun,{weekday:d+1,hour:h});
+            td.appendChild(open);
+          }
+          tr.appendChild(td);
+        });
+        body.appendChild(tr);
+      });
+      t.append(thead,body);wrap.appendChild(t);
+      const busy=r.busiest.map(b=>b.weekday+' '+hourText(b.hour)+' ('+b.events+')').join(', ');
+      grid.replaceChildren(wrap,...(group==='events'?[el('div',busy?'Busiest: '+busy+'.':'No events.','muted')]:[]));
+    }
+    mode.onchange=drawGrid;
     run.onclick=async()=>{
-      run.disabled=true;
+      run.disabled=true;report=null;grid.replaceChildren();gridControl.hidden=true;clearReview();
+      out.replaceChildren(el('div','Calculating time patterns…','muted'));
       try{
-        const spec={time_zone:zone.value.trim()||'UTC',work_start_hour:Number(startH.value),work_end_hour:Number(endH.value)};
+        const spec={time_zone:zone.value.trim()||'UTC',work_start_hour:Number(startH.value),work_end_hour:Number(endH.value),
+          work_days:dayChecks.flatMap((check,i)=>check.checked?[i+1]:[])};
         if(act.value)spec.activity=act.value;if(state.caseType)spec.case_type=state.caseType;
-        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/time-patterns',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(filterOn())spec.cohort=globalCohort();
+        const r=await request('',spec);
         if(generation!==state.generation)return;
-        const max=Math.max(1,...r.events.flat());
-        const wrap=el('div',null,'table-wrap'),t=el('table'),head=el('tr');t.id='owgPatternGrid';
-        const corner=el('th','Weekday');corner.scope='col';head.appendChild(corner);
-        for(let h=0;h<24;h++){const th=el('th',String(h).padStart(2,'0'));th.scope='col';head.appendChild(th);}
-        const thead=el('thead');thead.appendChild(head);const body=el('tbody');
-        r.events.forEach((rowCounts,d)=>{const tr=el('tr');const th=el('th',r.weekdays[d].slice(0,3));th.scope='row';tr.appendChild(th);
-          rowCounts.forEach(n=>{const td=el('td',n?String(n):'');td.style.background=n?'rgba(37,99,235,'+(0.12+0.6*n/max).toFixed(3)+')':'';td.style.textAlign='center';tr.appendChild(td);});body.appendChild(tr);});
-        t.append(thead,body);wrap.appendChild(t);
-        const busy=r.busiest.map(b=>b.weekday+' '+String(b.hour).padStart(2,'0')+':00 ('+b.events+')').join(', ');
-        out.replaceChildren(el('div',Number(r.total_events).toLocaleString()+' events and '+Number(r.total_case_arrivals).toLocaleString()+' new cases in '+r.settings.time_zone+'. '+(r.outside_working_hours_share===null?'':pct(r.outside_working_hours_share)+' of events fell outside '+String(r.settings.work_start_hour).padStart(2,'0')+':00–'+String(r.settings.work_end_hour).padStart(2,'0')+':00 on working days.')),
-          wrap,el('div',busy?'Busiest: '+busy+'.':'No events.','muted'),el('div',r.interpretation,'muted'));
-      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+        report={r,spec};gridControl.hidden=false;drawGrid();
+        const outside=button('Inspect outside-hours events','secondary');outside.onclick=()=>inspect(spec,'outside_working_hours','Outside-hours events');
+        out.replaceChildren(el('div',number(r.total_events)+' events and '+number(r.total_case_arrivals)+' new cases in '+r.settings.time_zone+'. '+(r.outside_working_hours_share===null?'':pct(r.outside_working_hours_share)+' of events fell outside '+hourText(r.settings.work_start_hour)+'–'+hourText(r.settings.work_end_hour)+' on working days.')),
+          ...(r.outside_working_hours_events?[outside]:[]),el('div',r.interpretation,'muted'));
+      }catch(error){if(generation===state.generation)out.replaceChildren(el('div',error.message,'muted'));}
       finally{run.disabled=false;}
     };
     return box;

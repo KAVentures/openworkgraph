@@ -860,6 +860,14 @@ async def event_log_time_patterns(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/time-patterns/cases")
+async def event_log_time_pattern_cases(request: Request, log_id: str):
+    from . import event_log_time_patterns as time_patterns
+    _require_dashboard(request)
+    spec = await _json_body(request, "time-pattern case settings", strict=True, limit=16384)
+    return await run_in_threadpool(_respond, time_patterns.pattern_cases, log_id, spec)
+
+
 @router.post("/v1/event-logs/{log_id}/rename")
 async def rename_event_log(request: Request, log_id: str):
     """Body: {"name": "..."}; the same name rule as at import."""
