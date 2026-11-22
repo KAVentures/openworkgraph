@@ -14,6 +14,7 @@ from shared.lifespan import extend_lifespan
 from .db import connect
 from . import run_memory
 from .open_work_reviews import clear_review_intentions
+from .reconstruction_review_store import clear_saved_reconstruction_review, read_saved_reconstruction_review, save_reconstruction_review
 from .open_work_dispatch import clear as clear_dispatch_offers
 from .history_retention import cleanup_expired_history, delete_history_session, initialize_history_retention, list_history
 from .main import ROOT
@@ -51,7 +52,11 @@ def _retention_loop() -> None:
     # open for months. No timer per HTTP request and no per-event cleanup.
     while not _retention_stop.wait(3600):
         try:
+            # A background retention pass can remove the observations that
+            # saved reviewer labels refer to. Purge those labels as well;
+            # otherwise they could survive until the next manual review read.
             cleanup_expired_history(startup=False)
+            clear_saved_reconstruction_review()
         except Exception:
             import logging
             logging.getLogger(__name__).exception("hourly local retention cleanup failed")
@@ -72,6 +77,8 @@ def _history_shutdown() -> None:
     if _retention_thread is not None:
         _retention_thread.join(timeout=2)
     cleanup_expired_history(startup=True)
+    # Startup/shutdown retention cleanup must not strand stale reviewer labels.
+    clear_saved_reconstruction_review()
 
 
 extend_lifespan(app, startup=_history_startup, shutdown=_history_shutdown)
@@ -88,6 +95,7 @@ def set_history_policy(request: RetentionChoice) -> dict[str, Any]:
         value=update_retention(human_mode=request.human_mode,human_days=request.human_days,agent_mode=request.agent_mode,agent_days=request.agent_days,onboarding_complete=request.onboarding_complete)
         cleanup=cleanup_expired_history(startup=False)
         if request.human_mode == "ephemeral":
+            clear_saved_reconstruction_review()
             # A user who chooses "This session only" must not unknowingly
             # keep saved Open Work review intentions for another seven days.
             clear_review_intentions()
@@ -121,7 +129,9 @@ def get_history(since:str|None=None,until:str|None=None,limit:int=200)->dict[str
 
 @app.post("/v1/history/delete-session")
 def delete_session(request:HistoryDeleteRequest)->dict[str,Any]:
-    try: result=delete_history_session(request.history_session_id)
+    try:
+        result=delete_history_session(request.history_session_id)
+        clear_saved_reconstruction_review()
     except ValueError as exc: raise HTTPException(status_code=404,detail=str(exc)) from exc
     return {"status":"deleted",**result}
 
@@ -131,12 +141,21 @@ def get_ai_history_access()->dict[str,Any]:
 
 @app.post("/v1/history/ai-access")
 def change_ai_history_access(request:AIHistoryAccessRequest)->dict[str,Any]:
-    try: access=set_ai_history_access(mode=request.mode,since=request.since,until=request.until,expires_minutes=request.expires_minutes)
+    try:
+        # Any access change invalidates prior saved labels, even if the next
+        # grant happens to have the same fields as the previous one.
+        clear_saved_reconstruction_review()
+        access=set_ai_history_access(mode=request.mode,since=request.since,until=request.until,expires_minutes=request.expires_minutes)
     except ValueError as exc: raise HTTPException(status_code=400,detail=str(exc)) from exc
     return {"status":"updated","access":access}
 
 @app.post("/v1/history/cleanup")
-def run_history_cleanup()->dict[str,Any]: return cleanup_expired_history(startup=False)
+def run_history_cleanup()->dict[str,Any]:
+    result = cleanup_expired_history(startup=False)
+    # Cleanup may remove source observations; never retain labels whose
+    # source evidence may no longer exist.
+    clear_saved_reconstruction_review()
+    return result
 
 @app.get("/v1/history/export-json")
 def export_history_json(since:str|None=None,until:str|None=None,include_raw:bool=False,redact_names:bool=False)->Response:
@@ -217,22 +236,39 @@ def get_reconstruction_review() -> Response:
     generation = history_generation()
     with connect() as connection:
         result = resumption_candidates(connection, lease=grant)
-    queue = build_review_queue(result)
+    # The HTTP projection caps identity timelines at 12. Bind that loss of
+    # reviewer-visible evidence to the queue digest and scoring eligibility.
+    # Preserve the original engine result; only enrich the review input.
+    review_result = {**result, "identity_timelines_truncated": (
+        result.get("identity_timelines_truncated", False)
+        or len(result.get("identity_timelines", [])) > 12
+    )}
+    try:
+        queue = build_review_queue(review_result)
+    except ValueError as exc:
+        # Malformed engine evidence is a rejected review, not an uncaught 500.
+        # Do not serialize partial source history into the error response.
+        raise HTTPException(status_code=422, detail="Invalid reconstruction evidence") from exc
     # Encode before the final authorization check: revocation during JSON
     # serialization must fail closed, not return already-stale evidence.
     payload = json.dumps({
         "review": queue,
         "coverage": result.get("coverage", {}),
         "identity_timelines": result.get("identity_timelines", [])[:12],
+        "identity_timelines_truncated": bool(result.get("identity_timelines_truncated", False) or len(result.get("identity_timelines", [])) > 12),
+        "identity_timelines_returned_count": min(len(result.get("identity_timelines", [])), 12),
         # Expose the bounded, directly observed event-to-pair provenance used
         # for the fingerprint. Connected navigation groups are not cases.
         "observed_pair_event_assignments": result.get("observed_pair_event_assignments", [])[:24],
         "observed_group_continuity": result.get("observed_group_continuity", [])[:24],
         # Components are navigational hypotheses, never confirmed cases.
         "observed_case_groups": result.get("observed_case_groups", [])[:24],
-        "observed_case_groups_truncated": result.get("observed_case_groups_truncated", False),
-        "observed_pair_event_assignments_truncated": result.get("observed_pair_event_assignments_truncated", False),
-        "observed_group_continuity_truncated": result.get("observed_group_continuity_truncated", False),
+        "observed_case_groups_truncated": bool(result.get("observed_case_groups_truncated", False) or len(result.get("observed_case_groups", [])) > 24),
+        "observed_case_groups_returned_count": min(len(result.get("observed_case_groups", [])), 24),
+        "observed_pair_event_assignments_truncated": bool(result.get("observed_pair_event_assignments_truncated", False) or len(result.get("observed_pair_event_assignments", [])) > 24),
+        "observed_pair_event_assignments_returned_count": min(len(result.get("observed_pair_event_assignments", [])), 24),
+        "observed_group_continuity_truncated": bool(result.get("observed_group_continuity_truncated", False) or len(result.get("observed_group_continuity", [])) > 24),
+        "observed_group_continuity_returned_count": min(len(result.get("observed_group_continuity", [])), 24),
         "notice": result.get("notice"),
         "derived": True,
         "authoritative": False,
@@ -283,8 +319,129 @@ def score_reconstruction_review_submission(request: ReconstructionReviewSubmissi
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail="History access changed during review") from exc
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail="Invalid reconstruction review submission") from exc
     if not still_authorized():
         raise HTTPException(status_code=403, detail="History access changed during review")
     return Response(content=payload, media_type="application/json",
+                    headers={"Cache-Control": "no-store"})
+
+
+class ReconstructionSourceCohortSubmission(BaseModel):
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$", min_length=64, max_length=64)
+    source_labels: list[dict[str, Any]] = Field(min_length=1, max_length=4096)
+
+
+@app.post("/v1/history/reconstruction-review/source-cohort-score")
+def score_reconstruction_source_cohort(request: ReconstructionSourceCohortSubmission) -> Response:
+    """Score caller labels against fresh authorized evidence, never certify independence."""
+    import hmac
+    from shared.history_policy import history_generation
+    from .work_resumption import resumption_candidates
+    from .reconstruction_review_cli import build_review_queue, score_source_event_cohort
+
+    grant = active_ai_history_access()
+    if grant.get("mode") != "all_saved":
+        raise HTTPException(status_code=403, detail="Explicit all-saved history access required")
+    generation = history_generation()
+
+    def still_authorized() -> bool:
+        return active_ai_history_access() == grant and history_generation() == generation
+
+    try:
+        with connect() as connection:
+            result = resumption_candidates(connection, lease=grant)
+        review_result = {**result, "identity_timelines_truncated": (
+            result.get("identity_timelines_truncated", False)
+            or len(result.get("identity_timelines", [])) > 12
+        )}
+        queue = build_review_queue(review_result)
+        if not hmac.compare_digest(queue["evidence_sha256"], request.evidence_sha256):
+            raise ValueError("stale review evidence")
+        scored = score_source_event_cohort(review_result, request.source_labels)
+        payload = json.dumps(scored, allow_nan=False)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="History access changed during evaluation") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid reconstruction cohort") from exc
+    if not still_authorized():
+        raise HTTPException(status_code=403, detail="History access changed during evaluation")
+    return Response(content=payload, media_type="application/json",
+                    headers={"Cache-Control": "no-store"})
+
+
+@app.get("/v1/history/reconstruction-review/saved")
+def get_saved_reconstruction_review() -> Response:
+    """Resume only labels whose current source evidence and grant still match."""
+    from shared.history_policy import history_generation
+    from .work_resumption import resumption_candidates
+    from .reconstruction_review_cli import build_review_queue
+
+    grant = active_ai_history_access()
+    if grant.get("mode") != "all_saved":
+        raise HTTPException(status_code=403, detail="Explicit all-saved history access required")
+    generation = history_generation()
+    try:
+        with connect() as connection:
+            result = resumption_candidates(connection, lease=grant)
+            # Use the same evidence projection as the live reviewer. Otherwise
+            # >12 identity timelines change the digest on saved-label reload.
+            review_result = {**result, "identity_timelines_truncated": (
+                result.get("identity_timelines_truncated", False)
+                or len(result.get("identity_timelines", [])) > 12
+            )}
+            queue = build_review_queue(review_result)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid reconstruction evidence") from exc
+    saved = read_saved_reconstruction_review(grant, generation, queue["evidence_sha256"])
+    if active_ai_history_access() != grant or history_generation() != generation:
+        raise HTTPException(status_code=403, detail="History access changed during review")
+    return Response(content=json.dumps({"saved": saved}), media_type="application/json",
+                    headers={"Cache-Control": "no-store"})
+
+
+@app.post("/v1/history/reconstruction-review/save")
+def save_reconstruction_review_submission(request: ReconstructionReviewSubmission) -> Response:
+    """Explicitly persist verified reviewer labels for at most one hour locally.
+
+    Never promotes labels to case identity or independent ground truth.
+    """
+    from shared.history_policy import history_generation
+    from .work_resumption import score_live_reconstruction_review
+
+    grant = active_ai_history_access()
+    if grant.get("mode") != "all_saved":
+        raise HTTPException(status_code=403, detail="Explicit all-saved history access required")
+    generation = history_generation()
+
+    def still_authorized() -> bool:
+        return active_ai_history_access() == grant and history_generation() == generation
+
+    try:
+        with connect() as connection:
+            # Exact evidence digest, complete annotation coverage, identity
+            # structure and consent are validated by the same live scorer.
+            score_live_reconstruction_review(
+                connection, request.model_dump(), lease=grant,
+                authorize_review=still_authorized,
+            )
+        if not still_authorized():
+            raise PermissionError("History access changed during review")
+        saved = save_reconstruction_review(grant, generation, request.model_dump())
+        if not still_authorized():
+            clear_saved_reconstruction_review()
+            raise PermissionError("History access changed during review")
+    except PermissionError as exc:
+        # Authorization callbacks may carry private event/source details. Never
+        # echo exception text to an authenticated (but now revoked) caller.
+        raise HTTPException(status_code=403, detail="History access changed during review") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid reconstruction review submission") from exc
+    return Response(content=json.dumps(saved), media_type="application/json",
+                    headers={"Cache-Control": "no-store"})
+
+
+@app.delete("/v1/history/reconstruction-review/saved")
+def delete_saved_reconstruction_review() -> Response:
+    clear_saved_reconstruction_review()
+    return Response(content='{"status":"deleted"}', media_type="application/json",
                     headers={"Cache-Control": "no-store"})
