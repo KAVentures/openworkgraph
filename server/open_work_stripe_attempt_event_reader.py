@@ -54,6 +54,7 @@ def read_exact_stripe_attempt_event(
     expected_event_id: str,
     credentials: Callable[[], dict[str, str] | None] = load_stripe_source,
     reader: Callable[[str, str], dict[str, Any]] = _read_stripe_json,
+    recheck_authorization: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """Supply a source-authenticated snapshot to verify_provider_attempt.
 
@@ -78,10 +79,18 @@ def read_exact_stripe_attempt_event(
                 or not key.startswith(("rk_test_", "rk_live_")) or len(key) > 256
                 or "\n" in key or "\r" in key):
             return unknown
+        if recheck_authorization is not None and recheck_authorization() is not True:
+            return {**unknown, "revoked": True}
         source_account = reader("/v1/account", key)
         if source_account.get("object") != "account" or source_account.get("id") != account:
             return unknown
+        # The account lookup and exact event GET are separate network calls.
+        # A revoked grant between them must prevent the second provider read.
+        if recheck_authorization is not None and recheck_authorization() is not True:
+            return {**unknown, "revoked": True}
         event = reader("/v1/events/" + expected_event_id, key)
+        if recheck_authorization is not None and recheck_authorization() is not True:
+            return {**unknown, "revoked": True}
         if event.get("object") != "event" or event.get("id") != expected_event_id:
             return unknown
         data = event.get("data")
