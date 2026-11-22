@@ -61,7 +61,11 @@ def _delta_private_parent(path):
 
 def _private_read(path, limit):
     try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        # A FIFO without a writer blocks in open() before fstat can reject it.
+        # O_NONBLOCK makes that refusal bounded; O_NOFOLLOW still prevents
+        # symlink traversal. The regular-file gate below remains mandatory.
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                     | getattr(os, "O_NONBLOCK", 0))
         with os.fdopen(fd, "rb") as stream:
             info = os.fstat(stream.fileno())
             if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
