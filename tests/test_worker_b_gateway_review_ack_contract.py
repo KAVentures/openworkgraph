@@ -15,7 +15,7 @@ def test_review_ack_requires_authenticated_actor_and_decision():
     assert "entry?.reviewer_actor_id===reviewSelection.your_actor_id" in verification
     assert "entry.decision===decision" in verification
     assert "reviewResult.process.content_sha256===record.content_sha256" in verification
-    assert end < source.index("render(reviewResult)", start)
+    assert end < source.index("render(recordedReview)", start)
 
 
 def test_interrupted_review_submission_requires_fresh_user_confirmation():
@@ -39,7 +39,7 @@ def test_acknowledged_review_consumes_explicit_confirmation():
     """Successful submissions must not leave a reusable approval checkbox."""
     source = (Path(__file__).resolve().parents[1] / "gateway" / "processes.html").read_text()
     start = source.index("if(!acknowledged)")
-    end = source.index("render(reviewResult)", start)
+    end = source.index("render(recordedReview)", start)
     success = source[start:end]
     assert '$("reviewConfirm").checked=false' in success
     assert success.index('$("reviewConfirm").checked=false', success.index("return;")) < success.index('$("handoffStatus").textContent="Design review acknowledged.')
