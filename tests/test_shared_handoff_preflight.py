@@ -86,7 +86,8 @@ def test_review_navigation_revalidates_fresh_authorized_revision_and_fails_close
     assert 'ticket!==handoffGeneration||identityTicket!==identityGeneration||\n               credential!==authorizedCredential||selected!==chosen||!$("handoffConsent").checked' in block
     assert 'resetHandoff("REFUSED: Process changed or access/review was withdrawn.' in block
     assert 'resetHandoff("REFUSED: Could not revalidate authorized revision.' in block
-    assert block.index('const current=await call(', block.index('$("handoffReview").addEventListener')) < block.index('$("revisionReview").scrollIntoView')
+    navigation = block.split('$("handoffReview").addEventListener("click",', 1)[1].split('$("handoffPacket").addEventListener', 1)[0]
+    assert navigation.index('const current=await call(') < navigation.index('$("revisionReview").scrollIntoView')
     assert 'inspectedHandoff={workflow_id:p.workflow_id,revision:p.revision,content_sha256:p.content_sha256,access_revision:current.access_revision};' in html
 
 
