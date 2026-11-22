@@ -116,6 +116,22 @@ def test_unfinished_only_activities_have_case_counts_and_respect_response_limit(
     assert [a["activity"] for a in unfinished] == sorted(a["activity"] for a in unfinished)
 
 
+def test_open_start_activity_count_deduplicates_across_cases():
+    log = _import(["case", "activity", "time", "lifecycle:transition"], [
+        ("a", "Review", _at(0, 0), "start"),
+        ("b", "Review", _at(1, 0), "start"),
+        ("c", "Approve", _at(2, 0), "start"),
+        ("d", "Finished", _at(3, 0), "start"),
+        ("d", "Finished", _at(3, 1), "complete"),
+    ])
+    result = waiting.waiting_time(log)
+    assert result["instances"]["unmatched_starts"] == 3
+    # Distinct activity labels, not the three unfinished case/activity groups.
+    assert result["instances"]["activities_with_open_starts"] == 2
+    assert _by(result)["Review"]["open_starts"] == 2
+    assert _by(result)["Review"]["cases"] == 2
+
+
 def test_overlapping_work_is_not_waiting_and_counts_once_as_busy():
     log = _import(["case", "activity", "time", "lifecycle:transition"], [
         ("x", "A", _at(0, 0), "start"), ("x", "B", _at(0, 1), "start"),
