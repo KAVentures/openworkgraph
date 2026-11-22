@@ -449,7 +449,7 @@ def test_handoff_review_readback_rejects_access_revocation_after_post():
     """A committed review cannot claim a still-authorized handoff after membership drift."""
     html = PAGE.read_text(encoding="utf-8")
     block = html.split("async function review(decision) {", 1)[1].split('$("approve").onclick', 1)[0]
-    assert "(!submittedInspectedHandoff ||" in block
+    assert "recordedReview.access_revision===reviewSelection.access_revision" in block
     assert "recordedReview.access_revision===reviewSelection.access_revision" in block
     assert "recordedReview.permissions?.review===true" in block
     assert block.index("recordedReview.access_revision===reviewSelection.access_revision") < block.index("if(!recorded) {")
@@ -503,7 +503,8 @@ def test_executable_export_rejects_non_zip_success_payload_and_session_rotation(
     guard = block.split("const signature = new Uint8Array(", 1)[1].split("const url = URL.createObjectURL", 1)[0]
     assert "exportedBlob.slice(0, 4).arrayBuffer()" in guard
     assert "signature[0] === 0x50 && signature[1] === 0x4b" in guard
-    assert "if (!zipHeader || identityTicket !== identityGeneration" in guard
+    assert "if (!zipHeader || !directoryValid ||" in guard
+    assert "identityTicket !== identityGeneration" in guard
     assert "credential !== authorizedCredential || selected !== selection" in guard
     assert block.index("const latest = await call(") < block.index("const signature = new Uint8Array(")
     assert block.index("const signature = new Uint8Array(") < block.index("URL.createObjectURL(exportedBlob)")
