@@ -970,7 +970,7 @@
     results.appendChild(activityProfileSection(names));
     results.appendChild(breakdownSection(names));
     results.appendChild(pathExplorerSection());
-    results.appendChild(cooccurrenceSection());
+    results.appendChild(cooccurrenceSection(inspection));
     results.appendChild(dueDatesSection(names,inspection));
     results.appendChild(unusualCasesSection());
     results.appendChild(funnelSection(names));
@@ -1442,6 +1442,12 @@
       association=false;exactActivity.value='';activityLookup.reset();path=null;transition=value.slice();document.getElementById(prefix+'FilterActivity').value='';
       chosen.textContent='Adjacent transition: '+JSON.stringify(transition)+'. Timestamp ties do not verify order.';
       start();box.scrollIntoView({block:'nearest'});
+    },activityPresence(required,excluded,cohort){
+      path=null;transition=null;association=true;filterApplied=Object.keys(cohort).length>0;
+      spec={cohort,required_activities:required,...(excluded.length?{excluded_activities:excluded}:{}),limit:30};
+      const names=values=>values.map(name=>JSON.stringify(name)).join(' and ');
+      chosen.textContent='Cases with '+names(required)+(excluded.length?' and without '+names(excluded):'')+'.';
+      detail.replaceChildren();opening++;load(null);box.scrollIntoView({block:'nearest'});
     },cohort(value,description){
       path=null;transition=null;association=true;filterApplied=Boolean(description)&&filterOn();spec={cohort:value,limit:30};
       chosen.textContent=description||'Association cases: '+JSON.stringify(value)+'. This selection uses all cases in the current case notion. Browse cases uses the fields above instead.';
@@ -4612,7 +4618,7 @@
     return box;
   }
 
-  function cooccurrenceSection(){
+  function cooccurrenceSection(inspection){
     const box=section('Activities that happen together');box.id='owgCooccurrence';
     box.appendChild(el('div','For the most common activities: when a case has the activity in the row, how often it also has the one in the column, in any order. Lift above 1 means the two go together more than chance would give; 0 means they never occur in the same case, which often marks alternative branches.','muted'));
     const sizePick=select('owgCooccurrenceSize',[['8','8 most common activities'],['12','12 most common activities'],['20','20 most common activities']]);sizePick.value='12';
@@ -4623,7 +4629,8 @@
     box.append(row,statusLine,out);
     const pct=x=>x===null||x===undefined?'—':Math.round(x*100)+'%';
     run.onclick=async()=>{
-      const generation=state.generation;run.disabled=true;statusLine.textContent='Comparing activities…';out.replaceChildren();
+      const generation=state.generation,cohort=globalCohort();
+      run.disabled=true;statusLine.textContent='Comparing activities…';out.replaceChildren();
       try{
         const r=await getJSON(logPath('co-occurrence',{limit:sizePick.value}));
         if(generation!==state.generation)return;
@@ -4632,6 +4639,34 @@
         const cell=w=>{const s=el('span',pct(w.share_of_a));s.title=w.both+' cases'+(w.lift===null?'':', lift '+w.lift);return s;};
         const t=table(['When a case has … it also has',...names],r.matrix.map(m=>[m.activity+' ('+Number(m.cases).toLocaleString()+')',...m.with.map(cell)]));t.id='owgCooccurrenceMatrix';
         out.appendChild(t);
+        const options=names.map(name=>[name,name]);
+        const first=select('owgCooccurrenceFirst',options),second=select('owgCooccurrenceSecond',options);
+        second.selectedIndex=1;
+        const both=button('Inspect cases with both','secondary');
+        const firstOnly=button('Inspect cases with first only','secondary');
+        const secondOnly=button('Inspect cases with second only','secondary');
+        const counts=el('div',null,'muted');counts.setAttribute('role','status');
+        const byName=new Map(r.matrix.map(item=>[item.activity,item]));
+        const update=()=>{
+          const a=byName.get(first.value),b=byName.get(second.value);
+          if(a===b){
+            both.disabled=firstOnly.disabled=secondOnly.disabled=true;
+            counts.textContent='Choose two different activities.';
+            return;
+          }
+          const intersection=a.with.find(item=>item.activity===b.activity).both;
+          const aOnly=a.cases-intersection,bOnly=b.cases-intersection;
+          both.disabled=intersection===0;firstOnly.disabled=aOnly===0;secondOnly.disabled=bOnly===0;
+          counts.textContent=intersection.toLocaleString()+' cases with both, '+aOnly.toLocaleString()+' with first only, '+bOnly.toLocaleString()+' with second only.';
+        };
+        first.onchange=second.onchange=update;
+        both.onclick=()=>inspection.activityPresence([first.value,second.value],[],cohort);
+        firstOnly.onclick=()=>inspection.activityPresence([first.value],[second.value],cohort);
+        secondOnly.onclick=()=>inspection.activityPresence([second.value],[first.value],cohort);
+        const pair=el('div',null,'row');pair.style.alignItems='end';
+        pair.append(field('First activity',first),field('Second activity',second),both,firstOnly,secondOnly);
+        update();
+        out.append(pair,counts);
         if(r.go_together.length){out.appendChild(el('h4','Go together most'));
           out.appendChild(table(['Activities','Cases with both','Lift'],r.go_together.map(p=>[p.a+' + '+p.b,Number(p.both).toLocaleString(),String(p.lift)])));}
         if(r.never_together.length){out.appendChild(el('h4','Never in the same case'));

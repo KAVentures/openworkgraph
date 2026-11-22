@@ -87,6 +87,35 @@ def test_transition_selectors_reject_ambiguous_shapes(transition):
     with pytest.raises(workspace.EventLogWorkspaceError):pages.cases('not-read',{'transition':transition})
 
 
+def test_case_activity_presence_is_order_independent_literal_and_cohort_scoped():
+    paths = {"apart": [" A ", "Other", "B", " A "], "reverse": ["B", " A "],
+             "first": [" A "], "second": ["B"], "short": ["A", "B"]}
+    log = imported([f"{case},{activity},2024-01-01T0{i}:00:00Z,owner"
+                    for case, path in paths.items() for i, activity in enumerate(path)])
+    pair = {"required_activities": [" A ", "B"]}
+    first = pages.cases(log, {**pair, "limit": 1})
+    assert first["selected_cases"] == 2 and first["next_after"] == "apart"
+    assert first["cases"][0]["events"] == 4
+    assert pages.cases(log, {**pair, "after": first["next_after"]})["cases"][0]["case_id"] == "reverse"
+    scoped = pages.cases(log, {**pair, "cohort": {"activity": "Other"}})
+    assert scoped["selected_cases"] == 1 and scoped["cases"][0]["case_id"] == "apart"
+    first_only = pages.cases(log, {"required_activities": [" A ", " A "], "excluded_activities": ["B"]})
+    assert first_only["selected_cases"] == 1 and first_only["cases"][0]["case_id"] == "first"
+    assert first_only["required_activities"] == [" A "]
+    second_only = pages.cases(log, {"required_activities": ["B"], "excluded_activities": [" A ", "A"]})
+    assert second_only["selected_cases"] == 1 and second_only["cases"][0]["case_id"] == "second"
+
+
+@pytest.mark.parametrize("selection", [
+    {"required_activities": []}, {"required_activities": list("ABCDEFGHIJK")},
+    {"required_activities": ["A", False]}, {"excluded_activities": "A"},
+    {"required_activities": ["A"], "excluded_activities": ["A"]},
+])
+def test_case_activity_presence_rejects_invalid_selection(selection):
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        pages.cases("not-read", selection)
+
+
 def test_ocel_cases_are_object_scoped_and_qualifiers_do_not_duplicate_events():
     payload={'objects':[{'id':'o','type':'order'},{'id':'i','type':'item'}],
              'events':[{'id':'e','type':' Review > ','time':'2024-01-01T00:00:00Z','relationships':[
@@ -127,6 +156,8 @@ with TestClient(app) as client:
  assert client.post(base+'/cases/query',json={'path':['A','B']},headers=h).json()['selected_cases']==1
  assert client.post(base+'/cases/query',json={'transition':['A','B']},headers=h).json()['cases'][0]['events']==2
  assert client.post(base+'/cases/query',json={'transition':['B','A']},headers=h).json()['selected_cases']==0
+ assert client.post(base+'/cases/query',json={'required_activities':['B','A']},headers=h).json()['selected_cases']==1
+ assert client.post(base+'/cases/query',json={'required_activities':['A'],'excluded_activities':['B']},headers=h).json()['selected_cases']==0
  assert client.post(base+'/cases/query',content=b'x',headers={**h,'Content-Type':'text/plain'}).status_code==415
  assert client.post(base+'/cases/query',content=b' '*70000,headers={**h,'Content-Type':'application/json'}).status_code==413
  from server import db

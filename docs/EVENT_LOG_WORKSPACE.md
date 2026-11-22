@@ -2505,6 +2505,12 @@ case filter. `GET /v1/event-logs/{log_id}/co-occurrence?limit=12&min_support=5` 
 and the case-filter parameters) needs the dashboard session. Co-occurrence describes the recorded
 cases; two activities that go together need not depend on each other.
 
+Select a first and second activity below the matrix to inspect cases containing both, or cases
+containing just one of the pair. Case evidence keeps the matrix's case filter and opens each
+matching case's complete history. The dashboard-only `POST /v1/event-logs/{log_id}/cases/query`
+accepts `required_activities` and `excluded_activities`. Each list accepts up to 10 exact labels.
+A case must contain every required label and none of the excluded labels, regardless of order.
+
 ## Path explorer
 
 **Path explorer** walks the process one step at a time, as Celonis's Process Explorer and the variant
