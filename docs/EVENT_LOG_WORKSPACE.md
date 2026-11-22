@@ -2427,7 +2427,7 @@ parameters; dashboard session only.
 
 The performance spectrum shows how long each step-to-step segment took, over calendar time. It
 follows Denisov, Fahland and van der Aalst (2018), as in ProM. A segment is "activity A directly
-followed by activity B" within a case. Every occurrence is drawn as a line from the moment A
+followed by activity B" within a case. Each plotted occurrence is a line from the moment A
 happened (top axis) to the moment B happened (bottom axis).
 
 This shows patterns a process map hides:
@@ -2441,9 +2441,15 @@ For the 6 busiest segments (1–12), or the segments asked for, the result gives
 | --- | --- |
 | `duration_seconds` | 25th, 50th, 75th and 95th percentiles, mean and maximum. |
 | `bins` | For equal calendar periods by start time (2–100, default 30): occurrences per class and the median. |
+| `bin_width_seconds` | Width of each period. Period 0 starts at `time_origin`. |
 | `fifo_share` | Among occurrences in start order, the share that also finish no earlier than the one before. Pairs that start at the same instant are skipped. `null` when no two start at different times. |
 | `batched_share` | Share of occurrences that end at the same instant as at least two others of the segment. |
 | `lines` | A repeatable sample of at most 400 occurrences with start, end (seconds from `time_origin`) and class. `lines_sampled` says when it is a sample. |
+
+Choose **Inspect cases** for an entire segment, or select a count under **Occurrences per
+period** to review one period and duration class. The list includes all matching occurrences,
+including those outside the chart sample. Repeated transitions are counted under the same
+case, with its first start, last finish and median duration. Open a case to see its event history.
 
 Each occurrence is put in a class against the segment's own percentiles:
 - `fast`: below the 25th percentile;
@@ -2456,8 +2462,13 @@ describe the log; they do not say why work waited or who caused it. The global c
 applies.
 
 `GET /v1/event-logs/{log_id}/performance-spectrum?top=&bins=&segment=A->B&case_type=` plus the
-case-filter parameters. Repeat `segment` for several segments (at most 12). Dashboard session
-only.
+case-filter parameters. Repeat `segment` for several segments (at most 12). For case evidence,
+`POST /v1/event-logs/{log_id}/performance-spectrum/cases` with the same `bins`, case notion and
+case filter. Send the exact activity pair as `{"segment":["A","B"]}`, with optional `bin`
+(zero-based) or duration `class`. Results are ordered by literal case key with `limit` 1–100
+(default 50). Use the returned `next_after` as `after` to continue. Both routes require a
+dashboard session.
+
 ## Heuristics net
 
 **Heuristics net** (the heuristics miner of ProM and PM4Py, after Weijters and Ribeiro's Flexible

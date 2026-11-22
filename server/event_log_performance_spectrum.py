@@ -36,6 +36,9 @@ DEFAULT_BINS = 30
 MAX_LINES = 400
 BATCH_MIN = 3
 CLASSES = ("fast", "normal", "slow", "very_slow")
+_BIN = "least(CAST(floor(epoch(t0 - ?::TIMESTAMP) / ?) AS INTEGER), ?)"
+_CLASS = """CASE WHEN d < ? THEN 'fast' WHEN d > ? THEN 'very_slow'
+                WHEN d > ? THEN 'slow' ELSE 'normal' END"""
 
 
 def _check(segments: Any, top: Any, bins: Any) -> list[tuple[str, str]] | None:
@@ -69,16 +72,28 @@ def parse_segments(values: list[str]) -> list[tuple[str, str]] | None:
     return pairs
 
 
+def _prepare(conn, bins: int):
+    conn.execute("""CREATE TEMP TABLE seg AS SELECT case_id, activity AS a, ts AS t0,
+          lead(activity) OVER w AS b, lead(ts) OVER w AS t1
+        FROM ce WINDOW w AS (PARTITION BY case_id ORDER BY ts, event_id)""")
+    conn.execute("DELETE FROM seg WHERE b IS NULL")
+    first, last = conn.execute("SELECT min(t0), max(t0) FROM seg").fetchone()
+    width = max((last - first).total_seconds(), 1.0) / bins if first is not None else None
+    return first, last, width
+
+
+def _durations(conn, a: str, b: str):
+    return conn.execute("""SELECT quantile_cont(d, [0.25, 0.5, 0.75, 0.95]), avg(d), max(d) FROM (
+        SELECT epoch(t1 - t0) AS d FROM seg WHERE a = ? AND b = ?)""", [a, b]).fetchone()
+
+
 def spectrum(log_id: str, case_type: str | None = None, *, segments: list[Any] | None = None,
              top: int = DEFAULT_SEGMENTS, bins: int = DEFAULT_BINS,
              cohort: dict[str, Any] | None = None) -> dict[str, Any]:
     chosen = _check(segments, top, bins)
 
     def run(conn):
-        conn.execute("""CREATE OR REPLACE TEMP TABLE seg AS SELECT case_id, activity AS a, ts AS t0,
-              lead(activity) OVER w AS b, lead(ts) OVER w AS t1
-            FROM ce WINDOW w AS (PARTITION BY case_id ORDER BY ts, event_id)""")
-        conn.execute("DELETE FROM seg WHERE b IS NULL")
+        first, last, width = _prepare(conn, bins)
         busiest = conn.execute("""SELECT a, b, count(*) FROM seg GROUP BY 1, 2
             ORDER BY 3 DESC, 1, 2""").fetchall()
         total_segments = len(busiest)
@@ -86,21 +101,16 @@ def spectrum(log_id: str, case_type: str | None = None, *, segments: list[Any] |
         picked = chosen if chosen is not None else [(a, b) for a, b, _ in busiest[:top]]
         missing = [list(p) for p in picked if p not in counts]
         picked = [p for p in picked if p in counts]
-        first, last = conn.execute("SELECT min(t0), max(t0) FROM seg").fetchone()
         out = []
         for a, b in picked:
-            q = conn.execute("""SELECT quantile_cont(d, [0.25, 0.5, 0.75, 0.95]), avg(d), max(d) FROM (
-                SELECT epoch(t1 - t0) AS d FROM seg WHERE a = ? AND b = ?)""", [a, b]).fetchone()
+            q = _durations(conn, a, b)
             q25, q50, q75, q95 = (float(v) for v in q[0])
-            klass = f"""CASE WHEN d < {q25!r} THEN 'fast' WHEN d > {q95!r} THEN 'very_slow'
-                         WHEN d > {q75!r} THEN 'slow' ELSE 'normal' END"""
-            span = max((last - first).total_seconds(), 1.0)
-            width = span / bins
+            thresholds = [q25, q95, q75]
             binned = conn.execute(f"""SELECT bin, count(*) FILTER (WHERE k = 'fast'), count(*) FILTER (WHERE k = 'normal'),
                   count(*) FILTER (WHERE k = 'slow'), count(*) FILTER (WHERE k = 'very_slow'), quantile_cont(d, 0.5)
-                FROM (SELECT least(CAST(floor(epoch(t0 - ?::TIMESTAMP) / ?) AS INTEGER), ?) AS bin, {klass} AS k, d
+                FROM (SELECT {_BIN} AS bin, {_CLASS} AS k, d
                       FROM (SELECT t0, epoch(t1 - t0) AS d FROM seg WHERE a = ? AND b = ?))
-                GROUP BY 1 ORDER BY 1""", [first, width, bins - 1, a, b]).fetchall()
+                GROUP BY 1 ORDER BY 1""", [first, width, bins - 1, *thresholds, a, b]).fetchall()
             by_bin = {r[0]: r for r in binned}
             series = []
             for i in range(bins):
@@ -114,9 +124,9 @@ def spectrum(log_id: str, case_type: str | None = None, *, segments: list[Any] |
                   WINDOW o AS (ORDER BY t0, t1, case_id))""", [a, b]).fetchone()
             batched = conn.execute("""SELECT coalesce(sum(n) FILTER (WHERE n >= ?), 0) FROM (
                 SELECT t1, count(*) AS n FROM seg WHERE a = ? AND b = ? GROUP BY 1)""", [BATCH_MIN, a, b]).fetchone()[0]
-            lines = conn.execute(f"""SELECT case_id, epoch(t0 - ?::TIMESTAMP), epoch(t1 - ?::TIMESTAMP), {klass}
+            lines = conn.execute(f"""SELECT case_id, epoch(t0 - ?::TIMESTAMP), epoch(t1 - ?::TIMESTAMP), {_CLASS}
                 FROM (SELECT case_id, t0, t1, epoch(t1 - t0) AS d FROM seg WHERE a = ? AND b = ?)
-                ORDER BY hash(case_id, t0), case_id, t0 LIMIT ?""", [first, first, a, b, MAX_LINES]).fetchall()
+                ORDER BY hash(case_id, t0), case_id, t0 LIMIT ?""", [first, first, *thresholds, a, b, MAX_LINES]).fetchall()
             n = counts[(a, b)]
             out.append({
                 "from": a, "to": b, "occurrences": n,
@@ -131,6 +141,7 @@ def spectrum(log_id: str, case_type: str | None = None, *, segments: list[Any] |
             })
         return {"segments": out, "missing": missing, "segments_total": total_segments,
                 "time_origin": first.isoformat() + "Z" if first else None,
+                "bin_width_seconds": width,
                 "bin_seconds": round(((last - first).total_seconds() if first else 0) / bins, 3) if first else None}
 
     data = workspace._query_filtered(log_id, case_type, cohort, run)
@@ -148,4 +159,50 @@ def spectrum(log_id: str, case_type: str | None = None, *, segments: list[Any] |
                    "describe this log; they do not say why work waited or who caused it.")}
 
 
-__all__ = ["spectrum", "parse_segments", "FORMAT"]
+def segment_cases(log_id: str, case_type: str | None = None, *, selection: dict[str, Any],
+                  bins: int = DEFAULT_BINS, cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Page through distinct cases contributing recorded adjacent transitions."""
+    if not isinstance(selection, dict) or selection.keys() - {"segment", "bin", "class", "after", "limit"}:
+        raise EventLogWorkspaceError("unknown performance spectrum case setting")
+    [(a, b)] = _check([selection.get("segment")], DEFAULT_SEGMENTS, bins)
+    bin_number, category = selection.get("bin"), selection.get("class")
+    if bin_number is not None and (type(bin_number) is not int or not 0 <= bin_number < bins):
+        raise EventLogWorkspaceError("bin must be a displayed period index")
+    if category is not None and category not in CLASSES:
+        raise EventLogWorkspaceError("unknown duration class")
+    after, limit = selection.get("after"), selection.get("limit", 50)
+    if after is not None and (not isinstance(after, str) or not after or len(after) > 200):
+        raise EventLogWorkspaceError("invalid case key cursor")
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise EventLogWorkspaceError("limit must be a whole number from 1 to 100")
+
+    def run(conn):
+        first, _, width = _prepare(conn, bins)
+        quants, _, _ = _durations(conn, a, b)
+        if quants is None:
+            return {"total": 0, "occurrences": 0, "rows": []}
+        q25, _, q75, q95 = (float(value) for value in quants)
+        conn.execute(f"""CREATE TEMP TABLE spectrum_cases AS
+            SELECT case_id, count(*) AS occurrences, min(t0) AS first_start, max(t1) AS last_end,
+                   quantile_cont(d, 0.5) AS median_seconds
+            FROM (SELECT *, {_BIN} AS bin, {_CLASS} AS category
+                  FROM (SELECT case_id, t0, t1, epoch(t1 - t0) AS d FROM seg WHERE a = ? AND b = ?))
+            WHERE (? IS NULL OR bin = ?) AND (? IS NULL OR category = ?) GROUP BY case_id""",
+                     [first, width, bins - 1, q25, q95, q75, a, b, bin_number, bin_number, category, category])
+        total, occurrences = conn.execute("SELECT count(*), coalesce(sum(occurrences), 0) FROM spectrum_cases").fetchone()
+        rows = conn.execute("""SELECT case_id, occurrences, first_start, last_end, median_seconds
+            FROM spectrum_cases WHERE ? IS NULL OR case_id > ? ORDER BY case_id LIMIT ?""",
+                            [after, after, limit + 1]).fetchall()
+        return {"total": total, "occurrences": occurrences, "rows": rows}
+
+    data = workspace._query_filtered(log_id, case_type, cohort, run)
+    rows = data["rows"]
+    return {"segment": [a, b], "bin": bin_number, "class": category, "case_notion": data["case_notion"],
+            "total": data["total"], "occurrences": data["occurrences"],
+            "cases": [{"case_id": key, "occurrences": count, "first_started_at": start.isoformat() + "Z",
+                       "last_finished_at": end.isoformat() + "Z", "median_seconds": round(median, 3)}
+                      for key, count, start, end, median in rows[:limit]],
+            "next_after": rows[limit - 1][0] if len(rows) > limit else None}
+
+
+__all__ = ["spectrum", "segment_cases", "parse_segments", "FORMAT"]

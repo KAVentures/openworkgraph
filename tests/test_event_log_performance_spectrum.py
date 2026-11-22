@@ -80,6 +80,45 @@ def test_overtaking():
     assert seg["duration_seconds"]["p25"] < seg["duration_seconds"]["p75"]
 
 
+def test_segment_case_totals_match_every_period_and_class_under_the_same_filter():
+    log = _log()
+    cohort = {"started_before": "2024-03-03T00:00:00Z"}
+    result = spectrum.spectrum(log, bins=3, cohort=cohort)
+    for segment in result["segments"]:
+        pick = {"segment": [segment["from"], segment["to"]]}
+        all_cases = spectrum.segment_cases(log, selection=pick, bins=3, cohort=cohort)
+        assert all_cases["total"] == all_cases["occurrences"] == segment["occurrences"] == 20
+        for period in segment["bins"]:
+            for category, expected in period["counts"].items():
+                evidence = spectrum.segment_cases(log, bins=3, cohort=cohort,
+                    selection={**pick, "bin": period["bin"], "class": category})
+                assert evidence["occurrences"] == expected
+                assert sum(case["occurrences"] for case in evidence["cases"]) == expected
+    spans = spectrum.segment_cases(log, cohort=cohort, selection={"segment": ["Pick", "Ship"], "limit": 1})
+    second = spectrum.segment_cases(log, cohort=cohort,
+        selection={"segment": ["Pick", "Ship"], "limit": 1, "after": spans["next_after"]})
+    assert spans["next_after"] == "o0" and second["next_after"] == "o1"
+    for invalid in ({"bin": 3}, {"bin": True}, {"class": "unknown"}, {"limit": 0}, {"after": ""}):
+        with pytest.raises(EventLogWorkspaceError):
+            spectrum.segment_cases(log, bins=3, selection={"segment": ["Pick", "Ship"], **invalid})
+
+
+def test_repeated_transitions_and_cases_outside_the_chart_sample():
+    rows = ["case,activity,time"]
+    for i in range(410):
+        rows.extend([f"c{i:03},A -> B,2024-03-01T00:00:00Z", f"c{i:03},Finish,2024-03-01T00:00:01Z"])
+    rows += ["c000,A -> B,2024-03-01T00:00:02Z", "c000,Finish,2024-03-01T00:00:03Z"]
+    log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="orders", source_format="csv",
+                               mapping=MAPPING)["log_id"]
+    report = spectrum.spectrum(log)
+    segment = report["segments"][0]
+    assert len(segment["lines"]) == spectrum.MAX_LINES and segment["lines_sampled"]
+    selection = {"segment": ["A -> B", "Finish"], "class": "normal"}
+    evidence = spectrum.segment_cases(log, selection=selection)
+    assert evidence["total"] == 410 and evidence["occurrences"] == 411
+    assert evidence["cases"][0]["case_id"] == "c000" and evidence["cases"][0]["occurrences"] == 2
+
+
 def test_route_is_dashboard_only(tmp_path):
     import os
     import subprocess
@@ -101,6 +140,10 @@ with TestClient(app) as client:
     assert r.status_code == 200 and r.json()["segments"][0]["occurrences"] == 6 and len(r.json()["segments"][0]["bins"]) == 4, r.text
     assert client.get(path + "?segment=B->A", headers=owner).status_code == 422
     assert client.get(path + "?bins=1", headers=owner).status_code == 422
+    evidence = path + "/cases?bins=4"
+    body = {"segment": ["A", "B"], "class": "normal"}
+    assert client.post(evidence, json=body, headers=bearer).status_code == 403
+    assert client.post(evidence, json=body, headers=owner).json()["occurrences"] == 6
 print("ok")
 '''
     env = os.environ.copy()
