@@ -22,9 +22,9 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
 from . import event_log_analytics as analytics
 from . import event_log_cohorts as cohorts
 from . import event_log_workspace as workspace
+from .event_log_variant_coverage import VARIANT_KEY_SQL
 
 FORMAT = "openworkgraph.event-log-comparison.v1"
-_SEP = "\x1f"
 
 
 class Side(BaseModel):
@@ -58,9 +58,9 @@ def _parse(spec: Any) -> ComparisonSpec:
 def _profile(side: Side) -> dict[str, Any]:
     def run(conn):
         cohorts.restrict(conn, cohorts.parse_cohort(side.cohort), side.log_id)
-        conn.execute(f"""CREATE OR REPLACE TEMP TABLE lc_cases AS SELECT case_id, count(*) AS events,
+        conn.execute("""CREATE OR REPLACE TEMP TABLE lc_cases AS SELECT case_id, count(*) AS events,
               epoch(max(ts) - min(ts)) AS duration, count(*) > count(DISTINCT activity) AS repeats,
-              string_agg(activity, '{_SEP}' ORDER BY ts, event_id) AS path
+              list(activity ORDER BY ts, event_id) AS path
             FROM ce GROUP BY case_id""")
         cases, events, repeats, first, last = conn.execute("""SELECT count(*), coalesce(sum(events), 0),
               count(*) FILTER (WHERE repeats), (SELECT min(ts) FROM ce), (SELECT max(ts) FROM ce) FROM lc_cases""").fetchone()
@@ -69,7 +69,9 @@ def _profile(side: Side) -> dict[str, Any]:
         edges = {(a, b): n for a, b, n in conn.execute("""SELECT activity, nxt, count(DISTINCT case_id) FROM (
               SELECT case_id, activity, lead(activity) OVER (PARTITION BY case_id ORDER BY ts, event_id) AS nxt FROM ce)
             WHERE nxt IS NOT NULL GROUP BY 1, 2""").fetchall()}
-        variants = dict(conn.execute("SELECT path, count(*) FROM lc_cases GROUP BY 1").fetchall())
+        variant_key = VARIANT_KEY_SQL.format(path="path")
+        variants = {tuple(path): (count, key) for path, count, key in conn.execute(
+            f"SELECT path, count(*), {variant_key} FROM lc_cases GROUP BY path").fetchall()}
         return {"cases": cases, "events": int(events), "repeat_cases": repeats,
                 "first_event_at": first.isoformat() + "Z" if first else None,
                 "last_event_at": last.isoformat() + "Z" if last else None,
@@ -156,11 +158,17 @@ def compare(spec: Any) -> dict[str, Any]:
     edge_rows = [_share_row({"from": a, "to": b}, base["edges"].get((a, b), 0), n0, comp["edges"].get((a, b), 0), n1)
                  for a, b in edge_keys]
 
-    shared = set(base["variants"]) & set(comp["variants"])
-    top = sorted(set(sorted(base["variants"], key=lambda v: (-base["variants"][v], v))[:settings.limit])
-                 | set(sorted(comp["variants"], key=lambda v: (-comp["variants"][v], v))[:settings.limit]))
-    variant_rows = _ranked([_share_row({"path": v.split(_SEP)}, base["variants"].get(v, 0), n0,
-                                       comp["variants"].get(v, 0), n1) for v in top], settings.limit)
+    base_variants, comp_variants = base["variants"], comp["variants"]
+    shared = set(base_variants) & set(comp_variants)
+    top = sorted(set(sorted(base_variants, key=lambda v: (-base_variants[v][0], v))[:settings.limit])
+                 | set(sorted(comp_variants, key=lambda v: (-comp_variants[v][0], v))[:settings.limit]))
+    variant_rows = []
+    for path in top:
+        base_count, base_key = base_variants.get(path, (0, None))
+        comp_count, comp_key = comp_variants.get(path, (0, None))
+        variant_rows.append(_share_row({"path": list(path), "variant_id": base_key or comp_key},
+                                       base_count, n0, comp_count, n1))
+    variant_rows = _ranked(variant_rows, settings.limit)
 
     def side_info(side: Side, profile: dict[str, Any]) -> dict[str, Any]:
         log = profile["log"]
@@ -185,8 +193,8 @@ def compare(spec: Any) -> dict[str, Any]:
                   "shared": sum(r["presence"] == "both" for r in edge_rows),
                   "largest_share_differences": _ranked(edge_rows, settings.limit)},
         "variants": {"shared_variants": len(shared),
-                     "baseline_cases_in_shared_variants": round(sum(base["variants"][v] for v in shared) / n0, 6),
-                     "comparison_cases_in_shared_variants": round(sum(comp["variants"][v] for v in shared) / n1, 6),
+                     "baseline_cases_in_shared_variants": round(sum(base_variants[v][0] for v in shared) / n0, 6),
+                     "comparison_cases_in_shared_variants": round(sum(comp_variants[v][0] for v in shared) / n1, 6),
                      "largest_share_differences": variant_rows},
         "activity_names_matched_exactly": True,
         "interpretation": ("Descriptive comparison of two saved logs. Activities are matched by exact name after each "

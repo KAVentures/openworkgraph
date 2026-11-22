@@ -7,6 +7,7 @@ from io import BytesIO, StringIO
 
 import pytest
 
+from server import event_log_cases
 from server import event_log_log_comparison as comparison
 from server import event_log_workspace as workspace
 
@@ -76,6 +77,27 @@ def test_one_log_against_a_filtered_version_of_itself_and_limits():
     assert len(r["activities"]["largest_share_differences"]) <= 2 and len(r["variants"]["largest_share_differences"]) <= 2
     with pytest.raises(workspace.EventLogWorkspaceError, match="same log, case notion and filter"):
         comparison.compare({"baseline": {"log_id": north, "case_type": "case"}, "comparison": {"log_id": north}})
+
+
+def test_ranked_variants_resolve_exact_cases_in_each_scope():
+    path = ["Open", "→"] + ["Review"] * 500 + ["Done"]
+    north = _import("north", [(path, 0.001)] * 3)
+    south = _import("south", [(path, 0.001), (["Open", "Done"], 1)])
+    scopes = ({"log_id": north, "cohort": {"started_from": "2024-03-05T00:00:00Z"}},
+              {"log_id": south, "cohort": {"started_before": "2024-03-05T00:00:00Z"}})
+    report = comparison.compare(dict(zip(("baseline", "comparison"), scopes)))
+    variant, = report["variants"]["largest_share_differences"]
+    assert variant["path"] == path
+    for side, scope in zip(("baseline", "comparison"), scopes):
+        request = {"cohort": scope["cohort"], "variant_id": variant["variant_id"], "limit": 1}
+        first = event_log_cases.cases(scope["log_id"], request, report[side]["case_notion"])
+        assert first["selected_cases"] == variant[side + "_cases"]
+        assert first["cases"][0]["case_id"] == ("north1" if side == "baseline" else "south0")
+        if side == "baseline":
+            assert first["next_after"] == "north1"
+            last = event_log_cases.cases(scope["log_id"], {**request, "after": first["next_after"]}, "case")
+            assert [case["case_id"] for case in last["cases"]] == ["north2"]
+            assert last["next_after"] is None
 
 
 def test_invalid_specs():
