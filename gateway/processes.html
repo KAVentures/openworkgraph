@@ -2130,7 +2130,20 @@
           if (!inspectedHandoff) {
             const identityTicket=identityGeneration, authorizedCredential=credential;
             const chosen=selected;
-            const current=await call("/v1/human/processes/"+encodeURIComponent(record.workflow_id));
+            let current;
+            try {
+              current=await call("/v1/human/processes/"+encodeURIComponent(record.workflow_id));
+            } catch (error) {
+              // A denied or unavailable authorization read must not leave the
+              // direct-review confirmation armed for a blind retry. This is a
+              // read-only failure; no review POST has been attempted.
+              if (identityTicket===identityGeneration &&
+                  credential===authorizedCredential && selected===chosen) {
+                $("reviewConfirm").checked=false;
+                $("reviewOutcome").textContent="Could not verify current review access. Reopen the latest authorized revision before submitting.";
+              }
+              throw error;
+            }
             if (identityTicket!==identityGeneration || credential!==authorizedCredential ||
                 selected!==chosen) return;
             if (!$("reviewConfirm").checked || $("comment").value!==confirmedComment ||
