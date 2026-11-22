@@ -5,6 +5,7 @@ from io import BytesIO
 
 import pytest
 
+from server import event_log_cases as cases
 from server import event_log_petri_replay as pr
 from server import event_log_pnml as pnml
 from server import event_log_workspace as workspace
@@ -77,6 +78,18 @@ def test_silent_transition_enables_skip_and_final_marking_is_guessed():
     log = _import([["A", "B", "C"]] * 5 + [["A", "C"]] * 5)
     result = pr.replay(log, _sequence_net(["A", "B", "C"], final=False, silent_skip=1))
     assert result["fitness"]["log"] == 1.0 and result["net"]["final_marking_declared"] is False
+
+
+def test_long_variant_resolves_by_identifier_without_uploading_its_labels():
+    long_activity = "雪" * 180
+    path = ["A"] + [long_activity] * 498 + ["C"]
+    log = _import([path, ["A", "B", "C"]])
+    result = pr.replay(log, _sequence_net(["A", "B", "C"]))
+    variant = result["non_fitting_variants"][0]
+    assert variant["path"] == path
+    evidence = cases.cases(log, {"variant_id": variant["variant_id"]})
+    assert evidence["selected_cases"] == variant["cases"] == 1
+    assert evidence["cases"][0]["case_id"] == "c0"
 
 
 def test_rejects_bad_files():
