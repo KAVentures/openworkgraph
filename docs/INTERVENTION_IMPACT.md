@@ -95,3 +95,15 @@ and the placebo result.
   staffing, seasonality or missing events, can cause or hide a difference.
 - **Not savings:** cycle time measures elapsed time, not effort or cost. Realized savings and causal effects are
   never verified here (`causal_effect_verified: false`, `realized_savings_verified: false`).
+
+## Saved changes (change markers)
+
+A change usually matters for more than one analysis. In *Intervention impact*, **Save this date as a change** records the go-live date with a label, such as "Automation went live", and **Saved changes** picks it again later. The picker fills the date and shows the label and note. A saved change outside the log's time span is marked as such.
+
+Markers are the owner's notes on the timeline. They are not events of the log, never change its data, and are deleted with the log. A log keeps at most 200.
+
+- `GET /v1/event-logs/{log_id}/change-markers` lists them, oldest first, with whether each lies within the log.
+- `POST /v1/event-logs/{log_id}/change-markers` with `{"marked_at": ISO time with an offset, "label", "note"?}` adds one.
+- `POST /v1/event-logs/{log_id}/change-markers/{marker_id}/delete` removes one.
+
+All three are dashboard session only.

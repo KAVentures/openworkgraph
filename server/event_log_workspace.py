@@ -154,6 +154,13 @@ CREATE INDEX IF NOT EXISTS signal_transitions_by_log_time ON signal_transitions(
 """
 
 _SCHEMA += source_identity.SCHEMA + object_relationships.SCHEMA
+# Dated notes on a log's timeline (event_log_change_markers), such as "Automation went live".
+_SCHEMA += """
+CREATE TABLE IF NOT EXISTS change_markers (
+  log_id VARCHAR NOT NULL, marker_id VARCHAR NOT NULL, marked_at TIMESTAMP NOT NULL, label VARCHAR NOT NULL,
+  note VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL
+);
+"""
 # Analyst case tags (event_log_case_tags); declared here so case filters can always refer to them.
 _SCHEMA += """
 CREATE TABLE IF NOT EXISTS case_tags (
@@ -777,6 +784,8 @@ def delete_log(log_id: str) -> dict[str, Any]:
                 erase_mappings(conn, log_id)
                 from .event_log_folder_feeds import erase_log as erase_feeds
                 feed_ids = erase_feeds(conn, log_id)
+                from .event_log_change_markers import erase as erase_change_markers
+                erase_change_markers(conn, log_id)       # in the deletion's transaction: no orphan markers
                 from .jira_retained_profiles import forget_dataset
                 forget_dataset(conn, log_id)
                 from .event_log_agent_access import erase as erase_agent_access
