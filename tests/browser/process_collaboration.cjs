@@ -180,9 +180,11 @@ const pathModule = require("node:path");
     assert.match(await alice.locator("#handoffStatus").textContent(), /Explicit authorization/);
     await alice.locator("#handoffConsent").check();
     await alice.locator("#handoffCheck").click();
-    await alice.locator("#handoffStatus").filter({hasText: "REFUSED:"}).waitFor();
-    assert.match(await alice.locator("#handoffStatus").textContent(), /lacks independent design review/);
-    assert.match(await alice.locator("#handoffStatus").textContent(), /No execution authorization/i);
+    await alice.locator("#handoffStatus").filter({hasText: "MATCH:"}).waitFor();
+    assert.match(await alice.locator("#handoffStatus").textContent(), /Eligible for human design review only/);
+    assert.match(await alice.locator("#handoffStatus").textContent(), /execution authorization remain unverified/i);
+    assert.equal(await alice.locator("#handoffReview").isDisabled(), false,
+      "an authorized, revision-pinned inspection must enable review navigation without execution");
     assert.equal(uploadedHandoff, false, "review packet bytes must remain local");
     await setHandoffPacket(handoffPacket({revision: handoffProcess.revision + 1}));
     await alice.locator("#handoffCheck").click();
@@ -220,9 +222,11 @@ const pathModule = require("node:path");
     assert.equal((await recoveredRead).status(),200,
       "recovery must independently read the current authorized Gateway revision");
     await recoveredHandoffPage.locator("#handoffStatus")
-      .filter({hasText:"REFUSED:"}).waitFor();
+      .filter({hasText:"MATCH:"}).waitFor();
     assert.match(await recoveredHandoffPage.locator("#handoffStatus").textContent(),
-      /lacks independent design review/i);
+      /Eligible for human design review only/i);
+    assert.equal(await recoveredHandoffPage.locator("#handoffReview").isDisabled(),false,
+      "a fresh authorized recovery permits human review but not execution");
     assert.equal(uploadedHandoff,false,
       "neither denied nor recovered packet may be posted to Gateway");
 
