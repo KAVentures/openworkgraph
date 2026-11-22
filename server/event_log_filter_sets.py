@@ -56,6 +56,7 @@ def list_sets(log_id: str) -> dict[str, Any]:
         cohort = cohorts.parse_cohort(saved["cohort"])
         sets.append({"set_id": set_id, "created_at": created.isoformat() + "Z", "name": saved["name"],
                      "cohort": saved["cohort"],
+                     **({"case_type": saved["case_type"]} if "case_type" in saved else {}),
                      "activities_not_in_log": sorted(_activities(cohort) - known),
                      "log_appended_since_saved": batches > saved["appended_batches_at_save"]})
     return {"filter_sets": sets, "max_sets": MAX_SETS, "format": FORMAT,
@@ -64,9 +65,12 @@ def list_sets(log_id: str) -> dict[str, Any]:
 
 
 def save(log_id: str, body: Any) -> dict[str, Any]:
-    if not isinstance(body, dict) or set(body) - {"name", "cohort"}:
-        raise workspace.EventLogWorkspaceError("a filter set accepts only name and cohort")
+    if not isinstance(body, dict) or set(body) - {"name", "cohort", "case_type"}:
+        raise workspace.EventLogWorkspaceError("a filter set accepts name, cohort and case type")
     name = _name(body.get("name"))
+    case_type = body.get("case_type")
+    if case_type is not None and (not isinstance(case_type, str) or not 0 < len(case_type) <= 200):
+        raise workspace.EventLogWorkspaceError("choose a valid case notion")
     cohort = cohorts.parse_cohort(body.get("cohort"))
     cohort.pop("label", None)
     if not cohort:
@@ -76,6 +80,8 @@ def save(log_id: str, body: Any) -> dict[str, Any]:
         conn = workspace._connect()
         try:
             workspace._check_log(conn, log_id)
+            if case_type is not None:
+                case_type = workspace._case_type(conn, log_id, case_type)
             existing = [json.loads(d)["name"] for (d,) in conn.execute(
                 "SELECT definition FROM filter_sets WHERE log_id = ?", [log_id]).fetchall()]
             if len(existing) >= MAX_SETS:
@@ -85,12 +91,14 @@ def save(log_id: str, body: Any) -> dict[str, Any]:
             set_id = "fs_" + secrets.token_hex(8)
             created = datetime.now(timezone.utc).replace(tzinfo=None)
             definition = {"format": FORMAT, "name": name, "cohort": described,
+                          **({"case_type": case_type} if case_type is not None else {}),
                           "appended_batches_at_save": _batches(conn, log_id)}
             conn.execute("INSERT INTO filter_sets VALUES (?, ?, ?, ?)",
                          [log_id, set_id, created, json.dumps(definition, sort_keys=True)])
         finally:
             conn.close()
-    return {"set_id": set_id, "created_at": created.isoformat() + "Z", "name": name, "cohort": described}
+    return {"set_id": set_id, "created_at": created.isoformat() + "Z", "name": name, "cohort": described,
+            **({"case_type": case_type} if case_type is not None else {})}
 
 
 def delete(log_id: str, set_id: str) -> dict[str, Any]:
