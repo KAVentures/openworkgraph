@@ -310,9 +310,10 @@ def resumption_candidates(
             identity = _identity(pointer)
             bucket["refs"].setdefault(identity, pointer)
             track = bucket["tracks"].setdefault(identity, {"first": float(instant),
-                                                           "last": float(instant), "event_ids": [], "observations": []})
+                                                           "last": float(instant), "event_ids": [], "observations": [], "observed_count": 0})
             track["first"] = min(track["first"], float(instant))
             track["last"] = max(track["last"], float(instant))
+            track["observed_count"] += 1
             track["observations"].append((float(instant), str(data.get("event_id") or "")[:120]))
             if len(track["event_ids"]) < 6:
                 track["event_ids"].append(str(data.get("event_id") or "")[:120])
@@ -430,7 +431,7 @@ def resumption_candidates(
                 "last_observed_at": _iso(track["last"]),
                 "idle_gap_session_started_at": _iso(sessions[index][0]),
                 "evidence_event_ids": list(reversed(track["event_ids"][-8:])),
-                "evidence_truncated": len(track["event_ids"]) > 8,
+                "evidence_truncated": track["observed_count"] > len(track["event_ids"]),
                 **_visible_bursts(track, IDENTITY_INTERRUPTION_MINUTES / 1440),
                 "gap_from_previous_seconds": (
                     max(0, round((track["first"] - previous_end) * 86400))
@@ -497,12 +498,14 @@ def resumption_candidates(
                         "first_observed_at": _iso(earlier["tracks"][ref]["first"]),
                         "last_observed_at": _iso(earlier["tracks"][ref]["last"]),
                         "evidence_event_ids": earlier["tracks"][ref]["event_ids"],
+                        "evidence_truncated": earlier["tracks"][ref]["observed_count"] > len(earlier["tracks"][ref]["event_ids"]),
                         **_visible_bursts(earlier["tracks"][ref], IDENTITY_INTERRUPTION_MINUTES / 1440),
                     },
                     "current": {
                         "first_observed_at": _iso(current["tracks"][ref]["first"]),
                         "last_observed_at": _iso(current["tracks"][ref]["last"]),
                         "evidence_event_ids": current["tracks"][ref]["event_ids"],
+                        "evidence_truncated": current["tracks"][ref]["observed_count"] > len(current["tracks"][ref]["event_ids"]),
                         **_visible_bursts(current["tracks"][ref], IDENTITY_INTERRUPTION_MINUTES / 1440),
                     },
                 }
