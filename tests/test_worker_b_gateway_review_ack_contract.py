@@ -219,3 +219,14 @@ def test_review_generation_is_rechecked_across_inspection_navigation_and_submiss
     for block in (inspected, direct, navigation, packet):
         assert expected in block
         assert 'current.permissions?.review!==true' in block
+
+
+def test_browser_history_restore_consumes_handoff_and_review_confirmation():
+    """BFCache restoration must not reuse an earlier human authorization."""
+    source = (Path(__file__).resolve().parents[1] / "gateway" / "processes.html").read_text()
+    for event in ('"pagehide"', '"pageshow"'):
+        block = source.split('window.addEventListener(' + event, 1)[1].split('});', 1)[0]
+        assert '$("handoffConsent").checked=false' in block
+        assert '$("reviewConfirm").checked=false' in block
+        assert 'resetHandoff(' in block
+    assert 'if(!event.persisted)return;' in source.split('window.addEventListener("pageshow"', 1)[1].split('});', 1)[0]
