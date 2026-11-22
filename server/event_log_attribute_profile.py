@@ -13,7 +13,7 @@ other ways.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
 
@@ -23,6 +23,9 @@ from . import event_log_workspace as workspace
 FORMAT = "openworkgraph.event-log-attribute-profile.v1"
 MAX_ATTRIBUTES = 100
 _NUMERIC_TYPES = ("BIGINT", "UBIGINT", "DOUBLE", "INTEGER")
+_VALUES = """SELECT ce.case_id, j.key AS attribute, j.type AS kind,
+                    CASE WHEN j.type = 'VARCHAR' THEN j.value->>'$' ELSE j.value::VARCHAR END AS value
+             FROM ce, json_each(ce.attributes) j WHERE j.type <> 'NULL'"""
 
 
 class ProfileSpec(BaseModel):
@@ -30,6 +33,53 @@ class ProfileSpec(BaseModel):
     top_values: StrictInt = Field(default=10, ge=1, le=50)
     cohort: dict[str, Any] = Field(default_factory=dict)
     case_type: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+class CaseProfileSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    attribute: str = Field(min_length=1, max_length=200)
+    value: str | None = Field(default=None, min_length=1, max_length=4096)
+    match: Literal["present", "missing", "varying"] = "present"
+    cohort: dict[str, Any] = Field(default_factory=dict)
+    after: str | None = Field(default=None, min_length=1, max_length=200)
+    limit: StrictInt = Field(default=30, ge=1, le=100)
+
+
+def cases(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, Any]:
+    try:
+        settings = CaseProfileSpec.model_validate(spec)
+    except ValidationError:
+        raise workspace.EventLogWorkspaceError("invalid attribute case selection") from None
+    if settings.value is not None and settings.match != "present":
+        raise workspace.EventLogWorkspaceError("a literal value requires present attribute cases")
+    cohort = cohorts.parse_cohort(settings.cohort)
+
+    def run(conn):
+        cohorts.restrict(conn, cohort, log_id)
+        params = [settings.attribute]
+        predicate = "value <> ''"
+        if settings.value is not None:
+            predicate = "value = ?"
+            params.append(settings.value)
+        distinct = "HAVING count(DISTINCT value) > 1" if settings.match == "varying" else ""
+        matching = f"""SELECT case_id, count(*) AS matching_events FROM ({_VALUES})
+                      WHERE attribute = ? AND {predicate} GROUP BY case_id {distinct}"""
+        if settings.match == "missing":
+            matching = f"""SELECT DISTINCT ce.case_id, 0 AS matching_events FROM ce
+                           WHERE ce.case_id NOT IN (SELECT case_id FROM ({matching}))"""
+        conn.execute("CREATE TEMP TABLE ap_case_matches AS " + matching, params)
+        total = conn.execute("SELECT count(*) FROM ap_case_matches").fetchone()[0]
+        where, args = (" WHERE case_id > ?", [settings.after]) if settings.after is not None else ("", [])
+        rows = conn.execute(f"""WITH page AS (
+                SELECT case_id, matching_events FROM ap_case_matches {where} ORDER BY case_id LIMIT ?)
+            SELECT ce.case_id, count(*), epoch(max(ts) - min(ts)), count(*) - count(DISTINCT ts), matching_events
+            FROM ce JOIN page USING (case_id) GROUP BY ce.case_id, matching_events ORDER BY ce.case_id""",
+            [*args, settings.limit + 1]).fetchall()
+        return {"selected_cases": total, "cases": [
+            {"case_id": key, "events": events, "elapsed_seconds": elapsed, "timestamp_ties": ties,
+             "matching_events": matches} for key, events, elapsed, ties, matches in rows[:settings.limit]],
+            "next_after": rows[settings.limit - 1][0] if len(rows) > settings.limit else None}
+    return workspace._query(log_id, case_type, run)
 
 
 def _parse(spec: Any) -> ProfileSpec:
@@ -57,23 +107,24 @@ def profile(log_id: str, spec: Any = None) -> dict[str, Any]:
         # One row per (event, attribute). JSON nulls and empty strings (blank CSV cells) count as missing;
         # text that parses as a number counts as numeric, as CSV attributes are always text.
         conn.execute(f"""CREATE OR REPLACE TEMP TABLE ap_values AS
-            SELECT case_id, event_id, attribute, kind, value,
+            SELECT case_id, attribute, kind, value,
                    CASE WHEN kind IN ({numeric}, 'VARCHAR') AND isfinite(try_cast(value AS DOUBLE))
                         THEN try_cast(value AS DOUBLE) END AS number
-            FROM (SELECT ce.case_id, ce.event_id, j.key AS attribute, j.type AS kind,
-                         CASE WHEN j.type = 'VARCHAR' THEN j.value->>'$' ELSE j.value::VARCHAR END AS value
-                  FROM ce, json_each(ce.attributes) j WHERE j.type <> 'NULL')
+            FROM ({_VALUES})
             WHERE value <> ''""")
         rows = conn.execute(f"""SELECT attribute, count(*) AS events, count(DISTINCT case_id) AS cases,
               count(DISTINCT value) AS distinct_values, count(number) AS numeric_events,
               list(DISTINCT kind ORDER BY kind) AS kinds
             FROM ap_values GROUP BY 1 ORDER BY cases DESC, events DESC, 1 LIMIT {MAX_ATTRIBUTES + 1}""").fetchall()
+        conn.execute("CREATE TEMP TABLE ap_keys AS SELECT unnest(?::VARCHAR[]) AS attribute",
+                     [[row[0] for row in rows[:MAX_ATTRIBUTES]]])
+        conn.execute("CREATE TEMP VIEW ap_visible AS SELECT ap_values.* FROM ap_values JOIN ap_keys USING (attribute)")
         varying = dict(conn.execute("""SELECT attribute, count(*) FROM (
-              SELECT attribute, case_id FROM ap_values GROUP BY 1, 2 HAVING count(DISTINCT value) > 1)
+              SELECT attribute, case_id FROM ap_visible GROUP BY 1, 2 HAVING count(DISTINCT value) > 1)
             GROUP BY 1""").fetchall())
-        top = conn.execute("""WITH v AS (SELECT attribute, value, count(*) AS events FROM ap_values GROUP BY 1, 2),
+        top = conn.execute("""WITH v AS (SELECT attribute, value, count(*) AS events FROM ap_visible GROUP BY 1, 2),
             c AS (SELECT vc.attribute, vc.value, count(*) AS cases, quantile_cont(d.duration, 0.5) AS median
-                  FROM (SELECT DISTINCT attribute, value, case_id FROM ap_values) vc
+                  FROM (SELECT DISTINCT attribute, value, case_id FROM ap_visible) vc
                   JOIN ap_durations d USING (case_id) GROUP BY 1, 2),
             ranked AS (SELECT v.attribute, v.value, v.events, c.cases, c.median,
                               row_number() OVER (PARTITION BY v.attribute ORDER BY c.cases DESC, v.events DESC, v.value) AS r
@@ -83,7 +134,7 @@ def profile(log_id: str, spec: Any = None) -> dict[str, Any]:
         quantiles = {a: (lo, q1, med, q3, hi, mean) for a, lo, q1, med, q3, hi, mean in conn.execute("""
             SELECT attribute, min(number), quantile_cont(number, 0.25), quantile_cont(number, 0.5),
                    quantile_cont(number, 0.75), max(number), avg(number)
-            FROM ap_values WHERE number IS NOT NULL GROUP BY 1""").fetchall()}
+            FROM ap_visible WHERE number IS NOT NULL GROUP BY 1""").fetchall()}
         overall = conn.execute("SELECT quantile_cont(duration, 0.5) FROM ap_durations").fetchone()[0]
         return {"events": events, "cases": cases, "rows": rows, "varying": varying, "top": top,
                 "quantiles": quantiles, "median_duration": overall}
