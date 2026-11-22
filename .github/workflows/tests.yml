@@ -274,6 +274,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_filter_from_findings.cjs
       - name: Verify grouping activities for every analysis in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/activity_mappings.cjs
+      - name: Verify hidden activities leave case analyses and come back
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_hidden_activities.cjs
       - name: Verify similar activity labels are suggested as a mapping
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_label_suggestions.cjs
       - name: Verify process cost from a dashboard cost model in Chromium

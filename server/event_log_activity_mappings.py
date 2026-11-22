@@ -149,6 +149,9 @@ def delete(log_id: str, mapping_id: str) -> dict[str, Any]:
 def erase(conn, log_id: str) -> None:
     _ensure(conn)
     conn.execute("DELETE FROM activity_mappings WHERE log_id = ?", [log_id])
+    # Hidden activities shape the same activity view and go with the log in the same transaction.
+    from .event_log_hidden_activities import erase as erase_hidden
+    erase_hidden(conn, log_id)
 
 
 def apply_to_case_events(conn, log_id: str) -> dict[str, Any] | None:
