@@ -978,7 +978,7 @@
     results.appendChild(funnelSection(names));
     results.appendChild(modelQualitySection());
     results.appendChild(modelChangeSection());
-    results.appendChild(footprintsSection());
+    results.appendChild(footprintsSection(inspection));
     results.appendChild(petriReplaySection());
     results.appendChild(temporalProfileSection());
     results.appendChild(waitingSection(inspection));
@@ -5332,33 +5332,83 @@
     return box;
   }
 
-  function footprintsSection(){
+  function footprintsSection(inspection){
     const box=section('Footprints');box.id='owgFootprints';
     box.appendChild(el('div','For every pair of activities, whether one directly follows the other (→), both orders occur (||) or neither (#): once from the recorded cases and once from the discovered model draft. Cells where they differ show orderings the model leaves out or allows without any case taking them.','muted'));
     const noise=select('owgFootprintsNoise',[['0.2','Model drops orderings under 20% (default)'],['0','Model keeps every ordering'],['0.4','Model drops orderings under 40%']]);
+    const coverage=select('owgFootprintsActivityShare',[['1','All activities'],['0.9','90% of events'],['0.75','75% of events'],['0.5','50% of events'],['0.25','25% of events']]);
     const run=button('Compare footprints','secondary');run.id='owgFootprintsRun';
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Model',noise),run);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Model',noise),field('Activity coverage',coverage),run);
     const statusLine=el('div',null,'muted');statusLine.id='owgFootprintsStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgFootprintsResults';
-    box.append(row,statusLine,out);
+    const review=el('div');review.id='owgFootprintsCaseReview';
+    box.append(row,statusLine,out,review);
+    const number=n=>Number(n).toLocaleString();
+    let reviewTurn=0;
+    function evidenceButton(url,retained,group,activities,label){
+      const open=button('Inspect cases','secondary');
+      open.setAttribute('aria-label','Inspect cases for '+label);
+      open.onclick=()=>{
+        const generation=state.generation,turn=++reviewTurn;
+        const current=()=>generation===state.generation&&turn===reviewTurn;
+        const heading=el('h4',label);heading.tabIndex=-1;
+        const status=el('div');status.setAttribute('role','status');
+        const rows=el('div'),nav=el('div',null,'row');
+        const previous=button('Previous case page','secondary'),next=button('Next case page','secondary');
+        nav.append(previous,next);review.replaceChildren(heading,status,rows,nav);heading.focus();
+        const cursors=[null];let index=0,following=null;
+        async function load(page){
+          previous.disabled=next.disabled=true;status.textContent='Loading cases…';
+          try{
+            const body={retained_activities:retained,group,activities,...(cursors[page]!==null?{after:cursors[page]}:{})};
+            const r=await (await api(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+            if(!current())return;
+            index=page;following=r.next_after;
+            status.textContent=number(r.occurrences)+(r.occurrences===1?' occurrence in ':' occurrences in ')+
+              number(r.total)+(r.total===1?' case.':' cases.');
+            if(r.projected_occurrences)status.append(' Excluding activities from the model changes '+number(r.projected_occurrences)+(r.projected_occurrences===1?' occurrence.':' occurrences.'));
+            rows.replaceChildren(r.cases.length?table(['Case','Occurrences','Occurrences affected by excluded activities','Events','Evidence'],r.cases.map(c=>{
+              const inspect=button('Open case','secondary');inspect.setAttribute('aria-label','Open case '+c.case_id);
+              inspect.onclick=()=>inspection.open(c.case_id);
+              return [c.case_id,number(c.occurrences),number(c.projected_occurrences),number(c.events),inspect];
+            })):el('div','No matching cases.','muted'));
+          }catch(error){if(current())status.textContent=error.message;}
+          finally{if(current()){previous.disabled=index===0;next.disabled=following===null;}}
+        }
+        previous.onclick=()=>load(index-1);
+        next.onclick=()=>{cursors[index+1]=following;load(index+1);};
+        load(0);
+      };
+      return open;
+    }
     run.onclick=async()=>{
       const generation=state.generation;run.disabled=true;statusLine.textContent='Comparing…';out.replaceChildren();
+      ++reviewTurn;review.replaceChildren();
       try{
-        const r=await getJSON(logPath('footprints',{noise:noise.value}));
+        const url=logPath('footprints',{noise:noise.value,activities:coverage.value}),r=await getJSON(url);
         if(generation!==state.generation)return;
+        const endpoint=new URL(url,window.location.origin);endpoint.pathname+='/cases';
+        endpoint.searchParams.delete('noise');endpoint.searchParams.delete('activities');
+        const evidenceURL=endpoint.pathname+endpoint.search;
         const c=r.conformance;
         statusLine.textContent=Math.round((c.footprint_fitness||0)*100)+'% of '+c.cells+' cells agree across '+r.activities.length+' activities in '+Number(r.cases).toLocaleString()+' cases; '+c.log_pairs_not_in_model+' orderings only in the log, '+c.model_pairs_not_in_log+' only in the model.'+(r.cases_before_filter?' Filtered from '+Number(r.cases_before_filter).toLocaleString()+' cases.':'');
         if(r.differences.length){out.appendChild(el('h4','Where log and model differ'));
-          out.appendChild(table(['From','To','Seen in','Cases','Log','Model'],r.differences.map(d=>[d.from,d.to,d.kind==='in_log_not_in_model'?'Log only':'Model only',Number(d.cases).toLocaleString(),d.log,d.model])));}
-        const extra=[['Start',r.start_activities.log_only],['End',r.end_activities.log_only]].filter(([,v])=>v.length);
-        if(extra.length)out.appendChild(el('div',extra.map(([k,v])=>k+' activities only in the log: '+v.join(', ')).join('. ')+'.','muted'));
+          out.appendChild(table(['From','To','Seen in','Cases','Log','Model','Evidence'],r.differences.map(d=>[
+            d.from,d.to,d.kind==='in_log_not_in_model'?'Log only':'Model only',number(d.cases),d.log,d.model,
+            d.cases?evidenceButton(evidenceURL,r.activities,'transition',[d.from,d.to],d.from+' → '+d.to):''
+          ])));
+          if(r.differences_total>r.differences.length)out.appendChild(el('div','Showing '+number(r.differences.length)+' of '+number(r.differences_total)+' differences.','muted'));}
+        const boundaries=[['start',r.start_activities],['end',r.end_activities]].flatMap(([group,boundary])=>boundary.log_only.map(activity=>[
+          group==='start'?'Start':'End',activity,number(boundary.log_only_counts[activity]),evidenceButton(evidenceURL,r.activities,group,[activity],(group==='start'?'Start: ':'End: ')+activity)
+        ]));
+        if(boundaries.length)out.append(el('h4','Start and end activities only in the log'),table(['Position','Activity','Cases','Evidence'],boundaries));
         const grid=document.createElement('details');grid.appendChild(el('summary','Footprint matrix (log / model)'));
         const t=table(['',...r.activities],r.matrix.map(row=>[row.activity,...row.cells.map(x=>x.log===x.model?x.log:x.log+' / '+x.model)]));
         t.id='owgFootprintsMatrix';
         r.matrix.forEach((row,i)=>row.cells.forEach((x,j)=>{if(x.log!==x.model){const cell=t.querySelector('tbody').rows[i].cells[j+1];cell.style.fontWeight='600';cell.setAttribute('aria-label',row.activity+' to '+r.activities[j]+': log '+x.log+', model '+x.model+' (differs)');}}));
         grid.appendChild(t);
         out.append(grid,el('div',r.caveat,'muted'));
-      }catch(error){statusLine.textContent=error.message;}
+      }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
       finally{run.disabled=false;}};
     return box;
   }
