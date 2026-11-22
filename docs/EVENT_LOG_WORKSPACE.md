@@ -136,6 +136,17 @@ over 64 MB, parts over 256 MB or a workbook over 512 MB uncompressed, and
 sheets over 2,000,000 rows or 500 columns. Formulas are read as their last
 calculated value, as Excel saved it.
 
+### Importing the same file twice
+
+Each import and appended batch keeps the SHA-256 of the uploaded file in its quality report. When a
+new import or append stores a file whose bytes match a file already loaded, into any saved log or an
+earlier batch of the same log, the response lists those batches under `same_source_as` (`log_id`,
+`name`, `batch`, `this_log`, `loaded_at`; at most 10) and the dashboard says "This exact file was
+already loaded as ...". It is a notice only: the import still happens, and you can delete the copy
+you do not need. The match is byte for byte, so a re-export with one changed row, a different line
+ending or a renamed file with different content is not reported. Deleted logs are never named, and
+the check reads only reports stored on this computer.
+
 ## Object-centric maps
 
 For an OCEL log, **Object-centric map** draws one directly-follows map per
