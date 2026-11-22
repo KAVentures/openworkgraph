@@ -360,6 +360,8 @@ def test_empty_run_identities_block_provider_io(monkeypatch):
     {"status": "verified_provider_operation", "provider_operation": "unknown", "customer_outcome": "unknown"},
     {"status": "unknown", "provider_operation": "unknown", "customer_outcome": "succeeded"},
     {"status": "verified_provider_event", "customer_outcome": "unknown"},
+    {"status": "verified_provider_event", "provider_operation": "unknown", "customer_outcome": "unknown", "event_id": "evt_wrong123"},
+    {"status": "unknown", "provider_operation": "unknown", "customer_outcome": "unknown", "event_id": "evt_12345678"},
     None,
 ])
 def test_contradictory_adapter_verdict_never_disclosed(monkeypatch, verdict):
