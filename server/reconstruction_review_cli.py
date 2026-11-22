@@ -137,12 +137,25 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("invalid group continuity evidence") from exc
         if len(encoded) > 65536:
             raise ValueError("unbounded group continuity evidence")
+    # A visible timeline can itself omit earlier episodes or source events.
+    # Treat nested omissions as incomplete review context, not a complete cohort.
+    nested_timeline_truncated = False
+    for timeline in identity_timelines:
+        nested_timeline_truncated |= _truncation_flag(timeline, "episodes_truncated")
+        episodes = timeline.get("episodes", [])
+        if not isinstance(episodes, list) or len(episodes) > 8:
+            raise ValueError("invalid or unbounded identity timeline episodes")
+        for episode in episodes:
+            if not isinstance(episode, dict):
+                raise ValueError("invalid identity timeline episode")
+            nested_timeline_truncated |= _truncation_flag(episode, "evidence_truncated")
     continuity_flag = _truncation_flag(response, "observed_group_continuity_truncated")
     identity_timelines_flag = _truncation_flag(response, "identity_timelines_truncated")
     continuity_truncated = continuity_flag or len(continuity) > 24
     identity_timelines_truncated = identity_timelines_flag or len(identity_timelines) > 12
     completeness_flags = (
         identity_timelines_truncated,
+        nested_timeline_truncated,
         _truncation_flag(response, "observed_pair_event_assignments_truncated"),
         continuity_truncated,
         _truncation_flag(response, "observed_case_groups_truncated"),
