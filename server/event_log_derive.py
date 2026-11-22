@@ -10,6 +10,10 @@ exported, compared with the source or deleted like any other.
 Not copied: the source's activity mapping, saved filters and analyses, signals,
 domain packs, source-identity keys, object-to-object relationships, quality
 reports, case tags and the cost model. The derived log starts without them, and the response says so.
+
+An optional time window (``events_from``, ``events_before``) trims the copy to the events inside it,
+the "trim to timeframe" of other process-mining tools: a case keeps only its events in the window,
+and a matching case with no event in it is left out. Without a window every event is copied.
 """
 from __future__ import annotations
 
@@ -18,6 +22,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from shared.event_log_formats import parse_timestamp
 
 from . import event_log_cohorts as cohorts
 from . import event_log_workspace as workspace
@@ -30,8 +36,23 @@ NOT_COPIED = ("activity mapping", "saved filters and analyses", "signals", "doma
 class DeriveSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=120)
-    cohort: dict[str, Any]
+    cohort: dict[str, Any] = Field(default_factory=dict)
     case_type: str | None = Field(default=None, min_length=1, max_length=200)
+    events_from: str | None = Field(default=None, min_length=10, max_length=40)
+    events_before: str | None = Field(default=None, min_length=10, max_length=40)
+
+
+def _window(parsed: DeriveSpec) -> tuple[datetime | None, datetime | None]:
+    bounds = []
+    for key in ("events_from", "events_before"):
+        value = getattr(parsed, key)
+        stamp = parse_timestamp(value) if value is not None else None
+        if value is not None and stamp is None:
+            raise workspace.EventLogWorkspaceError(f"{key} must be a time with a UTC offset")
+        bounds.append(stamp.astimezone(timezone.utc).replace(tzinfo=None) if stamp else None)
+    if bounds[0] and bounds[1] and bounds[0] >= bounds[1]:
+        raise workspace.EventLogWorkspaceError("events_from must be before events_before")
+    return bounds[0], bounds[1]
 
 
 def _parse(spec: Any) -> tuple[DeriveSpec, dict[str, Any]]:
@@ -44,13 +65,14 @@ def _parse(spec: Any) -> tuple[DeriveSpec, dict[str, Any]]:
     if not workspace._NAME.fullmatch(parsed.name.strip()):
         raise workspace.EventLogWorkspaceError("a short log name is required")
     chosen = cohorts.parse_cohort(parsed.cohort)
-    if not {k for k in chosen if k != "label"}:
-        raise workspace.EventLogWorkspaceError("choose a case filter; an unfiltered copy would duplicate the log")
+    if not {k for k in chosen if k != "label"} and _window(parsed) == (None, None):
+        raise workspace.EventLogWorkspaceError("choose a case filter or a time window; an unfiltered copy would duplicate the log")
     return parsed, chosen
 
 
 def derive(log_id: str, spec: Any) -> dict[str, Any]:
     settings, chosen = _parse(spec)
+    window_from, window_before = _window(settings)
     new_id = "log_" + secrets.token_hex(8)
 
     def run(conn):
@@ -68,6 +90,15 @@ def derive(log_id: str, spec: Any) -> dict[str, Any]:
             SELECT DISTINCT links.event_id
             FROM event_objects links SEMI JOIN ce ON links.object_id = ce.case_id
             WHERE links.log_id = ?""", [log_id])
+        trimmed = 0
+        if window_from or window_before:
+            before_trim = conn.execute("SELECT count(*) FROM dv_events").fetchone()[0]
+            conn.execute("""DELETE FROM dv_events WHERE event_id IN (SELECT event_id FROM events WHERE log_id = ?
+                AND ((?::TIMESTAMP IS NOT NULL AND ts < ?::TIMESTAMP) OR (?::TIMESTAMP IS NOT NULL AND ts >= ?::TIMESTAMP)))""",
+                         [log_id, window_from, window_from, window_before, window_before])
+            trimmed = before_trim - conn.execute("SELECT count(*) FROM dv_events").fetchone()[0]
+            if trimmed == before_trim:
+                raise workspace.EventLogWorkspaceError("no event of the matching cases falls in the time window")
         conn.execute("BEGIN")
         try:
             conn.execute("""INSERT INTO events SELECT ?, e.event_id, e.activity, e.ts, e.resource, e.attributes
@@ -91,7 +122,10 @@ def derive(log_id: str, spec: Any) -> dict[str, Any]:
         except Exception:
             conn.execute("ROLLBACK")
             raise
-        return {"source_cases": source_cases, "cases": cases, "events": events, "objects": objects}
+        kept_cases = conn.execute("""SELECT count(DISTINCT ce.case_id) FROM ce
+            WHERE ce.event_id IN (SELECT event_id FROM dv_events)""").fetchone()[0]
+        return {"source_cases": source_cases, "cases": cases, "events": events, "objects": objects,
+                "trimmed": trimmed, "kept_cases": kept_cases}
 
     data = workspace._query(log_id, settings.case_type, run)
     created = next(log for log in workspace.list_logs()["logs"] if log["log_id"] == new_id)
@@ -101,9 +135,15 @@ def derive(log_id: str, spec: Any) -> dict[str, Any]:
         "derived_from": {"log_id": log_id, "case_notion": data["case_notion"], "cohort": cohorts.describe(chosen),
                          "cases_matched": data["cases"], "cases_in_source": data["source_cases"]},
         "copied": {"events": data["events"], "objects": data["objects"]},
+        **({"time_window": {"events_from": window_from.isoformat() + "Z" if window_from else None,
+                            "events_before": window_before.isoformat() + "Z" if window_before else None,
+                            "events_outside_left_out": data["trimmed"],
+                            "cases_with_events_in_window": data["kept_cases"]}}
+           if window_from or window_before else {}),
         "not_copied": list(NOT_COPIED),
         "source_unchanged": True,
-        "interpretation": ("Every event of each matching case is copied, so a case keeps its full history. In an "
+        "interpretation": (("Only the events of the matching cases inside the time window are copied. " if window_from or window_before
+                            else "Every event of each matching case is copied, so a case keeps its full history. ") + "In an "
                            "object-centric log an event linked to a matching case also brings its other objects; "
                            "those objects keep only the copied events."),
     }
