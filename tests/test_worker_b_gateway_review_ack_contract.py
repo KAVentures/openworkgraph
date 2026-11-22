@@ -109,3 +109,20 @@ def test_executable_export_encodes_workflow_identity_in_authenticated_route():
     assert 'encodeURIComponent(record.workflow_id) +' in block
     assert 'record.workflow_id +' not in block
     assert 'new URLSearchParams({' in block
+
+
+def test_review_recovery_is_authenticated_read_only_and_consumes_consent():
+    """A lost review response may already be committed: recovery must GET, not POST."""
+    source = (Path(__file__).resolve().parents[1] / "gateway" / "processes.html").read_text()
+    assert 'id="reviewRecover" type="button"' in source
+    block = source.split('$("reviewRecover").onclick', 1)[1].split('$("approve").onclick', 1)[0]
+    assert 'if (!selected || !credential)' in block
+    assert '$("reviewConfirm").checked = false' in block
+    assert '$("handoffConsent").checked = false' in block
+    assert 'resetHandoff(' in block
+    assert 'await open(workflowId)' in block
+    assert 'review("reviewed_design")' not in block
+    assert '"/reviews"' not in block
+    open_block = source.split("async function open(id, revision)", 1)[1].split("function render(data)", 1)[0]
+    assert 'encodeURIComponent(id)' in open_block
+    assert 'render(data)' in open_block
