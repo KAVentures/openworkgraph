@@ -165,3 +165,66 @@ def test_retained_attempts_are_not_provider_causality(monkeypatch):
     assert result["provider_event_to_attempt_causality_verified"] is False
     assert result["provider_event_attributed_to_agent_run"] is False
     assert result["receipt_persisted"] is False
+
+
+def test_missing_retained_run_provenance_denied(monkeypatch):
+    """A journal without a run identity must not accompany a provider verdict."""
+    install(monkeypatch)
+    from server import local_source_credentials
+    from server import open_work_provider_attempt_verification as verifier
+    monkeypatch.setattr(local_source_credentials, "_read_metadata",
+                        lambda path: {"account": "acct_12345678"})
+    monkeypatch.setattr(routes, "_source_scope", lambda: "tenant-1")
+    monkeypatch.setattr(verifier, "verify_provider_attempt",
+                        lambda **kwargs: {"status": "unknown", "customer_outcome": "unknown"})
+    async def missing_run(req, resp):
+        return {"entries": []}
+    monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", missing_run)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
+    assert exc.value.status_code == 409
+
+
+def test_retained_journal_mutation_during_disclosure_denied(monkeypatch):
+    """An actor's retained journal changing after provider I/O fails closed."""
+    install(monkeypatch)
+    from server import local_source_credentials
+    from server import open_work_provider_attempt_verification as verifier
+    monkeypatch.setattr(local_source_credentials, "_read_metadata",
+                        lambda path: {"account": "acct_12345678"})
+    monkeypatch.setattr(routes, "_source_scope", lambda: "tenant-1")
+    monkeypatch.setattr(verifier, "verify_provider_attempt",
+                        lambda **kwargs: {"status": "unknown", "customer_outcome": "unknown"})
+    calls = []
+    async def changing(req, resp):
+        calls.append(1)
+        return {"run_ref": "run-1", "entries": [{"id": str(len(calls))}]}
+    monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", changing)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
+    assert exc.value.status_code == 409
+    assert len(calls) == 2
+
+
+def test_source_revoked_during_last_review_denied(monkeypatch):
+    """Consent loss in the last async review cannot disclose provider evidence."""
+    from server import local_source_credentials
+    from server import open_work_provider_attempt_verification as verifier
+    monkeypatch.setattr(local_source_credentials, "_read_metadata",
+                        lambda path: {"account": "acct_12345678"})
+    monkeypatch.setattr(routes, "_source_scope", lambda: "tenant-1")
+    monkeypatch.setattr(verifier, "verify_provider_attempt",
+                        lambda **kwargs: {"status": "unknown", "customer_outcome": "unknown"})
+    state = {"revoked": False, "reviews": 0}
+    async def review(req, resp):
+        state["reviews"] += 1
+        if state["reviews"] >= 4:
+            state["revoked"] = True
+        return {"case_ref": "case-1", "receipts": {"run_ref": "run-1"}}
+    def source():
+        if state["revoked"]:
+            raise HTTPException(403, "source revoked")
+    install(monkeypatch, review=review, source=source)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
+    assert exc.value.status_code == 403
