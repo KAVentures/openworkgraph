@@ -111,7 +111,14 @@ def read_exact_stripe_attempt_event(
                 or not isinstance(final_env.get("OWG_STRIPE_RESTRICTED_READ_KEY"), str)
                 or not hmac.compare_digest(final_env["OWG_STRIPE_RESTRICTED_READ_KEY"], key)):
             return {**unknown, "revoked": True}
-        if event.get("object") != "event" or event.get("id") != expected_event_id:
+        # Stripe accounts can have test and live events. The restricted key's
+        # environment is part of the independently authenticated source
+        # identity; an exact ID match in the wrong mode is not evidence.
+        expected_live = key.startswith("rk_live_")
+        if (event.get("object") != "event"
+                or event.get("id") != expected_event_id
+                or type(event.get("livemode")) is not bool
+                or event["livemode"] is not expected_live):
             return unknown
         data = event.get("data")
         obj = data.get("object") if isinstance(data, dict) else None
