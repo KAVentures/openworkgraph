@@ -184,3 +184,22 @@ def test_direct_review_denied_gateway_preflight_disarms_confirmation():
     assert 'Could not verify current review access.' in block
     assert 'throw error;' in block
     assert '"/reviews"' not in block
+
+
+def test_denied_packet_refresh_hides_revoked_review_actions():
+    """A failed Gateway refresh must not leave a stale actionable review form."""
+    source = (Path(__file__).resolve().parents[1] / "gateway" / "processes.html").read_text()
+    block = source.split('$("handoffRefresh").addEventListener', 1)[1].split('$("handoffPacket").addEventListener', 1)[0]
+    assert 'await open(workflowId)' in block
+    failure = block.split('catch (error)', 1)[1].split('throw error;', 1)[0]
+    for guard in (
+        'recoveryOpenTicket===processOpenGeneration',
+        'identityTicket===identityGeneration',
+        'selected?.process?.workflow_id===workflowId',
+        'selected=null;',
+        '$("selected").hidden=true;',
+        '$("reviewConfirm").checked=false;',
+        'REFUSED: Could not reopen an authorized revision.',
+    ):
+        assert guard in failure
+    assert '"/reviews"' not in block
