@@ -269,4 +269,38 @@ def test_internal_admission_requests_have_json_content_type(monkeypatch):
     result = asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
     assert result["receipt_persisted"] is False
     assert seen.count("review") >= 3
-    assert seen.count("receipts") == 2
+    assert seen.count("receipts") == 3
+
+
+def test_missing_retained_run_blocks_provider_network_io(monkeypatch):
+    """An admitted case without a matching actor journal cannot trigger Stripe IO."""
+    install(monkeypatch)
+    from server import open_work_provider_attempt_verification as verifier
+    calls = []
+    def forbidden(**kwargs):
+        calls.append("provider")
+        raise AssertionError("provider network read must not begin")
+    monkeypatch.setattr(verifier, "verify_provider_attempt", forbidden)
+    async def wrong_journal(req, resp):
+        return {"run_ref": "another-run", "entries": []}
+    monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", wrong_journal)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
+    assert exc.value.status_code == 409
+    assert calls == []
+
+
+def test_journal_revocation_before_provider_io_blocks_read(monkeypatch):
+    """Revoked journal permission must fail before provider access."""
+    install(monkeypatch)
+    from server import open_work_provider_attempt_verification as verifier
+    calls = []
+    monkeypatch.setattr(verifier, "verify_provider_attempt",
+                        lambda **kwargs: calls.append("provider"))
+    async def revoked(req, resp):
+        raise HTTPException(403, "receipt read revoked")
+    monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", revoked)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
+    assert exc.value.status_code == 403
+    assert calls == []
