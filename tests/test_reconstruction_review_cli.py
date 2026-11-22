@@ -176,6 +176,35 @@ class TruncatedNavigationEvidenceTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "invalid " + flag):
                     build_review_queue(source)
 
+    def test_nested_timeline_omissions_block_complete_scoring(self):
+        for timeline in (
+            {"episodes_truncated": True, "episodes": []},
+            {"episodes_truncated": False, "episodes": [{"evidence_truncated": True}]},
+        ):
+            with self.subTest(timeline=timeline):
+                source = payload([pair("A", "F", ["e1"])])
+                source["identity_timelines"] = [timeline]
+                queue = build_review_queue(source)
+                self.assertTrue(queue["coverage_incomplete"])
+                row = queue["event_reviews"][0]
+                labels = [{"window": row["window"], "event_id": row["event_id"],
+                           "true_resource_pairs": row["candidate_resource_pairs"]}]
+                with self.assertRaisesRegex(ValueError, "incomplete source evidence"):
+                    score_review_annotations(source, labels)
+
+    def test_malformed_nested_timeline_metadata_fails_closed(self):
+        for timeline in (
+            {"episodes_truncated": "false", "episodes": []},
+            {"episodes": [{"evidence_truncated": 0}]},
+            {"episodes": [None]},
+            {"episodes": [{}] * 9},
+        ):
+            with self.subTest(timeline=timeline):
+                source = payload([pair("A", "F", ["e1"])])
+                source["identity_timelines"] = [timeline]
+                with self.assertRaisesRegex(ValueError, "invalid"):
+                    build_review_queue(source)
+
     def test_complete_navigation_remains_scoreable(self):
         source = payload([pair("A", "F", ["e1"])])
         source["observed_case_groups_truncated"] = False
