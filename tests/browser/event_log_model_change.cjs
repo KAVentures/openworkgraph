@@ -41,6 +41,12 @@ const path=require('node:path');
    assert(status.includes('the way the work runs changed'),status);
    const out=await page.locator('#owgModelChangeResults').textContent();
    assert(out.includes('New after the split: Notify')&&out.includes('Orderings that changed'),out);
+   const later=box.getByText('Non-fitting variants · After cases on the Before model',{exact:true});
+   await later.click();
+   await box.getByRole('button',{name:/Review Order → Approve → Check → Ship → Notify in After cases/}).click();
+   await page.locator('#owgEventLogCasesStatus').getByText(/20 matching cases/).waitFor();
+   await page.locator('#owgEventLogCasesList').getByRole('button',{name:'Open case b0',exact:true}).click();
+   await page.locator('#owgEventLogCaseEvents').getByText(/Showing 5 of 5 events/).waitFor();
    await page.locator('#owgModelChangeSplit').fill('');await page.locator('#owgModelChangeRun').click();
    await page.locator('#owgModelChangeStatus').filter({hasText:'(median case start)'}).waitFor();
    // Two groups by the region column (event attribute): EU against US.
@@ -50,10 +56,14 @@ const path=require('node:path');
    await page.locator('#owgModelChangeStatus').filter({hasText:'region=EU (20 cases) against region=US (20)'}).waitFor();
    const groups=await page.locator('#owgModelChangeResults').textContent();
    assert(groups.includes('Only in region=US: Notify')&&groups.includes('Orderings that differ'),groups);
+   await box.getByRole('button',{name:'Review cases from region=US against the region=EU model',exact:true}).click();
+   await page.locator('#owgEventLogCasesStatus').getByText(/20 matching cases/).waitFor();
+   assert.equal(await page.locator('#owgEventLogCasesList').getByRole('button',{name:/Open case a/}).count(),0);
+   await box.getByText('Non-fitting variants · region=US cases on the region=EU model',{exact:true}).click();
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgModelChange'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Model change browser acceptance passed: given split with new activity, changed orderings and lower cross-fit, median split, two regions compared, WCAG audit.');
+   console.log('Model change browser acceptance passed: given split with new activity, changed orderings and lower cross-fit, median split, two regions compared, non-fitting variant evidence, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});

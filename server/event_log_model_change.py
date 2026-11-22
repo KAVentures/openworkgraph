@@ -54,7 +54,8 @@ def _relations(tree: dict[str, Any], alphabet: list[str]) -> dict[tuple[str, str
     return {(a, b): footprints._relation(a, b, follows, par) for a in alphabet for b in alphabet}
 
 
-def _compare(log_id: str, case_type: str | None, groups: dict[str, dict[str, Any]], noise: float):
+def _compare(log_id: str, case_type: str | None, groups: dict[str, dict[str, Any]], noise: float,
+             include_case_evidence: bool):
     """Discover a model per group (two groups, in order) and compare orderings, activities and cross-fit."""
     (first, c1), (second, c2) = groups.items()
     models = {name: discovery.discover(log_id, case_type, noise=noise, cohort=c) for name, c in groups.items()}
@@ -77,8 +78,19 @@ def _compare(log_id: str, case_type: str | None, groups: dict[str, dict[str, Any
 
     def fit(cases_of: str, model_of: str) -> dict[str, Any]:
         r = alignments.alignments(log_id, nets[model_of], case_type, cohort=groups[cases_of])
-        return {"cases": r["cases"], "fitness": r["fitness"]["log"],
-                "fitting_case_share": r["fitness"]["fitting_case_share"]}
+        result = {"cases": r["cases"], "fitness": r["fitness"]["log"],
+                  "fitting_case_share": r["fitness"]["fitting_case_share"]}
+        if include_case_evidence:
+            result.update({
+                "cases_total": r["cases_total"], "cases_excluded": r["cases_excluded"],
+                "cases_unaligned": r["unaligned"]["cases"],
+                "non_fitting_variants": [
+                    {key: variant[key] for key in ("path", "cases", "cost", "fitness")}
+                    for variant in r["non_fitting_variants"]
+                ],
+                "non_fitting_variants_total": r["non_fitting_variants_total"],
+            })
+        return result
 
     cross = {f"{first}_cases_on_{first}_model": fit(first, first),
              f"{second}_cases_on_{first}_model": fit(second, first),
@@ -88,10 +100,10 @@ def _compare(log_id: str, case_type: str | None, groups: dict[str, dict[str, Any
 
 
 def model_change(log_id: str, case_type: str | None = None, *, split: Any = None, noise: float = 0.2,
-                 cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+                 cohort: dict[str, Any] | None = None, include_case_evidence: bool = False) -> dict[str, Any]:
     if isinstance(noise, bool) or not isinstance(noise, (int, float)) or not 0 <= noise < 1:
         raise EventLogWorkspaceError("noise must be a share from 0 up to (not including) 1")
-    base = dict(cohort or {})
+    base = {k: v for k, v in dict(cohort or {}).items() if v not in (None, "", [], {})}
     if base.get("started_from") or base.get("started_before"):
         raise EventLogWorkspaceError("the periods come from the split date; remove the start-date filter")
     at = _parse_split(split)
@@ -112,7 +124,7 @@ def model_change(log_id: str, case_type: str | None = None, *, split: Any = None
         raise EventLogWorkspaceError(f"each period needs at least {MIN_CASES_PER_PERIOD} cases; "
                                      f"this split gives {before_n} before and {after_n} after")
     periods = {"before": {**base, "started_before": _iso(at)}, "after": {**base, "started_from": _iso(at)}}
-    models, acts, changes, pairs, cross = _compare(log_id, case_type, periods, noise)
+    models, acts, changes, pairs, cross = _compare(log_id, case_type, periods, noise, include_case_evidence)
     own, moved = cross["before_cases_on_before_model"]["fitness"], cross["after_cases_on_before_model"]["fitness"]
     return {
         "format": FORMAT, "log_id": log_id, "case_notion": models["before"].get("case_notion"),
@@ -125,6 +137,7 @@ def model_change(log_id: str, case_type: str | None = None, *, split: Any = None
                       "unchanged_share": round(1 - len(changes) / pairs, 4) if pairs else None},
         "changes": changes[:TOP_CHANGES], "changes_total": len(changes),
         "cross_fit": cross,
+        **({"case_selections": periods} if include_case_evidence else {}),
         "fitness_drop_on_earlier_model": (round(own - moved, 4) if own is not None and moved is not None else None),
         "models": {name: {"process_model_sha256": m.get("process_model_sha256")} for name, m in models.items()},
         "legend": {"→": "row is followed by column", "←": "column is followed by row", "||": "both orders or parallel",
@@ -145,7 +158,7 @@ def _group(raw: Any, what: str) -> dict[str, str]:
 
 
 def model_comparison(log_id: str, group_a: Any, group_b: Any, case_type: str | None = None, *,
-                     noise: float = 0.2, cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+                     noise: float = 0.2, cohort: dict[str, Any] | None = None, include_case_evidence: bool = False) -> dict[str, Any]:
     """The same comparison between two groups of cases, each selected by a case attribute value
     (for example ``region=EU`` and ``region=US``), as Celonis compares org units."""
     if isinstance(noise, bool) or not isinstance(noise, (int, float)) or not 0 <= noise < 1:
@@ -176,7 +189,7 @@ def model_comparison(log_id: str, group_a: Any, group_b: Any, case_type: str | N
     if min(counts.values()) < MIN_CASES_PER_PERIOD:
         raise EventLogWorkspaceError(f"each group needs at least {MIN_CASES_PER_PERIOD} cases; "
                                      f"these give {counts['a']} and {counts['b']}")
-    models, acts, changes, pairs, cross = _compare(log_id, case_type, groups, noise)
+    models, acts, changes, pairs, cross = _compare(log_id, case_type, groups, noise, include_case_evidence)
     own, other = cross["a_cases_on_a_model"]["fitness"], cross["b_cases_on_a_model"]["fitness"]
     return {
         "format": FORMAT.replace("model_change", "model_comparison"), "log_id": log_id,
@@ -189,6 +202,7 @@ def model_comparison(log_id: str, group_a: Any, group_b: Any, case_type: str | N
                       "unchanged_share": round(1 - len(changes) / pairs, 4) if pairs else None},
         "differences": changes[:TOP_CHANGES], "differences_total": len(changes),
         "cross_fit": cross,
+        **({"case_selections": groups} if include_case_evidence else {}),
         "fitness_gap_on_a_model": (round(own - other, 4) if own is not None and other is not None else None),
         "models": {name: {"process_model_sha256": m.get("process_model_sha256")} for name, m in models.items()},
         "legend": {"→": "row is followed by column", "←": "column is followed by row", "||": "both orders or parallel",
