@@ -421,7 +421,7 @@ const pathModule = require("node:path");
     await setHandoffPacket(handoffPacket());
     await alice.locator("#handoffCheck").click();
     await alice.locator("#handoffStatus")
-      .filter({hasText:"MATCH: Fresh authorized, independently design-reviewed process revision"}).waitFor();
+      .filter({hasText:"MATCH: Fresh authorized process revision"}).waitFor();
     assert.match(await alice.locator("#handoffStatus").textContent(), /execution authorization remain unverified/);
     assert.equal(uploadedHandoff, false);
     await bob
