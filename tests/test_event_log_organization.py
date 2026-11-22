@@ -86,6 +86,36 @@ def test_resources_beyond_the_visible_set_fold_into_one_bucket(monkeypatch):
     assert "carol" not in json.dumps(result)
 
 
+def test_grouped_resources_count_each_case_once_and_do_not_shadow_literal_labels(monkeypatch):
+    monkeypatch.setattr(org, "MAX_RESOURCES", 1)
+    log = _log({"case": [("A", "Other resources"), ("B", "one"), ("C", "Other resources"),
+                        ("D", "two"), ("E", "Other resources")]})
+    report = org.organization(log, names="shown")
+    a, b = "Other resources", "Other resources (grouped)"
+    assert {"from": a, "to": b, "handovers": 2, "cases": 1} in report["handover_of_work"]
+    assert {"from": a, "to": b, "times": 2, "cases": 1} in report["subcontracting"]
+    assert report["working_together"] == [{"resources": [a, b], "shared_cases": 1}]
+
+
+def test_relationship_review_exact_scope_and_keyset_pages(monkeypatch):
+    monkeypatch.setattr(org, "MAX_RESOURCES_PER_CASE", 2)
+    log = _log({**CASES, "c5": [("A", "alice"), ("B", "bob"), ("C", ""), ("D", "carol")]})
+    selector = {"names": "shown", "resources": ["alice", "bob"], "limit": 1}
+    assert org.relationship_cases(log, {**selector, "kind": "handover"})["selected_cases"] == 3
+    returned = org.relationship_cases(log, {**selector, "kind": "return"})
+    assert returned["cases"] == [{"case_id": "c1", "matches": 1}]
+    assert returned["next_after"] is None
+    shared = org.relationship_cases(log, {**selector, "kind": "shared"})
+    assert shared["cases"] == [{"case_id": "c1", "matches": 1}]
+    assert shared["selected_cases"] == 2 and shared["next_after"] == "c1"
+    second = org.relationship_cases(log, {**selector, "kind": "shared", "after": shared["next_after"]})
+    assert second["cases"] == [{"case_id": "c2", "matches": 1}] and second["next_after"] is None
+    scoped = org.relationship_cases(log, {**selector, "kind": "handover", "cohort": {"activity": "D"}})
+    assert scoped["cases"] == [{"case_id": "c5", "matches": 1}]
+    with pytest.raises(workspace.EventLogWorkspaceError, match="show resource names"):
+        org.relationship_cases(log, {**selector, "kind": "shared", "names": "pseudonymous"})
+
+
 def test_crowded_cases_are_excluded_from_pairs_and_reported(monkeypatch):
     monkeypatch.setattr(org, "MAX_RESOURCES_PER_CASE", 2)
     crowded = {**CASES, "c5": [("A", "alice"), ("B", "bob"), ("C", "carol")]}
@@ -140,6 +170,11 @@ with TestClient(app) as client:
     assert "ann" not in result.text
     assert client.get(path + "?names=shown", headers=headers).json()["resources"][0]["resource"] in {"ann", "ben"}
     assert client.get(path + "?names=all", headers=headers).status_code == 422
+    cases = {"kind": "handover", "resources": ["ann", "ben"], "names": "shown"}
+    assert client.post(path + "/cases", json=cases, headers={"Authorization": "Bearer " + local_auth.ensure_api_token()}).status_code in (401, 403)
+    inspected = client.post(path + "/cases", json=cases, headers=headers)
+    assert inspected.status_code == 200 and inspected.headers["cache-control"] == "no-store"
+    assert inspected.json()["cases"] == [{"case_id": "1", "matches": 1}]
 '''
     env = os.environ.copy()
     env.update({"WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"), "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth"),
