@@ -37,6 +37,9 @@ def install(monkeypatch, *, review=None, source=None, body=None):
     monkeypatch.setattr(routes, "_body", parse)
     monkeypatch.setattr(routes, "_recheck_source", recheck)
     monkeypatch.setattr(routes, "read_local_combined_case_review", admitted)
+    async def receipts(req, resp):
+        return {"run_ref": "run-1", "entries": [], "status": "retained_untrusted"}
+    monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", receipts)
 
 def test_no_provider_read_without_retained_run(monkeypatch):
     async def denied(req, resp):
@@ -125,3 +128,40 @@ def test_current_source_guard_is_passed_to_verifier(monkeypatch):
     result = asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
     assert result["receipt_persisted"] is False
     assert result["customer_outcome_verified"] is False
+
+
+def test_retained_receipt_run_mismatch_denied(monkeypatch):
+    """A journal from another run cannot be presented beside provider evidence."""
+    install(monkeypatch)
+    from server import local_source_credentials
+    from server import open_work_provider_attempt_verification as verifier
+    monkeypatch.setattr(local_source_credentials, "_read_metadata",
+                        lambda path: {"account": "acct_12345678"})
+    monkeypatch.setattr(routes, "_source_scope", lambda: "tenant-1")
+    monkeypatch.setattr(verifier, "verify_provider_attempt",
+                        lambda **kwargs: {"status": "unknown", "customer_outcome": "unknown"})
+    async def wrong_run(req, resp):
+        return {"run_ref": "other-run", "entries": []}
+    monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", wrong_run)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
+    assert exc.value.status_code == 409
+
+
+def test_retained_attempts_are_not_provider_causality(monkeypatch):
+    """A same-run journal may be displayed, but never attributed to the event."""
+    install(monkeypatch)
+    from server import local_source_credentials
+    from server import open_work_provider_attempt_verification as verifier
+    monkeypatch.setattr(local_source_credentials, "_read_metadata",
+                        lambda path: {"account": "acct_12345678"})
+    monkeypatch.setattr(routes, "_source_scope", lambda: "tenant-1")
+    monkeypatch.setattr(verifier, "verify_provider_attempt",
+                        lambda **kwargs: {"status": "verified_provider_event",
+                                          "customer_outcome": "unknown"})
+    result = asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
+    assert result["retained_attempt_receipts"]["run_ref"] == "run-1"
+    assert result["retained_attempt_receipts_are_untrusted"] is True
+    assert result["provider_event_to_attempt_causality_verified"] is False
+    assert result["provider_event_attributed_to_agent_run"] is False
+    assert result["receipt_persisted"] is False
