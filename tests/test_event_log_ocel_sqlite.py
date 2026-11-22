@@ -59,6 +59,60 @@ def test_type_names_become_unique_safe_table_names():
         "create order": "CreateOrder", "Create-Order": "CreateOrder2", "": "Type", "x\"; DROP": "XDrop"}
 
 
+
+@pytest.mark.parametrize(
+    "kind,names",
+    [
+        ("event", ["ocel_id"]),
+        ("event", ["OCEL_TIME"]),
+        ("object", ["ocel_changed_field"]),
+        ("object", ["ocel_id"]),
+        ("event", ["Attribute", "attribute"]),
+        ("object", ["Flag", "flag"]),
+    ],
+)
+def test_sqlite_attribute_column_collisions_refuse_before_writing(tmp_path, monkeypatch, kind, names):
+    doc = {"events": [], "objects": []}
+    attributes = [{"name": name, "value": "value", "time": "1970-01-01T00:00:00Z"} for name in names]
+    if kind == "event":
+        doc["events"] = [{"id": "e1", "type": "Activity", "time": "2024-01-01T00:00:00Z",
+                           "attributes": attributes, "relationships": []}]
+    else:
+        doc["objects"] = [{"id": "o1", "type": "Order",
+                            "attributes": attributes, "relationships": []}]
+
+    def export(_log_id, source_format, target):
+        assert source_format == "ocel"
+        target.write(json.dumps(doc))
+
+    monkeypatch.setattr(workspace, "export_log", export)
+    path = tmp_path / "conflict.sqlite"
+    with pytest.raises(workspace.EventLogWorkspaceError, match="OCEL SQLite attribute column"):
+        ocel_sqlite.write("log_test", path)
+    assert not path.exists()
+
+
+def test_repeating_same_attribute_on_multiple_events_is_valid(tmp_path, monkeypatch):
+    doc = {"objects": [], "events": [
+        {"id": event_id, "type": "Activity", "time": "2024-01-01T00:00:00Z",
+         "attributes": [{"name": "same", "value": event_id}], "relationships": []}
+        for event_id in ("e1", "e2")
+    ]}
+
+    def export(_log_id, source_format, target):
+        assert source_format == "ocel"
+        target.write(json.dumps(doc))
+
+    monkeypatch.setattr(workspace, "export_log", export)
+    path = tmp_path / "valid.sqlite"
+    assert ocel_sqlite.write("log_test", path)["events"] == 2
+    conn = sqlite3.connect(path)
+    try:
+        assert conn.execute('SELECT COUNT(*), COUNT("same") FROM event_Activity').fetchone() == (2, 2)
+    finally:
+        conn.close()
+
+
 def test_route_is_owner_only(tmp_path):
     code = r'''
 import sqlite3, tempfile
