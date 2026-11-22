@@ -898,7 +898,7 @@
     results.appendChild(footprintsSection());
     results.appendChild(petriReplaySection());
     results.appendChild(temporalProfileSection());
-    results.appendChild(waitingSection());
+    results.appendChild(waitingSection(inspection));
     results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity),inspection));
     results.appendChild(organizationSection());
     results.appendChild(privateMapSection());
@@ -3948,7 +3948,7 @@
     return box;
   }
 
-  function waitingSection(){
+  function waitingSection(inspection){
     const box=section('Processing and waiting time');box.id='owgWaiting';
     box.appendChild(el('div','Separates recorded activity intervals from gaps before they start, from start/complete lifecycle values or an end-time column. Waiting includes nights, weekends and work that was not recorded. Nothing is attributed to a person.','muted'));
     const lifecycle=input('owgWaitingLifecycle','text');lifecycle.value='lifecycle:transition';lifecycle.maxLength=120;
@@ -3957,6 +3957,7 @@
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Lifecycle attribute',lifecycle),field('Or end-time attribute (with timezone)',end),run);
     const statusLine=el('div',null,'muted');statusLine.id='owgWaitingStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgWaitingResults';
+    const review=el('div');review.id='owgWaitingCases';
     const enabled=input('owgWaitingCalendarEnabled','checkbox');
     const days=select('owgWaitingCalendarDays',[['mon','Monday'],['tue','Tuesday'],['wed','Wednesday'],['thu','Thursday'],['fri','Friday'],['sat','Saturday'],['sun','Sunday']]);
     days.multiple=true;days.size=4;for(const option of days.options)option.selected=['mon','tue','wed','thu','fri'].includes(option.value);
@@ -3966,22 +3967,55 @@
     const holidays=el('textarea');holidays.id='owgWaitingCalendarHolidays';holidays.rows=2;holidays.maxLength=6000;
     const calendarFields=el('div',null,'row');calendarFields.append(field('Calendar working days',days),field('Calendar opens',from),field('Calendar closes',until),field('Calendar time zone',zone),field('Calendar holidays (YYYY-MM-DD)',holidays));show(calendarFields,false);
     const exportReport=button('Download calendar and elapsed aggregates','secondary');exportReport.id='owgWaitingCalendarExport';exportReport.disabled=true;show(exportReport,false);
-    let artifact=null,requestVersion=0;
-    const invalidate=()=>{requestVersion++;out.replaceChildren();statusLine.textContent='Settings changed. Run the analysis again.';run.disabled=false;artifact=null;exportReport.disabled=true;};
+    let artifact=null,requestVersion=0,reviewVersion=0;
+    const invalidate=()=>{requestVersion++;out.replaceChildren();review.replaceChildren();statusLine.textContent='Settings changed. Run the analysis again.';run.disabled=false;artifact=null;exportReport.disabled=true;};
     for(const control of [lifecycle,end,days,from,until,zone,holidays])control.addEventListener('input',invalidate);
     enabled.addEventListener('change',()=>{show(calendarFields,enabled.checked);show(exportReport,enabled.checked);invalidate();});
     exportReport.onclick=()=>{if(artifact&&enabled.checked)download('working-calendar-aggregates.json',JSON.stringify(artifact,null,2),'application/json');};
-    box.append(field('Add a declared working-calendar lens',enabled),calendarFields,row,statusLine,out,exportReport);
+    box.append(field('Add a declared working-calendar lens',enabled),calendarFields,row,statusLine,out,review,exportReport);
+    function showHotspot(url,hotspot){
+      const generation=state.generation,version=requestVersion,selection=++reviewVersion;
+      const current=()=>generation===state.generation&&version===requestVersion&&selection===reviewVersion;
+      const title=el('h4','Waiting from '+hotspot.from+' to '+hotspot.to);title.tabIndex=-1;
+      const status=el('div');status.setAttribute('role','status');
+      const rows=el('div'),controls=el('div',null,'row');
+      const previous=button('Previous page','secondary'),next=button('Next page','secondary');
+      controls.append(previous,next);review.replaceChildren(title,status,rows,controls);title.focus();
+      const cursors=[null];let page=0,following=null;
+      async function load(index){
+        previous.disabled=next.disabled=true;status.textContent='Loading cases…';
+        try{
+          const path=new URL(url,window.location.origin);path.pathname+='/cases';
+          path.searchParams.set('source',hotspot.from);path.searchParams.set('destination',hotspot.to);
+          if(cursors[index]!==null)path.searchParams.set('after',cursors[index]);
+          const result=await getJSON(path.pathname+path.search);
+          if(!current())return;
+          if(!result.available)throw new Error(result.reason);
+          page=index;following=result.next_after;
+          status.textContent=Number(result.total_cases).toLocaleString()+' matching cases. Showing '+result.cases.length+' on this page.';
+          rows.replaceChildren(result.cases.length?table(['Case','Times','Total elapsed waiting','Longest elapsed wait','Evidence'],result.cases.map(item=>{
+            const open=button('Open case','secondary');open.setAttribute('aria-label','Open case '+item.case_id);
+            open.onclick=()=>inspection.open(item.case_id);
+            return [item.case_id,Number(item.instances).toLocaleString(),duration(item.waiting_seconds),duration(item.longest_wait_seconds),open];
+          })):el('div','No matching cases on this page.','muted'));
+        }catch(error){if(current())status.textContent=error.message;}
+        finally{if(current()){previous.disabled=page===0;next.disabled=following===null;}}
+      }
+      previous.onclick=()=>load(page-1);
+      next.onclick=()=>{cursors[page+1]=following;load(page+1);};
+      load(0);
+    }
     run.onclick=async()=>{
       const generation=state.generation,version=++requestVersion;
       const current=()=>generation===state.generation&&version===requestVersion;
       try{
-        run.disabled=true;artifact=null;exportReport.disabled=true;out.replaceChildren();statusLine.textContent='Measuring…';
+        run.disabled=true;artifact=null;exportReport.disabled=true;out.replaceChildren();review.replaceChildren();statusLine.textContent='Measuring…';
         const params={lifecycle_attribute:lifecycle.value.trim()||'lifecycle:transition'};
         if(end.value.trim())params.end_attribute=end.value.trim();
         const cal=enabled.checked?simCalendar({days:'every_day',from:from.value,to:until.value,timezone:zone.value,holidays:holidays.value}):null;
         if(cal){const selected=[...days.selectedOptions].map(o=>o.value);if(!selected.length)throw new Error('Choose at least one calendar working day.');cal.hours=Object.fromEntries(selected.map(day=>[day,cal.hours[day]]));}
-        const r=cal?await (await api(logPath('waiting-time'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...params,working_calendar:cal})})).json():await getJSON(logPath('waiting-time',params));
+        const url=logPath('waiting-time',params);
+        const r=cal?await (await api(logPath('waiting-time'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...params,working_calendar:cal})})).json():await getJSON(url);
         if(!current())return;
         if(!r.available){
           statusLine.textContent=r.reason;
@@ -4001,7 +4035,7 @@
               duration(a.waiting_before.population_stddev_seconds),duration(a.waiting_before.total_seconds),pct(a.share_of_all_waiting)])),
           el('p','Spread is population standard deviation of observed durations, not a confidence interval. Percentiles and spread exclude missing durations; processing coverage includes unfinished lifecycle starts in its denominator. Tied timestamps and incomplete lifecycle data can affect these descriptive results.','muted'),
           el('h4','Where cases wait'),
-          table(['After','Before','Times','Median waiting','Share of all waiting'],r.waiting_hotspots.slice(0,10).map(h=>[h.from,h.to,Number(h.count).toLocaleString(),duration(h.median_waiting_seconds),pct(h.share_of_all_waiting)])),
+          table(['After','Before','Times','Median waiting','Share of all waiting','Evidence'],r.waiting_hotspots.slice(0,10).map(h=>{const inspect=button('Inspect cases','secondary');inspect.setAttribute('aria-label','Inspect cases waiting from '+h.from+' to '+h.to);inspect.onclick=()=>showHotspot(url,h);return [h.from,h.to,Number(h.count).toLocaleString(),duration(h.median_waiting_seconds),pct(h.share_of_all_waiting),inspect];})),
           el('div',r.interpretation,'muted'));
         if(r.working_calendar?.available){
           const c=r.working_calendar,flow=c.flow_efficiency;
