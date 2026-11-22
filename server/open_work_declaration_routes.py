@@ -3464,11 +3464,39 @@ async def read_local_bound_provider_event(request: Request, response: Response):
     _dashboard_only(request)
     await require_same_provider_account()
     _dashboard_only(request)
+    # Show retained attempt evidence alongside the independent provider observation.
+    # This is a separate fully admitted actor/tenant-scoped read, never a
+    # correlation assertion: journal rows remain untrusted until an independent
+    # run-to-event provenance binding is established.
+    async def retained_attempt_review():
+        raw = json.dumps({key: payload[key] for key in (
+            "work_item_ref", "expected_revision", "expected_edit_token",
+            "confirm_historical_review", "confirm_run_comparison", "max_cases",
+            "deployment_id", "run_id",
+        )}, separators=(",", ":")).encode("utf-8")
+        async def receive():
+            return {"type": "http.request", "body": raw, "more_body": False}
+        return await read_local_bound_attempt_receipts(
+            Request(dict(request.scope), receive=receive), Response(),
+        )
+
+    retained = await retained_attempt_review()
+    await _recheck_source(scope)
+    _dashboard_only(request)
+    await require_same_provider_account()
+    final_admission = await review()
+    if final_admission != final:
+        raise HTTPException(409, "run/case admission changed during receipt review")
+    if retained.get("run_ref") not in (None, final["receipts"]["run_ref"]):
+        raise HTTPException(409, "retained receipt run does not match admitted run")
     response.headers["Cache-Control"] = "no-store"
     return {
         "format": "openworkgraph.bound-provider-event.v1",
         "case_ref": final["case_ref"], "run_ref": final["receipts"]["run_ref"],
         "provider_event_verdict": verdict,
+        "retained_attempt_receipts": retained,
+        "retained_attempt_receipts_are_untrusted": True,
+        "provider_event_to_attempt_causality_verified": False,
         "provider_event_independently_rechecked_on_this_read":
             verdict["status"] in ("verified_provider_event", "verified_provider_operation"),
         "provider_event_attributed_to_agent_run": False,
