@@ -76,6 +76,20 @@ def test_refusals(tmp_path, monkeypatch):
     assert list(tmp_path.glob("owg-sqlite-*")) == []
 
 
+
+def test_generated_csv_response_is_bounded_and_temporary_upload_is_removed(tmp_path, monkeypatch):
+    data = _db(tmp_path, _orders)
+    monkeypatch.setattr(sq, "MAX_CSV_CHARS", 30)
+    with pytest.raises(sq.SqliteError, match="supported response size"):
+        sq.to_csv(BytesIO(data), "order events", folder=tmp_path)
+    assert list(tmp_path.glob("owg-sqlite-*")) == []
+    # The header is also subject to the bound, including tables with wide columns.
+    monkeypatch.setattr(sq, "MAX_CSV_CHARS", 3)
+    with pytest.raises(sq.SqliteError, match="supported response size"):
+        sq.to_csv(BytesIO(data), "order events", folder=tmp_path)
+
+
+
 def test_a_slow_read_is_stopped(tmp_path, monkeypatch):
     def big(conn):
         conn.execute("CREATE TABLE t (a, b)")
