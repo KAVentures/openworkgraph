@@ -2018,6 +2018,14 @@ async def event_log_work_in_progress(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/work-in-progress/cases")
+async def event_log_work_in_progress_cases(request: Request, log_id: str):
+    from . import event_log_wip as wip
+    _require_dashboard(request)
+    spec = await _json_body(request, "work-in-progress case settings", strict=True, limit=16384)
+    return await run_in_threadpool(_respond, wip.bucket_cases, log_id, spec)
+
+
 @router.post("/v1/event-logs/{log_id}/analysis")
 async def event_log_run_analysis(request: Request, log_id: str):
     _require_dashboard(request)

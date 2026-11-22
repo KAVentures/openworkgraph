@@ -63,6 +63,47 @@ def test_weekly_buckets_without_end_activities_and_validation():
     assert len(wip.work_in_progress(_log(long_rows), {"bucket": "week"})["buckets"]) <= 73
 
 
+def test_evidence_matches_every_count_with_utc_boundaries_and_completion_rules():
+    log = _log([
+        ("a", "Start", "2024-03-04T12:00:00Z"),
+        ("a", "Close", "2024-03-05T00:00:00Z"),
+        ("a2", "Start", "2024-03-04T12:00:00Z"),
+        ("a2", "Close", "2024-03-04T23:59:59.999999Z"),
+        ("b", "Start", "2024-03-05T00:00:00Z"),
+        ("b", "Hold", "2024-03-06T01:00:00Z"),
+        ("c", "Start", "2024-03-11T00:00:00Z"),
+    ])
+    for report_settings in ({"end_activities": ["Close"]}, {"bucket": "week", "end_activities": ["Close"]},
+                            {}, {"cohort": {"activity": "Close"}}):
+        report = wip.work_in_progress(log, report_settings)
+        for bucket in report["buckets"]:
+            for group in ("arrivals", "completions", "open_at_end"):
+                evidence = wip.bucket_cases(log, {
+                    **report_settings, "bucket_start": bucket["start"][:10], "group": group,
+                })
+                assert evidence["total"] == len(evidence["cases"]) == bucket[group]
+    day = {"end_activities": ["Close"], "bucket_start": "2024-03-04"}
+    open_cases = wip.bucket_cases(log, {**day, "group": "open_at_end"})
+    assert open_cases["cases"] == [{"case_id": "a", "started_at": "2024-03-04T12:00:00Z", "completed_at": None}]
+    finished = wip.bucket_cases(log, {**day, "group": "completions"})
+    assert finished["cases"][0]["completed_at"] == "2024-03-04T23:59:59.999999Z"
+
+
+def test_evidence_pagination_uses_literal_keys_and_rejects_invalid_settings():
+    log = _log([(key, "Open", START.isoformat()) for key in ("a2", "a11", "a1", "a10")])
+    spec = {"bucket": "week", "bucket_start": "2024-03-04", "group": "arrivals", "limit": 2}
+    first = wip.bucket_cases(log, spec)
+    second = wip.bucket_cases(log, {**spec, "after": first["next_after"]})
+    assert first["total"] == second["total"] == 4
+    assert [row["case_id"] for row in first["cases"]] == ["a1", "a10"]
+    assert [row["case_id"] for row in second["cases"]] == ["a11", "a2"]
+    assert second["next_after"] is None
+    for patch in ({"bucket_start": "2024-03-05"}, {"bucket_start": "2024-04-01"}, {"bucket_start": "2024-02-30"},
+                  {"after": ""}, {"group": "unknown"}, {"limit": True}, {"limit": 101}):
+        with pytest.raises(workspace.EventLogWorkspaceError):
+            wip.bucket_cases(log, {**spec, **patch})
+
+
 def test_route_requires_the_dashboard(tmp_path):
     import os
     import subprocess
@@ -83,6 +124,9 @@ with TestClient(app) as client:
     r = client.post(path, json={"end_activities": ["Close"]}, headers=owner)
     assert r.status_code == 200 and r.json()["completed_cases"] == 3, r.text
     assert client.post(path, json={"bucket": "year"}, headers=owner).status_code == 422
+    spec = {"bucket_start": "2024-03-01", "group": "completions"}
+    assert client.post(path + "/cases", json=spec, headers=bearer).status_code == 403
+    assert client.post(path + "/cases", json=spec, headers=owner).json()["cases"][0]["case_id"] == "c0"
 '''
     env = os.environ.copy()
     env.update({"WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"), "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth"),
