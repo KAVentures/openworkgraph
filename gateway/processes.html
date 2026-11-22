@@ -329,6 +329,7 @@
           <legend id="revisionReview">Revision review</legend>
           <p id="reviewState"></p>
           <output id="reviewOutcome" role="status" aria-live="polite"></output>
+          <button id="reviewRecover" type="button">Reopen latest authorized revision</button>
           <div id="reviews"></div>
           <label
             >Review comment
@@ -2270,6 +2271,19 @@
             reviewMutationInFlight = false;
           }
         }
+        // Recovery is a fresh authenticated GET, never an automatic replay of a
+        // possibly committed review POST. The existing open/render path clears
+        // packet consent and forces the reviewer to inspect and confirm again.
+        $("reviewRecover").onclick = () => run(async () => {
+          if (!selected || !credential) throw new Error("Sign in and select an authorized process.");
+          const workflowId = selected.process.workflow_id;
+          $("reviewConfirm").checked = false;
+          $("handoffConsent").checked = false;
+          resetHandoff("Recovery requested. Reinspect the latest authorized revision before reviewing.");
+          $("reviewOutcome").textContent = "Checking the latest recorded Gateway review. Do not resubmit until its outcome is verified.";
+          await open(workflowId);
+          $("revisionReview").scrollIntoView({block:"start"});
+        });
         $("approve").onclick = () => run(() => review("reviewed_design"));
         $("changes").onclick = () => run(() => review("changes_requested"));
         $("comment").addEventListener("input", () => {
