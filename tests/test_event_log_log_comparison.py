@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from io import BytesIO, StringIO
 
@@ -98,6 +99,31 @@ def test_ranked_variants_resolve_exact_cases_in_each_scope():
             last = event_log_cases.cases(scope["log_id"], {**request, "after": first["next_after"]}, "case")
             assert [case["case_id"] for case in last["cases"]] == ["north2"]
             assert last["next_after"] is None
+
+
+def test_profiles_share_one_local_workspace_read_boundary(monkeypatch):
+    log, _ = _logs()
+    profile = comparison._profile
+    after_first = []
+
+    def can_write():
+        acquired = workspace._LOCK.acquire(blocking=False)
+        if acquired:
+            workspace._LOCK.release()
+        return acquired
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        def observed_profile(side):
+            result = profile(side)
+            after_first.append(pool.submit(can_write).result(timeout=10))
+            return result
+
+        monkeypatch.setattr(comparison, "_profile", observed_profile)
+        result = comparison.compare({"baseline": {"log_id": log},
+                                     "comparison": {"log_id": log, "cohort": {"activity": "Receive"}}})
+        assert after_first == [False, False]
+        assert result["kpis"]["difference"]["cases"] == 0
+        assert pool.submit(can_write).result(timeout=10) is True
 
 
 def test_invalid_specs():

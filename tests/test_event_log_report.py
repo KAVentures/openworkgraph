@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+from concurrent.futures import ThreadPoolExecutor
 import re
 from datetime import datetime, timedelta, timezone
 from io import BytesIO, StringIO
@@ -39,6 +40,36 @@ def _log(name="invoices \"Q1\" & co"):
     w.writerow(["case", "activity", "time", "who"])
     w.writerows(rows)
     return workspace.import_log(BytesIO(out.getvalue().encode()), name=name, source_format="csv", mapping=MAPPING)["log_id"]
+
+
+def test_report_blocks_local_appends_between_its_component_queries(monkeypatch):
+    log = _log()
+    original_summary = workspace.summary
+    appended = b"case,activity,time,who\nnew,Receive,2024-05-01T08:00:00Z,clerk\n"
+
+    def concurrent_append():
+        if not workspace._LOCK.acquire(blocking=False):
+            return False
+        try:
+            workspace.append_log(log, BytesIO(appended), source_format="csv", mapping=MAPPING)
+            return True
+        finally:
+            workspace._LOCK.release()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        def summary_then_append(*args, **kwargs):
+            summary = original_summary(*args, **kwargs)
+            assert pool.submit(concurrent_append).result(timeout=10) is False
+            return summary
+
+        monkeypatch.setattr(workspace, "summary", summary_then_append)
+        data = report.build(log)
+        assert data["summary"]["cases"] == data["kpis"]["cases"] == 9
+        assert sum(row["cases"] for row in data["variants"]["variants"]) == 9
+        assert data["case_notion"] == "case"
+        assert "case notion <b>case</b>" in report.render(data)
+        assert pool.submit(concurrent_append).result(timeout=10) is True
+    assert original_summary(log)["cases"] == 10
 
 
 def test_report_data_and_html():
