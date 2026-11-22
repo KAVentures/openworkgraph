@@ -147,11 +147,12 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
         # Keep the documented response cap even when the log has many activities
         # with starts but no completions. Rank those missing-duration activities
         # deterministically after the observed waiting-time hotspots.
-        open_only = sorted(set(open_by_activity) - observed_names)
+        all_observed_names = {row[0] for row in conn.execute("SELECT DISTINCT activity FROM seq2").fetchall()}
+        open_only = sorted(set(open_by_activity) - all_observed_names)
         # Surface truncation explicitly: a top-100 table is not a complete cohort.
         # Count distinct activities across both observed and unfinished-only rows,
         # including observed activities omitted by the ranked SQL LIMIT.
-        observed_activity_total = conn.execute("SELECT count(DISTINCT activity) FROM seq2").fetchone()[0]
+        observed_activity_total = len(all_observed_names)
         activity_total = observed_activity_total + len(open_only)
         remaining = max(0, MAX_ACTIVITIES - len(activities))
         if remaining and open_only:
