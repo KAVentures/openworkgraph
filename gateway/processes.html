@@ -2116,6 +2116,7 @@
                current.access_revision!==pinned.access_revision||
                current.permissions?.review!==true||
                current.your_actor_id!==chosen.your_actor_id||
+                current.your_review_number!==chosen.your_review_number||
                record.workflow_id!==pinned.workflow_id||
                record.revision!==pinned.revision||
                record.content_sha256!==pinned.content_sha256) {
@@ -2154,7 +2155,8 @@
                 current.process.content_sha256!==record.content_sha256 ||
                 current.access_revision!==chosen.access_revision ||
                 current.permissions?.review!==true ||
-                current.your_actor_id!==chosen.your_actor_id) {
+                current.your_actor_id!==chosen.your_actor_id||
+                current.your_review_number!==chosen.your_review_number) {
               $("reviewConfirm").checked=false;
               $("reviewOutcome").textContent="Review permission or revision changed. Reopen the latest authorized revision before submitting.";
               throw new Error("Review authorization or saved revision changed; reopen before submitting.");
@@ -2579,6 +2581,7 @@
                current.process.content_sha256!==inspected.content_sha256||
                current.permissions?.review!==true||
                current.your_actor_id!==chosen.your_actor_id||
+                current.your_review_number!==chosen.your_review_number||
                current.access_revision!==inspected.access_revision||
                chosen.access_revision!==inspected.access_revision||
                chosen.viewing_historical_revision||chosen.archived||
@@ -2668,6 +2671,7 @@
                current.process.content_sha256!==p.content_sha256||
                current.permissions?.review!==true||
                current.your_actor_id!==chosen.your_actor_id||
+                current.your_review_number!==chosen.your_review_number||
                current.access_revision!==chosen.access_revision){
               fail("Current authorized process is archived, changed, inaccessible, mismatched or lacks review permission for this revision.");return;
             }
