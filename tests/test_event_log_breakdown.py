@@ -122,6 +122,51 @@ def test_duration_bands_are_ordered():
     assert r["row_values"] == ["under 1 hour", "1 to 24 hours", "1 to 7 days", "7 to 30 days", "30 days or more"]
 
 
+def test_case_evidence_uses_the_displayed_cells_and_totals():
+    log = _import()
+    spec = ("start_month", "end_activity")
+    cohort = {"activity": "B", "started_before": "2024-03-01T00:00:00Z"}
+    report = bd.breakdown(log, *spec, with_activity="C", cohort=cohort)
+    for cell in [*report["cells"], *report["row_totals"], *report["column_totals"], report["overall"]]:
+        selection = {key: cell[key] for key in ("row_key", "column_key") if key in cell}
+        evidence = bd.cell_cases(log, *spec, selection=selection, with_activity="C", cohort=cohort)
+        assert evidence["total"] == cell["cases"] == len(evidence["cases"])
+        assert all(item["did_activity"] for item in evidence["cases"])
+    jan = report["row_totals"][0]["row_key"]
+    first = bd.cell_cases(log, *spec, selection={"row_key": jan, "limit": 2}, cohort=cohort)
+    second = bd.cell_cases(log, *spec, selection={"row_key": jan, "limit": 2, "after": first["next_after"]},
+                           cohort=cohort)
+    assert [x["case_id"] for x in first["cases"] + second["cases"]] == ["c0", "c3", "c6", "c9"]
+    assert second["next_after"] is None
+    with pytest.raises(EventLogWorkspaceError, match="no longer displayed"):
+        bd.cell_cases(log, *spec, selection={"row_key": "other", "limit": 2}, cohort=cohort)
+
+
+def test_literal_bucket_names_and_total_label_remain_distinct(monkeypatch):
+    import csv
+    from io import StringIO
+
+    values = ["(missing)"] * 3 + ["(other)"] * 3 + ["All"] * 3 + ["zzz", ""]
+    rows = ["case,activity,time,region"] + [f"c{i:02},A,2024-01-01T08:00:00Z,{value}"
+                                              for i, value in enumerate(values)]
+    log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="labels", source_format="csv",
+                               mapping={**MAPPING, "attribute_columns": ["region"]})["log_id"]
+    monkeypatch.setattr(bd, "MAX_ROWS", 3)
+    dimension = "event_attribute:region"
+    report = bd.breakdown(log, dimension)
+    cells = {c["row"]: c for c in report["cells"]}
+    expected = {"(missing)": ["c00", "c01", "c02"], "(other)": ["c03", "c04", "c05"],
+                "All": ["c06", "c07", "c08"], "(other grouped values)": ["c09"], "(missing value)": ["c10"]}
+    assert report["total_label"] == "All cases" and set(cells) == set(expected)
+    for label, ids in expected.items():
+        assert cells[label]["cases"] == len(ids)
+        evidence = bd.cell_cases(log, dimension,
+                                selection={"row_key": cells[label]["row_key"], "column_key": cells[label]["column_key"]})
+        assert [item["case_id"] for item in evidence["cases"]] == ids
+    exported = list(csv.reader(StringIO(bd.breakdown_csv(log, dimension))))
+    assert exported[-1][:3] == ["All cases", "All cases", "11"]
+
+
 def test_owner_only_routes(tmp_path):
     code = r'''
 from fastapi.testclient import TestClient
@@ -142,6 +187,12 @@ with TestClient(app) as client:
     r=client.get(base+'?rows=event_attribute:team&columns=end_activity',headers=owner)
     assert r.status_code==200 and r.headers['cache-control']=='no-store', r.text
     assert {c['row']:c['cases'] for c in r.json()['cells']}=={'blue':3,'red':3}
+    cell=r.json()['cells'][0]
+    scope={k:cell[k] for k in ('row_key','column_key')}
+    route=base+'/cases?rows=event_attribute:team&columns=end_activity'
+    assert client.post(route,json=scope,headers=bearer).status_code in (401,403)
+    evidence=client.post(route,json=scope,headers=owner)
+    assert evidence.status_code == 200 and evidence.json()['total'] == cell['cases'], evidence.text
     f=client.get(base+'?rows=event_attribute:team&activity=B',headers=owner)
     assert f.status_code==200 and f.json()['cases']==6
     assert client.get(base+'?rows=bogus',headers=owner).status_code==422
@@ -184,7 +235,7 @@ def test_breakdown_csv_neutralizes_whitespace_prefixed_formulas_and_headers(monk
 
     monkeypatch.setattr(bd, "breakdown", lambda *args, **kwargs: {
         "rows": {"label": "\ufeff=header"}, "columns": {"label": "\tcolumn"},
-        "cells": [{"row": "  =1+1", "column": "\n@cmd"}],
+        "cells": [{"row": "  =1+1", "column": "\n@cmd"}], "total_label": "All",
         "row_totals": [], "column_totals": [], "overall": {},
     })
     lines = list(csv.reader(io.StringIO(bd.breakdown_csv("log", "row", "column"))))
