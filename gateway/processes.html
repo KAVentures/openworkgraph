@@ -2301,11 +2301,38 @@
         $("reviewRecover").onclick = () => run(async () => {
           if (!selected || !credential) throw new Error("Sign in and select an authorized process.");
           const workflowId = selected.process.workflow_id;
+          const identityTicket = identityGeneration, authorizedCredential = credential;
+          // The recovery GET may be denied or superseded by another navigation.
+          // Never leave the previous confirmation, selection, or apparent success
+          // available when a fresh authorization read cannot be completed.
           $("reviewConfirm").checked = false;
           $("handoffConsent").checked = false;
           resetHandoff("Recovery requested. Reinspect the latest authorized revision before reviewing.");
           $("reviewOutcome").textContent = "Checking the latest recorded Gateway review. Do not resubmit until its outcome is verified.";
-          await open(workflowId);
+          const recoveryOpenTicket = processOpenGeneration + 1;
+          try {
+            await open(workflowId);
+          } catch (error) {
+            if (recoveryOpenTicket === processOpenGeneration &&
+                identityTicket === identityGeneration &&
+                credential === authorizedCredential &&
+                selected?.process?.workflow_id === workflowId) {
+              // The previously displayed process may have been revoked.
+              // Hide its actionable review controls rather than implying it
+              // remains a current authorized selection after a denied GET.
+              selected = null;
+              $("selected").hidden = true;
+              $("reviewOutcome").textContent = "REFUSED: Could not reopen an authorized review. Sign in and select a currently accessible process.";
+              note("Review recovery denied or unavailable. No decision was resubmitted.");
+            }
+            throw error;
+          }
+          if (recoveryOpenTicket !== processOpenGeneration ||
+              identityTicket !== identityGeneration ||
+              credential !== authorizedCredential ||
+              selected?.process?.workflow_id !== workflowId) return;
+          $("reviewConfirm").checked = false;
+          $("reviewOutcome").textContent = "Latest authorized review loaded. Inspect its recorded decision and reconfirm before any new submission.";
           $("revisionReview").scrollIntoView({block:"start"});
         });
         $("approve").onclick = () => run(() => review("reviewed_design"));
