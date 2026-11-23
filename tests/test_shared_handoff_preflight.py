@@ -551,3 +551,23 @@ def test_authorized_reopen_disarms_prior_process_while_gateway_read_is_pending()
     assert "const authorizedCredential = credential;" in before_read
     assert "credential !== authorizedCredential" in block
     assert block.index('const data = await call(') < block.index("render(data);")
+
+
+
+def test_history_disarms_stale_revision_navigation_after_identity_or_selection_change():
+    """History links must not survive an authenticated process/tenant switch."""
+    source = (Path(__file__).resolve().parents[1] / "gateway" / "processes.html").read_text()
+    block = source.split("async function history(before) {", 1)[1].split('$("history").onclick', 1)[0]
+    before_read = block.split("const result = await call(", 1)[0]
+    after_read = block.split("const result = await call(", 1)[1]
+    assert "host.replaceChildren();" in before_read
+    assert "const selection = selected;" in before_read
+    assert "const identityTicket = identityGeneration, authorizedCredential = credential;" in before_read
+    assert "encodeURIComponent(id)" in block
+    assert "ticket !== historyGeneration" in after_read
+    assert "identityTicket !== identityGeneration" in after_read
+    assert "credential !== authorizedCredential" in after_read
+    assert "selected !== selection" in after_read
+    assert "Array.isArray(result?.workflows)" in after_read
+    # Both revision and pagination buttons must independently reject stale clicks.
+    assert after_read.count("ticket !== historyGeneration") >= 3
