@@ -516,8 +516,8 @@ def test_provider_operation_verdict_must_have_valid_provider_status(monkeypatch,
     assert exc.value.status_code == 409
 
 
-def test_exact_retained_journal_correlation_is_explicitly_untrusted(monkeypatch):
-    """An exact operator-retained match is useful context, never causal proof."""
+def test_missing_event_id_cannot_establish_exact_event_correlation(monkeypatch):
+    """Object and correlation alone cannot identify a provider event."""
     install(monkeypatch)
     from server import local_source_credentials
     from server import open_work_provider_attempt_verification as verifier
@@ -539,7 +539,7 @@ def test_exact_retained_journal_correlation_is_explicitly_untrusted(monkeypatch)
     monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", receipts)
     result = asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
     assert result["retained_journal_correlation"] == {
-        "status": "untrusted_exact_match", "attempt_ref": "attempt-1",
+        "status": "not_recorded", "attempt_ref": None,
         "host_attested": False, "provider_event_attributed_to_agent_run": False,
     }
     assert result["receipt_persisted"] is False
@@ -628,3 +628,31 @@ def test_conflicting_retained_event_id_never_correlates_attempt(monkeypatch):
     assert result["retained_journal_correlation"]["status"] == "not_recorded"
     assert result["retained_journal_correlation"]["attempt_ref"] is None
     assert result["provider_event_to_attempt_causality_verified"] is False
+
+def test_exact_retained_event_id_match_remains_untrusted(monkeypatch):
+    """Matching event identity does not prove an agent initiated an operation."""
+    install(monkeypatch)
+    from server import local_source_credentials
+    from server import open_work_provider_attempt_verification as verifier
+    monkeypatch.setattr(local_source_credentials, "_read_metadata",
+                        lambda path: {"account": "acct_12345678"})
+    monkeypatch.setattr(routes, "_source_scope", lambda: "tenant-1")
+    monkeypatch.setattr(verifier, "verify_provider_attempt",
+                        lambda **kwargs: {"status": "verified_provider_event",
+                                          "provider_operation": "unknown",
+                                          "customer_outcome": "unknown",
+                                          "event_id": DATA["provider_event_id"]})
+    async def receipts(req, resp):
+        return {"run_ref": "run-1", "entries": [{
+            "attempt_ref": "attempt-1",
+            "provider_object_id": DATA["provider_object_id"],
+            "provider_operation": DATA["provider_operation"],
+            "provider_correlation_id": DATA["provider_correlation_id"],
+            "provider_event_id": DATA["provider_event_id"],
+        }]}
+    monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", receipts)
+    result = asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
+    assert result["retained_journal_correlation"]["status"] == "untrusted_exact_match"
+    assert result["retained_journal_correlation"]["attempt_ref"] == "attempt-1"
+    assert result["provider_event_to_attempt_causality_verified"] is False
+    assert result["receipt_persisted"] is False
