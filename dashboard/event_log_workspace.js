@@ -457,6 +457,8 @@
         el('div','From '+String(c.older.generated_at).replace('T',' ').replace('Z',' UTC')+' to '+String(c.newer.generated_at).replace('T',' ').replace('Z',' UTC')+'.','muted'),
         table(['Figure','Previous','Newest','Change'],rows));
       const notes=[];
+      if(c.comparison_scope==='different')notes.push('These copies use different case notions or case filters.');
+      if(c.comparison_scope==='unknown')notes.push('An older copy has no saved case selection.');
       if(c.activities_added.length)notes.push('New activities: '+c.activities_added.slice(0,10).join(', ')+'.');
       if(c.activities_gone.length)notes.push('No longer seen: '+c.activities_gone.slice(0,10).join(', ')+'.');
       if(!c.top_variant.same_path&&c.top_variant.newer)notes.push('The most common variant is now '+c.top_variant.newer.path.join(' → ')+'.');
@@ -466,15 +468,27 @@
       return box;
     }
     async function showSaved(note){
-      const r=await getJSON(savedBase());
-      let changes=null;try{changes=await getJSON('/v1/event-logs/'+encodeURIComponent(state.logId)+'/saved-report-changes');}catch(_){}
+      const logId=state.logId,base=savedBase();
+      const r=await getJSON(base);
+      let changes=null;try{changes=await getJSON('/v1/event-logs/'+encodeURIComponent(logId)+'/saved-report-changes');}catch(_){}
+      if(state.logId!==logId)return;
       const saveNow=button('Save a copy now','secondary');saveNow.id='owgEventLogSaveCopy';
-      saveNow.onclick=async()=>{saveNow.disabled=true;try{const s2=await (await api(savedBase(),{method:'POST'})).json();await showSaved('Saved '+s2.saved.name+'.');}catch(error){status(error.message);saveNow.disabled=false;}};
+      saveNow.onclick=async()=>{
+        if(state.logId!==logId)return;
+        const scope={cohort:globalCohort()};
+        if(state.caseType)scope.case_type=state.caseType;
+        saveNow.disabled=true;
+        try{
+          const result=await (await api(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(scope)})).json();
+          if(state.logId===logId)await showSaved('Saved '+result.saved.name+'.');
+        }catch(error){if(state.logId===logId)status(error.message);}
+        finally{saveNow.disabled=false;}
+      };
       const rows=r.reports.map(c=>{const get=button('Download','secondary');get.setAttribute('aria-label','Download saved report '+c.name);
         get.onclick=async()=>{try{const response=await api(savedBase()+'/'+encodeURIComponent(c.name));const url=URL.createObjectURL(await response.blob());const link=el('a');link.href=url;link.download=state.logId+'-'+c.name;document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(error){status(error.message);}};
         return [String(c.saved_at).replace('T',' ').replace('Z',' UTC'),Math.max(1,Math.round(c.bytes/1024))+' KB',get];});
       savedList.replaceChildren(el('h3','Saved report copies'),
-        el('div','The newest '+r.keep+' copies of this log’s report are kept on this computer. To save one regularly, add an “Event log report copy” job under Scheduled jobs with this log’s ID: '+state.logId+'.','muted'),
+        el('div','The newest '+r.keep+' copies of this log’s report are kept on this computer. Save a copy now uses the current case selection. To save one regularly, add an “Event log report copy” job under Scheduled jobs with this log’s ID: '+state.logId+'.','muted'),
         ...(note?[el('div',note)]:[]),
         rows.length?table(['Saved','Size',''],rows):el('div','No saved copies yet.','muted'),saveNow,savedChanges(changes));
       show(savedList,true);savedButton.setAttribute('aria-expanded','true');

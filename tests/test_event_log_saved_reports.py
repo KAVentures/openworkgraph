@@ -108,7 +108,17 @@ with TestClient(app) as client:
     assert client.get(changes, headers=bearer).status_code == 403
     assert client.get(changes, headers=owner).json()["available"] is False
     assert client.post(base, headers=owner).status_code == 200
-    assert client.get(changes, headers=owner).json()["figures"]["cases"]["change"] == 0
+    comparison = client.get(changes, headers=owner).json()
+    assert comparison["figures"]["cases"]["change"] == 0
+    assert comparison["comparison_scope"] == "same"
+    request = {"case_type": "case", "cohort": {"started_from": "2024-03-04T08:00:02Z"}}
+    assert client.post(base, json=request, headers=bearer).status_code == 403
+    assert client.post(base, json=request, headers=owner).status_code == 200
+    scoped = client.get(changes, headers=owner).json()
+    assert scoped["comparison_scope"] == "different"
+    assert scoped["newer"]["scope"] == {"case_notion": "case", "cohort": request["cohort"]}
+    assert scoped["figures"]["cases"] == {"older": 3, "newer": 1, "change": -2}
+    assert client.post(base, json={"cohort": {"unknown": 1}}, headers=owner).status_code == 422
     assert client.get(changes + "?older=" + name, headers=owner).status_code == 422
     assert name in [r["name"] for r in client.get(base, headers=owner).json()["reports"]]
     assert client.get(f"{base}/{name}", headers=bearer).status_code == 403
@@ -156,6 +166,21 @@ def test_changes_between_two_saved_copies():
     for bad in ((first["name"], None), ("report-20200101T000000Z.html", third["name"])):
         with pytest.raises(workspace.EventLogWorkspaceError):
             saved.changes(log, *bad)
+
+
+def test_failed_html_publication_leaves_no_saved_copy_or_figures(monkeypatch):
+    log = _log()
+    write = saved._write_atomic
+
+    def fail_html(folder, target, text):
+        if target.suffix == ".html":
+            raise OSError("cannot write HTML")
+        write(folder, target, text)
+
+    monkeypatch.setattr(saved, "_write_atomic", fail_html)
+    with pytest.raises(OSError, match="cannot write HTML"):
+        saved.save(log)
+    assert list(saved._folder(log).iterdir()) == []
 
 
 def test_pruning_removes_figures_too(monkeypatch):

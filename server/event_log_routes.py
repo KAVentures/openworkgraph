@@ -1668,12 +1668,19 @@ def event_log_saved_reports(request: Request, log_id: str):
 
 
 @router.post("/v1/event-logs/{log_id}/saved-reports")
-def event_log_save_report(request: Request, log_id: str):
-    """Save a copy of the HTML report now (a schedule can do the same)."""
+async def event_log_save_report(request: Request, log_id: str):
+    """Save a scoped dashboard copy. Older clients can still post without a body."""
     from . import event_log_saved_reports as saved_reports
     _require_dashboard(request)
-    return _respond(saved_reports.save, log_id)
-
+    if not request.headers.get("content-type"):
+        return await run_in_threadpool(_respond, saved_reports.save, log_id)
+    spec = await _json_body(request, "saved report scope", strict=True, limit=32768)
+    if not isinstance(spec, dict) or set(spec) - {"case_type", "cohort"}:
+        raise HTTPException(422, "saved report scope accepts case_type and cohort")
+    case_type = spec.get("case_type")
+    if case_type is not None and (not isinstance(case_type, str) or not 0 < len(case_type) <= 200):
+        raise HTTPException(422, "choose a valid case notion")
+    return await run_in_threadpool(_respond, saved_reports.save, log_id, case_type, spec.get("cohort"))
 
 @router.get("/v1/event-logs/{log_id}/saved-report-changes")
 def event_log_saved_report_changes(request: Request, log_id: str,

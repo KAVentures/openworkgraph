@@ -397,19 +397,23 @@ activities are not verified rework. The route requires the local dashboard
 session.
 
 **Saved copies.** **Saved copies**, next to **Download report**, lists copies
-of the whole-log report that were saved on this computer, newest first, and
-lets you download them. It also offers **Save a copy now** (the same as
-`POST /v1/event-logs/{log_id}/saved-reports`).
+of the reports saved on this computer, newest first, and lets you download
+them. **Save a copy now** uses the selected case notion and active case filter.
+The dashboard-only `POST /v1/event-logs/{log_id}/saved-reports` accepts a JSON
+body with optional `case_type` and `cohort` fields. A request without a body
+saves the whole log using its default case notion.
 
 To save copies regularly, for example to compare this week's report with last
 week's, add an **Event log report copy** job under *Scheduled jobs* with the
-log's ID. The job is local and runs at least every 15 minutes, at most every 7
+log's ID. Scheduled copies use the full log and its default case notion. The
+job is local and runs at least every 15 minutes, at most every 7
 days. The newest 10 copies per log are kept in the data folder under
 `event_log_reports/<log_id>/`. Deleting the log deletes its copies and its
 report and signal schedules. Copies are never sent anywhere.
 
 **What changed.** Each copy is saved with its headline figures in a JSON file
-next to the HTML. The panel then shows **Changes since the previous copy**:
+next to the HTML. The panel identifies comparisons between different selections
+and displays **Changes since the previous copy**:
 
 * cases, events, activities and variants;
 * median and 90th-percentile case time;
