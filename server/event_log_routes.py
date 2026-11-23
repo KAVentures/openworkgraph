@@ -374,6 +374,26 @@ async def convert_jsonl_event_log(request: Request):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/parquet-to-csv")
+async def convert_parquet_event_log(request: Request):
+    """Convert a Parquet file to CSV for the ordinary CSV import. Nothing is stored."""
+    from . import event_log_parquet as parquet
+    _require_dashboard(request)
+    with tempfile.SpooledTemporaryFile(max_size=8 << 20, dir=str(DATA_DIR)) as spool:
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > parquet.MAX_BYTES:
+                raise HTTPException(413, "the file is larger than the supported limit")
+            spool.write(chunk)
+        spool.seek(0)
+        try:
+            result = await run_in_threadpool(parquet.to_csv, spool, folder=DATA_DIR)
+        except parquet.ParquetError as exc:
+            raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/timestamp-formats")
 async def detect_timestamp_formats(request: Request, column: str = Query(min_length=1, max_length=200),
                                    delimiter: str = Query(default=",", max_length=1)):
