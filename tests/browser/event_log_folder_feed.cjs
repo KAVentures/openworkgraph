@@ -74,6 +74,29 @@ const path=require('node:path');
    await page.locator('#owgFolderFeedResult').filter({hasText:'Scheduled daily.'}).waitFor();
    const schedules=await page.evaluate(async()=>(await (await fetch('/v1/schedules')).json()).schedules);
    assert.deepEqual(schedules.map(s=>[s.kind,s.interval_minutes]),[['event_log_folder_feed',1440]]);
+   const target=await page.locator('#owgEventLogPick').inputValue();
+   await page.evaluate(async id=>{
+     const q=new URLSearchParams({format:'csv',case_column:'order',activity_column:'step',timestamp_column:'stamp'});
+     const response=await fetch('/v1/event-logs/'+id+'/append?'+q,{method:'POST',
+       headers:{'X-OWG-Local-Storage-Confirmed':'true'},body:'order,step,stamp\nmanual,Open,2024-03-08T00:00:00Z\n'});
+     if(!response.ok)throw Error(await response.text());
+   },target);
+   await box.getByRole('button',{name:'Review mapping for '+exports,exact:true}).click();
+   const mapping=box.locator('#owgFolderFeedPreview');
+   await mapping.getByText('Latest mapping source: Manual append 2.',{exact:true}).waitFor();
+   await mapping.locator('tr').filter({hasText:'Case column'}).getByText('order',{exact:true}).waitFor();
+   await mapping.getByRole('button',{name:'Use latest mapping',exact:true}).click();
+   await box.locator('#owgFolderFeedResult').getByText('Feed mapping updated.',{exact:true}).waitFor();
+   const updated=await page.evaluate(async id=>(await (await fetch('/v1/event-logs/'+id+'/feeds')).json()).feeds[0],target);
+   assert.equal(updated.mapping.case_column,'order');
+   assert.equal(updated.mapping_revision,1);
+   assert.equal(updated.files_appended,1);
+   assert.equal(await page.evaluate(async()=>(await (await fetch('/v1/schedules')).json()).schedules[0].schedule_id),schedules[0].schedule_id);
+   await fs.writeFile(path.join(exports,'orders-2.csv'),'order,step,stamp\nnew,Open,2024-03-09T00:00:00Z\n');
+   await fs.utimes(path.join(exports,'orders-2.csv'),old,old);
+   await box.getByRole('button',{name:'Run feed for '+exports,exact:true}).click();
+   await box.locator('#owgFolderFeedResult').getByText('1 file(s) appended with 1 new events',{exact:false}).waitFor();
+
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgFolderFeed'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
@@ -81,7 +104,7 @@ const path=require('node:path');
    await page.locator('#owgFolderFeedList').getByRole('button',{name:'Delete feed for '+exports}).click();
    await page.locator('#owgFolderFeedList').filter({hasText:'No folder feed yet.'}).waitFor();
    assert.deepEqual(await page.evaluate(async()=>(await (await fetch('/v1/schedules')).json()).schedules),[],'deleting the feed removes its schedule');
-   assert.deepEqual((await fs.readdir(exports)).sort(),['orders-1.csv','readme.txt'],'files are never removed');
+   assert.deepEqual((await fs.readdir(exports)).sort(),['orders-1.csv','orders-2.csv','readme.txt'],'files are never removed');
    assert.deepEqual(errors,[]);
    console.log('Folder feed browser acceptance passed: consented feed appends a dropped export once with overlap skipped, daily schedule, deletion removes the schedule, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}

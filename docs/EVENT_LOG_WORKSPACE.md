@@ -1726,8 +1726,12 @@ hand.
   literally; wildcard characters in the pattern retain their usual meaning.
   Path separators and control characters are not permitted in the pattern,
   and subfolders are not read.
-- The mapping is copied when the feed is created. A changed mapping needs a
-  new feed.
+- The feed starts with a copy of the CSV mapping. Use **Review mapping** to
+  compare it with the latest manual CSV import or append, then **Use latest
+  mapping** to update the existing feed. The new settings apply to future
+  manual and scheduled runs. A run in progress stops before its next append
+  if the mapping changes. Existing file history and events stay with the feed.
+  Mappings with supplied source-event IDs are ineligible for this update.
 - A file is appended once, identified by the SHA-256 of its content. A renamed
   copy is not appended again; an edited file counts as new.
 - Files modified in the last minute are left for the next run, in case the
@@ -1774,6 +1778,8 @@ hand.
 | `POST /v1/event-logs/feeds/{feed_id}/retry-failed` | Retry only previously failed, unchanged settled content; owner session and local-storage confirmation required. |
 | `GET /v1/event-logs/feeds/{feed_id}/failures?after=...` | Page up to 50 outstanding failed content hashes. |
 | `POST /v1/event-logs/feeds/{feed_id}/retry-failed/{sha256}` | Retry one outstanding hash; owner session and local-storage confirmation required. |
+| `GET /v1/event-logs/feeds/{feed_id}/mapping` | Review the current feed mapping and the latest manual CSV mapping. |
+| `POST /v1/event-logs/feeds/{feed_id}/mapping` | Apply the reviewed mapping by its `mapping_revision` and `mapping_sha256`. Requires local-storage confirmation. |
 | `GET /v1/event-logs/feeds/{feed_id}/preview` | Inspect matching files and return the content hash for each eligible new file. |
 | `POST /v1/event-logs/feeds/{feed_id}/append-file` | Append one verified file by `name` and `sha256`. Requires `X-OWG-Local-Storage-Confirmed: true`. |
 | `POST /v1/event-logs/feeds/{feed_id}/run` | Append new files now. Requires `X-OWG-Local-Storage-Confirmed: true`. |
