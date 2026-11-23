@@ -309,10 +309,7 @@ def test_selected_grant_expires_during_batch_before_next_get(setup, monkeypatch)
     value["expires_at"] = "2026-11-23T08:00:00Z"
     args["grant_file"].write_text(json.dumps(value))
     real_datetime = selected.datetime
-    class Clock:
-        @staticmethod
-        def strptime(*a, **kw):
-            return real_datetime.strptime(*a, **kw)
+    class Clock(real_datetime):
         @staticmethod
         def now(tz=None):
             return real_datetime(2026, 11, 23, 7 if len(graph.calls) == 0 else 9,
