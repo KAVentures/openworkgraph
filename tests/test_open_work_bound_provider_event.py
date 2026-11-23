@@ -514,3 +514,59 @@ def test_provider_operation_verdict_must_have_valid_provider_status(monkeypatch,
     with pytest.raises(HTTPException) as exc:
         asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
     assert exc.value.status_code == 409
+
+
+def test_exact_retained_journal_correlation_is_explicitly_untrusted(monkeypatch):
+    """An exact operator-retained match is useful context, never causal proof."""
+    install(monkeypatch)
+    from server import local_source_credentials
+    from server import open_work_provider_attempt_verification as verifier
+    monkeypatch.setattr(local_source_credentials, "_read_metadata",
+                        lambda path: {"account": "acct_12345678"})
+    monkeypatch.setattr(routes, "_source_scope", lambda: "tenant-1")
+    monkeypatch.setattr(verifier, "verify_provider_attempt",
+                        lambda **kwargs: {"status": "verified_provider_event",
+                                          "provider_operation": "unknown",
+                                          "customer_outcome": "unknown",
+                                          "event_id": DATA["provider_event_id"]})
+    async def receipts(req, resp):
+        return {"run_ref": "run-1", "entries": [{
+            "attempt_ref": "attempt-1",
+            "provider_object_id": DATA["provider_object_id"],
+            "provider_operation": DATA["provider_operation"],
+            "provider_correlation_id": DATA["provider_correlation_id"],
+        }]}
+    monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", receipts)
+    result = asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
+    assert result["retained_journal_correlation"] == {
+        "status": "untrusted_exact_match", "attempt_ref": "attempt-1",
+        "host_attested": False, "provider_event_attributed_to_agent_run": False,
+    }
+    assert result["receipt_persisted"] is False
+    assert result["provider_event_to_attempt_causality_verified"] is False
+
+
+def test_duplicate_retained_correlations_do_not_choose_attempt(monkeypatch):
+    """Two exact matches must not be silently attributed to either attempt."""
+    install(monkeypatch)
+    from server import local_source_credentials
+    from server import open_work_provider_attempt_verification as verifier
+    monkeypatch.setattr(local_source_credentials, "_read_metadata",
+                        lambda path: {"account": "acct_12345678"})
+    monkeypatch.setattr(routes, "_source_scope", lambda: "tenant-1")
+    monkeypatch.setattr(verifier, "verify_provider_attempt",
+                        lambda **kwargs: {"status": "unknown",
+                                          "provider_operation": "unknown",
+                                          "customer_outcome": "unknown"})
+    async def receipts(req, resp):
+        return {"run_ref": "run-1", "entries": [{
+            "attempt_ref": ref,
+            "provider_object_id": DATA["provider_object_id"],
+            "provider_operation": DATA["provider_operation"],
+            "provider_correlation_id": DATA["provider_correlation_id"],
+        } for ref in ("attempt-1", "attempt-2")]}
+    monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", receipts)
+    result = asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
+    assert result["retained_journal_correlation"]["status"] == "ambiguous"
+    assert result["retained_journal_correlation"]["attempt_ref"] is None
+    assert result["provider_event_attributed_to_agent_run"] is False
