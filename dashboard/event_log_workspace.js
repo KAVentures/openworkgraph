@@ -1017,7 +1017,7 @@
     results.appendChild(activityMappingSection());
     results.appendChild(hiddenActivitiesSection());
     results.appendChild(qualitySection());
-    results.appendChild(attributeProfileSection());
+    results.appendChild(attributeProfileSection(inspection));
     results.appendChild(caseFilterSection(names));
     results.appendChild(cohortMetricSection(names));
 
@@ -1535,19 +1535,25 @@
     const controls=el('div',null,'row');controls.append(browse,reset,first,next);
     box.append(note,filters.node,el('div','Suggestions include up to 500 frequent activities. An exact label overrides the suggestion and is matched literally.','muted'),field('Exact activity to inspect',exactActivity),activityLookup.wrap,chosen,controls,message,list,detail);
     let path=null,transition=null,spec=null,nextAfter=null,listing=0,opening=0,association=false,filterApplied=false;
-    async function load(after){
+    let listEndpoint='cases/query';
+    async function load(after,endpoint='cases/query'){
+      listEndpoint=endpoint;
       const ticket=++listing;first.disabled=true;next.disabled=true;browse.disabled=true;
       message.textContent='Loading cases…';
       try{
         const payload={...spec};if(after!==null)payload.after=after;
-        const result=await (await api(queryPath('cases/query'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).json();
+        const result=await (await api(queryPath(endpoint),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).json();
         if(!current()||ticket!==listing)return;
         nextAfter=result.next_after;
         message.textContent=Number(result.selected_cases).toLocaleString()+' matching cases'+(filterApplied?' (case filter applied)':'')+'. Showing '+result.cases.length+' on this page.';
-        list.replaceChildren(table(['Supplied case key','Events','Elapsed time','Equal-timestamp events'],result.cases.map(c=>{
+        const headers=['Supplied case key','Events','Elapsed time','Equal-timestamp events'];
+        if(endpoint==='attribute-profile/cases')headers.push('Events with matching values');
+        list.replaceChildren(table(headers,result.cases.map(c=>{
           const open=button(c.case_id,'secondary');open.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%';
           open.setAttribute('aria-label','Open case '+c.case_id);open.onclick=()=>openCase(c.case_id);
-          return [open,c.events,duration(c.elapsed_seconds),c.timestamp_ties];
+          const cells=[open,c.events,duration(c.elapsed_seconds),c.timestamp_ties];
+          if(endpoint==='attribute-profile/cases')cells.push(c.matching_events);
+          return cells;
         })));
         first.disabled=after===null;next.disabled=nextAfter===null;
       }catch(error){if(current()&&ticket===listing){message.textContent=error.message;list.replaceChildren();}}
@@ -1561,7 +1567,7 @@
         spec={cohort,limit:30};if(path)spec.path=path;if(transition)spec.transition=transition;detail.replaceChildren();opening++;load(null);}
       catch(error){message.textContent=error.message;}
     }
-    browse.onclick=start;first.onclick=()=>load(null);next.onclick=()=>load(nextAfter);
+    browse.onclick=start;first.onclick=()=>load(null,listEndpoint);next.onclick=()=>load(nextAfter,listEndpoint);
     async function openCase(caseId,caseType){
       const ticket=++opening;
       const heading=el('h4','Case '+caseId);heading.tabIndex=-1;
@@ -1617,6 +1623,11 @@
       const names=values=>values.map(name=>JSON.stringify(name)).join(' and ');
       chosen.textContent='Cases with '+names(required)+(excluded.length?' and without '+names(excluded):'')+'.';
       detail.replaceChildren();opening++;load(null);box.scrollIntoView({block:'nearest'});
+    },attributeMatch(cohort,attribute,selection,description){
+      path=null;transition=null;association=true;filterApplied=Object.keys(cohort).length>0;
+      spec={cohort,attribute,...selection,limit:30};
+      chosen.textContent=description;
+      detail.replaceChildren();opening++;load(null,'attribute-profile/cases');box.scrollIntoView({block:'nearest'});
     },cohort(value,description){
       path=null;transition=null;association=true;filterApplied=Boolean(description)&&filterOn();spec={cohort:value,limit:30};
       chosen.textContent=description||'Association cases: '+JSON.stringify(value)+'. This selection uses all cases in the current case notion. Browse cases uses the fields above instead.';
@@ -9082,7 +9093,7 @@
   }
 
   // Which event attributes the log carries: coverage, type, case- or event-level, frequent values.
-  function attributeProfileSection(){
+  function attributeProfileSection(inspection){
     const box=section('Attributes');box.id='owgAttributeProfile';
     box.appendChild(el('div','See which attributes the events carry, how often, whether each stays fixed within a case, and the most frequent values with the median duration of their cases. Use it to choose filters and comparisons.','muted'));
     const run=button('Profile attributes','secondary');run.id='owgAttributeProfileRun';
@@ -9099,10 +9110,39 @@
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/attribute-profile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
         if(generation!==state.generation)return;
         if(!r.attributes.length){out.replaceChildren(el('div','The events carry no attributes. Keep extra columns as attributes when importing a CSV.','muted'));return;}
-        const rows=r.attributes.map(a=>[a.attribute,pct(a.case_coverage)+' of cases',
-          a.kind==='numeric'?'number':'text',a.level==='case'?'fixed per case':'changes within '+Number(a.cases_where_value_changes).toLocaleString()+' cases',
-          Number(a.distinct_values).toLocaleString()+(a.unique_per_event?' (unique per event)':''),
-          a.numeric?num(a.numeric.min)+' – '+num(a.numeric.max)+', median '+num(a.numeric.median):a.unique_per_event?'—':a.top_values.map(v=>v.value+' ('+pct(v.case_share)+', '+duration(v.median_case_duration_seconds)+')').join('; ')]);
+        const review=(attribute,selection,label,text,count)=>{
+          if(!count)return el('span',text);
+          const open=button(text,'secondary');
+          open.setAttribute('aria-label','Review cases '+label);
+          open.onclick=()=>inspection.attributeMatch(r.cohort,attribute,selection,'Cases '+label+'.');
+          return open;
+        };
+        const rows=r.attributes.map(a=>{
+          const present=el('div',null,'row');
+          present.appendChild(review(a.attribute,{},'with '+a.attribute,pct(a.case_coverage)+' of cases',a.cases));
+          const missing=r.cases-a.cases;
+          if(missing)present.appendChild(review(a.attribute,{match:'missing'},'missing '+a.attribute,
+            num(missing)+' missing',missing));
+          const level=a.cases_where_value_changes
+            ?review(a.attribute,{match:'varying'},'where '+a.attribute+' changes',
+              'Changes within '+num(a.cases_where_value_changes)+' cases',a.cases_where_value_changes)
+            :'Fixed per case';
+          const values=el('div');
+          if(a.numeric)values.appendChild(el('div',num(a.numeric.min)+' – '+num(a.numeric.max)+', median '+num(a.numeric.median)));
+          if(!a.unique_per_event&&a.top_values.length){
+            const details=document.createElement('details');
+            const list=el('ul');list.style.cssText='padding-left:20px;margin:4px 0';
+            a.top_values.forEach(v=>{
+              const item=el('li');
+              item.append(review(a.attribute,{value:v.value},'with '+a.attribute+' = '+v.value,
+                v.value+' ('+pct(v.case_share)+', '+duration(v.median_case_duration_seconds)+')',v.cases));
+              list.appendChild(item);
+            });
+            details.append(el('summary','Frequent values'),list);values.appendChild(details);
+          }
+          return [a.attribute,present,a.kind==='numeric'?'number':'text',level,
+            num(a.distinct_values)+(a.unique_per_event?' (unique per event)':''),values];
+        });
         out.replaceChildren(
           el('div',Number(r.cases).toLocaleString()+' cases; median case time '+duration(r.median_case_duration_seconds)+'. Frequent values show the share of cases and their median case time.','muted'),
           table(['Attribute','Present in','Type','Level','Distinct values','Range or frequent values'],rows),
