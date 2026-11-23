@@ -818,6 +818,12 @@ results={'format':'openworkgraph.shadow-plan-results.v1','process_reference':ref
       await alice.locator("#design").textContent(),
       /Reviewed evidence is sufficient/,
     );
+    // Alice saved revision 2 while Bob still held the earlier selection. The
+    // Gateway correctly refuses review against that stale authorization snapshot.
+    // Refresh the actual authenticated selection before the successful review.
+    await bob.getByRole("button", { name: "Load shared processes", exact: true }).click();
+    await bob.getByRole("button", { name: "Shared support process · r2", exact: true }).click();
+    await bob.locator("#selectedTitle").filter({ hasText: "revision 2" }).waitFor();
     await bob.locator("#reviewConfirm").check();
     await bob
       .getByRole("button", { name: "Record design review", exact: true })
