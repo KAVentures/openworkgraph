@@ -3210,6 +3210,10 @@ global case filter applies.
 These routes need a dashboard session. Agents can read the aggregates
 through `get_process_decision_rules` (see PROCESS_INTELLIGENCE_FOR_AGENTS.md).
 
+### Excel event-log export
+
+Dashboard owners can download a saved log as an Excel workbook (`GET /v1/event-logs/{log_id}/events.xlsx`). The workbook preserves case IDs, activities, timestamps, and resources as literal text cells, with a frozen header and filter. It is a CSV-equivalent view rather than an OCEL relationship export.
+
 ### Rework and loop case evidence
 
 The local rework report offers explicit case-evidence links for repeated activities and exact closed activity loops. Selectors respect the active case cohort and retain literal event order; timestamp ties do not establish business order.
