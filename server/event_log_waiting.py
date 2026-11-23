@@ -175,9 +175,12 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
                 WHERE c.ts IS NULL OR c.ts < s.ts GROUP BY s.activity""").fetchall())
         # Invalid start/completion pairs already contribute an inst row. They are
         # also unmatched starts, so subtract them from coverage eligibility once.
-        invalid_by_activity = dict(conn.execute(
+        # Only lifecycle invalid pairs are also counted as unmatched starts.
+        # In end_attribute mode each invalid end belongs to one distinct event
+        # and must remain in the eligible observation denominator.
+        invalid_by_activity = (dict(conn.execute(
             "SELECT activity, count(*) FROM inst WHERE kind = 'invalid_pair' GROUP BY activity"
-        ).fetchall())
+        ).fetchall()) if used == 'lifecycle' else {})
         activities = conn.execute(f"""SELECT activity, count(*), count(DISTINCT case_id), count(proc),
               quantile_cont(proc, 0.5), quantile_cont(proc, 0.9), avg(proc),
               count(wait), quantile_cont(wait, 0.5), quantile_cont(wait, 0.9), avg(wait), coalesce(sum(wait), 0),
