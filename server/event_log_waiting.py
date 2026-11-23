@@ -189,7 +189,6 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
             FROM seq2 GROUP BY activity ORDER BY coalesce(sum(wait), 0) DESC, activity LIMIT {MAX_ACTIVITIES}""").fetchall()
         # A lifecycle activity with only unfinished starts has no row in inst/seq2.
         # Keep it visible instead of silently hiding a completely unobserved activity.
-        observed_names = {row[0] for row in activities}
         # Count all cases contributing lifecycle evidence, including cases whose
         # only evidence for this activity is an unfinished start. Otherwise the
         # displayed case denominator understates the population being measured.
@@ -201,12 +200,21 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
         # Keep the documented response cap even when the log has many activities
         # with starts but no completions. Rank those missing-duration activities
         # deterministically after the observed waiting-time hotspots.
-        all_observed_names = {row[0] for row in conn.execute("SELECT DISTINCT activity FROM seq2").fetchall()}
-        open_only = sorted(set(open_by_activity) - all_observed_names)
+        # Count the complete observed population in SQL instead of materializing
+        # every distinct label in Python. Only the bounded result is displayed.
+        observed_activity_total = conn.execute(
+            "SELECT count(DISTINCT activity) FROM seq2"
+        ).fetchone()[0]
+        # A start-only label is open-only only when it is absent from *all*
+        # observed instances, including those omitted by the top-N query.
+        observed_open_labels = set()
+        if open_by_activity:
+            observed_open_labels = {row[0] for row in conn.execute(
+                "SELECT DISTINCT activity FROM seq2 WHERE activity IN (SELECT unnest(?::VARCHAR[]))",
+                [list(open_by_activity)],
+            ).fetchall()}
+        open_only = sorted(set(open_by_activity) - observed_open_labels)
         # Surface truncation explicitly: a top-100 table is not a complete cohort.
-        # Count distinct activities across both observed and unfinished-only rows,
-        # including observed activities omitted by the ranked SQL LIMIT.
-        observed_activity_total = len(all_observed_names)
         activity_total = observed_activity_total + len(open_only)
         remaining = max(0, MAX_ACTIVITIES - len(activities))
         if remaining and open_only:
