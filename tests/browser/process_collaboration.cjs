@@ -824,9 +824,18 @@ results={'format':'openworkgraph.shadow-plan-results.v1','process_reference':ref
       .click();
     // A current, authorized reviewer should receive a durable Gateway review
     // acknowledgment; design review never grants agent execution permission.
-    await bob.locator("#reviewOutcome").getByText(
+    // Surface the actual Gateway acknowledgment or refusal instead of a
+    // 30-second opaque locator timeout when an authorization guard fires.
+    await bob.waitForFunction(() => {
+      const message = document.querySelector("#reviewOutcome")?.textContent || "";
+      return message.includes("Gateway acknowledged") ||
+        message.includes("Reopen") || message.includes("reopen") ||
+        message.includes("changed") || message.includes("uncertain");
+    });
+    assert.match(
+      await bob.locator("#reviewOutcome").textContent(),
       /Gateway acknowledged reviewed design for revision 2.*Human design review only; no agent handoff or execution occurred\./,
-    ).waitFor();
+    );
     assert.equal(await bob.locator("#reviewConfirm").isChecked(), false);
     await bob
       .getByRole("button", { name: "Load shared processes", exact: true })
