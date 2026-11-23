@@ -450,6 +450,9 @@ days. The newest 10 copies per log are kept in the data folder under
 `event_log_reports/<log_id>/`. Deleting the log deletes its copies and its
 report and signal schedules. Copies are never sent anywhere.
 
+Select a reference and comparison copy to compare any two saved reports that
+have figures. The newest pair appears when you open the panel.
+
 **What changed.** Each copy is saved with its headline figures in a JSON file
 next to the HTML. The panel identifies comparisons between different selections
 and displays **Changes since the previous copy**:

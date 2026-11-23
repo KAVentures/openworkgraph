@@ -486,7 +486,7 @@
     };
     // Copies of the report saved on this computer, by hand or by a local schedule (Basic mode › Scheduled jobs).
     const savedBase=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/saved-reports';
-    function savedChanges(c){
+    function savedChanges(c,selectedPair=false){
       if(!c||!c.available)return el('div','Save two copies to see what changed between them.','muted');
       const f=c.figures,sign=v=>v>0?'+':v<0?'−':'';
       const fmt={cases:v=>Number(v).toLocaleString(),events:v=>Number(v).toLocaleString(),activities:v=>Number(v).toLocaleString(),distinct_variants:v=>Number(v).toLocaleString(),
@@ -497,7 +497,7 @@
         return [label[k],x.older===null?'—':fmt[k](x.older),x.newer===null?'—':fmt[k](x.newer),change];});
       if(c.cost){const d=c.cost.change;rows.push(['Total cost ('+c.cost.currency+')',Number(c.cost.older).toLocaleString(undefined,{maximumFractionDigits:2}),Number(c.cost.newer).toLocaleString(undefined,{maximumFractionDigits:2}),d===0?'no change':sign(d)+Math.abs(d).toLocaleString(undefined,{maximumFractionDigits:2})]);}
       const box=el('div');box.id='owgEventLogSavedChanges';
-      box.append(el('h4','Changes since the previous copy'),
+      box.append(el('h4',selectedPair?'Changes between selected copies':'Changes since the previous copy'),
         el('div','From '+String(c.older.generated_at).replace('T',' ').replace('Z',' UTC')+' to '+String(c.newer.generated_at).replace('T',' ').replace('Z',' UTC')+'.','muted'),
         table(['Figure','Previous','Newest','Change'],rows));
       const notes=[];
@@ -510,6 +510,45 @@
       notes.forEach(n=>box.appendChild(el('div',n)));
       box.appendChild(el('div',c.interpretation,'muted'));
       return box;
+    }
+    function savedComparisonControls(reports,initial){
+      const panel=el('div');
+      const result=el('div');result.appendChild(savedChanges(initial));
+      const comparable=reports.filter(report=>report.has_figures);
+      if(comparable.length<2){panel.appendChild(result);return panel;}
+      const logId=state.logId;
+      const options=comparable.map(report=>[report.name,String(report.saved_at).replace('T',' ').replace('Z',' UTC')+' · '+report.name]);
+      const reference=select('owgSavedReportReference',options);
+      const comparison=select('owgSavedReportComparison',options);
+      reference.value=initial?.older?.name||comparable[1].name;
+      comparison.value=initial?.newer?.name||comparable[0].name;
+      const run=button('Compare selected copies','secondary');
+      const statusLine=el('div',null,'muted');statusLine.setAttribute('role','status');
+      const row=el('div',null,'row');row.style.alignItems='end';
+      row.append(field('Reference copy',reference),field('Comparison copy',comparison),run);
+      panel.append(row,statusLine,result);
+      let revision=0;
+      function reset(){
+        revision++;result.replaceChildren();
+        const same=reference.value===comparison.value;
+        run.disabled=same;
+        statusLine.textContent=same?'Choose two different report copies.':'';
+      }
+      reference.onchange=comparison.onchange=reset;
+      run.onclick=async()=>{
+        reset();
+        const ticket=revision;
+        const current=()=>panel.isConnected&&state.logId===logId&&ticket===revision;
+        run.disabled=true;statusLine.textContent='Comparing report copies…';
+        const query=new URLSearchParams({older:reference.value,newer:comparison.value});
+        try{
+          const data=await getJSON('/v1/event-logs/'+encodeURIComponent(logId)+'/saved-report-changes?'+query);
+          if(!current())return;
+          result.replaceChildren(savedChanges(data,true));statusLine.textContent='Comparison ready.';
+        }catch(error){if(current())statusLine.textContent=error.message;}
+        finally{if(current())run.disabled=false;}
+      };
+      return panel;
     }
     async function showSaved(note){
       const logId=state.logId,base=savedBase();
@@ -534,7 +573,7 @@
       savedList.replaceChildren(el('h3','Saved report copies'),
         el('div','The newest '+r.keep+' copies of this log’s report are kept on this computer. Save a copy now uses the current case selection. To save one regularly, add an “Event log report copy” job under Scheduled jobs with this log’s ID: '+state.logId+'.','muted'),
         ...(note?[el('div',note)]:[]),
-        rows.length?table(['Saved','Size',''],rows):el('div','No saved copies yet.','muted'),saveNow,savedChanges(changes));
+        rows.length?table(['Saved','Size',''],rows):el('div','No saved copies yet.','muted'),saveNow,savedComparisonControls(r.reports,changes));
       show(savedList,true);savedButton.setAttribute('aria-expanded','true');
     }
     savedButton.onclick=()=>{if(savedButton.getAttribute('aria-expanded')==='true'){show(savedList,false);savedButton.setAttribute('aria-expanded','false');return;}
