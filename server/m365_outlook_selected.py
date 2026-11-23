@@ -91,7 +91,7 @@ def _grant(path, tenant, mailbox, ids):
     if "expires_at" in value:
         expiry = value["expires_at"]
         if type(expiry) is not str or not re.fullmatch(
-                r"\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z", expiry):
+                r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", expiry):
             raise OutlookError("Outlook grant expired or invalid")
         try:
             expires = datetime.strptime(expiry, "%Y-%m-%dT%H:%M:%SZ").replace(
@@ -208,8 +208,8 @@ def export_selected(*, tenant, mailbox, message_ids, grant_file: Path,
         _same_grant(grant_file, tenant, mailbox, message_ids, revision)
         identity = namespace + "\0" + message_id
         case_id = "outlookcase:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()
-        revision = identity + "\0" + modified + "\0" + str(is_read)
-        event_id = "outlookevent:" + hashlib.sha256(revision.encode("utf-8")).hexdigest()
+        event_revision = identity + "\0" + modified + "\0" + str(is_read)
+        event_id = "outlookevent:" + hashlib.sha256(event_revision.encode("utf-8")).hexdigest()
         rows.append((case_id, "Observed read status: " + ("read" if is_read else "unread"),
                      modified, event_id))
     # Never publish partial batches. A final grant check also gates publication.
