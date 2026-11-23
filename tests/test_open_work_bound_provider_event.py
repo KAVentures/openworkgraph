@@ -570,3 +570,32 @@ def test_duplicate_retained_correlations_do_not_choose_attempt(monkeypatch):
     assert result["retained_journal_correlation"]["status"] == "ambiguous"
     assert result["retained_journal_correlation"]["attempt_ref"] is None
     assert result["provider_event_attributed_to_agent_run"] is False
+
+
+def test_unverified_provider_event_never_correlates_operator_supplied_attempt(monkeypatch):
+    """A failed independent read cannot turn matching user input into event evidence."""
+    install(monkeypatch)
+    from server import local_source_credentials
+    from server import open_work_provider_attempt_verification as verifier
+    monkeypatch.setattr(local_source_credentials, "_read_metadata",
+                        lambda path: {"account": "acct_12345678"})
+    monkeypatch.setattr(routes, "_source_scope", lambda: "tenant-1")
+    async def matching_journal(req, resp):
+        return {"run_ref": "run-1", "entries": [{
+            "attempt_ref": "attempt-1",
+            "provider_object_id": DATA["provider_object_id"],
+            "provider_operation": DATA["provider_operation"],
+            "provider_correlation_id": DATA["provider_correlation_id"],
+        }]}
+    monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", matching_journal)
+    monkeypatch.setattr(verifier, "verify_provider_attempt",
+                        lambda **kwargs: {"status": "unknown", "provider_operation": "unknown",
+                                          "customer_outcome": "unknown", "reason": "provider_unavailable"})
+    result = asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
+    correlation = result["retained_journal_correlation"]
+    assert correlation["status"] == "provider_event_unverified"
+    assert correlation["attempt_ref"] is None
+    assert correlation["host_attested"] is False
+    assert result["provider_event_independently_rechecked_on_this_read"] is False
+    assert result["provider_event_attributed_to_agent_run"] is False
+    assert result["receipt_persisted"] is False
