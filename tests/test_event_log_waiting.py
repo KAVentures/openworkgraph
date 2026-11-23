@@ -170,6 +170,26 @@ def test_unfinished_only_activities_have_case_counts_and_respect_response_limit(
     assert [a["activity"] for a in unfinished] == sorted(a["activity"] for a in unfinished)
 
 
+
+def test_observed_activity_population_is_not_limited_to_dashboard_top_n():
+    # An unfinished start for an activity omitted by the ranked top-N is
+    # still an observed activity, not a second open-only activity.
+    rows = []
+    for i in range(waiting.MAX_ACTIVITIES + 5):
+        name = f"Activity{i:03d}"
+        rows.extend([("case", name, _at(i, 0), "start"),
+                     ("case", name, _at(i, 1), "complete")])
+    rows.append(("unfinished", "Activity104", _at(200, 0), "start"))
+    rows.append(("unfinished", "OnlyOpen", _at(201, 0), "start"))
+    result = waiting.waiting_time(_import(
+        ["case", "activity", "time", "lifecycle:transition"], rows))
+    assert result["activity_total"] == waiting.MAX_ACTIVITIES + 6
+    assert len(result["activities"]) == waiting.MAX_ACTIVITIES
+    assert result["activities_omitted"] == 6
+    assert result["instances"]["unmatched_starts"] == 2
+
+
+
 def test_invalid_lifecycle_pair_does_not_double_count_coverage_eligibility():
     log = _import(["case", "activity", "time", "lifecycle:transition"], [
         ("x", "Review", _at(0, 2), "start"),
