@@ -446,3 +446,30 @@ def test_retained_journal_revoked_during_preflight_blocks_provider_io(monkeypatc
     assert exc.value.status_code == 403
     assert len(journal_reads) == 2
     assert calls == []
+
+
+def test_oversized_retained_attempt_denied_before_provider_io(monkeypatch):
+    """Untrusted retained rows cannot trigger a provider read or unbounded disclosure."""
+    install(monkeypatch)
+    async def oversized(req, resp):
+        return {"run_ref": "run-1", "entries": [{"attempt_ref": "a", "detail": "x" * 65_000}]}
+    monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", oversized)
+    from server import open_work_provider_attempt_verification as verifier
+    calls = []
+    monkeypatch.setattr(verifier, "verify_provider_attempt",
+                        lambda **kwargs: calls.append(kwargs))
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
+    assert exc.value.status_code == 409
+    assert calls == []
+
+
+def test_unserializable_retained_attempt_denied_before_provider_io(monkeypatch):
+    """Malformed journal projections fail closed rather than raising a server error."""
+    install(monkeypatch)
+    async def malformed(req, resp):
+        return {"run_ref": "run-1", "entries": [{"attempt_ref": object()}]}
+    monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", malformed)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
+    assert exc.value.status_code == 409
