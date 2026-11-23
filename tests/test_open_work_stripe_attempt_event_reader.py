@@ -41,7 +41,7 @@ def test_exact_provider_event_is_only_observed_not_success():
     verdict = verify_provider_attempt(
         account=ACCOUNT, object_id=OBJECT, operation=OPERATION,
         correlation_id=CORRELATION, expected_event_id=EVENT,
-        read_events=lambda: snapshot)
+        read_events=lambda: snapshot, recheck_authorization=lambda: True)
     assert verdict["status"] == "verified_provider_event"
     assert verdict["provider_operation"] == "unknown"
     assert verdict["customer_outcome"] == "unknown"
