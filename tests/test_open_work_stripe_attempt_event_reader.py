@@ -207,3 +207,31 @@ def test_direct_adapter_requires_explicit_authorization_guard_before_network():
         result = _read(reader=forbidden, recheck_authorization=missing)
         assert result == {"complete": False, "authenticated": False, "revoked": True}
     assert calls == []
+
+
+def test_revoked_grant_prevents_even_local_credential_access():
+    calls = []
+    def forbidden_credentials():
+        calls.append("credentials")
+        raise AssertionError("revoked actor must not access provider credentials")
+    def forbidden_provider(*args):
+        calls.append("provider")
+        raise AssertionError("revoked actor must not read provider")
+    for guard in (lambda: False, lambda: None):
+        result = _read(credentials=forbidden_credentials,
+                       reader=forbidden_provider, recheck_authorization=guard)
+        assert result == {"complete": False, "authenticated": False, "revoked": True}
+    assert calls == []
+
+
+def test_authorization_guard_exception_prevents_credential_access():
+    calls = []
+    def broken_guard():
+        raise OSError("authorization service unavailable")
+    def forbidden_credentials():
+        calls.append("credentials")
+        return CREDS
+    result = _read(credentials=forbidden_credentials,
+                   recheck_authorization=broken_guard)
+    assert result["complete"] is False
+    assert calls == []
