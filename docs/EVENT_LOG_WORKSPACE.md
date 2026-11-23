@@ -122,6 +122,15 @@ header, optional `other_headers` with columns for up to three other delimiters,
 and optional `preferred_log_id`. Each match includes its
 `missing_attribute_columns`.
 
+### Preview a CSV mapping
+
+Use **Preview CSV mapping** before confirming storage. OWG shows the accepted
+and rejected rows in the sample, a few normalized events, and any timestamp
+offset assumptions. The preview uses the import parser in isolation and
+checks up to 512 KiB and 2,000 complete records. Source-ID checks apply within
+that sample. The full import validates the entire file and checks existing
+identities when appending.
+
 ### SQLite database files
 
 When switching files or tables, the import form keeps the latest selection.

@@ -67,14 +67,15 @@
   // A gzip-compressed file (log.xes.gz, events.csv.gz) is read like the file inside it: the browser
   // decompresses the first bytes for the column read and the server decompresses the upload.
   const isGzip=file=>/\.gz$/i.test(String(file&&file.name||''));
-  async function headText(file,bytes){
-    if(!isGzip(file))return file.slice(0,bytes).text();
+  async function headBlob(file,bytes){
+    if(!isGzip(file))return file.slice(0,bytes);
     const reader=file.stream().pipeThrough(new DecompressionStream('gzip')).getReader();
     const parts=[];let size=0;
     try{while(size<bytes){const {done,value}=await reader.read();if(done)break;parts.push(value);size+=value.length;}}
     finally{reader.cancel().catch(()=>{});}
-    return new Blob(parts).slice(0,bytes).text();
+    return new Blob(parts).slice(0,bytes);
   }
+  const headText=async(file,bytes)=>(await headBlob(file,bytes)).text();
   function detectFormat(name){
     const lower=String(name||'').toLowerCase().replace(/\.gz$/,'');
     if(lower.endsWith('.xes'))return 'xes';
@@ -193,6 +194,10 @@
     const keepLabel=el('label');keepLabel.style.cssText='display:flex;gap:6px;align-items:center';
     const keep=input('owgEventLogKeepRejected','checkbox');keepLabel.append(keep,document.createTextNode(' Also keep rejected CSV rows with the log so I can review, release or discard them'));
     const importButton=button('Import log');importButton.id='owgEventLogImport';importButton.disabled=true;
+    const previewImport=button('Preview CSV mapping','secondary');previewImport.id='owgEventLogPreviewImport';previewImport.disabled=true;
+    const previewMessage=el('div',null,'muted');previewMessage.id='owgEventLogImportPreviewStatus';previewMessage.setAttribute('role','status');
+    const previewExamples=el('div');previewExamples.id='owgEventLogImportPreviewExamples';
+    const previewPanel=el('div');previewPanel.append(previewImport,previewMessage,previewExamples);
     const statusLine=el('div',null,'muted');statusLine.id='owgEventLogStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const appendButton=button('Add file to selected log','secondary');appendButton.id='owgEventLogAppend';appendButton.disabled=true;
     appendButton.title='Adds events from a newer export to the stored log chosen below; events it already holds are skipped.';
@@ -213,7 +218,7 @@
         storageList.replaceChildren(head,t,el('div',r.estimate,'muted'));}
       catch(error){storageList.replaceChildren(el('div',error.message));}};
     const storageRow=el('div',null,'row');storageRow.append(storageButton);
-    card.append(row,mapping,identity,consentLabel,keepLabel,importRow,statusLine,storageRow,storageList);
+    card.append(row,mapping,identity,previewPanel,consentLabel,keepLabel,importRow,statusLine,storageRow,storageList);
 
     const pick=select('owgEventLogPick',[]);const caseType=select('owgEventLogCaseType',[]);
     const exportFormat=select('owgEventLogExportFormat',[['csv','CSV (exact interchange)'],['csv-review','CSV for spreadsheet review'],['sourcecsv','Source-ID CSV (exact interchange)'],['sourcecsv-review','Source-ID CSV for spreadsheet review'],['xes','XES'],['xes-attributes','XES with retained attributes'],['ocel','OCEL 2.0 JSON'],['ocelxml','OCEL 2.0 XML']]);
@@ -230,7 +235,7 @@
     let salesforceStagedFile=null;
     const unstageSalesforce=()=>{
       if(salesforceStagedFile&&file.files?.[0]===salesforceStagedFile){
-        file.value='';consent.checked=false;refreshImport();
+        file.value='';consent.checked=false;clearImportPreview();refreshImport();
         status('Earlier Salesforce selection cleared from the import form.');
       }
       salesforceStagedFile=null;
@@ -238,7 +243,7 @@
     card.append(manage,savedList,results,salesforceSourceSection((csv,namespace,isCurrent)=>{
       if(!isCurrent())return;
       // Invalidate any in-flight column read for the previous import file.
-      columnReadSequence++;readingColumns=false;columnsReady=true;
+      columnReadSequence++;clearImportPreview();readingColumns=false;columnsReady=true;
       const transfer=new DataTransfer();transfer.items.add(new File([csv],'selected-salesforce-cases.csv',{type:'text/csv'}));
       file.files=transfer.files;salesforceStagedFile=file.files[0];
       name.value='Selected Salesforce cases';format.value='csv';delimiter.value=',';
@@ -261,14 +266,23 @@
     if(browse)browse.insertAdjacentElement('afterend',card);else panel.appendChild(card);
 
     let readingColumns=false,columnsReady=false,columnReadSequence=0;
+    let previewTurn=0,previewBusy=false;
+    function clearImportPreview(){
+      previewTurn++;previewBusy=false;previewMessage.textContent='';previewExamples.replaceChildren();
+    }
     const refreshImport=()=>{const csv=format.value==='csv',active=csv&&useIdentity.checked;
       const valid=!active||(eventId.value&&!!sourceNamespace.value!==!!sourceColumn.value&&!(caseNamespace.value&&caseColumn.value)&&!keep.checked);
-      const ready=!readingColumns&&(!csv||columnsReady)&&file.files&&file.files[0]&&consent.checked&&valid;importButton.disabled=!(ready&&name.value.trim());appendButton.disabled=!(ready&&state.logId);show(mapping,csv);show(identity,csv);show(identityFields,active);};
+      const ready=!readingColumns&&(!csv||columnsReady)&&file.files&&file.files[0]&&valid;
+      importButton.disabled=!(ready&&consent.checked&&name.value.trim());appendButton.disabled=!(ready&&consent.checked&&state.logId);
+      previewImport.disabled=!(csv&&ready&&!previewBusy);show(previewPanel,csv);
+      show(mapping,csv);show(identity,csv);show(identityFields,active);};
     for(const control of [useIdentity,eventId,sourceNamespace,sourceColumn,caseNamespace,caseColumn,jsonColumn]){
       control.addEventListener('change',()=>{consent.checked=false;refreshImport();});
       if(control.tagName==='INPUT'&&control.type==='text')control.addEventListener('input',()=>{consent.checked=false;refreshImport();});
     }
-    keep.addEventListener('change',refreshImport);
+    for(const control of [mapping,identity,keep])for(const event of ['input','change']){
+      control.addEventListener(event,()=>{clearImportPreview();refreshImport();});
+    }
     function csvMapping(q){
       q.set('case_column',cols.case.value);q.set('activity_column',cols.activity.value);q.set('timestamp_column',cols.time.value);q.set('resource_column',cols.resource.value);
       if(!(useIdentity.checked&&jsonColumn.value))[...extras.selectedOptions].forEach(o=>{if(![cols.case.value,cols.activity.value,cols.time.value,cols.resource.value].includes(o.value))q.append('attribute_column',o.value);});
@@ -277,6 +291,39 @@
       if(timeFormat.value)q.set('timestamp_format',timeFormat.value);
       if(useIdentity.checked)for(const [key,value] of Object.entries({event_id_column:eventId.value,source_namespace:sourceNamespace.value,source_namespace_column:sourceColumn.value,case_namespace:caseNamespace.value,case_namespace_column:caseColumn.value,attributes_json_column:jsonColumn.value}))if(value)q.set(key,value);
     }
+    function previewMapping(){
+      const params=new URLSearchParams();csvMapping(params);return params;
+    }
+    previewImport.onclick=async()=>{
+      const chosen=file.files?.[0];
+      if(!chosen||previewImport.disabled)return;
+      const ticket=++previewTurn,params=previewMapping(),basis=params.toString();
+      const current=()=>ticket===previewTurn&&file.files?.[0]===chosen&&format.value==='csv'&&previewMapping().toString()===basis;
+      previewBusy=true;refreshImport();previewMessage.textContent='Checking CSV sample…';previewExamples.replaceChildren();
+      try{
+        const limit=512*1024,sample=await headBlob(chosen,limit+1);
+        if(!current())return;
+        params.set('partial',String(sample.size>limit));
+        const r=await (await api('/v1/event-logs/import/preview?'+params,{method:'POST',
+          headers:{'Content-Type':'application/octet-stream'},body:sample.slice(0,limit)})).json();
+        if(!current())return;
+        const count=(value,singular)=>Number(value).toLocaleString()+' '+singular+(value===1?'':'s');
+        previewMessage.textContent=count(r.sample_rows,'row')+' checked. '+count(r.accepted_events,'accepted event')+' in '+
+          count(r.distinct_cases,'case')+'. '+count(r.rejected_rows,'row')+' rejected.'+
+          (r.duplicate_source_ids_skipped?' '+count(r.duplicate_source_ids_skipped,'duplicate source ID')+' skipped.':'')+
+          (r.timestamps_with_assumed_offset?' '+count(r.timestamps_with_assumed_offset,'timestamp')+' read with the chosen offset.':'')+
+          (r.sample_limited?' The preview covers only this sample.':'');
+        if(Object.keys(r.rejected_by_reason).length)previewExamples.appendChild(el('p',reasonText(r.rejected_by_reason)+'.','muted'));
+        if(r.examples.length){
+          const includeResource=!!params.get('resource_column');
+          const headers=['Case','Activity','Timestamp (UTC)',...(includeResource?['Resource']:[])];
+          previewExamples.appendChild(table(headers,r.examples.map(event=>[
+            event.case_id,event.activity,event.timestamp,...(includeResource?[event.resource]:[])
+          ])));
+        }
+      }catch(error){if(current())previewMessage.textContent=error.message;}
+      finally{if(ticket===previewTurn){previewBusy=false;refreshImport();}}
+    };
     function setMappingColumns(columns){
       const options=columns.map(c=>[c,c]);
       setOptions(cols.case,options);setOptions(cols.activity,options);setOptions(cols.time,options);setOptions(cols.resource,[['','(none)'],...options]);
@@ -297,7 +344,7 @@
     async function readColumns(){
       const sequence=++columnReadSequence;
       formatSequence++;
-      clearReusableMapping();
+      clearImportPreview();clearReusableMapping();
       const chosen=file.files&&file.files[0];
       columnsReady=false;
       if(!chosen||format.value!=='csv'){
@@ -340,7 +387,7 @@
       const database=isDatabase(chosen.name),unit=database?'table':'worksheet';
       let sequence=++columnReadSequence,expectedFile=file.files?.[0];
       const current=()=>sequence===columnReadSequence&&workbook===chosen&&file.files?.[0]===expectedFile;
-      formatSequence++;clearReusableMapping();readingColumns=true;consent.checked=false;refreshImport();
+      formatSequence++;clearImportPreview();clearReusableMapping();readingColumns=true;consent.checked=false;refreshImport();
       status(isJsonLines(chosen.name)?'Reading the JSON lines of '+chosen.name+'…':'Reading '+(sheet?unit+' “'+sheet+'”':'the first '+unit)+' of '+chosen.name+'…');
       try{
         const url=isJsonLines(chosen.name)?'/v1/event-logs/jsonl-to-csv':database?'/v1/event-logs/sqlite-to-csv'+(sheet?'?table='+encodeURIComponent(sheet):''):'/v1/event-logs/xlsx-to-csv'+(sheet?'?sheet='+encodeURIComponent(sheet):'');
@@ -395,7 +442,7 @@
         if(sequence!==formatSequence||file.files?.[0]!==chosen||format.value!=='csv'||delimiter.value!==selectedDelimiter||cols.time.value!==column)return;
         setOptions(timeFormat,[['','ISO 8601 (2024-03-04T14:05:00Z)'],...r.candidates.map(c=>[c.pattern,c.pattern+' \u2014 '+c.order+': '+c.first_value+' reads as '+c.first_value_reads_as])]);
         if(r.suggested){
-          timeFormat.value=r.suggested;
+          clearImportPreview();timeFormat.value=r.suggested;refreshImport();
           const pick=r.candidates.find(c=>c.pattern===r.suggested);
           if(!pick.has_offset&&!naiveOffset.value.trim())naiveOffset.value=localOffset();
           status('Times look like '+pick.first_value+', read as '+pick.first_value_reads_as+' with format '+r.suggested+(pick.has_offset?'.':' at offset '+naiveOffset.value+'. Change the format or offset if that is wrong.'));
@@ -407,7 +454,7 @@
     // Offer the mapping recorded with an earlier import whose columns this file also has.
     const reuseRow=el('div',null,'row');reuseRow.id='owgEventLogReuse';reuseRow.hidden=true;mapping.appendChild(reuseRow);
     function applyMapping(m,header){
-      formatSequence++;
+      formatSequence++;clearImportPreview();
       if(delimiter.value!==header.delimiter){
         delimiter.value=header.delimiter;
         setMappingColumns(header.columns);
@@ -464,7 +511,7 @@
       try{
         const log=await (await api('/v1/event-logs/import?'+q,{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream','X-OWG-Local-Storage-Confirmed':'true'}})).json();
         const done='Imported '+Number(log.events).toLocaleString()+' events'+(log.rejected_events?' ('+Number(log.rejected_events).toLocaleString()+' rejected: '+reasonText(log.quality&&log.quality.rejected_by_reason)+')':'')+'.'+relationshipText(log.object_relationships)+identityText(log.source_identity)+tieText(log.quality)+keptText(log.quality)+sameSourceText(log.same_source_as);
-        consent.checked=false;keep.checked=false;file.value='';name.value='';
+        consent.checked=false;keep.checked=false;file.value='';name.value='';clearImportPreview();
         // Report the import only once the new log is selected. Selecting it starts a new generation and
         // clears the results, so an analysis started before that would be dropped and never shown.
         await refreshLogs(log.log_id);
@@ -490,7 +537,7 @@
       appendButton.disabled=true;status('Adding '+chosen.name+' to '+target.name+'…');
       try{
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(target.log_id)+'/append?'+q,{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream','X-OWG-Local-Storage-Confirmed':'true'}})).json();
-        consent.checked=false;file.value='';
+        consent.checked=false;file.value='';clearImportPreview();
         await refreshLogs(target.log_id);
         status('Added '+Number(r.added_events).toLocaleString()+' new events to '+target.name+'; skipped '+Number(r.duplicate_events_skipped).toLocaleString()+' already in the log'+(r.rejected_events?' and rejected '+Number(r.rejected_events).toLocaleString()+' ('+reasonText(r.quality&&r.quality.rejected_by_reason)+')':'')+'.'+relationshipText(r.log&&r.log.object_relationships)+identityText(r.source_identity)+tieText(r.quality)+keptText(r.quality)+sameSourceText(r.same_source_as));keep.checked=false;
       }catch(error){status(error.message);}finally{refreshImport();}

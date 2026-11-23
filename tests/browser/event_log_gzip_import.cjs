@@ -28,12 +28,16 @@ const path=require('node:path');const zlib=require('node:zlib');
    await page.locator('#owgEventLogFile').setInputFiles({name:'orders.csv.gz',mimeType:'application/gzip',buffer:zlib.gzipSync(Buffer.from(rows.join('\n')))});
    await page.waitForFunction(()=>document.querySelector('#owgEventLogCase').options.length===3);
    assert.deepEqual(await page.locator('#owgEventLogCase option').allTextContents(),['case','activity','time']);
+   await page.getByRole('button',{name:'Preview CSV mapping',exact:true}).click();
+   await page.locator('#owgEventLogImportPreviewStatus').getByText(
+     '12 rows checked. 12 accepted events in 6 cases. 0 rows rejected.',{exact:true}).waitFor();
    await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Imported 12 events'}).waitFor();
    const xes=await page.evaluate(async()=>{const id=(await (await fetch('/v1/event-logs')).json()).logs[0].log_id;return (await fetch('/v1/event-logs/'+id+'/export?format=xes')).text();});
    await page.locator('#owgEventLogName').fill('');
    await page.locator('#owgEventLogFile').setInputFiles({name:'orders.xes.gz',mimeType:'application/gzip',buffer:zlib.gzipSync(Buffer.from(xes))});
    assert.equal(await page.locator('#owgEventLogFormat').inputValue(),'xes');
+   assert.equal(await page.locator('#owgEventLogPreviewImport').isVisible(),false);
    await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Imported 12 events'}).waitFor();
    const logs=await page.evaluate(async()=>(await (await fetch('/v1/event-logs')).json()).logs.map(l=>[l.source_format,l.events]).sort());
