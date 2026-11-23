@@ -70,6 +70,29 @@ def test_filter_top_values_and_errors():
             attribute_profile.profile(log, bad)
 
 
+def test_case_review_respects_literal_values_scope_and_pagination():
+    log = _log()
+    first = attribute_profile.cases(log, {"attribute": "region", "value": "south", "limit": 2})
+    assert first["selected_cases"] == 4 and first["next_after"] == "c7"
+    assert [(case["case_id"], case["matching_events"], case["elapsed_seconds"]) for case in first["cases"]] == [
+        ("c6", 2, 18000), ("c7", 2, 18000)]
+    last = attribute_profile.cases(log, {"attribute": "region", "value": "south", "after": first["next_after"]})
+    assert [case["case_id"] for case in last["cases"]] == ["c8", "c9"]
+    cohort = {"started_from": "2024-03-10T00:00:00Z"}
+    for attribute, match in (("note", "missing"), ("amount", "varying")):
+        result = attribute_profile.cases(log, {"attribute": attribute, "match": match, "cohort": cohort})
+        assert [case["case_id"] for case in result["cases"]] == ["c6", "c7", "c8", "c9"]
+    result = attribute_profile.cases(log, {"attribute": "note", "value": "urgent"})
+    assert [(case["case_id"], case["events"], case["matching_events"]) for case in result["cases"]] == [("c0", 2, 1)]
+    literal = b"case,activity,time,a=b\nc,A,2024-03-04T08:00:00Z,x=y\n"
+    other = workspace.import_log(BytesIO(literal), name="literal", source_format="csv",
+                                 mapping={**MAPPING, "attribute_columns": ["a=b"]})["log_id"]
+    assert attribute_profile.cases(other, {"attribute": "a=b", "value": "x=y"})["selected_cases"] == 1
+    assert attribute_profile.cases(other, {"attribute": "a=b", "value": "X=Y"})["selected_cases"] == 0
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        attribute_profile.cases(log, {"attribute": "note", "value": "urgent", "match": "missing"})
+
+
 def test_route_requires_the_dashboard(tmp_path):
     import os
     import subprocess
@@ -92,6 +115,11 @@ with TestClient(app) as client:
     assert found.status_code == 200, found.text
     assert [a["attribute"] for a in found.json()["attributes"]] == ["team"]
     assert client.post(path, json={"top_values": 99}, headers=owner).status_code == 422
+    query = {"attribute": "team", "value": "y"}
+    assert client.post(path + "/cases", json=query, headers=bearer).status_code == 403
+    evidence = client.post(path + "/cases", json=query, headers=owner)
+    assert evidence.status_code == 200 and evidence.headers["cache-control"] == "no-store"
+    assert [row["case_id"] for row in evidence.json()["cases"]] == ["c0"]
 print("ok")
 '''
     env = os.environ.copy()

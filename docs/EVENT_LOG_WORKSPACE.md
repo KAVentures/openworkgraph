@@ -523,6 +523,11 @@ following after **Analyse**.
 
 ### Attribute profile
 
+Select a coverage count or a frequent value to open the matching cases. You can also
+review cases where the attribute is missing or changes value. Matching uses the
+literal event-attribute key and value within the profile's case selection. Each
+result shows the number of matching events alongside the full case's event count.
+
 **Attributes** (and `POST /v1/event-logs/{log_id}/attribute-profile` with
 `{"top_values": 10, "cohort": {}, "case_type": null}`) lists every event
 attribute in the log, ordered by how many cases carry it. Each attribute

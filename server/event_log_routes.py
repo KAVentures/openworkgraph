@@ -999,6 +999,15 @@ async def event_log_attribute_profile(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/attribute-profile/cases")
+async def event_log_attribute_profile_cases(request: Request, log_id: str,
+                                            case_type: str | None = Query(default=None, max_length=200)):
+    from . import event_log_attribute_profile as attribute_profile
+    _require_dashboard(request)
+    spec = await _json_body(request, "attribute case selection", strict=True)
+    return await run_in_threadpool(_respond, attribute_profile.cases, log_id, spec, case_type)
+
+
 @router.post("/v1/event-logs/{log_id}/insights")
 async def event_log_insights(request: Request, log_id: str):
     """Ranked, descriptive pointers to where case time and repetition concentrate."""
