@@ -3595,9 +3595,16 @@ async def read_local_bound_provider_event(request: Request, response: Response):
             ref = row.get("attempt_ref")
             if isinstance(ref, str) and 0 < len(ref) <= 160:
                 correlation_candidates.append(ref)
-    unique_correlation = len(correlation_candidates) == 1
+    # An operator-supplied event ID is not independent provider evidence.
+    # Do not surface an exact attempt reference as an event correlation when
+    # the provider read failed, was revoked, or returned an unknown verdict.
+    independently_verified = verdict["status"] in (
+        "verified_provider_event", "verified_provider_operation",
+    )
+    unique_correlation = independently_verified and len(correlation_candidates) == 1
     journal_correlation = {
-        "status": ("untrusted_exact_match" if unique_correlation
+        "status": ("provider_event_unverified" if not independently_verified
+                   else "untrusted_exact_match" if unique_correlation
                    else "ambiguous" if correlation_candidates else "not_recorded"),
         "attempt_ref": correlation_candidates[0] if unique_correlation else None,
         "host_attested": False,
