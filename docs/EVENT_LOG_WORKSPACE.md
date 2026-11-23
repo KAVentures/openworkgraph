@@ -2531,6 +2531,12 @@ applies follower rules, case-attribute values, numeric ranges, endpoints and cas
 when newer exports were appended after it was saved and names any activities it uses that the log
 does not contain. Saved filters are deleted with the log and never change events.
 
+Use **Export JSON** on a saved filter and **Import a filter from another log**
+on the destination. The JSON carries the filter name, rules and saved case
+notion. Import validates the rules and case notion against the destination log.
+Filter names are unique within each log.
+
+
 The case evidence drill-down also uses the active case filter, so browsing cases shows the same
 cases the filtered views count ("N matching cases (case filter applied)"). Object-type maps keep
 their own case notion and are not filtered.
