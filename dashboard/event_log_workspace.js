@@ -1052,7 +1052,7 @@
     results.appendChild(discoverySection());
     results.appendChild(driftSection(inspection));
     results.appendChild(automationSection());
-    results.appendChild(decisionSection());
+    results.appendChild(decisionSection(inspection));
     results.appendChild(descriptionSection());
     results.appendChild(agentRunsRefreshSection());
     results.appendChild(folderFeedSection());
@@ -2145,23 +2145,86 @@
   }
 
   // Decision mining: which recorded data goes with which branch after an activity.
-  function decisionSection(){
+  function decisionSection(inspection){
     const box=section('Decision rules');box.id='owgDecisions';
     const branch=row=>row.next+(row.next_is_terminal?' · case completion':'');
     box.appendChild(el('div','Find the activities after which cases go different ways, then learn which recorded data goes with each branch. Only data recorded at or before the decision is used. Rules are associations in this log, checked on held-out cases, not the business rule.','muted'));
     const find=button('Find decision points','secondary');find.id='owgDecisionFind';
     const points=el('div');points.id='owgDecisionPoints';points.setAttribute('role','status');
     const out=el('div');out.id='owgDecisionResults';out.setAttribute('role','status');
-    box.append(find,points,out);
+    const observed=el('div');observed.id='owgDecisionObservedBranches';
+    const review=el('div');review.id='owgDecisionBranchCases';
+    box.append(find,points,observed,review,out);
+    const generation=state.generation;
+    let reviewTurn=0,ruleTurn=0;
     const pct=x=>Math.round(x*100)+'%';
+    const number=x=>Number(x).toLocaleString();
     const cond=c=>{
       const value=typeof c.value==='number'?String(c.value):'“'+c.value+'”';
       const comparison=c.attribute+' '+({'==':'is','!=':'is not','>=':'≥','<':'<'}[c.op])+' '+value;
       return c.includes_missing?'('+comparison+' or missing'+(c.includes_non_numeric?' or nonnumeric':'')+')':comparison;
     };
-    const learn=async(activity)=>{out.replaceChildren(el('div','Learning rules for '+activity+'…','muted'));
+    function showCases(endpoint,activity,item){
+      const turn=++reviewTurn,current=()=>generation===state.generation&&turn===reviewTurn;
+      const title=el('h4',activity+' → '+branch(item));title.tabIndex=-1;
+      const status=el('div');status.setAttribute('role','status');
+      const rows=el('div'),nav=el('div',null,'row');
+      const previous=button('Previous case page','secondary'),next=button('Next case page','secondary');
+      nav.append(previous,next);review.replaceChildren(title,status,rows,nav);title.focus();
+      const cursors=[null];let index=0,following=null;
+      async function load(page){
+        previous.disabled=next.disabled=true;status.textContent='Loading cases…';
+        const selection=item.next_is_terminal?{activity,ends_here:true}:{activity,next_activity:item.next};
+        if(cursors[page]!==null)selection.after=cursors[page];
+        try{
+          const response=await api(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(selection)});
+          const result=await response.json();
+          if(!current())return;
+          index=page;following=result.next_after;
+          status.textContent=number(result.occurrences)+' recorded occurrences in '+number(result.total)+' cases. Showing '+number(result.cases.length)+' on this page.';
+          rows.replaceChildren(result.cases.length?table(['Case','Branch occurrences','Evidence'],result.cases.map(c=>{
+            const open=button('Open case','secondary');open.setAttribute('aria-label','Open case '+c.case_id);
+            open.onclick=()=>inspection.open(c.case_id);
+            return [c.case_id,number(c.occurrences),open];
+          })):el('div','No cases on this page.','muted'));
+        }catch(error){if(current())status.textContent=error.message;}
+        finally{if(current()){previous.disabled=index===0;next.disabled=following===null;}}
+      }
+      previous.onclick=()=>load(index-1);
+      next.onclick=()=>{cursors[index+1]=following;load(index+1);};
+      load(0);
+    }
+    function showBranches(url,point){
+      const endpoint=new URL(url,window.location.origin);endpoint.pathname+='/cases';
+      const title=el('h4','Observed branches after '+point.activity);title.tabIndex=-1;
+      const rows=el('div'),nav=el('div',null,'row');
+      const previous=button('Previous branch page','secondary'),next=button('Next branch page','secondary');
+      const status=el('div');status.setAttribute('role','status');
+      nav.append(previous,next);observed.replaceChildren(title,status,rows,nav);
+      let offset=0;
+      function render(){
+        ++reviewTurn;review.replaceChildren();
+        const page=point.branches.slice(offset,offset+25);
+        status.textContent='Showing branches '+number(offset+1)+'–'+number(offset+page.length)+' of '+number(point.branches.length)+'.';
+        rows.replaceChildren(table(['Next','Occurrences','Cases','Share','Evidence'],page.map(item=>{
+          const inspect=button('Inspect cases','secondary');
+          inspect.setAttribute('aria-label',item.next_is_terminal?'Inspect cases ending here':'Inspect cases continuing to '+item.next);
+          inspect.onclick=()=>showCases(endpoint.pathname+endpoint.search,point.activity,item);
+          return [branch(item),number(item.occurrences),number(item.cases),pct(item.share),inspect];
+        })));
+        previous.disabled=offset===0;next.disabled=offset+25>=point.branches.length;
+      }
+      nav.hidden=point.branches.length<=25;
+      previous.onclick=()=>{offset-=25;render();};
+      next.onclick=()=>{offset+=25;render();};
+      render();title.focus();
+    }
+    const learn=async(activity)=>{
+      const turn=++ruleTurn,current=()=>generation===state.generation&&turn===ruleTurn;
+      out.replaceChildren(el('div','Learning rules for '+activity+'…','muted'));
       try{
         const r=await getJSON(logPath('decision-rules',{decision_activity:activity}));
+        if(!current())return;
         const head=el('div','After '+activity+': '+r.branches.map(b=>branch(b)+' '+pct(b.share)).join(', ')+' ('+Number(r.occurrences).toLocaleString()+' occurrences'+(r.occurrences_capped?', the first '+Number(r.occurrences_used).toLocaleString()+' used':'')+').','muted');
         if(!r.rules.length){out.replaceChildren(head,el('div',r.note,'muted'));return;}
         const e=r.evaluation,parts=[];
@@ -2172,15 +2235,22 @@
           table(['When','Then usually','Confidence','Training occurrences'],rows),
           el('div','Most informative data: '+(r.feature_importance.length?r.feature_importance.slice(0,5).map(f=>f.attribute+' '+pct(f.share)).join(', '):'none')+'.','muted'),
           el('div',r.caveat,'muted'));
-      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}};
-    find.onclick=async()=>{find.disabled=true;points.replaceChildren(el('div','Looking for decision points…','muted'));out.replaceChildren();
+      }catch(error){if(current())out.replaceChildren(el('div',error.message,'muted'));}};
+    find.onclick=async()=>{
+      ++reviewTurn;++ruleTurn;find.disabled=true;
+      points.replaceChildren(el('div','Looking for decision points…','muted'));
+      observed.replaceChildren();review.replaceChildren();out.replaceChildren();
       try{
-        const r=await getJSON(logPath('decision-points'));
+        const url=logPath('decision-points'),r=await getJSON(url);
+        if(generation!==state.generation)return;
         if(!r.decision_points.length){points.replaceChildren(el('div','No activity is followed by two or more branches seen at least '+r.min_branch_occurrences+' times each.','muted'));return;}
-        points.replaceChildren(table(['Activity','Occurrences','Branches',''],r.decision_points.map(p=>{
+        points.replaceChildren(table(['Activity','Occurrences','Branches','Actions'],r.decision_points.map(p=>{
           const go=button('Learn rules','secondary');go.setAttribute('aria-label','Learn rules after '+p.activity);go.onclick=()=>learn(p.activity);
-          return [p.activity,Number(p.occurrences).toLocaleString(),p.branches.slice(0,4).map(b=>branch(b)+' '+pct(b.share)).join(', ')+(p.branches.length>4?', …':''),go];})));
-      }catch(error){points.replaceChildren(el('div',error.message,'muted'));}
+          const open=button('Review branches','secondary');open.setAttribute('aria-label','Review branches after '+p.activity);open.onclick=()=>showBranches(url,p);
+          const actions=el('div',null,'row');actions.append(go,open);
+          return [p.activity,number(p.occurrences),p.branches.slice(0,4).map(b=>branch(b)+' '+pct(b.share)).join(', ')+(p.branches.length>4?', …':''),actions];
+        })));
+      }catch(error){if(generation===state.generation)points.replaceChildren(el('div',error.message,'muted'));}
       finally{find.disabled=false;}};
     return box;
   }

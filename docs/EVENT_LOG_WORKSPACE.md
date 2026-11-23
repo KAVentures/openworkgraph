@@ -3021,7 +3021,9 @@ A numeric condition with `includes_non_numeric` also matches unusable numbers.
    next activities, or end. Each branch must be seen at least 5 times. Completion
    normally appears as `(end)`. If a literal activity uses that label, the result
    picks a distinct `terminal_label`. Branches and rules flag completion using
-   `next_is_terminal`.
+   `next_is_terminal`. Choose **Review branches**, then **Inspect cases** to see which
+   cases contributed to an observed branch and how many times it occurred in each case.
+   Open a case to review its event history.
 2. **Data known at the decision.** The rules use two kinds of data:
    - the case's attributes (`case.*`);
    - the latest non-empty value of every event attribute recorded on the case at or before the
@@ -3051,6 +3053,11 @@ global case filter applies.
 - `GET /v1/event-logs/{log_id}/decision-rules?decision_activity=&max_depth=&case_type=` plus the
   case-filter parameters. The case filter's own `activity` parameter still selects cases that
   contain an activity.
+- `POST /v1/event-logs/{log_id}/decision-points/cases` uses the case notion and filter from
+  the decision points. Send `{"activity":"Check","next_activity":"Review"}` for a continuation
+  or `{"activity":"Check","ends_here":true}` for completion. It reports all observed
+  occurrences, including repeats, and pages through distinct cases in literal case-key order.
+  The optional `limit` is 1–100 (default 50). Send the returned `next_after` as `after` to continue.
 
-Both routes need a dashboard session. Agents can read the same results, at the aggregates level,
+These routes need a dashboard session. Agents can read the aggregates
 through `get_process_decision_rules` (see PROCESS_INTELLIGENCE_FOR_AGENTS.md).

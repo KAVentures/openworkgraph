@@ -1068,6 +1068,17 @@ def event_log_decision_points(request: Request, log_id: str, case_type: str | No
     return _respond(decisions.decision_points, log_id, case_type, cohort=cohort)
 
 
+@router.post("/v1/event-logs/{log_id}/decision-points/cases")
+async def event_log_decision_branch_cases(request: Request, log_id: str,
+                                          case_type: str | None = Query(default=None, max_length=200),
+                                          cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_decision_mining as decisions
+    _require_dashboard(request)
+    selection = await _json_body(request, "decision branch settings", strict=True, limit=8192)
+    return await run_in_threadpool(_respond, decisions.branch_cases, log_id, case_type,
+                                   selection=selection, cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/decision-rules")
 def event_log_decision_rules(request: Request, log_id: str,
                              decision_activity: str = Query(min_length=1, max_length=200),

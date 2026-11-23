@@ -112,6 +112,45 @@ def decision_points(log_id: str, case_type: str | None = None, *,
             "note": f"'{terminal}' means the case ended after the activity."}
 
 
+def branch_cases(log_id: str, case_type: str | None = None, *, selection: dict[str, Any],
+                 cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Page through cases contributing to an observed decision-point branch."""
+    if not isinstance(selection, dict) or selection.keys() - {"activity", "next_activity", "ends_here", "after", "limit"}:
+        raise EventLogWorkspaceError("unknown decision branch setting")
+    activity = _check_activity(selection.get("activity"))
+    terminal = "ends_here" in selection
+    if terminal and (selection["ends_here"] is not True or "next_activity" in selection):
+        raise EventLogWorkspaceError("choose a next activity or a case ending")
+    next_activity = None if terminal else _check_activity(selection.get("next_activity"))
+    after, limit = selection.get("after"), selection.get("limit", 50)
+    if after is not None and (not isinstance(after, str) or not after or len(after) > 200):
+        raise EventLogWorkspaceError("invalid case key cursor")
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise EventLogWorkspaceError("limit must be a whole number from 1 to 100")
+
+    def run(conn):
+        terminal_label = _terminal_label(conn)
+        if not terminal and next_activity == terminal_label:
+            return {"rows": [], "total": 0, "occurrences": 0}
+        conn.execute(_STEPS, [terminal_label])
+        conn.execute("""CREATE TEMP TABLE decision_branch_cases AS
+            SELECT case_id, count(*) AS occurrences FROM dm
+            WHERE activity = ? AND next = ? GROUP BY case_id""",
+                     [activity, terminal_label if terminal else next_activity])
+        total, occurrences = conn.execute(
+            "SELECT count(*), coalesce(sum(occurrences), 0) FROM decision_branch_cases").fetchone()
+        rows = conn.execute("""SELECT case_id, occurrences FROM decision_branch_cases
+            WHERE ? IS NULL OR case_id > ? ORDER BY case_id LIMIT ?""", [after, after, limit + 1]).fetchall()
+        return {"rows": rows, "total": total, "occurrences": occurrences}
+
+    data = workspace._query_filtered(log_id, case_type, cohort, run)
+    rows = data["rows"]
+    return {"activity": activity, "next_activity": next_activity, "next_is_terminal": terminal,
+            "case_notion": data["case_notion"], "total": data["total"], "occurrences": data["occurrences"],
+            "cases": [{"case_id": key, "occurrences": count} for key, count in rows[:limit]],
+            "next_after": rows[limit - 1][0] if len(rows) > limit else None}
+
+
 def _train(case_id: str) -> bool:
     return int(hashlib.sha256(case_id.encode()).hexdigest()[:8], 16) / 0xFFFFFFFF < TRAIN_SHARE
 
@@ -378,4 +417,4 @@ def analyse(log_id: str, activity: str, case_type: str | None = None, *, max_dep
             "learned_anything": "split" in tree}
 
 
-__all__ = ["decision_points", "analyse", "FORMAT"]
+__all__ = ["decision_points", "branch_cases", "analyse", "FORMAT"]
