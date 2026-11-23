@@ -197,8 +197,8 @@ def test_open_start_activity_count_deduplicates_across_cases():
     ])
     result = waiting.waiting_time(log)
     assert result["instances"]["unmatched_starts"] == 3
-    # Distinct activity labels, not the three unfinished case/activity groups.
-    assert result["instances"]["activities_with_open_starts"] == 2
+    # Count distinct unfinished case/activity groups, matching the established API metric.
+    assert result["instances"]["activities_with_open_starts"] == 3
     assert _by(result)["Review"]["open_starts"] == 2
     assert _by(result)["Review"]["cases"] == 2
 
