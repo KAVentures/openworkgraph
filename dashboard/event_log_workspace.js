@@ -343,6 +343,16 @@
       try{
         const url=isParquet(chosen.name)?'/v1/event-logs/parquet-to-csv':isJsonLines(chosen.name)?'/v1/event-logs/jsonl-to-csv':database?'/v1/event-logs/sqlite-to-csv'+(sheet?'?table='+encodeURIComponent(sheet):''):'/v1/event-logs/xlsx-to-csv'+(sheet?'?sheet='+encodeURIComponent(sheet):'');
         const r=await (await api(url,{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream'}})).json();
+        if(r.ocel){
+          // An OCEL 2.0 SQLite database keeps its objects and qualified links: import it as OCEL, not as one table.
+          status('Reading the OCEL 2.0 database '+chosen.name+'…');
+          const o=await (await api('/v1/event-logs/ocel-sqlite-to-json',{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream'}})).json();
+          sheetField.hidden=true;workbook=null;
+          const transfer=new DataTransfer();transfer.items.add(new File([o.document],chosen.name.replace(/\.(sqlite3?|db)$/i,'')+'.jsonocel',{type:'application/json'}));
+          file.files=transfer.files;format.value='ocel';readingColumns=false;await readColumns();
+          status('Read an OCEL 2.0 database: '+Number(o.events).toLocaleString()+' events and '+Number(o.objects).toLocaleString()+' objects.'+(o.times_without_offset_read_as_utc?' '+Number(o.times_without_offset_read_as_utc).toLocaleString()+' times without an offset are read as UTC.':'')+(o.events_without_time?' '+Number(o.events_without_time).toLocaleString()+' events without a time are left out.':''));
+          return;
+        }
         setOptions(sheetSelect,r.sheets.map(n=>[n,n]));sheetSelect.value=r.sheet;sheetField.hidden=r.sheets.length<2;
         const transfer=new DataTransfer();transfer.items.add(new File([r.csv],chosen.name.replace(/\.(xlsx|sqlite3?|db|jsonl|ndjson|parquet)$/i,'')+(database?'-'+r.sheet:'')+'.csv',{type:'text/csv'}));
         file.files=transfer.files;format.value='csv';delimiter.value=',';
