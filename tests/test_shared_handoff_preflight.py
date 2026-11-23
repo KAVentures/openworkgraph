@@ -84,7 +84,7 @@ def test_review_navigation_revalidates_fresh_authorized_revision_and_fails_close
     assert 'current.process.content_sha256!==inspected.content_sha256' in block
     assert 'current.permissions?.review!==true' in block
     assert 'ticket!==handoffGeneration||identityTicket!==identityGeneration||\n               credential!==authorizedCredential||selected!==chosen||!$("handoffConsent").checked' in block
-    assert 'resetHandoff("REFUSED: Process changed or access/review was withdrawn.' in block
+    assert 'invalidateDeniedReviewSelection("Review navigation rejected: process revision or review permission changed.' in block
     assert 'invalidateDeniedReviewSelection("Review navigation revalidation failed.' in block
     navigation = block.split('$("handoffReview").addEventListener("click",', 1)[1].split('$("handoffPacket").addEventListener', 1)[0]
     assert navigation.index('const current=await call(') < navigation.index('$("revisionReview").scrollIntoView')
