@@ -23,13 +23,16 @@ from __future__ import annotations
 
 import csv
 import io
+import json
+import re
 import os
 import shutil
 import sqlite3
 import tempfile
 import time
 from pathlib import Path
-from typing import IO, Any
+from contextlib import contextmanager
+from typing import IO, Any, Iterator
 
 FORMAT = "openworkgraph.event-log-sqlite-conversion.v1"
 MAX_ROWS = 2_000_000
@@ -80,6 +83,7 @@ def to_csv(source: IO[bytes], table: str | None = None, *, folder: Path) -> dict
                 conn.execute("PRAGMA trusted_schema = OFF")
                 conn.execute("PRAGMA query_only = ON")
                 tables = _tables(conn)
+                ocel = is_ocel(conn)
             except sqlite3.Error:
                 raise SqliteError("the SQLite database could not be read") from None
             if not tables:
@@ -127,7 +131,139 @@ def to_csv(source: IO[bytes], table: str | None = None, *, folder: Path) -> dict
         raise SqliteError("the table has no rows")
     return {"format": FORMAT, "sheets": tables, "sheet": chosen, "kind": "table", "rows": rows,
             "columns": len(columns), "csv": out.getvalue(), "binary_cells_left_empty": blobs[0],
-            "dates_have_no_offset": True, "stored": False}
+            "dates_have_no_offset": True, "stored": False,
+            **({"ocel": True} if ocel else {})}
 
 
-__all__ = ["to_csv", "SqliteError", "FORMAT"]
+
+@contextmanager
+def _opened(source: IO[bytes], folder: Path) -> Iterator[sqlite3.Connection]:
+    """Open a temporary, immutable, read-only SQLite file with untrusted schema disabled."""
+    with tempfile.TemporaryDirectory(prefix="owg-ocel-sqlite-", dir=str(folder)) as tmp:
+        path = Path(tmp) / "upload.sqlite"
+        with open(path, "wb") as out:
+            shutil.copyfileobj(source, out)
+        with open(path, "rb") as check:
+            if check.read(len(_HEADER)) != _HEADER:
+                raise SqliteError("the file is not a SQLite database")
+        try:
+            conn = sqlite3.connect(f"{path.as_uri()}?mode=ro&immutable=1", uri=True)
+        except sqlite3.Error:
+            raise SqliteError("the SQLite database could not be opened") from None
+        try:
+            deadline = time.monotonic() + MAX_SECONDS
+            conn.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 10_000)
+            try:
+                conn.execute("PRAGMA trusted_schema = OFF")
+                conn.execute("PRAGMA query_only = ON")
+            except sqlite3.Error:
+                raise SqliteError("the SQLite database could not be read") from None
+            yield conn
+        finally:
+            conn.close()
+
+
+OCEL_FORMAT = "openworkgraph.event-log-ocel-sqlite-conversion.v1"
+_OCEL_TABLES = {"event", "object", "event_object", "object_object", "event_map_type", "object_map_type"}
+MAX_OCEL_ROWS = 5_000_000
+_OFFSET = re.compile(r"(Z|[+-]\d{2}:?\d{2})$")
+
+
+def is_ocel(conn: sqlite3.Connection) -> bool:
+    """The database uses the OCEL 2.0 SQLite schema (its standard tables are all present)."""
+    names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    return _OCEL_TABLES <= names
+
+
+def _time(value: Any, naive: list[int]) -> str:
+    text = str(value).strip().replace(" ", "T", 1)
+    if _OFFSET.search(text):
+        return text
+    naive[0] += 1
+    return text + "Z"
+
+
+def _rows(conn: sqlite3.Connection, sql: str, budget: list[int]):
+    for row in conn.execute(sql):
+        budget[0] += 1
+        if budget[0] > MAX_OCEL_ROWS:
+            raise SqliteError(f"the OCEL database has more than {MAX_OCEL_ROWS:,} rows")
+        yield row
+
+
+def to_ocel_json(source: IO[bytes], *, folder: Path) -> dict[str, Any]:
+    """Read an OCEL 2.0 SQLite database as an OCEL 2.0 JSON document for the ordinary OCEL import.
+
+    Times without an offset (as some tools write them) are read as UTC and counted."""
+    naive, budget = [0], [0]
+    with _opened(source, folder) as conn:
+        try:
+            if not is_ocel(conn):
+                raise SqliteError("the database is not in the OCEL 2.0 SQLite format")
+            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            q = lambda n: '"' + n.replace('"', '""') + '"'
+            events: dict[str, dict[str, Any]] = {}
+            for ocel_id, ocel_type in _rows(conn, "SELECT ocel_id, ocel_type FROM event", budget):
+                events[str(ocel_id)] = {"id": str(ocel_id), "type": str(ocel_type), "time": None, "attributes": [],
+                                        "relationships": []}
+            for ocel_type, suffix in conn.execute("SELECT ocel_type, ocel_type_map FROM event_map_type").fetchall():
+                table = f"event_{suffix}"
+                if table not in tables:
+                    continue
+                cursor = conn.execute(f"SELECT * FROM {q(table)}")
+                names = [d[0] for d in cursor.description]
+                for row in cursor:
+                    budget[0] += 1
+                    record = dict(zip(names, row))
+                    event = events.get(str(record.get("ocel_id")))
+                    if event is None:
+                        continue
+                    if record.get("ocel_time") is not None:
+                        event["time"] = _time(record["ocel_time"], naive)
+                    event["attributes"] = [{"name": n, "value": str(v)} for n, v in record.items()
+                                           if n not in ("ocel_id", "ocel_time") and v is not None]
+            objects: dict[str, dict[str, Any]] = {}
+            for ocel_id, ocel_type in _rows(conn, "SELECT ocel_id, ocel_type FROM object", budget):
+                objects[str(ocel_id)] = {"id": str(ocel_id), "type": str(ocel_type), "attributes": [], "relationships": []}
+            for ocel_type, suffix in conn.execute("SELECT ocel_type, ocel_type_map FROM object_map_type").fetchall():
+                table = f"object_{suffix}"
+                if table not in tables:
+                    continue
+                cursor = conn.execute(f"SELECT * FROM {q(table)}")
+                names = [d[0] for d in cursor.description]
+                for row in cursor:
+                    budget[0] += 1
+                    record = dict(zip(names, row))
+                    obj = objects.get(str(record.get("ocel_id")))
+                    if obj is None:
+                        continue
+                    at = _time(record.get("ocel_time") or "1970-01-01T00:00:00Z", naive)
+                    changed = record.get("ocel_changed_field")
+                    for n, v in record.items():
+                        if n in ("ocel_id", "ocel_time", "ocel_changed_field") or v is None or (changed and n != changed):
+                            continue
+                        obj["attributes"].append({"name": n, "time": at, "value": str(v)})
+            for event_id, object_id, qualifier in _rows(conn, "SELECT ocel_event_id, ocel_object_id, ocel_qualifier FROM event_object", budget):
+                if str(event_id) in events:
+                    events[str(event_id)]["relationships"].append({"objectId": str(object_id), "qualifier": str(qualifier or "")})
+            for source_id, target_id, qualifier in _rows(conn, "SELECT ocel_source_id, ocel_target_id, ocel_qualifier FROM object_object", budget):
+                if str(source_id) in objects:
+                    objects[str(source_id)]["relationships"].append({"objectId": str(target_id), "qualifier": str(qualifier or "")})
+        except sqlite3.OperationalError as exc:
+            if "interrupted" in str(exc):
+                raise SqliteError(f"reading the database took longer than {MAX_SECONDS} seconds") from None
+            raise SqliteError("the OCEL database could not be read") from None
+        except sqlite3.Error:
+            raise SqliteError("the OCEL database could not be read") from None
+    timed = [e for e in events.values() if e["time"]]
+    if not timed:
+        raise SqliteError("the OCEL database has no events with a time")
+    document = {"objectTypes": [{"name": t, "attributes": []} for t in sorted({o["type"] for o in objects.values()})],
+                "eventTypes": [{"name": t, "attributes": []} for t in sorted({e["type"] for e in timed})],
+                "objects": list(objects.values()), "events": timed}
+    return {"format": OCEL_FORMAT, "events": len(timed), "objects": len(objects),
+            "events_without_time": len(events) - len(timed), "times_without_offset_read_as_utc": naive[0],
+            "document": json.dumps(document, ensure_ascii=False), "stored": False}
+
+
+__all__ = ["to_csv", "to_ocel_json", "is_ocel", "SqliteError", "FORMAT", "OCEL_FORMAT"]
