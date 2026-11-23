@@ -61,7 +61,7 @@ const path=require('node:path');
    await Promise.all([page.waitForRequest(r=>csvRoute.test(r.url())),page.locator('#owgAnonymizedDownload').click()]);
    await page.locator('#owgAnonymizedActivities').selectOption('pseudonymize');
    releaseDownload();
-   await (await discardedResponse).finished();
+   await discardedResponse;
    await page.locator('#owgAnonymizedTime').selectOption('elapsed');
    await page.locator('#owgAnonymizedCheck').click();
    await page.locator('#owgAnonymizedResults').getByText('2000-01-01T00:00:00Z',{exact:true}).waitFor();
