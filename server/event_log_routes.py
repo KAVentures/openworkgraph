@@ -542,6 +542,16 @@ async def run_event_log_feed(request: Request, feed_id: str):
     return await run_in_threadpool(_respond, folder_feeds.run, feed_id)
 
 
+@router.post("/v1/event-logs/feeds/{feed_id}/append-file")
+async def append_selected_event_log_feed_file(request: Request, feed_id: str):
+    from . import event_log_folder_feeds as folder_feeds
+    _require_dashboard(request)
+    if request.headers.get("x-owg-local-storage-confirmed") != "true":
+        raise HTTPException(403, "Explicit confirmation to store these events on this computer is required")
+    spec = await _json_body(request, "selected folder feed file", strict=True, limit=8192)
+    return await run_in_threadpool(_respond, folder_feeds.append_one, feed_id, spec)
+
+
 @router.post("/v1/event-logs/feeds/{feed_id}/delete")
 async def delete_event_log_feed(request: Request, feed_id: str):
     from . import event_log_folder_feeds as folder_feeds

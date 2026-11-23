@@ -1710,6 +1710,8 @@ The preview shows up to 40 of the oldest matching files and reads up to 32 MiB
 to compare content with the feed’s append and failure history. It shows new,
 already appended, previously failed, repeated, settling, and unchecked files.
 A run rechecks the current folder and validates the mapped event rows.
+Use **Append this file** for one new file in the preview. OWG checks the same
+filename and content before appending. If the file changes, preview it again.
 
 Many systems can only drop an export file into a folder every night or hour.
 A folder feed points a saved log at such a folder. Each run appends every new
@@ -1772,6 +1774,8 @@ hand.
 | `POST /v1/event-logs/feeds/{feed_id}/retry-failed` | Retry only previously failed, unchanged settled content; owner session and local-storage confirmation required. |
 | `GET /v1/event-logs/feeds/{feed_id}/failures?after=...` | Page up to 50 outstanding failed content hashes. |
 | `POST /v1/event-logs/feeds/{feed_id}/retry-failed/{sha256}` | Retry one outstanding hash; owner session and local-storage confirmation required. |
+| `GET /v1/event-logs/feeds/{feed_id}/preview` | Inspect matching files and return the content hash for each eligible new file. |
+| `POST /v1/event-logs/feeds/{feed_id}/append-file` | Append one verified file by `name` and `sha256`. Requires `X-OWG-Local-Storage-Confirmed: true`. |
 | `POST /v1/event-logs/feeds/{feed_id}/run` | Append new files now. Requires `X-OWG-Local-Storage-Confirmed: true`. |
 | `POST /v1/event-logs/feeds/{feed_id}/delete` | Delete the feed and its schedule. Appended events stay. |
 
