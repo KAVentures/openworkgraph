@@ -546,7 +546,8 @@ def test_exact_retained_journal_correlation_is_explicitly_untrusted(monkeypatch)
     assert result["provider_event_to_attempt_causality_verified"] is False
 
 
-def test_duplicate_retained_correlations_do_not_choose_attempt(monkeypatch):
+@pytest.mark.parametrize("verified", [True, False])
+def test_duplicate_retained_correlations_do_not_choose_attempt(monkeypatch, verified):
     """Two exact matches must not be silently attributed to either attempt."""
     install(monkeypatch)
     from server import local_source_credentials
@@ -555,9 +556,10 @@ def test_duplicate_retained_correlations_do_not_choose_attempt(monkeypatch):
                         lambda path: {"account": "acct_12345678"})
     monkeypatch.setattr(routes, "_source_scope", lambda: "tenant-1")
     monkeypatch.setattr(verifier, "verify_provider_attempt",
-                        lambda **kwargs: {"status": "unknown",
+                        lambda **kwargs: {"status": "verified_provider_event" if verified else "unknown",
                                           "provider_operation": "unknown",
-                                          "customer_outcome": "unknown"})
+                                          "customer_outcome": "unknown",
+                                          **({"event_id": DATA["provider_event_id"]} if verified else {})})
     async def receipts(req, resp):
         return {"run_ref": "run-1", "entries": [{
             "attempt_ref": ref,
@@ -567,7 +569,7 @@ def test_duplicate_retained_correlations_do_not_choose_attempt(monkeypatch):
         } for ref in ("attempt-1", "attempt-2")]}
     monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", receipts)
     result = asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
-    assert result["retained_journal_correlation"]["status"] == "ambiguous"
+    assert result["retained_journal_correlation"]["status"] == ("ambiguous" if verified else "provider_event_unverified")
     assert result["retained_journal_correlation"]["attempt_ref"] is None
     assert result["provider_event_attributed_to_agent_run"] is False
 
