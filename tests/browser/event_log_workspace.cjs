@@ -336,7 +336,7 @@ const path=require('node:path');
    assert.match(firstRow,/^C\d+/);assert.match(firstRow,/15\.0 h/,'longest case first');
    await page.locator('#owgConceptDriftRun').click();
    await page.locator('#owgConceptDriftStatus').filter({hasText:'among 0 window boundaries tested'}).waitFor();
-   await page.locator('#owgConceptDriftWindow').selectOption('cases');await page.locator('#owgConceptDriftCases').fill('20');
+   await page.locator('#owgConceptDriftWindow').selectOption('cases');await page.getByRole('spinbutton',{name:'Cases per window'}).fill('20');
    await page.locator('#owgConceptDriftRun').click();
    await page.locator('#owgConceptDriftStatus').filter({hasText:'0 change points among 2 window boundaries tested.'}).waitFor();
    assert.match(await page.locator('#owgConceptDriftResults').textContent(),/cases 1–20\s*20/);
