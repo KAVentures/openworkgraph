@@ -26,6 +26,8 @@ from . import event_log_signal_inbox as signal_inbox
 from . import event_log_signal_transitions as signal_transitions
 
 MAX_RULES = 50
+PACK_FORMAT = "openworkgraph.event-log-signal-pack.v1"
+MAX_PACK_BYTES = 4 * 1024 * 1024
 MAX_EVIDENCE_CASES = 50
 MAX_REMEMBERED_CASES = 10_000
 Label = Annotated[str, Field(min_length=1, max_length=200)]
@@ -166,6 +168,109 @@ def add_rule(log_id: str, spec: Any) -> dict[str, Any]:
         finally:
             conn.close()
     return _public(rule_id, created, rule, None)
+
+
+def export_pack(log_id: str) -> dict[str, Any]:
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            rows = conn.execute("SELECT definition FROM signal_rules WHERE log_id = ? ORDER BY created_at, rule_id",
+                                [log_id]).fetchall()
+            rules = [SignalRule.model_validate_json(row[0]) for row in rows]
+            default = workspace._case_type(conn, log_id, None) if any(rule.case_type is None for rule in rules) else None
+        finally:
+            conn.close()
+    return {"format": PACK_FORMAT, "rules": [
+        rule.model_dump() | {"case_type": rule.case_type or default} for rule in rules
+    ]}
+
+
+def _parse_pack(document: Any) -> list[SignalRule]:
+    if (not isinstance(document, dict) or set(document) != {"format", "rules"}
+            or document["format"] != PACK_FORMAT):
+        raise workspace.EventLogWorkspaceError("expected an OpenWorkGraph signal pack")
+    rules = document["rules"]
+    if not isinstance(rules, list) or len(rules) > MAX_RULES:
+        raise workspace.EventLogWorkspaceError(f"a signal pack must contain up to {MAX_RULES} rules")
+    parsed = []
+    for index, spec in enumerate(rules, start=1):
+        try:
+            parsed.append(_validate(spec))
+        except workspace.EventLogWorkspaceError as error:
+            raise workspace.EventLogWorkspaceError(f"rule {index}: {error}") from None
+    return parsed
+
+
+def _rule_key(rule: SignalRule) -> str:
+    return json.dumps(rule.model_dump(), sort_keys=True, separators=(",", ":"))
+
+
+def _pack_plan(conn, log_id: str, rules: list[SignalRule]) -> tuple[list[SignalRule], dict[str, Any]]:
+    workspace._check_log(conn, log_id)
+    rows = conn.execute("SELECT definition FROM signal_rules WHERE log_id = ?", [log_id]).fetchall()
+    existing = [SignalRule.model_validate_json(row[0]) for row in rows]
+    default = workspace._case_type(conn, log_id, None) if any(rule.case_type is None for rule in existing + rules) else None
+    def pin(rule: SignalRule) -> SignalRule:
+        return rule if rule.case_type is not None else rule.model_copy(update={"case_type": default})
+
+    seen = {_rule_key(pin(rule)) for rule in existing}
+    validated_types = {default} if default else set()
+    additions, items = [], []
+    for index, rule in enumerate(rules, start=1):
+        rule = pin(rule)
+        if rule.case_type not in validated_types:
+            try:
+                workspace._case_type(conn, log_id, rule.case_type)
+            except workspace.EventLogWorkspaceError as error:
+                raise workspace.EventLogWorkspaceError(f"rule {index}: {error}") from None
+            validated_types.add(rule.case_type)
+        key = _rule_key(rule)
+        duplicate = key in seen
+        if not duplicate:
+            additions.append(rule)
+            seen.add(key)
+        items.append({"name": rule.name, "kind": rule.when.kind, "case_type": rule.case_type,
+                      "status": "duplicate" if duplicate else "new"})
+    slots = MAX_RULES - len(rows)
+    return additions, {"rules": items, "new_rules": len(additions), "duplicates": len(rules) - len(additions),
+                       "available_slots": slots, "fits": len(additions) <= slots}
+
+
+def preview_pack(log_id: str, document: Any) -> dict[str, Any]:
+    rules = _parse_pack(document)
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            _, plan = _pack_plan(conn, log_id, rules)
+            return plan
+        finally:
+            conn.close()
+
+
+def import_pack(log_id: str, document: Any) -> dict[str, Any]:
+    rules = _parse_pack(document)
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            conn.execute("BEGIN")
+            try:
+                additions, plan = _pack_plan(conn, log_id, rules)
+                if not plan["fits"]:
+                    raise workspace.EventLogWorkspaceError(f"this log has room for {plan['available_slots']} more signal rules")
+                now = datetime.now(timezone.utc).replace(tzinfo=None)
+                if additions:
+                    conn.executemany("INSERT INTO signal_rules VALUES (?, ?, ?, ?, NULL, NULL)", [
+                        (log_id, "sig_" + secrets.token_hex(8), now + timedelta(microseconds=index), rule.model_dump_json())
+                        for index, rule in enumerate(additions)
+                    ])
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+        finally:
+            conn.close()
+    return {"added": len(additions), "duplicates": plan["duplicates"]}
 
 
 def delete_rule(log_id: str, rule_id: str) -> dict[str, Any]:
@@ -463,4 +568,4 @@ def scorecard(log_id: str, months: int = 6) -> dict[str, Any]:
     }
 
 
-__all__ = ["add_rule", "delete_rule", "evaluate", "list_rules", "preview_rule", "scorecard"]
+__all__ = ["add_rule", "delete_rule", "evaluate", "export_pack", "import_pack", "list_rules", "preview_pack", "preview_rule", "scorecard"]
