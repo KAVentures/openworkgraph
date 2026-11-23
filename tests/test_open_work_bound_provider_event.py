@@ -601,3 +601,30 @@ def test_unverified_provider_event_never_correlates_operator_supplied_attempt(mo
     assert result["provider_event_independently_rechecked_on_this_read"] is False
     assert result["provider_event_attributed_to_agent_run"] is False
     assert result["receipt_persisted"] is False
+
+def test_conflicting_retained_event_id_never_correlates_attempt(monkeypatch):
+    """A journal row naming a different event cannot be an exact event match."""
+    install(monkeypatch)
+    from server import local_source_credentials
+    from server import open_work_provider_attempt_verification as verifier
+    monkeypatch.setattr(local_source_credentials, "_read_metadata",
+                        lambda path: {"account": "acct_12345678"})
+    monkeypatch.setattr(routes, "_source_scope", lambda: "tenant-1")
+    monkeypatch.setattr(verifier, "verify_provider_attempt",
+                        lambda **kwargs: {"status": "verified_provider_event",
+                                          "provider_operation": "unknown",
+                                          "customer_outcome": "unknown",
+                                          "event_id": DATA["provider_event_id"]})
+    async def receipts(req, resp):
+        return {"run_ref": "run-1", "entries": [{
+            "attempt_ref": "attempt-1",
+            "provider_object_id": DATA["provider_object_id"],
+            "provider_operation": DATA["provider_operation"],
+            "provider_correlation_id": DATA["provider_correlation_id"],
+            "provider_event_id": "evt_different",
+        }]}
+    monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", receipts)
+    result = asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
+    assert result["retained_journal_correlation"]["status"] == "not_recorded"
+    assert result["retained_journal_correlation"]["attempt_ref"] is None
+    assert result["provider_event_to_attempt_causality_verified"] is False
