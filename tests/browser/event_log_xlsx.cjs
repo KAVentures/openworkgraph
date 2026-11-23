@@ -74,7 +74,7 @@ book.close()`,xlsxPath]);
 from server import event_log_xlsx
 with open(sys.argv[1],'rb') as f:
   result=event_log_xlsx.to_csv(f)
-print(result['rows'], result['columns'])`,await download.path()]).toString().trim();
+print(result['rows'], len(result['columns']))`,await download.path()]).toString().trim();
    assert.equal(exported,'18 4');
    // A file that is not a workbook is refused with a clear message, and nothing is selected.
    await page.locator('#owgEventLogFile').setInputFiles({name:'broken.xlsx',mimeType:'application/octet-stream',buffer:Buffer.from('not a zip')});
