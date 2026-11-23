@@ -37,13 +37,31 @@ const path=require('node:path');
    await page.locator('#owgEventLogNaiveOffset').fill('+01:00');
    await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Imported 8 events'}).waitFor();
-   // February's export has the same columns: the January mapping is offered, not applied.
+   const alternative=await page.evaluate(async csv=>{
+     const params=new URLSearchParams({format:'csv',name:'Alternative',case_column:'Ref',activity_column:'Stage',
+       timestamp_column:'Logged',resource_column:'Clerk',delimiter:';',timestamp_format:'%d/%m/%Y %H:%M',
+       naive_timestamp_offset:'+02:00'});
+     const response=await fetch('/v1/event-logs/import?'+params,{
+       method:'POST',headers:{'X-OWG-Local-Storage-Confirmed':'true'},body:csv});
+     if(!response.ok)throw Error(await response.text());
+     return (await response.json()).log_id;
+   },january.join('\n'));
+   // The earlier mapping is preferred for append, even when another saved mapping is newer.
+
    const february=[header];for(let i=0;i<3;i++)['Open','Close'].forEach((a,k)=>february.push(`EU;0${1+i}/02/2024 0${8+k}:00;${a};F${i};bo`));
+   await page.locator('#owgEventLogDelimiter').selectOption(',');
    await page.locator('#owgEventLogFile').setInputFiles({name:'february.csv',mimeType:'text/csv',buffer:Buffer.from(february.join('\n'))});
-   await page.locator('#owgEventLogDelimiter').selectOption(';');
    await page.locator('#owgEventLogReuseMapping').waitFor();
    assert.equal(await page.locator('#owgEventLogReuseMapping').innerText(),'Use the mapping from “january”');
-   assert.equal(await page.locator('#owgEventLogCase').inputValue(),'Region','not applied until chosen');
+   assert.equal(await page.locator('#owgEventLogDelimiter').inputValue(),',','delimiter changes only after applying');
+   const choice=page.getByLabel('Compatible column mapping',{exact:true});
+   assert.equal(await choice.locator('option').count(),2);
+   const januaryId=await choice.inputValue();
+   await choice.selectOption(alternative);
+   await page.locator('#owgEventLogReuseMapping').click();
+   assert.equal(await page.locator('#owgEventLogDelimiter').inputValue(),';');
+   assert.equal(await page.locator('#owgEventLogNaiveOffset').inputValue(),'+02:00');
+   await choice.selectOption(januaryId);
    await page.locator('#owgEventLogReuseMapping').click();
    await page.locator('#owgEventLogReuse').filter({hasText:'Mapping from “january” applied.'}).waitFor();
    for(const [id,value] of [['Case','Ref'],['Activity','Stage'],['Time','Logged'],['Resource','Clerk'],['TimeFormat','%d/%m/%Y %H:%M'],['NaiveOffset','+01:00']])
@@ -59,6 +77,21 @@ const path=require('node:path');
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run({include:[['#owgEventLogReuse']]},{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
+   const mappingPattern='**/v1/event-logs/mapping-matches';
+   let release;
+   const gate=new Promise(resolve=>{release=resolve;});
+   await page.route(mappingPattern,async route=>{
+     await gate;
+     await route.continue();
+   },{times:1});
+   const pending=page.waitForRequest(request=>request.url().endsWith('/mapping-matches'));
+   await page.locator('#owgEventLogFile').setInputFiles({name:'march.csv',mimeType:'text/csv',buffer:Buffer.from(february.join('\n'))});
+   await pending;
+   await page.locator('#owgEventLogFormat').selectOption('xes');
+   const late=page.waitForResponse(response=>response.url().endsWith('/mapping-matches'));
+   release();await (await late).finished();
+   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+   assert.equal(await page.locator('#owgEventLogReuseMapping').count(),0);
    assert.deepEqual(errors,[]);
    console.log('Event-log mapping reuse browser acceptance passed: the earlier mapping (columns, attributes, format, offset) offered for a matching export, applied on request and appended.');
  }finally{if(browser)await browser.close();server.kill();}

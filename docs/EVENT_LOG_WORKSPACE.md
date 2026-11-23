@@ -109,18 +109,18 @@ needs a format.
 ### Reusing an earlier mapping
 
 When a CSV file's header has every column an earlier import mapped (case,
-activity, timestamp and, if one was mapped, resource), with the same
-delimiter, the dashboard offers "Use the mapping from <log>". Choosing it
-fills in those columns, the extra attribute columns this file also has, the
-timestamp format and the offset decision. It never applies the mapping on its
-own, and it asks for consent again. When a log is selected and its own mapping
-fits, that one is offered. Only the newest mapping of each log counts.
-Columns are matched by name only, so check they still mean the same thing.
-Source event identity settings are not reused.
+activity, timestamp and, if one was mapped, resource), the dashboard offers
+up to five compatible mappings across comma, semicolon, tab and pipe
+delimiters. The selected log’s compatible mapping appears first, followed by
+the newest other matches. Applying one fills in the delimiter, columns,
+available extra attributes, timestamp format and offset. Review the mapping
+and confirm storage again. Only the newest mapping of each log counts.
+Columns are matched by name, and source event identity settings stay separate.
 
-`POST /v1/event-logs/mapping-matches` with `{"columns": [...], "delimiter": ";"}`
-returns up to five matching mappings, newest first, each with its
-`missing_attribute_columns`. Nothing is stored.
+`POST /v1/event-logs/mapping-matches` accepts `columns` and `delimiter` for one
+header, optional `other_headers` with columns for up to three other delimiters,
+and optional `preferred_log_id`. Each match includes its
+`missing_attribute_columns`.
 
 ### SQLite database files
 

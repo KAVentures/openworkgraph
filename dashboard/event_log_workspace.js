@@ -277,8 +277,25 @@
       if(timeFormat.value)q.set('timestamp_format',timeFormat.value);
       if(useIdentity.checked)for(const [key,value] of Object.entries({event_id_column:eventId.value,source_namespace:sourceNamespace.value,source_namespace_column:sourceColumn.value,case_namespace:caseNamespace.value,case_namespace_column:caseColumn.value,attributes_json_column:jsonColumn.value}))if(value)q.set(key,value);
     }
+    function setMappingColumns(columns){
+      const options=columns.map(c=>[c,c]);
+      setOptions(cols.case,options);setOptions(cols.activity,options);setOptions(cols.time,options);setOptions(cols.resource,[['','(none)'],...options]);
+      cols.case.value=guess(columns,['case','order','ticket','id'])||columns[0]||'';
+      cols.activity.value=guess(columns,['activity','event','step','action'])||columns[1]||'';
+      cols.time.value=guess(columns,['time','date','ts'])||columns[2]||'';
+      cols.resource.value=guess(columns,['resource','user','who','agent','owner']);
+      setOptions(extras,options);[...extras.options].forEach(o=>{o.selected=/lifecycle/i.test(o.value);});
+      setOptions(eventId,[['','Choose a column'],...options]);
+      for(const control of [sourceColumn,caseColumn,jsonColumn])setOptions(control,[['','(none)'],...options]);
+      eventId.value=columns.includes('source_event_id')?'source_event_id':'';
+      sourceColumn.value=columns.includes('source_namespace')?'source_namespace':'';
+      caseColumn.value=columns.includes('case_namespace')?'case_namespace':'';
+      jsonColumn.value=columns.includes('attributes')?'attributes':'';
+      columnsReady=!!(cols.case.value&&cols.activity.value&&cols.time.value);
+    }
     async function readColumns(){
       const sequence=++columnReadSequence;
+      formatSequence++;
       const staleOffer=document.getElementById('owgEventLogReuse');if(staleOffer){staleOffer.hidden=true;staleOffer.replaceChildren();}
       const chosen=file.files&&file.files[0];
       columnsReady=false;
@@ -290,27 +307,19 @@
         status(chosen?'File mapping ready. Review the selected columns before storing.':'');
         refreshImport();return;
       }
-      const sep=delimiter.value==='t'?'\t':delimiter.value;
+      const selectedDelimiter=delimiter.value;
+      const sep=selectedDelimiter==='t'?'\t':selectedDelimiter;
       readingColumns=true;status('Reading file columns…');refreshImport();
       try{
-        const columns=csvHeader(await headText(chosen,65536),sep);
+        const text=await headText(chosen,65536);
+        const columns=csvHeader(text,sep);
         if(sequence!==columnReadSequence||file.files?.[0]!==chosen||format.value!=='csv'||(delimiter.value==='t'?'\t':delimiter.value)!==sep)return;
-        const options=columns.map(c=>[c,c]);
-        setOptions(cols.case,options);setOptions(cols.activity,options);setOptions(cols.time,options);setOptions(cols.resource,[['','(none)'],...options]);
-        cols.case.value=guess(columns,['case','order','ticket','id'])||columns[0]||'';
-        cols.activity.value=guess(columns,['activity','event','step','action'])||columns[1]||'';
-        cols.time.value=guess(columns,['time','date','ts'])||columns[2]||'';
-        cols.resource.value=guess(columns,['resource','user','who','agent','owner']);
-        setOptions(extras,options);[...extras.options].forEach(o=>{o.selected=/lifecycle/i.test(o.value);});
-        setOptions(eventId,[['','Choose a column'],...options]);
-        for(const control of [sourceColumn,caseColumn,jsonColumn])setOptions(control,[['','(none)'],...options]);
-        eventId.value=columns.includes('source_event_id')?'source_event_id':'';
-        sourceColumn.value=columns.includes('source_namespace')?'source_namespace':'';
-        caseColumn.value=columns.includes('case_namespace')?'case_namespace':'';
-        jsonColumn.value=columns.includes('attributes')?'attributes':'';
-        columnsReady=!!(cols.case.value&&cols.activity.value&&cols.time.value);
+        setMappingColumns(columns);
         status(columnsReady?'File mapping ready. Review the selected columns before storing.':'Choose a CSV with case, activity and time columns.');
-        if(columnsReady)detectTimeFormat().then(()=>findReusableMapping(columns));
+        if(columnsReady)void detectTimeFormat();
+        const headers=[selectedDelimiter,...[',',';','t','|'].filter(candidate=>candidate!==selectedDelimiter)]
+          .map(candidate=>({delimiter:candidate,columns:csvHeader(text,candidate==='t'?'\t':candidate)}));
+        void findReusableMapping(headers,()=>sequence===columnReadSequence&&file.files?.[0]===chosen&&format.value==='csv');
       }catch(_){
         if(sequence===columnReadSequence)status('Could not read the column names.');
       }finally{
@@ -348,13 +357,13 @@
     // Suggest a timestamp format from the first rows of the chosen time column (sent to this computer only).
     let formatSequence=0;
     async function detectTimeFormat(){
-      const sequence=++formatSequence,chosen=file.files&&file.files[0],column=cols.time.value;
+      const sequence=++formatSequence,chosen=file.files&&file.files[0],column=cols.time.value,selectedDelimiter=delimiter.value;
       setOptions(timeFormat,[['','ISO 8601 (2024-03-04T14:05:00Z)']]);timeFormat.value='';
       if(!chosen||format.value!=='csv'||!column)return;
       try{
-        const q=new URLSearchParams({column,delimiter:delimiter.value});
+        const q=new URLSearchParams({column,delimiter:selectedDelimiter});
         const r=await (await api('/v1/event-logs/timestamp-formats?'+q,{method:'POST',body:await headText(chosen,256*1024),headers:{'Content-Type':'text/plain'}})).json();
-        if(sequence!==formatSequence)return;
+        if(sequence!==formatSequence||file.files?.[0]!==chosen||format.value!=='csv'||delimiter.value!==selectedDelimiter||cols.time.value!==column)return;
         setOptions(timeFormat,[['','ISO 8601 (2024-03-04T14:05:00Z)'],...r.candidates.map(c=>[c.pattern,c.pattern+' \u2014 '+c.order+': '+c.first_value+' reads as '+c.first_value_reads_as])]);
         if(r.suggested){
           timeFormat.value=r.suggested;
@@ -368,8 +377,12 @@
     cols.time.addEventListener('change',detectTimeFormat);
     // Offer the mapping recorded with an earlier import whose columns this file also has.
     const reuseRow=el('div',null,'row');reuseRow.id='owgEventLogReuse';reuseRow.hidden=true;mapping.appendChild(reuseRow);
-    let reuseSequence=0;
-    function applyMapping(m){
+    function applyMapping(m,header){
+      formatSequence++;
+      if(delimiter.value!==header.delimiter){
+        delimiter.value=header.delimiter;
+        setMappingColumns(header.columns);
+      }
       cols.case.value=m.case_column;cols.activity.value=m.activity_column;cols.time.value=m.timestamp_column;cols.resource.value=m.resource_column||'';
       [...extras.options].forEach(o=>{o.selected=(m.attribute_columns||[]).includes(o.value);});
       naiveOffset.value=m.naive_timestamp_offset||'';
@@ -377,16 +390,38 @@
       timeFormat.value=m.timestamp_format||'';
       columnsReady=true;consent.checked=false;refreshImport();
     }
-    async function findReusableMapping(columns){
-      const sequence=++reuseSequence;reuseRow.hidden=true;reuseRow.replaceChildren();
+    async function findReusableMapping(headers,current){
+      const [selected,...alternates]=headers;
+      const other_headers=alternates.filter(header=>header.columns.length>=3);
       try{
-        const r=await (await api('/v1/event-logs/mapping-matches',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({columns,delimiter:delimiter.value})})).json();
-        if(sequence!==reuseSequence||!r.matches.length)return;
-        // Appending to the selected log: its own mapping first.
-        const match=r.matches.find(x=>x.log_id===state.logId)||r.matches[0];
-        const use=button('Use the mapping from \u201c'+match.name+'\u201d');use.onclick=()=>{applyMapping(match.mapping);reuseRow.replaceChildren(el('span','Mapping from \u201c'+match.name+'\u201d applied. '+r.note+(match.missing_attribute_columns.length?' Not in this file: '+match.missing_attribute_columns.join(', ')+'.':''),'muted'));status('Mapping applied. Review the selected columns before storing.');};
-        use.id='owgEventLogReuseMapping';
-        reuseRow.append(use,el('span',' This file has the columns mapped when \u201c'+match.name+'\u201d was imported.','muted'));reuseRow.hidden=false;
+        const body={...selected,other_headers,...(state.logId?{preferred_log_id:state.logId}:{})};
+        const r=await (await api('/v1/event-logs/mapping-matches',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+        if(!current()||!r.matches.length)return;
+        const headerFor=match=>{
+          const saved=match.mapping.delimiter||',';
+          return headers.find(header=>header.delimiter===(saved==='\t'?'t':saved));
+        };
+        const delimiterLabel=match=>[...delimiter.options].find(option=>option.value===headerFor(match).delimiter).text;
+        const caption=match=>match.name+' · '+delimiterLabel(match);
+        const choice=select('owgEventLogReuseChoice',r.matches.map(m=>[m.log_id,caption(m)]));
+        const use=button('');use.id='owgEventLogReuseMapping';
+        const note=el('span',null,'muted');
+        const selectedMatch=()=>r.matches.find(m=>m.log_id===choice.value);
+        const describe=()=>{
+          const match=selectedMatch();use.textContent='Use the mapping from “'+match.name+'”';
+          note.textContent='Delimiter: '+delimiterLabel(match)+'. '+r.note+
+            (match.missing_attribute_columns.length?' Missing from this file: '+match.missing_attribute_columns.join(', ')+'.':'');
+        };
+        use.onclick=()=>{
+          if(!current())return;
+          const match=selectedMatch();
+          applyMapping(match.mapping,headerFor(match));
+          describe();note.textContent='Mapping from “'+match.name+'” applied. '+note.textContent;
+          status('Mapping applied. Review the selected columns before storing.');
+        };
+        choice.onchange=describe;describe();
+        reuseRow.replaceChildren(...(r.matches.length>1?[field('Compatible column mapping',choice)]:[]),use,note);
+        reuseRow.hidden=false;
       }catch(_){/* a convenience only */}
     }
     timeFormat.onchange=()=>{const fmt=timeFormat.value;if(fmt&&!fmt.includes('%z')&&!naiveOffset.value.trim())naiveOffset.value=localOffset();};
