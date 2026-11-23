@@ -2283,10 +2283,18 @@ async def event_log_next_activity(request: Request, log_id: str):
     _require_dashboard(request)
     spec, case_id = await _live_prediction_settings(request, "next-activity settings", strict=True, limit=32768)
     try:
-        result = await run_in_threadpool(next_activity.next_activity, log_id, spec, case_id=case_id)
+        result = await run_in_threadpool(next_activity.next_activity, log_id, spec, case_id=case_id, include_evidence=True)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/next-activity/training-evidence")
+async def event_log_next_activity_training_evidence(request: Request, log_id: str):
+    from . import event_log_next_activity as next_activity
+    _require_dashboard(request)
+    spec = await _json_body(request, "next-activity training evidence", strict=True, limit=32768)
+    return await run_in_threadpool(_respond, next_activity.training_evidence, log_id, spec)
 
 
 @router.get("/v1/event-logs/{log_id}/prediction-snapshots")

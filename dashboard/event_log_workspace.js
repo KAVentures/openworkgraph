@@ -9442,38 +9442,76 @@
     box.appendChild(el('div','Estimate what usually comes next in each open case, from completed cases that had the same recent activities. Check the backtest before relying on it.','muted'));
     const ends=input('owgNextEnds','text','for example Pay, Close');ends.maxLength=2000;
     const listId='owgNextEndsList';const list=document.createElement('datalist');list.id=listId;activityNames.slice(0,500).forEach(a=>{const o=document.createElement('option');o.value=a;list.appendChild(o);});ends.setAttribute('list',listId);
-    const history=select('owgNextHistory',[['1','1 activity'],['2','2 activities'],['3','3 activities']]);history.value='2';
+    const history=select('owgNextHistory',[['1','1 activity'],['2','2 activities'],['3','3 activities'],['4','4 activities']]);history.value='2';
     const exact=input('owgNextCaseKey','text');exact.maxLength=200;
     const run=button('Predict next activities','secondary');run.id='owgNextRun';
     const out=el('div');out.id='owgNextResults';out.setAttribute('role','status');
+    const evidence=el('div');evidence.id='owgNextTrainingEvidence';
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities that end a case (comma-separated)',ends),field('Recent history to match',history),field('Exact case key (optional)',exact),run);
-    box.append(row,list,out);
+    box.append(row,list,out,evidence);
     const generation=state.generation;
+    const base='/v1/event-logs/'+encodeURIComponent(state.logId)+'/next-activity';
+    const post=async(path,spec)=>(await api(base+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
     const name=n=>n.case_ends?'(case ends)':n.activity;
+    const historyText=list=>list.length?list.map(value=>JSON.stringify(value)).join(' → '):'All completed-case steps';
+    let turn=0,selection=0;
+    const current=t=>generation===state.generation&&box.isConnected&&t===turn;
+    for(const control of [ends,history,exact])control.addEventListener('input',()=>{
+      ++turn;run.disabled=false;out.replaceChildren();evidence.replaceChildren();
+    });
+    function inspect(t,settings,snapshot,prediction){
+      const selected=++selection,active=()=>current(t)&&selected===selection;
+      const title=el('h4','Training observations for '+prediction.case_id);title.tabIndex=-1;
+      const status=el('div');status.setAttribute('role','status');
+      const rows=el('div'),nav=el('div',null,'row'),previous=button('Previous page','secondary'),next=button('Next page','secondary');
+      nav.append(previous,next);evidence.replaceChildren(title,el('p',historyText(prediction.matched_history),'muted'),status,rows,nav);title.focus();
+      const cursors=[null];let page=0,more=null;
+      async function load(index){
+        status.textContent='Loading completed-case steps…';rows.replaceChildren();previous.disabled=next.disabled=true;
+        try{
+          const result=await post('/training-evidence',{settings,case_id:prediction.case_id,expected_snapshot:snapshot,after:cursors[index]});
+          if(!active())return;
+          page=index;more=result.next_after;
+          status.textContent=Number(result.support).toLocaleString()+' matching completed-case steps. Showing '+result.occurrences.length+'.';
+          rows.replaceChildren(table(['Completed case','Step','Activity','Recorded next step','Evidence'],result.occurrences.map(item=>[
+            item.case_id,item.step,item.activity,item.case_ends?'Case ended':item.next_activity,predictionCaseButton(inspection,item.case_id)
+          ])));
+          previous.disabled=page===0;next.disabled=more===null;
+        }catch(error){if(active())status.textContent=error.message;}
+      }
+      previous.onclick=()=>load(page-1);next.onclick=()=>{cursors[page+1]=more;load(page+1);};
+      load(0);
+    }
     run.onclick=async()=>{
-      run.disabled=true;
+      const t=++turn;
+      run.disabled=true;out.replaceChildren(el('div','Estimating next activities…','muted'));evidence.replaceChildren();
       try{
         const endList=ends.value.split(',').map(x=>x.trim()).filter(Boolean);
         if(!endList.length)throw new Error('List the activities that end a case.');
         const spec={end_activities:endList,history:Number(history.value),limit:50};
-        if(exact.value)spec.case_id=exact.value;
         if(state.caseType)spec.case_type=state.caseType;
         if(filterOn())spec.cohort=globalCohort();
-        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/next-activity',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
-        if(generation!==state.generation)return;
+        const caseId=exact.value;
+        const r=await post('',{...spec,...(caseId?{case_id:caseId}:{})});
+        if(!current(t))return;
         const b=r.backtest;
         const quality=b.available?'Backtest on '+Number(b.test_cases).toLocaleString()+' cases that ended after '+String(b.cutoff_case_ended_at).slice(0,10)+': the first guess was right '+pct(b.top1_accuracy)+' of the time and one of the top three '+pct(b.top3_accuracy)+', against '+pct(b.baseline_current_activity_only)+' when looking at the current activity only and '+pct(b.baseline_most_frequent_next)+' when always guessing the most common step.':'No backtest: '+b.reason+'.';
-        const rows=r.predictions.map(p=>[p.case_id,p.last_activity,p.next.map(n=>name(n)+' '+pct(n.probability)).join(', '),p.history_used?'last '+p.history_used+' '+(p.history_used===1?'activity':'activities'):'all completed cases',Number(p.support).toLocaleString(),predictionCaseButton(inspection,p.case_id)]);
+        const rows=r.predictions.map(p=>{
+          const actions=el('div',null,'row');actions.append(predictionCaseButton(inspection,p.case_id));
+          const training=button('Inspect training observations','secondary');training.setAttribute('aria-label','Inspect training observations for '+p.case_id);
+          training.onclick=()=>inspect(t,spec,r.evidence_snapshot,p);actions.append(training);
+          return [p.case_id,p.last_activity,p.next.map(n=>name(n)+' '+pct(n.probability)).join(', '),historyText(p.matched_history),Number(p.support).toLocaleString(),actions];
+        });
         const expected=r.expected_next_across_open_cases.map(e=>[name(e),e.expected_cases.toLocaleString()]);
-        const heading=spec.case_id?'Selected case':rows.length<r.open_cases?'Most recently active open cases (showing '+rows.length+' of '+Number(r.open_cases).toLocaleString()+')':'Most recently active open cases';
+        const heading=caseId?'Selected case':rows.length<r.open_cases?'Most recently active open cases (showing '+rows.length+' of '+Number(r.open_cases).toLocaleString()+')':'Most recently active open cases';
         out.replaceChildren(
           el('div',Number(r.open_cases).toLocaleString()+' open and '+Number(r.completed_cases).toLocaleString()+' completed cases. '+quality),
           el('h4','Expected next steps across open cases'),table(['Next step','Expected cases'],expected),
           el('h4',heading),
           rows.length?table(['Case','Last activity','Likely next','Matched on','Completed-case steps behind it','Evidence'],rows):el('div',predictionCaseStatus(r)||'No open cases.','muted'),
           el('div',r.interpretation,'muted'));
-      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
-      finally{run.disabled=false;}
+      }catch(error){if(current(t))out.replaceChildren(el('div',error.message,'muted'));}
+      finally{if(current(t))run.disabled=false;}
     };
     return box;
   }

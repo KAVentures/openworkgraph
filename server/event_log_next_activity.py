@@ -18,7 +18,9 @@ assessments of anyone, and resources are not used.
 """
 from __future__ import annotations
 
+import json
 from collections import Counter, defaultdict
+from hashlib import sha256
 from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, ValidationError
@@ -43,15 +45,22 @@ class NextActivitySpec(BaseModel):
     case_type: str | None = Field(default=None, min_length=1, max_length=200)
 
 
-def _parse(spec: Any) -> NextActivitySpec:
+class TrainingEvidenceSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    settings: NextActivitySpec
+    case_id: Label
+    expected_snapshot: str = Field(pattern=r"^[0-9a-f]{64}$")
+    after: tuple[Label, Annotated[StrictInt, Field(ge=1)]] | None = None
+    limit: StrictInt = Field(default=50, ge=1, le=100)
+
+
+def _parse(settings_type, spec: Any):
     try:
-        parsed = NextActivitySpec.model_validate(spec)
+        return settings_type.model_validate(spec)
     except ValidationError as exc:
         first = exc.errors()[0]
         raise workspace.EventLogWorkspaceError(
             "next-activity settings are invalid: " + ".".join(str(p) for p in first["loc"]) + " " + first["msg"]) from None
-    cohorts.parse_cohort(parsed.cohort)
-    return parsed
 
 
 class _Model:
@@ -67,14 +76,18 @@ class _Model:
             for h in range(self.history + 1):
                 if h > i + 1:
                     break
-                self.counts[h][tuple(path[i + 1 - h:i + 1])][following] += 1
+                self.counts[h][_history_at(path, i, h)][following] += 1
 
     def predict(self, prefix: list[str], min_support: int) -> tuple[Counter, int]:
         for h in range(min(self.history, len(prefix)), -1, -1):
-            seen = self.counts[h].get(tuple(prefix[len(prefix) - h:]) if h else ())
+            seen = self.counts[h].get(_history_at(prefix, len(prefix) - 1, h))
             if seen and sum(seen.values()) >= min_support:
                 return seen, h
         return self.counts[0].get((), Counter()), 0
+
+
+def _history_at(path: list[str], index: int, length: int) -> tuple[str, ...]:
+    return tuple(path[index + 1 - length:index + 1])
 
 
 def _ranked(counter: Counter, top: int) -> list[tuple[str | None, int]]:
@@ -114,17 +127,34 @@ def _backtest(paths: list[tuple[list[str], Any]], settings: NextActivitySpec) ->
                              "from cases that ended before it; the case ending counts as a possible next step.")}
 
 
-def next_activity(log_id: str, spec: Any, *, case_id: str | None = None) -> dict[str, Any]:
-    settings = _parse(spec)
-    ends = set(settings.end_activities)
+def _project(log_id: str, settings: NextActivitySpec) -> dict[str, Any]:
+    chosen = cohorts.parse_cohort(settings.cohort)
 
     def run(conn):
-        cohorts.restrict(conn, cohorts.parse_cohort(settings.cohort), log_id)
+        cohorts.restrict(conn, chosen, log_id)
         rows = conn.execute("""SELECT case_id, list(activity ORDER BY ts, event_id), max(ts)
             FROM ce GROUP BY case_id""").fetchall()
-        return {"rows": rows}
+        return {"rows": rows, "cohort": cohorts.describe(chosen)}
 
-    data = workspace._query(log_id, settings.case_type, run)
+    return workspace._query(log_id, settings.case_type, run)
+
+
+def _snapshot(data: dict[str, Any], settings: NextActivitySpec) -> str:
+    """Fingerprint the selected histories used by the estimate and evidence request."""
+    digest = sha256()
+    basis = [data["log"]["log_id"], data["case_notion"], sorted(set(settings.end_activities)),
+             settings.history, settings.min_support, data["cohort"]]
+    digest.update(json.dumps(basis, sort_keys=True, ensure_ascii=True, separators=(',', ':')).encode() + b'\n')
+    for key, steps, last in sorted(data["rows"], key=lambda row: row[0]):
+        digest.update(json.dumps([key, steps, last.isoformat()], ensure_ascii=True, separators=(',', ':')).encode() + b'\n')
+    return digest.hexdigest()
+
+
+def next_activity(log_id: str, spec: Any, *, case_id: str | None = None,
+                  include_evidence: bool = False) -> dict[str, Any]:
+    settings = _parse(NextActivitySpec, spec)
+    data = _project(log_id, settings)
+    ends = set(settings.end_activities)
     completed, open_cases = [], []
     case_selection = "not_in_selection"
     for key, steps, last in data["rows"]:
@@ -153,7 +183,8 @@ def next_activity(log_id: str, spec: Any, *, case_id: str | None = None) -> dict
                 "last_event_at": last.isoformat() + "Z",
                 "next": [{"activity": a, "case_ends": a is END, "probability": round(n / total, 6)}
                          for a, n in _ranked(counter, settings.top)],
-                "history_used": level, "support": total})
+                "history_used": level, "support": total,
+                **({"matched_history": list(_history_at(steps, len(steps) - 1, level))} if include_evidence else {})})
     return {
         "format": FORMAT,
         "case_notion": data["case_notion"],
@@ -161,6 +192,7 @@ def next_activity(log_id: str, spec: Any, *, case_id: str | None = None) -> dict
         "open_cases": len(open_cases),
         "history": settings.history,
         "predictions": predictions,
+        **({"evidence_snapshot": _snapshot(data, settings)} if include_evidence else {}),
         **({"case_selection": case_selection} if case_id is not None else {}),
         "open_cases_shown": len(predictions),
         "expected_next_across_open_cases": [
@@ -171,3 +203,47 @@ def next_activity(log_id: str, spec: Any, *, case_id: str | None = None) -> dict
                            "log. They are not instructions or commitments, and they say nothing about who should act. "
                            "Check the backtest before relying on them."),
     }
+
+
+def training_evidence(log_id: str, spec: Any) -> dict[str, Any]:
+    request = _parse(TrainingEvidenceSpec, spec)
+    settings = request.settings
+    data = _project(log_id, settings)
+    if _snapshot(data, settings) != request.expected_snapshot:
+        raise workspace.EventLogWorkspaceError("the prediction history changed; predict next activities again")
+    ends = set(settings.end_activities)
+    model = _Model(settings.history)
+    completed = []
+    target = None
+    for case_id, path, _ in data["rows"]:
+        if path[-1] in ends:
+            model.learn(path)
+            completed.append((case_id, path))
+        elif case_id == request.case_id:
+            target = path
+    if target is None:
+        raise workspace.EventLogWorkspaceError("choose a predicted open case in the current selection")
+    counts, length = model.predict(target, settings.min_support)
+    if not counts:
+        raise workspace.EventLogWorkspaceError("the open case has no matching completed-case steps")
+    history = _history_at(target, len(target) - 1, length)
+    rows = []
+    for case_id, path in sorted(completed, key=lambda row: row[0]):
+        if request.after is not None and case_id < request.after[0]:
+            continue
+        start = max(0, length - 1)
+        if request.after is not None and case_id == request.after[0]:
+            start = max(start, request.after[1])
+        for index in range(start, len(path)):
+            if _history_at(path, index, length) != history:
+                continue
+            next_activity = path[index + 1] if index + 1 < len(path) else END
+            rows.append({"case_id": case_id, "step": index + 1, "activity": path[index],
+                         "next_activity": next_activity, "case_ends": next_activity is END})
+            if len(rows) > request.limit:
+                break
+        if len(rows) > request.limit:
+            break
+    page = rows[:request.limit]
+    return {"case_id": request.case_id, "matched_history": list(history), "support": sum(counts.values()),
+            "occurrences": page, "next_after": [page[-1]["case_id"], page[-1]["step"]] if len(rows) > request.limit else None}
