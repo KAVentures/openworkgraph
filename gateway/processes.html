@@ -2735,7 +2735,11 @@
                current.your_actor_id!==chosen.your_actor_id||
                 current.your_review_number!==chosen.your_review_number||
                current.access_revision!==chosen.access_revision){
-              fail("Current authorized process is archived, changed, inaccessible, mismatched or lacks review permission for this revision.");return;
+              // A successful authenticated read that reports withdrawn review access,
+              // changed membership, or a stale selected revision invalidates every
+              // direct review/edit/export action, not only packet inspection.
+              invalidateDeniedReviewSelection("Inspection refused: current process authorization or revision changed. Reopen an authorized process.");
+              return;
             }
             // Inspection may fetch the latest revision while the UI still shows
             // an older one. Never enable navigation into a mismatched review form.
@@ -2748,7 +2752,11 @@
             $("handoffStatus").textContent="MATCH: Fresh authorized process revision "+p.revision+" and SHA-256 match. Eligible for human design review only; independent approval and execution are not granted by inspection. Consent, owner approval, source access, retention and execution authorization remain unverified.";
             inspectedHandoff={workflow_id:p.workflow_id,revision:p.revision,content_sha256:p.content_sha256,access_revision:current.access_revision};
             $("handoffReview").disabled=false;
-          }catch(_){fail("Fresh authenticated read failed or access was withdrawn.");}
+          }catch(_){
+            if(ticket===handoffGeneration&&identityTicket===identityGeneration&&
+               credential===authorizedCredential&&selected===chosen)
+              invalidateDeniedReviewSelection("Inspection authorization could not be verified. Reopen an authorized process.");
+          }
         }));
       })();
     </script>
