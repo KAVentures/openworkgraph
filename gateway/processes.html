@@ -2635,7 +2635,9 @@
           }catch(_){
             if(ticket===handoffGeneration&&identityTicket===identityGeneration&&
                credential===authorizedCredential&&selected===chosen)
-              resetHandoff("REFUSED: Could not revalidate authorized revision. Sign in and inspect again.");
+              // Failed live authorization must also disarm direct review,
+              // editing and export controls, not just the handoff button.
+              invalidateDeniedReviewSelection("Review navigation revalidation failed. Reopen the latest authorized revision.");
           }
         }));
         // Recovery is an authenticated read, not a shortcut around consent or review.
