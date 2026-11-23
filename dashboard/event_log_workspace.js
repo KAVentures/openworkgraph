@@ -1038,7 +1038,7 @@
     results.appendChild(batchingSection(inspection));
     results.appendChild(benchmarkSection(names));
     results.appendChild(timePatternSection(names,inspection));
-    results.appendChild(impactSection(names));
+    results.appendChild(impactSection(names,inspection));
     results.appendChild(stuckSection(inspection));
     results.appendChild(savedGraphSection(names,inspection));
     results.appendChild(simulationSection());
@@ -3256,7 +3256,7 @@
     return box;
   }
 
-  function impactSection(activityNames){
+  function impactSection(activityNames,inspection){
     const box=section('Intervention impact');box.id='owgImpact';
     box.appendChild(el('div','Compare cases that started before and after a change went live, such as an automation or a new rule. Optionally compare with cases the change did not apply to. Results show what changed between the periods, not proof that the change caused it.','muted'));
     const date=input('owgImpactDate','date'),metric=select('owgImpactMetric',[['cycle_time','Cycle time'],['rework','Rework (an activity repeated)'],['sla_breach','SLA breaches'],['activity_count','Count of one activity']]);
@@ -3280,7 +3280,8 @@
     const markerStatus=el('div',null,'muted');markerStatus.id='owgImpactMarkerStatus';markerStatus.setAttribute('role','status');
     const markerRow=el('div',null,'row');markerRow.style.alignItems='end';
     markerRow.append(field('Saved changes',markerPick),markerRemove,field('Label for this date',markerLabel),markerSave);
-    box.append(markerRow,markerStatus,row,out);
+    const evidence=el('div');evidence.id='owgImpactCaseReview';
+    box.append(markerRow,markerStatus,row,out,evidence);
     const markersBase='/v1/event-logs/'+encodeURIComponent(state.logId)+'/change-markers';let markerList=[];
     const showMarkers=r=>{markerList=r.markers;
       setOptions(markerPick,[['',r.markers.length?'Pick a saved change':'No saved changes yet'],...r.markers.map(m=>[m.marker_id,m.marked_at.slice(0,10)+' — '+m.label+(m.within_log?'':' (outside this log)')])]);
@@ -3301,16 +3302,51 @@
     const markersGeneration=state.generation;
     getJSON(markersBase).then(r=>{if(markersGeneration===state.generation)showMarkers(r);}).catch(error=>{markerStatus.textContent=error.message;});
     const generation=state.generation,logId=state.logId;let turn=0;
+    const invalidate=()=>{turn++;run.disabled=false;out.replaceChildren();evidence.replaceChildren();};
+    for(const control of [date,metric,sla,activity,windowDays,recent,treatedActivity,treatedResource]){
+      control.addEventListener('input',invalidate);control.addEventListener('change',invalidate);
+    }
+    markerPick.addEventListener('change',invalidate);
     run.onclick=async()=>{
       const t=++turn;
+      evidence.replaceChildren();
       let spec;try{spec=impactSpec({date:date.value,metric:metric.value,slaHours:sla.value,activity:activity.value,window:windowDays.value,recent:recent.value,treatedActivity:treatedActivity.value,treatedResource:treatedResource.value.trim()});}
       catch(error){out.replaceChildren(el('div',error.message,'muted'));return;}
+      if(state.caseType)spec.case_type=state.caseType;
       run.disabled=true;out.replaceChildren(el('div','Measuring…','muted'));
       try{
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(logId)+'/impact',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
         if(generation!==state.generation||!box.isConnected||t!==turn)return;
         const v=impactRows(r);
-        out.replaceChildren(el('div',r.reading,'note'),table(['Cases','Before','Mean before','After','Mean after'],v.rows),el('div',v.change,'muted'),
+        const rows=Object.entries(r.groups).map(([group,values],index)=>{
+          const open=(period,count)=>{
+            if(!count)return '0';
+            const b=button(Number(count).toLocaleString(),'secondary');
+            b.setAttribute('aria-label','Review '+group+' '+period+' cases');
+            b.onclick=()=>{
+              const panel=el('div'),heading=el('h4',group+' · '+period),message=el('div'),list=el('div');
+              const next=button('Next case page','secondary');let cursor=null;
+              panel.append(heading,message,list,next);evidence.replaceChildren(panel);
+              async function load(after){
+                next.disabled=true;message.textContent='Loading cases…';
+                try{
+                  const data=await (await api('/v1/event-logs/'+encodeURIComponent(logId)+'/impact/cases',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({analysis:spec,group,period,after})})).json();
+                  if(t!==turn||!panel.isConnected)return;
+                  cursor=data.next_after;message.textContent=Number(data.selected_cases).toLocaleString()+' matching cases.';
+                  list.replaceChildren(table(['Case','Started','Ended','Value'],data.cases.map(c=>{
+                    const link=button(c.case_id,'secondary');link.setAttribute('aria-label','Open case '+c.case_id);link.onclick=()=>inspection.open(c.case_id);
+                    return [link,c.started_at,c.ended_at,c.value];
+                  })));
+                  next.disabled=cursor===null;
+                }catch(error){if(t===turn&&panel.isConnected)message.textContent=error.message;}
+              }
+              next.onclick=()=>load(cursor);load(null);
+            };
+            return b;
+          };
+          return [v.rows[index][0],open('baseline',values.baseline.cases),v.rows[index][2],open('follow_up',values.follow_up.cases),v.rows[index][4]];
+        });
+        out.replaceChildren(el('div',r.reading,'note'),table(['Cases','Before','Mean before','After','Mean after'],rows),el('div',v.change,'muted'),
           ...(v.control?[el('div',v.control,'muted')]:[]),el('div',v.placebo,'muted'),el('div',r.interpretation,'muted'));
       }catch(error){if(t===turn)out.replaceChildren(el('div',error.message,'muted'));}
       finally{if(t===turn)run.disabled=false;}

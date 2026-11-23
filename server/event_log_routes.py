@@ -1974,6 +1974,13 @@ async def event_log_impact(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/impact/cases")
+async def event_log_impact_cases(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "impact case selection", strict=True)
+    return await run_in_threadpool(_respond, impact.cases, log_id, spec)
+
+
 _PACK_ID = r"^[a-z][a-z0-9_]{0,39}$"
 
 
