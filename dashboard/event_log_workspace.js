@@ -1139,7 +1139,7 @@
     results.appendChild(spectrumSection(inspection));
     results.appendChild(heuristicsSection(inspection));
     results.appendChild(glossarySection());
-    results.appendChild(activityProfileSection(names));
+    results.appendChild(activityProfileSection(names,inspection));
     results.appendChild(breakdownSection(names,inspection));
     results.appendChild(pathExplorerSection(inspection));
     results.appendChild(cooccurrenceSection(inspection));
@@ -5628,33 +5628,69 @@
     return box;
   }
 
-  function activityProfileSection(activityNames){
+  function activityProfileSection(activityNames,inspection){
     const box=section('Activity profile');box.id='owgActivityProfile';
     box.appendChild(el('div','One activity from every side: how often it happens and repeats, what comes before and after it, when in the week and day, and how long cases with it take.','muted'));
     const pick=select('owgActivityProfilePick',activityNames.slice(0,500).map(a=>[a,a]));
+    const exact=input('owgActivityProfileExact','text','Exact activity label (optional)');exact.maxLength=400;
+    const lookup=activityLabelLookup(exact,{id:part=>'owgActivityProfile'+part,subject:'profile activity'});
     const run=button('Show profile','secondary');run.id='owgActivityProfileRun';
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activity',pick),run);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activity',pick),field('Exact activity',exact),lookup.wrap,run);
     const statusLine=el('div',null,'muted');statusLine.id='owgActivityProfileStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgActivityProfileResults';
     box.append(row,statusLine,out);
     const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
     const hrs=x=>x===null||x===undefined?'—':(x<48?(Math.round(x*10)/10)+' h':(Math.round(x/24*10)/10)+' d');
+    const generation=state.generation;
+    let revision=0;
+    const reset=()=>{
+      ++revision;run.disabled=false;lookup.reset();out.replaceChildren();statusLine.textContent='Show the profile for this activity.';
+    };
+    exact.oninput=reset;pick.onchange=()=>{exact.value='';reset();};
     run.onclick=async()=>{
-      const generation=state.generation;run.disabled=true;statusLine.textContent='Profiling…';out.replaceChildren();
+      const ticket=++revision,cohort=globalCohort();
+      const current=()=>generation===state.generation&&ticket===revision;
+      run.disabled=true;statusLine.textContent='Profiling…';out.replaceChildren();
       try{
-        const r=await getJSON(logPath('activity-profile',{profile_activity:pick.value}));
-        if(generation!==state.generation)return;
+        const activity=exact.value||pick.value;
+        if(!activity||Array.from(activity).length>200)throw new Error('Choose an activity label of 1 to 200 characters.');
+        const r=await getJSON(logPath('activity-profile',{profile_activity:activity}));
+        if(!current())return;
         const c=r.case_hours;
         statusLine.textContent=r.activity+' happens in '+Number(r.cases_with_activity).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases ('+pct(r.share_of_cases)+'), '+r.occurrences_per_case+' times per case on average; '+pct(r.repeat_share)+' of those cases repeat it. Cases with it take a median '+hrs(c.with_activity.median)+', without it '+hrs(c.without_activity.median)+'.';
-        const side=(title,list)=>{out.appendChild(el('h4',title));out.appendChild(table(['Activity','Times','Share','Median gap'],list.map(n=>[n.activity,Number(n.times).toLocaleString(),pct(n.share),hrs(n.median_hours)])));};
-        side('Comes after',r.comes_after);side('Comes before',r.comes_before);
+        const inspect=(label,selector,count,scope=cohort)=>{
+          const buttonNode=button(label,'secondary');buttonNode.disabled=count===0;
+          buttonNode.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%';
+          buttonNode.onclick=()=>{if(current())inspection.openSelection(selector,label,scope);};
+          return buttonNode;
+        };
+        const cases=el('div',null,'row');
+        cases.append(inspect('Cases with '+r.activity,{required_activities:[r.activity]},r.cases_with_activity),
+          inspect('Cases without '+r.activity,{excluded_activities:[r.activity]},r.cases-r.cases_with_activity),
+          inspect('Cases repeating '+r.activity,{repeat_activity:r.activity},r.cases_repeating_it));
+        out.appendChild(cases);
+        const side=(title,list,before)=>{
+          out.appendChild(el('h4',title));
+          out.appendChild(table(['Activity','Times','Share','Median gap','Evidence'],list.map(n=>{
+            if(n.boundary){
+              const label=before?'Start of case':'End of case';
+              const scope=mergeActiveCohort(before?{starts_with:r.activity}:{ends_with:r.activity},cohort);
+              return [label,Number(n.times).toLocaleString(),pct(n.share),hrs(n.median_hours),
+                inspect('Cases '+(before?'starting':'ending')+' with '+r.activity,{},n.times,scope)];
+            }
+            const transition=before?[n.activity,r.activity]:[r.activity,n.activity];
+            return [n.activity,Number(n.times).toLocaleString(),pct(n.share),hrs(n.median_hours),
+              inspect('Cases with '+transition.join(' → '),{transition},n.times)];
+          })));
+        };
+        side('Comes after',r.comes_after,true);side('Comes before',r.comes_before,false);
         out.appendChild(el('h4','When it happens'));
         out.appendChild(table(['Weekday','Times'],r.by_weekday.map(d=>[d.day,Number(d.times).toLocaleString()])));
         const busy=r.by_hour.filter(h=>h.times).sort((a,b)=>b.times-a.times).slice(0,3).map(h=>String(h.hour).padStart(2,'0')+':00 ('+h.times+')');
         if(busy.length)out.appendChild(el('div','Busiest hours (UTC): '+busy.join(', ')+'.'));
         out.appendChild(el('div',r.caveat,'muted'));
-      }catch(error){statusLine.textContent=error.message;}
-      finally{run.disabled=false;}};
+      }catch(error){if(current())statusLine.textContent=error.message;}
+      finally{if(current())run.disabled=false;}};
     return box;
   }
 
