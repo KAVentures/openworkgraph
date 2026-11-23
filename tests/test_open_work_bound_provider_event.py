@@ -168,7 +168,8 @@ def test_retained_attempts_are_not_provider_causality(monkeypatch):
     monkeypatch.setattr(routes, "_source_scope", lambda: "tenant-1")
     monkeypatch.setattr(verifier, "verify_provider_attempt",
                         lambda **kwargs: {"status": "verified_provider_event",
-                                          "provider_operation": "unknown", "customer_outcome": "unknown"})
+                                          "provider_operation": "unknown", "customer_outcome": "unknown",
+                                          "event_id": DATA["provider_event_id"]})
     result = asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
     assert result["retained_attempt_receipts"]["run_ref"] == "run-1"
     assert result["retained_attempt_receipts_are_untrusted"] is True
