@@ -1366,6 +1366,10 @@ const path=require('node:path');
    assert.match(waitingText,/Review4\s*4\s*2\.0 h\s*2\.0 h/,'Review: four complete instances with 2 h median processing');
    assert.match(waitingText,/Processing with known duration/,'coverage denominator is labeled in the dashboard');
    assert.match(waitingText,/Waiting observations/,'waiting coverage denominator is labeled in the dashboard');
+   assert.match(waitingText,/Cohort-wide timestamp coverage:\s*8 \/ 8 processing observations \(100%\);\s*8 \/ 8 waiting observations \(100%\)/,
+     'authenticated saved-log dashboard exposes complete-cohort processing and waiting coverage');
+   assert.match(waitingText,/Coverage is not a measure of data quality or workflow performance/,
+     'the coverage metric must not imply causal quality or performance');
    assert.match(waitingText,/Review4\s*4 \/ 4 \(100%\)/,'observed and eligible processing counts render for the real authenticated saved log');
    assert.doesNotMatch(waitingText,/comment|note/);
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
