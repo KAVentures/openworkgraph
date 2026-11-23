@@ -343,3 +343,45 @@ def test_equivalent_json_grant_reissue_mid_round_refuses_export(private):
     assert len(graph.calls) == 1
     assert not params["candidate"].exists()
 
+
+
+def test_candidate_publication_failure_removes_only_owned_csv(private, monkeypatch):
+    import server.m365_outlook_delta as delta
+    params = args(private)
+    original = delta._publish
+    calls = []
+
+    def fail_candidate(path, *args):
+        calls.append(path)
+        if path == params["candidate"]:
+            raise DeltaError("Simulated candidate publication failure")
+        return original(path, *args)
+
+    monkeypatch.setattr(delta, "_publish", fail_candidate)
+    with pytest.raises(DeltaError, match="Simulated"):
+        export_delta(**params, opener=Graph([page([message(ID_A)])]))
+    assert calls == [params["output"], params["candidate"]]
+    assert not params["output"].exists()
+    assert not params["candidate"].exists()
+    # A retry with the same filenames can now succeed.
+    monkeypatch.setattr(delta, "_publish", original)
+    assert export_delta(**params, opener=Graph([page([message(ID_A)])]))["status"] == "review_ready"
+
+
+def test_candidate_failure_preserves_replaced_csv(private, monkeypatch):
+    import server.m365_outlook_delta as delta
+    params = args(private)
+    original = delta._publish
+
+    def replace_then_fail(path, *args):
+        if path == params["candidate"]:
+            params["output"].unlink()
+            params["output"].write_text("FOREIGN REPLACEMENT")
+            raise DeltaError("Simulated concurrent replacement")
+        return original(path, *args)
+
+    monkeypatch.setattr(delta, "_publish", replace_then_fail)
+    with pytest.raises(DeltaError, match="replacement"):
+        export_delta(**params, opener=Graph([page([message(ID_A)])]))
+    assert params["output"].read_text() == "FOREIGN REPLACEMENT"
+    assert not params["candidate"].exists()
