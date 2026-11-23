@@ -3472,6 +3472,11 @@ async def read_local_bound_provider_event(request: Request, response: Response):
             expected_event_id=payload["provider_event_id"],
             recheck_authorization=provider_read_still_authorized,
         )
+    # A revoked source must deny the request before invoking any provider
+    # adapter, even an adapter that incorrectly ignores its guard. The
+    # synchronous guard remains mandatory across each provider network step.
+    if provider_read_still_authorized() is not True:
+        raise HTTPException(403, "provider source authorization revoked")
     # Check the same local grant immediately before AND after the synchronous
     # provider reader. Async case admission is repeated below before disclosure.
     # This closes the gap where a revoked session/source could still initiate
