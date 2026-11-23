@@ -698,7 +698,7 @@
   // Save the cases matching a filter as a new saved log, to analyse or compare a slice on its own.
   function deriveSection(activityNames){
     const box=section('Save or export matching cases');box.id='owgEventLogDerive';
-    box.appendChild(el('div','Save matching cases as a new log or download their original events in CSV or XES. Saved copies start without the source log’s activity mapping, saved filters, signals and quality reports.','muted'));
+    box.appendChild(el('div','Save matching cases as a new log or download their original events in CSV, XES, or OCEL. Saved copies start without the source log’s activity mapping, saved filters, signals and quality reports.','muted'));
     const filter=cohortFields('owgDeriveCohort','Cases to include',activityNames);
     const name=input('owgDeriveName','text');name.maxLength=120;name.autocomplete='off';
     const current=state.logs.find(l=>l.log_id===state.logId);name.value=((current&&current.name)||'Log')+' (subset)';
@@ -706,7 +706,7 @@
     const preview=button('Preview copy','secondary');
     const previewStatus=el('div',null,'muted');previewStatus.id='owgDerivePreview';previewStatus.setAttribute('role','status');
     const formats=select('owgDeriveExportFormat',[['csv','CSV (exact interchange)'],['csv-review','CSV for spreadsheet review'],
-      ['xes','XES'],['xes-attributes','XES with retained attributes']]);
+      ['xes','XES'],['xes-attributes','XES with retained attributes'],['ocel','OCEL 2.0 JSON'],['ocelxml','OCEL 2.0 XML']]);
     const download=button('Download matching cases','secondary');download.id='owgDeriveExport';
     const formatNote=el('p',null,'muted');
     function describeFormat(){
@@ -714,7 +714,9 @@
         'csv':'Includes case IDs, activity names, timestamps and resources.',
         'csv-review':'Changes formula-like cells for spreadsheet review. Use exact CSV for re-import.',
         'xes':'Includes one trace per matching case with activity names, timestamps and resources.',
-        'xes-attributes':'Also includes retained trace and event attribute values. Use OCEL for timed object attributes and relationships.'
+        'xes-attributes':'Also includes retained trace and event attribute values. Use OCEL for timed object attributes and relationships.',
+        'ocel':'Includes objects linked to matching events, their timed attributes, and relationships between included objects.',
+        'ocelxml':'Includes objects linked to matching events, their timed attributes, and relationships between included objects.'
       }[formats.value];
     }
     formats.onchange=describeFormat;describeFormat();
@@ -765,7 +767,7 @@
     };
     download.onclick=async()=>{
       const logId=state.logId,format=formats.value;
-      const extension=format==='csv-review'?'review.csv':format.startsWith('xes')?'xes':'csv';
+      const extension={'csv-review':'review.csv',xes:'xes','xes-attributes':'xes',ocel:'jsonocel',ocelxml:'xmlocel'}[format]||'csv';
       download.disabled=true;
       try{
         const spec=copySelection('export');

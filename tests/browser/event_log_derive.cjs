@@ -105,6 +105,12 @@ const path=require('node:path');
    const [reviewFile]=await Promise.all([page.waitForEvent('download'),page.locator('#owgDeriveExport').click()]);
    assert.match(reviewFile.suggestedFilename(),/matching-cases\.review\.csv$/);
    assert.match(await fs.readFile(await reviewFile.path(),'utf8'),/^case_id_review,activity_review,/);
+   await page.locator('#owgDeriveExportFormat').selectOption('ocel');
+   const [ocelFile]=await Promise.all([page.waitForEvent('download'),page.locator('#owgDeriveExport').click()]);
+   assert.match(ocelFile.suggestedFilename(),/matching-cases\.jsonocel$/);
+   const objectExport=JSON.parse(await fs.readFile(await ocelFile.path(),'utf8'));
+   assert.deepEqual(objectExport.objects.map(object=>object.id),['item-1','item-2','order-1']);
+   assert.deepEqual(objectExport.events.map(event=>event.id),['event-1']);
 
    await page.locator('#owgDeriveName').fill('Order subset');
    await page.locator('#owgDeriveRun').click();

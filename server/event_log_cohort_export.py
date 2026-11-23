@@ -3,14 +3,14 @@ from datetime import timezone
 from typing import Any, IO, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from shared.event_log_formats import EventLogFormatError, write_csv, write_xes
+from shared.event_log_formats import EventLogFormatError, write_csv, write_ocel_json, write_ocel_xml, write_xes
 
 from . import event_log_cohorts as cohorts
 from . import event_log_derive as derived
 from . import event_log_workspace as workspace
 
 
-MatchingExportFormat = Literal["csv", "csv-review", "xes", "xes-attributes"]
+MatchingExportFormat = Literal["csv", "csv-review", "xes", "xes-attributes", "ocel", "ocelxml"]
 
 
 class ExportSpec(BaseModel):
@@ -37,6 +37,12 @@ def export_matching_cases(log_id: str, spec: Any, out: IO[str], *,
         cohorts.restrict(conn, chosen, log_id)
         if conn.execute("SELECT 1 FROM ce LIMIT 1").fetchone() is None:
             raise workspace.EventLogWorkspaceError("No cases match the filter")
+        if export_format in ("ocel", "ocelxml"):
+            derived._select_original_events(conn, log_id, start, end)
+            objects, events = workspace._ocel_export_projection(conn, log_id, matching=True)
+            writer = write_ocel_json if export_format == "ocel" else write_ocel_xml
+            writer(objects, events, out)
+            return {}
         notion = workspace._case_type(conn, log_id, settings.case_type)
 
         # Filters see the analysis mapping. Export writes the original rows
