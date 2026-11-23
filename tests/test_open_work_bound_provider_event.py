@@ -473,3 +473,44 @@ def test_unserializable_retained_attempt_denied_before_provider_io(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
     assert exc.value.status_code == 409
+
+
+@pytest.mark.parametrize("operation", ["succeeded", "failed"])
+def test_independent_provider_operation_verdict_is_not_customer_success(monkeypatch, operation):
+    """Provider-reported operation status is usable without asserting agent causality."""
+    install(monkeypatch)
+    from server import local_source_credentials
+    from server import open_work_provider_attempt_verification as verifier
+    monkeypatch.setattr(local_source_credentials, "_read_metadata",
+                        lambda path: {"account": "acct_12345678"})
+    monkeypatch.setattr(routes, "_source_scope", lambda: "tenant-1")
+    monkeypatch.setattr(verifier, "verify_provider_attempt",
+                        lambda **kwargs: {"status": "verified_provider_operation",
+                                          "provider_operation": operation,
+                                          "customer_outcome": "unknown",
+                                          "event_id": DATA["provider_event_id"]})
+    result = asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
+    assert result["provider_event_verdict"]["provider_operation"] == operation
+    assert result["provider_event_independently_rechecked_on_this_read"] is True
+    assert result["customer_outcome_verified"] is False
+    assert result["provider_event_attributed_to_agent_run"] is False
+    assert result["receipt_persisted"] is False
+
+
+@pytest.mark.parametrize("bad_operation", ["unknown", "customer_succeeded", None])
+def test_provider_operation_verdict_must_have_valid_provider_status(monkeypatch, bad_operation):
+    """A contradictory adapter result must not become verified provider evidence."""
+    install(monkeypatch)
+    from server import local_source_credentials
+    from server import open_work_provider_attempt_verification as verifier
+    monkeypatch.setattr(local_source_credentials, "_read_metadata",
+                        lambda path: {"account": "acct_12345678"})
+    monkeypatch.setattr(routes, "_source_scope", lambda: "tenant-1")
+    monkeypatch.setattr(verifier, "verify_provider_attempt",
+                        lambda **kwargs: {"status": "verified_provider_operation",
+                                          "provider_operation": bad_operation,
+                                          "customer_outcome": "unknown",
+                                          "event_id": DATA["provider_event_id"]})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
+    assert exc.value.status_code == 409
