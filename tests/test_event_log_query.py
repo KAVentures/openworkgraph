@@ -184,6 +184,41 @@ def test_saved_analyses_are_bounded_and_deleted_with_the_log(monkeypatch):
         conn.close()
 
 
+def test_analysis_template_moves_the_spec_and_pins_its_case_notion(monkeypatch):
+    origin, destination = _log(), _log()
+    spec = {"level": "cases", "measures": [{"fn": "avg", "of": "metric:checks"}],
+            "metrics": [{"name": "checks", "kind": "activity_count", "activity": "Check"}],
+            "cohort": {"activity": "Close"}}
+    source = query.save(origin, {"name": "Checks on closed cases", "spec": spec})
+    document = query.export_template(origin, source["analysis_id"])
+    assert document["format"] == query.ANALYSIS_TEMPLATE_FORMAT
+    assert set(document["analysis"]) == {"name", "spec"}
+    assert document["analysis"]["spec"]["case_type"] == "order"
+    assert query.use_template(origin, document, preview=True)["duplicate"]
+    plan = query.use_template(destination, document, preview=True)
+    assert not plan["duplicate"] and plan["available_slots"] == query.MAX_SAVED
+    assert query.list_saved(destination)["analyses"] == []
+    imported = query.use_template(destination, document, preview=False)
+    assert imported["added"] and imported["analysis_id"] != source["analysis_id"]
+    assert query.run(destination, imported["spec"])["rows"] == [[1.5]]
+    assert query.export_template(destination, imported["analysis_id"]) == document
+    monkeypatch.setattr(query, "MAX_SAVED", 1)
+    assert query.use_template(destination, document, preview=False) == {
+        "added": False, "analysis_id": imported["analysis_id"]}
+    another = {**document, "analysis": {**document["analysis"], "name": "Another"}}
+    assert query.use_template(destination, another, preview=True)["available_slots"] == 0
+    with pytest.raises(workspace.EventLogWorkspaceError, match="at most"):
+        query.use_template(destination, another, preview=False)
+
+    different = workspace.import_log(BytesIO(b"case,activity,time\nc,Close,2024-01-01T00:00:00Z\n"),
+                                     name="csv", source_format="csv",
+                                     mapping={"case_column": "case", "activity_column": "activity",
+                                              "timestamp_column": "time"})["log_id"]
+    with pytest.raises(workspace.EventLogWorkspaceError, match="unknown object type"):
+        query.use_template(different, document, preview=False)
+    assert query.list_saved(different)["analyses"] == []
+
+
 def test_real_http_routes_require_a_dashboard_session(tmp_path):
     import os
     from pathlib import Path
@@ -209,6 +244,19 @@ with TestClient(app) as client:
     saved = client.post(base + "/analyses", json={"name": "By end", "spec": spec}, headers=headers)
     assert saved.status_code == 200, saved.text
     assert client.get(base + "/analyses", headers=headers).json()["analyses"][0]["name"] == "By end"
+    export = base + "/analyses/" + saved.json()["analysis_id"] + "/template"
+    import_path = base + "/analyses/template"
+    assert client.get(export, headers=bearer).status_code in (401, 403)
+    result = client.get(export, headers=headers)
+    assert result.status_code == 200 and result.headers["cache-control"] == "no-store"
+    assert result.headers["content-disposition"].endswith('-analysis.json"')
+    template = result.json()
+    assert client.post(import_path + "/preview", json=template, headers=bearer).status_code in (401, 403)
+    assert client.post(import_path + "/import", json=template, headers=bearer).status_code in (401, 403)
+    assert client.post(import_path + "/preview", json=template, headers=headers).json()["duplicate"]
+    assert client.post(import_path + "/import", json=template, headers=headers).json()["added"] is False
+    assert client.post(import_path + "/preview", json={**template, "rows": []}, headers=headers).status_code == 422
+
     gone = client.post(base + "/analyses/" + saved.json()["analysis_id"] + "/delete", headers=headers)
     assert gone.status_code == 200 and client.get(base + "/analyses", headers=headers).json()["analyses"] == []
 '''

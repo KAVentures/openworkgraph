@@ -2627,6 +2627,28 @@ async def event_log_save_analysis(request: Request, log_id: str):
     return _respond(analysis.save, log_id, await _json_body(request, "saved analysis"))
 
 
+@router.get("/v1/event-logs/{log_id}/analyses/{analysis_id}/template")
+def event_log_export_analysis_template(request: Request, log_id: str, analysis_id: str):
+    _require_dashboard(request)
+    response = _respond(analysis.export_template, log_id, analysis_id)
+    response.headers["Content-Disposition"] = f'attachment; filename="{analysis_id}-analysis.json"'
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/analyses/template/preview")
+async def event_log_preview_analysis_template(request: Request, log_id: str):
+    _require_dashboard(request)
+    document = await _json_body(request, "saved analysis file", strict=True)
+    return await run_in_threadpool(_respond, analysis.use_template, log_id, document, preview=True)
+
+
+@router.post("/v1/event-logs/{log_id}/analyses/template/import")
+async def event_log_import_analysis_template(request: Request, log_id: str):
+    _require_dashboard(request)
+    document = await _json_body(request, "saved analysis file", strict=True)
+    return await run_in_threadpool(_respond, analysis.use_template, log_id, document, preview=False)
+
+
 @router.post("/v1/event-logs/{log_id}/analyses/{analysis_id}/delete")
 def event_log_delete_analysis(request: Request, log_id: str, analysis_id: str):
     _require_dashboard(request)

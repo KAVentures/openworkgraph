@@ -115,6 +115,45 @@ const path=require('node:path');
   const [scopedExport]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisJson').click()]);
   const exported=JSON.parse(await fs.readFile(await scopedExport.path(),'utf8'));
   assert.equal(exported.case_notion,'order');assert.deepEqual(exported.rows,[[1]]);
+  const [definition]=await Promise.all([page.waitForEvent('download'),
+    page.getByRole('button',{name:'Download definition for Orders',exact:true}).click()]);
+  const body=await fs.readFile(await definition.path());
+  const definitionJson=JSON.parse(body.toString());
+  assert.deepEqual(Object.keys(definitionJson).sort(),['analysis','format']);
+  assert.equal(definitionJson.analysis.spec.case_type,'order');
+  const firstLog=await page.locator('#owgEventLogPick').evaluate(select=>
+    [...select.options].find(option=>option.textContent.startsWith('jobs ·')).value);
+  await page.locator('#owgEventLogPick').selectOption(firstLog);
+  await page.locator('#owgEventLogAnalyze').click();
+  const templatePanel=page.locator('#owgAnalysisTemplate');
+  await templatePanel.getByText('Import an analysis definition',{exact:true}).click();
+  const pickTemplate=templatePanel.getByLabel('Analysis definition file',{exact:true});
+  await pickTemplate.setInputFiles({name:definition.suggestedFilename(),mimeType:'application/json',buffer:body});
+  await templatePanel.getByText('unknown object type for this log',{exact:false}).waitFor();
+  assert(await templatePanel.getByRole('button',{name:'Save imported analysis'}).isDisabled());
+  const [csvDefinition]=await Promise.all([page.waitForEvent('download'),
+    page.getByRole('button',{name:'Download definition for Only B',exact:true}).click()]);
+  const filteredBody=await fs.readFile(await csvDefinition.path());
+  await page.locator('#owgEventLogFile').setInputFiles({name:'destination.csv',mimeType:'text/csv',
+    buffer:Buffer.from('case,activity,time\nx,B,2024-02-02T00:00:00Z\ny,C,2024-02-03T00:00:00Z\n')});
+  await page.locator('#owgEventLogStatus').getByText('File mapping ready.',{exact:false}).waitFor();
+  await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
+  await page.locator('#owgEventLogStatus').getByText('Imported 2 events.',{exact:false}).waitFor();
+  await page.locator('#owgEventLogAnalyze').click();
+  await templatePanel.getByText('Import an analysis definition',{exact:true}).click();
+  const templateFile={name:csvDefinition.suggestedFilename(),mimeType:'application/json',buffer:filteredBody};
+  await pickTemplate.setInputFiles(templateFile);
+  await templatePanel.getByText('Ready to save.',{exact:true}).waitFor();
+  await templatePanel.getByText('{"activity":"B"}',{exact:true}).waitFor();
+  assert.equal(await page.locator('#owgAnalysisSaved tbody tr').count(),0);
+  await templatePanel.getByRole('button',{name:'Save imported analysis'}).click();
+  await templatePanel.getByText('Analysis definition saved.',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'Run saved analysis Only B',exact:true}).click();
+  await complete();assert.match(await out.textContent(),/1 matching cases/);
+  await pickTemplate.setInputFiles(templateFile);
+  await templatePanel.getByText('This analysis is already saved.',{exact:true}).waitFor();
+  assert(await templatePanel.getByRole('button',{name:'Save imported analysis'}).isDisabled());
+
 
   const axe=await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8');
   await page.addScriptTag({content:axe});

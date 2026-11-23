@@ -1538,6 +1538,12 @@ captures the case notion and filter. Running it later uses that saved scope,
 and loading it for editing keeps the saved filter available in **Cases to
 analyse**.
 
+Use **Download definition** beside a saved analysis to export its specification,
+including inline metrics and the case notion. In another log, select the JSON
+file under **Import an analysis definition**, review the scope, and save it.
+The destination must have the same case notion. Import skips an identical
+saved definition and leaves the analysis ready to run.
+
 `POST /v1/event-logs/{log_id}/analysis` runs a typed analysis: a bounded, no-SQL counterpart
 to Celonis PQL-style custom analyses. You choose the parts from fixed lists; nothing you type
 is executed as a query. Attribute names and values are passed as parameters.

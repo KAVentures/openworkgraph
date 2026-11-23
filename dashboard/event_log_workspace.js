@@ -8278,9 +8278,63 @@
           +(c.cases_with_non_finite_value?' ('+c.cases_with_non_finite_value+' with a value that is not a finite number, such as NaN or an overflowing sum)':'')+'; cases without a value are left out of its measures.','muted')),
         ...(r.non_finite_results_withheld?[el('div',r.non_finite_results_withheld+' results overflowed and are shown as —.','muted')]:[]));
     }
+    function templateImportControls(){
+      const panel=document.createElement('details');panel.id='owgAnalysisTemplate';
+      panel.appendChild(el('summary','Import an analysis definition'));
+      const file=input('owgAnalysisTemplateFile','file');file.accept='.json,application/json';
+      const apply=button('Save imported analysis','secondary');apply.disabled=true;
+      const statusLine=el('div',null,'muted');statusLine.setAttribute('role','status');
+      const preview=el('div');
+      const row=el('div',null,'row');row.append(field('Analysis definition file',file),apply);
+      panel.append(row,statusLine,preview);
+      const endpoint=base()+'/analyses/template';
+      let revision=0,reviewed=null;
+      const current=ticket=>generation===state.generation&&ticket===revision&&panel.isConnected;
+      const send=async(path,body)=>(await api(endpoint+path,{method:'POST',
+        headers:{'Content-Type':'application/json'},body})).json();
+      file.onchange=async()=>{
+        const ticket=++revision,selected=file.files?.[0];
+        reviewed=null;apply.disabled=true;preview.replaceChildren();statusLine.textContent='';
+        if(!selected)return;
+        if(selected.size>65536){statusLine.textContent='Choose an analysis definition up to 64 KiB.';return;}
+        statusLine.textContent='Checking analysis definition…';
+        try{
+          const body=await selected.text();
+          if(!current(ticket))return;
+          const plan=await send('/preview',body);
+          if(!current(ticket))return;
+          const {name,spec}=plan.analysis;
+          statusLine.textContent=plan.duplicate?'This analysis is already saved.':plan.available_slots?'Ready to save.':'The saved analysis list is full.';
+          preview.replaceChildren(table(['Setting','Value'],[
+            ['Name',name],['Data level',spec.level],['Case notion',spec.case_type],
+            ['Case filter',Object.keys(spec.cohort).length?JSON.stringify(spec.cohort):'All cases'],
+            ['Dimensions',spec.dimensions.join(', ')||'None'],
+            ['Measures',spec.measures.map(measure=>measure.fn+(measure.of?' of '+measure.of:'')).join(', ')],
+            ['Case metrics',spec.metrics.map(metric=>metric.name).join(', ')||'None']
+          ]));
+          if(!plan.duplicate&&plan.available_slots){reviewed=body;apply.disabled=false;}
+        }catch(error){if(current(ticket))statusLine.textContent=error.message;}
+      };
+      apply.onclick=async()=>{
+        if(!reviewed||generation!==state.generation)return;
+        const ticket=++revision,body=reviewed;
+        reviewed=null;file.disabled=true;apply.disabled=true;statusLine.textContent='Saving definition…';
+        try{
+          const result=await send('/import',body);
+          if(!current(ticket))return;
+          file.value='';preview.replaceChildren();
+          statusLine.textContent=result.added?'Analysis definition saved.':'This analysis is already saved.';
+          await refresh();
+        }catch(error){if(current(ticket)){file.value='';preview.replaceChildren();statusLine.textContent=error.message;}}
+        finally{if(current(ticket))file.disabled=false;}
+      };
+      return panel;
+    }
+    box.appendChild(templateImportControls());
+
     async function refresh(){
       const r=await getJSON(base()+'/analyses');if(generation!==state.generation)return;
-      savedList.replaceChildren(r.analyses.length?table(['Saved analysis','Case notion','','',''],r.analyses.map(a=>{
+      savedList.replaceChildren(r.analyses.length?table(['Saved analysis','Case notion','','','',''],r.analyses.map(a=>{
         const open=button('Run','secondary');open.setAttribute('aria-label','Run saved analysis '+a.name);
         open.onclick=()=>execute({...a.spec}).catch(error=>{message.textContent=error.message;});
         const load=button('Load into builder','secondary');load.setAttribute('aria-label','Load saved analysis '+a.name+' into builder');
@@ -8302,9 +8356,22 @@
             message.textContent='Loaded '+a.name+' into the builder. Edit and run it, then save under a new name; the original is unchanged.';
           }catch(error){message.textContent=error.message;}
         };
+        const download=button('Download definition','secondary');
+        download.setAttribute('aria-label','Download definition for '+a.name);
+        download.onclick=async()=>{
+          download.disabled=true;
+          try{
+            const blob=await (await api(base()+'/analyses/'+encodeURIComponent(a.analysis_id)+'/template')).blob();
+            if(generation!==state.generation||!box.isConnected)return;
+            const link=el('a');link.href=URL.createObjectURL(blob);link.download=a.analysis_id+'-analysis.json';
+            document.body.appendChild(link);link.click();link.remove();
+            setTimeout(()=>URL.revokeObjectURL(link.href),1000);
+          }catch(error){if(generation===state.generation)message.textContent=error.message;}
+          finally{download.disabled=false;}
+        };
         const del=button('Delete','secondary');del.setAttribute('aria-label','Delete saved analysis '+a.name);
         del.onclick=async()=>{try{await api(base()+'/analyses/'+encodeURIComponent(a.analysis_id)+'/delete',{method:'POST'});message.textContent='Analysis deleted.';await refresh();}catch(error){message.textContent=error.message;}};
-        return [a.name,a.spec.case_type||'Default',open,load,del];})):el('div','No saved analyses yet.','muted'));
+        return [a.name,a.spec.case_type||'Default',open,load,download,del];})):el('div','No saved analyses yet.','muted'));
     }
     run.onclick=async()=>{
       try{
