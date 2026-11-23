@@ -76,6 +76,10 @@ def read_exact_stripe_attempt_event(
             or not re.fullmatch(r"[A-Za-z0-9_./:-]{1,160}", correlation_id)):
         return unknown
     try:
+        # Authorization must precede even local credential retrieval. A revoked
+        # dashboard/source grant must not unlock keychain access, let alone I/O.
+        if recheck_authorization() is not True:
+            return {**unknown, "revoked": True}
         env = credentials()
         if not isinstance(env, dict) or str(env.get("OWG_STRIPE_SOURCE_READ_ENABLED", "")).lower() not in ("true", "1", "on", "yes"):
             return {**unknown, "revoked": True}
