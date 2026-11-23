@@ -2915,6 +2915,27 @@ async def event_log_simulation_validation(request: Request, log_id: str,
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.get("/v1/event-logs/{log_id}/events.xlsx")
+def export_event_log_xlsx(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200)):
+    """The log's events as an Excel workbook (the CSV export's rows, as text cells). Not stored."""
+    import shutil
+    from . import event_log_xlsx_export as xlsx_export
+    _require_dashboard(request)
+    folder = tempfile.mkdtemp(prefix="owg-xlsx-export-", dir=str(DATA_DIR))
+    path = Path(folder) / "events.xlsx"
+    try:
+        xlsx_export.write(log_id, path, case_type)
+    except workspace.EventLogWorkspaceError as exc:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise HTTPException(422, str(exc)) from None
+    except BaseException:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+    return FileResponse(str(path), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        filename=f"{log_id}.xlsx", headers={"Cache-Control": "no-store"},
+                        background=BackgroundTask(shutil.rmtree, folder, ignore_errors=True))
+
+
 @router.get("/v1/event-logs/{log_id}/export")
 def export_event_log(request: Request, log_id: str, format: str = Query(pattern="^(csv|sourcecsv|csv-review|sourcecsv-review|xes|xes-attributes|ocel|ocelxml)$"),
                      case_type: str | None = Query(default=None, max_length=200)):
