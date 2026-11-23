@@ -1495,6 +1495,11 @@ Celonis Action Engine and UiPath process alerts. Rules belong to one log, are im
 - `POST /v1/event-logs/{log_id}/signals/evaluate` checks every rule now.
 
 Use **Preview signal** to check the current draft before choosing **Save signal**.
+When the analysis has a case filter, choose **Current case filter** to save its
+conditions with the rule. Signal conditions and their case filters use the
+original recorded activities. **All cases** is selected by default. Later changes to
+the analysis filter leave saved rules unchanged. For case conditions, enter
+**Minimum matching cases** to set the trigger count.
 
 Use **Move signal rules between logs** to download rule definitions as JSON, or
 select a JSON file and preview the import. The file includes each rule’s case notion,
