@@ -568,6 +568,31 @@
         }catch(error){if(state.logId===logId)status(error.message);}
         finally{saveNow.disabled=false;}
       };
+      const scheduling=document.createElement('details');
+      const interval=input('owgSavedReportScheduleInterval','number');interval.min='15';interval.max='10080';interval.step='1';interval.value='1440';
+      const schedule=button('Start report schedule','secondary');
+      const scheduleStatus=el('div',null,'muted');scheduleStatus.setAttribute('role','status');
+      const scheduleRow=el('div',null,'row');scheduleRow.style.alignItems='end';
+      scheduleRow.append(field('Interval in minutes',interval),schedule);
+      scheduling.append(el('summary','Schedule the current case selection'),
+        el('div','Each run saves a local copy using the case notion and filter selected when you start the schedule. Manage it under Scheduled jobs.','muted'),
+        scheduleRow,scheduleStatus);
+      schedule.onclick=async()=>{
+        if(state.logId!==logId)return;
+        const minutes=Number(interval.value);
+        if(!Number.isInteger(minutes)||minutes<15||minutes>10080){
+          scheduleStatus.textContent='Enter an interval from 15 to 10,080 minutes.';return;
+        }
+        const scope={cohort:globalCohort()};
+        if(state.caseType)scope.case_type=state.caseType;
+        schedule.disabled=true;
+        try{
+          const body={kind:'event_log_report',target_id:logId,interval_minutes:minutes,
+            confirm_scheduled_runs:true,report_scope:scope};
+          await api('/v1/schedules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+          scheduleStatus.textContent='Report schedule started.';
+        }catch(error){scheduleStatus.textContent=error.message;schedule.disabled=false;}
+      };
       const rows=r.reports.map(c=>{const get=button('Download','secondary');get.setAttribute('aria-label','Download saved report '+c.name);
         get.onclick=async()=>{try{const response=await api(savedBase()+'/'+encodeURIComponent(c.name));const url=URL.createObjectURL(await response.blob());const link=el('a');link.href=url;link.download=state.logId+'-'+c.name;document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(error){status(error.message);}};
         return [String(c.saved_at).replace('T',' ').replace('Z',' UTC'),Math.max(1,Math.round(c.bytes/1024))+' KB',get];});
@@ -575,6 +600,7 @@
         el('div','The newest '+r.keep+' copies of this log’s report are kept on this computer. Save a copy now uses the current case selection. To save one regularly, add an “Event log report copy” job under Scheduled jobs with this log’s ID: '+state.logId+'.','muted'),
         ...(note?[el('div',note)]:[]),
         rows.length?table(['Saved','Size',''],rows):el('div','No saved copies yet.','muted'),saveNow,savedComparisonControls(r.reports,changes));
+      savedList.appendChild(scheduling);
       show(savedList,true);savedButton.setAttribute('aria-expanded','true');
     }
     savedButton.onclick=()=>{if(savedButton.getAttribute('aria-expanded')==='true'){show(savedList,false);savedButton.setAttribute('aria-expanded','false');return;}
