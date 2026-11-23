@@ -1417,6 +1417,19 @@ Celonis Action Engine and UiPath process alerts. Rules belong to one log, are im
 - `POST /v1/event-logs/{log_id}/signals/{rule_id}/delete` removes one.
 - `POST /v1/event-logs/{log_id}/signals/evaluate` checks every rule now.
 
+Use **Move signal rules between logs** to download rule definitions as JSON, or
+select a JSON file and preview the import. The file includes each rule’s case notion,
+case filter, and condition. The destination must have the corresponding case notion.
+The import skips duplicate definitions and saves all remaining rules together if
+they fit. Screenshots, event data, prior results, acknowledgements, schedules and
+alerts are separate from the rule definitions. A changed rule set needs fresh
+approval for any existing pinned signal schedule.
+
+`GET /v1/event-logs/{log_id}/signals/pack` downloads a
+`openworkgraph.event-log-signal-pack.v1` document. POST the document to
+`/signals/pack/preview` or `/signals/pack/import` under the destination log.
+Files can hold up to 50 rules and 4 MiB.
+
 Rule kinds:
 
 - `kpi`: `case_count`, `median_throughput_seconds`, `p90_throughput_seconds`, `rework_rate` or

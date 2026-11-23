@@ -8143,6 +8143,72 @@
     return {name,when};
   }
 
+  function signalPackControls(logId,onImported){
+    const node=document.createElement('details');node.id='owgSignalPack';
+    node.appendChild(el('summary','Move signal rules between logs'));
+    const generation=state.generation;
+    const endpoint='/v1/event-logs/'+encodeURIComponent(logId)+'/signals/pack';
+    const download=button('Download rule definitions','secondary');
+    const file=input('owgSignalPackFile','file');file.accept='.json,application/json';
+    const save=button('Import signal rules','secondary');save.disabled=true;
+    const message=el('div',null,'muted');message.id='owgSignalPackStatus';message.setAttribute('role','status');
+    const details=el('div');details.id='owgSignalPackPreview';
+    const row=el('div',null,'row');row.append(download,field('Signal rules file',file),save);
+    node.append(el('p','Download the rules for this log, including their case scopes. Importing a file adds rules without running checks or enabling alerts.','muted'),row,message,details);
+
+    let revision=0,previewedBody=null;
+    const current=ticket=>ticket===revision&&generation===state.generation&&node.isConnected;
+    const send=async(path,body)=>(await api(endpoint+path,{method:'POST',
+      headers:{'Content-Type':'application/json'},body})).json();
+    download.onclick=async()=>{
+      download.disabled=true;
+      try{
+        const blob=await (await api(endpoint)).blob();
+        if(generation!==state.generation||!node.isConnected)return;
+        const link=el('a');link.href=URL.createObjectURL(blob);link.download=logId+'-signals.json';
+        document.body.appendChild(link);link.click();link.remove();
+        setTimeout(()=>URL.revokeObjectURL(link.href),1000);
+      }catch(error){if(generation===state.generation)message.textContent=error.message;}
+      finally{download.disabled=false;}
+    };
+    file.onchange=async()=>{
+      const ticket=++revision;
+      previewedBody=null;save.disabled=true;details.replaceChildren();message.textContent='';
+      const selected=file.files[0];
+      if(!selected)return;
+      if(selected.size>4*1024*1024){message.textContent='Choose a signal rules file no larger than 4 MiB.';return;}
+      message.textContent='Checking signal rules…';
+      try{
+        const body=await selected.text();
+        if(!current(ticket))return;
+        const plan=await send('/preview',body);
+        if(!current(ticket))return;
+        message.textContent=plan.new_rules+' to add. '+plan.duplicates+' already present or repeated in the file.'+
+          (plan.fits?'':' This log has room for '+plan.available_slots+' more rules.');
+        if(plan.rules.length)details.replaceChildren(table(['Signal','Rule type','Case notion','Status'],plan.rules.map(rule=>[
+          rule.name,rule.kind.replace(/_/g,' '),rule.case_type,rule.status==='new'?'Ready to add':'Duplicate'
+        ])));
+        if(plan.fits&&plan.new_rules){previewedBody=body;save.disabled=false;}
+      }catch(error){if(current(ticket))message.textContent=error.message;}
+    };
+    save.onclick=async()=>{
+      if(!previewedBody||generation!==state.generation)return;
+      const ticket=++revision,body=previewedBody;
+      previewedBody=null;file.disabled=true;save.disabled=true;
+      message.textContent='Importing signal rules…';
+      try{
+        const result=await send('/import',body);
+        if(!current(ticket))return;
+        file.value='';details.replaceChildren();
+        message.textContent=result.added+' rules added. '+result.duplicates+' duplicates skipped.';
+        await onImported();
+      }catch(error){
+        if(current(ticket)){file.value='';details.replaceChildren();message.textContent=error.message;}
+      }finally{if(current(ticket))file.disabled=false;}
+    };
+    return node;
+  }
+
   function signalSection(activityNames){
     const box=section('Signals');box.id='owgEventLogSignals';
     box.appendChild(el('div','Save conditions to check this log against, such as a slow median or cases left open. Checking shows which signals hold now and which cases are new since the last check. Signals never execute business actions. Optional outbound counts-only alerts require separate opt-in below.','muted'));
@@ -8233,6 +8299,7 @@
       timelineHeading,timelineNote,timelineControls,timelineStatus,timelineResults);
     const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/signals';
     const selectedLogId=state.logId;
+    rules.after(signalPackControls(selectedLogId,refresh));
     const inboxBase=()=>'/v1/event-logs/'+encodeURIComponent(selectedLogId)+'/signal-inbox';
     const deliveryBase=()=>'/v1/schedules/signal-delivery/'+encodeURIComponent(selectedLogId);
     let deliveryRequestId=0,hasDelivery=false;
