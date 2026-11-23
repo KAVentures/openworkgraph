@@ -682,6 +682,17 @@ async def event_log_activity_label_search(request: Request, log_id: str):
                                    body.get("after", ""), body.get("case_type"))
 
 
+@router.post("/v1/event-logs/{log_id}/resource-labels/search")
+async def event_log_resource_label_search(request: Request, log_id: str):
+    from . import event_log_activity_lookup as lookup
+    _require_dashboard(request)
+    body = await _json_body(request, "resource label search", strict=True, limit=4096)
+    if not isinstance(body, dict) or set(body) - {"search", "after", "case_type"} or "search" not in body:
+        raise HTTPException(422, "resource label search needs search text")
+    return await run_in_threadpool(_respond, lookup.resource_search, log_id, body["search"],
+                                   body.get("after", ""), body.get("case_type"))
+
+
 @router.get("/v1/event-logs/{log_id}/quality")
 def event_log_quality(request: Request, log_id: str):
     _require_dashboard(request)
