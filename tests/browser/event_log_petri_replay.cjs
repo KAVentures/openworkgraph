@@ -52,6 +52,12 @@ const path=require('node:path');
    assert((await out.locator('table').nth(1).textContent()).includes('Pay'));
    await out.locator('details summary').click();
    assert((await out.locator('details').textContent()).includes('Register → Pay → Close'));
+   const evidenceStatus=page.locator('#owgEventLogCasesStatus'),evidenceList=page.locator('#owgEventLogCasesList');
+   const variantButton='Inspect cases on Register → Pay → Close';
+   await out.getByRole('button',{name:variantButton,exact:true}).click();
+   await evidenceStatus.getByText('6 matching cases. Showing 6 on this page.',{exact:true}).waitFor();
+   await evidenceList.getByRole('button',{name:'Open case c0',exact:true}).click();
+   await page.locator('#owgEventLogCaseEvents').getByRole('status').filter({hasText:'Showing 3 of 3 events'}).waitFor();
    // Alignments name exactly which step each non-fitting case skipped.
    await page.locator('#owgPetriAlign').click();
    await page.locator('#owgPetriAlignStatus').filter({hasText:'Alignment fitness 97.4%: 24 of 30 cases follow the net exactly'}).waitFor();
@@ -60,6 +66,9 @@ const path=require('node:path');
    const skippedTable=await aligned.locator('table').nth(1).textContent();
    assert(skippedTable.includes('Check')&&skippedTable.includes('6'),skippedTable);
    assert((await aligned.locator('details').textContent()).includes('Register → −Check (skipped) → Pay → Close'));
+   await aligned.getByRole('button',{name:variantButton,exact:true}).click();
+   await page.locator('#owgEventLogCasesPath').getByText('Step-by-step alignment on strict.pnml.',{exact:false}).waitFor();
+   await evidenceStatus.getByText('6 matching cases. Showing 6 on this page.',{exact:true}).waitFor();
    // Cases i%5===0 skip Check; they alternate months, so each month has 3 non-fitting cases of 15.
    const months=await page.locator('#owgPetriAlignMonths').textContent();
    assert(months.includes('2024-011580%97.4%')&&months.includes('2024-021580%97.4%'),months);
@@ -101,9 +110,20 @@ const path=require('node:path');
    await page.locator('#owgPetriHappy').click();
    await page.locator('#owgPetriStatus').filter({hasText:'on the most common path (followed by 80% of cases): 24 of 30 cases'}).waitFor();
    assert.equal(await page.locator('#owgPetriAlign').isDisabled(),false);
+   await page.locator('#owgCaseFilterEndedBefore').fill('2024-02-01');
+   await page.locator('#owgCaseFilterApply').click();
+   await page.locator('#owgCaseFilterCount').filter({hasText:'Filtered: 15 of 30 cases'}).waitFor();
+   await page.locator('#owgPetriSaved').selectOption({label:'Strict target (4 transitions)'});
+   await page.locator('#owgPetriSavedRun').click();
+   await page.locator('#owgPetriStatus').filter({hasText:'on Strict target: 12 of 15 cases'}).waitFor();
+   await page.locator('#owgPetriAlign').click();
+   await aligned.getByRole('button',{name:variantButton,exact:true}).click();
+   await evidenceStatus.getByText('3 matching cases (case filter applied). Showing 3 on this page.',{exact:true}).waitFor();
+   assert.deepEqual(await evidenceList.getByRole('button',{name:/Open case c\d+$/}).evaluateAll(buttons=>buttons.map(b=>b.getAttribute('aria-label'))),
+     ['Open case c0','Open case c10','Open case c20']);
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgPetri'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Petri net replay browser acceptance passed: discovered net fits, uploaded strict net shows missing and remaining tokens, alignments name the skipped step, deviation root causes, unsafe XML refused, most common path as reference, conformance signal, saved reference net, WCAG audit.');
+   console.log('Petri net replay browser acceptance passed: missing tokens and skipped steps, exact evidence and filtered saved-net review, deviation causes, unsafe XML refusal, conformance signals, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});

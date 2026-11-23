@@ -2958,6 +2958,10 @@ log. The section lists the places where tokens went missing or were left behind,
 when the net did not allow them, activities the net does not have (skipped and counted), net
 transitions no case took, and the variants that do not fit.
 
+Choose **Inspect cases** next to a variant in token replay or the step-by-step explanation.
+The case list uses the exact observed path and the case filter from the report. Open a case
+to see its recorded event history.
+
 **Precision** (ETConformance, Muñoz-Gama and Carmona, 2010; PM4Py's `precision_token_based_replay`)
 asks the opposite question: how much more the net allows than the cases did. For each prefix of
 the recorded cases that replays without problems, the activities the net allows next, directly or
@@ -3025,8 +3029,9 @@ cases did where the net does not allow them, the activities the net required tha
 and the alignment fitness, so a change in adherence over time (for example after a process change)
 is visible. Each variant is aligned once. Up to 500 variants of at
 most 200 steps are aligned; the search has a per-variant and a total limit, and variants it cannot
-finish are listed as unaligned and left out of the fitness. When two explanations cost the same, one
-is shown.
+finish are left out of the fitness. **Variants without a completed alignment** lists the available
+paths from that search and links to their cases. The report also counts cases outside the length
+or variant limits. When two explanations cost the same, one is shown.
 
 `POST /v1/event-logs/{log_id}/petri-net-alignments` with the PNML file as the body, plus the
 case-filter parameters. The net is not stored.

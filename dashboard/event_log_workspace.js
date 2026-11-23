@@ -1094,7 +1094,7 @@
     results.appendChild(modelQualitySection());
     results.appendChild(modelChangeSection());
     results.appendChild(footprintsSection(inspection));
-    results.appendChild(petriReplaySection());
+    results.appendChild(petriReplaySection(inspection));
     results.appendChild(temporalProfileSection(inspection));
     results.appendChild(waitingSection(inspection));
     results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity),inspection));
@@ -1602,10 +1602,10 @@
       const picker=document.getElementById(prefix+'FilterActivity');
       if(!Array.from(picker.options).some(option=>option.value===value))picker.add(new Option(value,value));
       association=false;exactActivity.value='';activityLookup.reset();path=null;transition=null;chosen.textContent='All paths.';picker.value=value;start();box.scrollIntoView({block:'nearest'});
-    },variant(value,rank,cohort){
+    },variant(value,rank,cohort,description){
       path=null;transition=null;association=true;filterApplied=Object.keys(cohort).length>0;
       spec={cohort,variant_id:value,limit:30};
-      chosen.textContent='Exact path for variant '+rank+'.';
+      chosen.textContent=description||'Exact path for variant '+rank+'.';
       detail.replaceChildren();opening++;load(null);box.scrollIntoView({block:'nearest'});
     },transition(value){
       association=false;exactActivity.value='';activityLookup.reset();path=null;transition=value.slice();document.getElementById(prefix+'FilterActivity').value='';
@@ -6135,7 +6135,7 @@
     return box;
   }
 
-  function petriReplaySection(){
+  function petriReplaySection(inspection){
     const box=section('Check against a Petri net');box.id='owgPetri';
     const netsBase=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/reference-nets';
     box.appendChild(el('div','Replay the recorded cases on a Petri net from ProM, PM4Py, Apromore or another tool (a .pnml file), or on the net discovered here. Tokens that are missing or left behind show where the cases and the net disagree. The file is read for this check and not stored.','muted'));
@@ -6181,13 +6181,23 @@
       catch(error){savedMessage.textContent=error.message;}
       finally{saveRun.disabled=!lastNet;}};
     const pct=x=>Math.round((x||0)*1000)/10+'%';
+    const sectionGeneration=state.generation;
+    const inspectVariant=(variant,net,report)=>{
+      const inspect=button('Inspect cases','secondary');
+      const preview=variant.path.slice(0,5).join(' → ')+(variant.path.length>5?' … ('+variant.path.length+' events)':'');
+      inspect.setAttribute('aria-label','Inspect cases on '+preview);
+      inspect.onclick=()=>inspection.variant(variant.variant_id,null,net.cohort,report+' on '+net.label+'. Exact path for '+preview+'.');
+      return inspect;
+    };
     let lastNet=null;
     const replay=async(body,label)=>{
-      const generation=state.generation;run.disabled=own.disabled=happy.disabled=align.disabled=alertSave.disabled=true;aligned.replaceChildren();alertMessage.textContent='';lastNet=null;statusLine.textContent='Replaying on '+label+'…';out.replaceChildren();
+      if(sectionGeneration!==state.generation)return;
+      const generation=sectionGeneration,cohort=globalCohort();
+      run.disabled=own.disabled=happy.disabled=align.disabled=alertSave.disabled=true;aligned.replaceChildren();alertMessage.textContent='';lastNet=null;statusLine.textContent='Replaying on '+label+'…';out.replaceChildren();
       try{
         const r=await (await api(logPath('petri-net-replay',{}),{method:'POST',headers:{'Content-Type':'application/xml'},body})).json();
         if(generation!==state.generation)return;
-        lastNet={body,label,generation};
+        lastNet={body,label,generation,cohort};
         const f=r.fitness;
         statusLine.textContent='Fitness '+pct(f.log)+' on '+label+': '+Number(f.fitting_cases).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases ('+pct(f.fitting_case_share)+') replay without missing or remaining tokens.'+(r.precision.precision!==null?' Precision '+pct(r.precision.precision)+'.':'')+' The net has '+r.net.places+' places and '+r.net.transitions+' transitions ('+r.net.silent_transitions+' silent).'+(r.cases_excluded?' '+Number(r.cases_excluded).toLocaleString()+' cases beyond the length or variant limit were left out.':'');
         if(!r.net.final_marking_declared)out.appendChild(el('div','The file declares no final marking, so cases are expected to end with one token on each place nothing consumes from.','muted'));
@@ -6200,7 +6210,9 @@
         if(r.activities_not_in_net.length)out.appendChild(el('div','Activities the net does not have (skipped): '+r.activities_not_in_net.map(a=>a.activity+' ('+a.cases+' cases)').join(', ')+'.','muted'));
         if(r.net_labels_never_seen.length)out.appendChild(el('div','Net transitions no case took: '+r.net_labels_never_seen.join(', ')+'.','muted'));
         if(r.non_fitting_variants.length){const more=document.createElement('details');more.appendChild(el('summary','Variants that do not fit ('+r.non_fitting_variants.length+')'));
-          more.appendChild(table(['Variant','Cases','Fitness','Missing','Remaining'],r.non_fitting_variants.map(v=>[v.path.join(' → '),Number(v.cases).toLocaleString(),pct(v.fitness),String(v.missing_tokens),String(v.remaining_tokens)])));out.appendChild(more);}
+          more.appendChild(table(['Variant','Cases','Fitness','Missing','Remaining','Evidence'],r.non_fitting_variants.map(v=>[
+            v.path.join(' → '),Number(v.cases).toLocaleString(),pct(v.fitness),String(v.missing_tokens),String(v.remaining_tokens),inspectVariant(v,lastNet,'Token replay')
+          ])));out.appendChild(more);}
         out.appendChild(el('div',r.caveat,'muted'));
       }catch(error){statusLine.textContent=error.message;}
       finally{run.disabled=own.disabled=happy.disabled=false;align.disabled=alertSave.disabled=saveRun.disabled=!lastNet;}};
@@ -6226,7 +6238,9 @@
         const r=await (await api(logPath('petri-net-alignments',{}),{method:'POST',headers:{'Content-Type':'application/xml'},body:net.body})).json();
         if(generation!==state.generation)return;
         const f=r.fitness;
-        status.textContent='Alignment fitness '+pct(f.log)+': '+Number(f.fitting_cases).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases follow the net exactly. On average a case needs '+r.deviation_cost.per_case+' extra or skipped steps to fit.'+(r.unaligned.variants?' '+r.unaligned.variants+' variants ('+Number(r.unaligned.cases).toLocaleString()+' cases) were too long to align within the search limit.':'');
+        status.textContent=(r.cases?'Alignment fitness '+pct(f.log)+': '+Number(f.fitting_cases).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases follow the net exactly. On average a case needs '+r.deviation_cost.per_case+' extra or skipped steps to fit.':'No cases could be aligned.')+
+          (r.unaligned.variants?' Alignment did not finish for '+Number(r.unaligned.variants).toLocaleString()+' variants covering '+Number(r.unaligned.cases).toLocaleString()+' cases.':'')+
+          (r.cases_excluded?' '+Number(r.cases_excluded).toLocaleString()+' cases were outside the trace length or variant limits.':'');
         if(r.by_month.length>1){aligned.appendChild(el('h4','Fitness by month the cases started'));
           const t=table(['Month','Cases','Follow the net exactly','Alignment fitness'],r.by_month.map(m=>[m.month,Number(m.cases).toLocaleString(),pct(m.fitting_case_share),pct(m.fitness)]));t.id='owgPetriAlignMonths';aligned.appendChild(t);}
         if(r.log_moves.length){aligned.appendChild(el('h4','Steps the cases took that the net does not allow there'));
@@ -6234,7 +6248,17 @@
         if(r.model_moves.length){aligned.appendChild(el('h4','Steps the net requires that the cases skipped'));
           aligned.appendChild(table(['Activity','Cases','Times'],r.model_moves.map(m=>[m.activity,Number(m.cases).toLocaleString(),Number(m.times).toLocaleString()])));}
         if(r.non_fitting_variants.length){const more=document.createElement('details');more.open=true;more.appendChild(el('summary','How each non-fitting variant is explained ('+r.non_fitting_variants.length+' of '+r.non_fitting_variants_total+')'));
-          more.appendChild(table(['Variant','Cases','Fitness','Explanation'],r.non_fitting_variants.map(v=>[v.path.join(' → '),Number(v.cases).toLocaleString(),pct(v.fitness),v.alignment.map(step).join(' → ')])));aligned.appendChild(more);}
+          more.appendChild(table(['Variant','Cases','Fitness','Explanation','Evidence'],r.non_fitting_variants.map(v=>[
+            v.path.join(' → '),Number(v.cases).toLocaleString(),pct(v.fitness),v.alignment.map(step).join(' → '),inspectVariant(v,net,'Step-by-step alignment')
+          ])));aligned.appendChild(more);}
+        if(r.unaligned_variants?.length){
+          const more=document.createElement('details');
+          more.appendChild(el('summary','Variants without a completed alignment ('+r.unaligned_variants.length+' of '+r.unaligned.variants+')'));
+          more.appendChild(table(['Variant','Cases','Evidence'],r.unaligned_variants.map(v=>[
+            v.path.join(' → '),Number(v.cases).toLocaleString(),inspectVariant(v,net,'Variant without a completed alignment')
+          ])));
+          aligned.appendChild(more);
+        }
         aligned.appendChild(el('div',r.caveat,'muted'));
         if(r.non_fitting_variants.length){
           const download=button('Download non-fitting cases (CSV)','secondary');download.id='owgPetriCasesCsv';

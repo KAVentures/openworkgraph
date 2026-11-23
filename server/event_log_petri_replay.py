@@ -26,6 +26,7 @@ from typing import Any
 from xml.etree import ElementTree as ET
 
 from . import event_log_workspace as workspace
+from .event_log_variant_coverage import VARIANT_KEY_SQL
 from .event_log_workspace import EventLogWorkspaceError
 
 FORMAT = "openworkgraph.event_log_petri_replay.v1"
@@ -319,7 +320,8 @@ def replay(log_id: str, pnml: bytes, case_type: str | None = None, *,
             by_label.setdefault(label, []).append(t)
 
     def run(conn):
-        rows = conn.execute("""SELECT path, count(*) AS cases FROM (
+        variant_key = VARIANT_KEY_SQL.format(path="path")
+        rows = conn.execute(f"""SELECT path, count(*) AS cases, {variant_key} FROM (
               SELECT list(activity ORDER BY ts, event_id) AS path FROM ce GROUP BY case_id HAVING count(*) <= ?)
             GROUP BY path ORDER BY cases DESC, path LIMIT ?""", [MAX_TRACE_LENGTH, MAX_VARIANTS]).fetchall()
         total = conn.execute("SELECT count(DISTINCT case_id) FROM ce").fetchone()[0]
@@ -337,7 +339,7 @@ def replay(log_id: str, pnml: bytes, case_type: str | None = None, *,
     fitting_cases = cases = 0
     fitness_sum = 0.0
     variants = []
-    for path, n in rows:
+    for path, n, variant_id in rows:
         result = _replay(net, tuple(path), by_label)
         cases += n
         fitting_cases += n if result["fits"] else 0
@@ -353,14 +355,14 @@ def replay(log_id: str, pnml: bytes, case_type: str | None = None, *,
         for a in set(result["unknown"]):
             unknown[a] += n
         if not result["fits"]:
-            variants.append({"path": list(path), "cases": n, "fitness": round(result["fitness"], 4),
+            variants.append({"path": list(path), "variant_id": variant_id, "cases": n, "fitness": round(result["fitness"], 4),
                              "missing_tokens": result["missing"], "remaining_tokens": result["remaining"],
                              "activities_not_in_net": sorted(set(result["unknown"]))})
     c, p = totals["consumed"], totals["produced"]
     log_fitness = 0.5 * (1 - totals["missing"] / c if c else 1) + 0.5 * (1 - totals["remaining"] / p if p else 1)
     names = net["places"]
     labels = {t: (label if label is not None else f"silent {t}") for t, label in net["transitions"].items()}
-    observed = {a for path, _ in rows for a in path}
+    observed = {a for path, _, _ in rows for a in path}
     variants.sort(key=lambda v: (-v["cases"], v["fitness"]))
     return {
         "format": FORMAT, "log_id": log_id, "case_notion": data.get("case_notion"),
@@ -372,7 +374,7 @@ def replay(log_id: str, pnml: bytes, case_type: str | None = None, *,
         "variants": len(rows),
         "fitness": {"log": round(log_fitness, 4), "average_case": round(fitness_sum / cases, 4),
                     "fitting_cases": fitting_cases, "fitting_case_share": round(fitting_cases / cases, 4)},
-        "precision": _precision(net, rows, by_label),
+        "precision": _precision(net, [(path, cases) for path, cases, _ in rows], by_label),
         "tokens": {k: totals[k] for k in ("produced", "consumed", "missing", "remaining")},
         "places": sorted(({"place": names[pl], "missing": missing_at[pl], "remaining": remaining_at[pl]}
                           for pl in set(missing_at) | set(remaining_at)),
