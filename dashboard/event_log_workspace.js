@@ -1042,7 +1042,7 @@
     const csvRow=el('div',null,'row');csvRow.append(variantsCsv,variantsCsvStatus);variantBox.appendChild(csvRow);
     results.appendChild(variantBox);
     results.appendChild(variantCoverageSection(names));
-    results.appendChild(reworkSection());
+    results.appendChild(reworkSection(inspection));
     results.appendChild(statisticsExportSection());
     results.appendChild(objectMapSection());
     if(summary.log&&summary.log.object_relationships)results.appendChild(objectRelationshipSection());
@@ -1589,7 +1589,13 @@
       }
       more.onclick=page;await page();
     }
-    return {node:box,open:openCase,path(value,comparisonCohort){
+    function openSelection(selector,label,cohort={}){
+      path=null;transition=null;association=true;filterApplied=Object.keys(cohort).length>0;
+      spec={cohort,...selector,limit:30};
+      chosen.textContent=label;
+      detail.replaceChildren();opening++;load(null);box.scrollIntoView({block:'nearest'});
+    }
+    return {node:box,open:openCase,openSelection,path(value,comparisonCohort){
       if(value.length>500){message.textContent='This path exceeds the 500-step case selector limit. Browse by activity or cohort instead.';box.scrollIntoView({block:'nearest'});return;}
       association=false;path=value.slice();transition=null;chosen.textContent='Exact path: '+JSON.stringify(path);
       if(comparisonCohort!==undefined){
@@ -4067,7 +4073,7 @@
     return box;
   }
 
-  function reworkSection(){
+  function reworkSection(inspection){
     const box=section('Rework and loops');box.id='owgEventLogRework';
     box.appendChild(el('div','Activities that happen again in the same case, the loops they form, and how cases with rework compare with cases without.','muted'));
     const run=button('Find rework','secondary');run.id='owgReworkRun';
@@ -4077,13 +4083,25 @@
     run.onclick=async()=>{
       run.disabled=true;
       try{
-        const spec={};if(state.caseType)spec.case_type=state.caseType;
+        const cohort=globalCohort(),spec={cohort};if(state.caseType)spec.case_type=state.caseType;
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/rework',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
         if(generation!==state.generation)return;
         const k=r.loop_kinds,c=r.comparison;
         const parts=[el('div',pct(r.rework_rate)+' of '+Number(r.cases).toLocaleString()+' cases repeat at least one activity: '+k.self_loop+' with an immediate repeat, '+k.short_loop+' with a short loop (one step in between), '+k.longer_loop+' with a longer return.')];
-        if(r.activities.length)parts.push(table(['Activity','Cases repeating it','Share of its cases','Extra occurrences'],r.activities.map(a=>[a.activity,Number(a.cases_repeating).toLocaleString(),pct(a.repeat_share_of_cases_with_activity),Number(a.extra_occurrences).toLocaleString()])));
-        if(r.loop_patterns.length)parts.push(el('h4','Most common loops'),table(['Loop','Cases'],r.loop_patterns.map(p=>[p.pattern.join(' → '),Number(p.cases).toLocaleString()])));
+        const inspect=(label,selector)=>{
+          const buttonNode=button('Inspect cases','secondary');
+          buttonNode.setAttribute('aria-label','Inspect '+label);
+          buttonNode.onclick=()=>inspection.openSelection(selector,label,cohort);
+          return buttonNode;
+        };
+        if(r.activities.length)parts.push(table(['Activity','Cases repeating it','Share of its cases','Extra occurrences','Evidence'],r.activities.map(a=>[
+          a.activity,Number(a.cases_repeating).toLocaleString(),pct(a.repeat_share_of_cases_with_activity),Number(a.extra_occurrences).toLocaleString(),
+          inspect('cases repeating '+a.activity,{repeat_activity:a.activity})
+        ])));
+        if(r.loop_patterns.length)parts.push(el('h4','Most common loops'),table(['Loop','Cases','Evidence'],r.loop_patterns.map(p=>[
+          p.pattern.join(' → '),Number(p.cases).toLocaleString(),
+          inspect('cases with loop '+p.pattern.join(' → '),{loop_pattern:p.pattern})
+        ])));
         if(c)parts.push(el('div','Median throughput '+duration(c.median_throughput_with_rework_seconds)+' with rework vs '+duration(c.median_throughput_without_rework_seconds)+' without'+(c.median_difference_ci95_seconds?' (difference 95% interval '+duration(c.median_difference_ci95_seconds[0])+' to '+duration(c.median_difference_ci95_seconds[1])+')':'')+'; '+c.mean_events_with_rework+' vs '+c.mean_events_without_rework+' events per case.'));
         parts.push(el('div',r.interpretation,'muted'));out.replaceChildren(...parts);
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
