@@ -1888,6 +1888,16 @@ optionally its `log_revision` as `expected_revision`. For a supplied relationshi
 Keep these settings for subsequent pages and send the returned `next_after` as `after`.
 The optional `limit` is 1–100 (default 50).
 
+Use **Save as new rule set** to keep the current rules with the log. **Load rule set** restores
+their definitions for review, and **Check object rules** evaluates them against the current log.
+**Update loaded rule set** saves edits to the loaded revision. Deleting a saved set leaves the
+current draft available. Deleting its log also deletes its saved sets.
+
+The dashboard APIs are `GET/POST /v1/event-logs/{log_id}/object-rule-sets` and
+`GET/PUT/DELETE /v1/event-logs/{log_id}/object-rule-sets/{set_id}`. Send `name` and `rules`
+when creating or updating. Updates take `expected_revision` in the body, and deletes take the
+same field as a query parameter.
+
 ## Process model discovery
 
 `GET /v1/event-logs/{log_id}/model-discovery` builds a draft process model from the log, in the

@@ -1971,6 +1971,44 @@ async def event_log_rule_discovery(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.get("/v1/event-logs/{log_id}/object-rule-sets")
+def event_log_object_rule_sets(request: Request, log_id: str):
+    from . import event_log_object_rule_sets as rule_sets
+    _require_dashboard(request)
+    return _respond(rule_sets.listing, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/object-rule-sets")
+async def event_log_save_object_rule_set(request: Request, log_id: str):
+    from . import event_log_object_rule_sets as rule_sets
+    _require_dashboard(request)
+    spec = await _json_body(request, "saved object rule set", strict=True)
+    return await run_in_threadpool(_respond, rule_sets.save, log_id, spec)
+
+
+@router.get("/v1/event-logs/{log_id}/object-rule-sets/{set_id}")
+def event_log_load_object_rule_set(request: Request, log_id: str, set_id: str):
+    from . import event_log_object_rule_sets as rule_sets
+    _require_dashboard(request)
+    return _respond(rule_sets.get, log_id, set_id)
+
+
+@router.put("/v1/event-logs/{log_id}/object-rule-sets/{set_id}")
+async def event_log_update_object_rule_set(request: Request, log_id: str, set_id: str):
+    from . import event_log_object_rule_sets as rule_sets
+    _require_dashboard(request)
+    spec = await _json_body(request, "saved object rule set", strict=True)
+    return await run_in_threadpool(_respond, rule_sets.update, log_id, set_id, spec)
+
+
+@router.delete("/v1/event-logs/{log_id}/object-rule-sets/{set_id}")
+def event_log_delete_object_rule_set(request: Request, log_id: str, set_id: str,
+                                     expected_revision: int = Query(ge=1)):
+    from . import event_log_object_rule_sets as rule_sets
+    _require_dashboard(request)
+    return _respond(rule_sets.delete, log_id, set_id, expected_revision)
+
+
 @router.post("/v1/event-logs/{log_id}/object-constraints")
 async def event_log_object_constraints(request: Request, log_id: str):
     _require_dashboard(request)

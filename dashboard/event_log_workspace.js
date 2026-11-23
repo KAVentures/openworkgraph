@@ -2977,11 +2977,20 @@
     template.onchange=sync;sync();
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Rule',template),field('Object type T',objectType),...Object.values(f),add);
     const pending=el('div');pending.id='owgObjectRuleList';
+    const savedPick=select('owgObjectRuleSaved',[]);
+    const savedName=input('owgObjectRuleSavedName','text');savedName.maxLength=120;
+    const loadSet=button('Load rule set','secondary');loadSet.id='owgObjectRuleLoadSet';
+    const saveSet=button('Save as new rule set','secondary');saveSet.id='owgObjectRuleSaveSet';
+    const updateSet=button('Update loaded rule set','secondary');updateSet.id='owgObjectRuleUpdateSet';
+    const deleteSet=button('Delete rule set','secondary');deleteSet.id='owgObjectRuleDeleteSet';
+    const savedRow=el('div',null,'row');savedRow.style.alignItems='end';
+    savedRow.append(field('Saved rule sets',savedPick),loadSet,deleteSet,field('Rule set name',savedName),saveSet,updateSet);
+    const savedStatus=el('div',null,'muted');savedStatus.id='owgObjectRuleSavedStatus';savedStatus.setAttribute('role','status');
     const message=el('div',null,'muted');message.id='owgObjectRuleStatus';message.setAttribute('role','status');
     const out=el('div');out.id='owgObjectRuleResults';
     const review=el('div');review.id='owgObjectRuleViolations';
     const history=el('div');history.id='owgObjectRuleObjectHistory';
-    box.append(row,pending,run,message,out,review,history);
+    box.append(row,pending,savedRow,savedStatus,run,message,out,review,history);
     const rules=[],generation=state.generation,logId=state.logId;let requestVersion=0,last=null;
     const current=turn=>generation===state.generation&&box.isConnected&&turn===requestVersion;
     const base='/v1/event-logs/'+encodeURIComponent(logId);
@@ -3053,6 +3062,65 @@
       next.onclick=()=>{cursors[index+1]=following;load(index+1);};
       load(0);
     }
+    const savedCurrent=()=>generation===state.generation&&box.isConnected;
+    const savedBase=base+'/object-rule-sets';
+    let sets=[],loaded=null,savedBusy=false;
+    function syncSaved(){
+      const selected=sets.find(entry=>entry.set_id===savedPick.value);
+      savedPick.disabled=savedBusy||!sets.length;
+      loadSet.disabled=deleteSet.disabled=savedBusy||!selected;
+      const canSave=!savedBusy&&rules.length>0&&Boolean(savedName.value.trim());
+      saveSet.disabled=!canSave;
+      updateSet.disabled=!canSave||!loaded||!selected||loaded.set_id!==selected.set_id;
+    }
+    async function refreshSaved(preferred=savedPick.value){
+      const data=await getJSON(savedBase);
+      if(!savedCurrent())return;
+      sets=data.sets;
+      setOptions(savedPick,[['','Choose a saved rule set'],...sets.map(s=>[s.set_id,s.name+' ('+s.rule_count+' '+(s.rule_count===1?'rule':'rules')+')'])]);
+      if(sets.some(s=>s.set_id===preferred))savedPick.value=preferred;
+      syncSaved();
+    }
+    async function manageSaved(action){
+      savedBusy=true;syncSaved();
+      try{await action();}
+      catch(error){if(savedCurrent())savedStatus.textContent=error.message;}
+      finally{if(savedCurrent()){savedBusy=false;syncSaved();}}
+    }
+    const sendSaved=async(url,method,spec)=>(await api(url,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+    loadSet.onclick=()=>manageSaved(async()=>{
+      const key=savedPick.value,turn=requestVersion;
+      const r=await getJSON(savedBase+'/'+encodeURIComponent(key));
+      if(!savedCurrent())return;
+      if(turn!==requestVersion){savedStatus.textContent='The rule editor changed while this set was loading. Load it again to replace the draft.';return;}
+      loaded=r;savedName.value=r.name;rules.splice(0,rules.length,...r.rules);drawPending();
+      savedStatus.textContent='Loaded '+r.name+'.';
+    });
+    function storeSaved(existing){
+      return manageSaved(async()=>{
+        const spec={name:savedName.value.trim(),rules};
+        const url=existing?savedBase+'/'+encodeURIComponent(loaded.set_id):savedBase;
+        if(existing)spec.expected_revision=loaded.revision;
+        const r=await sendSaved(url,existing?'PUT':'POST',spec);
+        if(!savedCurrent())return;
+        loaded=r;
+        savedStatus.textContent=(existing?'Updated ':'Saved ')+r.name+'.';
+        await refreshSaved(r.set_id);
+      });
+    }
+    saveSet.onclick=()=>storeSaved(false);updateSet.onclick=()=>storeSaved(true);
+    deleteSet.onclick=()=>{
+      const selected=sets.find(entry=>entry.set_id===savedPick.value);
+      if(!selected||!window.confirm('Delete saved rule set “'+selected.name+'”?'))return;
+      manageSaved(async()=>{
+        await api(savedBase+'/'+encodeURIComponent(selected.set_id)+'?expected_revision='+selected.revision,{method:'DELETE'});
+        if(!savedCurrent())return;
+        if(loaded?.set_id===selected.set_id)loaded=null;
+        savedStatus.textContent='Deleted '+selected.name+'.';
+        await refreshSaved('');
+      });
+    };
+    savedPick.onchange=syncSaved;savedName.oninput=syncSaved;
     const exports=exportButtons('owgObjectRuleExport',()=>last,r=>[
       ['Rule','Complete','Units','Activated','Violating retained shape','Satisfied retained shape','Relationship digest','Object ID/type digest','Append revision','Basis','Independently verified','Source completeness','Relationship validity','Business compliance','Execution authorized'],
       ...r.results.map(res=>[res.description,res.complete,res.units??'',res.activated??'',res.violating??'',res.satisfied??'',res.relationship_basis?r.supplied_relationship_basis?.relationships_sha256||'':'',res.relationship_basis?r.supplied_relationship_basis?.object_index_sha256||'':'',res.relationship_basis?r.supplied_relationship_basis?.revision??'':'',res.relationship_basis||'recorded_event_links',false,res.source_completeness||'unknown',res.relationship_validity||'unknown',res.business_compliance||'unknown',false])]);
@@ -3063,8 +3131,10 @@
       requestVersion++;last=null;exports.enable(false);show(exports.node,false);out.replaceChildren();clearReview();
       pending.replaceChildren(rules.length?table(['Rule',''],rules.map((r,i)=>{const del=button('Remove','secondary');del.setAttribute('aria-label','Remove object rule '+label(r));del.onclick=()=>{rules.splice(i,1);drawPending();};return [label(r),del];})):el('div','No object rules added yet.','muted'));
       run.disabled=!rules.length;
+      syncSaved();
     }
     drawPending();
+    manageSaved(()=>refreshSaved());
     add.onclick=()=>{try{if(rules.length>=20)throw new Error('Check at most 20 object rules at once.');rules.push(objectRule({template:template.value,activity:activity.value,objectType:objectType.value,relatedType:relatedType.value,required:required.value,via:via.value,min:min.value,max:max.value,direction:direction.value,exactQualifier:exact.checked,qualifier:qualifier.value}));message.textContent='';drawPending();}catch(error){message.textContent=error.message;}};
     run.onclick=async()=>{
       const turn=++requestVersion;run.disabled=true;last=null;exports.enable(false);show(exports.node,false);clearReview();

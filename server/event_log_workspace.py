@@ -96,6 +96,11 @@ CREATE TABLE IF NOT EXISTS quarantine_decisions (
 CREATE TABLE IF NOT EXISTS filter_sets (
   log_id VARCHAR NOT NULL, set_id VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL, definition VARCHAR NOT NULL
 );
+CREATE TABLE IF NOT EXISTS object_rule_sets (
+  log_id VARCHAR NOT NULL, set_id VARCHAR NOT NULL, name VARCHAR NOT NULL, revision INTEGER NOT NULL,
+  created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL, definition VARCHAR NOT NULL,
+  PRIMARY KEY (log_id, set_id)
+);
 CREATE TABLE IF NOT EXISTS event_log_feeds (
   log_id VARCHAR NOT NULL, feed_id VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL, definition VARCHAR NOT NULL
 );
@@ -848,7 +853,7 @@ def delete_log(log_id: str, *, only_if_expired_at: datetime | None = None) -> di
                 forget_dataset(conn, log_id)
                 from .event_log_agent_access import erase as erase_agent_access
                 erase_agent_access(conn, log_id)
-                for table in ("object_relationships", "event_source_keys", "event_source_namespaces", "discovery_snapshots", "log_appends", "log_quality", "quarantine", "quarantine_decisions", "filter_sets",
+                for table in ("object_relationships", "event_source_keys", "event_source_namespaces", "discovery_snapshots", "log_appends", "log_quality", "quarantine", "quarantine_decisions", "filter_sets", "object_rule_sets",
                               "domain_pack_installs", "cohort_metric_definitions", "metric_definitions", "saved_analyses", "signal_snoozes", "signal_reviews", "signal_transitions", "signal_rules", "reference_nets", "case_tags", "case_attribute_upload_changes", "case_attribute_uploads", "event_log_agent_shares", "event_log_agent_tag_grants", "event_log_agent_run_sources", "cost_models", "activity_notes", "event_objects", "events", "objects",
                               "object_attribute_values",
                               "logs"):
