@@ -7,18 +7,20 @@
   // More case filters (Disco-style timeframe, performance and variation filters): end time, events per case,
   // how many cases share the case's path, and rework.
   const START_FILTER_KEYS=['started_from','started_before'];
-  const MORE_FILTER_KEYS=[...START_FILTER_KEYS,'ended_from','ended_before','events','path_cases','rework','tag','without_tag','without_activity'];
+  const MORE_FILTER_KEYS=[...START_FILTER_KEYS,'ended_from','ended_before','events','path_cases','rework','tag','without_tag','without_activity','resource','event_attribute'];
   const countText=(r,what)=>what+' '+(r.min!==undefined&&r.max!==undefined?(r.min===r.max?'= '+r.min:r.min+'–'+r.max):r.min!==undefined?'\u2265 '+r.min:'\u2264 '+r.max);
   const utcFilterTime=value=>value.endsWith('T00:00:00Z')?value.slice(0,10):value.replace('T',' ').replace('Z',' UTC');
   const moreFilterText=a=>[a.started_from?'started from '+utcFilterTime(a.started_from):'',
-    a.started_before?'started before '+utcFilterTime(a.started_before):'',a.ended_from?'ended from '+a.ended_from.slice(0,10):'',a.ended_before?'ended before '+a.ended_before.slice(0,10):'',a.events?countText(a.events,'events per case'):'',a.path_cases?countText(a.path_cases,'cases on the same path'):'',a.rework===true?'repeats an activity':a.rework===false?'repeats no activity':'',a.tag?'tagged '+JSON.stringify(a.tag):'',a.without_tag?'not tagged '+JSON.stringify(a.without_tag):'',a.without_activity?'never does '+JSON.stringify(a.without_activity):''].filter(Boolean).join('; ');
+    a.started_before?'started before '+utcFilterTime(a.started_before):'',
+    a.resource?'contains resource '+JSON.stringify(a.resource):'',
+    a.event_attribute?'event attribute '+a.event_attribute:'',a.ended_from?'ended from '+a.ended_from.slice(0,10):'',a.ended_before?'ended before '+a.ended_before.slice(0,10):'',a.events?countText(a.events,'events per case'):'',a.path_cases?countText(a.path_cases,'cases on the same path'):'',a.rework===true?'repeats an activity':a.rework===false?'repeats no activity':'',a.tag?'tagged '+JSON.stringify(a.tag):'',a.without_tag?'not tagged '+JSON.stringify(a.without_tag):'',a.without_activity?'never does '+JSON.stringify(a.without_activity):''].filter(Boolean).join('; ');
   const filterOn=()=>state.follows.length>0||!!state.attr.attribute||!!state.attr.attribute_range||!!state.attr.starts_with||!!state.attr.ends_with||!!state.attr.duration||MORE_FILTER_KEYS.some(k=>state.attr[k]!==undefined)||!!state.caseActivity;
   const globalCohort=()=>({...(state.follows.length?{follows:state.follows}:{}),...state.attr,...(state.caseActivity?{activity:state.caseActivity}:{})});
   const rangeText=r=>(r.min!==undefined?r.min+' ≤ ':'')+r.name+(r.max!==undefined?' < '+r.max:'');
   const hoursText=s=>Number((s/3600).toFixed(3))+' h';
   const durationText=d=>'case duration '+(d.min!==undefined?'\u2265 '+hoursText(d.min):'')+(d.min!==undefined&&d.max!==undefined?' and ':'')+(d.max!==undefined?'< '+hoursText(d.max):'');
   const attrText=()=>[state.attr.attribute,state.attr.attribute_range?rangeText(state.attr.attribute_range):'',state.attr.starts_with?'starts with '+JSON.stringify(state.attr.starts_with):'',state.attr.ends_with?'ends with '+JSON.stringify(state.attr.ends_with):'',state.attr.duration?durationText(state.attr.duration):'',moreFilterText(state.attr)].filter(Boolean).join('; ');
-  let activityLookupBusy=false;
+  let labelLookupBusy=false;
   // Views that honour the workspace case filter; every other section uses all cases.
   const FILTERED=new Set(['automation-candidates','summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','performance-spectrum','waiting-time','drift','model-discovery','organization','report.html','decision-points','decision-rules']);
   FILTERED.add('roles');
@@ -1895,6 +1897,7 @@
     const wrap=el('div'),find=button('Find labels','secondary'),more=button('More matches','secondary'),use=button('Use label','secondary');
     find.id=options.id('Find');more.id=options.id('More');use.id=options.id('Use');
     const subject=options.subject;
+    const kind=options.kind||'activity';
     find.setAttribute('aria-label','Find matching '+subject);
     more.setAttribute('aria-label','More matches for '+subject);
     use.setAttribute('aria-label','Use selected '+subject);
@@ -1906,10 +1909,10 @@
     async function load(after){
       const search=exact.value;
       if(!search||Array.from(search).length>200){status.textContent='Enter 1 to 200 characters to search.';return;}
-      if(activityLookupBusy){status.textContent='Wait for the current activity lookup to finish.';return;}
-      const ticket=++turn;activityLookupBusy=true;find.disabled=true;more.disabled=true;use.disabled=true;status.textContent='Searching the current case notion…';
+      if(labelLookupBusy){status.textContent='Wait for the current label lookup to finish.';return;}
+      const ticket=++turn;labelLookupBusy=true;find.disabled=true;more.disabled=true;use.disabled=true;status.textContent='Searching the current case notion…';
       try{
-        const result=await (await api('/v1/event-logs/'+encodeURIComponent(lookupLog)+'/activity-labels/search',{
+        const result=await (await api('/v1/event-logs/'+encodeURIComponent(lookupLog)+'/'+kind+'-labels/search',{
           method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({search,after,case_type:lookupCase||null})})).json();
         if(!current(ticket)||exact.value!==search)return;
         const labels=Array.isArray(result.labels)?result.labels:[];
@@ -1917,7 +1920,7 @@
         show(choiceField,labels.length>0);show(use,labels.length>0);show(more,next!==null);
         status.textContent=labels.length+' matching labels on this page. Search is case-sensitive; results can change between pages.';
       }catch(error){if(current(ticket))status.textContent=error.message;}
-      finally{activityLookupBusy=false;if(wrap.isConnected&&lookupGeneration===state.generation&&lookupLog===state.logId&&activeCase===state.caseType){find.disabled=false;more.disabled=false;use.disabled=false;}}
+      finally{labelLookupBusy=false;if(wrap.isConnected&&lookupGeneration===state.generation&&lookupLog===state.logId&&activeCase===state.caseType){find.disabled=false;more.disabled=false;use.disabled=false;}}
     }
     find.onclick=()=>load('');more.onclick=()=>{if(next!==null)load(next);};
     use.onclick=()=>{if(!choices.value)return;exact.value=choices.value;exact.dispatchEvent(new Event('input',{bubbles:true}));exact.focus();};
@@ -1946,6 +1949,15 @@
     if(state.attr.attribute_range){const r=state.attr.attribute_range;rangeName.value=r.name;if(r.min!==undefined)rangeMin.value=r.min;if(r.max!==undefined)rangeMax.value=r.max;}
     const attrRow=el('div',null,'row');attrRow.style.alignItems='end';
     attrRow.append(field('Case attribute equals (name=value)',attrValue),field('Numeric case attribute',rangeName),field('From',rangeMin),field('Below',rangeMax));
+    const resource=input('owgCaseFilterResource','text','Exact resource label');
+    const eventAttribute=input('owgCaseFilterEventAttribute','text','for example channel=web');
+    for(const node of [resource,eventAttribute]){node.maxLength=400;node.autocomplete='off';}
+    resource.value=state.attr.resource||'';eventAttribute.value=state.attr.event_attribute||'';
+    const resourceLookup=activityLabelLookup(resource,{id:part=>'owgCaseFilterResource'+part,
+      subject:'resource label',kind:'resource'});
+    resource.addEventListener('input',resourceLookup.reset);
+    attrRow.append(field('Case contains exact resource',resource),resourceLookup.wrap,
+      field('Event attribute equals (name=value)',eventAttribute));
     // Endpoints and performance filters (Disco/Celonis): first or last activity, and case duration.
     const startsWith=input('owgCaseFilterStartsWith','text','exact first activity');startsWith.maxLength=400;startsWith.value=state.attr.starts_with||'';
     const endsWith=input('owgCaseFilterEndsWith','text','exact last activity');endsWith.maxLength=400;endsWith.value=state.attr.ends_with||'';
@@ -1990,6 +2002,18 @@
     function readAttr(){
       const out={},value=attrValue.value.trim();
       if(value){if(!value.includes('=')||!value.split('=')[0].trim())throw new Error('Write the case attribute as name=value.');out.attribute=value;}
+      const actor=resource.value, eventValue=eventAttribute.value.trim();
+      if(actor){
+        if(Array.from(actor).length>200)throw new Error('Enter a resource label of at most 200 characters.');
+        out.resource=actor;
+      }
+      if(eventValue){
+        const separator=eventValue.indexOf('=');
+        if(separator<1||!eventValue.slice(0,separator).trim()||Array.from(eventValue).length>200){
+          throw new Error('Write the event attribute as name=value, up to 200 characters.');
+        }
+        out.event_attribute=eventValue;
+      }
       const name=rangeName.value.replace(/^[\p{White_Space}\u001c-\u001f]+|[\p{White_Space}\u001c-\u001f]+$/gu,'');
       if(name||rangeMin.value||rangeMax.value){
         if(!name)throw new Error('Name the numeric case attribute.');
