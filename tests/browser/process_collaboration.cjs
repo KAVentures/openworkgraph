@@ -865,7 +865,7 @@ results={'format':'openworkgraph.shadow-plan-results.v1','process_reference':ref
     await bob
       .getByRole("button", { name: "Record design review", exact: true })
       .click();
-    await waitStatus(bob, "You are not a reviewer for this process");
+    // The fresh authenticated preflight rejects the revoked reviewer before\n    // any review POST. The UI now reports this as a revision/permission conflict\n    // rather than relying on the old server-side POST rejection message.\n    await bob.locator("#reviewOutcome").filter({\n      hasText: "Review permission or revision changed",\n    }).waitFor();\n    assert.equal(await bob.locator("#reviewConfirm").isChecked(), false);
     const reader = await login("reader");
     assert.equal(
       await reader
