@@ -102,24 +102,22 @@ def test_provider_account_replacement_during_read_denies_verdict(monkeypatch):
 
 
 def test_revoked_source_before_provider_io_never_calls_reader(monkeypatch):
-    """A source revoked after route admission must block provider network I/O."""
+    """Even an adapter ignoring its guard must not run after source revocation."""
     install(monkeypatch)
     from server import local_source_credentials
     from server import open_work_provider_attempt_verification as verifier
     monkeypatch.setattr(local_source_credentials, "_read_metadata",
                         lambda path: {"account": "acct_12345678"})
     calls = []
-    def verify(**kwargs):
+    def forbidden(**kwargs):
         calls.append("verifier")
-        assert kwargs["recheck_authorization"]() is False
-        return {"status": "unknown", "reason": "authorization_revoked",
-                "provider_operation": "unknown", "customer_outcome": "unknown"}
-    monkeypatch.setattr(verifier, "verify_provider_attempt", verify)
+        raise AssertionError("revoked source must not invoke the provider adapter")
+    monkeypatch.setattr(verifier, "verify_provider_attempt", forbidden)
     monkeypatch.setattr(routes, "_source_scope", lambda: None)
-    result = asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
-    assert calls == ["verifier"]
-    assert result["provider_event_independently_rechecked_on_this_read"] is False
-    assert result["provider_event_attributed_to_agent_run"] is False
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
+    assert exc.value.status_code == 403
+    assert calls == []
 
 
 def test_current_source_guard_is_passed_to_verifier(monkeypatch):
