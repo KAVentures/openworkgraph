@@ -1533,6 +1533,11 @@ saved log; it is not a verified business problem, a cause or an instruction to a
 
 ## Ad-hoc analyses
 
+The builder can use all cases or the current case filter. Saving the result
+captures the case notion and filter. Running it later uses that saved scope,
+and loading it for editing keeps the saved filter available in **Cases to
+analyse**.
+
 `POST /v1/event-logs/{log_id}/analysis` runs a typed analysis: a bounded, no-SQL counterpart
 to Celonis PQL-style custom analyses. You choose the parts from fixed lists; nothing you type
 is executed as a query. Attribute names and values are passed as parameters.

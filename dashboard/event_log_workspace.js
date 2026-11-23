@@ -7456,6 +7456,8 @@
     }
     const measures=[values.measure1,values.measure2].filter(Boolean).map(m=>{const i=m.indexOf(':');return i<0?{fn:m}:{fn:m.slice(0,i),of:m.slice(i+1)};});
     const spec={level:values.level,dimensions:dims,measures,limit:Number(values.limit)||100};
+    if(values.caseType)spec.case_type=values.caseType;
+    if(values.cohort&&Object.keys(values.cohort).length)spec.cohort=values.cohort;
     if(values.level==='cases'&&values.metrics&&values.metrics.length)spec.metrics=values.metrics;
     if(values.level==='cases'){
       const where={};const h=Number(values.hours);
@@ -7477,13 +7479,15 @@
       if(out&&typeof out==='object'&&!out.from_activity&&!out.to_activity&&out.stage_occurrence==='first')delete out.stage_occurrence;
       return out;};
     spec={...spec,where:unset(spec.where),metrics:Array.isArray(spec.metrics)?spec.metrics.map(unsetMetric):spec.metrics};
-    const allowed=new Set(['level','dimensions','measures','limit','metrics','where','case_type']);
+    const allowed=new Set(['level','dimensions','measures','limit','metrics','where','case_type','cohort']);
     // A stored spec echoes server defaults; only a non-default value is an unsupported option.
-    const defaults={cohort:'{}',activity_in:'[]',order:'"first_measure_desc"',time_zone:'null',time_of_week:'null'};
+    const defaults={activity_in:'[]',order:'"first_measure_desc"',time_zone:'null',time_of_week:'null'};
     if(Object.keys(spec).some(k=>!allowed.has(k)&&!(Object.hasOwn(defaults,k)&&JSON.stringify(spec[k]??null)===defaults[k])))
       throw new Error('This saved analysis uses options not supported by the builder; use Run instead.');
     if(!['cases','events'].includes(spec.level)||spec.limit!==100)throw new Error('This saved analysis cannot be edited in this builder; use Run instead.');
     if((spec.case_type||'')!==selectedCaseType)throw new Error('Select the saved analysis case notion before loading it.');
+    const cohort=spec.cohort??{};
+    if(typeof cohort!=='object'||Array.isArray(cohort))throw new Error('Saved analysis has an invalid case filter.');
     if(!Array.isArray(spec.dimensions)||spec.dimensions.length>2)throw new Error('Saved analysis dimensions cannot be edited here.');
     const dimOptions=new Set(ANALYSIS_DIMENSIONS[spec.level].map(x=>x[0]));
     const dims=spec.dimensions.map(d=>{
@@ -7540,7 +7544,7 @@
     const standard=new Set(ANALYSIS_MEASURES[spec.level].map(x=>x[0]));
     const measures=spec.measures.map(m=>{
       if(!m||typeof m!=='object'||typeof m.fn!=='string')throw new Error('Saved analysis has an invalid measure.');
-      const value=m.of===undefined?m.fn:m.fn+':'+m.of;
+      const value=m.of==null?m.fn:m.fn+':'+m.of;
       if(!standard.has(value)&&!(spec.level==='cases'&&['median','avg','sum','max'].includes(m.fn)&&
           typeof m.of==='string'&&m.of.startsWith('metric:')&&prior.has(m.of.slice(7))))
         throw new Error('Saved analysis uses a measure not available in the builder.');
@@ -7549,7 +7553,7 @@
     return {level:spec.level,dim1:dims[0]?.kind||'',attr1:dims[0]?.attribute||'',
       dim2:dims[1]?.kind||'',attr2:dims[1]?.attribute||'',measure1:measures[0],
       measure2:measures[1]||'',hours,endsWith:where.ends_with||'',
-      metrics:metrics.map(m=>JSON.parse(JSON.stringify(m)))};
+      metrics:metrics.map(m=>JSON.parse(JSON.stringify(m))),cohort:JSON.parse(JSON.stringify(cohort))};
   }
 
   // One typed case metric from form values; throws a readable error.
@@ -7770,6 +7774,16 @@
     const box=section('Build an analysis');box.id='owgEventLogAnalysis';
     box.appendChild(el('div','Group cases or events by up to two dimensions and choose what to measure. The choices are fixed, so no query text is ever run directly.','muted'));
     const level=select('owgAnalysisLevel',[['cases','Cases'],['events','Events']]);
+    const activeCohort=filterOn()?globalCohort():null;
+    let loadedCohort=null;
+    const caseScope=select('owgAnalysisScope',[]),scopeField=field('Cases to analyse',caseScope);
+    function setScopeOptions(cohort){
+      loadedCohort=Object.keys(cohort).some(key=>key!=='label')?cohort:null;
+      const options=[['all','All cases'],...(activeCohort?[['active','Current case filter']]:[]),
+        ...(loadedCohort?[['saved','Saved case filter']]:[])];
+      setOptions(caseScope,options);caseScope.value=loadedCohort?'saved':'all';show(scopeField,options.length>1);
+    }
+    setScopeOptions({});
     const dim1=select('owgAnalysisDim1',[]),dim2=select('owgAnalysisDim2',[]);
     const attr1=input('owgAnalysisAttr1','text','attribute name'),attr2=input('owgAnalysisAttr2','text','attribute name');
     const measure1=select('owgAnalysisMeasure1',[]),measure2=select('owgAnalysisMeasure2',[]);
@@ -7792,7 +7806,7 @@
     };
     level.onchange=dim1.onchange=dim2.onchange=sync;sync();
     const row=el('div',null,'row');row.style.alignItems='end';
-    row.append(field('Analyse',level),field('Group by',dim1),f.attr1,field('Then by',dim2),f.attr2,field('Measure',measure1),field('Also measure',measure2),f.hours,f.ends,run,cancel);
+    row.append(field('Analyse',level),scopeField,field('Group by',dim1),f.attr1,field('Then by',dim2),f.attr2,field('Measure',measure1),field('Also measure',measure2),f.hours,f.ends,run,cancel);
     // Case metrics: typed per-case values that the measures above can use.
     const names=(activityNames||[]).slice(0,500).map(a=>[a,a]);
     const mKind=select('owgMetricKind',METRIC_KINDS),mName=input('owgMetricName','text','wait_for_approval');mName.maxLength=40;
@@ -7852,16 +7866,20 @@
       ...Object.fromEntries(Object.entries(operands).flatMap(([side,controls])=>Object.entries(controls).map(([key,node])=>[side+key[0].toUpperCase()+key.slice(1),node.value])))});
     // A changed metric draft cannot reuse an earlier result or its export/share grants.
     // Invalidate synchronously, including when a dependent metric is removed.
-    function invalidateMetricResult(){
+    function invalidateAnalysisResult(){
       resetSharing();last=null;lastSpec=null;out.replaceChildren();exports.enable(false);
       save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;prepareCompany.disabled=true;
     }
+    caseScope.onchange=()=>{
+      invalidateAnalysisResult();
+      message.textContent='Case selection changed. Run the analysis to review the new result.';
+    };
     function useMetric(metric){
       if(running)throw new Error('Wait for the current analysis to finish or cancel it before changing this draft.');
       if(metrics.some(m=>m.name===metric.name))throw new Error('This analysis already has a metric named '+metric.name+'.');
       if(metrics.length>=4)throw new Error('Use at most 4 case metrics.');
       if(metric.kind==='arithmetic')for(const o of [metric.left,metric.right])if(o.kind==='metric'&&!metrics.some(m=>m.name===o.name))throw new Error('Add earlier metric '+o.name+' first.');
-      metrics.push(metric);renderMetrics();invalidateMetricResult();
+      metrics.push(metric);renderMetrics();invalidateAnalysisResult();
     }
     function renderMetrics(){
       metricList.replaceChildren(...metrics.map((m,i)=>{const item=el('div',metricText(m)+' ');
@@ -7871,7 +7889,7 @@
         if(running){message.textContent='Wait for the current analysis to finish or cancel it before changing this draft.';return;}
         const dependent=metrics.find(x=>x.kind==='arithmetic'&&[x.left,x.right].some(o=>o.kind==='metric'&&o.name===m.name));
         if(dependent){message.textContent='Remove dependent metric '+dependent.name+' first.';return;}
-        metrics.splice(i,1);if(editingMetric===m.name){editingMetric=null;mUpdate.disabled=true;}renderMetrics();invalidateMetricResult();};item.append(edit,rm);return item;}));
+        metrics.splice(i,1);if(editingMetric===m.name){editingMetric=null;mUpdate.disabled=true;}renderMetrics();invalidateAnalysisResult();};item.append(edit,rm);return item;}));
       for(const controls of Object.values(operands)){
         const keep=controls.metric.value;setOptions(controls.metric,metrics.length?metrics.map(m=>[m.name,m.name]):[['','(add an earlier metric)']]);
         if(metrics.some(m=>m.name===keep))controls.metric.value=keep;
@@ -8100,7 +8118,7 @@
         throw new Error('Analysis changed during export. Run and review it again.');
       const stable=r=>JSON.stringify([r.columns,r.rows,r.units,r.matching,r.rows_truncated,r.metrics,r.non_finite_results_withheld]);
       if(!selected.source_content_sha256||!current.source_content_sha256||current.source_content_sha256!==selected.source_content_sha256||stable(current)!==stable(selected)){
-        invalidateMetricResult();
+        invalidateAnalysisResult();
         throw new Error('Saved-log data or analysis results changed. Run and review the analysis again before downloading.');
       }
       return current;
@@ -8136,7 +8154,7 @@
         const existing=new Set(metrics.map(m=>m.name));
         if(proposed.some(m=>existing.has(m.name)))throw new Error('A comparison metric name already exists. Choose a different base name.');
         // Validate the entire batch before mutation; no half-added comparisons.
-        metrics.push(...proposed);renderMetrics();invalidateMetricResult();
+        metrics.push(...proposed);renderMetrics();invalidateAnalysisResult();
         // Case metrics cannot be measured at the event level.
         level.value='cases';sync();
         measure1.value='avg:metric:'+proposed[proposed.length-1].name;measure2.value='';
@@ -8157,7 +8175,7 @@
         if(proposed.some(m=>existing.has(m.name)))
           throw new Error('An activity comparison metric name already exists. Choose a different base name.');
         // Validate the entire batch before mutation, including dependency order.
-        metrics.push(...proposed);renderMetrics();invalidateMetricResult();
+        metrics.push(...proposed);renderMetrics();invalidateAnalysisResult();
         level.value='cases';sync();
         measure1.value='avg:metric:'+proposed[2].name;measure2.value='';
         message.textContent='Added activity A, activity B, and signed B minus A metrics. Missing activity values remain unknown, never zero.';
@@ -8173,7 +8191,7 @@
         if(proposed.some(m=>existing.has(m.name)))
           throw new Error('An activity fraction metric name already exists. Choose a different base name.');
         // The numerator, denominator and typed division are one atomic addition.
-        metrics.push(...proposed);renderMetrics();invalidateMetricResult();
+        metrics.push(...proposed);renderMetrics();invalidateAnalysisResult();
         level.value='cases';sync();
         measure1.value='avg:metric:'+proposed[2].name;measure2.value='';
         message.textContent='Added selected activity total, whole-case total and their fraction. Missing values and zero denominators remain unknown; signed totals may produce ratios outside 0–1.';
@@ -8211,9 +8229,8 @@
       if(running)throw new Error('Wait for this analysis or cancel it first.');
       const ownAttempt=++attempt,jobBase=base()+'/analysis-jobs';
       const current=()=>generation===state.generation&&box.isConnected&&ownAttempt===attempt;
-      running=true;cancelRequested=false;job=null;run.disabled=true;background.disabled=true;cancel.disabled=!background.checked;
+      running=true;cancelRequested=false;job=null;run.disabled=true;caseScope.disabled=true;background.disabled=true;cancel.disabled=!background.checked;
       resetSharing();last=null;lastSpec=null;out.replaceChildren();exports.enable(false);save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;prepareCompany.disabled=true;
-      if(state.caseType)spec.case_type=state.caseType;
       let r;
       try{
         if(background.checked){
@@ -8245,7 +8262,7 @@
         const cleanup=job;job=null;running=false;
         // Deletion cancels unfinished work and erases retained bytes. Failure is bounded by server expiry.
         if(cleanup)api(cleanup+'/delete',{method:'POST',signal:AbortSignal.timeout(10000)}).catch(()=>{});
-        if(current()){run.disabled=false;background.disabled=false;cancel.disabled=true;
+        if(current()){run.disabled=false;caseScope.disabled=false;background.disabled=false;cancel.disabled=true;
           if(cancelRequested)message.textContent='Analysis cancelled in this view; no result was displayed. Server cleanup requested; its deadline still applies.';}
       }
       if(!current())return;
@@ -8253,6 +8270,7 @@
       resetSharing();last=r;lastSpec=spec;exports.enable(true);save.disabled=false;prepareShare.disabled=false;prepareCases.disabled=false;prepareCompany.disabled=false;
       const units=r.units||{};
       out.replaceChildren(el('div',Number(r.matching.cases).toLocaleString()+' matching cases'+(r.rows_truncated?'; showing the first '+r.rows.length+' rows.':'.'),'muted'),
+        ...(r.case_notion?[el('div','Case notion: '+r.case_notion+'.','muted')]:[]),
         table(r.columns,r.rows.map(row=>row.map((v,i)=>cell(r.columns[i],v,units[r.columns[i]])))),
         ...(r.metrics||[]).map(c=>el('div',c.name+': '+Number(c.cases_with_value).toLocaleString()+' cases have a value, '+Number(c.cases_without_value).toLocaleString()+' do not'
           +(c.cases_without_from_activity!==undefined?' ('+c.cases_without_from_activity+' without '+c.definition.from_activity+', '+c.cases_without_to_activity+' without '+c.definition.to_activity+', '+c.cases_where_to_precedes_from+' where '+c.definition.to_activity+' comes first)':'')
@@ -8262,7 +8280,7 @@
     }
     async function refresh(){
       const r=await getJSON(base()+'/analyses');if(generation!==state.generation)return;
-      savedList.replaceChildren(r.analyses.length?table(['Saved analysis','','',''],r.analyses.map(a=>{
+      savedList.replaceChildren(r.analyses.length?table(['Saved analysis','Case notion','','',''],r.analyses.map(a=>{
         const open=button('Run','secondary');open.setAttribute('aria-label','Run saved analysis '+a.name);
         open.onclick=()=>execute({...a.spec}).catch(error=>{message.textContent=error.message;});
         const load=button('Load into builder','secondary');load.setAttribute('aria-label','Load saved analysis '+a.name+' into builder');
@@ -8272,6 +8290,7 @@
             const draft=analysisDraft(a.spec,state.caseType);
             // All checks have passed; replace the draft in one synchronous operation.
             level.value=draft.level;
+            setScopeOptions(draft.cohort);
             metrics.splice(0,metrics.length,...draft.metrics);
             editingMetric=null;mUpdate.disabled=true;renderMetrics();
             dim1.value=draft.dim1;dim2.value=draft.dim2;
@@ -8285,11 +8304,16 @@
         };
         const del=button('Delete','secondary');del.setAttribute('aria-label','Delete saved analysis '+a.name);
         del.onclick=async()=>{try{await api(base()+'/analyses/'+encodeURIComponent(a.analysis_id)+'/delete',{method:'POST'});message.textContent='Analysis deleted.';await refresh();}catch(error){message.textContent=error.message;}};
-        return [a.name,open,load,del];})):el('div','No saved analyses yet.','muted'));
+        return [a.name,a.spec.case_type||'Default',open,load,del];})):el('div','No saved analyses yet.','muted'));
     }
     run.onclick=async()=>{
-      try{message.textContent='';await execute(analysisSpec({level:level.value,dim1:dim1.value,attr1:attr1.value,dim2:dim2.value,attr2:attr2.value,measure1:measure1.value,measure2:measure2.value,hours:hours.value,endsWith:endsWith.value.trim(),metrics:[...metrics]}));}
-      catch(error){message.textContent=error.message;}
+      try{
+        message.textContent='';
+        const cohort={active:activeCohort,saved:loadedCohort}[caseScope.value];
+        await execute(analysisSpec({level:level.value,dim1:dim1.value,attr1:attr1.value,dim2:dim2.value,attr2:attr2.value,
+          measure1:measure1.value,measure2:measure2.value,hours:hours.value,endsWith:endsWith.value.trim(),metrics:[...metrics],
+          caseType:state.caseType,cohort}));
+      }catch(error){message.textContent=error.message;}
     };
     save.onclick=async()=>{
       try{
