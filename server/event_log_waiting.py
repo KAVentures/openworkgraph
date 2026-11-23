@@ -236,10 +236,27 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
               SELECT sum(busy) AS busy, epoch(max(en) - min(st)) AS dur, sum(busy) / epoch(max(en) - min(st)) AS eff
               FROM seq2 GROUP BY case_id HAVING count(proc) > 0 AND max(en) > min(st))""").fetchone()
 
+        # Cohort-wide coverage must include activities omitted from the bounded table.
+        # Invalid lifecycle pairs already appear in inst and unmatched_starts;
+        # subtract them once, unlike invalid end-attribute observations.
+        cohort_instances = conn.execute(
+            "SELECT count(*), count(proc), count(wait) FROM seq2"
+        ).fetchone()
+        cohort_eligible = (cohort_instances[0] + int(unmatched_starts)
+                           - (kinds.get("invalid_pair", 0) if used == "lifecycle" else 0))
+        cohort_coverage = {
+            "eligible": cohort_eligible,
+            "processing_observed": cohort_instances[1],
+            "waiting_observed": cohort_instances[2],
+            "processing_share": (cohort_instances[1] / cohort_eligible if cohort_eligible else None),
+            "waiting_share": (cohort_instances[2] / cohort_eligible if cohort_eligible else None),
+        }
+
         def stats(median, p90, mean):
             return {"median_seconds": median, "p90_seconds": p90, "mean_seconds": mean}
         return {
             **base, "available": True, "events": events,
+            "cohort_observation_coverage": cohort_coverage,
             "activity_result_limit": MAX_ACTIVITIES,
             "activity_total": activity_total,
             "activities_omitted": max(0, activity_total - len(activities)),
