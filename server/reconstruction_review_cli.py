@@ -489,19 +489,33 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Review exact observed event-to-resource-pair evidence offline")
     parser.add_argument("input", help="Authorized work-resumption response JSON, or - for stdin")
     parser.add_argument("--annotations", help="Explicit reviewer labels JSON; scoring remains non-held-out")
+    parser.add_argument("--source-labels", help="Explicit complete source-event inventory; not automatically held-out")
     args = parser.parse_args()
+    if args.annotations and args.source_labels:
+        parser.error("--annotations and --source-labels are mutually exclusive")
     try:
         if args.input == "-":
             payload = json.load(sys.stdin)
         else:
             with open(args.input, encoding="utf-8") as stream:
                 payload = json.load(stream)
-        if args.annotations:
-            if args.input != "-" and os.path.samefile(args.annotations, args.input):
+        if args.annotations or args.source_labels:
+            labels_file = args.annotations or args.source_labels
+            if args.input != "-" and os.path.samefile(labels_file, args.input):
                 raise ValueError("source and annotation files must be distinct")
-            with open(args.annotations, encoding="utf-8") as stream:
+            with open(labels_file, encoding="utf-8") as stream:
                 labels = json.load(stream)
-            output = score_bound_review_annotations(payload, labels)
+            if args.source_labels:
+                if not isinstance(labels, dict) or set(labels) != {"evidence_sha256", "source_events"}:
+                    raise ValueError("source cohort envelope requires evidence_sha256 and source_events")
+                digest = labels["evidence_sha256"]
+                if not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+                    raise ValueError("invalid evidence digest")
+                if not hmac.compare_digest(digest, build_review_queue(payload)["evidence_sha256"]):
+                    raise ValueError("source cohort evidence digest mismatch")
+                output = score_source_event_cohort(payload, labels["source_events"])
+            else:
+                output = score_bound_review_annotations(payload, labels)
         else:
             output = build_review_queue(payload)
         print(json.dumps(output, sort_keys=True, separators=(",", ":")))
@@ -510,9 +524,6 @@ def main() -> int:
         print(f"reconstruction review refused: {exc}", file=sys.stderr)
         return 2
 
-
-if __name__ == "__main__":
-    raise SystemExit(main())
 
 
 def score_source_event_cohort(response: dict[str, Any], source_labels: list[dict[str, Any]]) -> dict[str, Any]:
@@ -691,3 +702,7 @@ def score_source_event_cohort(response: dict[str, Any], source_labels: list[dict
         "evaluation_scope": "caller_supplied_source_event_inventory",
         "evidence_sha256": queue["evidence_sha256"],
     }
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
