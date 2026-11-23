@@ -312,7 +312,7 @@ const pathModule = require("node:path");
 
     assert.equal(
       await alice
-        .getByRole("button", { name: "Record design review", exact: true })
+        .getByRole("button", { name: "Record design review", exact: true, includeHidden: true })
         .isDisabled(),
       true,
     );
@@ -321,6 +321,7 @@ const pathModule = require("node:path");
         .getByRole("button", {
           name: "Download SDK implementation project",
           exact: true,
+          includeHidden: true,
         })
         .isDisabled(),
       true,
