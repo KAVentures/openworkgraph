@@ -863,37 +863,56 @@
 
   function anonymizedExportSection(){
     const box=section('Anonymized export');box.id='owgAnonymized';
-    box.appendChild(el('div','Export the cases to share outside this computer with less that points back to people: paths followed by fewer than the chosen number of cases are left out, case IDs are replaced, time is coarsened and attributes are never included. Check what is kept first, then download.','muted'));
+    box.appendChild(el('div','Before sharing a log, check which cases and fields the CSV will contain. Rare paths are left out, case IDs are replaced, and attributes are removed.','muted'));
     const minPick=select('owgAnonymizedMin',[['5','At least 5 cases per path'],['2','At least 2'],['10','At least 10'],['20','At least 20'],['50','At least 50']]);
-    const timePick=select('owgAnonymizedTime',[['relative','Each case moved to the start of its month, gaps kept'],['day','Date of each event only'],['exact','Exact timestamps']]);
+    const timePick=select('owgAnonymizedTime',[['relative','Start of the original month, gaps kept'],['elapsed','Same synthetic start for every case, gaps kept'],['sequence','Event order only, times one second apart'],['day','Date of each event only'],['exact','Exact timestamps']]);
     const resourcePick=select('owgAnonymizedResources',[['drop','Leave resources out'],['pseudonymize','Replace resources with Resource 01, 02, …']]);
+    const activityPick=select('owgAnonymizedActivities',[['keep','Keep activity names'],['pseudonymize','Replace activity names with codes']]);
     const check=button('Check what is kept','secondary');check.id='owgAnonymizedCheck';
     const get=button('Download anonymized CSV','secondary');get.id='owgAnonymizedDownload';
     const row=el('div',null,'row');row.style.alignItems='end';
-    row.append(field('Smallest group',minPick),field('Time',timePick),field('Resources',resourcePick),check,get);
+    row.append(field('Smallest group',minPick),field('Time',timePick),field('Resources',resourcePick),field('Activities',activityPick),check,get);
     const statusLine=el('div',null,'muted');statusLine.id='owgAnonymizedStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgAnonymizedResults';
     box.append(row,statusLine,out);
-    const params=()=>({min_cases:minPick.value,time_mode:timePick.value,resource_mode:resourcePick.value});
-    check.onclick=async()=>{
-      const generation=state.generation;check.disabled=true;statusLine.textContent='Checking…';out.replaceChildren();
-      try{
-        const r=await getJSON(logPath('anonymized-export',params()));
-        if(generation!==state.generation)return;
-        statusLine.textContent=Number(r.cases_kept).toLocaleString()+' of '+Number(r.cases_total).toLocaleString()+' cases would be exported ('+Math.round(r.cases_kept_share*1000)/10+'%); '+Number(r.cases_suppressed).toLocaleString()+' cases on '+Number(r.variants_suppressed).toLocaleString()+' rare paths are left out.';
-        out.appendChild(table(['Kept','Value'],[['Paths',Number(r.variants_kept).toLocaleString()+' of '+Number(r.variants_total).toLocaleString()],['Events',Number(r.events_kept).toLocaleString()],['Columns',r.columns.join(', ')],['Activities left out',r.activities_removed_total?r.activities_removed.join(', ')+(r.activities_removed_total>r.activities_removed.length?' …':''):'none']]));
-        out.appendChild(el('div',r.caveat,'muted'));
-      }catch(error){statusLine.textContent=error.message;}
-      finally{check.disabled=false;}};
-    get.onclick=async()=>{
-      get.disabled=true;
-      try{const response=await api(logPath('anonymized-export.csv',params()));
-        const blob=await response.blob();const link=document.createElement('a');link.href=URL.createObjectURL(blob);
-        link.download=(state.logId||'log')+'-anonymized.csv';document.body.appendChild(link);link.click();link.remove();
-        setTimeout(()=>URL.revokeObjectURL(link.href),1000);
-        statusLine.textContent='Downloaded '+(response.headers.get('X-OWG-Anonymized')||'').replace(/; /g,', ')+'. Review the file before sharing it.';}
-      catch(error){statusLine.textContent=error.message;}
-      finally{get.disabled=false;}};
+    let revision=0;
+    const generation=state.generation;
+    const logId=state.logId;
+    const params=()=>({min_cases:minPick.value,time_mode:timePick.value,resource_mode:resourcePick.value,activity_mode:activityPick.value});
+    const setBusy=busy=>{check.disabled=busy;get.disabled=busy;};
+    for(const control of [minPick,timePick,resourcePick,activityPick])control.addEventListener('change',()=>{
+      revision++;statusLine.textContent='';out.replaceChildren();setBusy(false);
+    });
+    async function withSelection(message,work){
+      const ticket=++revision;
+      const current=()=>ticket===revision&&generation===state.generation&&box.isConnected;
+      setBusy(true);statusLine.textContent=message;
+      try{await work(current);}
+      catch(error){if(current())statusLine.textContent=error.message;}
+      finally{if(current())setBusy(false);}
+    }
+    check.onclick=()=>withSelection('Checking…',async current=>{
+      out.replaceChildren();
+      const r=await getJSON(logPath('anonymized-export',params()));
+      if(!current())return;
+      statusLine.textContent=Number(r.cases_kept).toLocaleString()+' of '+Number(r.cases_total).toLocaleString()+' cases would be exported ('+Math.round(r.cases_kept_share*1000)/10+'%); '+Number(r.cases_suppressed).toLocaleString()+' cases on '+Number(r.variants_suppressed).toLocaleString()+' rare paths are left out.';
+      const rows=[['Paths',Number(r.variants_kept).toLocaleString()+' of '+Number(r.variants_total).toLocaleString()],
+        ['Events',Number(r.events_kept).toLocaleString()],['Columns',r.columns.join(', ')],
+        ['Activity names',r.activity_mode==='pseudonymize'?'Replaced with export-local codes':'Kept'],
+        ['Activities left out',r.activities_removed_total?r.activities_removed.join(', ')+(r.activities_removed_total>r.activities_removed.length?' …':''):'none']];
+      if(r.synthetic_start)rows.push(['Synthetic case start',r.synthetic_start]);
+      out.append(table(['Kept','Value'],rows),el('div',r.caveat,'muted'));
+    });
+    get.onclick=()=>withSelection('Preparing download…',async current=>{
+      const response=await api(logPath('anonymized-export.csv',params()));
+      if(!current())return;
+      const blob=await response.blob();
+      if(!current())return;
+      const link=document.createElement('a');link.href=URL.createObjectURL(blob);
+      link.download=logId+'-anonymized.csv';document.body.appendChild(link);link.click();link.remove();
+      setTimeout(()=>URL.revokeObjectURL(link.href),1000);
+      statusLine.textContent='Downloaded '+(response.headers.get('X-OWG-Anonymized')||'').replace(/; /g,', ')+'. Review the file before sharing it.';
+    });
     return box;
   }
 
