@@ -58,6 +58,48 @@ const path=require('node:path');
    await page.locator('#owgPipelineSort').selectOption('impact');
    assert.equal(await page.getByRole('button',{name:'Open idea Copy approved prices into renewals'}).count(),1);
 
+   const plannedIds=await page.evaluate(async()=>{
+     const ids=[];
+     for(const [title,owner,team,quarter] of [['Quarterly audit','Ada','Finance','2031-Q4'],['Queue reviews','Ada','Ops','2031-Q3']]){
+       const planPath='/v1/automation-pipeline',headers={'Content-Type':'application/json'};
+       const created=await fetch(planPath,{method:'POST',headers,body:JSON.stringify({title})});
+       if(!created.ok)throw new Error(await created.text());
+       const {idea_id,revision}=await created.json();ids.push(idea_id);
+       const planned=await fetch(planPath+'/'+idea_id+'/planning',{method:'POST',headers,
+         body:JSON.stringify({expected_revision:revision,owner,team,target_quarter:quarter})});
+       if(!planned.ok)throw new Error(await planned.text());
+     }
+     return ids;
+   });
+   await page.locator('#owgPipelineRefresh').click();
+   await page.locator('#owgPipelineViewCount').filter({hasText:'3 shown of 3'}).waitFor();
+   await page.locator('#owgPipelinePlanningFilters summary').click();
+   await page.locator('#owgPipelineView_owner').selectOption({label:'Ada'});
+   await page.locator('#owgPipelineView_team').selectOption({label:'Finance'});
+   await page.locator('#owgPipelineView_target_quarter').selectOption({label:'2031-Q4'});
+   await page.locator('#owgPipelineViewCount').filter({hasText:'1 shown of 3'}).waitFor();
+   assert.match(await page.locator('#owgPipelineList').textContent(),/Quarterly audit.*Ada.*Finance.*2031-Q4/);
+   const shortlistJson=page.locator('#owgPipelineShortlistJson');
+   const [shortlist]=await Promise.all([page.waitForEvent('download'),shortlistJson.click()]);
+   const packet=JSON.parse(await fs.readFile(await shortlist.path(),'utf8'));
+   assert.deepEqual(packet.scope.planning,{owner:'Ada',team:'Finance',target_quarter:'2031-Q4'});
+   assert.deepEqual(packet.ideas.map(i=>[i.idea_id,i.title,i.revision]),[[plannedIds[0],'Quarterly audit',2]]);
+   assert.equal(packet.selected_state_ideas,3);
+   const [shortlistSheet]=await Promise.all([page.waitForEvent('download'),page.locator('#owgPipelineShortlistCsv').click()]);
+   const shortlistText=await fs.readFile(await shortlistSheet.path(),'utf8');
+   assert.match(shortlistText,/Quarterly audit,idea,Ada,Finance,2031-Q4/);assert.doesNotMatch(shortlistText,/Queue reviews/);
+   await page.locator('#owgPipelineFilter').selectOption('assessing');
+   await page.locator('#owgPipelineViewCount').filter({hasText:'0 shown of 1'}).waitFor();
+   assert.equal(await shortlistJson.isDisabled(),true);
+   assert.match(await page.locator('#owgPipelineView_team option:checked').textContent(),/Finance/);
+   for(const id of plannedIds)await page.evaluate(async id=>{
+     const deleted=await fetch('/v1/automation-pipeline/'+id+'/delete',{method:'POST'});
+     if(!deleted.ok)throw new Error(await deleted.text());
+   },id);
+   await page.locator('#owgPipelineReset').click();
+   await page.locator('#owgPipelineViewCount').filter({hasText:'1 shown of 1'}).waitFor();
+   assert.equal(await page.locator('#owgPipelineView_team').inputValue(),'');
+
    const comparisonIds=await page.evaluate(async()=>{
      const ids=[];
      for(let n=1;n<=4;n++){
