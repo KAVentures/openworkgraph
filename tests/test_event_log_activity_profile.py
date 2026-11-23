@@ -40,3 +40,23 @@ def test_profile_of_a_reworked_step():
     assert r["by_weekday"][0] == {"day": "Mon", "times": 10} and r["by_hour"][10]["times"] == 8
     with pytest.raises(EventLogWorkspaceError, match="no case"):
         ap.activity_profile(log, "Nope")
+
+
+def test_literal_start_and_end_labels_are_separate_from_boundaries():
+    rows = [
+        "case,activity,time",
+        "first,Check,2024-01-01T00:00:00Z",
+        "first,(end),2024-01-01T02:00:00Z",
+        "last,(start),2024-01-02T00:00:00Z",
+        "last,Check,2024-01-02T01:00:00Z",
+    ]
+    log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="boundary labels", source_format="csv",
+                               mapping={"case_column": "case", "activity_column": "activity",
+                                        "timestamp_column": "time"})["log_id"]
+    report = ap.activity_profile(log, "Check")
+    for key, label, hours in (("comes_after", "(start)", 1), ("comes_before", "(end)", 2)):
+        rows = report[key]
+        actual = [row for row in rows if not row.get("boundary")]
+        boundary = [row for row in rows if row.get("boundary")]
+        assert actual == [{"activity": label, "times": 1, "share": 0.5, "median_hours": hours}]
+        assert boundary == [{"activity": label, "times": 1, "share": 0.5, "median_hours": None, "boundary": True}]
