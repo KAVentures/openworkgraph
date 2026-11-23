@@ -2741,11 +2741,20 @@ another, instead of requiring the case to begin with them, which answers "what u
 Reject → Rework?". Continuing down a branch keeps that first occurrence fixed in each case. If a
 case repeats the sequence later, the later occurrence does not change which branch it took.
 
+Use **Inspect cases** on a branch to see the matching case keys and event counts, then open a
+case to review its event history. This works for branches where the case ends as well.
+
 `GET /v1/event-logs/{log_id}/next-steps?step=Open&step=Check&anchor=start` plus the case-filter
 parameters. Agents use `get_process_next_steps` (aggregates only) and call it again with a step
 appended to go deeper.
 For anchored continuation with `anchor=anywhere`, pass `anchor_steps`, the length of the initial
 sequence. The API's `is_end` field distinguishes a case ending from an activity named `(end)`.
+
+The dashboard-only `POST /v1/event-logs/{log_id}/next-steps/cases` uses the same query
+parameters as the summary. Send `{"activity":"Check"}` for a continuation or `{"ends_here":true}`
+for a case ending. Each response gives the exact branch total and up to `limit` cases (1–100,
+default 50) in literal case-key order. Send the returned `next_after` as `after` in the next body.
+Each page reflects the current log.
 
 ## Due dates
 

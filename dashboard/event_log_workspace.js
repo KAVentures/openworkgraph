@@ -1086,7 +1086,7 @@
     results.appendChild(glossarySection());
     results.appendChild(activityProfileSection(names));
     results.appendChild(breakdownSection(names,inspection));
-    results.appendChild(pathExplorerSection());
+    results.appendChild(pathExplorerSection(inspection));
     results.appendChild(cooccurrenceSection(inspection));
     results.appendChild(dueDatesSection(names,inspection));
     results.appendChild(unusualCasesSection());
@@ -5657,7 +5657,7 @@
     return box;
   }
 
-  function pathExplorerSection(){
+  function pathExplorerSection(inspection){
     const box=section('Path explorer');box.id='owgPaths';
     box.appendChild(el('div','Walk the process one step at a time: see which activities come next, in how many cases and how fast, then choose one to go deeper.','muted'));
     const anywhere=document.createElement('input');anywhere.type='checkbox';anywhere.id='owgPathsAnywhere';
@@ -5668,27 +5668,64 @@
     const trail=el('div');trail.id='owgPathsTrail';
     const statusLine=el('div',null,'muted');statusLine.id='owgPathsStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgPathsResults';
-    box.append(row,trail,statusLine,out);
-    let path=[],anchored=0,request=0;
+    const review=el('div');review.id='owgPathsCaseReview';
+    box.append(row,trail,statusLine,out,review);
+    let path=[],anchored=0,request=0,reviewTurn=0;
     const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
     const hrs=x=>x===null||x===undefined?'—':(x<48?(Math.round(x*10)/10)+' h':(Math.round(x/24*10)/10)+' d');
+    function showCases(url,branch,reportCurrent){
+      const turn=++reviewTurn;
+      const current=()=>reportCurrent()&&turn===reviewTurn;
+      const endpoint=new URL(url,window.location.origin);endpoint.pathname+='/cases';
+      const title=el('h4',branch.is_end?'Cases ending here':'Cases continuing to '+branch.activity);title.tabIndex=-1;
+      const message=el('div');message.setAttribute('role','status');
+      const rows=el('div'),nav=el('div',null,'row');
+      const previous=button('Previous page','secondary'),next=button('Next page','secondary');
+      nav.append(previous,next);review.replaceChildren(title,message,rows,nav);title.focus();
+      const cursors=[null];let index=0,following=null;
+      async function load(page){
+        previous.disabled=next.disabled=true;message.textContent='Loading cases…';
+        const selection=branch.is_end?{ends_here:true}:{activity:branch.activity};
+        if(cursors[page]!==null)selection.after=cursors[page];
+        try{
+          const response=await api(endpoint.pathname+endpoint.search,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(selection)});
+          const result=await response.json();
+          if(!current())return;
+          index=page;following=result.next_after;
+          message.textContent=Number(result.total).toLocaleString()+(result.total===1?' case':' cases')+' in this branch. Showing '+result.cases.length+' on this page.';
+          rows.replaceChildren(result.cases.length?table(['Case','Events','Evidence'],result.cases.map(c=>{
+            const open=button('Open case','secondary');open.setAttribute('aria-label','Open case '+c.case_id);
+            open.onclick=()=>inspection.open(c.case_id);
+            return [c.case_id,Number(c.events).toLocaleString(),open];
+          })):el('div','No cases on this page.','muted'));
+        }catch(error){if(current())message.textContent=error.message;}
+        finally{if(current()){previous.disabled=index===0;next.disabled=following===null;}}
+      }
+      previous.onclick=()=>load(index-1);
+      next.onclick=()=>{cursors[index+1]=following;load(index+1);};
+      load(0);
+    }
     const show=async()=>{
       if(anywhere.checked&&!path.length){statusLine.textContent='Choose a first step from the start, then look for it anywhere.';anywhere.checked=false;}
       const generation=state.generation,turn=++request;
       const current=()=>generation===state.generation&&turn===request;
-      start.disabled=back.disabled=true;statusLine.textContent='Following cases…';out.replaceChildren();
+      start.disabled=back.disabled=true;statusLine.textContent='Following cases…';out.replaceChildren();review.replaceChildren();
       trail.textContent=path.length?'Path: '+(anywhere.checked?'… → ':'(start) → ')+path.join(' → '):'';
       try{
         const params={step:path,anchor:anywhere.checked?'anywhere':'start'};
         if(anywhere.checked)params.anchor_steps=anchored;
-        const r=await getJSON(logPath('next-steps',params));
+        const url=logPath('next-steps',params),r=await getJSON(url);
         if(!current())return;
         statusLine.textContent=(path.length?Number(r.cases_at_point).toLocaleString()+' cases ('+pct(r.share_of_cases)+') reach this point'+(r.hours_to_reach_point?', in a median '+hrs(r.hours_to_reach_point.median):'')+'.':Number(r.cases).toLocaleString()+' cases start with these activities.')+(r.next_total>r.next.length?' Showing the '+r.next.length+' most common of '+r.next_total+' next steps.':'');
         if(!r.next.length)return;
-        const t=table(['Next','Cases','Share','From previous (median)','To case end (median)',''],r.next.map(x=>[x.is_end?'Case ends here':x.activity,Number(x.cases).toLocaleString(),pct(x.share),x.hours_from_previous?hrs(x.hours_from_previous.median):'—',x.hours_to_case_end?hrs(x.hours_to_case_end.median):'—','']));
-        t.querySelector('tbody').querySelectorAll('tr').forEach((tr,i)=>{const x=r.next[i];
+        const t=table(['Next','Cases','Share','From previous (median)','To case end (median)','Actions'],r.next.map(x=>[x.is_end?'Case ends here':x.activity,Number(x.cases).toLocaleString(),pct(x.share),x.hours_from_previous?hrs(x.hours_from_previous.median):'—',x.hours_to_case_end?hrs(x.hours_to_case_end.median):'—','']));
+        t.querySelectorAll('tbody tr').forEach((tr,i)=>{const x=r.next[i];
           const bar=el('div');bar.setAttribute('aria-hidden','true');bar.style.cssText='height:4px;background:currentColor;opacity:.35;margin-top:4px;width:'+Math.round((x.share||0)*100)+'%';tr.cells[2].appendChild(bar);
-          if(!x.is_end){const go=button('Go to '+x.activity,'secondary');go.onclick=()=>{path=[...path,x.activity];show();};tr.cells[5].appendChild(go);}});
+          if(!x.is_end){const go=button('Go to '+x.activity,'secondary');go.onclick=()=>{path=[...path,x.activity];show();};tr.cells[5].appendChild(go);}
+          const inspect=button('Inspect cases','secondary');
+          inspect.setAttribute('aria-label',x.is_end?'Inspect cases ending here':'Inspect cases continuing to '+x.activity);
+          inspect.onclick=()=>showCases(url,x,current);tr.cells[5].appendChild(inspect);
+        });
         out.appendChild(t);
       }catch(error){if(current())statusLine.textContent=error.message;}
       finally{if(current()){start.disabled=false;back.disabled=!path.length;}}};

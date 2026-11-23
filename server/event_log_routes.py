@@ -1421,6 +1421,19 @@ def event_log_next_steps(request: Request, log_id: str, step: list[str] = Query(
                     anchor_steps=anchor_steps)
 
 
+@router.post("/v1/event-logs/{log_id}/next-steps/cases")
+async def event_log_next_step_cases(request: Request, log_id: str, step: list[str] = Query(default=[], max_length=500),
+                                    anchor: str = Query(default="start", max_length=20),
+                                    anchor_steps: int | None = Query(default=None, ge=1, le=30),
+                                    case_type: str | None = Query(default=None, max_length=200),
+                                    cohort: dict = Depends(_case_filter)):
+    from . import event_log_path_explorer as explorer
+    _require_dashboard(request)
+    selection = await _json_body(request, "path branch settings", strict=True, limit=8192)
+    return await run_in_threadpool(_respond, explorer.branch_cases, log_id, step, case_type,
+                                   selection=selection, anchor=anchor, anchor_steps=anchor_steps, cohort=cohort)
+
+
 @router.post("/v1/event-logs/{log_id}/petri-net-deviation-causes")
 async def event_log_petri_net_deviation_causes(request: Request, log_id: str,
                                                case_type: str | None = Query(default=None, max_length=200),
