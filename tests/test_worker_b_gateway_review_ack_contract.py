@@ -257,3 +257,25 @@ def test_handoff_review_navigation_denial_disarms_all_process_controls():
     helper = source.split("function invalidateDeniedReviewSelection(message) {", 1)[1].split("let reviewMutationInFlight", 1)[0]
     assert 'selected = null' in helper
     assert '$("selected").hidden = true' in helper
+
+
+def test_stale_handoff_navigation_disarms_direct_process_actions():
+    """A successful Gateway read with changed access/revision is still a denial.
+
+    A stale selected process must not remain editable or reviewable when the
+    authenticated navigation preflight returns a conflicting revision/ACL.
+    """
+    source = (Path(__file__).resolve().parents[1] / "gateway" / "processes.html").read_text()
+    navigation = source.split('$("handoffReview").addEventListener("click"', 1)[1].split(
+        '$("handoffRefresh").addEventListener("click"', 1
+    )[0]
+    stale = navigation.split('current.permissions?.review!==true', 1)[1].split('return;', 1)[0]
+    assert 'invalidateDeniedReviewSelection("Review navigation rejected:' in stale
+    assert 'resetHandoff("REFUSED: Process changed' not in stale
+    helper = source.split("function invalidateDeniedReviewSelection(message) {", 1)[1].split(
+        "let reviewMutationInFlight", 1
+    )[0]
+    assert "selected = null;" in helper
+    assert '$("selected").hidden = true;' in helper
+    assert '$("reviewConfirm").checked = false;' in helper
+    assert '$("handoffConsent").checked = false;' in helper
