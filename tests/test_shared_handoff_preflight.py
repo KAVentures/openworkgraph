@@ -25,7 +25,7 @@ def test_handoff_preflight_reads_fresh_authorized_process_without_upload():
     assert 'current.process.content_sha256!==p.content_sha256' in block
     assert 'current.archived' in block
     assert 'current.permissions?.review!==true' in block
-    assert "lacks review permission for this revision" in block
+    assert 'invalidateDeniedReviewSelection("Inspection refused: current process authorization or revision changed.' in block
     assert 'ticket!==handoffGeneration||identityTicket!==identityGeneration||\n               credential!==authorizedCredential||selected!==chosen' in block
     assert 'execution_authorized!==false' in block
     assert 'source_read_authorized!==false' in block
@@ -276,7 +276,7 @@ def test_stale_packet_read_failure_cannot_overwrite_new_identity_or_selection():
     assert 'const identityTicket=identityGeneration, authorizedCredential=credential;' in block
     assert 'ticket===handoffGeneration&&identityTicket===identityGeneration' in block
     assert 'credential===authorizedCredential&&selected===chosen' in block
-    assert 'catch(_){fail("Fresh authenticated read failed or access was withdrawn.");}' in block
+    assert 'invalidateDeniedReviewSelection("Inspection authorization could not be verified.' in block
 
 
 
