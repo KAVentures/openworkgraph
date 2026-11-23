@@ -2060,6 +2060,16 @@ body. It restricts the returned prediction rows while keeping the comparison pop
 backtest based on the selected cohort. Lookups report `case_selection` as `predicted`, `completed`,
 `unsupported`, or `not_in_selection`.
 
+Use **Rank estimates by** to prioritize open time, time since the latest recorded event, estimated
+remaining time or estimated likelihood of the selected outcome. **Maximum estimates shown** controls
+the dashboard shortlist (25–200). JSON and CSV download the displayed estimates and their coverage.
+The JSON also includes the selected case filter, estimator settings and backtest.
+
+The optional `rank_by` query parameter accepts `automatic`, `age`, `idle`, `remaining` or `outcome`.
+Automatic ranks by estimated outcome likelihood when an outcome is supplied and estimated remaining
+time otherwise. `ranked_by` reports the effective choice. Ranking does not change the compared cases,
+their estimates or the backtest. `outcome` requires an outcome in the request body.
+
 ```json
 {"end_activities": ["Close", "Cancel"],
  "outcome": {"kind": "duration_over", "seconds": 172800},

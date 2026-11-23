@@ -9498,12 +9498,20 @@
     const activity=select('owgPredictActivity',activityNames.slice(0,500).map(x=>[x,x]));
     const estimator=select('owgPredictEstimator',[['completed_cases','Completed cases only'],['survival','Completed and still-open cases']]);
     const exact=input('owgPredictCaseKey','text');exact.maxLength=200;
+    const rankLabels={age:'Longest open',idle:'Longest idle',remaining:'Longest estimated remaining time',outcome:'Highest estimated outcome likelihood'};
+    const rankBy=select('owgPredictRank',[['automatic','Automatic'],...Object.entries(rankLabels)]);
+    const limit=select('owgPredictResultsLimit',[25,50,100,200].map(n=>[String(n),String(n)]));limit.value='50';
     const run=button('Predict');run.id='owgPredictRun';
     const watch=button('Monitor quality over time','secondary');watch.id='owgPredictMonitor';
     const f={hours:field('Hours',hours),activity:field('Activity',activity)};
-    const sync=()=>{show(f.hours,outcome.value==='duration_over');show(f.activity,outcome.value==='contains_activity');};
-    outcome.onchange=sync;sync();
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities that end a case',ends),field('Also predict',outcome),f.hours,f.activity,field('Learn from',estimator),field('Exact case key (optional)',exact),run,watch);
+    const sync=()=>{
+      show(f.hours,outcome.value==='duration_over');show(f.activity,outcome.value==='contains_activity');
+      rankBy.querySelector('option[value="outcome"]').disabled=!outcome.value;
+      if(!outcome.value&&rankBy.value==='outcome')rankBy.value='automatic';
+      rankBy.disabled=limit.disabled=Boolean(exact.value);
+    };
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities that end a case',ends),field('Also predict',outcome),f.hours,f.activity,field('Learn from',estimator),field('Exact case key (optional)',exact),
+      field('Rank estimates by',rankBy),field('Maximum estimates shown',limit),run,watch);
     const out=el('div');out.id='owgPredictResults';out.setAttribute('role','status');
     const monitorOut=el('div');monitorOut.id='owgPredictMonitoring';monitorOut.setAttribute('role','status');
     const snapButton=button('Save a snapshot to score later','secondary');snapButton.id='owgPredictSnapshot';
@@ -9550,33 +9558,59 @@
       }catch(error){snapStatus.textContent=error.message;}
     };
     listSnapshots().catch(()=>{});
+    let predictTurn=0;
+    for(const control of [ends,outcome,hours,activity,estimator,exact,rankBy,limit])control.addEventListener('input',()=>{
+      ++predictTurn;out.replaceChildren();run.disabled=false;sync();
+    });
+    sync();
     run.onclick=async()=>{
-      run.disabled=true;
+      const t=++predictTurn;
+      const current=()=>generation===state.generation&&box.isConnected&&t===predictTurn;
+      run.disabled=true;out.replaceChildren(el('div','Estimating open cases…','muted'));
       try{
         const spec=predictionSpec({ends:ends.value,outcome:outcome.value,hours:hours.value,activity:activity.value,estimator:estimator.value});
-        if(exact.value)spec.case_id=exact.value;
+        if(exact.value){spec.case_id=exact.value;spec.limit=1;}else spec.limit=Number(limit.value);
+        const rank=spec.case_id?'automatic':rankBy.value;
         if(state.caseType)spec.case_type=state.caseType;
         if(filterOn())spec.cohort=globalCohort();
-        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/predictions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
-        if(generation!==state.generation)return;
+        const path='/v1/event-logs/'+encodeURIComponent(state.logId)+'/predictions';
+        const r=await (await api(path+(rank==='automatic'?'':'?rank_by='+encodeURIComponent(rank)),
+          {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(!current())return;
         const b=r.backtest;
         const quality=b.design==='as_of_replay'?asOfBacktestText(b):b.available?'Backtest on '+Number(b.scored_prefixes).toLocaleString()+' later steps: typical error '+duration(b.mean_absolute_error_seconds)+' vs '+duration(b.naive_mean_absolute_error_seconds)+' for a naive guess; the range held the actual time '+pct(b.p10_p90_coverage)+' of the time (target 80%).'+(b.brier_score!==undefined?' Outcome Brier score '+b.brier_score.toFixed(3)+' vs '+b.base_rate_brier_score.toFixed(3)+' for the base rate.':''):'No backtest: '+b.reason+'.';
-        const headers=['Case','Latest activity','Open for','Expected remaining','Likely range',...(spec.outcome?['Outcome likelihood']:[]),'Based on','Evidence'];
-        const rows=r.predictions.map(p=>[p.case_id,p.last_activity,duration(p.age_seconds),remainingText(p),
+        const headers=['Case','Latest activity','Open for','Idle for','Expected remaining','Likely range',...(spec.outcome?['Outcome likelihood']:[]),'Based on','Evidence'];
+        const rows=r.predictions.map(p=>[p.case_id,p.last_activity,duration(p.age_seconds),duration(p.idle_seconds),remainingText(p),
           (p.remaining_p10_seconds===null?'unknown':duration(p.remaining_p10_seconds))+' – '+(p.remaining_p90_seconds===null?'unknown':duration(p.remaining_p90_seconds)),
           ...(spec.outcome?[p.outcome_probability_ci95?pct(p.outcome_probability)+' ['+pct(p.outcome_probability_ci95[0])+', '+pct(p.outcome_probability_ci95[1])+']':'—']:[]),
           Number(p.comparable_cases).toLocaleString()+' cases ('+({same_activity_and_step:'same step',same_activity:'same activity',all_completed_cases:'all cases',all_cases:'all cases'})[p.basis]+')'+
             (p.comparable_cases_still_open?', '+Number(p.comparable_cases_still_open).toLocaleString()+' still open':''),
           predictionCaseButton(inspection,p.case_id)]);
         const selection=predictionCaseStatus(r);
+        const report={...r,selected_case_id:spec.case_id??null};
+        const exports=exportButtons('owgPredictExport',()=>report,value=>{
+          const coverage=[value.log.log_id,value.case_notion,value.as_of,value.settings.estimator,value.selected_case_id?'':value.ranked_by,value.selected_case_id,
+            value.open_cases,value.predicted_open_cases,value.predictions.length,value.predictions_truncated];
+          const columns=['Log ID','Case notion','As of (UTC)','Estimator','Ranked by','Selected case key','Open cases','Cases with comparable history','Estimates shown','Truncated',
+            'Case','Latest activity','Open seconds','Idle seconds','Median remaining seconds','Low remaining seconds','High remaining seconds','At least remaining seconds','Estimate withheld',
+            'Outcome probability','Outcome CI low','Outcome CI high','Comparable cases','Comparable still open','Basis'];
+          const data=value.predictions.map(p=>[...coverage,p.case_id,p.last_activity,p.age_seconds,p.idle_seconds,
+            p.median_remaining_seconds,p.remaining_p10_seconds,p.remaining_p90_seconds,p.remaining_at_least_seconds,p.estimate_withheld??false,
+            p.outcome_probability,p.outcome_probability_ci95?.[0],p.outcome_probability_ci95?.[1],p.comparable_cases,p.comparable_cases_still_open,p.basis]);
+          return [columns,...(data.length?data:[[...coverage,...Array(columns.length-coverage.length).fill('')]])];
+        });
+        exports.enable(true);
         out.replaceChildren(el('div',Number(r.open_cases).toLocaleString()+' open cases; '+Number(r.predicted_open_cases).toLocaleString()+' have enough comparable history'+
             (r.withheld_estimates?'; '+Number(r.withheld_estimates).toLocaleString()+' estimates withheld because too many comparable cases are still open':'')+'.','muted'),
+          el('div',r.log.name+' · '+r.case_notion+(r.as_of?' · As of '+r.as_of.replace('T',' ').replace('Z',' UTC'):''),'muted'),
           el('div',quality,'muted'),
-          ...(r.predictions_truncated?[el('div','Showing '+rows.length+' estimates. Enter an exact case key to look up another open case.','muted')]:[]),
+          ...(!spec.case_id&&rows.length?[el('div','Showing '+rows.length+' of '+Number(r.predicted_open_cases).toLocaleString()+' estimates · '+rankLabels[r.ranked_by]+'.'+
+            (r.ranked_by==='remaining'&&r.withheld_estimates?' Withheld medians appear first.':'')+
+            (r.predictions_truncated?' Use an exact case key to look up another open case.':''),'muted')]:[]),
           rows.length?table(headers,rows):el('div',selection||'No estimates are available for the selected open cases.','muted'),
-          el('div',r.interpretation,'muted'));
-      }catch(error){if(generation===state.generation)out.replaceChildren(el('div',error.message,'muted'));}
-      finally{run.disabled=false;}
+          el('div',r.interpretation,'muted'),exports.node);
+      }catch(error){if(current())out.replaceChildren(el('div',error.message,'muted'));}
+      finally{if(current())run.disabled=false;}
     };
     let watchTurn=0;
     watch.onclick=async()=>{
