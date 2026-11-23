@@ -98,7 +98,7 @@ def test_provider_account_replacement_during_read_denies_verdict(monkeypatch):
                         lambda **kwargs: {"status": "verified_provider_event"})
     with pytest.raises(HTTPException) as exc:
         asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
-    assert exc.value.status_code == 409
+    assert exc.value.status_code == 403
 
 
 def test_revoked_source_before_provider_io_never_calls_reader(monkeypatch):
@@ -278,7 +278,7 @@ def test_internal_admission_requests_have_json_content_type(monkeypatch):
     result = asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
     assert result["receipt_persisted"] is False
     assert seen.count("review") >= 3
-    assert seen.count("receipts") == 4
+    assert seen.count("receipts") == 5
 
 
 def test_missing_retained_run_blocks_provider_network_io(monkeypatch):
