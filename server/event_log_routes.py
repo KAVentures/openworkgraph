@@ -2115,6 +2115,13 @@ async def event_log_object_process_model_discovery(request: Request, log_id: str
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/object-process-model/preview")
+async def event_log_object_process_model_preview(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "object process model", strict=True, limit=object_process_model.MAX_REQUEST_BYTES)
+    return await run_in_threadpool(_respond, object_process_model.preview, log_id, spec)
+
+
 @router.post("/v1/event-logs/{log_id}/object-process-model/conformance")
 async def event_log_object_process_model_conformance(request: Request, log_id: str):
     _require_dashboard(request)

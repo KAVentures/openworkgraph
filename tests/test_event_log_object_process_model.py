@@ -129,6 +129,30 @@ def test_an_edited_arc_changes_only_the_arc_check():
         ("Place order", "item", "several_objects_on_single_arc"): 1, ("Pay", "order", "type_without_arc"): 2}
 
 
+def test_model_preview_validates_a_second_log_and_preserves_the_edited_model(monkeypatch):
+    source = _ocel(_order_to_cash())
+    destination = _ocel(_deviating())
+    model = ocpm.discover(source)["model"]
+    arc = next(a for a in model["arcs"] if (a["activity"], a["object_type"]) == ("Place order", "item"))
+    arc["variable"] = False
+    with monkeypatch.context() as mock:
+        mock.setattr(ocpm, "_lifecycles", lambda *args: pytest.fail("preview replayed a lifecycle"))
+        mock.setattr(ocpm, "_arc_check", lambda *args: pytest.fail("preview checked arcs against events"))
+        preview = ocpm.preview(destination, model)
+    assert preview["log"]["log_id"] == destination and preview["model"] == model
+    assert preview["execution_authorized"] is False
+    result = ocpm.check(destination, {"model": preview["model"]})
+    assert result["arcs"]["issues"]["several_objects_on_single_arc"] == 2
+    unknown_type = copy.deepcopy(model)
+    unknown_type["arcs"][0]["object_type"] = "invoice"
+    with pytest.raises(workspace.EventLogWorkspaceError, match="unknown object type.*invoice"):
+        ocpm.preview(destination, unknown_type)
+    broken = copy.deepcopy(model)
+    broken["types"][0]["process_model"]["entry_activity_id"] = "missing"
+    with pytest.raises(workspace.EventLogWorkspaceError, match="not a valid process model"):
+        ocpm.preview(destination, broken)
+
+
 def test_arc_event_pages_match_the_summary_beyond_its_examples():
     model = ocpm.discover(_ocel(_order_to_cash()))["model"]
     doc = _deviating()
@@ -280,6 +304,12 @@ with TestClient(app) as client:
     found = client.post(base + "discovery", json={}, headers=headers)
     assert found.status_code == 200 and found.headers["cache-control"] == "no-store", found.text
     model = found.json()["model"]
+    assert client.post(base + "preview", json=model, headers=bearer).status_code in (401, 403)
+    preview = client.post(base + "preview", json=model, headers=headers)
+    assert preview.status_code == 200 and preview.headers["cache-control"] == "no-store", preview.text
+    assert preview.json()["model"] == model and "summary" not in preview.json()
+    assert client.post(base + "preview", content='{"version":1,"version":2}',
+                       headers={**headers, "Content-Type": "application/json"}).status_code == 422
     assert client.post(base + "conformance", json={"model": model}, headers=bearer).status_code in (401, 403)
     checked = client.post(base + "conformance", json={"model": model}, headers=headers)
     assert checked.status_code == 200 and checked.headers["cache-control"] == "no-store", checked.text
