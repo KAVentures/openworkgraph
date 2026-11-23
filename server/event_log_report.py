@@ -104,29 +104,34 @@ def build(log_id: str, case_type: str | None = None, cohort: dict[str, Any] | No
     """Collect the report's data; ``render`` turns it into HTML."""
     if not isinstance(variant_limit, int) or isinstance(variant_limit, bool) or not 1 <= variant_limit <= MAX_VARIANTS:
         raise workspace.EventLogWorkspaceError(f"variant_limit must be an integer between 1 and {MAX_VARIANTS}")
-    info = next((log for log in workspace.list_logs()["logs"] if log["log_id"] == log_id), None)
-    if info is None:
-        raise workspace.EventLogWorkspaceError("unknown event log")
-    summary = workspace.summary(log_id, case_type, cohort)
-    return {
-        "format": FORMAT,
-        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
-        "log": {"log_id": info["log_id"], "name": info["name"], "source_format": info["source_format"],
-                "imported_at": info["imported_at"]},
-        "case_type": case_type,
-        "cohort": summary.get("cohort"),
-        "cases_before_filter": summary.get("cases_before_filter"),
-        "summary": summary,
-        "kpis": analytics.kpis(log_id, case_type, sla_seconds, None, cohort),
-        "variants": workspace.variants(log_id, case_type, variant_limit, cohort=cohort),
-        "activities": workspace.activities(log_id, case_type, cohort),
-        "slowest_transitions": slowest_transitions(log_id, case_type, cohort),
-        "costs": _costs(log_id, case_type, cohort),
-        "insights": _insights(log_id, case_type, cohort, sla_seconds),
-        "adherence": _adherence(log_id, case_type, cohort),
-        "story": _story(log_id, case_type, cohort),
-        "interpretation": _CAVEAT,
-    }
+    # Each component query takes this reentrant lock. Keep it across the
+    # build so an append or workspace configuration edit cannot split the report.
+    with workspace._LOCK:
+        info = next((log for log in workspace.list_logs()["logs"] if log["log_id"] == log_id), None)
+        if info is None:
+            raise workspace.EventLogWorkspaceError("unknown event log")
+        summary = workspace.summary(log_id, case_type, cohort)
+        case_notion = summary["case_notion"]
+        return {
+            "format": FORMAT,
+            "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+            "log": {"log_id": info["log_id"], "name": info["name"], "source_format": info["source_format"],
+                    "imported_at": info["imported_at"]},
+            "case_type": case_type,
+            "case_notion": case_notion,
+            "cohort": summary.get("cohort"),
+            "cases_before_filter": summary.get("cases_before_filter"),
+            "summary": summary,
+            "kpis": analytics.kpis(log_id, case_notion, sla_seconds, None, cohort),
+            "variants": workspace.variants(log_id, case_notion, variant_limit, cohort=cohort),
+            "activities": workspace.activities(log_id, case_notion, cohort),
+            "slowest_transitions": slowest_transitions(log_id, case_notion, cohort),
+            "costs": _costs(log_id, case_notion, cohort),
+            "insights": _insights(log_id, case_notion, cohort, sla_seconds),
+            "adherence": _adherence(log_id, case_notion, cohort),
+            "story": _story(log_id, case_notion, cohort),
+            "interpretation": _CAVEAT,
+        }
 
 
 def _insights(log_id: str, case_type: str | None, cohort: dict[str, Any] | None,
@@ -244,8 +249,9 @@ def render(data: dict[str, Any]) -> str:
     tile_html = "".join(f'<div class="tile"><div class="v">{v}</div><div class="k">{escape(k)}</div></div>' for k, v in tiles)
 
     filters = []
-    if data.get("case_type"):
-        filters.append(f"case notion <b>{escape(str(data['case_type']))}</b>")
+    notion = data.get("case_notion") or data.get("case_type")
+    if notion:
+        filters.append(f"case notion <b>{escape(notion)}</b>")
     if data.get("cohort"):
         before = data.get("cases_before_filter")
         filters.append(f"filtered to {_num(summary['cases'])} of {_num(before)} cases: "
