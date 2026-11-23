@@ -243,3 +243,17 @@ def test_bfcache_restore_invalidates_selected_process_and_pending_reads():
     assert '$("reviewConfirm").checked=false;' in block
     assert '$("handoffConsent").checked=false;' in block
     assert 'resetHandoff(' in block
+
+
+def test_handoff_review_navigation_denial_disarms_all_process_controls():
+    """A failed live preflight must not leave direct edit/review/export available."""
+    source = (Path(__file__).resolve().parents[1] / "gateway" / "processes.html").read_text()
+    start = source.index('$("handoffReview").addEventListener("click"')
+    end = source.index('$("handoffRefresh").addEventListener("click"', start)
+    navigation = source[start:end]
+    assert 'invalidateDeniedReviewSelection("Review navigation revalidation failed.' in navigation
+    assert 'identityTicket===identityGeneration&&' in navigation
+    assert 'credential===authorizedCredential&&selected===chosen' in navigation
+    helper = source.split("function invalidateDeniedReviewSelection(message) {", 1)[1].split("let reviewMutationInFlight", 1)[0]
+    assert 'selected = null' in helper
+    assert '$("selected").hidden = true' in helper
