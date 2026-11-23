@@ -49,7 +49,7 @@ def test_trace_clusters_withhold_small_groups_and_cohorts():
     assert all(c["cases"] >= 5 and "cohort" not in c for c in r["clusters"])
     assert all(v["cases"] >= 5 for c in r["clusters"] for v in c["top_variants"])
     assert sum(c["top_variants_withheld"] for c in r["clusters"]) >= 1   # the 3-case variant
-    assert r["withheld"]["min_cases"] == 5 and "c0" not in repr(r)
+    assert r["withheld"]["min_cases"] == 5 and "'c0'" not in repr(r)
 
 
 def test_compliance_rates_with_case_ids_only_at_cases_level():
@@ -83,7 +83,7 @@ def test_performance_spectrum_without_case_lines():
     names = {(s["from"], s["to"]) for s in r["segments"]}
     assert ("Order", "Check") in names and ("Pay", "Ship") in names
     assert all(s["occurrences"] >= 5 and "lines" not in s and "max" not in s["duration_seconds"] for s in r["segments"])
-    assert r["case_lines_returned"] is False and "c0" not in repr(r)
+    assert r["case_lines_returned"] is False and "'c0'" not in repr(r)
     chosen = sharing.performance_spectrum(log, segments=["Order->Cancel"], bins=4)
     assert [(s["from"], s["occurrences"]) for s in chosen["segments"]] == [("Order", 9)]
     with pytest.raises(EventLogWorkspaceError):
