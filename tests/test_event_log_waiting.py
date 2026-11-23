@@ -190,6 +190,27 @@ def test_observed_activity_population_is_not_limited_to_dashboard_top_n():
 
 
 
+def test_cohort_coverage_includes_omitted_activity_rows():
+    # Numeric denominators cover the full cohort, not just the top-N display.
+    rows = []
+    for i in range(waiting.MAX_ACTIVITIES + 5):
+        rows.extend([
+            (f"c{i}", f"A{i:03}", _at(i, 0), "start"),
+            (f"c{i}", f"A{i:03}", _at(i, 1), "complete"),
+        ])
+    rows.append(("unfinished", "OnlyOpen", _at(201, 0), "start"))
+    result = waiting.waiting_time(_import(
+        ["case", "activity", "time", "lifecycle:transition"], rows))
+    coverage = result["cohort_observation_coverage"]
+    assert result["activities_omitted"] == 6
+    assert coverage["eligible"] == waiting.MAX_ACTIVITIES + 6
+    assert coverage["processing_observed"] == waiting.MAX_ACTIVITIES + 5
+    assert coverage["processing_share"] == pytest.approx(
+        (waiting.MAX_ACTIVITIES + 5) / (waiting.MAX_ACTIVITIES + 6))
+    assert coverage["waiting_observed"] == 0
+    assert coverage["waiting_share"] == 0
+
+
 def test_invalid_lifecycle_pair_does_not_double_count_coverage_eligibility():
     log = _import(["case", "activity", "time", "lifecycle:transition"], [
         ("x", "Review", _at(0, 2), "start"),
