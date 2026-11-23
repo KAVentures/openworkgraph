@@ -357,10 +357,18 @@ def export_delta(*, tenant, mailbox, folder_id, grant_file: Path,
     except (DeltaError, OSError):
         try:
             current = os.stat(output, follow_symlinks=False)
+            # Inode numbers can be reused immediately after unlink on Linux.
+            # Do not mistake a replacement at the same path for this round's CSV.
+            # Compare metadata AND the original bytes before cleanup.
             if (stat.S_ISREG(current.st_mode) and current.st_dev == published.st_dev
-                    and current.st_ino == published.st_ino and current.st_nlink == 1):
+                    and current.st_ino == published.st_ino and current.st_nlink == 1
+                    and current.st_size == published.st_size
+                    and current.st_mtime_ns == published.st_mtime_ns
+                    and current.st_ctime_ns == published.st_ctime_ns
+                    and hashlib.sha256(_private_read(output, 2 * 1024 * 1024)).digest()
+                    == hashlib.sha256(csv_bytes).digest()):
                 output.unlink()
-        except OSError:
+        except (OSError, DeltaError):
             pass  # Keep the original refusal; never remove a foreign artifact.
         raise
     return {
