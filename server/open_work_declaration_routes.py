@@ -3593,8 +3593,8 @@ async def read_local_bound_provider_event(request: Request, response: Response):
                 and row.get("provider_operation") == payload["provider_operation"]
                 and row.get("provider_correlation_id") == payload["provider_correlation_id"]
                 # A retained event ID, when present, must not contradict the
-                # independently retrieved event. An absent ID remains untrusted.
-                and row.get("provider_event_id") in (None, payload["provider_event_id"])):
+                # independently retrieved event. An absent ID cannot establish exact event identity.
+                and row.get("provider_event_id") == payload["provider_event_id"]):
             ref = row.get("attempt_ref")
             if isinstance(ref, str) and 0 < len(ref) <= 160:
                 correlation_candidates.append(ref)
