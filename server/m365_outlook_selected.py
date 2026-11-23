@@ -67,10 +67,12 @@ def _scope(tenant, mailbox, ids):
 
 def _grant(path, tenant, mailbox, ids):
     try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                     | getattr(os, "O_NONBLOCK", 0))
         with os.fdopen(fd, "rb") as stream:
             info = os.fstat(stream.fileno())
-            if (not stat.S_ISREG(info.st_mode) or info.st_size > 8192
+            if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                    or info.st_size > 8192
                     or (os.name == "posix" and info.st_mode & 0o077)):
                 raise OutlookError("Invalid owner-only Outlook grant")
             raw = stream.read(8193)
