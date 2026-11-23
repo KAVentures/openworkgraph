@@ -13,7 +13,8 @@ one applies a few transparent, explainable steps rather than noise injection:
 * **coarser time**: ``exact`` keeps timestamps; ``day`` keeps only the date of each event (a step
   column keeps the order); ``relative`` moves each case to start on the first day of the month it
   started and keeps the gaps between its events. ``elapsed`` keeps the gaps and
-  uses the same synthetic start for every case;
+  uses the same synthetic start for every case. ``sequence`` uses synthetic
+  timestamps one second apart to retain order only;
 * **resources**: dropped (default), or replaced by ``Resource 01``, … in a random order;
 * **activity codes**: optional export-local codes replace activity names;
 * **no attributes**: case and event attributes are never exported.
@@ -28,14 +29,14 @@ import csv
 import io
 import secrets
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from . import event_log_workspace as workspace
 from .event_log_workspace import EventLogWorkspaceError
 
 FORMAT = "openworkgraph.event_log_anonymized_export.v1"
-TIME_MODES = ("exact", "day", "relative", "elapsed")
+TIME_MODES = ("exact", "day", "relative", "elapsed", "sequence")
 ACTIVITY_MODES = ("keep", "pseudonymize")
 SYNTHETIC_START = datetime(2000, 1, 1)
 RESOURCE_MODES = ("drop", "pseudonymize")
@@ -93,13 +94,14 @@ def _plan(data: dict[str, Any], k: int) -> tuple[list, dict[str, Any]]:
     return kept, summary
 
 
-def _when(ts: datetime, case_start: datetime, time_mode: str, synthetic_start: datetime | None) -> str:
+def _when(ts: datetime, case_start: datetime, time_mode: str, synthetic_start: datetime | None, step: int) -> str:
     if time_mode == "exact":
         return ts.isoformat(sep="T") + "Z"
     if time_mode == "day":
         return ts.date().isoformat()
     anchor = synthetic_start or case_start.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    return (anchor + (ts - case_start)).isoformat(sep="T") + "Z"
+    elapsed = timedelta(seconds=step - 1) if time_mode == "sequence" else ts - case_start
+    return (anchor + elapsed).isoformat(sep="T") + "Z"
 
 
 def anonymized_export(log_id: str, case_type: str | None = None, *, min_cases: int = 5, time_mode: str = "relative",
@@ -114,7 +116,7 @@ def anonymized_export(log_id: str, case_type: str | None = None, *, min_cases: i
     if summary["events_kept"] > MAX_EXPORT_EVENTS:
         raise EventLogWorkspaceError(f"the export would hold {summary['events_kept']:,} events; at most "
                                      f"{MAX_EXPORT_EVENTS:,} can be exported at once — narrow the selection")
-    synthetic_start = None
+    synthetic_start = SYNTHETIC_START if time_mode == "sequence" else None
     if time_mode == "elapsed":
         longest = max(stamps[-1] - stamps[0] for _, stamps, _ in kept)
         synthetic_start = SYNTHETIC_START if longest <= datetime.max - SYNTHETIC_START else datetime.min
@@ -126,7 +128,8 @@ def anonymized_export(log_id: str, case_type: str | None = None, *, min_cases: i
         "method": ("cases kept only when at least min_cases cases share their exact path; case IDs replaced in random "
                    "order; " + {"exact": "timestamps kept", "day": "timestamps reduced to the date",
                                 "relative": "each case moved to start on the first of its start month, gaps kept",
-                                "elapsed": "each case moved to the same synthetic start, gaps kept"}[time_mode]
+                                "elapsed": "each case moved to the same synthetic start, gaps kept",
+                                "sequence": "synthetic timestamps one second apart, event order kept"}[time_mode]
                    + "; " + ("resources dropped" if resource_mode == "drop" else "resources replaced in random order")
                    + ("; activity names replaced with export-local codes" if activity_mode == "pseudonymize" else "")
                    + "; attributes never exported"),
@@ -159,7 +162,7 @@ def anonymized_export(log_id: str, case_type: str | None = None, *, min_cases: i
         case_id = f"C{n:0{width}d}"
         for step, (activity, ts, resource) in enumerate(zip(acts, stamps, res), start=1):
             row = [case_id, step, _cell(activities.get(activity, activity)),
-                   _when(ts, stamps[0], time_mode, synthetic_start)]
+                   _when(ts, stamps[0], time_mode, synthetic_start, step)]
             if resource_mode == "pseudonymize":
                 row.append(names.get(resource, ""))
             writer.writerow(row)

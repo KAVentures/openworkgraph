@@ -681,7 +681,7 @@ def _anonymized(log_id: str, case_type: str | None, cohort: dict[str, Any], min_
 def event_log_anonymized_export_summary(request: Request, log_id: str,
                                         case_type: str | None = Query(default=None, max_length=200),
                                         min_cases: int = Query(default=5, ge=2, le=1000),
-                                        time_mode: str = Query(default="relative", pattern="^(exact|day|relative|elapsed)$"),
+                                        time_mode: str = Query(default="relative", pattern="^(exact|day|relative|elapsed|sequence)$"),
                                         resource_mode: str = Query(default="drop", pattern="^(drop|pseudonymize)$"),
                                         activity_mode: str = Query(default="keep", pattern="^(keep|pseudonymize)$"),
                                         cohort: dict = Depends(_case_filter)):
@@ -695,7 +695,7 @@ def event_log_anonymized_export_summary(request: Request, log_id: str,
 def event_log_anonymized_export_csv(request: Request, log_id: str,
                                     case_type: str | None = Query(default=None, max_length=200),
                                     min_cases: int = Query(default=5, ge=2, le=1000),
-                                    time_mode: str = Query(default="relative", pattern="^(exact|day|relative|elapsed)$"),
+                                    time_mode: str = Query(default="relative", pattern="^(exact|day|relative|elapsed|sequence)$"),
                                     resource_mode: str = Query(default="drop", pattern="^(drop|pseudonymize)$"),
                                     activity_mode: str = Query(default="keep", pattern="^(keep|pseudonymize)$"),
                                     cohort: dict = Depends(_case_filter)):

@@ -1577,7 +1577,8 @@ less that points back to people. It honours the case filter.
   midnight on the first day of the month it started and keeps the gaps between
   its events; *day* keeps only each event's date (the `step` column keeps the
   order); *exact* keeps timestamps. *Synthetic start* moves every case to the
-  same date while preserving elapsed time between events.
+  same date while preserving elapsed time between events. *Event order only*
+  assigns synthetic timestamps one second apart, so elapsed times are omitted.
 * **Activity names** are kept by default. Choose activity codes to replace
   names consistently within the file. Each export assigns its own codes.
 * **Resources** are left out (default) or replaced by `Resource 01`, … in a
@@ -1590,7 +1591,7 @@ less that points back to people. It honours the case filter.
 `GET /v1/event-logs/{log_id}/anonymized-export` returns that summary and
 `GET /v1/event-logs/{log_id}/anonymized-export.csv` the file (header
 `X-OWG-Anonymized`), both with `min_cases`, `time_mode`
-(`relative|day|exact|elapsed`), `resource_mode` (`drop|pseudonymize`),
+(`relative|day|exact|elapsed|sequence`), `resource_mode` (`drop|pseudonymize`),
 `activity_mode` (`keep|pseudonymize`), `case_type` and the case-filter parameters. At most 1,000,000 events are exported at once.
 This lowers the chance that a case can be singled out; it is not a guarantee.
 Durations, dates and activity names can still identify a case to someone who

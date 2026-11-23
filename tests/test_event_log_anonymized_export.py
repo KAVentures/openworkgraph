@@ -90,6 +90,16 @@ def test_activity_codes_and_synthetic_dates_keep_paths_and_elapsed_gaps():
     assert len({path[0] for path in paths.values()}) == len({path[-1] for path in paths.values()}) == 1
 
 
+def test_sequence_mode_retains_event_order_and_omits_elapsed_time():
+    log = _import()
+    result = ax.anonymized_export(log, min_cases=3, time_mode="sequence")
+    assert result["synthetic_start"] == "2000-01-01T00:00:00Z"
+    rows = _read(result["csv"])
+    assert len(rows) == 21
+    for row in rows:
+        assert row["timestamp"] == f"2000-01-01T00:00:0{int(row['step']) - 1}Z"
+
+
 def test_synthetic_date_supports_the_full_timestamp_span():
     rows = ["case,activity,time"]
     for case in ("one", "two"):
@@ -158,6 +168,8 @@ with TestClient(app) as client:
     share = client.get(base+'.csv'+coded, headers=owner)
     assert share.status_code==200 and share.headers['cache-control']=='no-store'
     assert ',A000001,2000-' in share.text and ',A000002,2000-' in share.text
+    sequence = client.get(base+'.csv?min_cases=2&time_mode=sequence', headers=owner)
+    assert sequence.status_code==200 and ',B,2000-01-01T00:00:01Z' in sequence.text
     assert client.get(base+'?min_cases=9',headers=owner).status_code==422
     filtered=client.get(base+'?min_cases=2&activity=B',headers=owner)
     assert filtered.status_code==200 and filtered.json()['cases_total']==4

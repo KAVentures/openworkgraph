@@ -796,7 +796,7 @@
     const box=section('Anonymized export');box.id='owgAnonymized';
     box.appendChild(el('div','Before sharing a log, check which cases and fields the CSV will contain. Rare paths are left out, case IDs are replaced, and attributes are removed.','muted'));
     const minPick=select('owgAnonymizedMin',[['5','At least 5 cases per path'],['2','At least 2'],['10','At least 10'],['20','At least 20'],['50','At least 50']]);
-    const timePick=select('owgAnonymizedTime',[['relative','Start of the original month, gaps kept'],['elapsed','Same synthetic start for every case, gaps kept'],['day','Date of each event only'],['exact','Exact timestamps']]);
+    const timePick=select('owgAnonymizedTime',[['relative','Start of the original month, gaps kept'],['elapsed','Same synthetic start for every case, gaps kept'],['sequence','Event order only, times one second apart'],['day','Date of each event only'],['exact','Exact timestamps']]);
     const resourcePick=select('owgAnonymizedResources',[['drop','Leave resources out'],['pseudonymize','Replace resources with Resource 01, 02, …']]);
     const activityPick=select('owgAnonymizedActivities',[['keep','Keep activity names'],['pseudonymize','Replace activity names with codes']]);
     const check=button('Check what is kept','secondary');check.id='owgAnonymizedCheck';
