@@ -2432,28 +2432,46 @@
               "Shared revisions and reviews deleted. Private local knowledge was not changed.",
             );
           });
+        let historyGeneration = 0;
         async function history(before) {
+          if (!selected || !credential) throw new Error("Select an authorized process first.");
+          const ticket = ++historyGeneration;
+          const selection = selected;
+          const identityTicket = identityGeneration, authorizedCredential = credential;
+          const id = selection.process.workflow_id;
+          const host = $("historyList");
+          // Do not expose links from an earlier tenant/process while a new
+          // authenticated history read is pending or has failed.
+          host.replaceChildren();
           const params = new URLSearchParams({ limit: "10" });
           if (before) params.set("before_revision", String(before));
-          const id = selected.process.workflow_id;
           const result = await call(
-            "/v1/human/processes/" + id + "/history?" + params,
+            "/v1/human/processes/" + encodeURIComponent(id) + "/history?" + params,
           );
-          const host = $("historyList");
-          host.replaceChildren();
+          if (ticket !== historyGeneration || identityTicket !== identityGeneration ||
+              credential !== authorizedCredential || selected !== selection ||
+              selected?.process?.workflow_id !== id) return;
+          if (!Array.isArray(result?.workflows))
+            throw new Error("Gateway returned an invalid revision history.");
           result.workflows.forEach((record) =>
             host.appendChild(
               button(
                 "Open revision " + record.revision + " · " + record.saved_at,
-                () => open(id, record.revision),
+                () => {
+                  if (ticket !== historyGeneration || identityTicket !== identityGeneration ||
+                      credential !== authorizedCredential || selected !== selection) return;
+                  return open(id, record.revision);
+                },
               ),
             ),
           );
           if (result.has_more)
             host.appendChild(
-              button("Older revisions", () =>
-                history(result.next_before_revision),
-              ),
+              button("Older revisions", () => {
+                if (ticket !== historyGeneration || identityTicket !== identityGeneration ||
+                    credential !== authorizedCredential || selected !== selection) return;
+                return history(result.next_before_revision);
+              }),
             );
         }
         $("history").onclick = () => run(() => history());
