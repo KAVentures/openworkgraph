@@ -2560,7 +2560,10 @@ variant tables list only cases that match that row and the side's case selection
 supplied case key to see its event history. Case keys and event rows are available in the
 local dashboard. The aggregate JSON omits case keys and events. Use **Download
 baseline events (CSV)** or **Download comparison events (CSV)** to save the
-complete original traces for that side's case selection and case notion.
+complete original traces for that side's case selection and case notion. Open a case in
+either the comparison or the shared inspector to download its complete trace
+using **Download case events (CSV)**. The download includes original retained
+events beyond the current page of the inspector.
 
 `cohort` takes the same keys as other analyses. `limit` (1–200) caps each ranked
 list. The response contains:
