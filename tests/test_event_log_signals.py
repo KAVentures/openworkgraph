@@ -119,6 +119,32 @@ def test_preview_matches_evaluation_without_recording_signal_state():
     assert saved_state() == before
 
 
+def test_evaluating_one_saved_rule_leaves_other_rules_and_reviews_alone():
+    from server import event_log_signal_inbox as inbox
+
+    log = _log()
+    first = signals.add_rule(log, _rule("Slow", kind="cases", condition="duration_over", seconds=24 * 3600))
+    other = signals.add_rule(log, _rule("Any cases", kind="kpi", metric="case_count", operator="above", threshold=0))
+    outside_log = _log()
+    outside = signals.add_rule(outside_log, _rule("Other log", kind="cases", condition="has_rework"))
+    other_id = other["rule_id"]
+    signals.evaluate(log, rule_id=other_id)
+    initial = next(item for item in inbox.list_inbox(log)["items"] if item["rule_id"] == other_id)
+    inbox.snooze(log, other_id, {"state_fingerprint": initial["state_fingerprint"], "minutes": 60})
+    before = {item["rule_id"]: item for item in inbox.list_inbox(log)["items"]}
+    with pytest.raises(workspace.EventLogWorkspaceError, match="unknown signal rule"):
+        signals.evaluate(log, rule_id=outside["rule_id"])
+    assert {item["rule_id"]: item for item in inbox.list_inbox(log)["items"]} == before
+    current = signals.evaluate(log, rule_id=first["rule_id"])
+    assert current["triggered"] == 1
+    assert [entry["rule_id"] for entry in current["signals"]] == [first["rule_id"]]
+    assert current["signals"][0]["matching_cases"] == 1
+    after = {item["rule_id"]: item for item in inbox.list_inbox(log)["items"]}
+    assert after[other_id] == before[other_id]
+    assert after[first["rule_id"]]["status"] == "unreviewed"
+    assert signals.list_rules(outside_log)["rules"][0]["last_evaluated_at"] is None
+
+
 def test_saved_signals_use_fractional_seconds_for_kpis_sla_and_case_evidence():
     """Synthetic timestamps: 1.5s breaches a strict 1s rule; exactly 1s does not."""
     rows = [
@@ -305,6 +331,12 @@ with TestClient(app) as client:
     assert client.post(base + "/preview", json={**rule, "cohort": {"activity": []}}, headers=headers).status_code == 422
     created = client.post(base, json=rule, headers=headers)
     assert created.status_code == 200, created.text
+    single = base + "/" + created.json()["rule_id"] + "/evaluate"
+    assert client.post(single, headers=bearer).status_code in (401, 403)
+    assert client.post(base + "/unknown/evaluate", headers=headers).status_code == 422
+    checked = client.post(single, headers=headers)
+    assert checked.status_code == 200 and checked.headers["cache-control"] == "no-store"
+    assert [signal["rule_id"] for signal in checked.json()["signals"]] == [created.json()["rule_id"]]
     assert client.post(base, content=b"not json", headers={**headers, "content-type": "application/json"}).status_code == 422
     evaluated = client.post(base + "/evaluate", headers=headers).json()
     assert evaluated["signals"][0]["triggered"] and evaluated["signals"][0]["evidence_cases"][0]["case_id"] == "1"

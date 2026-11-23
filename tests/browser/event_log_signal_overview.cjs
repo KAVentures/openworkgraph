@@ -224,7 +224,19 @@ const path=require('node:path');
     assert.equal(definition.when.minimum_cases,2);
     await page.locator('#owgCaseFilterClear').click();
     await scope.waitFor({state:'hidden'});
+    const readRules=async()=>page.evaluate(async id=>(
+      await (await fetch('/v1/event-logs/'+id+'/signals')).json()
+    ).rules,setup.a);
+    const beforeCheck=await readRules();
+    await page.getByRole('button',{name:'Check signal Closed cohort',exact:true}).click();
+    await page.locator('#owgSignalResults').getByText('Checked Closed cohort.',{exact:true}).waitFor();
+    assert.equal(await page.locator('#owgSignalResults tbody tr').count(),1);
+    const afterCheck=await readRules();
+    assert.ok(afterCheck.find(rule=>rule.rule_id===definition.rule_id).last_evaluated_at);
+    assert.deepEqual(afterCheck.filter(rule=>rule.rule_id!==definition.rule_id),
+      beforeCheck.filter(rule=>rule.rule_id!==definition.rule_id));
     await page.locator('#owgSignalEvaluate').click();
+    await page.locator('#owgSignalResults').getByText('signals hold now.',{exact:false}).waitFor();
     const evaluated=page.locator('#owgSignalResults tbody tr').filter({hasText:'Closed cohort'});
     await evaluated.getByText('no',{exact:true}).waitFor();
     await evaluated.getByText('1 case',{exact:true}).waitFor();

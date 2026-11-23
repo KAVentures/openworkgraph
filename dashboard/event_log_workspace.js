@@ -8017,7 +8017,7 @@
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Name',name),scopeField,field('Watch',kind),...Object.values(fields),preview,add);
     const rules=el('div');rules.id='owgSignalRules';
     const message=el('div',null,'muted');message.id='owgSignalStatus';message.setAttribute('role','status');
-    const out=el('div');out.id='owgSignalResults';
+    const out=el('div');out.id='owgSignalResults';out.setAttribute('aria-live','polite');
     const reviewHeading=el('h4','Review evaluated signals');
     const reviewNote=el('p','Acknowledge a specific triggered result locally, or reopen it. Snooze a result for one hour or one day; it returns on refresh after expiry. Reviews never send notifications, approve actions, or imply business outcomes. Stale results require a fresh Check signals.','muted');
     const inbox=el('div');inbox.id='owgSignalInbox';
@@ -8083,8 +8083,13 @@
       deliveryPanel,transitionHeading,transitionNote,transitionRefresh,transitionPrevious,transitionNext,transitionStatus,transitionResults,
       allHeading,allNote,allControls,allStatus,allResults,
       timelineHeading,timelineNote,timelineControls,timelineStatus,timelineResults);
-    const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/signals';
     const selectedLogId=state.logId;
+    const base=()=>'/v1/event-logs/'+encodeURIComponent(selectedLogId)+'/signals';
+    let checkingSaved=false,savedCount=0;
+    const syncCheckActions=()=>{
+      evaluate.disabled=checkingSaved||savedCount===0;
+      rules.querySelectorAll('[data-signal-check]').forEach(control=>{control.disabled=checkingSaved;});
+    };
     const inboxBase=()=>'/v1/event-logs/'+encodeURIComponent(selectedLogId)+'/signal-inbox';
     const deliveryBase=()=>'/v1/schedules/signal-delivery/'+encodeURIComponent(selectedLogId);
     let deliveryRequestId=0,hasDelivery=false;
@@ -8378,8 +8383,13 @@
     reviewRefresh.onclick=()=>refreshInbox().catch(error=>{message.textContent=error.message;});
     async function refresh(){
       const r=await getJSON(base());if(generation!==state.generation)return;
-      rules.replaceChildren(r.rules.length?table(['Signal','Case scope','Rule',''],r.rules.map(rule=>{
+      savedCount=r.rules.length;
+      rules.replaceChildren(savedCount?table(['Signal','Case scope','Rule','Actions'],r.rules.map(rule=>{
+        const check=button('Check','secondary');check.dataset.signalCheck='';
+        check.setAttribute('aria-label','Check signal '+rule.name);
+        check.onclick=()=>checkSaved(rule.rule_id);
         const del=button('Delete','secondary');del.setAttribute('aria-label','Delete signal '+rule.name);
+        const actions=el('div',null,'actions');actions.append(check,del);
         del.onclick=async()=>{try{await api(base()+'/'+encodeURIComponent(rule.rule_id)+'/delete',{method:'POST'});message.textContent='Signal deleted.';await refresh();}catch(error){message.textContent=error.message;}};
         const w=rule.when;const text=w.kind==='kpi'?w.metric.replace(/_/g,' ')+' '+w.operator+' '+w.threshold
           :w.kind==='conformance'?w.metric.replace(/_/g,' ')+' on '+w.net_name+' '+w.operator+' '+w.threshold+(w.recent_days?' (cases started in the last '+w.recent_days+' days)':'')
@@ -8389,8 +8399,8 @@
         const scoped=Object.keys(rule.cohort||{}).some(key=>key!=='label');
         const scope=(scoped?'Saved case filter':'All cases')+(rule.case_type?' · '+rule.case_type:'');
         const minimumText=w.minimum_cases>1?' · minimum '+Number(w.minimum_cases).toLocaleString()+' cases':'';
-        return [rule.name,scope,text+minimumText,del];})):el('div','No saved signals yet.','muted'));
-      evaluate.disabled=!r.rules.length;
+        return [rule.name,scope,text+minimumText,actions];})):el('div','No saved signals yet.','muted'));
+      syncCheckActions();
       await refreshInbox();
       await refreshAllSignals();
       await refreshTimeline();
@@ -8428,11 +8438,16 @@
         message.textContent='Signal saved.';name.value='';clearPreview();await refresh();
       }catch(error){message.textContent=error.message;}
     };
-    evaluate.onclick=async()=>{
+    async function checkSaved(ruleId){
+      const current=()=>generation===state.generation&&box.isConnected;
+      if(checkingSaved||!current())return;
+      checkingSaved=true;syncCheckActions();
       try{
-        const r=await (await api(base()+'/evaluate',{method:'POST'})).json();if(generation!==state.generation)return;
+        const path=ruleId?'/'+encodeURIComponent(ruleId)+'/evaluate':'/evaluate';
+        const r=await (await api(base()+path,{method:'POST'})).json();
+        if(!current())return;
         out.replaceChildren(
-          el('div',r.triggered+' of '+r.signals.length+' signals hold now.','muted'),
+          el('div',ruleId?'Checked '+r.signals[0].name+'.':r.triggered+' of '+r.signals.length+' signals hold now.','muted'),
           table(['Signal','Holds','Value or matching cases','New since last check','Example cases'],r.signals.map(sig=>[
             sig.name,sig.triggered?'yes':'no',
             signalValueText(sig),
@@ -8440,8 +8455,10 @@
             signalEvidenceText(sig)])),
           el('div',r.interpretation,'muted'));
         await refresh();
-      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
-    };
+      }catch(error){if(current())out.replaceChildren(el('div',error.message,'muted'));}
+      finally{checkingSaved=false;if(current())syncCheckActions();}
+    }
+    evaluate.onclick=()=>checkSaved(null);
     refresh().catch(error=>{message.textContent=error.message;});
     // Signals saved from other sections (e.g. a Petri net conformance alert) appear without a reload.
     box.addEventListener('owg-signals-changed',()=>{refresh().catch(error=>{message.textContent=error.message;});});

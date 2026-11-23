@@ -1408,13 +1408,16 @@ Celonis Action Engine and UiPath process alerts. Rules belong to one log, are im
   case population checked. The draft preview leaves saved signals and evaluation history alone.
 - `POST /v1/event-logs/{log_id}/signals/{rule_id}/delete` removes one.
 - `POST /v1/event-logs/{log_id}/signals/evaluate` checks every rule now.
+- `POST /v1/event-logs/{log_id}/signals/{rule_id}/evaluate` checks and records one saved rule.
 
 Use **Preview signal** to check the current draft before choosing **Save signal**.
 When the analysis has a case filter, choose **Current case filter** to save its
 conditions with the rule. Signal conditions and their case filters use the
 original recorded activities. **All cases** is selected by default. Later changes to
 the analysis filter leave saved rules unchanged. For case conditions, enter
-**Minimum matching cases** to set the trigger count.
+**Minimum matching cases** to set the trigger count. Use **Check** beside a
+saved rule to evaluate it on its own, or **Check signals** to evaluate the log’s
+whole list.
 
 Rule kinds:
 
