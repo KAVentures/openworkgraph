@@ -9,6 +9,7 @@ import pytest
 
 from server import event_log_case_attributes as case_attributes
 from server import event_log_cohorts as cohorts
+from server import event_log_derive as derived_logs
 from server import event_log_insights as insights
 from server import event_log_workspace as workspace
 
@@ -62,13 +63,26 @@ def test_categorical_segment_from_a_joined_case_table(tmp_path):
     log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="t", source_format="csv",
                                mapping={"case_column": "case", "activity_column": "activity", "timestamp_column": "time"})["log_id"]
     table = tmp_path / "regions.csv"
-    table.write_text("id,Region\n" + "\n".join(f"c{i},{'APAC' if i % 3 == 0 else 'EU'}" for i in range(12)) + "\n")
-    case_attributes.add(log, table, id_column="id", columns=["Region"])
+    table.write_text("id,Region,Batch\n" + "\n".join(
+        f"c{i},{'APAC' if i % 3 == 0 else 'EU'},{'early' if i < 9 else 'later'}" for i in range(12)) + "\n")
+    case_attributes.add(log, table, id_column="id", columns=["Region", "Batch"])
     r = insights.insights(log, {"limit": 30})
     seg = next(f for f in r["findings"] if f["kind"] == "attribute_segment")
     assert seg["cohort"] == {"attribute": "Region=APAC"} and seg["cases"] == 4
     assert seg["numbers"]["median_seconds_with"] == 12 * 3600 and seg["numbers"]["median_seconds_without"] == 3600
     assert _cases(log, seg["cohort"]) == 4
+    report = insights.insights(log, {"cohort": {"attribute": "Batch=early"}, "limit": 30})
+    association = next(f for f in report["findings"] if f["kind"] == "attribute_segment")
+    selection = {"all_of": [report["cohort"], association["cohort"]]}
+    assert _cases(log, selection) == association["cases"] == 3
+    assert cohorts.describe(cohorts.parse_cohort(selection)) == selection
+    copied = derived_logs.derive(log, {"name": "Selected APAC", "cohort": selection})
+    assert copied["derived_from"]["cases_matched"] == 3
+    assert copied["copied"]["events"] == 6
+    for parts in ([], [{}, {"label": "empty"}], [{"all_of": []}, selection["all_of"][0]], [{}] * 5):
+        with pytest.raises(workspace.EventLogWorkspaceError, match="all_of"):
+            cohorts.parse_cohort({"all_of": parts})
+
     # No attributes, no segment findings.
     plain = workspace.import_log(BytesIO("\n".join(rows).encode()), name="p", source_format="csv",
                                  mapping={"case_column": "case", "activity_column": "activity", "timestamp_column": "time"})["log_id"]

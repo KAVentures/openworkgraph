@@ -994,7 +994,7 @@
     if(summary.activity_mapping){const m=summary.activity_mapping;const note=el('div','Activities are grouped by the mapping “'+m.name+'”: '+Number(m.events_relabeled).toLocaleString()+' events relabelled'+(m.repeats_collapsed?', '+Number(m.repeats_collapsed).toLocaleString()+' consecutive repeats collapsed':'')+'. The stored events are unchanged; remove the mapping under Group activities to see the original activities.','note');note.id='owgActivityMappingNotice';overview.appendChild(note);}
     if(summary.hidden_activities){const h=summary.hidden_activities;const note=el('div','Hidden activities left out: '+h.activities.join(', ')+' ('+Number(h.events_hidden).toLocaleString()+' events'+(h.cases_with_only_hidden_events?'; '+Number(h.cases_with_only_hidden_events).toLocaleString()+' cases had only hidden events and are not shown':'')+'). The stored events are unchanged; use Show all activities under Hide activities to include them.','note');note.id='owgHiddenActivitiesNotice';overview.appendChild(note);}
     results.appendChild(overview);
-    results.appendChild(insightSection());
+    results.appendChild(insightSection(inspection));
     results.appendChild(activityMappingSection());
     results.appendChild(hiddenActivitiesSection());
     results.appendChild(qualitySection());
@@ -1583,7 +1583,7 @@
     return rules;
   }
   // "Where to look first": ranked, descriptive pointers computed automatically after Analyse.
-  function insightSection(){
+  function insightSection(inspection){
     const box=section('Where to look first');box.id='owgEventLogInsights';
     const out=el('div');out.id='owgInsightResults';out.setAttribute('role','status');out.setAttribute('aria-live','polite');
     out.appendChild(el('div','Looking for where case time and repetition concentrate…','muted'));
@@ -1601,12 +1601,19 @@
           const title=el('strong',f.title);
           const meta=el('div',Number(f.cases).toLocaleString()+' cases ('+pct(f.case_share)+')'+(f.impact_seconds?' · about '+duration(f.impact_seconds)+' of case time involved':'')+'. '+f.caveat,'muted');
           item.append(title,meta);
-          if(f.follows&&f.follows.length&&!filterOn()){
+          const finding={...f.cohort,...(f.follows?.length?{follows:f.follows}:{})};
+          const scoped=Object.keys(r.cohort).length>0;
+          const selection=scoped?{all_of:[r.cohort,finding]}:finding;
+          if(Object.keys(finding).length){
+            const review=button('Review cases','secondary');
+            review.setAttribute('aria-label','Review cases for '+f.title);
+            review.onclick=()=>inspection.cohort(selection,f.title);
+            item.appendChild(review);
+          }
+          if(f.follows&&f.follows.length&&!scoped){
             const go=button('Filter to these cases','secondary');go.setAttribute('aria-label','Filter to these cases: '+f.title);
             go.onclick=()=>{state.follows=f.follows;analyse().catch(error=>status(error.message));};
             item.appendChild(go);
-          }else if(f.cohort&&f.cohort.activity){
-            item.appendChild(el('div','To see these cases, choose “'+f.cohort.activity+'” under Contains activity in any filter.','muted'));
           }else if(f.cohort&&(f.cohort.attribute||f.cohort.attribute_range)){
             // Case-attribute groups: list the slowest of exactly these cases, or save them as a log.
             const casesOut=el('div');casesOut.setAttribute('role','status');
@@ -1614,16 +1621,16 @@
             const post=(path,body)=>{if(state.caseType)body.case_type=state.caseType;return api(base+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(x=>x.json());};
             const slowest=button('Slowest cases','secondary');slowest.setAttribute('aria-label','Slowest cases: '+f.title);
             const save=button('Save as log','secondary');save.setAttribute('aria-label','Save these cases as a new log: '+f.title);
-            slowest.onclick=async()=>{try{const r2=await post('/cases/slowest',{cohort:f.cohort,limit:10});if(generation!==state.generation)return;
+            slowest.onclick=async()=>{try{const r2=await post('/cases/slowest',{cohort:selection,limit:10});if(generation!==state.generation)return;
               const row=el('div',null,'row');r2.cases.forEach(c=>{const b=button(c.case_id+' ('+duration(c.duration_seconds)+')','secondary');b.setAttribute('aria-label','Explain case '+c.case_id);
                 b.onclick=()=>{const id=document.getElementById('owgCaseExplainId'),run=document.getElementById('owgCaseExplainRun');if(!id||!run)return;id.value=c.case_id;run.click();document.getElementById('owgCaseExplain').scrollIntoView({block:'start'});};row.appendChild(b);});
               casesOut.replaceChildren(row);}catch(error){casesOut.replaceChildren(el('div',error.message,'muted'));}};
             save.onclick=async()=>{const name=(window.prompt('Name for a new log with these '+f.cases+' cases',(f.numbers.segment||'segment').slice(0,120))||'').trim();if(!name)return;
-              try{const r2=await post('/derive',{name:name.slice(0,120),cohort:f.cohort});casesOut.replaceChildren(el('div','Saved '+Number(r2.copied.events).toLocaleString()+' events of '+Number(r2.derived_from.cases_matched).toLocaleString()+' cases as “'+r2.log.name+'”. This log is unchanged.'));}
+              try{const r2=await post('/derive',{name:name.slice(0,120),cohort:selection});casesOut.replaceChildren(el('div','Saved '+Number(r2.copied.events).toLocaleString()+' events of '+Number(r2.derived_from.cases_matched).toLocaleString()+' cases as “'+r2.log.name+'”. This log is unchanged.'));}
               catch(error){casesOut.replaceChildren(el('div',error.message,'muted'));}};
             const row=el('div',null,'row');
             // Make the group the global case filter, so every filtered view shows only these cases.
-            if(!filterOn()){const go=button('Filter to these cases','secondary');go.setAttribute('aria-label','Filter to these cases: '+f.title);
+            if(!scoped){const go=button('Filter to these cases','secondary');go.setAttribute('aria-label','Filter to these cases: '+f.title);
               go.onclick=()=>{state.attr={...f.cohort};analyse().catch(error=>status(error.message));};row.appendChild(go);}
             row.append(slowest,save);item.append(row,casesOut);
           }

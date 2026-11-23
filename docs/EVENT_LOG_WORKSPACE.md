@@ -448,6 +448,13 @@ them all; typing filters the list by section name and description (for example "
 
 ## Where to look first (automatic insights)
 
+Use **Review cases** to see which cases contribute to a transition, repeated activity,
+detour or case-attribute finding. **Slowest cases** and **Save as log** for attribute
+findings use the same selection. These actions combine the finding's case filter
+with the case filter used to calculate the insight. The JSON cohort form accepts
+`all_of` with two to four nonempty case filters. Each case must match every filter.
+
+
 After **Analyse**, **Where to look first** lists up to six findings, ranked by the
 case time they involve. The same list comes from
 `POST /v1/event-logs/{log_id}/insights` with
