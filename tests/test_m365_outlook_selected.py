@@ -253,7 +253,7 @@ def test_selected_grant_fifo_without_writer_refused_without_blocking(setup):
         except OutlookError:
             return
         raise AssertionError("FIFO grant was accepted")
-    process = multiprocessing.Process(target=check_grant)
+    process = multiprocessing.get_context("fork").Process(target=check_grant)
     process.start()
     process.join(timeout=3)
     if process.is_alive():
