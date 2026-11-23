@@ -324,6 +324,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_pdd.cjs
       - name: Verify process map SVG and PNG downloads in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_map_export.cjs
+      - name: Verify a log downloads as an OCEL 2.0 SQLite database
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_ocel_sqlite_export.cjs
       - name: Verify the self-contained event-log HTML report downloads and renders offline
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_report.cjs
       - name: Verify a folder feed appends a dropped export once and runs on a schedule
