@@ -47,6 +47,11 @@ const path=require('node:path');
    assert.match(text,/No price for Pay: 10 executions are left out of the totals\./);
    assert.match(text,/Receive → Check → Check → Pay/);
    assert.match(text,/not verified rework/);
+   await out.getByRole('button',{name:'Review costs for Receive → Check → Check → Pay',exact:true}).click();
+   const review=page.locator('#owgCostCaseReview');
+   await review.getByText(/4 matching cases/).waitFor();
+   await review.getByRole('button',{name:/Open case /}).first().click();
+   await page.locator('#owgEventLogCaseEvents').getByText(/Showing 4 of 4 events/).waitFor();
    // A default price fills the blanks.
    await page.locator('#owgCostDefault').fill('1');await page.locator('#owgCostRun').click();
    await out.filter({hasText:'$273.00'}).waitFor();

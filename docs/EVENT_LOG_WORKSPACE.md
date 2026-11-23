@@ -586,6 +586,11 @@ are prefixed with `'`. `GET /v1/event-logs/{log_id}/breakdown.csv` takes the sam
 
 ### Process cost
 
+Select **Review case costs** to see cases in descending order of modeled cost, or
+select the case count for a variant to review that exact sequence. The breakdown
+shows activity and elapsed-time charges, repeat charges already included in
+activity cost, and unpriced executions. Open a case to inspect its recorded events.
+
 The log records what happened, not what it cost. **Process cost** applies your
 own cost model to the observed events. `POST /v1/event-logs/{log_id}/costs`
 takes:

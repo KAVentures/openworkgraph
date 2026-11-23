@@ -1088,7 +1088,7 @@
     results.appendChild(nextActivitySection(names,inspection));
     results.appendChild(complianceSection((activities.activities||[]).map(a=>a.activity),inspection));
     results.appendChild(domainPackSection());
-    results.appendChild(costSection(names));
+    results.appendChild(costSection(names,inspection));
     results.prepend(analysisNavigator(results));
     results.prepend(storySection());
     attachCaseAttributeSuggestions(generation);
@@ -1217,7 +1217,7 @@
   }
 
   // Process cost from the user's own cost model: a price per activity execution and an optional hourly cost per open case.
-  function costSection(activityNames){
+  function costSection(activityNames,inspection){
     const box=section('Process cost');box.id='owgEventLogCosts';
     box.appendChild(el('div','Enter what one execution of each activity costs, and optionally what each hour a case stays open costs. The log does not record what work cost: these figures are your model applied to the observed events.','muted'));
     const currency=input('owgCostCurrency','text');currency.value='EUR';currency.maxLength=3;currency.size=4;currency.autocomplete='off';
@@ -1236,11 +1236,12 @@
     const forget=button('Forget saved prices','secondary');forget.id='owgCostForgetModel';forget.disabled=true;
     const modelStatus=el('div',null,'muted');modelStatus.id='owgCostModelStatus';modelStatus.setAttribute('role','status');
     const actions=el('div',null,'row');actions.append(run,saveModel,forget);
-    box.append(actions,modelStatus,out);
+    const evidence=el('div');evidence.id='owgCostCaseReview';
+    box.append(actions,modelStatus,out,evidence);
     const generation=state.generation;
     const modelPath=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/cost-model';
     const readModel=()=>{
-      const activity_costs={};
+      const activity_costs=Object.create(null);
       for(const node of prices){if(node.value.trim()==='')continue;const v=Number(node.value);if(!(v>=0))throw new Error('Costs must be zero or more ('+node.dataset.activity+').');activity_costs[node.dataset.activity]=v;}
       const model={currency:currency.value.trim().toUpperCase(),activity_costs,hourly_open_case_cost:Number(hourly.value||0)};
       if(fallback.value.trim()!=='')model.default_activity_cost=Number(fallback.value);
@@ -1263,30 +1264,74 @@
       try{await api(modelPath()+'/delete',{method:'POST'});forget.disabled=true;modelStatus.textContent='Saved prices forgotten. The report no longer includes a cost section.';}
       catch(error){modelStatus.textContent=error.message;}
     };
+    let revision=0;
+    function invalidate(){
+      revision++;run.disabled=false;out.replaceChildren();evidence.replaceChildren();
+    }
+    for(const control of [currency,hourly,fallback,...prices])control.addEventListener('input',invalidate);
     run.onclick=async()=>{
+      invalidate();
+      const ticket=revision;
+      const current=()=>box.isConnected&&generation===state.generation&&ticket===revision;
       run.disabled=true;
       try{
-        const activity_costs={};
-        for(const node of prices){if(node.value.trim()==='')continue;const v=Number(node.value);if(!(v>=0))throw new Error('Costs must be zero or more ('+node.dataset.activity+').');activity_costs[node.dataset.activity]=v;}
-        const spec={currency:currency.value.trim().toUpperCase(),activity_costs,hourly_open_case_cost:Number(hourly.value||0)};
-        if(fallback.value.trim()!=='')spec.default_activity_cost=Number(fallback.value);
+        const spec=readModel();
         if(state.caseType)spec.case_type=state.caseType;
         if(filterOn())spec.cohort=globalCohort();
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/costs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
-        if(generation!==state.generation)return;
+        if(!current())return;
         let money;try{money=new Intl.NumberFormat(undefined,{style:'currency',currency:r.currency});}catch(_){money={format:v=>r.currency+' '+Number(v).toFixed(2)};}
         const m=v=>v===null||v===undefined?'—':money.format(v);
         const cpc=r.cost_per_case;
         const summary=table(['Total','Activities','Time cases are open','Repeated executions','Per case: mean','median','90th percentile'],
           [[m(r.total_cost),m(r.activity_cost),m(r.holding_cost),m(r.repeated_execution_cost)+' ('+pct(r.repeated_execution_share)+')',m(cpc.mean),m(cpc.median),m(cpc.p90)]]);
         const acts=table(['Activity','Executions','Unit cost','Cost','Share','Repeated executions','Their cost'],r.activities.map(a=>[a.activity,Number(a.events).toLocaleString(),a.unit_cost===null?'no price':m(a.unit_cost)+(a.price_source==='default'?' (default)':''),m(a.cost),pct(a.share_of_activity_cost),Number(a.repeated_executions).toLocaleString(),m(a.repeated_execution_cost)]));
-        const variants=table(['Variant','Cases','Cost per case','Total','Repeated executions per case'],r.costliest_variants.map(v=>[v.path.join(' → '),Number(v.cases).toLocaleString(),m(v.cost_per_case),m(v.total_cost),m(v.repeated_execution_cost_per_case)]));
-        const nodes=[el('div',Number(r.cases).toLocaleString()+' cases, '+Number(r.events).toLocaleString()+' events.','muted'),summary];
+        function review(label,variant){
+          const panel=el('div'),heading=el('h4',label);heading.tabIndex=-1;
+          const message=el('div',null,'muted');message.setAttribute('role','status');
+          const list=el('div'),first=button('First case page','secondary'),next=button('Next case page','secondary');
+          panel.append(heading,message,list,first,next);evidence.replaceChildren(panel);heading.focus();
+          let cursor=null;
+          async function load(offset){
+            first.disabled=next.disabled=true;
+            message.textContent='Loading case costs…';
+            try{
+              const path='/v1/event-logs/'+encodeURIComponent(state.logId)+'/costs/cases';
+              const result=await (await api(path,{method:'POST',headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({model:spec,variant_id:variant,offset})})).json();
+              if(!current()||!panel.isConnected)return;
+              cursor=result.next_offset;
+              message.textContent=Number(result.selected_cases).toLocaleString()+' matching cases, highest cost first.';
+              list.replaceChildren(table(['Case','Total','Activity cost','Elapsed-time cost','Repeat cost (included in activity cost)','Unpriced executions'],
+                result.cases.map(c=>{
+                  const open=button(c.case_id,'secondary');
+                  open.setAttribute('aria-label','Open case '+c.case_id);
+                  open.onclick=()=>inspection.open(c.case_id);
+                  return [open,m(c.total_cost),m(c.activity_cost),m(c.holding_cost),m(c.repeated_execution_cost),c.unpriced_events];
+                })));
+              first.disabled=offset===0;next.disabled=cursor===null;
+            }catch(error){
+              if(current()&&panel.isConnected){
+                message.textContent=error.message;
+                const retry=button('Retry','secondary');retry.onclick=()=>load(offset);list.replaceChildren(retry);
+              }
+            }
+          }
+          first.onclick=()=>load(0);next.onclick=()=>load(cursor);load(0);
+        }
+        const browse=button('Review case costs','secondary');browse.onclick=()=>review('Case costs');
+        const variants=table(['Variant','Cases','Cost per case','Total','Repeated executions per case'],r.costliest_variants.map(v=>{
+          const label=v.path.slice(0,20).join(' → ')+(v.path.length>20?' … ('+v.path.length+' steps)':'');
+          const open=button(Number(v.cases).toLocaleString(),'secondary');
+          open.setAttribute('aria-label','Review costs for '+label);open.onclick=()=>review('Case costs for '+label,v.variant_id);
+          return [label,open,m(v.cost_per_case),m(v.total_cost),m(v.repeated_execution_cost_per_case)];
+        }));
+        const nodes=[el('div',Number(r.cases).toLocaleString()+' cases, '+Number(r.events).toLocaleString()+' events.','muted'),summary,browse];
         if(r.unpriced_events)nodes.push(el('div','No price for '+r.unpriced_activities.map(a=>a.activity).join(', ')+': '+Number(r.unpriced_events).toLocaleString()+' executions are left out of the totals.','muted'));
         nodes.push(el('h4','Cost by activity'),acts,el('h4','Costliest variants'),variants,el('div',r.interpretation,'muted'));
         out.replaceChildren(...nodes);
-      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
-      finally{run.disabled=false;}
+      }catch(error){if(current())out.replaceChildren(el('div',error.message,'muted'));}
+      finally{if(current())run.disabled=false;}
     };
     return box;
   }

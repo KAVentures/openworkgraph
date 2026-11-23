@@ -69,6 +69,27 @@ def test_unpriced_default_and_filter():
     assert f["cases"] == 4 and f["activity_cost"] == 80 and len(f["costliest_variants"]) == 1
 
 
+def test_case_cost_ranking_matches_the_exact_variant_and_cohort():
+    log = _log()
+    model = {"activity_costs": {"Check": 10}, "hourly_open_case_cost": 4}
+    report = costs.costs(log, model)
+    variant = report["costliest_variants"][0]
+    spec = {"model": model, "variant_id": variant["variant_id"], "limit": 2}
+    first = costs.case_costs(log, spec)
+    second = costs.case_costs(log, {**spec, "offset": first["next_offset"]})
+    assert first["selected_cases"] == variant["cases"] == 4
+    assert second["next_offset"] is None
+    rows = first["cases"] + second["cases"]
+    assert len({row["case_id"] for row in rows}) == 4
+    for row in rows:
+        assert (row["total_cost"], row["activity_cost"], row["holding_cost"],
+                row["repeated_execution_cost"], row["unpriced_events"]) == (32, 20, 12, 10, 2)
+    scoped = {**model, "cohort": {"rework": False}}
+    result = costs.case_costs(log, {"model": scoped})
+    assert result["selected_cases"] == 6
+    assert all(row["total_cost"] == 18 for row in result["cases"])
+
+
 def test_invalid_models():
     log = _log()
     for bad in (None, {}, {"activity_costs": {"Check": -1}}, {"activity_costs": {"Check": "5"}},
@@ -103,6 +124,11 @@ with TestClient(app) as client:
     found = client.post(path, json=body, headers=owner)
     assert found.status_code == 200, found.text
     assert found.json()["total_cost"] == 9
+    assert client.post(path + "/cases", json={"model": body}, headers=bearer).status_code == 403
+    page = client.post(path + "/cases", json={"model": body, "limit": 2}, headers=owner)
+    assert page.status_code == 200 and page.headers["Cache-Control"] == "no-store"
+    assert [row["case_id"] for row in page.json()["cases"]] == ["c0", "c1"]
+    assert page.json()["next_offset"] == 2
     assert client.post(path, json={}, headers=owner).status_code == 422
     dup = client.post(path, content=b'{"activity_costs": {"A": 1}, "activity_costs": {"B": 1}}',
                       headers={**owner, "Content-Type": "application/json"})
