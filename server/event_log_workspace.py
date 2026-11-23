@@ -14,7 +14,9 @@ from __future__ import annotations
 import csv
 from contextlib import nullcontext
 import json
+import gzip
 import os
+import zlib
 from pathlib import Path
 import re
 import secrets
@@ -485,7 +487,32 @@ def _receive(source: IO[bytes], folder: Path) -> Path:
             if size > MAX_IMPORT_BYTES:
                 raise EventLogWorkspaceError("event log is larger than the supported limit")
             handle.write(chunk)
-    return upload
+    return _gunzip(upload)
+
+
+def _gunzip(upload: Path) -> Path:
+    """A gzip-compressed upload (``log.xes.gz``, ``events.csv.gz``) is decompressed before it is read.
+
+    The decompressed size is bounded by the same limit as an uncompressed upload, so a small file
+    cannot expand without limit. Digests in the quality report then describe the decompressed bytes,
+    so the same log compressed or not is recognised as the same file.
+    """
+    with upload.open("rb") as handle:
+        if handle.read(2) != b"\x1f\x8b":
+            return upload
+    plain = upload.with_name("upload.plain")
+    size = 0
+    try:
+        with gzip.open(upload, "rb") as packed, plain.open("wb") as out:
+            while chunk := packed.read(1 << 20):
+                size += len(chunk)
+                if size > MAX_IMPORT_BYTES:
+                    raise EventLogWorkspaceError("the decompressed event log is larger than the supported limit")
+                out.write(chunk)
+    except (OSError, EOFError, zlib.error):
+        raise EventLogWorkspaceError("the file looks gzip-compressed but could not be decompressed") from None
+    upload.unlink()
+    return plain.rename(upload)
 
 
 def import_log(source: IO[bytes], *, name: str, source_format: str, mapping: dict[str, Any] | None = None,

@@ -70,6 +70,16 @@ mapping, `naive_timestamp_offset=+01:00` in the API). That choice is recorded
 with the import. XML with a `DOCTYPE` or entity declaration is refused before
 parsing.
 
+### Compressed files
+
+Any import or appended file may be gzip-compressed, as public logs such as the BPI Challenge
+`.xes.gz` files are. The server recognises gzip by its first bytes and decompresses the upload before
+reading it, bounded by the same 4 GB limit as an uncompressed file, so a small file cannot expand
+without limit; a damaged archive is refused. The dashboard picks the format from the name without
+`.gz` (`orders.xes.gz` is XES) and reads the columns of a `.csv.gz` file in the browser. The quality
+report's digests describe the decompressed bytes, so the same log compressed or not counts as the same
+file.
+
 ### Timestamp formats
 
 ISO 8601 times (`2024-03-04T14:05:00Z`, `2024-03-04 14:05:00+01:00`) need no

@@ -64,8 +64,19 @@
   const button=(text,cls)=>{const node=el('button',text,cls);node.type='button';return node;};
 
   // Pure helpers, exercised by the browser test.
+  // A gzip-compressed file (log.xes.gz, events.csv.gz) is read like the file inside it: the browser
+  // decompresses the first bytes for the column read and the server decompresses the upload.
+  const isGzip=file=>/\.gz$/i.test(String(file&&file.name||''));
+  async function headText(file,bytes){
+    if(!isGzip(file))return file.slice(0,bytes).text();
+    const reader=file.stream().pipeThrough(new DecompressionStream('gzip')).getReader();
+    const parts=[];let size=0;
+    try{while(size<bytes){const {done,value}=await reader.read();if(done)break;parts.push(value);size+=value.length;}}
+    finally{reader.cancel().catch(()=>{});}
+    return new Blob(parts).slice(0,bytes).text();
+  }
   function detectFormat(name){
-    const lower=String(name||'').toLowerCase();
+    const lower=String(name||'').toLowerCase().replace(/\.gz$/,'');
     if(lower.endsWith('.xes'))return 'xes';
     if(lower.endsWith('.xmlocel'))return 'ocelxml';
     if(lower.endsWith('.jsonocel')||lower.endsWith('.json'))return 'ocel';
@@ -176,6 +187,7 @@
     sourceNamespace.maxLength=40;caseNamespace.maxLength=40;
     identityFields.append(field('Event ID column',eventId),field('Source namespace',sourceNamespace),field('Or source namespace column',sourceColumn),field('Case namespace (optional)',caseNamespace),field('Or case namespace column',caseColumn),field('Attribute JSON column (optional; replaces extra columns)',jsonColumn));
     identity.append(field('Deduplicate using supplied source-event IDs',useIdentity),identityFields,el('p','Namespaces are your declarations, not verified provider identities. Different source IDs keep otherwise identical events; conflicting reuse refuses the entire file. A shared case namespace joins exact case keys across sources. Every row must be valid; rejected-row retention is incompatible. Use Source-ID CSV to preserve these keys on export.'));
+    file.accept+=',.gz';      // gzip-compressed logs, e.g. BPI Challenge .xes.gz files
     const consentLabel=el('label');consentLabel.style.cssText='display:flex;gap:6px;align-items:center;margin-top:8px';
     const consent=input('owgEventLogConsent','checkbox');consentLabel.append(consent,document.createTextNode(' Store this log on this computer until I delete it'));
     const keepLabel=el('label');keepLabel.style.cssText='display:flex;gap:6px;align-items:center';
@@ -281,7 +293,7 @@
       const sep=delimiter.value==='t'?'\t':delimiter.value;
       readingColumns=true;status('Reading file columns…');refreshImport();
       try{
-        const columns=csvHeader(await chosen.slice(0,65536).text(),sep);
+        const columns=csvHeader(await headText(chosen,65536),sep);
         if(sequence!==columnReadSequence||file.files?.[0]!==chosen||format.value!=='csv'||(delimiter.value==='t'?'\t':delimiter.value)!==sep)return;
         const options=columns.map(c=>[c,c]);
         setOptions(cols.case,options);setOptions(cols.activity,options);setOptions(cols.time,options);setOptions(cols.resource,[['','(none)'],...options]);
@@ -335,7 +347,7 @@
       if(!chosen||format.value!=='csv'||!column)return;
       try{
         const q=new URLSearchParams({column,delimiter:delimiter.value});
-        const r=await (await api('/v1/event-logs/timestamp-formats?'+q,{method:'POST',body:await chosen.slice(0,256*1024).text(),headers:{'Content-Type':'text/plain'}})).json();
+        const r=await (await api('/v1/event-logs/timestamp-formats?'+q,{method:'POST',body:await headText(chosen,256*1024),headers:{'Content-Type':'text/plain'}})).json();
         if(sequence!==formatSequence)return;
         setOptions(timeFormat,[['','ISO 8601 (2024-03-04T14:05:00Z)'],...r.candidates.map(c=>[c.pattern,c.pattern+' \u2014 '+c.order+': '+c.first_value+' reads as '+c.first_value_reads_as])]);
         if(r.suggested){
