@@ -573,3 +573,17 @@ def test_history_disarms_stale_revision_navigation_after_identity_or_selection_c
     assert "Array.isArray(result?.workflows)" in after_read
     # Both revision and pagination buttons must independently reject stale clicks.
     assert after_read.count("ticket !== historyGeneration") >= 3
+
+
+def test_authenticated_packet_inspection_denial_disarms_direct_process_actions():
+    """A rejected live inspection must not leave review/edit/export controls armed."""
+    html = PAGE.read_text(encoding="utf-8")
+    block = html.split('$("handoffCheck").addEventListener("click",', 1)[1].split("      })();", 1)[0]
+    denial = block.split("if(!current?.process||", 1)[1].split("// Inspection may fetch", 1)[0]
+    assert 'invalidateDeniedReviewSelection("Inspection refused:' in denial
+    failure = block.split("}catch(_){", 1)[-1]
+    assert "ticket===handoffGeneration" in failure
+    assert "identityTicket===identityGeneration" in failure
+    assert "credential===authorizedCredential" in failure
+    assert "selected===chosen" in failure
+    assert 'invalidateDeniedReviewSelection("Inspection authorization could not be verified.' in failure
