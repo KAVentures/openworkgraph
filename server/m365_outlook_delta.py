@@ -252,6 +252,12 @@ def _publish(path, data, grant_file, tenant, mailbox, folder, grant_revision):
             os.fsync(stream.fileno())
         _same_grant(grant_file, tenant, mailbox, folder, grant_revision)
         os.link(tmp, path)
+        # Unlinking the temporary hard link changes the destination inode's
+        # ctime on macOS. Snapshot only after that cleanup, so a later
+        # failure can identify this exact artifact across platforms.
+        os.unlink(tmp)
+        tmp = None
+        return os.stat(path, follow_symlinks=False)
     except OSError:
         raise DeltaError("Could not create private delta artifact") from None
     finally:
@@ -346,9 +352,30 @@ def export_delta(*, tenant, mailbox, folder_id, grant_file: Path,
         "removed_case_ids": sorted(removed.values()), "pages": pages,
     }
     # CSV first, then its SHA-bound candidate. Failure never advances a cursor.
-    _publish(output, csv_bytes, grant_file, tenant, mailbox, folder_id, grant_revision)
-    _publish(candidate, (json.dumps(record, sort_keys=True) + "\n").encode(),
-             grant_file, tenant, mailbox, folder_id, grant_revision)
+    # If the second publication fails, do not strand an uncommittable CSV
+    # that prevents a safe retry. Only remove the inode this round created;
+    # never delete a replacement installed by another actor.
+    published = _publish(output, csv_bytes, grant_file, tenant, mailbox, folder_id, grant_revision)
+    try:
+        _publish(candidate, (json.dumps(record, sort_keys=True) + "\n").encode(),
+                 grant_file, tenant, mailbox, folder_id, grant_revision)
+    except (DeltaError, OSError):
+        try:
+            current = os.stat(output, follow_symlinks=False)
+            # Inode numbers can be reused immediately after unlink on Linux.
+            # Do not mistake a replacement at the same path for this round's CSV.
+            # Compare metadata AND the original bytes before cleanup.
+            if (stat.S_ISREG(current.st_mode) and current.st_dev == published.st_dev
+                    and current.st_ino == published.st_ino and current.st_nlink == 1
+                    and current.st_size == published.st_size
+                    and current.st_mtime_ns == published.st_mtime_ns
+                    and current.st_ctime_ns == published.st_ctime_ns
+                    and hashlib.sha256(_private_read(output, 2 * 1024 * 1024)).digest()
+                    == hashlib.sha256(csv_bytes).digest()):
+                output.unlink()
+        except (OSError, DeltaError):
+            pass  # Keep the original refusal; never remove a foreign artifact.
+        raise
     return {
         "format": FORMAT, "status": "review_ready",
         "provider_get_requests": pages, "source_rows": total,
