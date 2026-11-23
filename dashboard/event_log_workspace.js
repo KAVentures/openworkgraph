@@ -2338,26 +2338,52 @@
     const create=button('Create feed','secondary');create.id='owgFolderFeedCreate';create.disabled=true;
     const out=el('div');out.id='owgFolderFeedResult';out.setAttribute('role','status');
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Folder',folder),field('File pattern',pattern));
-    box.append(list,row,consentLabel,create,out);
+    const previewOut=el('div');previewOut.id='owgFolderFeedPreview';previewOut.setAttribute('role','status');
+    box.append(list,row,consentLabel,create,out,previewOut);
     const ready=()=>{create.disabled=!(folder.value.trim()&&pattern.value.trim()&&consent.checked);};
     for(const control of [folder,pattern])control.addEventListener('input',ready);consent.addEventListener('change',ready);
     const base='/v1/event-logs/'+encodeURIComponent(state.logId)+'/feeds';
     const generation=state.generation;
+    let previewTurn=0;
+    const clearPreview=()=>{previewTurn++;previewOut.replaceChildren();};
     const describe=r=>r.files_appended+' file(s) appended with '+Number(r.events_added).toLocaleString()+' new events'+(r.files_failed?', '+r.files_failed+' could not be appended':'')+(r.files_already_appended?', '+r.files_already_appended+' already appended':'')+(r.files_previously_failed?', '+r.files_previously_failed+' previously failed (use Retry failed files)':'')+(r.files_still_being_written?', '+r.files_still_being_written+' still being written (next run)':'')+'.'+((r.files||[]).some(file=>file.warning)?' An append committed, but its quality report could not be recorded.':'');
     const render=r=>{
+      clearPreview();
       if(!r.feeds.length){list.replaceChildren(el('div','No folder feed yet.','muted'));return;}
       list.replaceChildren(table(['Folder','Pattern','Files appended','Failed','Latest file',''],r.feeds.map(f=>{
         const wrap=el('div',null,'row');
+        const previewButton=button('Preview files','secondary');
+        previewButton.setAttribute('aria-label','Preview files for '+f.folder);
+        previewButton.onclick=async()=>{
+          const ticket=++previewTurn;
+          const current=()=>ticket===previewTurn&&generation===state.generation&&wrap.isConnected;
+          previewButton.disabled=true;previewOut.replaceChildren(el('div','Checking folder files…','muted'));
+          try{
+            const r=await getJSON('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/preview');
+            if(!current())return;
+            const labels={new_content:'New content',already_appended:'Already appended',previously_failed:'Previously failed',
+              repeated_content:'Same content as another file in this preview',settling:'Still settling',
+              too_large:'Above the import size limit',preview_limit:'Content unchecked at the preview limit',unavailable:'File unavailable'};
+            const summary=r.files.length
+              ?'Checked '+r.files.length+' matching files for '+f.pattern+'.'+(r.more_files?' Showing the oldest '+r.max_files+'.':'')
+              :'No matching files in this folder.';
+            previewOut.replaceChildren(el('div',summary,'muted'),
+              ...(r.files.length?[table(['File','Size','Status'],r.files.map(file=>[
+                file.name,Number(file.bytes).toLocaleString()+' bytes',labels[file.state]
+              ])),el('div','Run now checks the latest files and validates their event rows.','muted')]:[]));
+          }catch(error){if(current())previewOut.replaceChildren(el('div',error.message,'muted'));}
+          finally{previewButton.disabled=false;}
+        };
         const run=button('Run now','secondary');run.setAttribute('aria-label','Run feed for '+f.folder);
         const retry=button('Retry failed files','secondary');retry.setAttribute('aria-label','Retry failed files for '+f.folder);retry.disabled=!f.files_failed;
         const review=button('Review failures','secondary');review.setAttribute('aria-label','Review failures for '+f.folder);review.disabled=!f.files_failed;
         const schedule=button('Run every day','secondary');schedule.setAttribute('aria-label','Run feed for '+f.folder+' every day');
         const remove=button('Delete feed','secondary');remove.setAttribute('aria-label','Delete feed for '+f.folder);
-        run.onclick=async()=>{run.disabled=true;out.replaceChildren(el('div','Reading the folder\u2026','muted'));
+        run.onclick=async()=>{clearPreview();run.disabled=true;out.replaceChildren(el('div','Reading the folder\u2026','muted'));
           try{const r2=await (await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/run',{method:'POST',headers:{'X-OWG-Local-Storage-Confirmed':'true'}})).json();
             out.replaceChildren(el('div',describe(r2)+(r2.events_added?' Analyse again to include them.':'')),...(r2.files||[]).filter(file=>file.outcome==='failed').map(file=>el('div',file.name+': '+file.error,'muted')));render(await getJSON(base));}
           catch(error){out.replaceChildren(el('div',error.message,'muted'));run.disabled=false;}};
-        retry.onclick=async()=>{retry.disabled=true;out.replaceChildren(el('div','Retrying unchanged failed files…','muted'));
+        retry.onclick=async()=>{clearPreview();retry.disabled=true;out.replaceChildren(el('div','Retrying unchanged failed files…','muted'));
           try{const r2=await (await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/retry-failed',{method:'POST',headers:{'X-OWG-Local-Storage-Confirmed':'true'}})).json();
             out.replaceChildren(el('div',describe(r2)+' Only unchanged failed files were retried; new files are left for Run now.'+(!r2.files_appended&&!r2.files_failed?' No matching failed files were ready; they may have changed, been removed or still be settling.':'')+(r2.events_added?' Analyse again to include them.':'')),...(r2.files||[]).filter(file=>file.outcome==='failed').map(file=>el('div',file.name+': '+file.error,'muted')));render(await getJSON(base));}
           catch(error){out.replaceChildren(el('div',error.message,'muted'));retry.disabled=false;}};
@@ -2370,7 +2396,7 @@
             if(generation!==state.generation||turn!==failureTurn||!wrap.isConnected)return;
             const rows=page.failures.map(item=>{
               const one=button('Retry this file','secondary');one.setAttribute('aria-label','Retry failed file '+item.name+' ('+item.sha256.slice(0,12)+')');
-              one.onclick=async()=>{one.disabled=true;out.replaceChildren(el('div','Retrying selected failed content…','muted'));
+              one.onclick=async()=>{clearPreview();one.disabled=true;out.replaceChildren(el('div','Retrying selected failed content…','muted'));
                 try{const result=await (await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/retry-failed/'+encodeURIComponent(item.sha256),{method:'POST',headers:{'X-OWG-Local-Storage-Confirmed':'true'}})).json();
                   if(generation!==state.generation)return;
                   out.replaceChildren(el('div',describe(result)+' Only the selected content was considered.'+(result.files.length||result.files_already_appended?'':' The selected content is not currently ready or available.')+(result.events_added?' Analyse again to include them.':'')),...(result.files||[]).filter(file=>file.outcome==='failed').map(file=>el('div',file.name+': '+file.error,'muted')));const updated=await getJSON(base);if(generation===state.generation)render(updated);}
@@ -2390,7 +2416,7 @@
         remove.onclick=async()=>{if(!window.confirm('Delete this feed? Events already appended stay in the log.'))return;
           try{await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/delete',{method:'POST'});out.replaceChildren(el('div','Feed deleted.'));render(await getJSON(base));}
           catch(error){out.replaceChildren(el('div',error.message,'muted'));}};
-        wrap.append(run,retry,review,schedule,remove,failures);
+        wrap.append(previewButton,run,retry,review,schedule,remove,failures);
         const latest=f.recent_files[0];
         return [f.folder,f.pattern,Number(f.files_appended).toLocaleString(),Number(f.files_failed).toLocaleString(),
           latest?latest.name+' \u2014 '+(latest.outcome==='appended'?Number(latest.added_events).toLocaleString()+' events added'+(latest.warning?' · '+latest.warning:''):'not appended: '+latest.error):'\u2014',wrap];})));

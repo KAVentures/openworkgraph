@@ -43,9 +43,20 @@ const path=require('node:path');
    assert.equal(await page.locator('#owgFolderFeedCreate').isDisabled(),true,'reading a folder needs consent');
    await page.locator('#owgFolderFeedConsent').check();await page.locator('#owgFolderFeedCreate').click();
    await page.locator('#owgFolderFeedResult').filter({hasText:'Feed created.'}).waitFor();
+   const previewFiles=page.getByRole('button',{name:'Preview files for '+exports,exact:true});
+   const preview=page.locator('#owgFolderFeedPreview');
+   await previewFiles.click();
+   await preview.locator('tr').filter({hasText:'orders-1.csv'}).getByText('New content',{exact:true}).waitFor();
+   assert.equal(await preview.getByText('readme.txt',{exact:true}).count(),0);
+   assert.match(await page.locator('#owgEventLogPick').inputValue(),/^log_/);
+   const before=await page.evaluate(async()=>(await (await fetch('/v1/event-logs')).json()).logs[0].events);
+   assert.equal(before,8);
+
    await page.locator('#owgFolderFeedList').getByRole('button',{name:'Run feed for '+exports,exact:true}).click();
    await page.locator('#owgFolderFeedResult').filter({hasText:'1 file(s) appended with 2 new events. Analyse again to include them.'}).waitFor();
    await page.locator('#owgFolderFeedList').filter({hasText:'orders-1.csv — 2 events added'}).waitFor();
+   await previewFiles.click();
+   await preview.locator('tr').filter({hasText:'orders-1.csv'}).getByText('Already appended',{exact:true}).waitFor();
    // Running again finds nothing new.
    await page.locator('#owgFolderFeedList').getByRole('button',{name:'Run feed for '+exports,exact:true}).click();
    await page.locator('#owgFolderFeedResult').filter({hasText:'0 file(s) appended with 0 new events, 1 already appended.'}).waitFor();

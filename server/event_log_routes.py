@@ -526,6 +526,13 @@ async def create_event_log_feed(request: Request, log_id: str):
     return await run_in_threadpool(_respond, folder_feeds.create, log_id, spec)
 
 
+@router.get("/v1/event-logs/feeds/{feed_id}/preview")
+def preview_event_log_feed(request: Request, feed_id: str):
+    from . import event_log_folder_feeds as folder_feeds
+    _require_dashboard(request)
+    return _respond(folder_feeds.preview, feed_id)
+
+
 @router.post("/v1/event-logs/feeds/{feed_id}/run")
 async def run_event_log_feed(request: Request, feed_id: str):
     from . import event_log_folder_feeds as folder_feeds

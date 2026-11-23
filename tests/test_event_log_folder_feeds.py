@@ -77,6 +77,61 @@ def test_feed_appends_new_settled_files_once(tmp_path):
     assert (folder / "orders-0303.csv").exists(), "files in the folder are never removed"
 
 
+def test_preview_compares_content_and_leaves_feed_history_untouched(tmp_path, monkeypatch):
+    log = _log()
+    folder = tmp_path / "exports"
+    folder.mkdir()
+    feed_id = feeds.create(log, {"folder": str(folder), "pattern": "orders-*.csv",
+                                 "confirm_folder_reads": True})["feed_id"]
+    earlier = _drop(folder, "orders-earlier.csv", HEADER + "o2;Create;04/03/2024 10:00\n")
+    _drop(folder, "orders-failed.csv", "Wrong;Header\n1;2\n")
+    run = feeds.run(feed_id)
+    assert (run["files_appended"], run["files_failed"]) == (1, 1)
+    earlier.rename(folder / "orders-renamed.csv")
+    row = HEADER + "o3;Create;05/03/2024 10:00\n"
+    _drop(folder, "orders-new.csv", row, age=300)
+    _drop(folder, "orders-copy.csv", row, age=200)
+    _drop(folder, "orders-current.csv", row, age=2)
+    _drop(folder, "unmatched.csv", row)
+    (folder / "orders-dir.csv").mkdir()
+    history = feeds.feeds(log)
+    summary = workspace.summary(log)
+
+    def forbid(*args, **kwargs):
+        pytest.fail("the preview must not stage or append content")
+
+    monkeypatch.setattr(feeds, "_snapshot", forbid)
+    monkeypatch.setattr(workspace, "append_log", forbid)
+    review = feeds.preview(feed_id)
+    assert {file["name"]: file["state"] for file in review["files"]} == {
+        "orders-renamed.csv": "already_appended",
+        "orders-failed.csv": "previously_failed",
+        "orders-new.csv": "new_content",
+        "orders-copy.csv": "repeated_content",
+        "orders-current.csv": "settling",
+    }
+    assert review["counts"]["new_content"] == 1 and not review["more_files"]
+    assert all(set(file) == {"name", "bytes", "state"} for file in review["files"])
+    assert feeds.feeds(log) == history and workspace.summary(log) == summary
+
+
+def test_preview_bounds_hashing_bytes_and_the_number_of_files(tmp_path, monkeypatch):
+    log = _log()
+    folder = tmp_path / "exports"
+    folder.mkdir()
+    feed = feeds.create(log, {"folder": str(folder), "confirm_folder_reads": True})
+    _drop(folder, "first.csv", "x" * 10, age=500)
+    _drop(folder, "over-budget.csv", "y" * 10, age=400)
+    _drop(folder, "too-large.csv", "z" * 20, age=300)
+    _drop(folder, "outside-page.csv", "new", age=200)
+    monkeypatch.setattr(feeds, "MAX_PREVIEW_FILES", 3)
+    monkeypatch.setattr(feeds, "MAX_PREVIEW_BYTES", 15)
+    monkeypatch.setattr(workspace, "MAX_IMPORT_BYTES", 15)
+    result = feeds.preview(feed["feed_id"])
+    assert result["more_files"] is True
+    assert [file["state"] for file in result["files"]] == ["new_content", "preview_limit", "too_large"]
+
+
 def test_feed_needs_a_csv_mapping_and_scheduler_runs_it(tmp_path):
     log = _log()
     folder = tmp_path / "exports"
@@ -131,6 +186,12 @@ with TestClient(app) as client:
     assert r.status_code == 200, r.text
     feed_id = r.json()["feed_id"]
     assert client.post(f"/v1/event-logs/feeds/{feed_id}/run", headers=owner).status_code == 403
+    preview_url = f"/v1/event-logs/feeds/{feed_id}/preview"
+    assert client.get(preview_url, headers=bearer).status_code == 403
+    preview = client.get(preview_url, headers=owner)
+    assert preview.status_code == 200 and preview.headers["cache-control"] == "no-store"
+    assert [(item["name"], item["state"]) for item in preview.json()["files"]] == [("a.csv", "new_content")]
+
     assert client.post(f"/v1/event-logs/feeds/{feed_id}/retry-failed", headers=bearer).status_code == 403
     assert client.post(f"/v1/event-logs/feeds/{feed_id}/retry-failed", headers=owner).status_code == 403
     assert client.get(f"/v1/event-logs/feeds/{feed_id}/failures", headers=bearer).status_code == 403

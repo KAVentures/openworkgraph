@@ -1705,6 +1705,12 @@ Appending one million events, half of them already in the log, takes about 12 se
 
 ### Folder feeds
 
+For a saved feed, use **Preview files** to check matching files before a run.
+The preview shows up to 40 of the oldest matching files and reads up to 32 MiB
+to compare content with the feed’s append and failure history. It shows new,
+already appended, previously failed, repeated, settling, and unchecked files.
+A run rechecks the current folder and validates the mapped event rows.
+
 Many systems can only drop an export file into a folder every night or hour.
 A folder feed points a saved log at such a folder. Each run appends every new
 file that matches the pattern, using the column mapping of the log's latest
