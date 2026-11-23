@@ -85,7 +85,7 @@ def test_review_navigation_revalidates_fresh_authorized_revision_and_fails_close
     assert 'current.permissions?.review!==true' in block
     assert 'ticket!==handoffGeneration||identityTicket!==identityGeneration||\n               credential!==authorizedCredential||selected!==chosen||!$("handoffConsent").checked' in block
     assert 'resetHandoff("REFUSED: Process changed or access/review was withdrawn.' in block
-    assert 'resetHandoff("REFUSED: Could not revalidate authorized revision.' in block
+    assert 'invalidateDeniedReviewSelection("Review navigation revalidation failed.' in block
     navigation = block.split('$("handoffReview").addEventListener("click",', 1)[1].split('$("handoffPacket").addEventListener', 1)[0]
     assert navigation.index('const current=await call(') < navigation.index('$("revisionReview").scrollIntoView')
     assert 'inspectedHandoff={workflow_id:p.workflow_id,revision:p.revision,content_sha256:p.content_sha256,access_revision:current.access_revision};' in html
@@ -100,7 +100,7 @@ def test_review_navigation_rejects_inflight_identity_and_credential_changes():
     assert 'credential!==authorizedCredential' in block
     assert block.index('const current=await call(') < block.index('identityTicket!==identityGeneration')
     assert block.index('identityTicket!==identityGeneration') < block.index('$("revisionReview").scrollIntoView')
-    assert 'resetHandoff("REFUSED: Could not revalidate authorized revision.' in block
+    assert 'invalidateDeniedReviewSelection("Review navigation revalidation failed.' in block
 
 
 def test_packet_inspection_rejects_inflight_identity_and_credential_changes():
@@ -172,9 +172,9 @@ def test_review_authorization_read_failure_invalidates_inspected_packet():
     assert 'catch (error)' in block
     assert 'ticket===handoffGeneration && identityTicket===identityGeneration' in block
     assert 'credential===authorizedCredential && selected===chosen' in block
-    assert 'resetHandoff("REFUSED: Authorization read failed.' in block
+    assert 'invalidateDeniedReviewSelection("Review access could not be verified.' in block
     assert 'throw error;' in block
-    assert block.index('resetHandoff("REFUSED: Authorization read failed.') < block.index('"/reviews"')
+    assert block.index('invalidateDeniedReviewSelection("Review access could not be verified.') < block.index('"/reviews"')
 
 
 def test_failed_review_navigation_cannot_invalidate_newer_session():
@@ -183,7 +183,7 @@ def test_failed_review_navigation_cannot_invalidate_newer_session():
     block = html.split('$("handoffReview").addEventListener("click",', 1)[1].split('$("handoffPacket").addEventListener', 1)[0]
     assert "if(ticket===handoffGeneration&&identityTicket===identityGeneration&&" in block
     assert "credential===authorizedCredential&&selected===chosen)" in block
-    assert block.index("credential===authorizedCredential&&selected===chosen)") < block.index('resetHandoff("REFUSED: Could not revalidate authorized revision.')
+    assert block.index("credential===authorizedCredential&&selected===chosen)") < block.index('invalidateDeniedReviewSelection("Review navigation revalidation failed.')
 
 
 def test_stale_review_authorization_response_does_not_clear_new_handoff():
@@ -229,7 +229,9 @@ def test_handoff_recovery_reopens_latest_using_authenticated_gateway_and_require
     assert 'const data = await call(' in opener
     assert '"/v1/human/processes/" + encodeURIComponent(id) + params' in opener
     assert 'render(data);' in opener
-    assert 'if (openTicket !== processOpenGeneration || identityTicket !== identityGeneration) return;' in opener
+    assert 'openTicket !== processOpenGeneration' in opener
+    assert 'identityTicket !== identityGeneration' in opener
+    assert 'credential !== authorizedCredential' in opener
 
 
 def test_recovery_completion_rejects_superseding_open_of_same_process():
