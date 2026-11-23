@@ -2740,6 +2740,12 @@ median gap, how far into the case it first happens, how often it occurs on each 
 (UTC), and how long cases with it take compared with cases without it. A longer duration with the
 step is an association, not proof that the step causes it.
 
+Use **Exact activity** to profile a label beyond the frequent-activity suggestions. Review cases
+with, without, or repeating that activity, or open cases with an adjacent transition shown in
+the profile. The case list keeps the profile's case filter. Case boundaries are shown separately
+from activities literally named `(start)` or `(end)`. The profile API marks boundary rows with
+`boundary: true`.
+
 `GET /v1/event-logs/{log_id}/activity-profile?profile_activity=Check` plus the case-filter
 parameters (`activity` there is the case filter). Agents use `get_process_activity_profile`.
 
