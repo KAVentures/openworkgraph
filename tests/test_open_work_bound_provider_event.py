@@ -566,6 +566,7 @@ def test_duplicate_retained_correlations_do_not_choose_attempt(monkeypatch, veri
             "provider_object_id": DATA["provider_object_id"],
             "provider_operation": DATA["provider_operation"],
             "provider_correlation_id": DATA["provider_correlation_id"],
+            "provider_event_id": DATA["provider_event_id"],
         } for ref in ("attempt-1", "attempt-2")]}
     monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", receipts)
     result = asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
