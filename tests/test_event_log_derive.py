@@ -81,11 +81,17 @@ def test_derived_log_keeps_original_events_collapsed_in_the_matching_analysis():
     assert cases["c6"][1]["attributes"] == {"region": "south"}
 
 
-def test_object_centric_logs_keep_linked_objects_and_their_history():
+def test_object_centric_logs_keep_linked_objects_history_and_scoped_relationships():
     objects = [{"id": f"o{i}", "type": "order",
                 "attributes": [{"name": "status", "value": "new", "time": "2024-01-01T00:00:00Z"},
                                {"name": "status", "value": "paid", "time": "2024-01-05T00:00:00Z"}]} for i in range(4)]
     objects += [{"id": "i1", "type": "item"}, {"id": "i2", "type": "item"}]
+    objects[1]["relationships"] = [
+        {"objectId": "i1", "qualifier": "contains"},
+        {"objectId": "o3", "qualifier": "related"},
+        {"objectId": "o0", "qualifier": "preceding"},
+    ]
+    objects[4]["relationships"] = [{"objectId": "o1", "qualifier": "contained-by"}]
     events = [{"id": f"e{i}", "type": "pay" if i % 2 else "place", "time": f"2024-01-0{1 + i}T09:00:00Z",
                "relationships": [{"objectId": f"o{i}", "qualifier": "order"},
                                  {"objectId": "i1" if i < 2 else "i2", "qualifier": "item"}]} for i in range(4)]
@@ -93,8 +99,12 @@ def test_object_centric_logs_keep_linked_objects_and_their_history():
                             {"name": "item", "attributes": []}],
             "eventTypes": [], "objects": objects, "events": events}
     log = workspace.import_log(BytesIO(json.dumps(ocel).encode()), name="o", source_format="ocel")["log_id"]
-    r = derive.derive(log, {"name": "paid orders", "case_type": "order", "cohort": {"activity": "pay"}})
-    assert r["derived_from"]["cases_matched"] == 2 and r["copied"] == {"events": 2, "objects": 4}
+    scope = {"case_type": "order", "cohort": {"activity": "pay"}}
+    assert derive.preview(log, scope)["object_relationships"] == 3
+    r = derive.derive(log, {"name": "paid orders", **scope})
+    assert r["derived_from"]["cases_matched"] == 2
+    assert r["copied"] == {"events": 2, "objects": 4, "object_relationships": 3}
+    assert r["log"]["object_relationships"]["retained_relationships"] == 3
     types = {t["object_type"]: t["objects"] for t in workspace.object_types(r["log"]["log_id"])["object_types"]}
     assert types == {"order": 2, "item": 2}
     out = StringIO()
@@ -102,6 +112,18 @@ def test_object_centric_logs_keep_linked_objects_and_their_history():
     exported = json.loads(out.getvalue())
     statuses = [o for o in exported["objects"] if o["id"] == "o1"][0]["attributes"]
     assert sorted(a["value"] for a in statuses) == ["new", "paid"]
+    assert {(obj["id"], rel["objectId"], rel["qualifier"])
+            for obj in exported["objects"] for rel in obj.get("relationships", [])} == {
+        ("o1", "i1", "contains"), ("o1", "o3", "related"), ("i1", "o1", "contained-by"),
+    }
+    window = {**scope, "events_before": "2024-01-04T09:00:00Z"}
+    assert derive.preview(log, window)["object_relationships"] == 2
+    trimmed = derive.derive(log, {"name": "earlier paid orders", **window})
+    assert trimmed["copied"] == {"events": 1, "objects": 2, "object_relationships": 2}
+    out = StringIO()
+    workspace.export_log(log, "ocel", out)
+    assert any(rel["objectId"] == "o0" for obj in json.loads(out.getvalue())["objects"]
+               for rel in obj.get("relationships", []))
 
 
 def test_invalid_requests():
