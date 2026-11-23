@@ -345,7 +345,7 @@ def test_event_review_rechecks_journal_after_last_async_case_admission(monkeypat
         journals.append("journal")
         if revoked[0]:
             raise HTTPException(403, "retained journal permission revoked")
-        return {"run_ref": "run-1", "attempts": []}
+        return {"run_ref": "run-1", "entries": [{"attempt_ref": "attempt-1"}]}
 
     async def scope():
         return "tenant-1"
