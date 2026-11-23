@@ -1356,12 +1356,15 @@ def event_log_model_quality(request: Request, log_id: str, case_type: str | None
 @router.get("/v1/event-logs/{log_id}/funnel")
 def event_log_funnel(request: Request, log_id: str, step: list[str] = Query(default=[], max_length=500),
                      within_hours: float | None = Query(default=None, gt=0),
+                     evidence_step: int | None = Query(default=None, ge=1, le=8),
+                     evidence_status: str = Query(default="reached", pattern="^(reached|dropped)$"),
                      case_type: str | None = Query(default=None, max_length=200),
                      cohort: dict = Depends(_case_filter)):
     """How many cases reach each chosen step in order, the time between steps and where the rest stopped."""
     from . import event_log_funnel as funnel
     _require_dashboard(request)
-    return _respond(funnel.funnel, log_id, step, case_type, within_hours=within_hours, cohort=cohort)
+    return _respond(funnel.funnel, log_id, step, case_type, within_hours=within_hours, cohort=cohort,
+                    evidence_step=evidence_step, evidence_status=evidence_status)
 
 
 @router.get("/v1/event-logs/{log_id}/unusual-cases")

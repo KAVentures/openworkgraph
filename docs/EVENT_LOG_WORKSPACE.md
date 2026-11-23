@@ -2841,11 +2841,15 @@ come in between. For each step the section shows:
 The step with the largest drop is named, along with the median and 90th percentile time from the
 first to the last step. An optional **conversion window** counts a step only within that many hours
 of the latest occurrence of the previous step. The funnel shows how far cases got and how long it
-took, not why the others stopped; use the eventual-follower case filter to open the cases behind a
-step.
+took, not why the others stopped. Choose a step and either **Reached step** or **Stopped before
+step** to inspect up to 50 matching case IDs, last recorded activities and steps reached. The
+full matching count and any truncation are shown; evidence uses the same filter and conversion window.
 
 `GET /v1/event-logs/{log_id}/funnel?step=A&step=B&within_hours=24` plus the case-filter
-parameters. Agents with access to a shared log use `get_process_funnel` (aggregates only).
+parameters. Dashboard sessions can additionally request `evidence_step=2&evidence_status=dropped`
+(or `reached`); the first 50 matching case IDs in sorted order are returned with a total and
+truncation flag. Case evidence is not available through the shared agent tool; agents with access
+to a shared log use `get_process_funnel` (aggregates only).
 
 ## Model change
 

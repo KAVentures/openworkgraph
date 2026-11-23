@@ -5895,8 +5895,10 @@
       if(activityNames[n-1])pick.value=activityNames[n-1];pickers.push(pick);steps.appendChild(field('Step '+n,pick));more.disabled=pickers.length>=8;};
     const more=button('Add step','secondary');more.id='owgFunnelAdd';more.onclick=addStep;
     const windowPick=select('owgFunnelWindow',[['','No time limit'],['24','Within 24 hours of the previous step'],['168','Within 7 days'],['720','Within 30 days']]);
+    const evidenceStep=select('owgFunnelEvidenceStep',[['','No case evidence'],...Array.from({length:8},(_,i)=>[String(i+1),'Step '+(i+1)])]);
+    const evidenceStatus=select('owgFunnelEvidenceStatus',[['reached','Reached step'],['dropped','Stopped before step']]);
     const run=button('Show funnel','secondary');run.id='owgFunnelRun';
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Conversion window',windowPick),more,run);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Conversion window',windowPick),field('Case evidence',evidenceStep),field('Evidence group',evidenceStatus),more,run);
     const statusLine=el('div',null,'muted');statusLine.id='owgFunnelStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgFunnelResults';
     box.append(steps,row,statusLine,out);
@@ -5906,9 +5908,11 @@
     run.onclick=async()=>{
       const chosen=pickers.map(p=>p.value).filter(Boolean);
       if(chosen.length<2){statusLine.textContent='Choose at least two steps.';out.replaceChildren();return;}
+      if(evidenceStep.value&&(Number(evidenceStep.value)>chosen.length||(evidenceStep.value==='1'&&evidenceStatus.value==='dropped'))){statusLine.textContent='Choose a valid evidence step; drop-off requires step 2 or later.';out.replaceChildren();return;}
       const generation=state.generation;run.disabled=true;statusLine.textContent='Following cases…';out.replaceChildren();
       try{
         const params={step:chosen};if(windowPick.value)params.within_hours=windowPick.value;
+        if(evidenceStep.value){params.evidence_step=evidenceStep.value;params.evidence_status=evidenceStatus.value;}
         const r=await getJSON(logPath('funnel',params));
         if(generation!==state.generation)return;
         const first=r.steps[0],last=r.steps[r.steps.length-1];
@@ -5916,6 +5920,9 @@
         const t=table(['Step','Reached','Of step 1','From previous','Dropped','Median time from previous','Stopped cases did last'],r.steps.map(x=>[x.step+'. '+x.activity,Number(x.cases).toLocaleString(),pct(x.share_of_first_step),x.step===1?'—':pct(x.conversion_from_previous),x.step===1?'—':Number(x.dropped_after_previous).toLocaleString()+(x.stopped_cases_possibly_open?' ('+x.stopped_cases_possibly_open+' possibly open)':''),x.step===1?'—':hrs(x.hours_from_previous.median),x.step===1?'—':(x.stopped_cases_last_activity.map(a=>a.activity+' ('+a.cases+')').join(', ')||'—')]));
         t.querySelector('tbody').querySelectorAll('tr').forEach((tr,i)=>{const bar=el('div');bar.setAttribute('aria-hidden','true');bar.style.cssText='height:4px;background:currentColor;opacity:.35;margin-top:4px;width:'+Math.round((r.steps[i].share_of_first_step||0)*100)+'%';tr.cells[1].appendChild(bar);});
         out.appendChild(t);
+        if(r.evidence){const e=r.evidence;out.appendChild(el('h4','Case evidence'));
+          out.appendChild(el('div','Showing '+e.cases.length+' of '+e.total+' cases '+(e.status==='reached'?'reaching step ':'stopping before step ')+e.step+(e.truncated?' (first 50 by case ID).':'.'),'muted'));
+          if(e.cases.length)out.appendChild(table(['Case ID','Last recorded activity','Steps reached'],e.cases.map(c=>[c.case_id,c.last_activity,c.steps_reached])));}
         out.appendChild(el('div',r.caveat,'muted'));
       }catch(error){statusLine.textContent=error.message;}
       finally{run.disabled=false;}};
