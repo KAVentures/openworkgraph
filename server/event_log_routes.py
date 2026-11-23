@@ -1958,7 +1958,7 @@ async def event_log_drift_window_cases(request: Request, log_id: str,
     _require_dashboard(request)
     spec = await _json_body(request, "drift case page", strict=True, limit=16_384)
     if not isinstance(spec, dict) or "window_index" not in spec or set(spec) - {
-        "window_index", "source", "destination", "after", "expected_window", "limit",
+        "window_index", "source", "destination", "after", "expected_window", "expected_sample_sha256", "limit",
     }:
         raise HTTPException(422, "invalid drift case page settings")
     return await run_in_threadpool(_respond, drift.window_cases, log_id, case_type, window=window,
