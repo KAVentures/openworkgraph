@@ -4867,6 +4867,14 @@
         }
         const i=r.instances,f=r.flow_efficiency;
         statusLine.textContent=Number(i.with_processing_time).toLocaleString()+' of '+Number(i.total).toLocaleString()+' activity instances have a start and an end'+(f.median===null?'.':'; in the median case, recorded intervals cover '+pct(f.median)+' of the elapsed time.')+(i.unmatched_starts?' '+Number(i.unmatched_starts).toLocaleString()+' starts have no completion yet.':'');
+        // These denominators cover the entire selected cohort, not only the capped activity table.
+        const coverage=r.cohort_observation_coverage;
+        if(coverage&&Number.isFinite(coverage.eligible)&&Number.isFinite(coverage.processing_observed)&&Number.isFinite(coverage.waiting_observed)){
+          const eligible=Math.max(0,coverage.eligible);
+          const observed=(value)=>Math.max(0,Math.min(eligible,value));
+          const fraction=(value)=>eligible?pct(observed(value)/eligible):'n/a';
+          out.append(el('p','Cohort-wide timestamp coverage: '+observed(coverage.processing_observed).toLocaleString()+' / '+eligible.toLocaleString()+' processing observations ('+fraction(coverage.processing_observed)+'); '+observed(coverage.waiting_observed).toLocaleString()+' / '+eligible.toLocaleString()+' waiting observations ('+fraction(coverage.waiting_observed)+'). These denominators include activities omitted from the table and unfinished starts. Coverage is not a measure of data quality or workflow performance.','muted'));
+        }
         if(r.activities_omitted)out.append(el('p',Number(r.activities_omitted).toLocaleString()+' additional activities are omitted by the '+Number(r.activity_result_limit).toLocaleString()+'-activity API limit. The table shows all '+Number(r.activities.length).toLocaleString()+' returned activities; use a narrower case cohort to investigate excluded activities.','muted'));
         out.append(
           table(['Activity','Instances','Processing with known duration','Median processing','90th percentile processing','Processing spread (population SD)','Waiting observations','Median waiting before','10th–90th percentile waiting','Waiting spread (population SD)','Total waiting before','Share of all waiting'],
