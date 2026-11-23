@@ -1046,7 +1046,7 @@
     results.appendChild(statisticsExportSection());
     results.appendChild(objectMapSection());
     if(summary.log&&summary.log.object_relationships)results.appendChild(objectRelationshipSection());
-    results.appendChild(processMapSection());
+    results.appendChild(processMapSection(inspection));
 
     const activityBox=section('Activities');
     activityBox.appendChild(table(['Activity','Events','Cases','Cases repeating activity','Evidence'],(activities.activities||[]).map(a=>{const open=button('Inspect cases','secondary');open.setAttribute('aria-label','Inspect cases containing '+a.activity);open.onclick=()=>inspection.activity(a.activity);return [a.activity,a.events,a.cases,a.repeated_in_cases,open];})));
@@ -1080,7 +1080,7 @@
     results.appendChild(deriveSection(names));
     results.appendChild(anonymizedExportSection());
     results.appendChild(combineSection());
-    results.appendChild(dottedSection());
+    results.appendChild(dottedSection(inspection));
     results.appendChild(spectrumSection(inspection));
     results.appendChild(heuristicsSection(inspection));
     results.appendChild(glossarySection());
@@ -6371,7 +6371,7 @@
     return box;
   }
 
-  function dottedSection(){
+  function dottedSection(inspection){
     const box=section('Events over time');box.id='owgDots';
     box.appendChild(el('div','A dotted chart: each row is a case and each dot an event at its recorded time, coloured by activity. Use calendar time to see waves, batches and backlogs, or time since each case started to compare how cases unfold.','muted'));
     const time=select('owgDotsTime',[['absolute','Calendar time'],['relative','Time since case start']]);
@@ -6382,12 +6382,21 @@
     const out=el('div');out.id='owgDotsResults';out.style.position='relative';
     box.append(row,statusLine,out);
     const stamp=(r,seconds)=>r.time_origin?new Date(Date.parse(r.time_origin)+seconds*1000).toISOString().slice(0,16).replace('T',' '):duration(seconds);
+    const generation=state.generation;
+    let revision=0,watcher=null;
+    function reset(){
+      ++revision;watcher?.disconnect();watcher=null;
+      run.disabled=false;out.replaceChildren();
+    }
+    time.onchange=order.onchange=()=>{reset();statusLine.textContent='Chart settings changed.';};
     run.onclick=async()=>{
-      const generation=state.generation;
+      reset();
+      const ticket=revision;
+      const current=()=>ticket===revision&&generation===state.generation&&box.isConnected;
       try{
-        run.disabled=true;statusLine.textContent='Drawing…';out.replaceChildren();
+        run.disabled=true;statusLine.textContent='Drawing…';
         const r=await getJSON(logPath('dotted-chart',{time:time.value,order:order.value,max_cases:'300'}));
-        if(generation!==state.generation)return;
+        if(!current())return;
         const c=r.coverage;
         statusLine.textContent=Number(c.cases_shown).toLocaleString()+' of '+Number(c.cases).toLocaleString()+' cases'+(c.cases_sampled?' (evenly sampled)':'')+' with '+Number(c.points_shown).toLocaleString()+' events'+(c.points_thinned?' (thinned within long cases)':'')+'.';
         const legend=el('ul');legend.id='owgDotsLegend';legend.style.cssText='list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:4px 14px;margin:6px 0';
@@ -6409,7 +6418,7 @@
           const ratio=window.devicePixelRatio||1;canvas.width=layout.width*ratio;canvas.height=layout.height*ratio;
           canvas.style.cssText='width:'+layout.width+'px;height:'+layout.height+'px;display:block';
           canvas.setAttribute('role','img');
-          canvas.setAttribute('aria-label','Dotted chart of '+r.cases.length+' cases over '+(r.time_origin?'calendar time':'time since case start')+'. The table below lists the same cases.');
+          canvas.setAttribute('aria-label','Dotted chart of '+r.cases.length+' cases over '+(r.time_origin?'calendar time':'time since case start')+'. Open a dot or use the case table below to review its events.');
           const ctx=canvas.getContext('2d');ctx.scale(ratio,ratio);
           const ink=getComputedStyle(box).color||'#52514e';
           ctx.strokeStyle='rgba(128,128,128,0.35)';ctx.fillStyle=ink;ctx.font='11px system-ui,sans-serif';
@@ -6418,11 +6427,19 @@
           const radius=Math.max(1.5,Math.min(4,rowHeight/2));
           layout.points.forEach(p=>{ctx.beginPath();ctx.arc(p.x,p.y,radius,0,Math.PI*2);ctx.fillStyle=DOT_COLOURS[p.slot];ctx.fill();});
           canvas.__owgPoints=layout.points;
-          canvas.addEventListener('mousemove',event=>{
+          const nearest=event=>{
             const rect=canvas.getBoundingClientRect();
             const mx=event.clientX-rect.left,my=event.clientY-rect.top;
             let best=null,dist=64;
             for(const p of layout.points){const d=(p.x-mx)**2+(p.y-my)**2;if(d<dist){dist=d;best=p;}}
+            return best;
+          };
+          canvas.addEventListener('click',event=>{
+            const point=nearest(event);
+            if(point&&current())inspection.open(r.cases[point.row].case_id);
+          });
+          canvas.addEventListener('mousemove',event=>{
+            const best=nearest(event);canvas.style.cursor=best?'pointer':'default';
             if(!best){tip.style.display='none';return;}
             tip.textContent='Case '+r.cases[best.row].case_id+' · '+names[best.slot]+' · '+stamp(r,best.t);
             tip.style.left=Math.max(0,Math.min(layout.width-200,best.x+12))+'px';tip.style.top=(best.y+8)+'px';tip.style.display='block';
@@ -6431,12 +6448,20 @@
           plotHost.replaceChildren(canvas,tip);
         };
         const details=el('details');details.appendChild(el('summary','Table view of these cases'));
-        details.appendChild(table(['Case','Started','Duration','Events'],r.cases.slice(0,300).map(k=>[k.case_id,k.start.slice(0,16).replace('T',' '),duration(k.duration_seconds),Number(k.events).toLocaleString()])));
+        details.appendChild(table(['Case','Started (UTC)','Duration','Events'],r.cases.map(k=>{
+          const open=button(k.case_id,'secondary');open.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%';
+          open.setAttribute('aria-label','Open case '+k.case_id);
+          open.onclick=()=>{if(current())inspection.open(k.case_id);};
+          return [open,k.start.slice(0,16).replace('T',' '),duration(k.duration_seconds),Number(k.events).toLocaleString()];
+        })));
         out.append(legend,plotHost,details,el('div',r.interpretation,'muted'));
         draw();
-        if(window.ResizeObserver){const watcher=new ResizeObserver(()=>{if(!plotHost.isConnected){watcher.disconnect();return;}draw();});watcher.observe(plotHost);}
-      }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
-      finally{run.disabled=false;}
+        if(window.ResizeObserver){
+          const observer=new ResizeObserver(()=>{if(!current()){observer.disconnect();return;}draw();});
+          watcher=observer;observer.observe(plotHost);
+        }
+      }catch(error){if(current())statusLine.textContent=error.message;}
+      finally{if(current())run.disabled=false;}
     };
     return box;
   }
@@ -8281,7 +8306,7 @@
   function downloadBlob(blob,name){const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
   function mapFileName(ext){return 'process-map-'+String(state.logId||'log').replace(/[^A-Za-z0-9_-]/g,'').slice(0,40)+'.'+ext;}
 
-  function processMapSection(){
+  function processMapSection(inspection){
     const box=section('Process map');box.id='owgEventLogProcessMap';
     box.appendChild(el('div','Simplify the map with the sliders. Hidden activities are removed first, so arrows can join steps that had hidden work between them. Times are gaps between recorded events, not measured work.','muted'));
     const slider=(id,label,value)=>{const node=input(id,'range');node.min='5';node.max='100';node.step='5';node.value=String(value);
@@ -8291,7 +8316,7 @@
     const row=el('div',null,'row');row.style.alignItems='end';row.append(acts.wrap,paths.wrap);
     const status=el('div',null,'muted');status.id='owgMapStatus';status.setAttribute('role','status');
     const graphHost=el('div');graphHost.id='owgMapGraph';const slow=el('div');slow.id='owgMapSlowest';
-    const player=mapPlayback(box);
+    const player=mapPlayback(box,inspection);
     const svgButton=button('Download map (SVG)','secondary');svgButton.id='owgMapDownloadSvg';
     const pngButton=button('Download map (PNG)','secondary');pngButton.id='owgMapDownloadPng';
     const csvButton=button('Download map data (CSV)','secondary');csvButton.id='owgMapDownloadCsv';
@@ -8353,29 +8378,41 @@
   }
 
   // Disco-style playback: one token per sampled case moves along the drawn map between its recorded events.
-  function mapPlayback(owner){
+  function mapPlayback(owner,inspection){
     const node=el('div');node.id='owgMapPlayback';
     const play=button('Play','secondary');play.id='owgPlaybackPlay';play.setAttribute('aria-pressed','false');play.disabled=true;
     const position=input('owgPlaybackPosition','range');position.min='0';position.max='1000';position.step='1';position.value='0';position.disabled=true;
     const length=select('owgPlaybackLength',[['20','20 seconds'],['60','1 minute'],['120','2 minutes']]);
+    const focus=select('owgPlaybackCase',[['','All sampled cases']]);focus.disabled=true;
+    const inspect=button('Open selected case','secondary');inspect.id='owgPlaybackOpenCase';inspect.disabled=true;
     const clock=el('span','—');clock.id='owgPlaybackTime';
     const message=el('div','Playback starts once the map is drawn.','muted');message.id='owgPlaybackStatus';message.setAttribute('role','status');
     const row=el('div',null,'row');row.style.alignItems='end';
     const where=field('Playback position',position);where.appendChild(clock);
     row.append(play,where,field('Playback length',length));
-    node.append(el('h4','Case playback'),row,message);
+    const review=el('div',null,'row');review.style.alignItems='end';
+    review.append(field('Case to follow',focus),inspect);
+    node.append(el('h4','Case playback'),row,review,message);
     const reduced=()=>window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     let data=null,svgNode=null,layer=null,tokens=[],edges=new Map(),centres=new Map(),frame=0,last=0,ticket=0;
     const generation=state.generation;
     const stamp=t=>data&&data.origin?new Date(Date.parse(data.origin)+t*1000).toISOString().slice(0,16).replace('T',' ')+' UTC':'—';
     function stop(){cancelAnimationFrame(frame);frame=0;play.textContent='Play';play.setAttribute('aria-pressed','false');}
-    function reset(){stop();ticket++;data=null;tokens=[];if(layer)layer.remove();layer=null;play.disabled=true;position.disabled=true;}
+    function reset(){
+      stop();ticket++;data=null;tokens=[];if(layer)layer.remove();layer=null;
+      play.disabled=position.disabled=focus.disabled=inspect.disabled=true;
+      setOptions(focus,[['','All sampled cases']]);clock.textContent='—';position.removeAttribute('aria-valuetext');
+    }
     function paint(){
       if(!data)return;
-      const t=Number(position.value)/1000*data.span_seconds;
+      const focused=focus.value===''?null:Number(focus.value);
+      const steps=focused===null?null:data.cases[focused].events;
+      const start=steps?.[0]?.[0]??0,end=steps?.[steps.length-1]?.[0]??data.span_seconds;
+      const fraction=Number(position.value)/1000;
+      const t=fraction===1?end:start+fraction*(end-start);
       let moving=0;
       data.cases.forEach((c,k)=>{
-        const token=tokens[k],at=tokenAt(c.events,t);
+        const token=tokens[k],at=focused===null||focused===k?tokenAt(c.events,t):null;
         if(!at){token.setAttribute('visibility','hidden');return;}
         const from=data.activities[c.events[at.i][1]],next=c.events[at.i+1];
         let x,y;
@@ -8387,7 +8424,8 @@
         }
         token.setAttribute('cx',x.toFixed(1));token.setAttribute('cy',y.toFixed(1));token.setAttribute('visibility','visible');moving++;
       });
-      clock.textContent=stamp(t)+' · '+moving+' cases in progress';
+      const shown=focused===null?moving+' cases in progress':moving?'Selected case in progress':'Selected case outside this position';
+      clock.textContent=stamp(t)+' · '+shown;
       position.setAttribute('aria-valuetext',stamp(t));
     }
     function tick(now){
@@ -8409,6 +8447,14 @@
       play.textContent='Pause';play.setAttribute('aria-pressed','true');last=performance.now();frame=requestAnimationFrame(tick);
     };
     position.oninput=paint;
+    focus.onchange=()=>{
+      inspect.disabled=focus.value==='';
+      stop();position.value='0';paint();
+    };
+    inspect.onclick=()=>{
+      if(!data||focus.value==='')return;
+      stop();inspection.open(data.cases[Number(focus.value)].case_id);
+    };
     async function load(drawing,share){
       const mine=++ticket;
       message.textContent='Loading playback…';
@@ -8437,7 +8483,8 @@
           +(offMap?' '+Number(offMap).toLocaleString()+' steps follow paths hidden from the map and move in a straight line.':'')
           +(r.activities_hidden?' Events of '+r.activities_hidden+' hidden activities are left out.':'')
           +(cov.cases_truncated?' '+cov.cases_truncated+' long cases are shortened.':'')+' '+r.interpretation;
-        position.value='0';play.disabled=!r.cases.length;position.disabled=!r.cases.length;paint();
+        setOptions(focus,[['','All sampled cases'],...r.cases.map((c,i)=>[String(i),c.case_id])]);
+        position.value='0';play.disabled=position.disabled=focus.disabled=!r.cases.length;paint();
       }catch(error){if(mine===ticket)message.textContent=error.message;}
     }
     return {node,load,reset};
