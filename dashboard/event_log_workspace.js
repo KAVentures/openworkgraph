@@ -3168,6 +3168,11 @@
     const min=input('owgObjectRuleMin','number');min.min='0';min.step='1';const max=input('owgObjectRuleMax','number');max.min='0';max.step='1';
     const add=button('Add object rule','secondary');add.id='owgObjectRuleAdd';
     const run=button('Check object rules');run.id='owgObjectRuleRun';run.disabled=true;
+    const otherLogs=state.logs.filter(l=>l.log_id!==state.logId&&(l.object_relationships||['ocel','ocelxml'].includes(l.source_format)));
+    const compareLog=select('owgObjectRuleCompareLog',[['','Choose a retained object log'],...otherLogs.map(l=>[l.log_id,l.name+' · '+Number(l.events).toLocaleString()+' events'])]);
+    const compare=button('Compare object rules','secondary');compare.id='owgObjectRuleCompare';
+    const checkRow=el('div',null,'row');checkRow.style.alignItems='end';checkRow.append(run);
+    if(otherLogs.length)checkRow.append(field('Object rule comparison log',compareLog),compare);
     const f={activity:field('Activity A',activity),related:field('Related type U',relatedType),required:field('Activity B',required),via:field('Related through',via),direction:field('Supplied assertion direction',direction),exact:field('Match exact supplied qualifier',exact),qualifier:field('Supplied qualifier (empty is a valid exact label)',qualifier),min:field('At least',min),max:field('At most',max)};
     if(types.length<2&&(allTypes.length>1||graph.log&&(graph.log.object_relationships||['ocel','ocelxml'].includes(graph.log.source_format))))template.value='supplied_object_cardinality';
     const sync=()=>{
@@ -3193,17 +3198,20 @@
     const out=el('div');out.id='owgObjectRuleResults';
     const review=el('div');review.id='owgObjectRuleViolations';
     const history=el('div');history.id='owgObjectRuleObjectHistory';
-    box.append(row,pending,savedRow,savedStatus,run,message,out,review,history);
-    const rules=[],generation=state.generation,logId=state.logId;let requestVersion=0,last=null;
+    box.append(row,pending,savedRow,savedStatus,checkRow,message,out,review,history);
+    const rules=[],generation=state.generation,logId=state.logId;let requestVersion=0,last=null,lastComparison=null,busy=false,comparing=false;
     const current=turn=>generation===state.generation&&box.isConnected&&turn===requestVersion;
-    const base='/v1/event-logs/'+encodeURIComponent(logId);
-    const post=async(path,spec)=>(await api(base+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+    const logBase=id=>'/v1/event-logs/'+encodeURIComponent(id);
+    const base=logBase(logId);
+    const post=async(path,spec,id=logId)=>(await api(logBase(id)+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
     const number=n=>Number(n).toLocaleString();
+    const unit={events:'events',objects:'objects',event_object_pairs:'event–object pairs'};
+    const unknown=res=>res.unknown_reason==='analysis_memory_limit'?'Unknown within available analysis memory':'Unknown within the disclosed relation work budget';
     const utc=timestamp=>timestamp?.replace('T',' ').replace('Z',' UTC')||'—';
     let reviewTurn=0,historyTurn=0;
     const clearHistory=()=>{++historyTurn;history.replaceChildren();};
     const clearReview=()=>{++reviewTurn;review.replaceChildren();clearHistory();};
-    function showHistory(valid,object,type){
+    function showHistory(valid,object,type,evidenceLogId){
       const ticket=++historyTurn,active=()=>valid()&&ticket===historyTurn;
       const title=el('h4','Event history for '+object);title.tabIndex=-1;
       const status=el('div');status.setAttribute('role','status');
@@ -3213,7 +3221,7 @@
       async function load(){
         more.disabled=true;status.textContent='Loading events…';
         try{
-          const r=await post('/case-events/query?case_type='+encodeURIComponent(type),{case_id:object,offset,limit:50});
+          const r=await post('/case-events/query?case_type='+encodeURIComponent(type),{case_id:object,offset,limit:50},evidenceLogId);
           if(!active())return;
           offset=r.next_offset;shown+=r.events.length;
           status.textContent='Showing '+number(shown)+' of '+number(r.total_events)+' events.';
@@ -3224,12 +3232,14 @@
       }
       more.onclick=load;load();
     }
-    function inspect(turn,report,result){
+    function inspect(turn,report,result,side){
       const ticket=++reviewTurn,valid=()=>current(turn)&&ticket===reviewTurn;
+      const evidenceLogId=report.log.log_id;
       const title=el('h4',result.description);title.tabIndex=-1;
       const status=el('div');status.setAttribute('role','status');
       const rows=el('div'),nav=el('div',null,'row'),previous=button('Previous page','secondary'),next=button('Next page','secondary');
       nav.append(previous,next);review.replaceChildren(title,status,rows,nav);title.focus();
+      if(side)title.after(el('div',side+' log · '+report.log.name,'muted'));
       const spec={rule:result.rule,expected_revision:report.log_revision};
       if(result.relationship_basis){
         const basis=report.supplied_relationship_basis;
@@ -3241,7 +3251,7 @@
       async function load(page){
         clearHistory();previous.disabled=next.disabled=true;rows.inert=true;status.textContent='Loading violations…';
         try{
-          const r=await post('/object-constraints/violations',{...spec,...(cursors[page]!==null?{after:cursors[page]}:{})});
+          const r=await post('/object-constraints/violations',{...spec,...(cursors[page]!==null?{after:cursors[page]}:{})},evidenceLogId);
           if(!valid())return;
           if(!r.complete){
             following=null;rows.replaceChildren();status.textContent=r.unknown_reason==='analysis_memory_limit'?
@@ -3254,7 +3264,7 @@
             let evidence='No retained events';
             if(v.has_events){
               evidence=button('Open event history','secondary');evidence.setAttribute('aria-label','Open event history for '+v.object_id);
-              evidence.onclick=()=>showHistory(valid,v.object_id,result.rule.object_type);
+              evidence.onclick=()=>showHistory(valid,v.object_id,result.rule.object_type,evidenceLogId);
             }
             return [...(event?[v.event_id,utc(v.timestamp)]:[]),...(object?[v.object_id]:[]),v.detail,...(object?[evidence]:[])];
           })):el('div','No matching violations.','muted'));
@@ -3328,23 +3338,44 @@
       ['Rule','Complete','Units','Activated','Violating retained shape','Satisfied retained shape','Relationship digest','Object ID/type digest','Append revision','Basis','Independently verified','Source completeness','Relationship validity','Business compliance','Execution authorized'],
       ...r.results.map(res=>[res.description,res.complete,res.units??'',res.activated??'',res.violating??'',res.satisfied??'',res.relationship_basis?r.supplied_relationship_basis?.relationships_sha256||'':'',res.relationship_basis?r.supplied_relationship_basis?.object_index_sha256||'':'',res.relationship_basis?r.supplied_relationship_basis?.revision??'':'',res.relationship_basis||'recorded_event_links',false,res.source_completeness||'unknown',res.relationship_validity||'unknown',res.business_compliance||'unknown',false])]);
     show(exports.node,false);box.append(exports.node);
+    const comparisonExports=exportButtons('owgObjectRuleComparison',()=>lastComparison,r=>[
+      ['Rule','Side','Log','Log ID','Append revision','Complete','Unknown reason','Unit','Activated','Violating','Violation rate','Rate change (percentage points)','Relationship digest','Object ID/type digest'],
+      ...r.baseline.results.flatMap((_,i)=>[['Baseline',r.baseline],['Comparison',r.comparison]].map(([side,report])=>{
+        const result=report.results[i],change=r.violation_rate_changes[i],basis=report.supplied_relationship_basis;
+        return [result.description,side,report.log.name,report.log.log_id,report.log_revision,result.complete,result.unknown_reason??'',result.unit,
+          result.activated??'',result.violating??'',result.violation_rate??'',side==='Comparison'&&change!==null?change*100:'',
+          result.relationship_basis?basis.relationships_sha256:'',result.relationship_basis?basis.object_index_sha256:''];
+      }))]);
+    show(comparisonExports.node,false);box.append(comparisonExports.node);
     const counts=r=>r.max===undefined?'at least '+r.min:r.min===r.max?'exactly '+r.min:r.min+'–'+r.max;
     const label=r=>r.template==='supplied_object_cardinality'?'supplied assertions: each '+typeLabel(r.object_type)+' has '+counts(r)+' distinct '+typeLabel(r.related_type)+' neighbors ('+r.direction+(r.qualifier!==undefined?', exact qualifier '+JSON.stringify(r.qualifier):', all qualifiers')+')':({event_cardinality:'each '+r.activity+' involves '+counts(r)+' '+r.object_type,object_cardinality:'each '+r.object_type+' is related to '+counts(r)+' '+r.related_type+(r.via_activity?' through '+r.via_activity:''),synchronization:r.activity+' events of '+r.object_type+' objects come after '+r.required_activity+' of every related '+r.related_type}[r.template]);
+    function syncChecks(){
+      run.disabled=busy||!rules.length;
+      compare.disabled=run.disabled||!compareLog.value;
+    }
+    function resetResults(){
+      requestVersion++;last=lastComparison=null;message.textContent='';out.replaceChildren();clearReview();
+      for(const group of [exports,comparisonExports]){group.enable(false);show(group.node,false);}
+    }
     function drawPending(){
-      requestVersion++;last=null;exports.enable(false);show(exports.node,false);out.replaceChildren();clearReview();
+      resetResults();busy=comparing=false;
       pending.replaceChildren(rules.length?table(['Rule',''],rules.map((r,i)=>{const del=button('Remove','secondary');del.setAttribute('aria-label','Remove object rule '+label(r));del.onclick=()=>{rules.splice(i,1);drawPending();};return [label(r),del];})):el('div','No object rules added yet.','muted'));
-      run.disabled=!rules.length;
+      syncChecks();
       syncSaved();
     }
+    compareLog.onchange=()=>{
+      if(comparing){resetResults();busy=comparing=false;message.textContent='';}
+      syncChecks();
+    };
     drawPending();
     manageSaved(()=>refreshSaved());
     add.onclick=()=>{try{if(rules.length>=20)throw new Error('Check at most 20 object rules at once.');rules.push(objectRule({template:template.value,activity:activity.value,objectType:objectType.value,relatedType:relatedType.value,required:required.value,via:via.value,min:min.value,max:max.value,direction:direction.value,exactQualifier:exact.checked,qualifier:qualifier.value}));message.textContent='';drawPending();}catch(error){message.textContent=error.message;}};
     run.onclick=async()=>{
-      const turn=++requestVersion;run.disabled=true;last=null;exports.enable(false);show(exports.node,false);clearReview();
+      resetResults();busy=true;comparing=false;syncChecks();message.textContent='Checking object rules…';
+      const turn=requestVersion;
       try{
         const r=await post('/object-constraints',{rules});
         if(!current(turn))return;
-        const unit={events:'events',objects:'objects',event_object_pairs:'event–object pairs'};
         const examples=res=>{
           const shown=res.violating_examples.slice(0,5),text=shown.map(e=>e.unit+' ('+e.detail+')').join(', ');
           return text+(res.violating>shown.length?'; showing '+shown.length+' of '+res.violating+' retained violations':'');
@@ -3354,7 +3385,7 @@
           open.onclick=()=>inspect(turn,r,res);
           return res.complete?[res.description,Number(res.activated).toLocaleString()+' '+unit[res.unit],Number(res.violating).toLocaleString(),
           res.violation_rate===null?'—':pct(res.violation_rate)+(res.violation_rate_ci95?' ['+pct(res.violation_rate_ci95[0])+', '+pct(res.violation_rate_ci95[1])+']':' (retained set)'),
-          examples(res),res.violating?open:'']:[res.description,'—',res.unknown_reason==='analysis_memory_limit'?'Unknown within available analysis memory':'Unknown within the disclosed relation work budget','—','',''];
+          examples(res),res.violating?open:'']:[res.description,'—',unknown(res),'—','',''];
         });
         out.replaceChildren(el('div',r.rules_with_violations+' of '+r.results.length+' object rules have violations.','muted'),
           table(['Rule','Applies to','Violating','Violation rate (95% CI)','Examples','Evidence'],rows),el('div',r.interpretation,'muted'));
@@ -3363,7 +3394,42 @@
           out.append(el('p','Supplied retained graph: '+basis.retained_relationships+' assertions; digest '+basis.relationships_sha256+'; object ID/type digest '+basis.object_index_sha256+'; append revision '+basis.revision+'. This pins the retained assertion set and object population, not source completeness or verified business compliance.','muted'));
         }
       }catch(error){if(current(turn))out.replaceChildren(el('div',error.message,'muted'));}
-      finally{if(current(turn))run.disabled=!rules.length;}
+      finally{if(current(turn)){busy=false;syncChecks();message.textContent='';}}
+    };
+    compare.onclick=async()=>{
+      const other_log_id=compareLog.value;
+      resetResults();busy=comparing=true;syncChecks();message.textContent='Comparing object rules…';
+      const turn=requestVersion;
+      try{
+        const data=await post('/object-constraints/compare',{rules,other_log_id});
+        if(!current(turn))return;
+        const {baseline,comparison,violation_rate_changes}=data;
+        function sideResult(side,report,result){
+          if(!result.complete)return unknown(result);
+          const cell=el('div');
+          cell.append(el('div',result.activated?number(result.violating)+' of '+number(result.activated)+' activated '+unit[result.unit]+' violate ('+pct(result.violation_rate)+')':'0 activated '+unit[result.unit]));
+          const absent=[['activity','activity'],['object_type','object type'],['related_type','related type'],['required_activity','required activity']]
+            .filter(([key])=>result[key+'_in_log']===false).map(([key,name])=>name+' '+JSON.stringify(result.rule[key]));
+          if(absent.length)cell.append(el('div','Absent from this log · '+absent.join(', '),'muted'));
+          if(result.violating){
+            const open=button('Inspect violations','secondary');
+            open.setAttribute('aria-label','Inspect '+side.toLowerCase()+' violations for '+result.description);
+            open.onclick=()=>inspect(turn,report,result,side);cell.append(open);
+          }
+          return cell;
+        }
+        const title=(side,r)=>side+' · '+r.log.name+' (revision '+number(r.log_revision)+')';
+        const rows=baseline.results.map((result,i)=>{
+          const change=violation_rate_changes[i];
+          const points=change===null?null:Number((change*100).toFixed(1));
+          return [result.description,sideResult('Baseline',baseline,result),sideResult('Comparison',comparison,comparison.results[i]),
+            points===null?'Unavailable':(points>0?'+':'')+points.toFixed(1)+' pp'];
+        });
+        out.replaceChildren(table(['Rule',title('Baseline',baseline),title('Comparison',comparison),'Rate change'],rows),
+          el('div','Rate change is comparison minus baseline in percentage points. It requires activated units and complete results on both sides. Object rules describe recorded links across each whole log.','muted'));
+        lastComparison=data;show(comparisonExports.node,true);comparisonExports.enable(true);
+      }catch(error){if(current(turn))out.replaceChildren(el('div',error.message,'muted'));}
+      finally{if(current(turn)){busy=false;syncChecks();message.textContent='';}}
     };
     return box;
   }

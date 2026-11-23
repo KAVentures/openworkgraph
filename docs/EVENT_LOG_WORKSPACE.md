@@ -1932,6 +1932,18 @@ their definitions for review, and **Check object rules** evaluates them against 
 **Update loaded rule set** saves edits to the loaded revision. Deleting a saved set leaves the
 current draft available. Deleting its log also deletes its saved sets.
 
+Choose a second retained object log and select **Compare object rules** to evaluate the same draft
+against both whole logs. The comparison shows violating and activated counts, the violation rate,
+and the percentage-point change from the baseline. A rate change requires a complete result and
+at least one activated unit in each log. Counts describe each retained population. Open violations
+on either side to review its own events and objects. JSON and CSV downloads include both log IDs,
+append revisions and applicable supplied graph digests.
+
+`POST /v1/event-logs/{log_id}/object-constraints/compare` takes `rules` and `other_log_id`.
+The response contains the individual `baseline` and `comparison` reports and
+`violation_rate_changes` in rule order as fractions of one, with `null` for an unavailable change.
+Use the corresponding report's revision and graph pins when paging through its violations.
+
 The dashboard APIs are `GET/POST /v1/event-logs/{log_id}/object-rule-sets` and
 `GET/PUT/DELETE /v1/event-logs/{log_id}/object-rule-sets/{set_id}`. Send `name` and `rules`
 when creating or updating. Updates take `expected_revision` in the body, and deletes take the
