@@ -70,6 +70,21 @@ def test_saved_case_notion_is_validated_and_legacy_filter_stays_portable():
             filter_sets.save(log, {"name": "Invalid", "cohort": FIX, "case_type": invalid})
 
 
+def test_import_creates_an_independent_filter_and_validates_the_destination():
+    source, destination = _log(), _log()
+    original = filter_sets.save(source, {"name": "Rework", "cohort": FIX, "case_type": "case"})
+    portable = {"format": filter_sets.FORMAT, **{key: original[key] for key in ("name", "cohort", "case_type")}}
+    copied = filter_sets.import_set(destination, portable)
+    assert copied["set_id"] != original["set_id"]
+    assert copied["cohort"] == original["cohort"] and copied["case_type"] == "case"
+    assert workspace.summary(destination, copied["case_type"], copied["cohort"])["cases"] == 3
+    for invalid in (portable, {**portable, "format": "foreign"}, {**portable, "case_type": "invoice"},
+                    {**portable, "unexpected": True}):
+        with pytest.raises(workspace.EventLogWorkspaceError):
+            filter_sets.import_set(destination, invalid)
+    assert len(filter_sets.list_sets(destination)["filter_sets"]) == 1
+
+
 def test_filter_sets_are_validated():
     log = _log()
     filter_sets.save(log, {"name": "Rework", "cohort": FIX})
@@ -118,6 +133,11 @@ with TestClient(app) as client:
     body = {"name": "A then B", "cohort": {"follows": [{"from": "A", "to": "B", "mode": "direct"}]}}
     assert client.post(base + "/filter-sets", json=body, headers=bearer).status_code in (401, 403)
     assert client.get(base + "/filter-sets", headers=bearer).status_code in (401, 403)
+    portable = {"format": "openworkgraph.event-log-filter-set.v1", **body}
+    assert client.post(base + "/filter-sets/import", json=portable, headers=bearer).status_code == 403
+    imported = client.post(base + "/filter-sets/import", json=portable, headers=headers)
+    assert imported.status_code == 200
+    assert client.post(base + "/filter-sets/" + imported.json()["set_id"] + "/delete", headers=headers).status_code == 200
     saved = client.post(base + "/filter-sets", json=body, headers=headers)
     assert saved.status_code == 200 and saved.headers["cache-control"] == "no-store", saved.text
     assert client.post(base + "/filter-sets", json=body, headers=headers).status_code == 422
