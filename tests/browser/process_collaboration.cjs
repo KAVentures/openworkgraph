@@ -188,7 +188,9 @@ const pathModule = require("node:path");
     assert.equal(uploadedHandoff, false, "review packet bytes must remain local");
     await setHandoffPacket(handoffPacket({revision: handoffProcess.revision + 1}));
     await alice.locator("#handoffCheck").click();
-    await alice.locator("#handoffStatus").filter({hasText: "REFUSED:"}).waitFor();
+    await alice.waitForFunction(() => document.querySelector("#handoffStatus")?.textContent?.includes("REFUSED:"));
+    assert.equal(await alice.locator("#handoffReview").isDisabled(), true,
+      "rejected packet must never enable review navigation, including when the selection is hidden");
     // Real Gateway 403 from a valid identity without process scope; do not mock a response.
     // Denial can revoke the session: isolate it from the rest of the lifecycle.
     const deniedHandoffPage = await login("alice");
