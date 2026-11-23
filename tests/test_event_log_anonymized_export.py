@@ -74,13 +74,53 @@ def test_time_and_resource_modes():
     assert len({row["resource"] for row in rows if row["step"] == "1"}) == 1
 
 
+def test_activity_codes_and_synthetic_dates_keep_paths_and_elapsed_gaps():
+    log = _import()
+    result = ax.anonymized_export(log, min_cases=3, time_mode="elapsed", activity_mode="pseudonymize")
+    rows = _read(result["csv"])
+    assert result["synthetic_start"] == "2000-01-01T00:00:00Z"
+    assert len(rows) == 21
+    paths = {}
+    for row in rows:
+        paths.setdefault(row["case_id"], []).append(row["activity"])
+        assert row["timestamp"] == f"2000-01-01T{2 * (int(row['step']) - 1):02d}:00:00Z"
+    assert {row["activity"] for row in rows} == {"A000001", "A000002", "A000003"}
+    assert sorted([len(path) for path in paths.values()]) == [2] * 3 + [3] * 5
+    assert len({tuple(path) for path in paths.values()}) == 2
+    assert len({path[0] for path in paths.values()}) == len({path[-1] for path in paths.values()}) == 1
+
+
+def test_sequence_mode_retains_event_order_and_omits_elapsed_time():
+    log = _import()
+    result = ax.anonymized_export(log, min_cases=3, time_mode="sequence")
+    assert result["synthetic_start"] == "2000-01-01T00:00:00Z"
+    rows = _read(result["csv"])
+    assert len(rows) == 21
+    for row in rows:
+        assert row["timestamp"] == f"2000-01-01T00:00:0{int(row['step']) - 1}Z"
+
+
+def test_synthetic_date_supports_the_full_timestamp_span():
+    rows = ["case,activity,time"]
+    for case in ("one", "two"):
+        rows.extend([f"{case},A,0001-01-01T00:00:00Z", f"{case},B,9999-12-31T23:59:59Z"])
+    log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="long", source_format="csv",
+                               mapping={k: v for k, v in MAPPING.items() if k != "resource_column"})["log_id"]
+    result = ax.anonymized_export(log, min_cases=2, time_mode="elapsed")
+    assert result["synthetic_start"] == "0001-01-01T00:00:00Z"
+    assert {row["timestamp"] for row in _read(result["csv"])} == {
+        "0001-01-01T00:00:00Z", "9999-12-31T23:59:59Z",
+    }
+
+
 def test_summary_only_cohort_and_errors():
     log = _import()
     s = ax.anonymized_export(log, min_cases=2, summary_only=True)
     assert "csv" not in s and s["cases_kept"] == 8
     with pytest.raises(EventLogWorkspaceError, match="no path is followed"):
         ax.anonymized_export(log, min_cases=6)
-    for bad in ({"min_cases": 1}, {"min_cases": True}, {"time_mode": "hour"}, {"resource_mode": "keep"}):
+    for bad in ({"min_cases": 1}, {"min_cases": True}, {"time_mode": "hour"}, {"resource_mode": "keep"},
+                {"activity_mode": "mask"}):
         with pytest.raises(EventLogWorkspaceError):
             ax.anonymized_export(log, **bad)
     only_b = ax.anonymized_export(log, min_cases=2, cohort={"activity": "B"}, summary_only=True)
@@ -120,6 +160,16 @@ with TestClient(app) as client:
     assert 'rare' not in f.text and 'p0' not in f.text and f.text.count('\n')==9
     assert client.get(base+'?min_cases=1',headers=owner).status_code==422
     assert client.get(base+'?time_mode=hour',headers=owner).status_code==422
+    assert client.get(base+'?activity_mode=mask',headers=owner).status_code==422
+    coded = '?min_cases=2&time_mode=elapsed&activity_mode=pseudonymize'
+    preview = client.get(base+coded, headers=owner)
+    assert preview.status_code==200 and preview.json()['activity_mode']=='pseudonymize'
+    assert preview.json()['synthetic_start']=='2000-01-01T00:00:00Z'
+    share = client.get(base+'.csv'+coded, headers=owner)
+    assert share.status_code==200 and share.headers['cache-control']=='no-store'
+    assert ',A000001,2000-' in share.text and ',A000002,2000-' in share.text
+    sequence = client.get(base+'.csv?min_cases=2&time_mode=sequence', headers=owner)
+    assert sequence.status_code==200 and ',B,2000-01-01T00:00:01Z' in sequence.text
     assert client.get(base+'?min_cases=9',headers=owner).status_code==422
     filtered=client.get(base+'?min_cases=2&activity=B',headers=owner)
     assert filtered.status_code==200 and filtered.json()['cases_total']==4

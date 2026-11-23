@@ -26,6 +26,8 @@ from . import event_log_signal_inbox as signal_inbox
 from . import event_log_signal_transitions as signal_transitions
 
 MAX_RULES = 50
+PACK_FORMAT = "openworkgraph.event-log-signal-pack.v1"
+MAX_PACK_BYTES = 4 * 1024 * 1024
 MAX_EVIDENCE_CASES = 50
 MAX_REMEMBERED_CASES = 10_000
 Label = Annotated[str, Field(min_length=1, max_length=200)]
@@ -168,6 +170,109 @@ def add_rule(log_id: str, spec: Any) -> dict[str, Any]:
     return _public(rule_id, created, rule, None)
 
 
+def export_pack(log_id: str) -> dict[str, Any]:
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            rows = conn.execute("SELECT definition FROM signal_rules WHERE log_id = ? ORDER BY created_at, rule_id",
+                                [log_id]).fetchall()
+            rules = [SignalRule.model_validate_json(row[0]) for row in rows]
+            default = workspace._case_type(conn, log_id, None) if any(rule.case_type is None for rule in rules) else None
+        finally:
+            conn.close()
+    return {"format": PACK_FORMAT, "rules": [
+        rule.model_dump() | {"case_type": rule.case_type or default} for rule in rules
+    ]}
+
+
+def _parse_pack(document: Any) -> list[SignalRule]:
+    if (not isinstance(document, dict) or set(document) != {"format", "rules"}
+            or document["format"] != PACK_FORMAT):
+        raise workspace.EventLogWorkspaceError("expected an OpenWorkGraph signal pack")
+    rules = document["rules"]
+    if not isinstance(rules, list) or len(rules) > MAX_RULES:
+        raise workspace.EventLogWorkspaceError(f"a signal pack must contain up to {MAX_RULES} rules")
+    parsed = []
+    for index, spec in enumerate(rules, start=1):
+        try:
+            parsed.append(_validate(spec))
+        except workspace.EventLogWorkspaceError as error:
+            raise workspace.EventLogWorkspaceError(f"rule {index}: {error}") from None
+    return parsed
+
+
+def _rule_key(rule: SignalRule) -> str:
+    return json.dumps(rule.model_dump(), sort_keys=True, separators=(",", ":"))
+
+
+def _pack_plan(conn, log_id: str, rules: list[SignalRule]) -> tuple[list[SignalRule], dict[str, Any]]:
+    workspace._check_log(conn, log_id)
+    rows = conn.execute("SELECT definition FROM signal_rules WHERE log_id = ?", [log_id]).fetchall()
+    existing = [SignalRule.model_validate_json(row[0]) for row in rows]
+    default = workspace._case_type(conn, log_id, None) if any(rule.case_type is None for rule in existing + rules) else None
+    def pin(rule: SignalRule) -> SignalRule:
+        return rule if rule.case_type is not None else rule.model_copy(update={"case_type": default})
+
+    seen = {_rule_key(pin(rule)) for rule in existing}
+    validated_types = {default} if default else set()
+    additions, items = [], []
+    for index, rule in enumerate(rules, start=1):
+        rule = pin(rule)
+        if rule.case_type not in validated_types:
+            try:
+                workspace._case_type(conn, log_id, rule.case_type)
+            except workspace.EventLogWorkspaceError as error:
+                raise workspace.EventLogWorkspaceError(f"rule {index}: {error}") from None
+            validated_types.add(rule.case_type)
+        key = _rule_key(rule)
+        duplicate = key in seen
+        if not duplicate:
+            additions.append(rule)
+            seen.add(key)
+        items.append({"name": rule.name, "kind": rule.when.kind, "case_type": rule.case_type,
+                      "status": "duplicate" if duplicate else "new"})
+    slots = MAX_RULES - len(rows)
+    return additions, {"rules": items, "new_rules": len(additions), "duplicates": len(rules) - len(additions),
+                       "available_slots": slots, "fits": len(additions) <= slots}
+
+
+def preview_pack(log_id: str, document: Any) -> dict[str, Any]:
+    rules = _parse_pack(document)
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            _, plan = _pack_plan(conn, log_id, rules)
+            return plan
+        finally:
+            conn.close()
+
+
+def import_pack(log_id: str, document: Any) -> dict[str, Any]:
+    rules = _parse_pack(document)
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            conn.execute("BEGIN")
+            try:
+                additions, plan = _pack_plan(conn, log_id, rules)
+                if not plan["fits"]:
+                    raise workspace.EventLogWorkspaceError(f"this log has room for {plan['available_slots']} more signal rules")
+                now = datetime.now(timezone.utc).replace(tzinfo=None)
+                if additions:
+                    conn.executemany("INSERT INTO signal_rules VALUES (?, ?, ?, ?, NULL, NULL)", [
+                        (log_id, "sig_" + secrets.token_hex(8), now + timedelta(microseconds=index), rule.model_dump_json())
+                        for index, rule in enumerate(additions)
+                    ])
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+        finally:
+            conn.close()
+    return {"added": len(additions), "duplicates": plan["duplicates"]}
+
+
 def delete_rule(log_id: str, rule_id: str) -> dict[str, Any]:
     with workspace._LOCK:
         conn = workspace._connect()
@@ -252,92 +357,109 @@ def _new_case_comparison(total: int, ids: list[str], previous: dict | None) -> d
             'previous_retained_cases': len(before)}
 
 
+def _evaluate_rule(conn, log_id: str, rule: SignalRule) -> tuple[dict[str, Any], dict[str, Any]]:
+    notion = workspace._case_type(conn, log_id, rule.case_type)
+    conn.execute(f"CREATE OR REPLACE TEMP TABLE ce AS {workspace._CASE_EVENTS}", [log_id, notion])
+    as_of = conn.execute("SELECT max(ts) FROM ce").fetchone()[0]
+    cohorts.restrict(conn, cohorts.parse_cohort(rule.cohort), log_id, table="rc")
+    conn.execute(_PER_CASE)
+    result: dict[str, Any] = {"name": rule.name, "case_notion": notion,
+                              "when": rule.when.model_dump(exclude={"pnml"}), "cohort": rule.cohort}
+    if isinstance(rule.when, DueDateCondition):
+        from . import event_log_due_dates as due_dates
+        w = rule.when
+        got = due_dates.collect(conn, log_id, w.activity, w.due_attribute, table="rc")
+        groups, _, _, _, _ = due_dates.classify(got["cases_rows"], got["raw_due"], got["log_end"],
+                                                due_days=w.due_days, early_days=None)
+        done = groups["on_time"] + groups["early"] + groups["late"]
+        value = (groups["open_overdue"] if w.metric == "open_overdue_cases"
+                 else (round(groups["late"] / done, 4) if done else None))
+        basis = groups["open_overdue"] + groups["open_not_due"] if w.metric == "open_overdue_cases" else done
+        triggered = basis >= w.minimum_cases and value is not None and (
+            value > w.threshold if w.operator == "above" else value < w.threshold)
+        result.update(value=value, triggered=triggered, due_dates={k: groups[k] for k in (
+                          "on_time", "early", "late", "open_overdue", "open_not_due", "no_due_date",
+                          "unreadable_due_date")},
+                      as_of=as_of.isoformat() + "Z" if as_of else None)
+        state = {"triggered": triggered, "value": value}
+    elif isinstance(rule.when, ConformanceCondition):
+        from . import event_log_alignments as alignments
+        since = None
+        if rule.when.recent_days and as_of is not None:
+            since = as_of - timedelta(days=rule.when.recent_days)
+        paths = conn.execute("""SELECT path, count(*) FROM (
+              SELECT list(activity ORDER BY ts, event_id) AS path, min(ts) AS started FROM rc GROUP BY case_id)
+            WHERE ? IS NULL OR started >= ? GROUP BY path""", [since, since]).fetchall()
+        measured = alignments.conformance_of(rule.when.pnml.encode(), paths)
+        value = measured[rule.when.metric]
+        enough = measured["cases"] >= rule.when.minimum_cases
+        triggered = enough and value is not None and (
+            value > rule.when.threshold if rule.when.operator == "above" else value < rule.when.threshold)
+        result.update(value=value, triggered=triggered, conformance=measured,
+                      as_of=as_of.isoformat() + "Z" if as_of else None)
+        state = {"triggered": triggered, "value": value}
+    elif isinstance(rule.when, KpiCondition):
+        value = _measure(conn, rule.when)
+        triggered = value is not None and (value > rule.when.threshold if rule.when.operator == "above"
+                                           else value < rule.when.threshold)
+        result.update(value=value, triggered=triggered)
+        state = {"triggered": triggered, "value": value}
+    else:
+        if isinstance(rule.when, ComplianceCondition):
+            compliance.positions(conn, "rc")
+            summary, ids = compliance.evaluate_rule(conn, rule.when.rule)
+            total, evidence, ids = summary["violating_cases"], summary["violating_case_examples"], ids[:MAX_REMEMBERED_CASES]
+            result["compliance"] = {k: summary[k] for k in (
+                "description", "activated_cases", "violation_rate", "violation_rate_ci95", "unknown_cases")}
+        else:
+            total, evidence, ids = _matching(conn, rule.when, as_of)
+        triggered = total >= rule.when.minimum_cases
+        result.update(matching_cases=total, triggered=triggered, evidence_cases=evidence,
+                      evidence_truncated=total > len(evidence),
+                      as_of=as_of.isoformat() + "Z" if as_of else None)
+        state = {"triggered": triggered, "case_ids": ids, "matching_cases": total}
+    return result, state
+
+
+def preview_rule(log_id: str, spec: Any) -> dict[str, Any]:
+    """Run a draft rule against the current log without reading or saving prior signal state."""
+    rule = _validate(spec)
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            result, _ = _evaluate_rule(conn, log_id, rule)
+            cohort_cases = conn.execute("SELECT count(*) FROM sc").fetchone()[0]
+        finally:
+            conn.close()
+    return {"signal": result, "cohort_cases": cohort_cases, "signals_execute_actions": False,
+            **workspace.DESCRIPTIVE_ONLY}
+
+
 def evaluate(log_id: str) -> dict[str, Any]:
     """Evaluate every rule on the log as it is now and remember the result."""
     with workspace._LOCK:
         conn = workspace._connect()
         try:
             info = workspace._check_log(conn, log_id)
-            rows = conn.execute("SELECT rule_id, created_at, definition, last_state FROM signal_rules "
+            rows = conn.execute("SELECT rule_id, definition, last_state FROM signal_rules "
                                 "WHERE log_id = ? ORDER BY created_at, rule_id", [log_id]).fetchall()
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             log_basis = signal_inbox.log_basis(conn, log_id)
             signals = []
             recorded_transitions = False
             conn.execute("BEGIN")
-            for rule_id, created, definition, last_state in rows:
+            for rule_id, definition, last_state in rows:
                 rule = SignalRule.model_validate_json(definition)
                 previous = json.loads(last_state) if last_state else None
-                notion = workspace._case_type(conn, log_id, rule.case_type)
-                conn.execute(f"CREATE OR REPLACE TEMP TABLE ce AS {workspace._CASE_EVENTS}", [log_id, notion])
-                as_of = conn.execute("SELECT max(ts) FROM ce").fetchone()[0]
-                cohorts.restrict(conn, cohorts.parse_cohort(rule.cohort), log_id, table="rc")
-                conn.execute(_PER_CASE)
-                result: dict[str, Any] = {"rule_id": rule_id, "name": rule.name, "case_notion": notion,
-                                          "when": rule.when.model_dump(), "cohort": rule.cohort}
-                if isinstance(rule.when, DueDateCondition):
-                    from . import event_log_due_dates as due_dates
-                    w = rule.when
-                    got = due_dates.collect(conn, log_id, w.activity, w.due_attribute, table="rc")
-                    groups, _, _, _, _ = due_dates.classify(got["cases_rows"], got["raw_due"], got["log_end"],
-                                                            due_days=w.due_days, early_days=None)
-                    done = groups["on_time"] + groups["early"] + groups["late"]
-                    value = (groups["open_overdue"] if w.metric == "open_overdue_cases"
-                             else (round(groups["late"] / done, 4) if done else None))
-                    basis = groups["open_overdue"] + groups["open_not_due"] if w.metric == "open_overdue_cases" else done
-                    triggered = basis >= w.minimum_cases and value is not None and (
-                        value > w.threshold if w.operator == "above" else value < w.threshold)
-                    result.update(value=value, triggered=triggered, due_dates={k: groups[k] for k in (
-                                      "on_time", "early", "late", "open_overdue", "open_not_due", "no_due_date",
-                                      "unreadable_due_date")},
-                                  changed_since_last_evaluation=None if previous is None
-                                  else previous.get("triggered") != triggered,
-                                  as_of=as_of.isoformat() + "Z" if as_of else None)
-                    state = {"triggered": triggered, "value": value}
-                elif isinstance(rule.when, ConformanceCondition):
-                    from . import event_log_alignments as alignments
-                    since = None
-                    if rule.when.recent_days and as_of is not None:
-                        since = as_of - timedelta(days=rule.when.recent_days)
-                    paths = conn.execute("""SELECT path, count(*) FROM (
-                          SELECT list(activity ORDER BY ts, event_id) AS path, min(ts) AS started FROM rc GROUP BY case_id)
-                        WHERE ? IS NULL OR started >= ? GROUP BY path""", [since, since]).fetchall()
-                    measured = alignments.conformance_of(rule.when.pnml.encode(), paths)
-                    value = measured[rule.when.metric]
-                    enough = measured["cases"] >= rule.when.minimum_cases
-                    triggered = enough and value is not None and (
-                        value > rule.when.threshold if rule.when.operator == "above" else value < rule.when.threshold)
-                    result.update(value=value, triggered=triggered, conformance=measured,
-                                  changed_since_last_evaluation=None if previous is None
-                                  else previous.get("triggered") != triggered,
-                                  as_of=as_of.isoformat() + "Z" if as_of else None)
-                    state = {"triggered": triggered, "value": value}
-                    result["when"] = {k: v for k, v in result["when"].items() if k != "pnml"}
-                elif isinstance(rule.when, KpiCondition):
-                    value = _measure(conn, rule.when)
-                    triggered = value is not None and (value > rule.when.threshold if rule.when.operator == "above"
-                                                       else value < rule.when.threshold)
-                    result.update(value=value, triggered=triggered,
-                                  changed_since_last_evaluation=None if previous is None
-                                  else previous.get("triggered") != triggered)
-                    state = {"triggered": triggered, "value": value}
+                result, state = _evaluate_rule(conn, log_id, rule)
+                result["rule_id"] = rule_id
+                if "matching_cases" in state:
+                    comparison = _new_case_comparison(state["matching_cases"], state["case_ids"], previous)
+                    result.update(new_cases_since_last_evaluation=comparison["count"], new_cases_comparison=comparison)
                 else:
-                    if isinstance(rule.when, ComplianceCondition):
-                        compliance.positions(conn, "rc")
-                        summary, ids = compliance.evaluate_rule(conn, rule.when.rule)
-                        total, evidence, ids = summary["violating_cases"], summary["violating_case_examples"], ids[:MAX_REMEMBERED_CASES]
-                        result["compliance"] = {k: summary[k] for k in (
-                            "description", "activated_cases", "violation_rate", "violation_rate_ci95", "unknown_cases")}
-                    else:
-                        total, evidence, ids = _matching(conn, rule.when, as_of)
-                    triggered = total >= rule.when.minimum_cases
-                    comparison = _new_case_comparison(total, ids, previous)
-                    result.update(matching_cases=total, triggered=triggered, evidence_cases=evidence,
-                                  evidence_truncated=total > len(evidence),
-                                  new_cases_since_last_evaluation=comparison['count'],
-                                  new_cases_comparison=comparison,
-                                  as_of=as_of.isoformat() + "Z" if as_of else None)
-                    state = {"triggered": triggered, "case_ids": ids, "matching_cases": total}
+                    result["changed_since_last_evaluation"] = (None if previous is None
+                                                               else previous.get("triggered") != state["triggered"])
                 # Preserve exact source revision so unchanged metrics after an
                 # append still require explicit reevaluation and fresh review.
                 state["log_basis"] = log_basis
@@ -446,4 +568,4 @@ def scorecard(log_id: str, months: int = 6) -> dict[str, Any]:
     }
 
 
-__all__ = ["add_rule", "delete_rule", "evaluate", "list_rules", "scorecard"]
+__all__ = ["add_rule", "delete_rule", "evaluate", "export_pack", "import_pack", "list_rules", "preview_pack", "preview_rule", "scorecard"]

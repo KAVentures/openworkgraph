@@ -70,6 +70,16 @@ mapping, `naive_timestamp_offset=+01:00` in the API). That choice is recorded
 with the import. XML with a `DOCTYPE` or entity declaration is refused before
 parsing.
 
+### Compressed files
+
+Any import or appended file may be gzip-compressed, as public logs such as the BPI Challenge
+`.xes.gz` files are. The server recognises gzip by its first bytes and decompresses the upload before
+reading it, bounded by the same 4 GB limit as an uncompressed file, so a small file cannot expand
+without limit; a damaged archive is refused. The dashboard picks the format from the name without
+`.gz` (`orders.xes.gz` is XES) and reads the columns of a `.csv.gz` file in the browser. The quality
+report's digests describe the decompressed bytes, so the same log compressed or not counts as the same
+file.
+
 ### Timestamp formats
 
 ISO 8601 times (`2024-03-04T14:05:00Z`, `2024-03-04 14:05:00+01:00`) need no
@@ -99,18 +109,57 @@ needs a format.
 ### Reusing an earlier mapping
 
 When a CSV file's header has every column an earlier import mapped (case,
-activity, timestamp and, if one was mapped, resource), with the same
-delimiter, the dashboard offers "Use the mapping from <log>". Choosing it
-fills in those columns, the extra attribute columns this file also has, the
-timestamp format and the offset decision. It never applies the mapping on its
-own, and it asks for consent again. When a log is selected and its own mapping
-fits, that one is offered. Only the newest mapping of each log counts.
-Columns are matched by name only, so check they still mean the same thing.
-Source event identity settings are not reused.
+activity, timestamp and, if one was mapped, resource), the dashboard offers
+up to five compatible mappings across comma, semicolon, tab and pipe
+delimiters. The selected log’s compatible mapping appears first, followed by
+the newest other matches. Applying one fills in the delimiter, columns,
+available extra attributes, timestamp format and offset. Review the mapping
+and confirm storage again. Only the newest mapping of each log counts.
+Columns are matched by name, and source event identity settings stay separate.
 
-`POST /v1/event-logs/mapping-matches` with `{"columns": [...], "delimiter": ";"}`
-returns up to five matching mappings, newest first, each with its
-`missing_attribute_columns`. Nothing is stored.
+`POST /v1/event-logs/mapping-matches` accepts `columns` and `delimiter` for one
+header, optional `other_headers` with columns for up to three other delimiters,
+and optional `preferred_log_id`. Each match includes its
+`missing_attribute_columns`.
+
+### SQLite database files
+
+A `.sqlite`, `.sqlite3` or `.db` file chosen for import is read like an Excel workbook (below): its tables
+take the place of worksheets (the first table by name is read first; pick another under
+*Worksheet*), and the chosen table becomes CSV for the ordinary column mapping, consent and quality
+report. `POST /v1/event-logs/sqlite-to-csv?table=...` with the file as the body does the same and
+returns `sheets`, `sheet`, `rows`, `columns`, `csv` and `binary_cells_left_empty`. Nothing is stored:
+the upload is copied to a temporary file in the data folder, read and removed.
+
+The file must start with the SQLite header and is opened read-only and immutable, with the schema
+treated as untrusted (`trusted_schema` off, `query_only` on, extensions disabled). Only real tables
+are offered, not views, virtual tables or SQLite's own tables, and each is read with a plain
+`SELECT *`. A read stops after 120 seconds, 2,000,000 rows or 500 columns, and the upload may be at
+most 256 MB. NULL becomes an empty cell and binary values are left empty and counted. SQLite stores
+no time zone, so the import asks which offset times without one use.
+
+### JSON Lines files
+
+A `.jsonl` or `.ndjson` file (one JSON object per line, as APIs and log shippers write) is converted
+to CSV in the same way and then mapped like any CSV. Nested objects become dotted columns
+(`customer.id`, up to five levels), lists and other non-scalar values are kept as compact JSON text,
+`null` becomes an empty cell and booleans `true`/`false`; columns appear in the order first seen.
+Blank lines are skipped; any other line that is not a JSON object refuses the file with its line
+number. At most 2,000,000 lines, 500 columns and 1 MB per line are read, and the upload may be at
+most 256 MB. `POST /v1/event-logs/jsonl-to-csv` with the file as the body returns `rows`, `columns`
+and `csv`. Nothing is stored. A `.json` file is still read as OCEL 2.0 JSON.
+
+### Parquet files
+
+A `.parquet` file, as data warehouses and lakes export, is read with DuckDB's `read_parquet` in an
+in-memory connection that cannot install or load extensions, converted to CSV and then mapped like
+any CSV. The file must start and end with the Parquet magic bytes. Timestamps with a time zone become
+ISO 8601 in UTC with `Z`; timestamps without one are written without an offset and the import asks
+which offset they use; dates stay ISO dates, lists and structs become compact JSON, NULL an empty
+cell, and binary values are left empty and counted. At most 2,000,000 rows and 500 columns are read,
+and the upload may be at most 512 MB. `POST /v1/event-logs/parquet-to-csv` with the file as the body
+returns `rows`, `columns`, `csv` and `dates_have_no_offset`. Nothing is stored: the upload is copied
+to a temporary file in the data folder, read and removed.
 
 ### Excel workbooks
 
@@ -303,6 +352,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET`/`POST /v1/event-logs/{log_id}/expiry` (`{"delete_after": ISO time \| null}`) | Read, set or clear the date after which the log is deleted automatically (below). |
 | `POST /v1/event-logs/{log_id}/export/matching-cases` | Download complete matching cases. Body contains `cohort` and optional `case_type`. Query `format` is `csv` (default), `csv-review`, `xes`, or `xes-attributes`. |
 | `POST /v1/event-logs/{log_id}/derive` | Save the cases matching a filter as a new log (below). |
+| `POST /v1/event-logs/combine` | Combine 2 to 10 saved logs into a new log (below). |
 | `GET /v1/event-logs/{log_id}/quality` | Stored quality and mapping reports per import and append, plus current whole-log diagnostics (below). |
 | `GET /v1/event-logs/{log_id}/summary` | Events, cases, activities, time span and case-duration median/p90/mean. |
 | `GET`/`POST /v1/event-logs/{log_id}/description` (`{"description"}`) | The owner's description of the log (at most 2,000 characters; an empty text removes it), shown and edited in **About this log**. It never changes the events and is deleted with the log. |
@@ -344,6 +394,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET`/`POST /v1/event-logs/{log_id}/activity-glossary`, `POST .../activity-glossary/delete`, `POST .../activity-glossary/import`, `GET .../activity-glossary.csv` | The owner's notes per activity (below). |
 | `GET /v1/event-logs/{log_id}/root-cause?outcome=...` | Case features associated with an outcome, with confidence intervals. |
 | `GET /v1/event-logs/{log_id}/export?format=csv\|xes\|ocel\|ocelxml` | Download the log. |
+| `GET /v1/event-logs/{log_id}/ocel.sqlite` | Owner-only download of the retained OCEL 2.0 log as standard SQLite event/object and relationship tables; created temporarily and cleaned up after response. |
 | `GET /v1/event-logs/{log_id}/report.html?sla_seconds=&variants=` | Download a self-contained HTML report (below). |
 | `GET`/`POST /v1/event-logs/{log_id}/saved-reports`, `GET .../saved-reports/{name}` | Copies of the report saved on this computer (below). |
 
@@ -386,19 +437,26 @@ activities are not verified rework. The route requires the local dashboard
 session.
 
 **Saved copies.** **Saved copies**, next to **Download report**, lists copies
-of the whole-log report that were saved on this computer, newest first, and
-lets you download them. It also offers **Save a copy now** (the same as
-`POST /v1/event-logs/{log_id}/saved-reports`).
+of the reports saved on this computer, newest first, and lets you download
+them. **Save a copy now** uses the selected case notion and active case filter.
+The dashboard-only `POST /v1/event-logs/{log_id}/saved-reports` accepts a JSON
+body with optional `case_type` and `cohort` fields. A request without a body
+saves the whole log using its default case notion.
 
 To save copies regularly, for example to compare this week's report with last
 week's, add an **Event log report copy** job under *Scheduled jobs* with the
-log's ID. The job is local and runs at least every 15 minutes, at most every 7
+log's ID. Scheduled copies use the full log and its default case notion. The
+job is local and runs at least every 15 minutes, at most every 7
 days. The newest 10 copies per log are kept in the data folder under
 `event_log_reports/<log_id>/`. Deleting the log deletes its copies and its
 report and signal schedules. Copies are never sent anywhere.
 
+Select a reference and comparison copy to compare any two saved reports that
+have figures. The newest pair appears when you open the panel.
+
 **What changed.** Each copy is saved with its headline figures in a JSON file
-next to the HTML. The panel then shows **Changes since the previous copy**:
+next to the HTML. The panel identifies comparisons between different selections
+and displays **Changes since the previous copy**:
 
 * cases, events, activities and variants;
 * median and 90th-percentile case time;
@@ -437,6 +495,13 @@ them all; typing filters the list by section name and description (for example "
 
 ## Where to look first (automatic insights)
 
+Use **Review cases** to see which cases contribute to a transition, repeated activity,
+detour or case-attribute finding. **Slowest cases** and **Save as log** for attribute
+findings use the same selection. These actions combine the finding's case filter
+with the case filter used to calculate the insight. The JSON cohort form accepts
+`all_of` with two to four nonempty case filters. Each case must match every filter.
+
+
 After **Analyse**, **Where to look first** lists up to six findings, ranked by the
 case time they involve. The same list comes from
 `POST /v1/event-logs/{log_id}/insights` with
@@ -473,6 +538,11 @@ The dashboard card **Large event logs** (Evidence tab) offers all of the
 following after **Analyse**.
 
 ### Attribute profile
+
+Select a coverage count or a frequent value to open the matching cases. You can also
+review cases where the attribute is missing or changes value. Matching uses the
+literal event-attribute key and value within the profile's case selection. Each
+result shows the number of matching events alongside the full case's event count.
 
 **Attributes** (and `POST /v1/event-logs/{log_id}/attribute-profile` with
 `{"top_values": 10, "cohort": {}, "case_type": null}`) lists every event
@@ -567,6 +637,11 @@ value and every figure), then the row totals, the column totals and the overall 
 are prefixed with `'`. `GET /v1/event-logs/{log_id}/breakdown.csv` takes the same parameters.
 
 ### Process cost
+
+Select **Review case costs** to see cases in descending order of modeled cost, or
+select the case count for a variant to review that exact sequence. The breakdown
+shows activity and elapsed-time charges, repeat charges already included in
+activity cost, and unpriced executions. Open a case to inspect its recorded events.
 
 The log records what happened, not what it cost. **Process cost** applies your
 own cost model to the observed events. `POST /v1/event-logs/{log_id}/costs`
@@ -1358,6 +1433,16 @@ left out of the shared-case pairs and counted in `working_together_excluded_case
 same case filters as KPIs apply (`started_from`, `started_before`, `resource`, `activity`,
 `attribute`).
 
+With resource names shown, select a case count for a named handover, return handover,
+or shared pair. Select a supplied case key to open the recorded events. Each case
+contributes once to an edge's case count, including when several resources in the
+case fall into the grouped bucket. Occurrence counts still include every match.
+
+The dashboard-only `POST /v1/event-logs/{log_id}/organization/cases` accepts
+`names: "shown"`, two literal `resources`, a `kind` of `handover`, `return` or
+`shared`, and the report's `cohort`. Use the response's `next_after` as the next
+request's `after` to page through matching case keys.
+
 No per-person duration, waiting time, speed, ranking or performance score is calculated,
 not even on handover edges. Handover counts say who touched a case next, not who was
 responsible or how well anyone worked. One million events are analysed in seconds
@@ -1403,8 +1488,26 @@ Celonis Action Engine and UiPath process alerts. Rules belong to one log, are im
 - `GET /v1/event-logs/{log_id}/signals` lists the rules.
 - `POST /v1/event-logs/{log_id}/signals` adds one, for example:
   `{"name":"Left open","when":{"kind":"cases","condition":"open_longer_than","seconds":172800,"end_activities":["Close"]}}`
+- `POST /v1/event-logs/{log_id}/signals/preview` checks one draft with the same request body.
+  It returns whether the draft would trigger, the measured value or matching cases, and the
+  case population checked. The draft preview leaves saved signals and evaluation history alone.
 - `POST /v1/event-logs/{log_id}/signals/{rule_id}/delete` removes one.
 - `POST /v1/event-logs/{log_id}/signals/evaluate` checks every rule now.
+
+Use **Preview signal** to check the current draft before choosing **Save signal**.
+
+Use **Move signal rules between logs** to download rule definitions as JSON, or
+select a JSON file and preview the import. The file includes each rule’s case notion,
+case filter, and condition. The destination must have the corresponding case notion.
+The import skips duplicate definitions and saves all remaining rules together if
+they fit. Screenshots, event data, prior results, acknowledgements, schedules and
+alerts are separate from the rule definitions. A changed rule set needs fresh
+approval for any existing pinned signal schedule.
+
+`GET /v1/event-logs/{log_id}/signals/pack` downloads a
+`openworkgraph.event-log-signal-pack.v1` document. POST the document to
+`/signals/pack/preview` or `/signals/pack/import` under the destination log.
+Files can hold up to 50 rules and 4 MiB.
 
 Rule kinds:
 
@@ -1534,6 +1637,10 @@ static trace and event values. The XES projection follows the chosen case notion
 Use OCEL when you need timed object attributes or relationships. An empty filter
 or a filter with no matches produces an error.
 
+Choose **Preview copy** to see how many cases, events and linked objects the
+current case selection and optional time window would retain. Saving a copy
+recalculates the selection against the source log.
+
 **Save or export matching cases → Save as new log** (after **Analyse**), or
 `POST /v1/event-logs/{log_id}/derive` with
 `{"name": "Escalated orders", "cohort": {"activity": "Escalate"}, "case_type": null}`,
@@ -1562,6 +1669,29 @@ under the chosen case notion and the source's activity mapping.
   exported, compared with the source (see *Comparing two logs*) or deleted like
   any other log.
 
+### Combining saved logs
+
+The same process is often exported in pieces: one file per region or per year, or one system each
+for the order and invoice steps. **Combine with other saved logs** (under Analyse) copies the open
+log and the logs you tick, 2 to 10 in all, into a new saved log; `POST /v1/event-logs/combine` with
+`{"name": ..., "log_ids": [...], "cases": "shared" | "separate"}` does the same. The sources are
+unchanged.
+
+- **Shared** (default): an ID found in several logs is one case or object, with the events of all of
+  them. Use it to join systems that use the same case key. Its type and attributes come from the
+  first log listed that has it; the response counts `ids_in_several_sources` and
+  `object_type_conflicts`.
+- **Separate**: every log keeps its own cases. Object IDs are prefixed with the source number
+  (`s1:c7`), so equal IDs in two regional exports never merge.
+
+Event IDs are always prefixed (`s1:`, `s2:`, ... in the order listed, given per source as
+`event_id_prefix`), and every event gets a `source_log` attribute naming its log, so you can filter
+or break down by source. An existing `source_log` attribute is replaced and counted
+(`source_attribute_replaced_on_events`). The combined log keeps the sources' format if they share
+one, otherwise it is recorded as OCEL. As with a derived log, activity mappings, saved filters and
+analyses, signals, domain packs, source-identity keys, object-to-object relationships, quality
+reports, case tags and cost models are not copied.
+
 ### Anonymized export
 
 **Anonymized export** (after **Analyse**) downloads the cases as a CSV meant
@@ -1576,7 +1706,11 @@ less that points back to people. It honours the case filter.
 * **Time is coarsened.** *Relative* (default) moves each case to start at
   midnight on the first day of the month it started and keeps the gaps between
   its events; *day* keeps only each event's date (the `step` column keeps the
-  order); *exact* keeps timestamps.
+  order); *exact* keeps timestamps. *Synthetic start* moves every case to the
+  same date while preserving elapsed time between events. *Event order only*
+  assigns synthetic timestamps one second apart, so elapsed times are omitted.
+* **Activity names** are kept by default. Choose activity codes to replace
+  names consistently within the file. Each export assigns its own codes.
 * **Resources** are left out (default) or replaced by `Resource 01`, … in a
   random order.
 * **Attributes are never exported.** Columns: `case_id`, `step`, `activity`,
@@ -1587,8 +1721,8 @@ less that points back to people. It honours the case filter.
 `GET /v1/event-logs/{log_id}/anonymized-export` returns that summary and
 `GET /v1/event-logs/{log_id}/anonymized-export.csv` the file (header
 `X-OWG-Anonymized`), both with `min_cases`, `time_mode`
-(`relative|day|exact`), `resource_mode` (`drop|pseudonymize`), `case_type` and
-the case-filter parameters. At most 1,000,000 events are exported at once.
+(`relative|day|exact|elapsed|sequence`), `resource_mode` (`drop|pseudonymize`),
+`activity_mode` (`keep|pseudonymize`), `case_type` and the case-filter parameters. At most 1,000,000 events are exported at once.
 This lowers the chance that a case can be singled out; it is not a guarantee.
 Durations, dates and activity names can still identify a case to someone who
 knows it, so review the file before sharing it. For a map with formal
@@ -1617,6 +1751,12 @@ Appending one million events, half of them already in the log, takes about 12 se
 
 
 ### Folder feeds
+
+For a saved feed, use **Preview files** to check matching files before a run.
+The preview shows up to 40 of the oldest matching files and reads up to 32 MiB
+to compare content with the feed’s append and failure history. It shows new,
+already appended, previously failed, repeated, settling, and unchecked files.
+A run rechecks the current folder and validates the mapped event rows.
 
 Many systems can only drop an export file into a folder every night or hour.
 A folder feed points a saved log at such a folder. Each run appends every new
@@ -1801,6 +1941,16 @@ optionally its `log_revision` as `expected_revision`. For a supplied relationshi
 Keep these settings for subsequent pages and send the returned `next_after` as `after`.
 The optional `limit` is 1–100 (default 50).
 
+Use **Save as new rule set** to keep the current rules with the log. **Load rule set** restores
+their definitions for review, and **Check object rules** evaluates them against the current log.
+**Update loaded rule set** saves edits to the loaded revision. Deleting a saved set leaves the
+current draft available. Deleting its log also deletes its saved sets.
+
+The dashboard APIs are `GET/POST /v1/event-logs/{log_id}/object-rule-sets` and
+`GET/PUT/DELETE /v1/event-logs/{log_id}/object-rule-sets/{set_id}`. Send `name` and `rules`
+when creating or updating. Updates take `expected_revision` in the body, and deletes take the
+same field as a query parameter.
+
 ## Process model discovery
 
 `GET /v1/event-logs/{log_id}/model-discovery` builds a draft process model from the log, in the
@@ -1917,6 +2067,13 @@ Nothing is uploaded; activity names in the file are as sensitive as the log.
 optionally, an outcome risk for open cases. This is the local equivalent of ABBYY Timeline, IBM
 Process Mining or Celonis predictive monitoring.
 
+Enter an **Exact case key** to look up an open case, including one outside the preview. Both
+live prediction views respect the active case filter and offer **Open case** to show recorded
+event history. In either dashboard-only API, pass the optional literal `case_id` in the JSON
+body. It restricts the returned prediction rows while keeping the comparison population and
+backtest based on the selected cohort. Lookups report `case_selection` as `predicted`, `completed`,
+`unsupported`, or `not_in_selection`.
+
 ```json
 {"end_activities": ["Close", "Cancel"],
  "outcome": {"kind": "duration_over", "seconds": 172800},
@@ -2002,6 +2159,7 @@ Optional settings:
 * `top`: the number of next steps returned per case (1–10, default 3);
 * `limit`: the number of open cases returned, most recently active first
   (1–500, default 50);
+* `case_id`: the exact case key to return, including cases outside the default preview;
 * `backtest_share`: the share of completed cases used for the backtest
   (default 0.3);
 * `cohort` and `case_type`: as for other analyses.
@@ -2081,7 +2239,8 @@ Colours follow each activity's event count in the whole log, not in the filtered
 never repaints an activity. The seven most frequent activities get their own colour from a
 colour-blind-checked palette and the rest share "Other". The dashboard section draws the chart
 with a hover tooltip (case, activity, time), a legend with event counts and a table view of the
-same cases. One million events take well under a second to sample
+same cases. Click a dot or open a case from the table to review its recorded events.
+One million events take well under a second to sample
 (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_dotted_chart.py`).
 
 ## Process map comparison
@@ -2303,6 +2462,11 @@ cohort they are `starts_with`, `ends_with` and `duration: {"min": s, "max": s}`.
 every other condition and apply to the same views. Saved filters keep them. A saved filter whose
 first or last activity is no longer in the log is flagged, like its follower rules.
 
+**Case start dates.** Select UTC dates to keep cases whose first recorded event
+falls on or after the lower date and before the upper date. The selection keeps
+each matching case's full event sequence and can be saved as a filter. When a log
+comparison uses the workspace filter, its baseline dates narrow this selection.
+
 **End time, events, path frequency and rework.** Four more filters follow Disco's timeframe,
 performance and variation filters:
 
@@ -2356,7 +2520,10 @@ an attribute value or range both offer to become this filter in one click: "Filt
 and "Filter". They are offered only while no global filter is active, so they never silently
 replace one. They set exactly the finding's `attribute` or `attribute_range`.
 
-**Saved filters.** The active case filter can be saved under a name and applied again later from
+**Saved filters.** A new dashboard filter remembers the selected case notion.
+Applying it restores that notion and the filter together. Older filters saved
+without a case notion use the current selection.
+The active case filter can be saved under a name and applied again later from
 the same panel; applying it re-runs every filtered view at once. The API stores any case filter
 (`{"name": "...", "cohort": {"follows": [...], "started_from": "...", ...}}`, up to 50 per log,
 names unique regardless of case) as `openworkgraph.event-log-filter-set.v1`. The dashboard panel
@@ -2374,7 +2541,9 @@ activities that the map shows for the same `activities` share. At most `max_case
 to 500) cases are returned, sampled evenly by start time, and at most 30,000 events in total. The
 dashboard moves one token per case along the drawn arrow between consecutive events. A step whose
 arrow the paths slider hid moves in a straight line, and steps that share a timestamp jump instantly;
-the status line counts both. Play, pause and the position slider work from the keyboard. With reduced
+the status line counts both. Choose a sampled case to isolate its token and scrub within its
+displayed time span. **Open selected case** shows the case's recorded events. Play, pause and
+the position slider work from the keyboard. With reduced
 motion the playback advances in steps once per second. Tokens show recorded timestamps, not work
 being done, and nothing is executed. A million events filter and play back in a few seconds
 (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_playback_filters.py`).
@@ -2413,7 +2582,9 @@ including the case notions and applied filters, to a local file.
 Select a case count to review cases from that side of the report. The activity, path and
 variant tables list only cases that match that row and the side's case selection. Select a
 supplied case key to see its event history. Case keys and event rows are available in the
-local dashboard and are excluded from the comparison download.
+local dashboard. The aggregate JSON omits case keys and events. Use **Download
+baseline events (CSV)** or **Download comparison events (CSV)** to save the
+complete original traces for that side's case selection and case notion.
 
 `cohort` takes the same keys as other analyses. `limit` (1–200) caps each ranked
 list. The response contains:
@@ -2577,8 +2748,18 @@ the section offers 0.3, 0.5, 0.7 and 0.9) and when seen at least the chosen numb
   and why it was kept. Logs with more than 64 activities need an activity mapping or a case filter
   first. The case filter applies.
 
-`GET /v1/event-logs/{log_id}/heuristics-net?dependency_threshold=&and_threshold=&min_occurrences=&all_connected=`
+Choose **Inspect cases** for a kept arrow, loop, or start or end boundary. The case list reports
+the number of matching occurrences, including repeated and overlapping loops. Open a case
+to see its recorded event history.
+
+`GET /v1/event-logs/{log_id}/heuristics-net?dependency_threshold=&and_threshold=&loop_two_threshold=&min_occurrences=&all_connected=`
 plus the case-filter parameters. Agents with access to a shared log use `get_process_heuristics_net`.
+
+The dashboard-only `POST /v1/event-logs/{log_id}/heuristics-net/cases` keeps the report's case
+notion and filter. Send `group` as `transition`, `length_two`, `start`, or `end`, and `activities`
+as the two literal labels for a transition or back-and-forth loop, or one for a boundary.
+For a repeated activity, send a transition with the same label twice. Send the returned
+`next_after` as `after` to page by literal case key. The optional `limit` is 1–100 (default 50).
 
 ## Activity profile
 
@@ -2626,11 +2807,20 @@ another, instead of requiring the case to begin with them, which answers "what u
 Reject → Rework?". Continuing down a branch keeps that first occurrence fixed in each case. If a
 case repeats the sequence later, the later occurrence does not change which branch it took.
 
+Use **Inspect cases** on a branch to see the matching case keys and event counts, then open a
+case to review its event history. This works for branches where the case ends as well.
+
 `GET /v1/event-logs/{log_id}/next-steps?step=Open&step=Check&anchor=start` plus the case-filter
 parameters. Agents use `get_process_next_steps` (aggregates only) and call it again with a step
 appended to go deeper.
 For anchored continuation with `anchor=anywhere`, pass `anchor_steps`, the length of the initial
 sequence. The API's `is_end` field distinguishes a case ending from an activity named `(end)`.
+
+The dashboard-only `POST /v1/event-logs/{log_id}/next-steps/cases` uses the same query
+parameters as the summary. Send `{"activity":"Check"}` for a continuation or `{"ends_here":true}`
+for a case ending. Each response gives the exact branch total and up to `limit` cases (1–100,
+default 50) in literal case-key order. Send the returned `next_after` as `after` in the next body.
+Each page reflects the current log.
 
 ## Due dates
 
@@ -2726,11 +2916,15 @@ come in between. For each step the section shows:
 The step with the largest drop is named, along with the median and 90th percentile time from the
 first to the last step. An optional **conversion window** counts a step only within that many hours
 of the latest occurrence of the previous step. The funnel shows how far cases got and how long it
-took, not why the others stopped; use the eventual-follower case filter to open the cases behind a
-step.
+took, not why the others stopped. Choose a step and either **Reached step** or **Stopped before
+step** to inspect up to 50 matching case IDs, last recorded activities and steps reached. The
+full matching count and any truncation are shown; evidence uses the same filter and conversion window.
 
 `GET /v1/event-logs/{log_id}/funnel?step=A&step=B&within_hours=24` plus the case-filter
-parameters. Agents with access to a shared log use `get_process_funnel` (aggregates only).
+parameters. Dashboard sessions can additionally request `evidence_step=2&evidence_status=dropped`
+(or `reached`); the first 50 matching case IDs in sorted order are returned with a total and
+truncation flag. Case evidence is not available through the shared agent tool; agents with access
+to a shared log use `get_process_funnel` (aggregates only).
 
 ## Model change
 
@@ -2830,6 +3024,10 @@ log. The section lists the places where tokens went missing or were left behind,
 when the net did not allow them, activities the net does not have (skipped and counted), net
 transitions no case took, and the variants that do not fit.
 
+Choose **Inspect cases** next to a variant in token replay or the step-by-step explanation.
+The case list uses the exact observed path and the case filter from the report. Open a case
+to see its recorded event history.
+
 **Precision** (ETConformance, Muñoz-Gama and Carmona, 2010; PM4Py's `precision_token_based_replay`)
 asks the opposite question: how much more the net allows than the cases did. For each prefix of
 the recorded cases that replays without problems, the activities the net allows next, directly or
@@ -2897,8 +3095,9 @@ cases did where the net does not allow them, the activities the net required tha
 and the alignment fitness, so a change in adherence over time (for example after a process change)
 is visible. Each variant is aligned once. Up to 500 variants of at
 most 200 steps are aligned; the search has a per-variant and a total limit, and variants it cannot
-finish are listed as unaligned and left out of the fitness. When two explanations cost the same, one
-is shown.
+finish are left out of the fitness. **Variants without a completed alignment** lists the available
+paths from that search and links to their cases. The report also counts cases outside the length
+or variant limits. When two explanations cost the same, one is shown.
 
 `POST /v1/event-logs/{log_id}/petri-net-alignments` with the PNML file as the body, plus the
 case-filter parameters. The net is not stored.
@@ -2962,6 +3161,15 @@ far too long, or suspiciously little time, overall between two points.
 - The profile is learned from the same cases it checks, so a few extreme cases widen it; read the
   results as timings to review, not errors. The case filter applies.
 
+**Browse all deviating cases** opens the complete set of flagged cases. **Inspect cases** on
+a pair limits the review to that pair. Either review can show slower or faster deviations and
+open complete event histories.
+
+The dashboard-only `POST /v1/event-logs/{log_id}/temporal-profile/cases` uses the same analysis
+settings and case filter in its query. The body accepts optional exact `source` and `destination`
+labels together, a `direction` of `all`, `slower`, or `faster`, and a `limit` of 1–100
+(default 50). Send `next_after` as `after` for the next page.
+
 `GET /v1/event-logs/{log_id}/temporal-profile?zeta=&min_occurrences=&case_type=` plus the case-filter
 parameters. Agents with access to a shared log get the pair figures, without case IDs, through
 `get_process_temporal_profile`.
@@ -2978,7 +3186,9 @@ A numeric condition with `includes_non_numeric` also matches unusable numbers.
    next activities, or end. Each branch must be seen at least 5 times. Completion
    normally appears as `(end)`. If a literal activity uses that label, the result
    picks a distinct `terminal_label`. Branches and rules flag completion using
-   `next_is_terminal`.
+   `next_is_terminal`. Choose **Review branches**, then **Inspect cases** to see which
+   cases contributed to an observed branch and how many times it occurred in each case.
+   Open a case to review its event history.
 2. **Data known at the decision.** The rules use two kinds of data:
    - the case's attributes (`case.*`);
    - the latest non-empty value of every event attribute recorded on the case at or before the
@@ -3008,6 +3218,15 @@ global case filter applies.
 - `GET /v1/event-logs/{log_id}/decision-rules?decision_activity=&max_depth=&case_type=` plus the
   case-filter parameters. The case filter's own `activity` parameter still selects cases that
   contain an activity.
+- `POST /v1/event-logs/{log_id}/decision-points/cases` uses the case notion and filter from
+  the decision points. Send `{"activity":"Check","next_activity":"Review"}` for a continuation
+  or `{"activity":"Check","ends_here":true}` for completion. It reports all observed
+  occurrences, including repeats, and pages through distinct cases in literal case-key order.
+  The optional `limit` is 1–100 (default 50). Send the returned `next_after` as `after` to continue.
 
-Both routes need a dashboard session. Agents can read the same results, at the aggregates level,
+These routes need a dashboard session. Agents can read the aggregates
 through `get_process_decision_rules` (see PROCESS_INTELLIGENCE_FOR_AGENTS.md).
+
+### Rework and loop case evidence
+
+The local rework report offers explicit case-evidence links for repeated activities and exact closed activity loops. Selectors respect the active case cohort and retain literal event order; timestamp ties do not establish business order.

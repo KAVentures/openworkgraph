@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 from server import event_log_alignments as al
+from server import event_log_cases as cases
 from server import event_log_pnml as pnml
 from server.event_log_workspace import EventLogWorkspaceError
 from tests.test_event_log_petri_replay import _dirs, _import, _sequence_net  # noqa: F401  (fixture reuse)
@@ -33,6 +34,7 @@ def test_skipped_extra_and_swapped_steps_are_named_exactly():
     skipped = by_path[("A", "C")]
     assert skipped["cost"] == 1 and skipped["fitness"] == round(1 - 1 / 5, 4)
     assert _moves(skipped) == [("sync", "A"), ("model", "B"), ("sync", "C")]
+    assert cases.cases(log, {"variant_id": skipped["variant_id"]})["selected_cases"] == skipped["cases"]
     extra = by_path[("A", "B", "X", "C")]
     assert _moves(extra) == [("sync", "A"), ("sync", "B"), ("log", "X"), ("sync", "C")]
     swapped = by_path[("A", "C", "B")]
@@ -61,7 +63,9 @@ def test_search_limit_reports_unaligned_variants(monkeypatch):
     monkeypatch.setattr(al, "MAX_STATES_PER_VARIANT", 6)
     result = al.alignments(log, _sequence_net(["A", "B", "C"]))
     assert result["unaligned"]["variants"] >= 1
-    assert {"path": ["C", "B", "A", "A", "B"], "cases": 1} in result["unaligned_variants"]
+    variant = next(row for row in result["unaligned_variants"] if row["path"] == ["C", "B", "A", "A", "B"])
+    assert variant["cases"] == 1
+    assert cases.cases(log, {"variant_id": variant["variant_id"]})["cases"][0]["case_id"] == "c3"
     assert result["cases"] + result["unaligned"]["cases"] == 4
 
 

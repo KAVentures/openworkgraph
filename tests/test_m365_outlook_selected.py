@@ -261,3 +261,62 @@ def test_selected_grant_fifo_without_writer_refused_without_blocking(setup):
         process.join(timeout=3)
         pytest.fail("Grant validation blocked on a FIFO without a writer")
     assert process.exitcode == 0
+
+
+@pytest.mark.parametrize("expiry,allowed", [
+    ("2000-01-01T00:00:00Z", False),
+    ("2999-01-01T00:00:00Z", True),
+    ("2026-13-01T00:00:00Z", False),
+    ("2999-01-01T00:00:00+00:00", False),
+    (None, False),
+])
+def test_selected_grant_expiry_preflight(setup, expiry, allowed):
+    args = options(setup)
+    grant = args["grant_file"]
+    value = json.loads(grant.read_text())
+    value["expires_at"] = expiry
+    grant.write_text(json.dumps(value))
+    graph = Graph([message(ID_A), message(ID_B)])
+    if allowed:
+        assert export_selected(**args, opener=graph)["status"] == "exported"
+        assert len(graph.calls) == 2
+    else:
+        with pytest.raises(OutlookError):
+            export_selected(**args, opener=graph)
+        assert not graph.calls
+        assert not args["output"].exists()
+
+
+def test_selected_grant_reissue_between_graph_reads_fails_closed(setup):
+    args = options(setup)
+    def reissue(n):
+        if n == 1:
+            grant = args["grant_file"]
+            value = json.loads(grant.read_text())
+            grant.write_text(json.dumps(value, indent=2))
+    graph = Graph([message(ID_A), message(ID_B)], mutate=reissue)
+    with pytest.raises(OutlookError, match="grant changed"):
+        export_selected(**args, opener=graph)
+    assert len(graph.calls) == 1
+    assert not args["output"].exists()
+
+
+def test_selected_grant_expires_during_batch_before_next_get(setup, monkeypatch):
+    import server.m365_outlook_selected as selected
+    from datetime import datetime, timezone
+    args = options(setup)
+    value = json.loads(args["grant_file"].read_text())
+    value["expires_at"] = "2026-11-23T08:00:00Z"
+    args["grant_file"].write_text(json.dumps(value))
+    real_datetime = selected.datetime
+    class Clock(real_datetime):
+        @staticmethod
+        def now(tz=None):
+            return real_datetime(2026, 11, 23, 7 if len(graph.calls) == 0 else 9,
+                                 tzinfo=timezone.utc)
+    graph = Graph([message(ID_A), message(ID_B)])
+    monkeypatch.setattr(selected, "datetime", Clock)
+    with pytest.raises(OutlookError, match="expired"):
+        export_selected(**args, opener=graph)
+    assert len(graph.calls) == 1
+    assert not args["output"].exists()

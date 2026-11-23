@@ -22,3 +22,12 @@ test('workspace activity filters keep literal labels and refuse unrepresentable 
  assert.deepEqual(plain(mergeActiveCohort({activity:'  Review 雪  '},active)),active);
  assert.throws(()=>mergeActiveCohort({activity:'Review 雪'},active),/different activity/);
 });
+
+test('start periods intersect without rounding away subsecond bounds',()=>{
+ const active={started_from:'2024-02-01T00:00:00.000001Z',started_before:'2024-03-01T00:00:00Z'};
+ const operation={started_from:'2024-02-01T00:00:00Z',started_before:'2024-02-01T00:00:00.000002Z'};
+ assert.deepEqual(plain(mergeActiveCohort(operation,active)),{
+   started_from:active.started_from,started_before:operation.started_before
+ });
+ assert.throws(()=>mergeActiveCohort({started_before:'2024-02-01T00:00:00Z'},active),/start date/);
+});

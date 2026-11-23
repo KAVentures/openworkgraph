@@ -30,6 +30,7 @@ never modified or deleted.
 from __future__ import annotations
 
 import hashlib
+import heapq
 import json
 import os
 import re
@@ -40,7 +41,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO, Iterator
 
 from . import event_log_workspace as workspace
 from .event_log_workspace import EventLogWorkspaceError
@@ -48,6 +49,8 @@ from .event_log_workspace import EventLogWorkspaceError
 FORMAT = "openworkgraph.event-log-folder-feed.v1"
 MAX_FEEDS_PER_LOG = 5
 MAX_FILES_PER_RUN = 20
+MAX_PREVIEW_FILES = 40
+MAX_PREVIEW_BYTES = 32 * 1024 * 1024
 SETTLE_SECONDS = 60
 _PATTERN = re.compile(r"^.{1,80}\.(csv|tsv|txt)$", re.IGNORECASE)
 _UNSAFE_PATTERN = re.compile(r"[/\\\x00-\x1f\x7f-\x9f\ud800-\udfff]")
@@ -186,31 +189,103 @@ def _identity(info: os.stat_result) -> tuple[int, int, int, int]:
     return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
 
 
-@contextmanager
-def _snapshot(path: Path, expected: os.stat_result):
-    """Hash exactly the bytes later appended, without following a replaced symlink."""
-    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+def _digest(path: Path, expected: os.stat_result, limit: int, destination: BinaryIO | None = None) -> tuple[str, int]:
+    """Hash a stable regular file without following a replaced symlink."""
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     fd = os.open(path, flags)
-    with os.fdopen(fd, "rb") as source, tempfile.TemporaryFile() as snapshot:
+    with os.fdopen(fd, "rb") as source:
         opened = os.fstat(source.fileno())
         if not stat.S_ISREG(opened.st_mode) or _identity(opened) != _identity(expected):
             raise _FileChanged()
-        if opened.st_size > workspace.MAX_IMPORT_BYTES:
+        if opened.st_size > limit:
             raise EventLogWorkspaceError("event log is larger than the supported limit")
         digest, size = hashlib.sha256(), 0
-        while chunk := source.read(1 << 20):
+        while chunk := source.read(min(1 << 20, limit - size + 1)):
             size += len(chunk)
-            if size > workspace.MAX_IMPORT_BYTES:
+            if size > limit:
                 raise EventLogWorkspaceError("event log is larger than the supported limit")
             digest.update(chunk)
-            snapshot.write(chunk)
+            if destination is not None:
+                destination.write(chunk)
         if _identity(os.fstat(source.fileno())) != _identity(opened):
             raise _FileChanged()
         current = path.lstat()
         if not stat.S_ISREG(current.st_mode) or _identity(current) != _identity(opened):
             raise _FileChanged()
+        return digest.hexdigest(), size
+
+
+@contextmanager
+def _snapshot(path: Path, expected: os.stat_result):
+    """Hash exactly the bytes later appended."""
+    with tempfile.TemporaryFile() as snapshot:
+        sha, size = _digest(path, expected, workspace.MAX_IMPORT_BYTES, snapshot)
         snapshot.seek(0)
-        yield digest.hexdigest(), size, snapshot
+        yield sha, size, snapshot
+
+
+def _candidates(feed: dict[str, Any]) -> Iterator[tuple[float, str, Path, os.stat_result]]:
+    folder = Path(feed["folder"])
+    if not folder.is_dir():
+        raise EventLogWorkspaceError("the feed folder is no longer available")
+    for path in folder.glob(feed["pattern"]):
+        try:
+            info = path.lstat()
+        except OSError:
+            continue
+        if stat.S_ISREG(info.st_mode):
+            yield info.st_mtime, path.name, path, info
+
+
+def preview(feed_id: str, *, now: float | None = None) -> dict[str, Any]:
+    """Inspect bounded file metadata and hashes without staging, validating, or appending rows."""
+    feed = get(feed_id)
+    current = time.time() if now is None else now
+    candidates = heapq.nsmallest(MAX_PREVIEW_FILES + 1, _candidates(feed))
+    files: list[dict[str, Any]] = []
+    pending: dict[int, str] = {}
+    remaining = MAX_PREVIEW_BYTES
+    for mtime, name, path, info in candidates[:MAX_PREVIEW_FILES]:
+        row = {"name": name, "bytes": info.st_size}
+        if current - mtime < SETTLE_SECONDS:
+            state = "settling"
+        elif info.st_size > workspace.MAX_IMPORT_BYTES:
+            state = "too_large"
+        elif info.st_size + 1 > remaining:
+            state = "preview_limit"
+        else:
+            # Count one extra byte per read for EOF or for a file that grew.
+            remaining -= info.st_size + 1
+            try:
+                sha, _ = _digest(path, info, info.st_size)
+                pending[len(files)] = sha
+                state = "new_content"
+            except (_FileChanged, EventLogWorkspaceError):
+                state = "settling"
+            except OSError:
+                state = "unavailable"
+        files.append({**row, "state": state})
+
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            _feed(conn, feed_id)
+            previous = dict(conn.execute("""SELECT sha256,
+                    CASE WHEN bool_or(outcome = 'appended') THEN 'already_appended' ELSE 'previously_failed' END
+                FROM event_log_feed_files WHERE feed_id = ? AND sha256 IN (SELECT unnest(?::VARCHAR[]))
+                GROUP BY sha256""", [feed_id, list(set(pending.values()))]).fetchall())
+        finally:
+            conn.close()
+    seen: set[str] = set()
+    for index, sha in pending.items():
+        files[index]["state"] = previous.get(sha, "repeated_content" if sha in seen else "new_content")
+        seen.add(sha)
+    counts: dict[str, int] = {}
+    for row in files:
+        counts[row["state"]] = counts.get(row["state"], 0) + 1
+    return {"format": FORMAT, "feed_id": feed_id, "files": files, "counts": counts,
+            "more_files": len(candidates) > MAX_PREVIEW_FILES, "max_files": MAX_PREVIEW_FILES,
+            "max_bytes": MAX_PREVIEW_BYTES}
 
 
 def failures(feed_id: str, *, after: str = "") -> dict[str, Any]:
@@ -245,19 +320,8 @@ def run(feed_id: str, *, now: float | None = None, retry_failed: bool = False, r
     if retry_hash is not None and (not retry_failed or not isinstance(retry_hash, str) or not _SHA256.fullmatch(retry_hash)):
         raise EventLogWorkspaceError("retry hash must be a SHA-256 for a failed file")
     feed = get(feed_id)
-    folder = Path(feed["folder"])
-    if not folder.is_dir():
-        raise EventLogWorkspaceError("the feed folder is no longer available")
     current = time.time() if now is None else now
-    candidates = []
-    for path in folder.glob(feed["pattern"]):
-        try:
-            info = path.lstat()
-        except OSError:
-            continue
-        if stat.S_ISREG(info.st_mode):
-            candidates.append((info.st_mtime, path.name, path, info))
-    candidates.sort()
+    candidates = sorted(_candidates(feed))
     waiting, already, previously_failed, skipped_new, duplicate_failed, results, attempted = 0, 0, 0, 0, 0, [], set()
     for mtime, name, path, info in candidates:
         if current - mtime < SETTLE_SECONDS:

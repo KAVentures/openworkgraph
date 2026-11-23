@@ -39,7 +39,10 @@ const path=require('node:path');
    const items=await list.locator('li').allInnerTexts();
    assert.match(items[0],/^Approve → Pay takes 42% of all recorded case time/);
    assert(items.some(t=>/^Cases with Escalate \(20%\) take 2\.7× as long/.test(t)),JSON.stringify(items));
-   assert(items.some(t=>/Contains activity/.test(t)),'activity findings explain how to filter');
+   await list.getByRole('button',{name:/^Review cases for Cases with Escalate/}).click();
+   await page.locator('#owgEventLogCasesStatus').getByText(/8 matching cases/).waitFor();
+   assert.deepEqual(await page.locator('#owgEventLogCasesList').getByRole('button',{name:/Open case /}).allTextContents(),
+     ['c000','c005','c010','c015','c020','c025','c030','c035']);
    assert.match(await box.innerText(),/not causes, recommendations/);
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgEventLogInsights'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));

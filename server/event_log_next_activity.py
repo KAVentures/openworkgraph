@@ -28,7 +28,6 @@ from . import event_log_workspace as workspace
 
 FORMAT = "openworkgraph.event-log-next-activity.v1"
 END = None  # the case ends
-_SEP = "\x1f"
 Label = Annotated[str, Field(min_length=1, max_length=200)]
 
 
@@ -115,37 +114,42 @@ def _backtest(paths: list[tuple[list[str], Any]], settings: NextActivitySpec) ->
                              "from cases that ended before it; the case ending counts as a possible next step.")}
 
 
-def next_activity(log_id: str, spec: Any) -> dict[str, Any]:
+def next_activity(log_id: str, spec: Any, *, case_id: str | None = None) -> dict[str, Any]:
     settings = _parse(spec)
     ends = set(settings.end_activities)
 
     def run(conn):
         cohorts.restrict(conn, cohorts.parse_cohort(settings.cohort), log_id)
-        rows = conn.execute(f"""SELECT case_id, string_agg(activity, '{_SEP}' ORDER BY ts, event_id), max(ts)
+        rows = conn.execute("""SELECT case_id, list(activity ORDER BY ts, event_id), max(ts)
             FROM ce GROUP BY case_id""").fetchall()
         return {"rows": rows}
 
     data = workspace._query(log_id, settings.case_type, run)
     completed, open_cases = [], []
-    for case_id, path, last in data["rows"]:
-        steps = path.split(_SEP)
-        (completed if steps[-1] in ends else open_cases).append((case_id, steps, last))
-    if not completed:
+    case_selection = "not_in_selection"
+    for key, steps, last in data["rows"]:
+        is_complete = steps[-1] in ends
+        (completed if is_complete else open_cases).append((key, steps, last))
+        if key == case_id:
+            case_selection = "completed" if is_complete else "unsupported"
+    if not completed and case_id is None:
         raise workspace.EventLogWorkspaceError("no completed cases: none ends with one of the end activities")
     model = _Model(settings.history)
     for _, steps, _ in completed:
         model.learn(steps)
     predictions, expected = [], Counter()
-    for case_id, steps, last in sorted(open_cases, key=lambda c: (c[2], c[0]), reverse=True):
+    for key, steps, last in sorted(open_cases, key=lambda c: (c[2], c[0]), reverse=True):
         counter, level = model.predict(steps, settings.min_support)
         total = sum(counter.values())
         if not total:
             continue
         for activity, n in counter.items():
             expected[activity] += n / total
-        if len(predictions) < settings.limit:
+        if case_id is not None and key == case_id:
+            case_selection = "predicted"
+        if (case_id is None or key == case_id) and len(predictions) < settings.limit:
             predictions.append({
-                "case_id": case_id, "last_activity": steps[-1], "events": len(steps),
+                "case_id": key, "last_activity": steps[-1], "events": len(steps),
                 "last_event_at": last.isoformat() + "Z",
                 "next": [{"activity": a, "case_ends": a is END, "probability": round(n / total, 6)}
                          for a, n in _ranked(counter, settings.top)],
@@ -157,6 +161,7 @@ def next_activity(log_id: str, spec: Any) -> dict[str, Any]:
         "open_cases": len(open_cases),
         "history": settings.history,
         "predictions": predictions,
+        **({"case_selection": case_selection} if case_id is not None else {}),
         "open_cases_shown": len(predictions),
         "expected_next_across_open_cases": [
             {"activity": a, "case_ends": a is END, "expected_cases": round(v, 3)}

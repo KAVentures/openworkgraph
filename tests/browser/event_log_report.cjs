@@ -54,10 +54,38 @@ const path=require('node:path');
    assert.match(changesText,/Changes since the previous copy/);
    assert.match(changesText,/Cases\t8\t8\tno change/);
    assert.equal(await page.locator('#owgEventLogSavedList tbody tr').count()>=2,true);
+   const beforeThird=await page.locator('#owgSavedReportReference option').count();
+   await page.locator('#owgEventLogSaveCopy').click();
+   await page.waitForFunction(expected=>document.querySelector('#owgSavedReportReference')?.options.length===expected,beforeThird+1);
+   const reference=page.locator('#owgSavedReportReference'),comparison=page.locator('#owgSavedReportComparison');
+   const first=await reference.locator('option').last().getAttribute('value');
+   const latest=await comparison.locator('option').first().getAttribute('value');
+   await reference.selectOption(latest);
+   const compare=page.getByRole('button',{name:'Compare selected copies'});
+   assert.equal(await compare.isDisabled(),true);
+   await reference.selectOption(first);
+   const [selected]=await Promise.all([
+     page.waitForResponse(response=>new URL(response.url()).searchParams.get('older')===first),
+     compare.click()
+   ]);
+   const pair=await selected.json();
+   assert.equal(pair.older.name,first);
+   assert.equal(pair.newer.name,latest);
+   await page.getByRole('heading',{name:'Changes between selected copies'}).waitFor();
    const [copy]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogSavedList').getByRole('button',{name:/^Download saved report report-/}).first().click()]);
    assert.match(copy.suggestedFilename(),/^log_[0-9a-f]{16}-report-\d{8}T\d{6}Z(?:-\d+)?\.html$/);
    const copyHtml=await fs.readFile(await copy.path(),'utf8');
    assert(copyHtml.startsWith('<!doctype html>')&&copyHtml.includes('<h1>orders</h1>'));
+   await page.locator('#owgEventLogSavedReports').click();
+   await page.locator('#owgEventLogAnalyze').click();
+   await page.locator('#owgCaseFilterContainsActivity').fill('Ship');
+   await page.locator('#owgCaseFilterApply').click();
+   await page.locator('#owgCaseFilterCount').getByText(/4 of 8 cases/).waitFor();
+   await page.locator('#owgEventLogSavedReports').click();
+   await page.locator('#owgEventLogSaveCopy').click();
+   const scoped=page.locator('#owgEventLogSavedChanges');
+   await scoped.getByText('These copies use different case notions or case filters.').waitFor();
+   assert.match(await scoped.innerText(),/Cases\t8\t4\t−4/);
    await page.addScriptTag({content:axeSource});
    const savedAudit=await page.evaluate(async()=>window.axe.run({include:[['#owgEventLogManage'],['#owgEventLogSavedList']]},{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(savedAudit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);

@@ -81,6 +81,97 @@ def test_kpi_and_case_rules_trigger_with_evidence_and_remember_new_cases():
 
 
 
+def test_preview_matches_evaluation_without_recording_signal_state():
+    from server import event_log_signal_inbox as inbox
+
+    log = _log()
+    spec = {**_rule("Slow", kind="cases", condition="duration_over", seconds=24 * 3600),
+            "cohort": {"activity": "Close"}}
+    first = signals.preview_rule(log, spec)
+    assert first["cohort_cases"] == 2
+    assert first["signal"]["triggered"] and first["signal"]["matching_cases"] == 1
+    assert [case["case_id"] for case in first["signal"]["evidence_cases"]] == ["slow"]
+    assert first["signals_execute_actions"] is False
+    assert signals.list_rules(log)["rules"] == []
+    made = signals.add_rule(log, spec)
+    evaluated = signals.evaluate(log)["signals"][0]
+    assert first["signal"] == {key: value for key, value in evaluated.items() if key not in {
+        "rule_id", "new_cases_since_last_evaluation", "new_cases_comparison",
+    }}
+
+    current = inbox.list_inbox(log)["items"][0]
+    inbox.snooze(log, made["rule_id"], {"state_fingerprint": current["state_fingerprint"], "minutes": 60})
+
+    def saved_state():
+        with workspace._LOCK:
+            conn = workspace._connect()
+            try:
+                return [conn.execute(f"SELECT * FROM {table} WHERE log_id = ?", [log]).fetchall()
+                        for table in ("signal_rules", "signal_transitions", "signal_reviews", "signal_snoozes")]
+            finally:
+                conn.close()
+
+    before = saved_state()
+    kpi = _rule("Large cohort", kind="kpi", metric="case_count", operator="above", threshold=10)
+    second = signals.preview_rule(log, kpi)
+    assert second["cohort_cases"] == second["signal"]["value"] == 4
+    assert not second["signal"]["triggered"]
+    assert saved_state() == before
+
+
+def test_signal_pack_round_trip_pins_scope_and_imports_definitions_only():
+    from server import local_scheduler
+
+    source, destination = _log(), _log()
+    rule = {**_rule("Slow", kind="cases", condition="duration_over", seconds=3600),
+            "cohort": {"activity": "Close"}}
+    original = signals.add_rule(source, rule)
+    signals.evaluate(source)
+    document = signals.export_pack(source)
+    assert document["format"] == signals.PACK_FORMAT
+    assert set(document["rules"][0]) == {"case_type", "cohort", "name", "when"}
+    assert document["rules"][0]["case_type"] == "case"
+    assert document["rules"][0]["cohort"] == rule["cohort"]
+    assert signals.preview_pack(source, document)["duplicates"] == 1  # the implicit source notion is equivalent
+    plan = signals.preview_pack(destination, document)
+    assert plan["new_rules"] == 1 and plan["fits"]
+    assert plan["rules"][0]["case_type"] == "case"
+    assert signals.list_rules(destination)["rules"] == []
+
+    pin_before = local_scheduler._signal_rule_set_pin(destination)
+    assert signals.import_pack(destination, document) == {"added": 1, "duplicates": 0}
+    imported = signals.list_rules(destination)["rules"][0]
+    assert imported["rule_id"] != original["rule_id"]
+    assert imported["last_evaluated_at"] is None
+    assert signals.export_pack(destination) == document
+    pin_after = local_scheduler._signal_rule_set_pin(destination)
+    assert pin_after != pin_before
+    assert signals.import_pack(destination, document) == {"added": 0, "duplicates": 1}
+    assert local_scheduler._signal_rule_set_pin(destination) == pin_after
+
+
+def test_pack_import_is_atomic_for_invalid_rules_and_capacity_changes(monkeypatch):
+    log = _log()
+    base = _rule("Any cases", kind="kpi", metric="case_count", operator="above", threshold=0)
+    next_rule = {**base, "name": "Another rule"}
+    invalid = {**next_rule, "case_type": "unknown"}
+    document = {"format": signals.PACK_FORMAT, "rules": [base, invalid]}
+    with pytest.raises(workspace.EventLogWorkspaceError, match="rule 2: unknown object type"):
+        signals.import_pack(log, document)
+    with pytest.raises(workspace.EventLogWorkspaceError, match="rule 2"):
+        signals.import_pack(log, {**document, "rules": [base, {"name": "not a rule"}]})
+    assert signals.list_rules(log)["rules"] == []
+    monkeypatch.setattr(signals, "MAX_RULES", 2)
+    document["rules"] = [base, next_rule]
+    assert signals.preview_pack(log, document)["fits"]
+    signals.add_rule(log, {**base, "name": "Added since preview"})
+    assert not signals.preview_pack(log, document)["fits"]
+    with pytest.raises(workspace.EventLogWorkspaceError, match="room for 1"):
+        signals.import_pack(log, document)
+    assert [rule["name"] for rule in signals.list_rules(log)["rules"]] == ["Added since preview"]
+    assert signals.import_pack(log, {**document, "rules": [base, base]}) == {"added": 1, "duplicates": 1}
+
+
 def test_saved_signals_use_fractional_seconds_for_kpis_sla_and_case_evidence():
     """Synthetic timestamps: 1.5s breaches a strict 1s rule; exactly 1s does not."""
     rows = [
@@ -259,8 +350,26 @@ with TestClient(app) as client:
     bearer = {"Authorization": "Bearer " + local_auth.ensure_api_token()}
     assert client.post(base, json=rule, headers=bearer).status_code in (401, 403)
     assert client.post(base + "/evaluate", headers=bearer).status_code in (401, 403)
+    assert client.post(base + "/preview", json=rule, headers=bearer).status_code in (401, 403)
+    preview = client.post(base + "/preview", json=rule, headers=headers)
+    assert preview.status_code == 200 and preview.headers["cache-control"] == "no-store"
+    assert preview.json()["cohort_cases"] == preview.json()["signal"]["matching_cases"] == 1
+    assert client.get(base, headers=headers).json()["rules"] == []
+    assert client.post(base + "/preview", json={**rule, "cohort": {"activity": []}}, headers=headers).status_code == 422
+    pack_url = base + "/pack"
+    assert client.get(pack_url, headers=bearer).status_code in (401, 403)
+    assert client.post(pack_url + "/preview", json={}, headers=bearer).status_code in (401, 403)
+    assert client.post(pack_url + "/import", json={}, headers=bearer).status_code in (401, 403)
+    empty = client.get(pack_url, headers=headers)
+    assert empty.status_code == 200 and empty.json()["rules"] == []
+    assert empty.headers["cache-control"] == "no-store"
+    assert empty.headers["content-disposition"].endswith('-signals.json"')
+    assert client.post(pack_url + "/preview", json={"format": "invalid", "rules": []}, headers=headers).status_code == 422
     created = client.post(base, json=rule, headers=headers)
     assert created.status_code == 200, created.text
+    document = client.get(pack_url, headers=headers).json()
+    assert client.post(pack_url + "/preview", json=document, headers=headers).json()["duplicates"] == 1
+    assert client.post(pack_url + "/import", json=document, headers=headers).json()["added"] == 0
     assert client.post(base, content=b"not json", headers={**headers, "content-type": "application/json"}).status_code == 422
     evaluated = client.post(base + "/evaluate", headers=headers).json()
     assert evaluated["signals"][0]["triggered"] and evaluated["signals"][0]["evidence_cases"][0]["case_id"] == "1"

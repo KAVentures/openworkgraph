@@ -78,6 +78,18 @@ const path=require('node:path');
     // The overview intentionally does not depend on which log is selected.
     await page.locator('#owgEventLogAnalyze').click();
     await page.locator('#owgSignalAllStatus').filter({hasText:/2 signal states need attention across 2 saved logs/}).waitFor();
+    await page.locator('#owgSignalName').fill('Draft preview');
+    await page.locator('#owgSignalKind').selectOption('kpi');
+    await page.locator('#owgSignalMetric').selectOption('case_count');
+    await page.locator('#owgSignalThreshold').fill('0');
+    await page.getByRole('button',{name:'Preview signal',exact:true}).click();
+    const preview=page.locator('#owgSignalPreviewStatus');
+    await preview.getByText('Would trigger. Result: 1. Checked 1 case.',{exact:true}).waitFor();
+    await page.locator('#owgSignalThreshold').fill('100');
+    assert.equal(await preview.textContent(),'');
+    await page.getByRole('button',{name:'Preview signal',exact:true}).click();
+    await preview.getByText('Would stay clear. Result: 1. Checked 1 case.',{exact:true}).waitFor();
+    assert.equal(await page.getByRole('button',{name:'Delete signal Draft preview'}).count(),0);
     const rows=page.locator('#owgSignalAllResults tbody tr');
     assert.equal(await rows.count(),2);
     assert.equal(await page.locator('#owgSignalAllResults img').count(),0);
@@ -183,6 +195,30 @@ const path=require('node:path');
     const removed=await page.evaluate(async id=>(await (await fetch(
       '/v1/schedules/signal-delivery/'+id)).json()),setup.a);
     assert.equal(removed.configured,false,'removal revokes key and pending delivery');
+
+    await page.getByText('Move signal rules between logs',{exact:true}).click();
+    const pack=page.locator('#owgSignalPack');
+    const [packFile]=await Promise.all([page.waitForEvent('download'),
+      pack.getByRole('button',{name:'Download rule definitions',exact:true}).click()]);
+    const fileData=await fs.readFile(await packFile.path());
+    const document=JSON.parse(fileData);
+    assert.equal(document.rules.length,2);
+    assert(document.rules.every(rule=>!('rule_id' in rule)&&!('last_evaluated_at' in rule)&&rule.case_type==='case'));
+    await page.locator('#owgEventLogPick').selectOption(setup.b);
+    await page.locator('#owgEventLogAnalyze').click();
+    await page.getByText('Move signal rules between logs',{exact:true}).click();
+    const pick=pack.getByLabel('Signal rules file',{exact:true});
+    await pick.setInputFiles({name:packFile.suggestedFilename(),mimeType:'application/json',buffer:fileData});
+    await pack.getByText('2 to add. 0 already present or repeated in the file.',{exact:true}).waitFor();
+    assert.equal(await pack.locator('img').count(),0);
+    assert.equal(await page.evaluate(()=>window.signalOverviewInjected),undefined);
+    assert.equal(await page.locator('#owgSignalRules tbody tr').count(),1);
+    await pack.getByRole('button',{name:'Import signal rules',exact:true}).click();
+    await pack.getByText('2 rules added. 0 duplicates skipped.',{exact:true}).waitFor();
+    await page.waitForFunction(()=>document.querySelectorAll('#owgSignalRules tbody tr').length===3);
+    await pick.setInputFiles({name:packFile.suggestedFilename(),mimeType:'application/json',buffer:fileData});
+    await pack.getByText('0 to add. 2 already present or repeated in the file.',{exact:true}).waitFor();
+    assert(await pack.getByRole('button',{name:'Import signal rules',exact:true}).isDisabled());
 
     await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
     const audit=await page.evaluate(()=>window.axe.run(document.querySelector('#owgEventLogSignals'),{

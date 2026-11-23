@@ -56,6 +56,20 @@ def test_save_list_apply_and_delete_a_filter_set():
         filter_sets.delete(log, saved["set_id"])
 
 
+def test_saved_case_notion_is_validated_and_legacy_filter_stays_portable():
+    log = _log()
+    legacy = filter_sets.save(log, {"name": "Legacy", "cohort": FIX})
+    chosen = filter_sets.save(log, {"name": "Chosen case notion", "cohort": FIX, "case_type": "case"})
+    assert "case_type" not in legacy
+    assert chosen["case_type"] == "case"
+    listed = {entry["name"]: entry for entry in filter_sets.list_sets(log)["filter_sets"]}
+    assert "case_type" not in listed["Legacy"]
+    assert listed["Chosen case notion"]["case_type"] == "case"
+    for invalid in ("invoice", "", True):
+        with pytest.raises(workspace.EventLogWorkspaceError):
+            filter_sets.save(log, {"name": "Invalid", "cohort": FIX, "case_type": invalid})
+
+
 def test_filter_sets_are_validated():
     log = _log()
     filter_sets.save(log, {"name": "Rework", "cohort": FIX})

@@ -73,6 +73,10 @@ def test_anywhere_branch_keeps_the_first_occurrence_of_the_anchor():
     assert anchored["cases_at_point"] == 2 and anchored["anchor_steps"] == 1
     assert {row["activity"]: row["cases"] for row in anchored["next"]} == {"Close": 1, "Hold": 1}
     assert px.next_steps(log, ["Open", "Check", "Close"], anchor="anywhere", anchor_steps=2)["cases_at_point"] == 1
+    evidence = px.branch_cases(log, ["Open", "Check"], None, selection={"activity": "Close"},
+                               anchor="anywhere", anchor_steps=1)
+    assert evidence["total"] == 1
+    assert evidence["cases"] == [{"case_id": "c1", "events": 4}]
 
 
 def test_literal_end_label_is_an_activity_distinct_from_case_end():
@@ -83,6 +87,42 @@ def test_literal_end_label_is_an_activity_distinct_from_case_end():
     assert page["next"][0]["hours_from_previous"]["median"] == 1
     assert page["next"][1]["hours_from_previous"] is None
     assert px.next_steps(log, ["Open", "(end)"])["next"][0]["activity"] == "Close"
+    for selection, case_id, events, ends in [
+        ({"activity": "(end)"}, "c1", 3, False),
+        ({"ends_here": True}, "c0", 1, True),
+    ]:
+        evidence = px.branch_cases(log, ["Open"], None, selection=selection)
+        assert evidence["is_end"] is ends
+        assert evidence["total"] == 1 and evidence["next_after"] is None
+        assert evidence["cases"] == [{"case_id": case_id, "events": events}]
+
+
+def test_branch_pages_use_literal_case_key_order_and_the_same_cohort():
+    log = _import(CASES)
+    cohort = {"activity": "Approve"}
+    total = px.next_steps(log, cohort=cohort)["next"][0]["cases"]
+    first = px.branch_cases(log, [], None, selection={"activity": "Open", "limit": 2}, cohort=cohort)
+    second = px.branch_cases(log, [], None,
+                             selection={"activity": "Open", "limit": 2, "after": first["next_after"]},
+                             cohort=cohort)
+    last = px.branch_cases(log, [], None, selection={"activity": "Open", "after": second["next_after"]},
+                           cohort=cohort)
+    assert first["total"] == second["total"] == last["total"] == total == 6
+    assert [case["case_id"] for page in (first, second, last) for case in page["cases"]] == [
+        "c0", "c1", "c2", "c3", "c4", "c5"]
+    assert last["next_after"] is None
+    drafts = px.branch_cases(log, [], None, selection={"activity": "Draft", "limit": 1}, cohort=cohort)
+    assert drafts["next_after"] == "c10"
+
+
+@pytest.mark.parametrize("selection", [
+    [], {}, {"unknown": 1}, {"activity": ""}, {"ends_here": False}, {"ends_here": 1},
+    {"activity": "(end)", "ends_here": True}, {"activity": "Open", "after": ""},
+    {"activity": "Open", "limit": True}, {"activity": "Open", "limit": 101},
+])
+def test_branch_rejects_invalid_settings(selection):
+    with pytest.raises(EventLogWorkspaceError):
+        px.branch_cases("unused", [], None, selection=selection)
 
 
 def test_bad_requests():

@@ -150,9 +150,20 @@ with TestClient(app) as client:
         assert response.status_code == 200, response.text
         assert response.headers["content-disposition"].endswith(suffix + '"')
         assert response.headers["cache-control"] == "no-store"
+    assert client.post(export, json={"cohort": {}}, headers=owner).status_code == 422
+    explicit = {"cohort": {}, "case_type": "case", "include_unfiltered": True}
+    assert client.post(export, json=explicit, headers=bearer).status_code == 403
+    all_cases = client.post(export, json=explicit, headers=owner)
+    assert all_cases.status_code == 200 and len(all_cases.text.splitlines()) == 4
+    assert client.post(export, json={**explicit, "include_unfiltered": "true"}, headers=owner).status_code == 422
     assert client.post(export + "?format=ocel", json=cohort, headers=owner).status_code == 422
 
     assert client.post(path, json=body, headers=bearer).status_code == 403
+    preview_body = {key: value for key, value in body.items() if key != "name"}
+    assert client.post(path + "/preview", json=preview_body, headers=bearer).status_code == 403
+    preview = client.post(path + "/preview", json=preview_body, headers=owner)
+    assert preview.status_code == 200 and preview.json()["events"] == 2
+    assert len(client.get("/v1/event-logs", headers=owner).json()["logs"]) == 1
     made = client.post(path, json=body, headers=owner)
     assert made.status_code == 200, made.text
     assert made.json()["log"]["events"] == 2
@@ -243,6 +254,31 @@ def test_a_time_window_trims_the_copy_to_its_events():
     assert south["copied"]["events"] == 3
     assert south["time_window"]["events_before"] is None and south["time_window"]["cases_with_events_in_window"] == 1
     assert "time_window" not in derive.derive(log, {"name": "esc", "cohort": {"activity": "Escalate"}})
+
+
+def test_preview_and_copy_count_original_events_that_were_collapsed():
+    from server import event_log_activity_mappings as mappings
+
+    raw = b"""case,activity,time
+c,Start,2024-03-04T08:00:00Z
+c,Retry,2024-03-04T09:00:00Z
+"""
+    imported = workspace.import_log(BytesIO(raw), name="collapsed", source_format="csv",
+                                    mapping={"case_column": "case", "activity_column": "activity",
+                                             "timestamp_column": "time"})
+    log = imported["log_id"]
+    saved = mappings.create(log, {"name": "Collapsed attempts",
+                                  "groups": [{"label": "Attempt", "activities": ["Start", "Retry"]}],
+                                  "collapse_repeats": True})
+    mappings.apply_mapping(log, saved["mapping_id"])
+    selection = {"cohort": {"activity": "Attempt"}, "events_from": "2024-03-04T09:00:00Z"}
+    preview = derive.preview(log, selection)
+    assert preview["kept_cases"] == preview["events"] == preview["objects"] == 1
+    assert preview["trimmed"] == 1
+    assert len(workspace.list_logs()["logs"]) == 1
+    copied = derive.derive(log, {**selection, "name": "Retry period"})
+    assert copied["time_window"]["cases_with_events_in_window"] == 1
+    assert copied["copied"] == {"events": 1, "objects": 1}
 
 
 def test_time_window_validation():

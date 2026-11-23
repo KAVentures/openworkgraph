@@ -55,6 +55,22 @@ def test_newest_mapping_of_a_log_wins_and_invalid_settings_are_refused():
             reuse.matches(bad)
 
 
+def test_alternate_headers_and_preferred_log_rank_before_the_match_cap(monkeypatch):
+    prefer = _import("earlier", "Order;Step;When\no;A;2024-03-04T08:00:00Z\n",
+                     case_column="Order", activity_column="Step", timestamp_column="When", delimiter=";")
+    newer = _import("later", "case,activity,time\nc,A,2024-03-04T08:00:00Z\n",
+                    case_column="case", activity_column="activity", timestamp_column="time")
+    spec = {"columns": ["case", "activity", "time"],
+            "other_headers": [{"columns": ["Order", "Step", "When"], "delimiter": ";"}]}
+    assert [match["log_id"] for match in reuse.matches(spec)["matches"]] == [newer, prefer]
+    monkeypatch.setattr(reuse, "MAX_MATCHES", 1)
+    assert reuse.matches({**spec, "preferred_log_id": prefer})["matches"][0]["log_id"] == prefer
+    assert reuse.matches({**spec, "preferred_log_id": "missing"})["matches"][0]["log_id"] == newer
+    with pytest.raises(workspace.EventLogWorkspaceError, match="one header per delimiter"):
+        reuse.matches({"columns": ["case"], "delimiter": "t",
+                       "other_headers": [{"columns": ["case"], "delimiter": "\t"}]})
+
+
 def test_route(tmp_path):
     import os
     import subprocess

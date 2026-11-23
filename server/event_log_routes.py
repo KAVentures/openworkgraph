@@ -66,6 +66,7 @@ from .local_auth import dashboard_session_valid
 
 router = APIRouter()
 XLSX_MAX_BYTES = 64 * 1024 * 1024
+SQLITE_MAX_BYTES = 256 * 1024 * 1024
 _SCRIPT = Path(__file__).resolve().parents[1] / "dashboard" / "event_log_workspace.js"
 _TYPES = {"csv": "text/csv", "sourcecsv": "text/csv", "sourcecsv-review": "text/csv", "csv-review": "text/csv", "xes": "application/xml", "xes-attributes": "application/xml", "ocel": "application/json", "ocelxml": "application/xml"}
 _SUFFIX = {"csv": "csv", "sourcecsv": "csv", "sourcecsv-review": "review.csv", "csv-review": "review.csv", "xes": "xes", "xes-attributes": "xes", "ocel": "jsonocel", "ocelxml": "xmlocel"}
@@ -203,6 +204,14 @@ async def event_log_costs(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/costs/cases")
+async def event_log_cost_cases(request: Request, log_id: str):
+    from . import event_log_costs as cost_model
+    _require_dashboard(request)
+    spec = await _json_body(request, "case cost settings", strict=True, limit=131072)
+    return await run_in_threadpool(_respond, cost_model.case_costs, log_id, spec)
+
+
 @router.post("/v1/event-logs/prepare-salesforce")
 async def prepare_salesforce_export(request: Request):
     """Prepare a selected offline export without retaining it as an event log."""
@@ -316,6 +325,26 @@ async def convert_xlsx_event_log(request: Request, sheet: str | None = Query(def
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/sqlite-to-csv")
+async def convert_sqlite_event_log(request: Request, table: str | None = Query(default=None, max_length=200)):
+    """Convert one table of a SQLite database file to CSV for the ordinary CSV import. Nothing is stored."""
+    from . import event_log_sqlite as sqlite_import
+    _require_dashboard(request)
+    with tempfile.SpooledTemporaryFile(max_size=8 << 20, dir=str(DATA_DIR)) as spool:
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > SQLITE_MAX_BYTES:
+                raise HTTPException(413, "the database is larger than the supported limit")
+            spool.write(chunk)
+        spool.seek(0)
+        try:
+            result = await run_in_threadpool(sqlite_import.to_csv, spool, table, folder=DATA_DIR)
+        except sqlite_import.SqliteError as exc:
+            raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/mapping-matches")
 async def event_log_mapping_matches(request: Request):
     """Earlier CSV column mappings that fit a file header (by column names only). Nothing is stored."""
@@ -323,6 +352,46 @@ async def event_log_mapping_matches(request: Request):
     _require_dashboard(request)
     spec = await _json_body(request, "mapping match settings", strict=True, limit=262144)
     return await run_in_threadpool(_respond, reuse.matches, spec)
+
+
+@router.post("/v1/event-logs/jsonl-to-csv")
+async def convert_jsonl_event_log(request: Request):
+    """Convert a JSON Lines file (one object per line) to CSV for the ordinary CSV import. Nothing is stored."""
+    from . import event_log_jsonl as jsonl
+    _require_dashboard(request)
+    with tempfile.SpooledTemporaryFile(max_size=8 << 20, dir=str(DATA_DIR)) as spool:
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > jsonl.MAX_BYTES:
+                raise HTTPException(413, "the file is larger than the supported limit")
+            spool.write(chunk)
+        spool.seek(0)
+        try:
+            result = await run_in_threadpool(jsonl.to_csv, spool)
+        except jsonl.JsonlError as exc:
+            raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/parquet-to-csv")
+async def convert_parquet_event_log(request: Request):
+    """Convert a Parquet file to CSV for the ordinary CSV import. Nothing is stored."""
+    from . import event_log_parquet as parquet
+    _require_dashboard(request)
+    with tempfile.SpooledTemporaryFile(max_size=8 << 20, dir=str(DATA_DIR)) as spool:
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > parquet.MAX_BYTES:
+                raise HTTPException(413, "the file is larger than the supported limit")
+            spool.write(chunk)
+        spool.seek(0)
+        try:
+            result = await run_in_threadpool(parquet.to_csv, spool, folder=DATA_DIR)
+        except parquet.ParquetError as exc:
+            raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/v1/event-logs/timestamp-formats")
@@ -475,6 +544,13 @@ async def create_event_log_feed(request: Request, log_id: str):
     _require_dashboard(request)
     spec = await _json_body(request, "folder feed settings", strict=True, limit=8192)
     return await run_in_threadpool(_respond, folder_feeds.create, log_id, spec)
+
+
+@router.get("/v1/event-logs/feeds/{feed_id}/preview")
+def preview_event_log_feed(request: Request, feed_id: str):
+    from . import event_log_folder_feeds as folder_feeds
+    _require_dashboard(request)
+    return _respond(folder_feeds.preview, feed_id)
 
 
 @router.post("/v1/event-logs/feeds/{feed_id}/run")
@@ -667,11 +743,12 @@ async def export_event_log_matching_cases(request: Request, log_id: str,
 
 
 def _anonymized(log_id: str, case_type: str | None, cohort: dict[str, Any], min_cases: int, time_mode: str,
-                resource_mode: str, summary_only: bool) -> dict[str, Any]:
+                resource_mode: str, activity_mode: str, summary_only: bool) -> dict[str, Any]:
     from . import event_log_anonymized_export as anonymized
     try:
         return anonymized.anonymized_export(log_id, case_type, min_cases=min_cases, time_mode=time_mode,
-                                            resource_mode=resource_mode, cohort=cohort, summary_only=summary_only)
+                                            resource_mode=resource_mode, activity_mode=activity_mode,
+                                            cohort=cohort, summary_only=summary_only)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
 
@@ -680,12 +757,13 @@ def _anonymized(log_id: str, case_type: str | None, cohort: dict[str, Any], min_
 def event_log_anonymized_export_summary(request: Request, log_id: str,
                                         case_type: str | None = Query(default=None, max_length=200),
                                         min_cases: int = Query(default=5, ge=2, le=1000),
-                                        time_mode: str = Query(default="relative", pattern="^(exact|day|relative)$"),
+                                        time_mode: str = Query(default="relative", pattern="^(exact|day|relative|elapsed|sequence)$"),
                                         resource_mode: str = Query(default="drop", pattern="^(drop|pseudonymize)$"),
+                                        activity_mode: str = Query(default="keep", pattern="^(keep|pseudonymize)$"),
                                         cohort: dict = Depends(_case_filter)):
     """What an anonymized export would keep and remove, without the data."""
     _require_dashboard(request)
-    result = _anonymized(log_id, case_type, cohort, min_cases, time_mode, resource_mode, True)
+    result = _anonymized(log_id, case_type, cohort, min_cases, time_mode, resource_mode, activity_mode, True)
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
@@ -693,16 +771,39 @@ def event_log_anonymized_export_summary(request: Request, log_id: str,
 def event_log_anonymized_export_csv(request: Request, log_id: str,
                                     case_type: str | None = Query(default=None, max_length=200),
                                     min_cases: int = Query(default=5, ge=2, le=1000),
-                                    time_mode: str = Query(default="relative", pattern="^(exact|day|relative)$"),
+                                    time_mode: str = Query(default="relative", pattern="^(exact|day|relative|elapsed|sequence)$"),
                                     resource_mode: str = Query(default="drop", pattern="^(drop|pseudonymize)$"),
+                                    activity_mode: str = Query(default="keep", pattern="^(keep|pseudonymize)$"),
                                     cohort: dict = Depends(_case_filter)):
     """The anonymized log as CSV: rare paths suppressed, new case IDs, coarser time, no attributes. Not stored."""
     _require_dashboard(request)
-    result = _anonymized(log_id, case_type, cohort, min_cases, time_mode, resource_mode, False)
+    result = _anonymized(log_id, case_type, cohort, min_cases, time_mode, resource_mode, activity_mode, False)
     return Response(result["csv"], media_type="text/csv; charset=utf-8", headers={
         "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-anonymized.csv"',
         "X-OWG-Anonymized": f"cases={result['cases_kept']}; suppressed={result['cases_suppressed']}; "
                             f"min_cases={result['min_cases']}"})
+
+
+@router.post("/v1/event-logs/combine")
+async def combine_event_logs(request: Request):
+    """Combine 2 to 10 saved logs into a new saved log; the sources are unchanged."""
+    from . import event_log_combine as combined_logs
+    _require_dashboard(request)
+    spec = await _json_body(request, "combine settings", strict=True, limit=8192)
+    try:
+        result = await run_in_threadpool(combined_logs.combine, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/derive/preview")
+async def preview_derived_event_log(request: Request, log_id: str):
+    from . import event_log_derive as derived_logs
+    _require_dashboard(request)
+    spec = await _json_body(request, "derived log selection", strict=True, limit=32768)
+    return await run_in_threadpool(_respond, derived_logs.preview, log_id, spec)
+
 
 
 @router.post("/v1/event-logs/{log_id}/derive")
@@ -937,6 +1038,15 @@ async def event_log_attribute_profile(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/attribute-profile/cases")
+async def event_log_attribute_profile_cases(request: Request, log_id: str,
+                                            case_type: str | None = Query(default=None, max_length=200)):
+    from . import event_log_attribute_profile as attribute_profile
+    _require_dashboard(request)
+    spec = await _json_body(request, "attribute case selection", strict=True)
+    return await run_in_threadpool(_respond, attribute_profile.cases, log_id, spec, case_type)
+
+
 @router.post("/v1/event-logs/{log_id}/insights")
 async def event_log_insights(request: Request, log_id: str):
     """Ranked, descriptive pointers to where case time and repetition concentrate."""
@@ -1055,6 +1165,17 @@ def event_log_decision_points(request: Request, log_id: str, case_type: str | No
     return _respond(decisions.decision_points, log_id, case_type, cohort=cohort)
 
 
+@router.post("/v1/event-logs/{log_id}/decision-points/cases")
+async def event_log_decision_branch_cases(request: Request, log_id: str,
+                                          case_type: str | None = Query(default=None, max_length=200),
+                                          cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_decision_mining as decisions
+    _require_dashboard(request)
+    selection = await _json_body(request, "decision branch settings", strict=True, limit=8192)
+    return await run_in_threadpool(_respond, decisions.branch_cases, log_id, case_type,
+                                   selection=selection, cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/decision-rules")
 def event_log_decision_rules(request: Request, log_id: str,
                              decision_activity: str = Query(min_length=1, max_length=200),
@@ -1077,18 +1198,46 @@ def event_log_temporal_profile(request: Request, log_id: str, case_type: str | N
                     cohort=cohort)
 
 
+@router.post("/v1/event-logs/{log_id}/temporal-profile/cases")
+async def event_log_temporal_cases(request: Request, log_id: str,
+        case_type: str | None = Query(default=None, max_length=200),
+        zeta: float = Query(default=3.0, ge=0.5, le=10),
+        min_occurrences: int = Query(default=5, ge=2, le=10_000),
+        cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_temporal_profile as temporal
+    _require_dashboard(request)
+    spec = await _json_body(request, "temporal case page", strict=True, limit=16_384)
+    if not isinstance(spec, dict) or set(spec) - {"source", "destination", "direction", "after", "limit"}:
+        raise HTTPException(422, "invalid temporal case page settings")
+    return await run_in_threadpool(_respond, temporal.temporal_cases, log_id, case_type, zeta=zeta,
+                                   min_occurrences=min_occurrences, cohort=cohort, **spec)
+
+
 @router.get("/v1/event-logs/{log_id}/heuristics-net")
 def event_log_heuristics_net(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                              dependency_threshold: float = Query(default=0.5, ge=0, le=1),
                              and_threshold: float = Query(default=0.65, ge=0, le=1),
+                             loop_two_threshold: float = Query(default=0.5, ge=0, le=1),
                              min_occurrences: int = Query(default=1, ge=1, le=1_000_000),
                              all_connected: bool = Query(default=True),
                              cohort: dict[str, Any] = Depends(_case_filter)):
     from . import event_log_heuristics_miner as heuristics
     _require_dashboard(request)
     return _respond(heuristics.heuristics_net, log_id, case_type, dependency_threshold=dependency_threshold,
-                    and_threshold=and_threshold, min_occurrences=min_occurrences, all_connected=all_connected,
+                    and_threshold=and_threshold, loop_two_threshold=loop_two_threshold,
+                    min_occurrences=min_occurrences, all_connected=all_connected,
                     cohort=cohort)
+
+
+@router.post("/v1/event-logs/{log_id}/heuristics-net/cases")
+async def event_log_heuristics_cases(request: Request, log_id: str,
+                                     case_type: str | None = Query(default=None, max_length=200),
+                                     cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_heuristics_miner as heuristics
+    _require_dashboard(request)
+    selection = await _json_body(request, "heuristics case settings", strict=True, limit=8192)
+    return await run_in_threadpool(_respond, heuristics.evidence_cases, log_id, case_type,
+                                   selection=selection, cohort=cohort)
 
 
 @router.get("/v1/event-logs/{log_id}/footprints")
@@ -1255,12 +1404,15 @@ def event_log_model_quality(request: Request, log_id: str, case_type: str | None
 @router.get("/v1/event-logs/{log_id}/funnel")
 def event_log_funnel(request: Request, log_id: str, step: list[str] = Query(default=[], max_length=500),
                      within_hours: float | None = Query(default=None, gt=0),
+                     evidence_step: int | None = Query(default=None, ge=1, le=8),
+                     evidence_status: str = Query(default="reached", pattern="^(reached|dropped)$"),
                      case_type: str | None = Query(default=None, max_length=200),
                      cohort: dict = Depends(_case_filter)):
     """How many cases reach each chosen step in order, the time between steps and where the rest stopped."""
     from . import event_log_funnel as funnel
     _require_dashboard(request)
-    return _respond(funnel.funnel, log_id, step, case_type, within_hours=within_hours, cohort=cohort)
+    return _respond(funnel.funnel, log_id, step, case_type, within_hours=within_hours, cohort=cohort,
+                    evidence_step=evidence_step, evidence_status=evidence_status)
 
 
 @router.get("/v1/event-logs/{log_id}/unusual-cases")
@@ -1315,6 +1467,19 @@ def event_log_next_steps(request: Request, log_id: str, step: list[str] = Query(
     _require_dashboard(request)
     return _respond(explorer.next_steps, log_id, step, case_type, anchor=anchor, cohort=cohort,
                     anchor_steps=anchor_steps)
+
+
+@router.post("/v1/event-logs/{log_id}/next-steps/cases")
+async def event_log_next_step_cases(request: Request, log_id: str, step: list[str] = Query(default=[], max_length=500),
+                                    anchor: str = Query(default="start", max_length=20),
+                                    anchor_steps: int | None = Query(default=None, ge=1, le=30),
+                                    case_type: str | None = Query(default=None, max_length=200),
+                                    cohort: dict = Depends(_case_filter)):
+    from . import event_log_path_explorer as explorer
+    _require_dashboard(request)
+    selection = await _json_body(request, "path branch settings", strict=True, limit=8192)
+    return await run_in_threadpool(_respond, explorer.branch_cases, log_id, step, case_type,
+                                   selection=selection, anchor=anchor, anchor_steps=anchor_steps, cohort=cohort)
 
 
 @router.post("/v1/event-logs/{log_id}/petri-net-deviation-causes")
@@ -1621,12 +1786,19 @@ def event_log_saved_reports(request: Request, log_id: str):
 
 
 @router.post("/v1/event-logs/{log_id}/saved-reports")
-def event_log_save_report(request: Request, log_id: str):
-    """Save a copy of the HTML report now (a schedule can do the same)."""
+async def event_log_save_report(request: Request, log_id: str):
+    """Save a scoped dashboard copy. Older clients can still post without a body."""
     from . import event_log_saved_reports as saved_reports
     _require_dashboard(request)
-    return _respond(saved_reports.save, log_id)
-
+    if not request.headers.get("content-type"):
+        return await run_in_threadpool(_respond, saved_reports.save, log_id)
+    spec = await _json_body(request, "saved report scope", strict=True, limit=32768)
+    if not isinstance(spec, dict) or set(spec) - {"case_type", "cohort"}:
+        raise HTTPException(422, "saved report scope accepts case_type and cohort")
+    case_type = spec.get("case_type")
+    if case_type is not None and (not isinstance(case_type, str) or not 0 < len(case_type) <= 200):
+        raise HTTPException(422, "choose a valid case notion")
+    return await run_in_threadpool(_respond, saved_reports.save, log_id, case_type, spec.get("cohort"))
 
 @router.get("/v1/event-logs/{log_id}/saved-report-changes")
 def event_log_saved_report_changes(request: Request, log_id: str,
@@ -1814,6 +1986,14 @@ def event_log_organization(request: Request, log_id: str, case_type: str | None 
                     automation_resources=automation_resource, limit=limit)
 
 
+@router.post("/v1/event-logs/{log_id}/organization/cases")
+async def event_log_organization_cases(request: Request, log_id: str,
+                                       case_type: str | None = Query(default=None, max_length=200)):
+    _require_dashboard(request)
+    spec = await _json_body(request, "relationship case query", strict=True)
+    return await run_in_threadpool(_respond, organization.relationship_cases, log_id, spec, case_type)
+
+
 async def _json_body(request: Request, what: str, *, strict: bool = False, limit: int = 65536) -> Any:
     if not str(request.headers.get("content-type") or "").startswith("application/json"):
         raise HTTPException(415, f"{what} must be JSON")
@@ -1866,6 +2046,44 @@ async def event_log_rule_discovery(request: Request, log_id: str):
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/v1/event-logs/{log_id}/object-rule-sets")
+def event_log_object_rule_sets(request: Request, log_id: str):
+    from . import event_log_object_rule_sets as rule_sets
+    _require_dashboard(request)
+    return _respond(rule_sets.listing, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/object-rule-sets")
+async def event_log_save_object_rule_set(request: Request, log_id: str):
+    from . import event_log_object_rule_sets as rule_sets
+    _require_dashboard(request)
+    spec = await _json_body(request, "saved object rule set", strict=True)
+    return await run_in_threadpool(_respond, rule_sets.save, log_id, spec)
+
+
+@router.get("/v1/event-logs/{log_id}/object-rule-sets/{set_id}")
+def event_log_load_object_rule_set(request: Request, log_id: str, set_id: str):
+    from . import event_log_object_rule_sets as rule_sets
+    _require_dashboard(request)
+    return _respond(rule_sets.get, log_id, set_id)
+
+
+@router.put("/v1/event-logs/{log_id}/object-rule-sets/{set_id}")
+async def event_log_update_object_rule_set(request: Request, log_id: str, set_id: str):
+    from . import event_log_object_rule_sets as rule_sets
+    _require_dashboard(request)
+    spec = await _json_body(request, "saved object rule set", strict=True)
+    return await run_in_threadpool(_respond, rule_sets.update, log_id, set_id, spec)
+
+
+@router.delete("/v1/event-logs/{log_id}/object-rule-sets/{set_id}")
+def event_log_delete_object_rule_set(request: Request, log_id: str, set_id: str,
+                                     expected_revision: int = Query(ge=1)):
+    from . import event_log_object_rule_sets as rule_sets
+    _require_dashboard(request)
+    return _respond(rule_sets.delete, log_id, set_id, expected_revision)
 
 
 @router.post("/v1/event-logs/{log_id}/object-constraints")
@@ -1925,6 +2143,13 @@ async def event_log_impact(request: Request, log_id: str):
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/impact/cases")
+async def event_log_impact_cases(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "impact case selection", strict=True)
+    return await run_in_threadpool(_respond, impact.cases, log_id, spec)
 
 
 _PACK_ID = r"^[a-z][a-z0-9_]{0,39}$"
@@ -2017,12 +2242,23 @@ async def event_log_rework(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+async def _live_prediction_settings(request: Request, what: str, *, strict: bool = False,
+                                    limit: int = 65536) -> tuple[Any, str | None]:
+    spec = await _json_body(request, what, strict=strict, limit=limit)
+    if not isinstance(spec, dict) or "case_id" not in spec:
+        return spec, None
+    case_id = spec.pop("case_id")
+    if not isinstance(case_id, str) or not 1 <= len(case_id) <= 200:
+        raise HTTPException(422, "case_id must be a non-empty case key of at most 200 characters")
+    return spec, case_id
+
+
 @router.post("/v1/event-logs/{log_id}/predictions")
 async def event_log_predictions(request: Request, log_id: str):
     _require_dashboard(request)
-    spec = await _json_body(request, "prediction settings")
+    spec, case_id = await _live_prediction_settings(request, "prediction settings")
     try:
-        result = await run_in_threadpool(predictions.predict, log_id, spec)
+        result = await run_in_threadpool(predictions.predict, log_id, spec, case_id=case_id)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
@@ -2045,9 +2281,9 @@ async def event_log_next_activity(request: Request, log_id: str):
     """What usually happens next in open cases, learned from completed cases and backtested."""
     from . import event_log_next_activity as next_activity
     _require_dashboard(request)
-    spec = await _json_body(request, "next-activity settings", strict=True, limit=32768)
+    spec, case_id = await _live_prediction_settings(request, "next-activity settings", strict=True, limit=32768)
     try:
-        result = await run_in_threadpool(next_activity.next_activity, log_id, spec)
+        result = await run_in_threadpool(next_activity.next_activity, log_id, spec, case_id=case_id)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
@@ -2454,6 +2690,35 @@ async def event_log_add_signal_rule(request: Request, log_id: str):
     return _respond(signals.add_rule, log_id, await _json_body(request, "signal rule"))
 
 
+@router.post("/v1/event-logs/{log_id}/signals/preview")
+async def event_log_preview_signal_rule(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "signal rule", strict=True)
+    return await run_in_threadpool(_respond, signals.preview_rule, log_id, spec)
+
+
+@router.get("/v1/event-logs/{log_id}/signals/pack")
+def event_log_export_signal_pack(request: Request, log_id: str):
+    _require_dashboard(request)
+    response = _respond(signals.export_pack, log_id)
+    response.headers["Content-Disposition"] = f'attachment; filename="{log_id}-signals.json"'
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/signals/pack/preview")
+async def event_log_preview_signal_pack(request: Request, log_id: str):
+    _require_dashboard(request)
+    document = await _json_body(request, "signal pack", strict=True, limit=signals.MAX_PACK_BYTES)
+    return await run_in_threadpool(_respond, signals.preview_pack, log_id, document)
+
+
+@router.post("/v1/event-logs/{log_id}/signals/pack/import")
+async def event_log_import_signal_pack(request: Request, log_id: str):
+    _require_dashboard(request)
+    document = await _json_body(request, "signal pack", strict=True, limit=signals.MAX_PACK_BYTES)
+    return await run_in_threadpool(_respond, signals.import_pack, log_id, document)
+
+
 @router.get("/v1/event-logs/{log_id}/signals/scorecard")
 def event_log_signal_scorecard(request: Request, log_id: str, months: int = Query(default=6, ge=1, le=24)):
     """Value-based signals month by month (read-only)."""
@@ -2670,6 +2935,27 @@ async def event_log_simulation_validation(request: Request, log_id: str,
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/v1/event-logs/{log_id}/ocel.sqlite")
+def export_event_log_ocel_sqlite(request: Request, log_id: str):
+    """Export the retained OCEL 2.0 log into a temporary SQLite database, owner-only."""
+    import shutil
+    from . import event_log_ocel_sqlite as ocel_sqlite
+    _require_dashboard(request)
+    folder = tempfile.mkdtemp(prefix="owg-ocel-sqlite-", dir=str(DATA_DIR))
+    path = Path(folder) / "log.sqlite"
+    try:
+        ocel_sqlite.write(log_id, path)
+    except workspace.EventLogWorkspaceError as exc:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise HTTPException(422, str(exc)) from None
+    except BaseException:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+    return FileResponse(str(path), media_type="application/vnd.sqlite3",
+                        filename=f"{log_id}.ocel.sqlite", headers={"Cache-Control": "no-store"},
+                        background=BackgroundTask(shutil.rmtree, folder, ignore_errors=True))
 
 
 @router.get("/v1/event-logs/{log_id}/export")

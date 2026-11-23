@@ -67,9 +67,48 @@ const path=require('node:path');
    assert.equal(s.body.cases,4);
    assert.equal(await page.locator('#owgCaseFilterEventsMin').inputValue(),'3','the saved filter is shown in the controls');
    assert.equal(await page.locator('#owgCaseFilterEndedFrom').inputValue(),'2024-01-03');
+   s=await summaryAfter(()=>page.locator('#owgCaseFilterClear').click());
+   assert.equal(s.body.cases,8);
+   await page.locator('#owgCaseFilterStartedFrom').fill('2024-02-01');
+   await page.locator('#owgCaseFilterStartedBefore').fill('2024-03-01');
+   s=await summaryAfter(()=>page.locator('#owgCaseFilterApply').click());
+   assert.equal(s.body.cases,2);
+   assert.equal(s.body.cohort.started_from,'2024-02-01T00:00:00Z');
+   assert.equal(s.body.cohort.started_before,'2024-03-01T00:00:00Z');
+   await page.locator('#owgFilterSetName').fill('February starts');
+   await page.locator('#owgFilterSetSave').click();
+   await page.locator('#owgFilterSetStatus').getByText('Saved "February starts".').waitFor();
+   await summaryAfter(()=>page.locator('#owgCaseFilterClear').click());
+   s=await summaryAfter(()=>page.getByRole('button',{name:'Apply saved filter February starts'}).click());
+   assert.equal(s.body.cases,2);
+   assert.equal(await page.locator('#owgCaseFilterStartedFrom').inputValue(),'2024-02-01');
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgCaseFilter'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
+   const ocel={objectTypes:[],eventTypes:[],
+     objects:[{id:'o1',type:'order'},{id:'i1',type:'item'},{id:'i2',type:'item'}],
+     events:[
+       {id:'start',type:'Open',time:'2024-01-01T00:00:00Z',relationships:['o1','i1','i2'].map(objectId=>({objectId}))},
+       {id:'pick',type:'Pick',time:'2024-01-01T01:00:00Z',relationships:[{objectId:'i1'}]}
+     ]};
+   await page.locator('#owgEventLogFile').setInputFiles({name:'items.jsonocel',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(ocel))});
+   await page.locator('#owgEventLogConsent').check();
+   await page.locator('#owgEventLogImport').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Imported 2 events'}).waitFor();
+   const notions=page.locator('#owgEventLogCaseType');
+   await notions.selectOption('item');
+   await summaryAfter(()=>page.locator('#owgEventLogAnalyze').click());
+   await page.locator('#owgCaseFilterContainsActivity').fill('Pick');
+   await summaryAfter(()=>page.locator('#owgCaseFilterApply').click());
+   await page.locator('#owgFilterSetName').fill('Picked items');
+   await page.locator('#owgFilterSetSave').click();
+   await page.locator('#owgFilterSetStatus').filter({hasText:'Saved "Picked items".'}).waitFor();
+   await notions.selectOption('order');
+   await summaryAfter(()=>page.locator('#owgEventLogAnalyze').click());
+   s=await summaryAfter(()=>page.getByRole('button',{name:'Apply saved filter Picked items'}).click());
+   assert.equal(s.body.cases,1);
+   assert.match(s.url,/case_type=item/);
+   assert.equal(await notions.inputValue(),'item');
    assert.deepEqual(errors,[]);
    console.log('More case filters browser acceptance passed: rework, path frequency, events per case and end period applied, validated, saved and re-applied, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}

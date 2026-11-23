@@ -22,10 +22,11 @@ from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, Valid
 from . import event_log_cohorts as cohorts
 from . import event_log_workspace as workspace
 
+from .event_log_variant_coverage import VARIANT_KEY_SQL
+
 FORMAT = "openworkgraph.event-log-costs.v1"
 MAX_ACTIVITIES = 500
 MAX_PRICE = 1e9
-_SEP = "\x1f"
 
 
 def _price(value: Any) -> float:
@@ -89,28 +90,62 @@ def _money(value: float | None) -> float | None:
     return None if value is None else round(value, 2)
 
 
+def _cost_tables(conn, model: CostSpec, log_id: str) -> None:
+    cohorts.restrict(conn, cohorts.parse_cohort(model.cohort), log_id)
+    conn.execute("CREATE TEMP TABLE cost_prices (activity VARCHAR, price DOUBLE)")
+    if model.activity_costs:
+        conn.executemany("INSERT INTO cost_prices VALUES (?, ?)", list(model.activity_costs.items()))
+    conn.execute("""CREATE TEMP TABLE cost_events AS
+        SELECT ce.case_id, ce.activity, coalesce(ce.resource, '') AS resource, ce.ts, ce.event_id,
+               coalesce(p.price, ?) AS price, p.price IS NULL AS unpriced,
+               row_number() OVER (PARTITION BY ce.case_id, ce.activity ORDER BY ce.ts, ce.event_id) > 1 AS repeated
+        FROM ce LEFT JOIN cost_prices p ON p.activity = ce.activity""", [model.default_activity_cost])
+    conn.execute("""CREATE TEMP TABLE cost_cases AS
+        SELECT case_id, coalesce(sum(price), 0) AS activity_cost,
+               coalesce(sum(price) FILTER (WHERE repeated), 0) AS repeat_cost,
+               count(*) FILTER (WHERE price IS NULL) AS unpriced_events,
+               epoch(max(ts) - min(ts)) / 3600.0 AS open_hours,
+               list(activity ORDER BY ts, event_id) AS path
+        FROM cost_events GROUP BY case_id""")
+
+
+def case_costs(log_id: str, spec: Any) -> dict[str, Any]:
+    from .event_log_cases import _integer, _spec
+    spec = _spec(spec, {"model", "variant_id", "offset", "limit"})
+    model = _parse(spec.get("model"))
+    offset = _integer(spec.get("offset", 0), 2**31 - 1, minimum=0)
+    limit = _integer(spec.get("limit", 30), 100)
+    variant = spec.get("variant_id")
+    if variant is not None and (not isinstance(variant, str) or len(variant) != 64
+                                or any(char not in "0123456789abcdef" for char in variant)):
+        raise workspace.EventLogWorkspaceError("invalid exact variant identifier")
+
+    def run(conn):
+        _cost_tables(conn, model, log_id)
+        key = VARIANT_KEY_SQL.format(path="path")
+        where, args = (f"WHERE {key} = ?", [variant]) if variant is not None else ("", [])
+        total = conn.execute(f"SELECT count(*) FROM cost_cases {where}", args).fetchone()[0]
+        rate = model.hourly_open_case_cost
+        rows = conn.execute(f"""SELECT case_id, activity_cost, open_hours * ? AS holding,
+            repeat_cost, unpriced_events, activity_cost + open_hours * ? AS total
+            FROM cost_cases {where} ORDER BY total DESC, case_id LIMIT ? OFFSET ?""",
+            [rate, rate, *args, limit, offset]).fetchall()
+        return {"currency": model.currency, "selected_cases": total,
+                "cases": [{"case_id": case, "activity_cost": _money(activity), "holding_cost": _money(holding),
+                           "repeated_execution_cost": _money(repeat), "unpriced_events": unpriced,
+                           "total_cost": _money(cost)} for case, activity, holding, repeat, unpriced, cost in rows],
+                "next_offset": offset + len(rows) if offset + len(rows) < total else None}
+
+    return workspace._query(log_id, model.case_type, run)
+
+
 def costs(log_id: str, spec: Any = None) -> dict[str, Any]:
     model = _parse(spec)
-    prices = [[name, price] for name, price in model.activity_costs.items()]
     default = model.default_activity_cost
     hourly = model.hourly_open_case_cost
 
     def run(conn):
-        cohorts.restrict(conn, cohorts.parse_cohort(model.cohort), log_id)
-        conn.execute("CREATE OR REPLACE TEMP TABLE cost_prices (activity VARCHAR, price DOUBLE)")
-        if prices:
-            conn.executemany("INSERT INTO cost_prices VALUES (?, ?)", prices)
-        conn.execute("""CREATE OR REPLACE TEMP TABLE cost_events AS
-            SELECT ce.case_id, ce.activity, coalesce(ce.resource, '') AS resource, ce.ts, ce.event_id,
-                   coalesce(p.price, ?) AS price, p.price IS NULL AS unpriced,
-                   row_number() OVER (PARTITION BY ce.case_id, ce.activity ORDER BY ce.ts, ce.event_id) > 1 AS repeated
-            FROM ce LEFT JOIN cost_prices p ON p.activity = ce.activity""", [default])
-        conn.execute(f"""CREATE OR REPLACE TEMP TABLE cost_cases AS
-            SELECT case_id, coalesce(sum(price), 0) AS activity_cost,
-                   coalesce(sum(price) FILTER (WHERE repeated), 0) AS repeat_cost,
-                   epoch(max(ts) - min(ts)) / 3600.0 AS open_hours,
-                   string_agg(activity, '{_SEP}' ORDER BY ts, event_id) AS path
-            FROM cost_events GROUP BY case_id""")
+        _cost_tables(conn, model, log_id)
         cases = conn.execute("SELECT count(*) FROM cost_cases").fetchone()[0]
         if not cases:
             raise workspace.EventLogWorkspaceError("no cases match the filter")
@@ -124,7 +159,8 @@ def costs(log_id: str, spec: Any = None) -> dict[str, Any]:
         unpriced = conn.execute("""SELECT activity, count(*) FROM cost_events WHERE price IS NULL
             GROUP BY 1 ORDER BY 2 DESC, 1""").fetchall()
         variants = conn.execute(f"""SELECT path, count(*), avg(activity_cost + open_hours * ?),
-              sum(activity_cost + open_hours * ?), avg(repeat_cost)
+              sum(activity_cost + open_hours * ?), avg(repeat_cost),
+              {VARIANT_KEY_SQL.format(path="path")}
             FROM cost_cases GROUP BY 1 ORDER BY 4 DESC, 2 DESC, 1 LIMIT {model.limit}""", [hourly, hourly]).fetchall()
         resources = conn.execute(f"""SELECT resource, count(*), sum(price), sum(price) FILTER (WHERE repeated)
             FROM cost_events WHERE resource <> '' GROUP BY 1 ORDER BY coalesce(sum(price), 0) DESC, 2 DESC, 1
@@ -161,9 +197,9 @@ def costs(log_id: str, spec: Any = None) -> dict[str, Any]:
                        for a, n, c, unit, defaulted, cost, rep_cost, reps in data["activities"]],
         "unpriced_activities": [{"activity": a, "events": n} for a, n in data["unpriced"]],
         "unpriced_events": unpriced_events,
-        "costliest_variants": [{"path": p.split(_SEP), "cases": n, "cost_per_case": _money(avg),
+        "costliest_variants": [{"path": p, "variant_id": key, "cases": n, "cost_per_case": _money(avg),
                                 "total_cost": _money(sum_), "repeated_execution_cost_per_case": _money(rep)}
-                               for p, n, avg, sum_, rep in data["variants"]],
+                               for p, n, avg, sum_, rep, key in data["variants"]],
         "resources": [{"resource": r, "events": n, "cost": _money(cost), "repeated_execution_cost": _money(rep or 0)}
                       for r, n, cost, rep in data["resources"]],
         "model": {"activity_costs": model.activity_costs, "default_activity_cost": default,

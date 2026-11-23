@@ -93,6 +93,26 @@ def test_cohorts_limit_and_settings_validation():
             predictions.predict(log, bad)
 
 
+@pytest.mark.parametrize("estimator", ["completed_cases", "survival"])
+def test_exact_open_case_preserves_model_and_cohort(estimator):
+    log = _log()
+    spec = {"end_activities": ["Close"], "estimator": estimator}
+    all_cases = predictions.predict(log, spec)
+    limited = predictions.predict(log, {**spec, "limit": 1})
+    target = next(key for key in _by_case(all_cases) if key not in _by_case(limited))
+    selected = predictions.predict(log, {**spec, "limit": 1}, case_id=target)
+    assert selected["case_selection"] == "predicted"
+    assert selected["predictions"] == [_by_case(all_cases)[target]]
+    assert selected["predicted_open_cases"] == all_cases["predicted_open_cases"]
+    assert selected["backtest"] == all_cases["backtest"]
+    assert not selected["predictions_truncated"]
+    excluded = predictions.predict(log, {**spec, "cohort": {"activity": "Fix"}}, case_id="open-check")
+    assert excluded["case_selection"] == "not_in_selection" and not excluded["predictions"]
+    assert predictions.predict(log, spec, case_id="c0")["case_selection"] == "completed"
+    assert predictions.predict(log, spec, case_id="Open-check")["case_selection"] == "not_in_selection"
+    assert predictions.predict(log, {**spec, "min_support": 1000}, case_id=target)["case_selection"] == "unsupported"
+
+
 def test_real_http_route_requires_a_dashboard_session(tmp_path):
     code = r'''
 from datetime import datetime, timedelta, timezone
@@ -118,6 +138,10 @@ with TestClient(app) as client:
     assert result.status_code == 200 and result.headers["cache-control"] == "no-store", result.text
     assert result.json()["predictions"][0]["case_id"] == "open"
     assert result.json()["predictions"][0]["median_remaining_seconds"] == 7200
+    selection = {**body, "case_id": "open"}
+    assert client.post(path, json=selection, headers=bearer).status_code in (401, 403)
+    assert client.post(path, json=selection, headers=headers).json()["case_selection"] == "predicted"
+    assert client.post(path, json={**body, "case_id": 1}, headers=headers).status_code == 422
     assert client.post(path, json={"end_activities": []}, headers=headers).status_code == 422
 '''
     env = os.environ.copy()

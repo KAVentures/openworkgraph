@@ -14,7 +14,9 @@ from __future__ import annotations
 import csv
 from contextlib import nullcontext
 import json
+import gzip
 import os
+import zlib
 from pathlib import Path
 import re
 import secrets
@@ -93,6 +95,11 @@ CREATE TABLE IF NOT EXISTS quarantine_decisions (
 );
 CREATE TABLE IF NOT EXISTS filter_sets (
   log_id VARCHAR NOT NULL, set_id VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL, definition VARCHAR NOT NULL
+);
+CREATE TABLE IF NOT EXISTS object_rule_sets (
+  log_id VARCHAR NOT NULL, set_id VARCHAR NOT NULL, name VARCHAR NOT NULL, revision INTEGER NOT NULL,
+  created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL, definition VARCHAR NOT NULL,
+  PRIMARY KEY (log_id, set_id)
 );
 CREATE TABLE IF NOT EXISTS event_log_feeds (
   log_id VARCHAR NOT NULL, feed_id VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL, definition VARCHAR NOT NULL
@@ -485,7 +492,32 @@ def _receive(source: IO[bytes], folder: Path) -> Path:
             if size > MAX_IMPORT_BYTES:
                 raise EventLogWorkspaceError("event log is larger than the supported limit")
             handle.write(chunk)
-    return upload
+    return _gunzip(upload)
+
+
+def _gunzip(upload: Path) -> Path:
+    """A gzip-compressed upload (``log.xes.gz``, ``events.csv.gz``) is decompressed before it is read.
+
+    The decompressed size is bounded by the same limit as an uncompressed upload, so a small file
+    cannot expand without limit. Digests in the quality report then describe the decompressed bytes,
+    so the same log compressed or not is recognised as the same file.
+    """
+    with upload.open("rb") as handle:
+        if handle.read(2) != b"\x1f\x8b":
+            return upload
+    plain = upload.with_name("upload.plain")
+    size = 0
+    try:
+        with gzip.open(upload, "rb") as packed, plain.open("wb") as out:
+            while chunk := packed.read(1 << 20):
+                size += len(chunk)
+                if size > MAX_IMPORT_BYTES:
+                    raise EventLogWorkspaceError("the decompressed event log is larger than the supported limit")
+                out.write(chunk)
+    except (OSError, EOFError, zlib.error):
+        raise EventLogWorkspaceError("the file looks gzip-compressed but could not be decompressed") from None
+    upload.unlink()
+    return plain.rename(upload)
 
 
 def import_log(source: IO[bytes], *, name: str, source_format: str, mapping: dict[str, Any] | None = None,
@@ -821,7 +853,7 @@ def delete_log(log_id: str, *, only_if_expired_at: datetime | None = None) -> di
                 forget_dataset(conn, log_id)
                 from .event_log_agent_access import erase as erase_agent_access
                 erase_agent_access(conn, log_id)
-                for table in ("object_relationships", "event_source_keys", "event_source_namespaces", "discovery_snapshots", "log_appends", "log_quality", "quarantine", "quarantine_decisions", "filter_sets",
+                for table in ("object_relationships", "event_source_keys", "event_source_namespaces", "discovery_snapshots", "log_appends", "log_quality", "quarantine", "quarantine_decisions", "filter_sets", "object_rule_sets",
                               "domain_pack_installs", "cohort_metric_definitions", "metric_definitions", "saved_analyses", "signal_snoozes", "signal_reviews", "signal_transitions", "signal_rules", "reference_nets", "case_tags", "case_attribute_upload_changes", "case_attribute_uploads", "event_log_agent_shares", "event_log_agent_tag_grants", "event_log_agent_run_sources", "cost_models", "activity_notes", "event_objects", "events", "objects",
                               "object_attribute_values",
                               "logs"):

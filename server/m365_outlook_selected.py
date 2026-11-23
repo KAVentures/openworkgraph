@@ -79,7 +79,7 @@ def _grant(path, tenant, mailbox, ids):
         value = json.loads(raw.decode("utf-8"), object_pairs_hook=_pairs)
     except (OSError, UnicodeError, ValueError, TypeError):
         raise OutlookError("Outlook grant missing, revoked or invalid") from None
-    if (type(value) is not dict or set(value) != _KEYS
+    if (type(value) is not dict or set(value) not in (_KEYS, _KEYS | {"expires_at"})
             or type(value["version"]) is not int or value["version"] != 1
             or value["enabled"] is not True or value["consented"] is not True
             or value["tenant_scope"] != tenant or value["mailbox_scope"] != mailbox
@@ -88,6 +88,24 @@ def _grant(path, tenant, mailbox, ids):
             or any(type(x) is not str for x in value["message_ids"])
             or sorted(value["message_ids"]) != sorted(ids)):
         raise OutlookError("Outlook grant missing, revoked or mismatched")
+    if "expires_at" in value:
+        expiry = value["expires_at"]
+        if type(expiry) is not str or not re.fullmatch(
+                r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", expiry):
+            raise OutlookError("Outlook grant expired or invalid")
+        try:
+            expires = datetime.strptime(expiry, "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=timezone.utc)
+        except ValueError:
+            raise OutlookError("Outlook grant expired or invalid") from None
+        if datetime.now(timezone.utc) >= expires:
+            raise OutlookError("Outlook grant expired or invalid")
+    return hashlib.sha256(raw).digest()
+
+
+def _same_grant(path, tenant, mailbox, ids, expected):
+    if _grant(path, tenant, mailbox, ids) != expected:
+        raise OutlookError("Outlook grant changed during selected batch")
 
 
 def _instant(value):
@@ -129,7 +147,7 @@ def _private_parent(parent):
         raise OutlookError("Output directory must be owner-only")
 
 
-def _publish(path, content, grant, tenant, mailbox, ids):
+def _publish(path, content, grant, tenant, mailbox, ids, revision):
     tmp = None
     try:
         fd, tmp = tempfile.mkstemp(prefix=".owg-outlook-", dir=path.parent)
@@ -137,7 +155,7 @@ def _publish(path, content, grant, tenant, mailbox, ids):
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
-        _grant(grant, tenant, mailbox, ids)
+        _same_grant(grant, tenant, mailbox, ids, revision)
         os.link(tmp, path)  # create-only; never replace existing output
     except OSError:
         raise OutlookError("Could not create private Outlook export") from None
@@ -160,11 +178,11 @@ def export_selected(*, tenant, mailbox, message_ids, grant_file: Path,
     _private_parent(output.parent)
     if output.exists() or output.is_symlink():
         raise OutlookError("Outlook export must be new")
-    _grant(grant_file, tenant, mailbox, message_ids)
+    revision = _grant(grant_file, tenant, mailbox, message_ids)
     transport = _opener() if opener is None else opener
     rows = []
     for message_id in sorted(message_ids):
-        _grant(grant_file, tenant, mailbox, message_ids)
+        _same_grant(grant_file, tenant, mailbox, message_ids, revision)
         url = ("https://graph.microsoft.com/v1.0/me/messages/"
                + parse.quote(message_id, safe="")
                + "?%24select=id%2CreceivedDateTime%2ClastModifiedDateTime%2CisRead")
@@ -187,11 +205,11 @@ def export_selected(*, tenant, mailbox, message_ids, grant_file: Path,
                 or re.search(r"charset\s*=\s*(?!utf-8(?:;|$))", media, re.I)):
             raise OutlookError("Unexpected Graph transport response")
         received, modified, is_read = _project(raw, message_id)
-        _grant(grant_file, tenant, mailbox, message_ids)
+        _same_grant(grant_file, tenant, mailbox, message_ids, revision)
         identity = namespace + "\0" + message_id
         case_id = "outlookcase:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()
-        revision = identity + "\0" + modified + "\0" + str(is_read)
-        event_id = "outlookevent:" + hashlib.sha256(revision.encode("utf-8")).hexdigest()
+        event_revision = identity + "\0" + modified + "\0" + str(is_read)
+        event_id = "outlookevent:" + hashlib.sha256(event_revision.encode("utf-8")).hexdigest()
         rows.append((case_id, "Observed read status: " + ("read" if is_read else "unread"),
                      modified, event_id))
     # Never publish partial batches. A final grant check also gates publication.
@@ -199,7 +217,7 @@ def export_selected(*, tenant, mailbox, message_ids, grant_file: Path,
     writer = csv.writer(csv_file, lineterminator="\n")
     writer.writerow(("case_id", "activity", "timestamp", "source_event_id"))
     writer.writerows(sorted(rows))
-    _publish(output, csv_file.getvalue(), grant_file, tenant, mailbox, message_ids)
+    _publish(output, csv_file.getvalue(), grant_file, tenant, mailbox, message_ids, revision)
     return {
         "format": FORMAT, "status": "exported",
         "selected_messages": len(message_ids), "source_snapshots": len(rows),

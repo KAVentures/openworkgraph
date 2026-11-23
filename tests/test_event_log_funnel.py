@@ -67,6 +67,67 @@ def test_bad_requests_are_refused():
         fn.funnel(log, ["A", "Z"])
     with pytest.raises(EventLogWorkspaceError, match="window"):
         fn.funnel(log, ["A", "B"], within_hours=0)
+    # Preserve current main's stricter input contract while integrating #1111.
+    # The superseded branch coerced non-string step values to strings.
+    with pytest.raises(EventLogWorkspaceError, match="steps"):
+        fn.funnel(log, ("A", "B"), evidence_step=2)
+    with pytest.raises(EventLogWorkspaceError, match="each step"):
+        fn.funnel(log, [1, "B"], evidence_step=2)
     for steps in ("AB", {"A": 1, "B": 2}, ["A", None], ["A", 1]):
         with pytest.raises(EventLogWorkspaceError):
             fn.funnel(log, steps)
+
+
+def test_case_evidence_matches_funnel_and_filters():
+    log = _import([[('A', 0), ('B', 1), ('C', 2)],
+                   [('A', 0), ('B', 1), ('Lost', 2)],
+                   [('A', 0), ('Lost', 1)], [('B', 0)]])
+    reached = fn.funnel(log, ['A', 'B', 'C'], evidence_step=2)
+    assert reached['evidence'] == {'step': 2, 'status': 'reached', 'total': 2,
+        'cases': [{'case_id': 'c0', 'last_activity': 'C', 'steps_reached': 3},
+                  {'case_id': 'c1', 'last_activity': 'Lost', 'steps_reached': 2}], 'truncated': False}
+    dropped = fn.funnel(log, ['A', 'B', 'C'], evidence_step=3, evidence_status='dropped')
+    assert dropped['evidence']['total'] == dropped['steps'][2]['dropped_after_previous'] == 1
+    assert dropped['evidence']['cases'][0]['case_id'] == 'c1'
+    filtered = fn.funnel(log, ['A', 'B'], cohort={'activity': 'C'}, evidence_step=2)
+    assert [c['case_id'] for c in filtered['evidence']['cases']] == ['c0']
+    with pytest.raises(EventLogWorkspaceError):
+        fn.funnel(log, ['A', 'B'], evidence_step=1, evidence_status='dropped')
+    with pytest.raises(EventLogWorkspaceError):
+        fn.funnel(log, ['A', 'B'], evidence_step=3)
+
+
+def test_case_evidence_is_bounded_and_ordered():
+    rows = ['case,activity,time']
+    for i in range(55):
+        rows.extend([f'c{i:02},A,2024-01-01T00:00:00Z', f'c{i:02},B,2024-01-01T01:00:00Z'])
+    log = workspace.import_log(BytesIO('\n'.join(rows).encode()), name='many', source_format='csv',
+                               mapping=MAPPING)['log_id']
+    evidence = fn.funnel(log, ['A', 'B'], evidence_step=2)['evidence']
+    assert evidence['total'] == 55 and evidence['truncated'] and len(evidence['cases']) == 50
+    assert [c['case_id'] for c in evidence['cases']] == [f'c{i:02}' for i in range(50)]
+
+
+def test_case_evidence_requires_dashboard_session(tmp_path):
+    import os
+    import subprocess
+    import sys
+    code = r'''
+from fastapi.testclient import TestClient
+from server.secure_app import app
+from server import local_auth
+with TestClient(app) as client:
+    owner = {'Authorization': 'OWG-Session ' + local_auth.create_dashboard_session()}
+    made = client.post('/v1/event-logs/import?format=csv&name=f&case_column=case&activity_column=activity&timestamp_column=time',
+        content=b'case,activity,time\nc1,A,2024-01-01T00:00:00Z\nc1,B,2024-01-01T01:00:00Z\n',
+        headers={**owner, 'x-owg-local-storage-confirmed': 'true'})
+    assert made.status_code == 200, made.text
+    url = '/v1/event-logs/' + made.json()['log_id'] + '/funnel?step=A&step=B&evidence_step=2'
+    assert client.get(url).status_code in (401, 403)
+    result = client.get(url, headers=owner)
+    assert result.status_code == 200, result.text
+    assert result.json()['evidence']['cases'][0]['case_id'] == 'c1'
+'''
+    env = {**os.environ, 'WORKFLOW_OBSERVER_DATA': str(tmp_path / 'data'),
+           'WORKFLOW_OBSERVER_AUTH_DIR': str(tmp_path / 'auth')}
+    subprocess.run([sys.executable, '-c', code], env=env, check=True, timeout=60)

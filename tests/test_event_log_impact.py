@@ -101,6 +101,25 @@ def test_windows_recent_cases_and_spanning_cases_are_counted():
     assert dropped["left_out"]["spanning_intervention"] == 8 and dropped["baseline"]["cases"] == 232
 
 
+def test_impact_case_pages_match_each_report_group():
+    log = _log(480, lambda i, t, team: 48 if not _after(t) else 24)
+    spec = {"intervention_at": AT, "treated": {"resource": "A"}, "window_days": 14,
+            "exclude_spanning": True, "exclude_recent_days": 10}
+    report = impact.analyze(log, spec)
+    for group in ("treated", "control"):
+        for period in ("baseline", "follow_up"):
+            after, keys = None, []
+            while True:
+                page = impact.cases(log, {"analysis": spec, "group": group, "period": period,
+                                          "after": after, "limit": 7})
+                keys.extend(row["case_id"] for row in page["cases"])
+                assert page["selected_cases"] == report["groups"][group][period]["cases"]
+                after = page["next_after"]
+                if after is None:
+                    break
+            assert len(keys) == len(set(keys)) == page["selected_cases"]
+
+
 def test_shares_and_counts_are_measured_too():
     log = _log(480, lambda i, t, team: 40 if _after(t) else 48,
                extra=lambda i, t: ["Check", "Check"] if (not _after(t) and i % 2) else ["Check"])
