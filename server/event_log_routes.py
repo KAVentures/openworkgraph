@@ -2697,6 +2697,28 @@ async def event_log_preview_signal_rule(request: Request, log_id: str):
     return await run_in_threadpool(_respond, signals.preview_rule, log_id, spec)
 
 
+@router.get("/v1/event-logs/{log_id}/signals/pack")
+def event_log_export_signal_pack(request: Request, log_id: str):
+    _require_dashboard(request)
+    response = _respond(signals.export_pack, log_id)
+    response.headers["Content-Disposition"] = f'attachment; filename="{log_id}-signals.json"'
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/signals/pack/preview")
+async def event_log_preview_signal_pack(request: Request, log_id: str):
+    _require_dashboard(request)
+    document = await _json_body(request, "signal pack", strict=True, limit=signals.MAX_PACK_BYTES)
+    return await run_in_threadpool(_respond, signals.preview_pack, log_id, document)
+
+
+@router.post("/v1/event-logs/{log_id}/signals/pack/import")
+async def event_log_import_signal_pack(request: Request, log_id: str):
+    _require_dashboard(request)
+    document = await _json_body(request, "signal pack", strict=True, limit=signals.MAX_PACK_BYTES)
+    return await run_in_threadpool(_respond, signals.import_pack, log_id, document)
+
+
 @router.get("/v1/event-logs/{log_id}/signals/scorecard")
 def event_log_signal_scorecard(request: Request, log_id: str, months: int = Query(default=6, ge=1, le=24)):
     """Value-based signals month by month (read-only)."""
