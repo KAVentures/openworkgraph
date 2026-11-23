@@ -272,7 +272,8 @@ const pathModule = require("node:path");
       await route.fulfill({response,json:latest});
     }, {times:1});
     await driftHandoffPage.locator("#handoffCheck").click();
-    await driftHandoffPage.locator("#handoffStatus").filter({hasText:"REFUSED:"}).waitFor();
+    await driftHandoffPage.locator("#selectedTitle").waitFor({state:"hidden"});
+    await driftHandoffPage.locator("#handoffStatus").filter({hasText:"REFUSED:"}).waitFor({state:"attached"});
     assert.doesNotMatch(await driftHandoffPage.locator("#handoffStatus").textContent(),/^MATCH:/);
     assert.equal(uploadedHandoff,false);
 
