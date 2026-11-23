@@ -1181,7 +1181,7 @@
     results.appendChild(workInProgressSection(inspection));
     results.appendChild(durationDistributionSection(inspection));
     results.appendChild(batchingSection(inspection));
-    results.appendChild(benchmarkSection(names));
+    results.appendChild(benchmarkSection(names,inspection));
     results.appendChild(timePatternSection(names,inspection));
     results.appendChild(impactSection(names,inspection));
     results.appendChild(stuckSection(inspection));
@@ -1760,6 +1760,11 @@
       spec={cohort,attribute,...selection,limit:30};
       chosen.textContent=description;
       detail.replaceChildren();opening++;load(null,'attribute-profile/cases');box.scrollIntoView({block:'nearest'});
+    },selection(cohort,selector,description){
+      path=null;transition=null;association=true;filterApplied=false;
+      spec={cohort,...selector,limit:30};
+      chosen.textContent=description;
+      detail.replaceChildren();opening++;load(null);box.scrollIntoView({block:'nearest'});
     },cohort(value,description){
       path=null;transition=null;association=true;filterApplied=Boolean(description)&&filterOn();spec={cohort:value,limit:30};
       chosen.textContent=description||'Association cases: '+JSON.stringify(value)+'. This selection uses all cases in the current case notion. Browse cases uses the fields above instead.';
@@ -4496,7 +4501,7 @@
     return box;
   }
 
-  function benchmarkSection(activityNames){
+  function benchmarkSection(activityNames,inspection){
     const box=section('Compare cohorts');
     box.appendChild(el('div','Compare two groups of cases, for example two periods, teams or case types. Differences describe the cohorts; they do not say why they differ.','muted'));
     const first=cohortFields('owgEventLogCohortA','First cohort',activityNames),second=cohortFields('owgEventLogCohortB','Second cohort',activityNames);
@@ -4504,20 +4509,38 @@
     const run=button('Compare','secondary');run.id='owgEventLogBenchRun';
     const row=el('div',null,'row');row.style.cssText='align-items:end;margin-top:8px';const mapRun=button('Compare maps','secondary');mapRun.id='owgMapCompareRun';
     row.append(field('SLA (hours)',sla),run,mapRun);
-    let last=null;
+    let last=null,benchmarkTurn=0,mapTurn=0;
+    const generation=state.generation;
     const ci=d=>(d.difference>0?'+':'')+(d.difference*100).toFixed(1)+' pts ['+(d.ci95[0]*100).toFixed(1)+', '+(d.ci95[1]*100).toFixed(1)+']';
     const exports=exportButtons('owgEventLogBenchmark',()=>last,r=>[
       ['activity','share_in_first','share_in_second','difference','ci95_low','ci95_high'],
       ...r.activity_presence.map(a=>[a.activity,a.share_in_first,a.share_in_second,a.difference,a.ci95[0],a.ci95[1]])]);
     const out=el('div');box.append(first.node,second.node,row,out,exports.node);
     const mapOut=el('div');mapOut.id='owgMapCompareResults';mapOut.setAttribute('role','status');box.appendChild(mapOut);
+    const invalidate=()=>{
+      benchmarkTurn++;mapTurn++;last=null;exports.enable(false);
+      run.disabled=mapRun.disabled=false;out.replaceChildren();mapOut.replaceChildren();
+    };
+    for(const node of [first.node,second.node,sla]){
+      node.addEventListener('input',invalidate);node.addEventListener('change',invalidate);
+    }
+    const caseCount=(count,share,cohort,name,kind,selector)=>{
+      const label=count.toLocaleString()+(count===1?' case':' cases')+(share===undefined?'':' · '+pct(share));
+      if(!count)return label;
+      const title=name+' cohort · '+kind;
+      const open=button(label,'secondary');
+      open.setAttribute('aria-label','Review '+count+' '+(count===1?'case':'cases')+' in '+title);
+      open.onclick=()=>inspection.selection(cohort,selector,title+'.');
+      return open;
+    };
     mapRun.onclick=async()=>{
-      const generation=state.generation;
+      const ticket=++mapTurn;
+      const current=()=>ticket===mapTurn&&generation===state.generation&&box.isConnected;
       try{
         mapRun.disabled=true;mapOut.replaceChildren(el('div','Comparing maps…','muted'));
         const cohortsSpec=[first.read(),second.read()];
         const r=await (await api(logPath('map-comparison'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cohorts:cohortsSpec})})).json();
-        if(generation!==state.generation)return;
+        if(!current())return;
         const names=[cohortsSpec[0].label||'First',cohortsSpec[1].label||'Second'];
         const maps=el('div');maps.style.cssText='display:flex;flex-wrap:wrap;gap:12px';
         r.maps.forEach((m,i)=>{
@@ -4528,33 +4551,57 @@
             catch(_){pane.appendChild(el('div','Map unavailable for this cohort; the paths are listed below.','muted'));}}
           maps.appendChild(pane);
         });
-        const share=p=>pct(p.case_share_in_first)+' → '+pct(p.case_share_in_second);
+        const side=(p,index)=>caseCount(index?p.cases_in_second:p.cases_in_first,
+          index?p.case_share_in_second:p.case_share_in_first,cohortsSpec[index],names[index],
+          'path '+p.from+' → '+p.to,{transition:[p.from,p.to]});
         const ci=p=>(p.case_share_difference>0?'+':'')+(p.case_share_difference*100).toFixed(1)+' pts ['+(p.ci95[0]*100).toFixed(1)+', '+(p.ci95[1]*100).toFixed(1)+']'+(p.only_in?' · only in '+names[p.only_in==='first'?0:1]:'');
         const gap=p=>p.median_gap_difference?((p.median_gap_difference.seconds>=0?'+':'−')+duration(Math.abs(p.median_gap_difference.seconds))+' ['+duration(p.median_gap_difference.ci95[0])+', '+duration(p.median_gap_difference.ci95[1])+']'):'';
         mapOut.replaceChildren(maps,
           el('div',Number(r.paths_only_in_second).toLocaleString()+' paths appear only in '+names[1]+' and '+Number(r.paths_only_in_first).toLocaleString()+' only in '+names[0]+', of '+Number(r.paths_total).toLocaleString()+'.','muted'),
-          table(['Path','Cases with path','Difference (95% CI)','Median gap','Gap difference (95% CI)'],r.paths.slice(0,25).map(p=>[p.from+' → '+p.to,share(p),ci(p),duration(p.median_gap_seconds_first)+' → '+duration(p.median_gap_seconds_second),gap(p)])),
+          table(['Path',names[0]+' cases',names[1]+' cases','Difference (95% CI)','Median gap','Gap difference (95% CI)'],
+            r.paths.slice(0,25).map(p=>[p.from+' → '+p.to,side(p,0),side(p,1),ci(p),
+              duration(p.median_gap_seconds_first)+' → '+duration(p.median_gap_seconds_second),gap(p)])),
           el('div',(r.overlapping_cases?Number(r.overlapping_cases).toLocaleString()+' cases are in both cohorts; ':'')+r.note+'.','muted'));
-      }catch(error){if(generation===state.generation)mapOut.replaceChildren(el('div',error.message,'muted'));}
-      finally{mapRun.disabled=false;}
+      }catch(error){if(current())mapOut.replaceChildren(el('div',error.message,'muted'));}
+      finally{if(current())mapRun.disabled=false;}
     };
     run.onclick=async()=>{
+      const ticket=++benchmarkTurn;
+      const current=()=>ticket===benchmarkTurn&&generation===state.generation&&box.isConnected;
+      last=null;exports.enable(false);run.disabled=true;
+      out.replaceChildren(el('div','Comparing cohorts…','muted'));
       try{
         const spec={cohorts:[first.read(),second.read()]};const hours=Number(sla.value);
         if(sla.value&&hours>0)spec.sla_seconds=Math.round(hours*3600);
         const r=await (await api(logPath('benchmark'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(!current())return;
         last=r;exports.enable(true);
-        const name=(c,i)=>c.definition.label||(i?'Second':'First');
+        const names=r.cohorts.map((c,i)=>c.definition.label||(i?'Second':'First'));
+        const count=(i,n,share,kind,selector,cohort=spec.cohorts[i])=>caseCount(n,share,cohort,names[i],kind,selector);
+        const shareRow=(item,label,kind,selector)=>[label,
+          count(0,item.cases_in_first,item.share_in_first,kind,selector),
+          count(1,item.cases_in_second,item.share_in_second,kind,selector)];
         const diff=r.differences_second_minus_first,m=diff.median_throughput_seconds;
         out.replaceChildren(
-          table(['Cohort','Cases','Median time','90th percentile','Rework rate','SLA breach rate'],r.cohorts.map((c,i)=>[name(c,i),Number(c.cases).toLocaleString(),duration((c.throughput_seconds||{}).p50),duration((c.throughput_seconds||{}).p90),pct(c.rework_rate),c.sla_breach_rate===undefined?'—':pct(c.sla_breach_rate)])),
+          table(['Cohort','Cases','Median time','90th percentile','Rework rate','SLA breach rate'],r.cohorts.map((c,i)=>[
+            names[i],count(i,c.cases,undefined,'all selected cases',{}),duration(c.throughput_seconds.p50),duration(c.throughput_seconds.p90),
+            count(i,c.rework_cases,c.rework_rate,'rework',{}, {...spec.cohorts[i],rework:true}),
+            c.sla_breach_rate===undefined?'—':count(i,c.sla_breached_cases,c.sla_breach_rate,'SLA breach',{duration_seconds_gt:spec.sla_seconds})
+          ])),
           table(['Difference (second − first)','Value (95% CI)'],[
             ['Median time',(m.difference>=0?'+':'−')+duration(Math.abs(m.difference))+' ['+duration(m.ci95[0])+', '+duration(m.ci95[1])+']'],
             ['Rework rate',ci(diff.rework_rate)],...(diff.sla_breach_rate?[['SLA breach rate',ci(diff.sla_breach_rate)]]:[])]),
-          table(['Activity','Share of first','Share of second','Difference (95% CI)'],r.activity_presence.slice(0,10).map(a=>[a.activity,pct(a.share_in_first),pct(a.share_in_second),ci(a)])),
-          table(['Variant','Share of first','Share of second'],r.variants.slice(0,10).map(v=>[v.path.join(' → '),pct(v.share_in_first),pct(v.share_in_second)])),
+          table(['Activity',names[0]+' cases',names[1]+' cases','Difference (95% CI)'],
+            r.activity_presence.slice(0,10).map(item=>[
+              ...shareRow(item,item.activity,'activity '+item.activity,{required_activities:[item.activity]}),ci(item)
+            ])),
+          table(['Variant',names[0]+' cases',names[1]+' cases'],r.variants.slice(0,10).map(item=>{
+            const label=item.path.slice(0,20).join(' → ')+(item.path.length>20?' … ('+item.path.length+' steps)':'');
+            return shareRow(item,label,'variant '+label,{variant_id:item.variant_id});
+          })),
           el('div',(r.overlapping_cases?Number(r.overlapping_cases).toLocaleString()+' cases are in both cohorts. ':'')+r.note+'.','muted'));
-      }catch(error){last=null;exports.enable(false);out.replaceChildren(el('div',error.message,'muted'));}
+      }catch(error){if(current())out.replaceChildren(el('div',error.message,'muted'));}
+      finally{if(current())run.disabled=false;}
     };
     return box;
   }
