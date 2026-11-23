@@ -1076,7 +1076,7 @@
     results.appendChild(modelChangeSection());
     results.appendChild(footprintsSection(inspection));
     results.appendChild(petriReplaySection());
-    results.appendChild(temporalProfileSection());
+    results.appendChild(temporalProfileSection(inspection));
     results.appendChild(waitingSection(inspection));
     results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity),inspection));
     results.appendChild(organizationSection());
@@ -5942,7 +5942,7 @@
     return box;
   }
 
-  function temporalProfileSection(){
+  function temporalProfileSection(inspection){
     const box=section('Temporal profile');box.id='owgTemporal';
     box.appendChild(el('div','For every pair of activities in a case, even far apart, the usual time from the first to the second. Cases whose time is more than the chosen number of standard deviations from the usual one are listed: unusual timings to review, not errors.','muted'));
     const zeta=select('owgTemporalZeta',[['3','3 standard deviations'],['2','2 standard deviations'],['4','4 standard deviations'],['6','6 standard deviations']]);
@@ -5950,22 +5950,74 @@
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Flag times beyond',zeta),run);
     const statusLine=el('div',null,'muted');statusLine.id='owgTemporalStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgTemporalResults';
-    box.append(row,statusLine,out);
+    const review=el('div');review.id='owgTemporalCases';
+    box.append(row,statusLine,out,review);
+    const generation=state.generation;
+    let revision=0,selection=0;
+    zeta.onchange=()=>{
+      ++revision;run.disabled=false;out.replaceChildren();review.replaceChildren();
+      statusLine.textContent='Threshold changed. Check timings again.';
+    };
+    function reviewCases(url,pair){
+      const report=revision,chosen=++selection;
+      const heading=el('h4',pair?'Timing deviations from '+pair.from+' to '+pair.to:'All cases with unusual timings');heading.tabIndex=-1;
+      const direction=select('owgTemporalDirection',[['all','Both directions'],['slower','Slower than usual'],['faster','Faster than usual']]);
+      const message=el('div');message.setAttribute('role','status');
+      const rows=el('div'),nav=el('div',null,'row');
+      const previous=button('Previous page','secondary'),next=button('Next page','secondary');
+      nav.append(previous,next);review.replaceChildren(heading,field('Direction',direction),message,rows,nav);heading.focus();
+      const cursors=[null];let page=0,more=null,turn=0;
+      async function load(index){
+        const ticket=++turn;
+        const current=()=>generation===state.generation&&report===revision&&chosen===selection&&ticket===turn;
+        previous.disabled=next.disabled=true;message.textContent='Loading cases…';rows.replaceChildren();
+        try{
+          const endpoint=new URL(url,window.location.origin);endpoint.pathname+='/cases';
+          const spec={direction:direction.value};
+          if(pair){spec.source=pair.from;spec.destination=pair.to;}
+          if(cursors[index]!==null)spec.after=cursors[index];
+          const result=await (await api(endpoint.pathname+endpoint.search,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+          if(!current())return;
+          page=index;more=result.next_after;
+          const count=(value,label)=>value.toLocaleString()+' '+label+(value===1?'':'s');
+          message.textContent=count(result.deviating_cases,'matching case')+' with '+count(result.deviations,'deviation')+'. Showing '+result.cases.length+'.';
+          rows.replaceChildren(result.cases.length?table(['Case','Deviations','Strongest pair','Direction','Took','Usual','Evidence'],
+            result.cases.map(item=>{
+              const open=button('Open case','secondary');open.setAttribute('aria-label','Open case '+item.case_id);
+              open.onclick=()=>inspection.open(item.case_id);
+              return [item.case_id,item.deviations,item.strongest.from+' → '+item.strongest.to,item.direction,
+                duration(item.strongest.seconds),duration(item.strongest.mean_seconds),open];
+            })):el('div','No cases match these timings.','muted'));
+        }catch(error){if(current())message.textContent=error.message;}
+        finally{if(current()){previous.disabled=page===0;next.disabled=more===null;}}
+      }
+      previous.onclick=()=>load(page-1);next.onclick=()=>{cursors[page+1]=more;load(page+1);};
+      direction.onchange=()=>{cursors.length=1;page=0;more=null;load(0);};load(0);
+    }
     run.onclick=async()=>{
-      const generation=state.generation;run.disabled=true;statusLine.textContent='Checking…';out.replaceChildren();
+      const report=++revision;
+      const current=()=>generation===state.generation&&report===revision;
+      run.disabled=true;statusLine.textContent='Checking…';out.replaceChildren();review.replaceChildren();
       try{
-        const r=await getJSON(logPath('temporal-profile',{zeta:zeta.value}));
-        if(generation!==state.generation)return;
+        const url=logPath('temporal-profile',{zeta:zeta.value}),r=await getJSON(url);
+        if(!current())return;
         if(!r.profile_pairs){statusLine.textContent='No pair of activities occurs often enough, with varying times, to check.';return;}
         statusLine.textContent=r.deviating_cases.toLocaleString()+' of '+r.cases.toLocaleString()+' cases ('+Math.round((r.deviating_case_share||0)*100)+'%) have at least one unusual timing across '+r.profile_pairs+' checked pairs.'+(r.cases_before_filter?' Filtered from '+Number(r.cases_before_filter).toLocaleString()+' cases.':'');
         const pairs=r.pairs.filter(p=>p.deviations).slice(0,15);
         if(pairs.length){out.appendChild(el('h4','Pairs most often outside their usual time'));
-          out.appendChild(table(['From','To','Usual time','Allowed range','Outside','Slower','Faster'],pairs.map(p=>[p.from,p.to,duration(p.mean_seconds),duration(p.allowed_seconds[0])+'–'+duration(p.allowed_seconds[1]),p.deviations+' of '+p.occurrences,String(p.slower),String(p.faster)])));}
+          out.appendChild(table(['From','To','Usual time','Allowed range','Outside','Slower','Faster','Evidence'],pairs.map(p=>{
+            const inspect=button('Inspect cases','secondary');inspect.setAttribute('aria-label','Inspect timings from '+p.from+' to '+p.to);
+            inspect.onclick=()=>reviewCases(url,p);
+            return [p.from,p.to,duration(p.mean_seconds),duration(p.allowed_seconds[0])+'–'+duration(p.allowed_seconds[1]),
+              p.deviations+' of '+p.occurrences,String(p.slower),String(p.faster),inspect];
+          })));}
         if(r.top_cases.length){out.appendChild(el('h4','Cases with most unusual timings'));
+          const all=button('Browse all deviating cases','secondary');all.onclick=()=>reviewCases(url);
+          out.appendChild(all);
           out.appendChild(table(['Case','Unusual pairs','Strongest','Took','Usual'],r.top_cases.map(c=>[c.case_id,String(c.deviations),c.strongest.from+' → '+c.strongest.to+' ('+c.strongest.standard_deviations+' sd)',duration(c.strongest.seconds),duration(c.strongest.mean_seconds)])));}
         out.appendChild(el('div',r.caveat,'muted'));
-      }catch(error){statusLine.textContent=error.message;}
-      finally{run.disabled=false;}};
+      }catch(error){if(current())statusLine.textContent=error.message;}
+      finally{if(current())run.disabled=false;}};
     return box;
   }
 

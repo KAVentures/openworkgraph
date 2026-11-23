@@ -2996,6 +2996,15 @@ far too long, or suspiciously little time, overall between two points.
 - The profile is learned from the same cases it checks, so a few extreme cases widen it; read the
   results as timings to review, not errors. The case filter applies.
 
+**Browse all deviating cases** opens the complete set of flagged cases. **Inspect cases** on
+a pair limits the review to that pair. Either review can show slower or faster deviations and
+open complete event histories.
+
+The dashboard-only `POST /v1/event-logs/{log_id}/temporal-profile/cases` uses the same analysis
+settings and case filter in its query. The body accepts optional exact `source` and `destination`
+labels together, a `direction` of `all`, `slower`, or `faster`, and a `limit` of 1–100
+(default 50). Send `next_after` as `after` for the next page.
+
 `GET /v1/event-logs/{log_id}/temporal-profile?zeta=&min_occurrences=&case_type=` plus the case-filter
 parameters. Agents with access to a shared log get the pair figures, without case IDs, through
 `get_process_temporal_profile`.

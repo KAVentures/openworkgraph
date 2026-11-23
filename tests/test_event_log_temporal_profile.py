@@ -58,6 +58,41 @@ def test_case_filter_restricts_the_profile():
     assert result["cases"] == 16 and result["deviating_cases"] == 0 and result["cases_before_filter"] == 20
 
 
+def test_case_evidence_pages_match_report_counts_by_pair_and_direction():
+    log = _log()
+    summary = tp.temporal_profile(log, zeta=0.5)
+    pair = next(row for row in summary["pairs"] if (row["from"], row["to"]) == ("Order", "Ship"))
+    query = {"source": "Order", "destination": "Ship", "zeta": 0.5, "limit": 2}
+    for direction in ("slower", "faster"):
+        rows, after = [], None
+        while True:
+            page = tp.temporal_cases(log, **query, direction=direction, after=after)
+            assert page["deviations"] == pair[direction]
+            rows.extend(page["cases"])
+            after = page["next_after"]
+            if after is None:
+                break
+        assert len(rows) == len({row["case_id"] for row in rows}) == pair[direction]
+        assert all(row["direction"] == direction for row in rows)
+    assert tp.temporal_cases(log, zeta=0.5)["deviating_cases"] == summary["deviating_cases"]
+
+
+def test_case_evidence_keeps_a_whole_case_filter():
+    log = _log()
+    filtered = tp.temporal_cases(log, source="Order", destination="Invoice",
+                                 cohort={"started_from": "2024-01-02T00:00:00Z"})
+    assert filtered["cases_before_filter"] == 20 and filtered["cases"] == []
+    late = tp.temporal_cases(log, direction="slower", source="Order", destination="Invoice")
+    assert late["cases"][0]["case_id"] == "c0" and late["deviations"] == 1
+    assert late["cases"][0]["strongest"]["seconds"] > late["cases"][0]["strongest"]["mean_seconds"]
+
+
+@pytest.mark.parametrize("kwargs", [{"source": "A"}, {"direction": "both"}, {"limit": True}, {"after": ""}])
+def test_invalid_case_pages_are_refused(kwargs):
+    with pytest.raises(EventLogWorkspaceError):
+        tp.temporal_cases("not-read", **kwargs)
+
+
 @pytest.mark.parametrize("kwargs", [{"zeta": 0.1}, {"zeta": 11}, {"zeta": True}, {"zeta": "3"},
                                     {"min_occurrences": 1}, {"min_occurrences": 2.0}])
 def test_invalid_settings_are_refused(kwargs):
