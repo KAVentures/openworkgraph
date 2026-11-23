@@ -3583,11 +3583,35 @@ async def read_local_bound_provider_event(request: Request, response: Response):
                 verdict.get("event_id") != payload["provider_event_id"])
             or (verdict.get("status") == "unknown" and verdict.get("event_id") is not None)):
         raise HTTPException(409, "provider verification verdict unavailable or contradictory")
+    # Compare independently returned provider identity with the retained journal
+    # without treating an operator-authored journal as host-attested provenance.
+    # Only exact, unique, bounded references are surfaced; duplicates or
+    # contradictory rows remain ambiguous rather than manufacturing causality.
+    correlation_candidates = []
+    for row in entries:
+        if (row.get("provider_object_id") == payload["provider_object_id"]
+                and row.get("provider_operation") == payload["provider_operation"]
+                and row.get("provider_correlation_id") == payload["provider_correlation_id"]):
+            ref = row.get("attempt_ref")
+            if isinstance(ref, str) and 0 < len(ref) <= 160:
+                correlation_candidates.append(ref)
+    unique_correlation = (len(correlation_candidates) == 1
+                          and entries.count(next(
+                              (row for row in entries if row.get("attempt_ref") ==
+                               correlation_candidates[0]), None)) == 1)
+    journal_correlation = {
+        "status": ("untrusted_exact_match" if unique_correlation
+                   else "ambiguous" if correlation_candidates else "not_recorded"),
+        "attempt_ref": correlation_candidates[0] if unique_correlation else None,
+        "host_attested": False,
+        "provider_event_attributed_to_agent_run": False,
+    }
     response.headers["Cache-Control"] = "no-store"
     return {
         "format": "openworkgraph.bound-provider-event.v1",
         "case_ref": final["case_ref"], "run_ref": final["receipts"]["run_ref"],
         "provider_event_verdict": verdict,
+        "retained_journal_correlation": journal_correlation,
         "retained_attempt_receipts": retained,
         "retained_attempt_receipts_are_untrusted": True,
         "provider_event_to_attempt_causality_verified": False,
