@@ -27,7 +27,8 @@ def _reader(path, key):
 def _read(**overrides):
     args = dict(account=ACCOUNT, object_id=OBJECT, operation=OPERATION,
                 correlation_id=CORRELATION, expected_event_id=EVENT,
-                credentials=lambda: CREDS, reader=_reader)
+                credentials=lambda: CREDS, reader=_reader,
+                recheck_authorization=lambda: True)
     args.update(overrides)
     return read_exact_stripe_attempt_event(**args)
 
@@ -195,3 +196,14 @@ def test_malformed_provider_json_shapes_fail_closed_without_event_disclosure():
         assert snapshot["complete"] is False
         assert snapshot["authenticated"] is False
         assert calls == ["/v1/account", "/v1/events/" + EVENT]
+
+
+def test_direct_adapter_requires_explicit_authorization_guard_before_network():
+    calls = []
+    def forbidden(path, key):
+        calls.append(path)
+        raise AssertionError("provider read without grant")
+    for missing in (None, False, "allow"):
+        result = _read(reader=forbidden, recheck_authorization=missing)
+        assert result == {"complete": False, "authenticated": False, "revoked": True}
+    assert calls == []
