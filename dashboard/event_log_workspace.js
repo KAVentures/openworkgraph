@@ -1218,7 +1218,7 @@
     results.appendChild(unusualCasesSection());
     results.appendChild(funnelSection(names));
     results.appendChild(modelQualitySection());
-    results.appendChild(modelChangeSection());
+    results.appendChild(modelChangeSection(inspection));
     results.appendChild(footprintsSection(inspection));
     results.appendChild(petriReplaySection(inspection));
     results.appendChild(temporalProfileSection(inspection));
@@ -1727,11 +1727,11 @@
       chosen.textContent=label;
       detail.replaceChildren();opening++;load(null);box.scrollIntoView({block:'nearest'});
     }
-    return {node:box,open:openCase,openSelection,path(value,comparisonCohort){
+    return {node:box,open:openCase,openSelection,path(value,comparisonCohort,description){
       if(value.length>500){message.textContent='This path exceeds the 500-step case selector limit. Browse by activity or cohort instead.';box.scrollIntoView({block:'nearest'});return;}
       association=false;path=value.slice();transition=null;chosen.textContent='Exact path: '+JSON.stringify(path);
       if(comparisonCohort!==undefined){
-        chosen.append(' · Saved process comparison cohort. Browse cases uses the fields above.');
+        chosen.append(' · '+(description||'Saved process comparison cohort')+'. Browse cases uses the fields above.');
         filterApplied=true;spec={cohort:comparisonCohort,path,limit:30};
         detail.replaceChildren();opening++;load(null);
       }else start();
@@ -6182,7 +6182,7 @@
     return box;
   }
 
-  function modelChangeSection(){
+  function modelChangeSection(inspection){
     const box=section('Model change');box.id='owgModelChange';
     box.appendChild(el('div','How the discovered model differs before and after a date: which activities now follow each other differently, which activities are new or gone, and how well each period\'s cases fit the other period\'s model.','muted'));
     const mode=select('owgModelChangeMode',[['periods','Before and after a date'],['groups','Two groups of cases']]);
@@ -6192,56 +6192,84 @@
     const noise=select('owgModelChangeNoise',[['0.2','Leave out paths under 20% (default)'],['0','Keep every path'],['0.4','Leave out paths under 40%']]);
     const run=button('Compare periods','secondary');run.id='owgModelChangeRun';
     const splitField=field('Split at (empty: median case start)',split),aField=field('Group A (attribute=value)',groupA),bField=field('Group B (attribute=value)',groupB);
-    const sync=()=>{splitField.hidden=mode.value!=='periods';aField.hidden=bField.hidden=mode.value!=='groups';};mode.onchange=sync;sync();
+    const sync=()=>{splitField.hidden=mode.value!=='periods';aField.hidden=bField.hidden=mode.value!=='groups';};sync();
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Compare',mode),splitField,aField,bField,field('Models',noise),run);
     const statusLine=el('div',null,'muted');statusLine.id='owgModelChangeStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgModelChangeResults';
     box.append(row,statusLine,out);
     const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
+    const generation=state.generation;
+    let revision=0;
+    const reset=()=>{revision++;out.replaceChildren();run.disabled=false;statusLine.textContent='';};
+    mode.onchange=()=>{sync();reset();};
+    split.oninput=groupA.oninput=groupB.oninput=noise.onchange=reset;
+    function showCrossFit(report,names){
+      const number=value=>value.toLocaleString();
+      const ids=Object.keys(names);
+      const [first,second]=ids;
+      const pairs=[[first,first],[second,first],[second,second],[first,second]];
+      const details=[];
+      const rows=pairs.map(([source,target])=>{
+        const fit=report.cross_fit[source+'_cases_on_'+target+'_model'];
+        const label=names[source]+' cases on the '+names[target]+' model';
+        const open=button(number(fit.cases_total)+' cases','secondary');
+        open.setAttribute('aria-label','Review cases from '+names[source]+' against the '+names[target]+' model');
+        open.onclick=()=>inspection.cohort(report.case_selections[source],names[source]+' model comparison cases.');
+        if(fit.non_fitting_variants.length){
+          const variants=document.createElement('details');
+          variants.append(el('summary','Non-fitting variants · '+label),
+            el('div','Showing '+fit.non_fitting_variants.length+' of '+number(fit.non_fitting_variants_total)+' non-fitting variants in the aligned cases.','muted'),
+            table(['Recorded path','Alignment cost','Fitness','Cases'],fit.non_fitting_variants.map(variant=>{
+              const path=variant.path.slice(0,20).join(' → ')+(variant.path.length>20?' … ('+variant.path.length+' steps)':'');
+              const inspect=button(number(variant.cases)+' cases','secondary');
+              inspect.setAttribute('aria-label','Review '+path+' in '+label);
+              inspect.onclick=()=>inspection.path(variant.path,report.case_selections[source],label);
+              return [path,variant.cost,pct(variant.fitness),inspect];
+            })));
+          details.push(variants);
+        }
+        return [names[source],names[target],pct(fit.fitness),pct(fit.fitting_case_share),open,
+          number(fit.cases),number(fit.cases_excluded),number(fit.cases_unaligned)];
+      });
+      out.append(el('h4','Cross-fit'),table(['Cases','Model','Alignment fitness','Follow it exactly',
+        'Selected cases','Aligned','Excluded by limits','Unable to align'],rows),...details);
+    }
     run.onclick=async()=>{
+      const ticket=++revision;
+      const current=()=>ticket===revision&&generation===state.generation&&box.isConnected;
       if(mode.value==='groups'){
         if(!groupA.value.includes('=')||!groupB.value.includes('=')){statusLine.textContent='Enter both groups as attribute=value.';out.replaceChildren();return;}
-        const generation=state.generation;run.disabled=true;statusLine.textContent='Discovering both groups…';out.replaceChildren();
+        run.disabled=true;statusLine.textContent='Discovering both groups…';out.replaceChildren();
         try{
           const r=await getJSON(logPath('model-comparison',{group_a:groupA.value.trim(),group_b:groupB.value.trim(),noise:noise.value}));
-          if(generation!==state.generation)return;
+          if(!current())return;
           const c=r.cross_fit,A=r.groups.a,B=r.groups.b;
           statusLine.textContent=A.filter+' ('+Number(A.cases).toLocaleString()+' cases) against '+B.filter+' ('+Number(B.cases).toLocaleString()+'): '+r.orderings.changed+' of '+r.orderings.pairs_compared+' activity orderings differ. '+B.filter+' cases fit the '+A.filter+' model '+pct(c.b_cases_on_a_model.fitness)+', against '+pct(c.a_cases_on_a_model.fitness)+' for its own cases.';
           const a=r.activities;
           if(a.only_a.length||a.only_b.length)out.appendChild(el('div',(a.only_a.length?'Only in '+A.filter+': '+a.only_a.join(', ')+'. ':'')+(a.only_b.length?'Only in '+B.filter+': '+a.only_b.join(', ')+'.':'')));
           if(r.differences.length){out.appendChild(el('h4','Orderings that differ'));
             out.appendChild(table(['Activity','Activity',A.filter,B.filter],r.differences.map(x=>[x.from,x.to,x.a,x.b])));}
-          out.appendChild(el('h4','Cross-fit'));
-          out.appendChild(table(['Cases','Model','Alignment fitness','Follow it exactly'],[
-            [A.filter,A.filter,pct(c.a_cases_on_a_model.fitness),pct(c.a_cases_on_a_model.fitting_case_share)],
-            [B.filter,A.filter,pct(c.b_cases_on_a_model.fitness),pct(c.b_cases_on_a_model.fitting_case_share)],
-            [B.filter,B.filter,pct(c.b_cases_on_b_model.fitness),pct(c.b_cases_on_b_model.fitting_case_share)],
-            [A.filter,B.filter,pct(c.a_cases_on_b_model.fitness),pct(c.a_cases_on_b_model.fitting_case_share)]]));
+          showCrossFit(r,{a:A.filter,b:B.filter});
           out.appendChild(el('div',r.caveat,'muted'));
-        }catch(error){statusLine.textContent=error.message;}
-        finally{run.disabled=false;}
+        }catch(error){if(current())statusLine.textContent=error.message;}
+        finally{if(current())run.disabled=false;}
         return;
       }
-      const generation=state.generation;run.disabled=true;statusLine.textContent='Discovering both periods…';out.replaceChildren();
+      run.disabled=true;statusLine.textContent='Discovering both periods…';out.replaceChildren();
       try{
         const params={noise:noise.value};if(split.value)params.split=split.value+'T00:00:00Z';
         const r=await getJSON(logPath('model-change',params));
-        if(generation!==state.generation)return;
+        if(!current())return;
         const c=r.cross_fit,drop=r.fitness_drop_on_earlier_model;
         statusLine.textContent='Split at '+r.split.slice(0,10)+(r.split_chosen==='given'?'':' (median case start)')+': '+Number(r.periods.before.cases).toLocaleString()+' cases before, '+Number(r.periods.after.cases).toLocaleString()+' after. '+r.orderings.changed+' of '+r.orderings.pairs_compared+' activity orderings changed. Later cases fit the earlier model '+pct(c.after_cases_on_before_model.fitness)+', against '+pct(c.before_cases_on_before_model.fitness)+' for the earlier cases'+(drop!==null?(drop>0.02?' — the way the work runs changed.':' — little change in how the work runs.'):'.');
         const a=r.activities;
         if(a.only_before.length||a.only_after.length)out.appendChild(el('div',(a.only_after.length?'New after the split: '+a.only_after.join(', ')+'. ':'')+(a.only_before.length?'Gone after the split: '+a.only_before.join(', ')+'.':'')));
         if(r.changes.length){out.appendChild(el('h4','Orderings that changed'));
           out.appendChild(table(['Activity','Activity','Before','After'],r.changes.map(x=>[x.from,x.to,x.before,x.after])));}
-        out.appendChild(el('h4','Cross-fit'));
-        out.appendChild(table(['Cases','Model','Alignment fitness','Follow it exactly'],[
-          ['Before','Before',pct(c.before_cases_on_before_model.fitness),pct(c.before_cases_on_before_model.fitting_case_share)],
-          ['After','Before',pct(c.after_cases_on_before_model.fitness),pct(c.after_cases_on_before_model.fitting_case_share)],
-          ['After','After',pct(c.after_cases_on_after_model.fitness),pct(c.after_cases_on_after_model.fitting_case_share)],
-          ['Before','After',pct(c.before_cases_on_after_model.fitness),pct(c.before_cases_on_after_model.fitting_case_share)]]));
+        showCrossFit(r,{before:'Before',after:'After'});
         out.appendChild(el('div','→: the first is followed by the second; ←: the reverse; ||: both orders or in parallel; #: not directly related. '+r.caveat,'muted'));
-      }catch(error){statusLine.textContent=error.message;}
-      finally{run.disabled=false;}};
+      }catch(error){if(current())statusLine.textContent=error.message;}
+      finally{if(current())run.disabled=false;}};
     return box;
   }
 
