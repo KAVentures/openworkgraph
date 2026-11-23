@@ -6,9 +6,12 @@
   // The global case filter: follower rules plus an optional case-attribute value and/or numeric range.
   // More case filters (Disco-style timeframe, performance and variation filters): end time, events per case,
   // how many cases share the case's path, and rework.
-  const MORE_FILTER_KEYS=['ended_from','ended_before','events','path_cases','rework','tag','without_tag','without_activity'];
+  const START_FILTER_KEYS=['started_from','started_before'];
+  const MORE_FILTER_KEYS=[...START_FILTER_KEYS,'ended_from','ended_before','events','path_cases','rework','tag','without_tag','without_activity'];
   const countText=(r,what)=>what+' '+(r.min!==undefined&&r.max!==undefined?(r.min===r.max?'= '+r.min:r.min+'–'+r.max):r.min!==undefined?'\u2265 '+r.min:'\u2264 '+r.max);
-  const moreFilterText=a=>[a.ended_from?'ended from '+a.ended_from.slice(0,10):'',a.ended_before?'ended before '+a.ended_before.slice(0,10):'',a.events?countText(a.events,'events per case'):'',a.path_cases?countText(a.path_cases,'cases on the same path'):'',a.rework===true?'repeats an activity':a.rework===false?'repeats no activity':'',a.tag?'tagged '+JSON.stringify(a.tag):'',a.without_tag?'not tagged '+JSON.stringify(a.without_tag):'',a.without_activity?'never does '+JSON.stringify(a.without_activity):''].filter(Boolean).join('; ');
+  const utcFilterTime=value=>value.endsWith('T00:00:00Z')?value.slice(0,10):value.replace('T',' ').replace('Z',' UTC');
+  const moreFilterText=a=>[a.started_from?'started from '+utcFilterTime(a.started_from):'',
+    a.started_before?'started before '+utcFilterTime(a.started_before):'',a.ended_from?'ended from '+a.ended_from.slice(0,10):'',a.ended_before?'ended before '+a.ended_before.slice(0,10):'',a.events?countText(a.events,'events per case'):'',a.path_cases?countText(a.path_cases,'cases on the same path'):'',a.rework===true?'repeats an activity':a.rework===false?'repeats no activity':'',a.tag?'tagged '+JSON.stringify(a.tag):'',a.without_tag?'not tagged '+JSON.stringify(a.without_tag):'',a.without_activity?'never does '+JSON.stringify(a.without_activity):''].filter(Boolean).join('; ');
   const filterOn=()=>state.follows.length>0||!!state.attr.attribute||!!state.attr.attribute_range||!!state.attr.starts_with||!!state.attr.ends_with||!!state.attr.duration||MORE_FILTER_KEYS.some(k=>state.attr[k]!==undefined)||!!state.caseActivity;
   const globalCohort=()=>({...(state.follows.length?{follows:state.follows}:{}),...state.attr,...(state.caseActivity?{activity:state.caseActivity}:{})});
   const rangeText=r=>(r.min!==undefined?r.min+' ≤ ':'')+r.name+(r.max!==undefined?' < '+r.max:'');
@@ -1787,8 +1790,23 @@
 
   // Preserve all selected conditions. Incompatible numeric ranges fail closed
   // instead of silently dropping either the operation or workspace constraint.
-  function mergeActiveCohort(cohort,active){
+  function intersectStartPeriod(cohort,period){
     const result={...cohort};
+    // Case filter timestamps are normalized to UTC. Pad the fractional
+    // component so saved subsecond bounds compare in chronological order.
+    const order=value=>value.replace(/(T\d{2}:\d{2}:\d{2})(?:\.(\d+))?Z$/,
+      (_,second,fraction)=>second+'.'+(fraction||'').padEnd(6,'0')+'Z');
+    const lower=period.started_from,upper=period.started_before;
+    if(lower&&(!result.started_from||order(lower)>order(result.started_from)))result.started_from=lower;
+    if(upper&&(!result.started_before||order(upper)<order(result.started_before)))result.started_before=upper;
+    if(result.started_from&&result.started_before&&order(result.started_from)>=order(result.started_before)){
+      throw new Error('A start date must be earlier than its end date.');
+    }
+    return result;
+  }
+
+  function mergeActiveCohort(cohort,active){
+    const result=intersectStartPeriod(cohort,active);
     if(active.follows)result.follows=active.follows;
     if(active.activity){
       if(result.activity&&result.activity!==active.activity)throw new Error('This operation selects a different activity from the active case filter. Clear one activity to continue.');
@@ -1824,7 +1842,7 @@
       result.duration=d;
     }
     for(const key of MORE_FILTER_KEYS){
-      if(active[key]===undefined)continue;
+      if(START_FILTER_KEYS.includes(key)||active[key]===undefined)continue;
       if(result[key]!==undefined&&JSON.stringify(result[key])!==JSON.stringify(active[key]))throw new Error('This operation uses a different '+key.replace('_',' ')+' filter from the active case filter. Clear one to continue.');
       result[key]=active[key];
     }
@@ -1897,7 +1915,8 @@
     if(state.attr.duration){if(state.attr.duration.min!==undefined)durMin.value=state.attr.duration.min/3600;if(state.attr.duration.max!==undefined)durMax.value=state.attr.duration.max/3600;}
     const endRow=el('div',null,'row');endRow.style.alignItems='end';
     endRow.append(field('Case starts with',startsWith),field('Case ends with',endsWith),field('Case duration at least (hours)',durMin),field('Case duration below (hours)',durMax));
-    // Timeframe by end, events per case, path frequency (variation) and rework.
+    // Date bounds are inclusive at the start and exclusive at the end.
+    const startedFrom=input('owgCaseFilterStartedFrom','date'),startedBefore=input('owgCaseFilterStartedBefore','date');
     const endedFrom=input('owgCaseFilterEndedFrom','date',''),endedBefore=input('owgCaseFilterEndedBefore','date','');
     const evMin=input('owgCaseFilterEventsMin','number','events'),evMax=input('owgCaseFilterEventsMax','number','events');
     const pathMin=input('owgCaseFilterPathMin','number','cases'),pathMax=input('owgCaseFilterPathMax','number','cases');
@@ -1910,13 +1929,16 @@
     const withoutActivity=input('owgCaseFilterWithoutActivity','text','Exact activity label');withoutActivity.maxLength=200;withoutActivity.autocomplete='off';
     const a0=state.attr;
     if(a0.without_activity)withoutActivity.value=a0.without_activity;
+    const startFields=[['started_from',startedFrom],['started_before',startedBefore]];
+    for(const [key,node] of startFields)if(a0[key])node.value=a0[key].slice(0,10);
     if(a0.ended_from)endedFrom.value=a0.ended_from.slice(0,10);if(a0.ended_before)endedBefore.value=a0.ended_before.slice(0,10);
     if(a0.events){if(a0.events.min!==undefined)evMin.value=a0.events.min;if(a0.events.max!==undefined)evMax.value=a0.events.max;}
     if(a0.path_cases){if(a0.path_cases.min!==undefined)pathMin.value=a0.path_cases.min;if(a0.path_cases.max!==undefined)pathMax.value=a0.path_cases.max;}
     if(a0.rework!==undefined)reworkPick.value=String(a0.rework);
     if(a0.tag){tagName.value=a0.tag;tagMode.value='tag';}else if(a0.without_tag){tagName.value=a0.without_tag;tagMode.value='without_tag';}
     const moreRow=el('div',null,'row');moreRow.style.alignItems='end';
-    moreRow.append(field('Case ended on or after',endedFrom),field('Case ended before',endedBefore),field('Events per case at least',evMin),field('Events per case at most',evMax),
+    moreRow.append(field('Case started on or after (UTC)',startedFrom),field('Case started before (UTC)',startedBefore),
+      field('Case ended on or after',endedFrom),field('Case ended before',endedBefore),field('Events per case at least',evMin),field('Events per case at most',evMax),
       field('Path followed by at least (cases)',pathMin),field('Path followed by at most (cases)',pathMax),field('Rework',reworkPick),
       field('Case tag',tagName),field('Tag condition',tagMode),field('Case never does activity',withoutActivity));
     function readCount(lo,hi,what){
@@ -1946,6 +1968,10 @@
         if([d.min,d.max].some(v=>v!==undefined&&!(Number.isFinite(v)&&v>=0)))throw new Error('Case duration bounds must be zero or more hours.');
         if(d.min!==undefined&&d.max!==undefined&&!(d.min<d.max))throw new Error('The shortest case duration must be below the longest.');
         out.duration=d;}
+      for(const [key,node] of startFields){
+        if(node.value)out[key]=node.value===a0[key]?.slice(0,10)?a0[key]:node.value+'T00:00:00Z';
+      }
+      intersectStartPeriod(out,{});
       if(endedFrom.value)out.ended_from=endedFrom.value+'T00:00:00Z';
       if(endedBefore.value)out.ended_before=endedBefore.value+'T00:00:00Z';
       if(out.ended_from&&out.ended_before&&!(out.ended_from<out.ended_before))throw new Error('The end period is empty: the first date must be before the second.');
@@ -7079,15 +7105,10 @@
     otherType.onchange=active.onchange=invalidate;
     for(const date of [baseFrom,baseBefore,otherFrom,otherBefore])date.oninput=invalidate;
     save.onclick=()=>{if(result&&enabled())download('event-log-comparison.json',JSON.stringify(result,null,2),'application/json');};
-    const datesIn=(start,end,cohort={})=>{
-      const picked={...cohort};
-      if(start.value)picked.started_from=start.value+'T00:00:00Z';
-      if(end.value)picked.started_before=end.value+'T00:00:00Z';
-      if(picked.started_from&&picked.started_before&&Date.parse(picked.started_from)>=Date.parse(picked.started_before)){
-        throw new Error('A start date must be earlier than its end date.');
-      }
-      return picked;
-    };
+    const datesIn=(start,end,cohort={})=>intersectStartPeriod(cohort,{
+      started_from:start.value?start.value+'T00:00:00Z':undefined,
+      started_before:end.value?end.value+'T00:00:00Z':undefined
+    });
     const shareCell=r=>r.share_difference===null?'—':(r.share_difference>0?'+':'')+(r.share_difference*100).toFixed(1)+' pts'+(r.interval_excludes_zero?' *':'');
     const signed=(v,f)=>v===null||v===undefined?'—':(v>0?'+':v<0?'−':'')+f(Math.abs(v));
     function reviewCases(side,scope,selector,label,reportCurrent){

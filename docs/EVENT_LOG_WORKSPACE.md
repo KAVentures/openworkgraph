@@ -2441,6 +2441,11 @@ cohort they are `starts_with`, `ends_with` and `duration: {"min": s, "max": s}`.
 every other condition and apply to the same views. Saved filters keep them. A saved filter whose
 first or last activity is no longer in the log is flagged, like its follower rules.
 
+**Case start dates.** Select UTC dates to keep cases whose first recorded event
+falls on or after the lower date and before the upper date. The selection keeps
+each matching case's full event sequence and can be saved as a filter. When a log
+comparison uses the workspace filter, its baseline dates narrow this selection.
+
 **End time, events, path frequency and rework.** Four more filters follow Disco's timeframe,
 performance and variation filters:
 
