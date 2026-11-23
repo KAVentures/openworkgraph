@@ -252,6 +252,11 @@ def _publish(path, data, grant_file, tenant, mailbox, folder, grant_revision):
             os.fsync(stream.fileno())
         _same_grant(grant_file, tenant, mailbox, folder, grant_revision)
         os.link(tmp, path)
+        # Unlinking the temporary hard link changes the destination inode's
+        # ctime on macOS. Snapshot only after that cleanup, so a later
+        # failure can identify this exact artifact across platforms.
+        os.unlink(tmp)
+        tmp = None
         return os.stat(path, follow_symlinks=False)
     except OSError:
         raise DeltaError("Could not create private delta artifact") from None
