@@ -41,6 +41,38 @@ def test_weekend_gap_keeps_elapsed_and_parallel_schedule_assumption_separate():
     assert list(workspace.case_events(log))==before
 
 
+def test_scheduled_hotspot_pages_reconcile_with_aggregate_and_refuse_changed_intervals():
+    log = imported([('one', 'A', '2024-01-05T15:00:00Z', '2024-01-05T16:00:00Z'),
+                    ('one', 'B', '2024-01-08T10:00:00Z', '2024-01-08T11:00:00Z'),
+                    ('two', 'A', '2024-01-06T08:00:00Z', '2024-01-06T09:00:00Z'),
+                    ('two', 'B', '2024-01-06T11:00:00Z', '2024-01-06T12:00:00Z')])
+    schedule = calendar()
+    lens = run(log, schedule)['working_calendar']
+    request = {'source': 'A', 'destination': 'B', 'mode': 'end_attribute', 'end_attribute': 'finished',
+               'working_calendar': schedule, 'expected_evidence_sha256': lens['evidence_sha256'], 'limit': 1}
+    first = waiting.waiting_hotspot_cases(log, **request)
+    second = waiting.waiting_hotspot_cases(log, **request, after=first['next_after'])
+    cases = first['cases'] + second['cases']
+    [hotspot] = lens['waiting_hotspots']
+    assert [item['case_id'] for item in cases] == ['one', 'two'] and second['next_after'] is None
+    assert [item['waiting_seconds'] for item in cases] == [66*3600, 2*3600]
+    assert [item['scheduled_waiting_seconds'] for item in cases] == [2*3600, 0]
+    assert [item['longest_scheduled_wait_seconds'] for item in cases] == [2*3600, 0]
+    assert first['total_cases'] == 2 and first['total_instances'] == hotspot['count']
+    assert first['total_scheduled_waiting_seconds'] == hotspot['total_waiting_seconds'] == 2*3600
+    assert first['evidence_sha256'] == second['evidence_sha256'] == lens['evidence_sha256']
+    with pytest.raises(workspace.EventLogWorkspaceError, match='intervals changed'):
+        waiting.waiting_hotspot_cases(log, **{**request, 'working_calendar': calendar(holidays=['2024-01-08'])})
+
+    workspace.append_log(log, BytesIO(b'case,activity,time,finished\none,C,2024-01-06T14:00:00Z,2024-01-06T15:00:00Z\n'),
+                         source_format='csv', mapping={'case_column': 'case', 'activity_column': 'activity',
+                                                      'timestamp_column': 'time', 'attribute_columns': ['finished']})
+    updated = run(log, schedule)['working_calendar']
+    assert updated['utc_opening_windows_sha256'] == lens['utc_opening_windows_sha256']
+    with pytest.raises(workspace.EventLogWorkspaceError, match='intervals changed'):
+        waiting.waiting_hotspot_cases(log, **request, after=first['next_after'])
+
+
 def test_holiday_excludes_interval_without_inventing_absent_work_and_changes_clock_pin():
     log=imported([('one','A','2024-01-05T15:00:00Z','2024-01-05T16:00:00Z'),
                   ('one','B','2024-01-08T10:00:00Z','2024-01-08T11:00:00Z')])
@@ -168,6 +200,15 @@ with TestClient(app) as client:
     response=client.post(url,headers=headers,json=payload)
     assert response.status_code==200 and response.headers['cache-control']=='no-store',response.text
     assert response.json()['working_calendar']['flow_efficiency']['median']==.5
+    pin=response.json()['working_calendar']['evidence_sha256']
+    selection={**payload,'source':'A','destination':'B','expected_evidence_sha256':pin}
+    assert client.post(url+'/cases',headers={'Authorization':'Bearer '+local_auth.ensure_api_token()},json=selection).status_code==403
+    evidence=client.post(url+'/cases',headers=headers,json=selection)
+    assert evidence.status_code==200 and evidence.headers['cache-control']=='no-store',evidence.text
+    assert evidence.json()['cases'][0]['scheduled_waiting_seconds']==7200
+    assert evidence.json()['cases'][0]['waiting_seconds']==237600
+    assert client.post(url+'/cases',headers=headers,json={**selection,'expected_evidence_sha256':'a'*64}).status_code==422
+    assert client.post(url+'/cases',headers=headers,json={**selection,'working_calendar':None}).status_code==422
     core=client.get(url,headers=headers,params={'mode':'end_attribute','end_attribute':'finished'}).json()
     bare=client.post(url,headers=headers,json={'mode':'end_attribute','end_attribute':'finished'})
     assert bare.status_code==200 and bare.json()==core

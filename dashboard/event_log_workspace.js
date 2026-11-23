@@ -5328,33 +5328,41 @@
     enabled.addEventListener('change',()=>{show(calendarFields,enabled.checked);show(exportReport,enabled.checked);invalidate();});
     exportReport.onclick=()=>{if(artifact&&enabled.checked)download('working-calendar-aggregates.json',JSON.stringify(artifact,null,2),'application/json');};
     box.append(field('Add a declared working-calendar lens',enabled),calendarFields,row,statusLine,out,review,exportReport);
-    function showHotspot(url,hotspot){
+    function showHotspot(url,hotspot,calendarSpec){
       const generation=state.generation,version=requestVersion,selection=++reviewVersion;
       const current=()=>generation===state.generation&&version===requestVersion&&selection===reviewVersion;
-      const title=el('h4','Waiting from '+hotspot.from+' to '+hotspot.to);title.tabIndex=-1;
+      const title=el('h4',(calendarSpec?'Scheduled waiting':'Waiting')+' from '+hotspot.from+' to '+hotspot.to);title.tabIndex=-1;
       const status=el('div');status.setAttribute('role','status');
       const rows=el('div'),controls=el('div',null,'row');
       const previous=button('Previous page','secondary'),next=button('Next page','secondary');
       controls.append(previous,next);review.replaceChildren(title,status,rows,controls);title.focus();
       const cursors=[null];let page=0,following=null;
       async function load(index){
-        previous.disabled=next.disabled=true;status.textContent='Loading cases…';
+        previous.disabled=next.disabled=true;status.textContent='Loading cases…';rows.replaceChildren();
         try{
           const path=new URL(url,window.location.origin);path.pathname+='/cases';
-          path.searchParams.set('source',hotspot.from);path.searchParams.set('destination',hotspot.to);
-          if(cursors[index]!==null)path.searchParams.set('after',cursors[index]);
-          const result=await getJSON(path.pathname+path.search);
+          const pageSpec={source:hotspot.from,destination:hotspot.to,after:cursors[index]};
+          let result;
+          if(calendarSpec){
+            result=await (await api(path.pathname+path.search,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...calendarSpec,...pageSpec})})).json();
+          }else{
+            for(const [key,value] of Object.entries(pageSpec))if(value!==null)path.searchParams.set(key,value);
+            result=await getJSON(path.pathname+path.search);
+          }
           if(!current())return;
           if(!result.available)throw new Error(result.reason);
           page=index;following=result.next_after;
-          status.textContent=Number(result.total_cases).toLocaleString()+' matching cases. Showing '+result.cases.length+' on this page.';
-          rows.replaceChildren(result.cases.length?table(['Case','Times','Total elapsed waiting','Longest elapsed wait','Evidence'],result.cases.map(item=>{
+          status.textContent=Number(result.total_cases).toLocaleString()+' matching cases. Showing '+result.cases.length+' on this page.'+
+            (calendarSpec?' Total scheduled waiting '+duration(result.total_scheduled_waiting_seconds)+'.':'');
+          const headers=['Case','Times','Total elapsed waiting','Longest elapsed wait',...(calendarSpec?['Total scheduled waiting','Longest scheduled wait']:[]),'Evidence'];
+          rows.replaceChildren(result.cases.length?table(headers,result.cases.map(item=>{
             const open=button('Open case','secondary');open.setAttribute('aria-label','Open case '+item.case_id);
             open.onclick=()=>inspection.open(item.case_id);
-            return [item.case_id,Number(item.instances).toLocaleString(),duration(item.waiting_seconds),duration(item.longest_wait_seconds),open];
+            return [item.case_id,Number(item.instances).toLocaleString(),duration(item.waiting_seconds),duration(item.longest_wait_seconds),
+              ...(calendarSpec?[duration(item.scheduled_waiting_seconds),duration(item.longest_scheduled_wait_seconds)]:[]),open];
           })):el('div','No matching cases on this page.','muted'));
+          previous.disabled=page===0;next.disabled=following===null;
         }catch(error){if(current())status.textContent=error.message;}
-        finally{if(current()){previous.disabled=page===0;next.disabled=following===null;}}
       }
       previous.onclick=()=>load(page-1);
       next.onclick=()=>{cursors[page+1]=following;load(page+1);};
@@ -5369,8 +5377,8 @@
         if(end.value.trim())params.end_attribute=end.value.trim();
         const cal=enabled.checked?simCalendar({days:'every_day',from:from.value,to:until.value,timezone:zone.value,holidays:holidays.value}):null;
         if(cal){const selected=[...days.selectedOptions].map(o=>o.value);if(!selected.length)throw new Error('Choose at least one calendar working day.');cal.hours=Object.fromEntries(selected.map(day=>[day,cal.hours[day]]));}
-        const url=logPath('waiting-time',params);
-        const r=cal?await (await api(logPath('waiting-time'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...params,working_calendar:cal})})).json():await getJSON(url);
+        const url=logPath('waiting-time',params),calendarUrl=logPath('waiting-time');
+        const r=cal?await (await api(calendarUrl,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...params,working_calendar:cal})})).json():await getJSON(url);
         if(!current())return;
         if(!r.available){
           statusLine.textContent=r.reason;
@@ -5391,9 +5399,17 @@
           el('div',r.interpretation,'muted'));
         if(r.working_calendar?.available){
           const c=r.working_calendar,flow=c.flow_efficiency;
+          const calendarSpec={...params,working_calendar:cal,expected_evidence_sha256:c.evidence_sha256};
           out.append(el('h4','Declared working-calendar lens'),
             el('p','Calendar: '+c.calendar.timezone+'. '+c.instances_crossing_closed_time+' recorded intervals cross closed time. These are schedule-adjusted intervals; actual labor, staffing and policy remain unverified. Elapsed metrics above retain all recorded time.'),
             table(['Activity','Median scheduled processing','Median scheduled gap','Total scheduled gap'],c.activities.slice(0,25).map(a=>[a.activity,duration(a.processing.median_seconds),duration(a.waiting_before.median_seconds),duration(a.waiting_before.total_seconds)])),
+            el('h4','Where cases wait during scheduled hours'),
+            table(['After','Before','Times','Median scheduled waiting','Total scheduled waiting','Evidence'],c.waiting_hotspots.slice(0,10).map(h=>{
+              const inspect=button('Inspect scheduled waits','secondary');
+              inspect.setAttribute('aria-label','Inspect scheduled waits from '+h.from+' to '+h.to);
+              inspect.onclick=()=>showHotspot(calendarUrl,h,calendarSpec);
+              return [h.from,h.to,Number(h.count).toLocaleString(),duration(h.median_waiting_seconds),duration(h.total_waiting_seconds),inspect];
+            })),
             el('p','Calendar flow efficiency: '+(flow.median===null?'undefined':pct(flow.median))+'. '+flow.cases_with_zero_calendar_span+' cases have no scheduled span. '+c.interpretation));
           artifact={format:'openworkgraph.working-calendar-aggregate-export.v1',
             log_reference:{log_id:r.log.log_id,case_notion:r.case_notion,imported_at:r.log.imported_at,events:r.log.events,objects:r.log.objects},
