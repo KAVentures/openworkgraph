@@ -124,6 +124,10 @@ and optional `preferred_log_id`. Each match includes its
 
 ### SQLite database files
 
+When switching files or tables, the import form keeps the latest selection.
+If a table cannot be read, the last successfully converted table stays in the
+form for review.
+
 A `.sqlite`, `.sqlite3` or `.db` file chosen for import is read like an Excel workbook (below): its tables
 take the place of worksheets (the first table by name is read first; pick another under
 *Worksheet*), and the chosen table becomes CSV for the ordinary column mapping, consent and quality

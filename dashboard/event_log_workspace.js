@@ -293,10 +293,11 @@
       jsonColumn.value=columns.includes('attributes')?'attributes':'';
       columnsReady=!!(cols.case.value&&cols.activity.value&&cols.time.value);
     }
+    function clearReusableMapping(){reuseRow.hidden=true;reuseRow.replaceChildren();}
     async function readColumns(){
       const sequence=++columnReadSequence;
       formatSequence++;
-      const staleOffer=document.getElementById('owgEventLogReuse');if(staleOffer){staleOffer.hidden=true;staleOffer.replaceChildren();}
+      clearReusableMapping();
       const chosen=file.files&&file.files[0];
       columnsReady=false;
       if(!chosen||format.value!=='csv'){
@@ -330,28 +331,57 @@
     const localOffset=()=>{const m=-new Date().getTimezoneOffset(),a=Math.abs(m);return (m<0?'-':'+')+String(Math.floor(a/60)).padStart(2,'0')+':'+String(a%60).padStart(2,'0');};
     // A workbook with several sheets: choose which one to import (the first by default).
     const sheetSelect=select('owgEventLogSheet',[]),sheetField=field('Worksheet',sheetSelect);sheetField.hidden=true;mapping.prepend(sheetField);
-    let workbook=null;
+    let workbook=null,stagedSheet=null;
+    const clearWorkbook=()=>{workbook=null;stagedSheet=null;sheetField.hidden=true;};
     const isDatabase=n=>/\.(sqlite3?|db)$/i.test(n),isJsonLines=n=>/\.(jsonl|ndjson)$/i.test(n);
     async function convertWorkbook(chosen,sheet){
       workbook=chosen;
       // A SQLite database file is read like a workbook: its tables take the place of worksheets.
       const database=isDatabase(chosen.name),unit=database?'table':'worksheet';
-      columnReadSequence++;readingColumns=true;refreshImport();status(isJsonLines(chosen.name)?'Reading the JSON lines of '+chosen.name+'…':'Reading '+(sheet?unit+' \u201c'+sheet+'\u201d':'the first '+unit)+' of '+chosen.name+'…');
+      let sequence=++columnReadSequence,expectedFile=file.files?.[0];
+      const current=()=>sequence===columnReadSequence&&workbook===chosen&&file.files?.[0]===expectedFile;
+      formatSequence++;clearReusableMapping();readingColumns=true;consent.checked=false;refreshImport();
+      status(isJsonLines(chosen.name)?'Reading the JSON lines of '+chosen.name+'…':'Reading '+(sheet?unit+' “'+sheet+'”':'the first '+unit)+' of '+chosen.name+'…');
       try{
         const url=isJsonLines(chosen.name)?'/v1/event-logs/jsonl-to-csv':database?'/v1/event-logs/sqlite-to-csv'+(sheet?'?table='+encodeURIComponent(sheet):''):'/v1/event-logs/xlsx-to-csv'+(sheet?'?sheet='+encodeURIComponent(sheet):'');
         const r=await (await api(url,{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream'}})).json();
-        setOptions(sheetSelect,r.sheets.map(n=>[n,n]));sheetSelect.value=r.sheet;sheetField.hidden=r.sheets.length<2;
+        if(!current())return;
         const transfer=new DataTransfer();transfer.items.add(new File([r.csv],chosen.name.replace(/\.(xlsx|sqlite3?|db|jsonl|ndjson)$/i,'')+(database?'-'+r.sheet:'')+'.csv',{type:'text/csv'}));
-        file.files=transfer.files;format.value='csv';delimiter.value=',';
+        file.files=transfer.files;expectedFile=file.files[0];format.value='csv';delimiter.value=',';
+        stagedSheet=r.sheet;
+        setOptions(sheetSelect,r.sheets.map(n=>[n,n]));sheetSelect.value=stagedSheet;sheetField.hidden=r.sheets.length<2;
         if(r.dates_have_no_offset&&!naiveOffset.value.trim())naiveOffset.value=localOffset();
-        readingColumns=false;await readColumns();
+        const read=readColumns();sequence=columnReadSequence;
+        await read;
+        if(!current())return;
         if(r.kind==='lines'){status('Read '+Number(r.rows).toLocaleString()+(r.rows===1?' JSON line':' JSON lines')+' with '+r.columns+' columns from '+chosen.name+'; nested fields are named with dots (customer.id).');return;}
         status('Read '+unit+' “'+r.sheet+'”'+(r.sheets.length>1?' ('+(r.sheets.indexOf(r.sheet)+1)+' of '+r.sheets.length+'; choose another under Worksheet)':'')+': '+Number(r.rows).toLocaleString()+(r.rows===1?' row.':' rows.')+(r.binary_cells_left_empty?' '+Number(r.binary_cells_left_empty).toLocaleString()+' binary values were left empty.':'')+(r.dates_have_no_offset?' '+(database?'SQLite':'Excel')+' dates have no time zone; they will be read with offset '+naiveOffset.value+' (change it under Offset for times without one).':''));
-      }catch(error){readingColumns=false;file.value='';refreshImport();status(error.message);}
+      }catch(error){
+        if(!current())return;
+        readingColumns=false;
+        if(stagedSheet!==null&&expectedFile!==chosen){
+          sheetSelect.value=stagedSheet;
+          status(error.message+' Still using “'+stagedSheet+'”.');
+        }else{
+          file.value='';columnsReady=false;clearWorkbook();status(error.message);
+        }
+        refreshImport();
+      }
     }
-    file.onchange=()=>{const chosen=file.files&&file.files[0];if(chosen){if(!name.value)name.value=chosen.name.replace(/\.[^.]+$/,'').slice(0,120);if(chosen.name.toLowerCase().endsWith('.xlsx')||isDatabase(chosen.name)||isJsonLines(chosen.name)){consent.checked=false;convertWorkbook(chosen);return;}workbook=null;sheetField.hidden=true;format.value=detectFormat(chosen.name);if(chosen.name.toLowerCase().endsWith('.tsv'))delimiter.value='t';}consent.checked=false;readColumns();};
-    format.onchange=()=>{consent.checked=false;readColumns();};
-    sheetSelect.onchange=()=>{if(workbook){consent.checked=false;convertWorkbook(workbook,sheetSelect.value);}};
+    file.onchange=()=>{
+      const chosen=file.files?.[0];clearWorkbook();consent.checked=false;
+      if(chosen){
+        if(!name.value)name.value=chosen.name.replace(/\.[^.]+$/,'').slice(0,120);
+        if(chosen.name.toLowerCase().endsWith('.xlsx')||isDatabase(chosen.name)||isJsonLines(chosen.name)){
+          void convertWorkbook(chosen);return;
+        }
+        format.value=detectFormat(chosen.name);
+        if(chosen.name.toLowerCase().endsWith('.tsv'))delimiter.value='t';
+      }
+      void readColumns();
+    };
+    format.onchange=()=>{clearWorkbook();consent.checked=false;readColumns();};
+    sheetSelect.onchange=()=>{if(workbook)void convertWorkbook(workbook,sheetSelect.value);};
     delimiter.onchange=()=>{consent.checked=false;readColumns();};
     // Suggest a timestamp format from the first rows of the chosen time column (sent to this computer only).
     let formatSequence=0;
