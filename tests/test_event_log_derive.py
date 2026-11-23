@@ -250,8 +250,30 @@ def test_a_time_window_trims_the_copy_to_its_events():
     assert "time_window" not in derive.derive(log, {"name": "esc", "cohort": {"activity": "Escalate"}})
 
 
-def test_preview_and_copy_count_original_events_that_were_collapsed():
+def test_matching_case_export_applies_the_window_to_original_events():
+    from server.event_log_cohort_export import export_matching_cases
+
+    log = _csv_log()
+    selection = {"cohort": {}, "events_from": "2024-03-05T09:00:00Z",
+                 "events_before": "2024-03-06T09:00:00Z"}
+    out = StringIO(newline="")
+    export_matching_cases(log, selection, out)
+    rows = list(csv.DictReader(StringIO(out.getvalue())))
+    assert [(row["case_id"], row["activity"]) for row in rows] == [("c1", "Pay"), ("c2", "Receive")]
+    assert len(rows) == derive.preview(log, selection)["events"]
+    for settings, message in (
+        ({"events_from": "2024-03-05"}, "UTC offset"),
+        ({"events_before": "2024-03-04T00:00:00Z"}, "before"),
+        ({"cohort": {"activity": "Escalate"}}, "no event"),
+        ({"cohort": {"activity": []}}, "activity"),
+    ):
+        with pytest.raises(workspace.EventLogWorkspaceError, match=message):
+            export_matching_cases(log, {**selection, **settings}, StringIO())
+
+
+def test_preview_copy_and_export_include_original_events_that_were_collapsed():
     from server import event_log_activity_mappings as mappings
+    from server.event_log_cohort_export import export_matching_cases
 
     raw = b"""case,activity,time
 c,Start,2024-03-04T08:00:00Z
@@ -273,6 +295,11 @@ c,Retry,2024-03-04T09:00:00Z
     copied = derive.derive(log, {**selection, "name": "Retry period"})
     assert copied["time_window"]["cases_with_events_in_window"] == 1
     assert copied["copied"] == {"events": 1, "objects": 1}
+
+    out = StringIO()
+    export_matching_cases(log, selection, out, export_format="xes-attributes")
+    assert 'key="concept:name" value="Retry"' in out.getvalue()
+    assert 'key="concept:name" value="Start"' not in out.getvalue()
 
 
 def test_time_window_validation():

@@ -45,10 +45,9 @@ class DeriveSpec(SelectionSpec):
     name: str = Field(min_length=1, max_length=120)
 
 
-def _window(parsed: SelectionSpec) -> tuple[datetime | None, datetime | None]:
+def _window(events_from: str | None, events_before: str | None) -> tuple[datetime | None, datetime | None]:
     bounds = []
-    for key in ("events_from", "events_before"):
-        value = getattr(parsed, key)
+    for key, value in (("events_from", events_from), ("events_before", events_before)):
         stamp = parse_timestamp(value) if value is not None else None
         if value is not None and stamp is None:
             raise workspace.EventLogWorkspaceError(f"{key} must be a time with a UTC offset")
@@ -71,18 +70,13 @@ def _parse(spec: Any, schema: type[_Selection]) -> tuple[_Selection, dict[str, A
     if isinstance(parsed, DeriveSpec) and not workspace._NAME.fullmatch(parsed.name.strip()):
         raise workspace.EventLogWorkspaceError("a short log name is required")
     chosen = cohorts.parse_cohort(parsed.cohort)
-    if not {k for k in chosen if k != "label"} and _window(parsed) == (None, None):
+    if not {k for k in chosen if k != "label"} and _window(parsed.events_from, parsed.events_before) == (None, None):
         raise workspace.EventLogWorkspaceError("choose a case filter or a time window; an unfiltered copy would duplicate the log")
     return parsed, chosen
 
 
-def _select_events(conn, log_id: str, chosen: dict[str, Any],
-                   window_from: datetime | None, window_before: datetime | None) -> dict[str, int]:
-    source_cases = conn.execute("SELECT count(DISTINCT case_id) FROM ce").fetchone()[0]
-    cohorts.restrict(conn, chosen, log_id)
-    cases = conn.execute("SELECT count(DISTINCT case_id) FROM ce").fetchone()[0]
-    if not cases:
-        raise workspace.EventLogWorkspaceError("no cases match the filter")
+def _select_original_events(conn, log_id: str, window_from: datetime | None,
+                            window_before: datetime | None) -> tuple[int, int]:
     # The mapped projection determines which cases match. A collapsed
     # analysis row still belongs to the original trace being copied.
     conn.execute("""CREATE OR REPLACE TEMP TABLE dv_events AS
@@ -98,19 +92,30 @@ def _select_events(conn, log_id: str, chosen: dict[str, Any],
     events = conn.execute("SELECT count(*) FROM dv_events").fetchone()[0]
     if not events:
         raise workspace.EventLogWorkspaceError("no event of the matching cases falls in the time window")
+    return events, before_trim - events if before_trim is not None else 0
+
+
+def _select_events(conn, log_id: str, chosen: dict[str, Any],
+                   window_from: datetime | None, window_before: datetime | None) -> dict[str, int]:
+    source_cases = conn.execute("SELECT count(DISTINCT case_id) FROM ce").fetchone()[0]
+    cohorts.restrict(conn, chosen, log_id)
+    cases = conn.execute("SELECT count(DISTINCT case_id) FROM ce").fetchone()[0]
+    if not cases:
+        raise workspace.EventLogWorkspaceError("no cases match the filter")
+    events, trimmed = _select_original_events(conn, log_id, window_from, window_before)
     kept_cases = cases
-    if before_trim is not None:
+    if window_from or window_before:
         # A surviving raw event can have been collapsed in the analytical projection.
         kept_cases = conn.execute("""SELECT count(DISTINCT links.object_id) FROM event_objects links
             SEMI JOIN ce ON links.object_id = ce.case_id
             SEMI JOIN dv_events ON links.event_id = dv_events.event_id WHERE links.log_id = ?""", [log_id]).fetchone()[0]
     return {"source_cases": source_cases, "cases": cases, "events": events,
-            "trimmed": before_trim - events if before_trim is not None else 0, "kept_cases": kept_cases}
+            "trimmed": trimmed, "kept_cases": kept_cases}
 
 
 def preview(log_id: str, spec: Any) -> dict[str, Any]:
     settings, chosen = _parse(spec, SelectionSpec)
-    start, end = _window(settings)
+    start, end = _window(settings.events_from, settings.events_before)
 
     def run(conn):
         selected = _select_events(conn, log_id, chosen, start, end)
@@ -123,7 +128,7 @@ def preview(log_id: str, spec: Any) -> dict[str, Any]:
 
 def derive(log_id: str, spec: Any) -> dict[str, Any]:
     settings, chosen = _parse(spec, DeriveSpec)
-    window_from, window_before = _window(settings)
+    window_from, window_before = _window(settings.events_from, settings.events_before)
     new_id = "log_" + secrets.token_hex(8)
 
     def run(conn):

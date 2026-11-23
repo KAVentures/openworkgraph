@@ -733,12 +733,12 @@
       if(filterOn())applyActiveCohort(cohort);
       return state.caseType?{cohort,case_type:state.caseType}:{cohort};
     }
-    function copySelection(){
+    function copySelection(action='copy'){
       const cases=selectedCases(),window={};
       if(windowFrom.value)window.events_from=new Date(windowFrom.value).toISOString();
       if(windowBefore.value)window.events_before=new Date(windowBefore.value).toISOString();
       if(!Object.keys(cases.cohort).length&&!Object.keys(window).length){
-        throw new Error('Choose which cases to copy. Or set a time window.');
+        throw new Error('Choose which cases to '+action+'. Or set a time window.');
       }
       return {...cases,...window};
     }
@@ -768,8 +768,7 @@
       const extension=format==='csv-review'?'review.csv':format.startsWith('xes')?'xes':'csv';
       download.disabled=true;
       try{
-        const spec=selectedCases();
-        if(!Object.keys(spec.cohort).length)throw new Error('Choose which cases to export.');
+        const spec=copySelection('export');
         out.textContent='Preparing matching cases…';
         const response=await api('/v1/event-logs/'+encodeURIComponent(logId)+'/export/matching-cases?'+new URLSearchParams({format}),{
           method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)});
