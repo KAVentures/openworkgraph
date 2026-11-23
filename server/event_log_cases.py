@@ -44,7 +44,10 @@ def cases(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, Any
     variant_id = spec.get("variant_id") if isinstance(spec, dict) else None
     if variant_id is not None and (not isinstance(variant_id, str) or not re.fullmatch(r"[a-f0-9]{64}", variant_id)):
         raise EventLogWorkspaceError("invalid exact variant identifier")
-    spec = _spec(spec, {"cohort", "path", "transition", "after", "limit", "variant_id", "required_activities", "excluded_activities", "repeat_activity", "loop_pattern"})
+    spec = _spec(spec, {"cohort", "path", "transition", "after", "limit", "variant_id", "required_activities", "excluded_activities", "repeat_activity", "loop_pattern", "duration_seconds_gt"})
+    duration_cutoff = spec.get("duration_seconds_gt")
+    if duration_cutoff is not None:
+        duration_cutoff = _integer(duration_cutoff, 10**9)
     cohort = cohorts.parse_cohort(spec.get("cohort"))
     limit = _integer(spec.get("limit", 30), 100)
     after = _text(spec["after"]) if spec.get("after") is not None else None
@@ -100,13 +103,17 @@ def cases(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, Any
             params.extend(transition)
         sequence = "list(activity ORDER BY ts, event_id)"
         shape = f", {sequence} AS path" if variant_id is not None else ""
-        having = ""
+        criteria = []
         if path is not None:
-            having = f" HAVING {sequence} = ?"
+            criteria.append(f"{sequence} = ?")
             params.append(path)
         if variant_id is not None:
-            having = f" HAVING {VARIANT_KEY_SQL.format(path=sequence)} = ?"
+            criteria.append(f"{VARIANT_KEY_SQL.format(path=sequence)} = ?")
             params.append(variant_id)
+        if duration_cutoff is not None:
+            criteria.append("epoch(max(ts) - min(ts)) > ?")
+            params.append(duration_cutoff)
+        having = " HAVING " + " AND ".join(criteria) if criteria else ""
         conn.execute(f"""CREATE TEMP TABLE selected_cases AS SELECT case_id, count(*) AS events,
             min(ts) AS started, max(ts) AS ended, count(*) - count(DISTINCT ts) AS timestamp_ties{shape}
             FROM ce WHERE {predicate} GROUP BY case_id{having}""", params)
