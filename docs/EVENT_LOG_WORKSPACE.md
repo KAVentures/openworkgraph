@@ -2937,6 +2937,9 @@ model is discovered for each period at the chosen noise level, and the section s
 - activities that only one period's model has;
 - **cross-fit**: each period's cases aligned on both models. When the later cases fit the earlier
   model clearly worse than the earlier cases did, the way the work runs has changed.
+- dashboard case evidence for each cross-fit row, including the aligned, excluded and unaligned
+  case counts. Open a listed non-fitting variant to see cases with that exact recorded path in
+  its original period or group. The dashboard lists up to 20 non-fitting variants per alignment.
 
 Each period needs at least 10 cases; a start-date case filter cannot be combined with the split.
 Both models are drafts from their own cases, and a change in how events are recorded looks the same
