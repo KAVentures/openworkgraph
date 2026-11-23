@@ -1631,6 +1631,7 @@
       const heading=el('h4','Case '+caseId);heading.tabIndex=-1;
       const progress=el('div','Loading events…');progress.setAttribute('role','status');
       const rows=el('div'),more=button('More case events','secondary');more.id=prefix==='owgEventLogCases'?'owgEventLogCaseEventsMore':prefix+'EventsMore';more.disabled=true;
+      const exportActions=el('div');
       const notes=document.createElement('details');notes.id=prefix+'InlineNotes';
       notes.append(el('summary','Case notes'));
       notes.ontoggle=()=>{
@@ -1638,13 +1639,16 @@
           notes.append(caseNotesPanel(prefix+'InlineNote',caseId,null));
         }
       };
-      detail.replaceChildren(heading,progress,rows,more,notes);
+      detail.replaceChildren(heading,progress,rows,more,exportActions,notes);
       heading.focus();let offset=0,shown=0;
       async function page(){
         more.disabled=true;
         try{
           const result=await (await api(queryPath('case-events/query',caseType),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({case_id:caseId,offset,limit:100})})).json();
           if(!current()||ticket!==opening)return;
+          if(!exportActions.childElementCount){
+            exportActions.appendChild(caseEventDownload(state.logId,result.case_notion,caseId,{},()=>current()&&ticket===opening));
+          }
           shown+=result.events.length;offset=result.next_offset;
           progress.textContent='Showing '+shown+' of '+result.total_events+' events. '+result.timestamp_ties+' equal-timestamp events. '+result.ordering;
           rows.appendChild(table(['Activity','Timestamp (UTC)','Resource label','Event ID'],result.events.map(e=>[e.activity,e.timestamp,e.resource||'(missing)',e.event_id])));
@@ -7152,13 +7156,17 @@
         const detail=el('div'),title=el('h4','Case '+caseId);title.tabIndex=-1;
         const progress=el('div',null,'muted');progress.setAttribute('role','status');
         const rows=el('div'),more=button('More case events','secondary');
-        detail.append(title,progress,rows,more);events.replaceChildren(detail);title.focus();
+        const exportActions=el('div');
+        detail.append(title,progress,rows,more,exportActions);events.replaceChildren(detail);title.focus();
         let offset=0;
         async function loadEvents(){
           more.disabled=true;progress.textContent='Loading events…';
           try{
             const found=await post('case-events/query',{case_id:caseId,offset,limit:100});
             if(!current()||!detail.isConnected)return;
+            if(!exportActions.childElementCount){
+              exportActions.appendChild(caseEventDownload(side.log_id,found.case_notion,caseId,scope.cohort,()=>current()&&detail.isConnected));
+            }
             progress.textContent='Showing '+(offset+found.events.length)+' of '+found.total_events+' events. '+
               found.timestamp_ties+' equal-timestamp events. '+found.ordering;
             rows.appendChild(table(['Activity','Timestamp (UTC)','Resource label','Event ID'],
@@ -8480,6 +8488,28 @@
       Object.entries({x:box.x+8,y:box.y+box.height+16+i*16,'font-size':11,'font-family':'sans-serif',fill:'#334155'}).forEach(([k,v])=>t.setAttribute(k,String(v)));t.textContent=line.slice(0,160);clone.appendChild(t);});
     return {text:new XMLSerializer().serializeToString(clone),width:box.width,height:box.height+pad};
   }
+  function caseEventDownload(logId,caseType,caseId,cohort,current){
+    const row=el('div',null,'row');
+    const control=button('Download case events (CSV)','secondary');
+    const message=el('span',null,'muted');message.setAttribute('role','status');
+    row.append(control,message);
+    control.onclick=async()=>{
+      if(!current())return;
+      control.disabled=true;message.textContent='Preparing case events…';
+      try{
+        const path='/v1/event-logs/'+encodeURIComponent(logId)+'/export/matching-cases?format=csv';
+        const spec={case_type:caseType,case_id:caseId,cohort};
+        const response=await api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)});
+        const blob=await response.blob();
+        if(!current())return;
+        downloadBlob(blob,logId+'-case-events.csv');
+        message.textContent='Case events downloaded.';
+      }catch(error){if(current())message.textContent=error.message;}
+      finally{if(current())control.disabled=false;}
+    };
+    return row;
+  }
+
   function downloadBlob(blob,name){const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
   function mapFileName(ext){return 'process-map-'+String(state.logId||'log').replace(/[^A-Za-z0-9_-]/g,'').slice(0,40)+'.'+ext;}
 
