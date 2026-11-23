@@ -1512,3 +1512,52 @@ class CompleteSourceCohortTests(unittest.TestCase):
         self.assertEqual(result["false_negative_pairs"], 1)
         self.assertFalse(result["independent_labels_verified"])
         self.assertFalse(result["held_out_verified"])
+
+
+class SourceCohortOperatorCliTests(unittest.TestCase):
+    def test_source_inventory_counts_unsurfaced_events_without_claiming_holdout(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from server.reconstruction_review_cli import main
+        source = payload([pair("A", "F", ["e1"])])
+        row = build_review_queue(source)["event_reviews"][0]
+        inventory = {"evidence_sha256": build_review_queue(source)["evidence_sha256"], "source_events": [
+            {"window": "current", "event_id": "e1", "true_resource_pairs": row["candidate_resource_pairs"]},
+            {"window": "current", "event_id": "e2", "true_resource_pairs": row["candidate_resource_pairs"]},
+            {"window": "current", "event_id": "e3", "true_resource_pairs": []},
+        ]}
+        with tempfile.TemporaryDirectory() as directory:
+            source_path, labels_path = Path(directory) / "source.json", Path(directory) / "inventory.json"
+            source_path.write_text(json.dumps(source), encoding="utf-8")
+            labels_path.write_text(json.dumps(inventory), encoding="utf-8")
+            output = StringIO()
+            with patch("sys.argv", ["review", str(source_path), "--source-labels", str(labels_path)]):
+                with redirect_stdout(output):
+                    self.assertEqual(main(), 0)
+            result = json.loads(output.getvalue())
+            self.assertEqual(result["true_positive_pairs"], 1)
+            self.assertEqual(result["false_negative_pairs"], 1)
+            self.assertFalse(result["held_out_verified"])
+            self.assertFalse(result["source_event_inventory_exhaustiveness_verified"])
+
+    def test_source_inventory_refuses_stale_digest(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        from contextlib import redirect_stderr
+        from io import StringIO
+        from server.reconstruction_review_cli import main
+        source = payload([pair("A", "F", ["e1"])])
+        with tempfile.TemporaryDirectory() as directory:
+            source_path, labels_path = Path(directory) / "source.json", Path(directory) / "inventory.json"
+            source_path.write_text(json.dumps(source), encoding="utf-8")
+            labels_path.write_text(json.dumps({"evidence_sha256": "0" * 64, "source_events": []}), encoding="utf-8")
+            with patch("sys.argv", ["review", str(source_path), "--source-labels", str(labels_path)]):
+                with redirect_stderr(StringIO()) as errors:
+                    self.assertEqual(main(), 2)
+            self.assertIn("digest mismatch", errors.getvalue())
