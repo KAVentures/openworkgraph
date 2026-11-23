@@ -233,6 +233,22 @@ def test_end_time_attribute_with_offsets_and_bad_values():
     assert result["instances"]["without_lifecycle_or_end"] == 1 and result["instances"]["end_before_start"] == 1
 
 
+def test_end_attribute_invalid_end_remains_in_coverage_denominator():
+    # Unlike a lifecycle invalid pair, an invalid end-attribute timestamp
+    # is not counted again as an unmatched start.
+    log = _import(["case", "activity", "time", "finished"], [
+        ("a", "Review", _at(0, 0), _at(0, 1)),
+        ("b", "Review", _at(1, 2), _at(1, 1)),
+        ("c", "Review", _at(2, 0), "no trusted offset"),
+    ])
+    result = waiting.waiting_time(log, end_attribute="finished")
+    review = _by(result)["Review"]
+    assert result["instances"]["end_before_start"] == 1
+    assert review["processing_observations"] == {"observed": 1, "eligible": 3}
+    assert review["processing_observation_share"] == pytest.approx(1 / 3)
+    assert review["waiting_observations"]["eligible"] == 3
+
+
 def test_settings_validation_and_cohorts():
     log = _lifecycle_log()
     for bad in ({"mode": "fast"}, {"mode": "end_attribute"}, {"end_attribute": 'x"y'}, {"lifecycle_attribute": ""}):
