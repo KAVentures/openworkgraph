@@ -237,3 +237,27 @@ def test_cli_refuses_without_secrets_or_partial_output(setup, monkeypatch, capsy
     assert MAILBOX not in json.dumps(receipt)
     assert main(cmd, opener=Graph([message(ID_A), message(ID_B)])) == 2
     assert json.loads(capsys.readouterr().out)["status"] == "refused"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX FIFO semantics")
+def test_selected_grant_fifo_without_writer_refused_without_blocking(setup):
+    import multiprocessing
+    private, grant = setup
+    grant.unlink()
+    os.mkfifo(grant, mode=0o600)
+    # Child process bounds the test even if a future regression blocks open().
+    def check_grant():
+        from server.m365_outlook_selected import _grant
+        try:
+            _grant(grant, TENANT, MAILBOX, [ID_A, ID_B])
+        except OutlookError:
+            return
+        raise AssertionError("FIFO grant was accepted")
+    process = multiprocessing.get_context("fork").Process(target=check_grant)
+    process.start()
+    process.join(timeout=3)
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=3)
+        pytest.fail("Grant validation blocked on a FIFO without a writer")
+    assert process.exitcode == 0
