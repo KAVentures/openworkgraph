@@ -252,6 +252,7 @@ def _publish(path, data, grant_file, tenant, mailbox, folder, grant_revision):
             os.fsync(stream.fileno())
         _same_grant(grant_file, tenant, mailbox, folder, grant_revision)
         os.link(tmp, path)
+        return os.stat(path, follow_symlinks=False)
     except OSError:
         raise DeltaError("Could not create private delta artifact") from None
     finally:
@@ -346,9 +347,22 @@ def export_delta(*, tenant, mailbox, folder_id, grant_file: Path,
         "removed_case_ids": sorted(removed.values()), "pages": pages,
     }
     # CSV first, then its SHA-bound candidate. Failure never advances a cursor.
-    _publish(output, csv_bytes, grant_file, tenant, mailbox, folder_id, grant_revision)
-    _publish(candidate, (json.dumps(record, sort_keys=True) + "\n").encode(),
-             grant_file, tenant, mailbox, folder_id, grant_revision)
+    # If the second publication fails, do not strand an uncommittable CSV
+    # that prevents a safe retry. Only remove the inode this round created;
+    # never delete a replacement installed by another actor.
+    published = _publish(output, csv_bytes, grant_file, tenant, mailbox, folder_id, grant_revision)
+    try:
+        _publish(candidate, (json.dumps(record, sort_keys=True) + "\n").encode(),
+                 grant_file, tenant, mailbox, folder_id, grant_revision)
+    except (DeltaError, OSError):
+        try:
+            current = os.stat(output, follow_symlinks=False)
+            if (stat.S_ISREG(current.st_mode) and current.st_dev == published.st_dev
+                    and current.st_ino == published.st_ino and current.st_nlink == 1):
+                output.unlink()
+        except OSError:
+            pass  # Keep the original refusal; never remove a foreign artifact.
+        raise
     return {
         "format": FORMAT, "status": "review_ready",
         "provider_get_requests": pages, "source_rows": total,
