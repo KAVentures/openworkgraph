@@ -1623,6 +1623,10 @@ static trace and event values. The XES projection follows the chosen case notion
 Use OCEL when you need timed object attributes or relationships. An empty filter
 or a filter with no matches produces an error.
 
+Choose **Preview copy** to see how many cases, events and linked objects the
+current case selection and optional time window would retain. Saving a copy
+recalculates the selection against the source log.
+
 **Save or export matching cases → Save as new log** (after **Analyse**), or
 `POST /v1/event-logs/{log_id}/derive` with
 `{"name": "Escalated orders", "cohort": {"activity": "Escalate"}, "case_type": null}`,

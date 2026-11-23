@@ -34,6 +34,14 @@ const path=require('node:path');
    // Without a filter nothing is copied.
    await page.locator('#owgDeriveRun').click();
    await page.locator('#owgDeriveResult').filter({hasText:'Choose which cases to copy.'}).waitFor();
+   const savePanel=page.locator('#owgEventLogDerive');
+   await page.locator('#owgDeriveEventsFrom').fill('2024-01-01T00:00');
+   await page.locator('#owgDeriveCohortAttribute').fill('missing-equals');
+   await page.locator('#owgDeriveRun').click();
+   await page.locator('#owgDeriveResult').getByText('Attribute must look like name=value.').waitFor();
+   assert.equal(await page.locator('#owgEventLogPick option').count(),1);
+   await page.locator('#owgDeriveCohortAttribute').fill('');
+   await page.locator('#owgDeriveEventsFrom').fill('');
    await page.locator('#owgDeriveCohortActivity').selectOption('Escalate');
    const endpoint=await page.evaluate(()=>'/v1/event-logs/'+document.querySelector('#owgEventLogPick').value+'/export/matching-cases');
    assert.ok([401,403].includes((await context.request.post(base+endpoint,{data:{cohort:{activity:'Escalate'}}})).status()));
@@ -44,6 +52,9 @@ const path=require('node:path');
    assert.deepEqual([...new Set(csv.slice(1).map(line=>line.split(',')[0]))],['c0','c3','c6','c9']);
    assert.equal(await page.locator('#owgEventLogPick option').count(),1);
 
+   await savePanel.getByRole('button',{name:'Preview copy',exact:true}).click();
+   await page.locator('#owgDerivePreview').getByText('4 of 10 cases match. The copy would retain 12 events and 4 linked objects.').waitFor();
+   assert.equal(await page.locator('#owgEventLogPick option').count(),1);
    await page.locator('#owgDeriveName').fill('Escalated orders');
    await page.locator('#owgDeriveRun').click();
    await page.locator('#owgDeriveResult').filter({hasText:'Saved Escalated orders: 4 of 10 cases, 12 events.'}).waitFor();
