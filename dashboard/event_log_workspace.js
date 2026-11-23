@@ -204,6 +204,7 @@
     const sampleButton=button('Try with a sample log','secondary');sampleButton.id='owgEventLogSample';
     sampleButton.title='Stores a synthetic order-to-cash log (no real data) on this computer and analyses it';
     const importRow=el('div',null,'row');importRow.append(importButton,appendButton,sampleButton);
+    const saveMessage=el('div',null,'muted');saveMessage.id='owgEventLogSaveStatus';saveMessage.setAttribute('role','status');
     // Storage used by the saved logs on this computer, largest first.
     const storageButton=button('Storage used','secondary');storageButton.id='owgEventLogStorage';storageButton.setAttribute('aria-expanded','false');storageButton.setAttribute('aria-controls','owgEventLogStorageList');
     const storageList=el('div');storageList.id='owgEventLogStorageList';storageList.setAttribute('role','region');storageList.setAttribute('aria-label','Storage used by saved logs');show(storageList,false);
@@ -218,7 +219,7 @@
         storageList.replaceChildren(head,t,el('div',r.estimate,'muted'));}
       catch(error){storageList.replaceChildren(el('div',error.message));}};
     const storageRow=el('div',null,'row');storageRow.append(storageButton);
-    card.append(row,mapping,identity,previewPanel,consentLabel,keepLabel,importRow,statusLine,storageRow,storageList);
+    card.append(row,mapping,identity,previewPanel,consentLabel,keepLabel,importRow,statusLine,saveMessage,storageRow,storageList);
 
     const pick=select('owgEventLogPick',[]);const caseType=select('owgEventLogCaseType',[]);
     const exportFormat=select('owgEventLogExportFormat',[['csv','CSV (exact interchange)'],['csv-review','CSV for spreadsheet review'],['sourcecsv','Source-ID CSV (exact interchange)'],['sourcecsv-review','Source-ID CSV for spreadsheet review'],['xes','XES'],['xes-attributes','XES with retained attributes'],['ocel','OCEL 2.0 JSON'],['ocelxml','OCEL 2.0 XML']]);
@@ -265,7 +266,7 @@
     const browse=document.getElementById('owgProcessCSV');
     if(browse)browse.insertAdjacentElement('afterend',card);else panel.appendChild(card);
 
-    let readingColumns=false,columnsReady=false,columnReadSequence=0;
+    let readingColumns=false,columnsReady=false,columnReadSequence=0,savingImport=false;
     let previewTurn=0,previewBusy=false;
     function clearImportPreview(){
       previewTurn++;previewBusy=false;previewMessage.textContent='';previewExamples.replaceChildren();
@@ -273,7 +274,8 @@
     const refreshImport=()=>{const csv=format.value==='csv',active=csv&&useIdentity.checked;
       const valid=!active||(eventId.value&&!!sourceNamespace.value!==!!sourceColumn.value&&!(caseNamespace.value&&caseColumn.value)&&!keep.checked);
       const ready=!readingColumns&&(!csv||columnsReady)&&file.files&&file.files[0]&&valid;
-      importButton.disabled=!(ready&&consent.checked&&name.value.trim());appendButton.disabled=!(ready&&consent.checked&&state.logId);
+      importButton.disabled=savingImport||!(ready&&consent.checked&&name.value.trim());
+      appendButton.disabled=savingImport||!(ready&&consent.checked&&state.logId);
       previewImport.disabled=!(csv&&ready&&!previewBusy);show(previewPanel,csv);
       show(mapping,csv);show(identity,csv);show(identityFields,active);};
     for(const control of [useIdentity,eventId,sourceNamespace,sourceColumn,caseNamespace,caseColumn,jsonColumn]){
@@ -503,21 +505,57 @@
     timeFormat.onchange=()=>{const fmt=timeFormat.value;if(fmt&&!fmt.includes('%z')&&!naiveOffset.value.trim())naiveOffset.value=localOffset();};
     consent.onchange=refreshImport;name.oninput=refreshImport;
     card.appendChild(agentRunsSection());
-    importButton.onclick=async()=>{
-      const chosen=file.files&&file.files[0];if(!chosen||!consent.checked)return;
-      const q=new URLSearchParams({format:format.value,name:name.value.trim()});
+    function saveParams(target){
+      const q=new URLSearchParams({format:format.value});
+      if(!target)q.set('name',name.value.trim());
       if(format.value==='csv')csvMapping(q);
-      importButton.disabled=true;status('Importing '+chosen.name+'…');
+      return q;
+    }
+    async function saveSelectedFile(target){
+      const chosen=file.files?.[0],control=target?appendButton:importButton;
+      if(savingImport||!chosen||control.disabled)return;
+      const q=saveParams(target),generation=state.generation;
+      const formKey=()=>[columnReadSequence,name.value,saveParams(target).toString(),consent.checked].join('\n');
+      let expectedFile=chosen,expectedForm=formKey(),preserved=false;
+      const changed=()=>state.generation!==generation||file.files?.[0]!==expectedFile||formKey()!==expectedForm;
+      const report=text=>{
+        if(preserved)saveMessage.textContent=text;
+        else status(text);
+      };
+      savingImport=true;refreshImport();saveMessage.textContent='';
+      status(target?'Adding '+chosen.name+' to '+target.name+'…':'Importing '+chosen.name+'…');
       try{
-        const log=await (await api('/v1/event-logs/import?'+q,{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream','X-OWG-Local-Storage-Confirmed':'true'}})).json();
-        const done='Imported '+Number(log.events).toLocaleString()+' events'+(log.rejected_events?' ('+Number(log.rejected_events).toLocaleString()+' rejected: '+reasonText(log.quality&&log.quality.rejected_by_reason)+')':'')+'.'+relationshipText(log.object_relationships)+identityText(log.source_identity)+tieText(log.quality)+keptText(log.quality)+sameSourceText(log.same_source_as);
-        consent.checked=false;keep.checked=false;file.value='';name.value='';clearImportPreview();
-        // Report the import only once the new log is selected. Selecting it starts a new generation and
-        // clears the results, so an analysis started before that would be dropped and never shown.
-        await refreshLogs(log.log_id);
-        status(done);
-      }catch(error){status(error.message);}finally{refreshImport();}
-    };
+        const endpoint=target?'/v1/event-logs/'+encodeURIComponent(target.log_id)+'/append':'/v1/event-logs/import';
+        const result=await (await api(endpoint+'?'+q,{method:'POST',body:chosen,headers:{
+          'Content-Type':'application/octet-stream','X-OWG-Local-Storage-Confirmed':'true'}})).json();
+        const count=value=>Number(value).toLocaleString();
+        const rejected=result.rejected_events
+          ?count(result.rejected_events)+' rejected: '+reasonText(result.quality&&result.quality.rejected_by_reason):'';
+        const lead=target
+          ?'Added '+count(result.added_events)+' new events to '+target.name+'; skipped '+
+            count(result.duplicate_events_skipped)+' already in the log'+(rejected?' and '+rejected:'')
+          :'Imported '+count(result.events)+' events'+(rejected?' ('+rejected+')':'');
+        const savedLog=target?result.log:result;
+        const done=lead+'.'+relationshipText(savedLog?.object_relationships)+identityText(result.source_identity)+
+          tieText(result.quality)+keptText(result.quality)+sameSourceText(result.same_source_as);
+        preserved=changed();
+        if(!preserved){
+          consent.checked=false;keep.checked=false;file.value='';if(!target)name.value='';
+          clearImportPreview();clearReusableMapping();expectedFile=undefined;expectedForm=formKey();
+        }
+        try{
+          await refreshLogs(target?target.log_id:result.log_id,undefined,()=>{
+            preserved=preserved||changed();
+            return preserved;
+          });
+        }catch(error){
+          report(done+' Could not refresh the saved logs list. '+error.message);return;
+        }
+        report(done);
+      }catch(error){preserved=preserved||changed();report(error.message);}
+      finally{savingImport=false;refreshImport();}
+    }
+    importButton.onclick=()=>saveSelectedFile(null);
     sampleButton.onclick=async()=>{
       sampleButton.disabled=true;status('Creating the synthetic sample log…');
       try{
@@ -530,17 +568,9 @@
         status((r.already_present?'Opened the sample log you already have. ':'Created the sample log: ')+'synthetic order-to-cash data with no real customers or people, analysed by order.');
       }catch(error){status(error.message);}finally{sampleButton.disabled=false;}
     };
-    appendButton.onclick=async()=>{
-      const chosen=file.files&&file.files[0];const target=state.logs.find(l=>l.log_id===state.logId);if(!chosen||!consent.checked||!target)return;
-      const q=new URLSearchParams({format:format.value});
-      if(format.value==='csv')csvMapping(q);
-      appendButton.disabled=true;status('Adding '+chosen.name+' to '+target.name+'…');
-      try{
-        const r=await (await api('/v1/event-logs/'+encodeURIComponent(target.log_id)+'/append?'+q,{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream','X-OWG-Local-Storage-Confirmed':'true'}})).json();
-        consent.checked=false;file.value='';clearImportPreview();
-        await refreshLogs(target.log_id);
-        status('Added '+Number(r.added_events).toLocaleString()+' new events to '+target.name+'; skipped '+Number(r.duplicate_events_skipped).toLocaleString()+' already in the log'+(r.rejected_events?' and rejected '+Number(r.rejected_events).toLocaleString()+' ('+reasonText(r.quality&&r.quality.rejected_by_reason)+')':'')+'.'+relationshipText(r.log&&r.log.object_relationships)+identityText(r.source_identity)+tieText(r.quality)+keptText(r.quality)+sameSourceText(r.same_source_as));keep.checked=false;
-      }catch(error){status(error.message);}finally{refreshImport();}
+    appendButton.onclick=()=>{
+      const target=state.logs.find(log=>log.log_id===state.logId);
+      if(target)void saveSelectedFile(target);
     };
     pick.onchange=()=>{selectLog(pick.value);refreshImport();};
     caseType.onchange=()=>{state.generation++;state.caseType=caseType.value;state.follows=[];state.attr={};state.caseActivity='';results.replaceChildren();};
@@ -807,7 +837,7 @@
     return box;
   }
 
-  async function refreshLogs(selectId, preferredCaseType){
+  async function refreshLogs(selectId, preferredCaseType, preserveCurrent){
     const refresh=++state.refresh;
     const data=await getJSON('/v1/event-logs');
     if(refresh!==state.refresh)return;
@@ -815,6 +845,9 @@
     const pick=document.getElementById('owgEventLogPick');
     setOptions(pick,state.logs.map(l=>[l.log_id,l.name+' · '+Number(l.events).toLocaleString()+' events']));
     show(document.getElementById('owgEventLogManage'),state.logs.length>0);
+    if(preserveCurrent?.()&&state.logs.some(log=>log.log_id===state.logId)){
+      pick.value=state.logId;return;
+    }
     const next=state.logs.some(l=>l.log_id===selectId)?selectId:(state.logs[0]?state.logs[0].log_id:'');
     if(next){pick.value=next;await selectLog(next,next===selectId?preferredCaseType:undefined);}else{state.logId='';state.objectTypes=[];}
   }

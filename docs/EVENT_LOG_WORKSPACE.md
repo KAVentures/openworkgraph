@@ -131,6 +131,10 @@ checks up to 512 KiB and 2,000 complete records. Source-ID checks apply within
 that sample. The full import validates the entire file and checks existing
 identities when appending.
 
+An import or append runs one at a time. You can prepare another file while a
+save is running. The completed save keeps newer file and mapping choices in
+the form.
+
 ### SQLite database files
 
 When switching files or tables, the import form keeps the latest selection.

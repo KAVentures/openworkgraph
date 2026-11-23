@@ -42,6 +42,53 @@ const path=require('node:path');const zlib=require('node:zlib');
    await page.locator('#owgEventLogStatus').filter({hasText:'Imported 12 events'}).waitFor();
    const logs=await page.evaluate(async()=>(await (await fetch('/v1/event-logs')).json()).logs.map(l=>[l.source_format,l.events]).sort());
    assert.deepEqual(logs,[['csv',12],['xes',12]]);
+   const file=page.locator('#owgEventLogFile'),pick=page.locator('#owgEventLogPick');
+   const consent=page.locator('#owgEventLogConsent'),saveStatus=page.locator('#owgEventLogSaveStatus');
+   const importButton=page.locator('#owgEventLogImport'),appendButton=page.locator('#owgEventLogAppend');
+   async function stage(name){
+     await file.setInputFiles({name:name+'.csv',mimeType:'text/csv',
+       buffer:Buffer.from('case,activity,time\n'+name+',Open,2024-05-01T08:00:00Z\n')});
+     await page.locator('#owgEventLogName').fill(name);
+     await page.locator('#owgEventLogStatus').getByText('File mapping ready.',{exact:false}).waitFor();
+     await consent.check();
+   }
+   async function holdSave(pattern,button){
+     let release;
+     const gate=new Promise(resolve=>{release=resolve;});
+     await page.route(pattern,async route=>{
+       await gate;
+       await route.continue();
+     },{times:1});
+     await Promise.all([page.waitForRequest(request=>pattern.test(request.url())),button.click()]);
+     return release;
+   }
+   const activeLog=await pick.inputValue();
+   await stage('first');
+   const finishImport=await holdSave(/\/v1\/event-logs\/import\?/,importButton);
+   await stage('next');
+   assert(await importButton.isDisabled());assert(await appendButton.isDisabled());
+   finishImport();
+   await saveStatus.getByText('Imported 1 events.',{exact:false}).waitFor();
+   assert.equal(await pick.inputValue(),activeLog);
+   assert.equal(await file.evaluate(input=>input.files[0].name),'next.csv');
+   assert.equal(await page.locator('#owgEventLogName').inputValue(),'next');
+   assert(await consent.isChecked());
+   await page.waitForFunction(()=>!document.querySelector('#owgEventLogAppend').disabled);
+   const csvId=await page.evaluate(async()=>(await (await fetch('/v1/event-logs')).json()).logs
+     .find(log=>log.source_format==='csv'&&log.events===12).log_id);
+   await pick.selectOption(csvId);
+   const finishAppend=await holdSave(/\/append\?/,appendButton);
+   await pick.selectOption(activeLog);
+   await stage('after');
+   assert(await importButton.isDisabled());assert(await appendButton.isDisabled());
+   finishAppend();
+   await saveStatus.getByText('Added 1 new events',{exact:false}).waitFor();
+   assert.equal(await file.evaluate(input=>input.files[0].name),'after.csv');
+   assert.equal(await pick.inputValue(),activeLog);
+   assert(await consent.isChecked());
+   const saved=await page.evaluate(async id=>(await (await fetch('/v1/event-logs')).json()).logs
+     .find(log=>log.log_id===id),csvId);
+   assert.equal(saved.events,13);
    assert.deepEqual(errors,[]);
    console.log('Gzip import browser acceptance passed: .csv.gz columns read in the browser, .csv.gz and .xes.gz imported.');
  }finally{if(browser)await browser.close();server.kill();}
