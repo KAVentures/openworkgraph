@@ -1417,7 +1417,10 @@ original recorded activities. **All cases** is selected by default. Later change
 the analysis filter leave saved rules unchanged. For case conditions, enter
 **Minimum matching cases** to set the trigger count. Use **Check** beside a
 saved rule to evaluate it on its own, or **Check signals** to evaluate the log’s
-whole list.
+whole list. In a preview or a saved result, open an evidence case to see its
+recorded events under the rule’s case notion. Expand the list for the rest of
+the sample. A count shows when more cases matched than were returned as
+evidence.
 
 Rule kinds:
 

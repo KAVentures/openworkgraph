@@ -1033,7 +1033,7 @@
     results.appendChild(privateMapSection());
     results.appendChild(logComparisonSection());
     results.appendChild(analysisSection(names));
-    results.appendChild(signalSection((activities.activities||[]).map(a=>a.activity)));
+    results.appendChild(signalSection(names,inspection));
     results.appendChild(predictionSection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(nextActivitySection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(complianceSection((activities.activities||[]).map(a=>a.activity),inspection));
@@ -7965,9 +7965,35 @@
     }
     return Number(signal.matching_cases).toLocaleString()+(signal.matching_cases===1?' case':' cases');
   }
-  function signalEvidenceText(signal){
-    return (signal.evidence_cases||[]).slice(0,5).map(c=>c.case_id+(signal.when.condition==='open_longer_than'&&c.age_since_first_event_seconds!==undefined?
-      ' (age '+duration(c.age_since_first_event_seconds)+', idle '+duration(c.idle_since_last_event_seconds)+')':'')).join(', ');
+  function signalEvidenceLinks(signal,inspection){
+    const node=el('div');
+    const cases=signal.evidence_cases||[];
+    const caseList=entries=>{
+      const list=el('ul');
+      for(const item of entries){
+        const row=el('li');
+        const open=button('Open case '+item.case_id,'secondary');
+        open.onclick=()=>inspection.open(item.case_id,signal.case_notion);
+        row.appendChild(open);
+        if(signal.when.condition==='open_longer_than'&&item.age_since_first_event_seconds!==undefined){
+          row.append(' Age '+duration(item.age_since_first_event_seconds)+', idle '+duration(item.idle_since_last_event_seconds)+'.');
+        }
+        list.appendChild(row);
+      }
+      return list;
+    };
+    if(cases.length)node.appendChild(caseList(cases.slice(0,5)));
+    if(cases.length>5){
+      const remaining=cases.length-5;
+      const more=document.createElement('details');
+      more.append(el('summary','Show '+remaining+' more '+(remaining===1?'case':'cases')),caseList(cases.slice(5)));
+      node.appendChild(more);
+    }
+    if(signal.evidence_truncated){
+      node.appendChild(el('div',Number(cases.length).toLocaleString()+' of '+Number(signal.matching_cases).toLocaleString()+
+        ' matching cases are available as evidence here.','muted'));
+    }
+    return node;
   }
   function signalRule(values){
     const name=String(values.name||'').trim();if(!name)throw new Error('Name the signal.');
@@ -7989,7 +8015,7 @@
     return {name,when};
   }
 
-  function signalSection(activityNames){
+  function signalSection(activityNames,inspection){
     const box=section('Signals');box.id='owgEventLogSignals';
     box.appendChild(el('div','Save conditions to check this log against, such as a slow median or cases left open. Checking shows which signals hold now and which cases are new since the last check. Signals never execute business actions. Optional outbound counts-only alerts require separate opt-in below.','muted'));
     const name=input('owgSignalName','text','Signal name');name.maxLength=120;
@@ -8008,6 +8034,7 @@
     const add=button('Save signal','secondary');add.id='owgSignalAdd';
     const preview=button('Preview signal','secondary');preview.id='owgSignalPreview';
     const previewStatus=el('div',null,'muted');previewStatus.id='owgSignalPreviewStatus';previewStatus.setAttribute('role','status');
+    const previewEvidence=el('div');previewEvidence.id='owgSignalPreviewEvidence';
     const evaluate=button('Check signals');evaluate.id='owgSignalEvaluate';
     const fields={condition:field('Condition',condition),metric:field('KPI',metric),operator:field('Comparison',operator),threshold:field('Threshold',threshold),hours:field('Hours',hours),activity:field('Activity',activity),ends:field('Activities that end a case',ends),minimum:field('Minimum matching cases',minimum)};
     const sync=()=>{const k=kind.value==='kpi';show(fields.minimum,!k);show(fields.condition,!k);show(fields.metric,k);show(fields.operator,k);show(fields.threshold,k);
@@ -8079,7 +8106,7 @@
     const timelineResults=el('div');timelineResults.id='owgSignalTimelineResults';
     const timelineControls=el('div',null,'actions');timelineControls.append(timelineFilter,timelineRefresh,timelinePrevious,timelineNext);
     const allControls=el('div',null,'actions');allControls.append(allFilter,allRefresh,allPrevious,allNext);
-    box.append(row,previewStatus,message,rules,evaluate,out,reviewHeading,reviewNote,reviewRefresh,inbox,
+    box.append(row,previewStatus,previewEvidence,message,rules,evaluate,out,reviewHeading,reviewNote,reviewRefresh,inbox,
       deliveryPanel,transitionHeading,transitionNote,transitionRefresh,transitionPrevious,transitionNext,transitionStatus,transitionResults,
       allHeading,allNote,allControls,allStatus,allResults,
       timelineHeading,timelineNote,timelineControls,timelineStatus,timelineResults);
@@ -8414,20 +8441,20 @@
       return body;
     };
     let previewTurn=0;
-    const clearPreview=()=>{++previewTurn;previewStatus.textContent='';preview.disabled=false;};
+    const clearPreview=()=>{++previewTurn;previewStatus.textContent='';previewEvidence.replaceChildren();preview.disabled=false;};
     row.addEventListener('input',clearPreview);row.addEventListener('change',clearPreview);
     preview.onclick=async()=>{
       const ticket=++previewTurn;
       const current=()=>ticket===previewTurn&&generation===state.generation&&box.isConnected;
-      preview.disabled=true;previewStatus.textContent='Checking draft signal…';
+      preview.disabled=true;previewStatus.textContent='Checking draft signal…';previewEvidence.replaceChildren();
       try{
         const r=await (await api(base()+'/preview',{method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify(draftRule())})).json();
         if(!current())return;
-        const examples=signalEvidenceText(r.signal);
         const cases=Number(r.cohort_cases).toLocaleString()+(r.cohort_cases===1?' case.':' cases.');
         previewStatus.textContent=(r.signal.triggered?'Would trigger. ':'Would stay clear. ')+
-          'Result: '+signalValueText(r.signal)+'. Checked '+cases+(examples?' Examples: '+examples+'.':'');
+          'Result: '+signalValueText(r.signal)+'. Checked '+cases;
+        previewEvidence.replaceChildren(signalEvidenceLinks(r.signal,inspection));
       }catch(error){if(current())previewStatus.textContent=error.message;}
       finally{if(current())preview.disabled=false;}
     };
@@ -8448,11 +8475,11 @@
         if(!current())return;
         out.replaceChildren(
           el('div',ruleId?'Checked '+r.signals[0].name+'.':r.triggered+' of '+r.signals.length+' signals hold now.','muted'),
-          table(['Signal','Holds','Value or matching cases','New since last check','Example cases'],r.signals.map(sig=>[
+          table(['Signal','Holds','Value or matching cases','New since last check','Evidence cases'],r.signals.map(sig=>[
             sig.name,sig.triggered?'yes':'no',
             signalValueText(sig),
             (sig.when.kind==='kpi'||sig.when.kind==='conformance'||sig.when.kind==='due_date')?(sig.changed_since_last_evaluation?'changed':'—'):newCaseChange(sig),
-            signalEvidenceText(sig)])),
+            signalEvidenceLinks(sig,inspection)])),
           el('div',r.interpretation,'muted'));
         await refresh();
       }catch(error){if(current())out.replaceChildren(el('div',error.message,'muted'));}

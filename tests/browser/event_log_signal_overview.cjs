@@ -45,7 +45,8 @@ const path=require('node:path');
     await page.locator('#owgEventLogCard').waitFor();
 
     const malicious='<img src=x onerror="window.signalOverviewInjected=true">';
-    const csv='case,activity,time\nC1,Open,2024-01-01T00:00:00Z\nC1,Close,2024-01-02T00:00:00Z\nC2,Open,2024-01-03T00:00:00Z\n';
+    const csv='case,activity,time\nC1,Open,2024-01-01T00:00:00Z\nC1,Close,2024-01-02T00:00:00Z\n'+
+      Array.from({length:59},(_,i)=>'C'+(i+2)+',Open,2024-01-03T00:00:00Z\n').join('');
     const setup=await page.evaluate(async({csv,malicious})=>{
       async function json(url,options={}){
         const r=await fetch(url,{...options,cache:'no-store'});
@@ -86,11 +87,11 @@ const path=require('node:path');
     await preview.getByText('Enter a threshold.',{exact:true}).waitFor();
     await page.locator('#owgSignalThreshold').fill('0');
     await page.getByRole('button',{name:'Preview signal',exact:true}).click();
-    await preview.getByText('Would trigger. Result: 2. Checked 2 cases.',{exact:true}).waitFor();
+    await preview.getByText('Would trigger. Result: 60. Checked 60 cases.',{exact:true}).waitFor();
     await page.locator('#owgSignalThreshold').fill('100');
     assert.equal(await preview.textContent(),'');
     await page.getByRole('button',{name:'Preview signal',exact:true}).click();
-    await preview.getByText('Would stay clear. Result: 2. Checked 2 cases.',{exact:true}).waitFor();
+    await preview.getByText('Would stay clear. Result: 60. Checked 60 cases.',{exact:true}).waitFor();
     assert.equal(await page.getByRole('button',{name:'Delete signal Draft preview'}).count(),0);
     const rows=page.locator('#owgSignalAllResults tbody tr');
     assert.equal(await rows.count(),2);
@@ -208,10 +209,21 @@ const path=require('node:path');
     await page.locator('#owgSignalActivity').selectOption('Open');
     await page.locator('#owgSignalMinimumCases').fill('2');
     await page.getByRole('button',{name:'Preview signal',exact:true}).click();
-    await preview.getByText('Would trigger. Result: 2 cases. Checked 2 cases.',{exact:false}).waitFor();
+    await preview.getByText('Would trigger. Result: 60 cases. Checked 60 cases.',{exact:true}).waitFor();
+    const draftEvidence=page.locator('#owgSignalPreviewEvidence');
+    await draftEvidence.getByText('50 of 60 matching cases are available as evidence here.',{exact:true}).waitFor();
+    assert.equal(await draftEvidence.getByRole('button',{name:/Open case/}).count(),5);
+    await draftEvidence.getByText('Show 45 more cases',{exact:true}).click();
+    const evidenceRequest=page.waitForRequest(r=>r.url().includes('/case-events/query?')&&r.postDataJSON()?.case_id==='C2');
+    await draftEvidence.getByRole('button',{name:'Open case C2',exact:true}).click();
+    assert.equal(new URL((await evidenceRequest).url()).searchParams.get('case_type'),'case');
+    const caseEvents=page.locator('#owgEventLogCaseEvents');
+    await caseEvents.getByRole('heading',{name:'Case C2',exact:true}).waitFor();
+    await caseEvents.getByText('Open',{exact:true}).waitFor();
     await scope.selectOption('active');
     await page.getByRole('button',{name:'Preview signal',exact:true}).click();
-    await preview.getByText('Would stay clear. Result: 1 case. Checked 1 case. Examples: C1.',{exact:true}).waitFor();
+    await preview.getByText('Would stay clear. Result: 1 case. Checked 1 case.',{exact:true}).waitFor();
+    await draftEvidence.getByRole('button',{name:'Open case C1',exact:true}).waitFor();
     await page.getByRole('button',{name:'Save signal',exact:true}).click();
     const saved=page.locator('#owgSignalRules tr').filter({hasText:'Closed cohort'});
     await saved.getByText('Saved case filter',{exact:false}).waitFor();
@@ -231,6 +243,9 @@ const path=require('node:path');
     await page.getByRole('button',{name:'Check signal Closed cohort',exact:true}).click();
     await page.locator('#owgSignalResults').getByText('Checked Closed cohort.',{exact:true}).waitFor();
     assert.equal(await page.locator('#owgSignalResults tbody tr').count(),1);
+    await page.locator('#owgSignalResults').getByRole('button',{name:'Open case C1',exact:true}).click();
+    await caseEvents.getByRole('heading',{name:'Case C1',exact:true}).waitFor();
+    await caseEvents.getByText('Close',{exact:true}).waitFor();
     const afterCheck=await readRules();
     assert.ok(afterCheck.find(rule=>rule.rule_id===definition.rule_id).last_evaluated_at);
     assert.deepEqual(afterCheck.filter(rule=>rule.rule_id!==definition.rule_id),
