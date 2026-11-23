@@ -3428,6 +3428,16 @@ async def read_local_bound_provider_event(request: Request, response: Response):
     if (not isinstance(entries, list) or not 0 < len(entries) <= 200
             or any(not isinstance(row, dict) or not row for row in entries)):
         raise HTTPException(409, "no valid bounded retained attempts for provider review")
+    # A bounded row count alone is insufficient: retained untrusted journals
+    # can contain very large values. Refuse provider network access and avoid
+    # echoing oversized evidence back to the operator.
+    try:
+        journal_size = len(json.dumps(entries, ensure_ascii=False, separators=(",", ":"))
+                           .encode("utf-8"))
+    except (TypeError, ValueError, OverflowError):
+        raise HTTPException(409, "retained attempt journal cannot be bounded") from None
+    if journal_size > 64_000:
+        raise HTTPException(409, "retained attempt journal exceeds review limit")
     admitted_run_ref = (before.get("receipts", {}).get("run_ref")
                         if isinstance(before, dict) and isinstance(before.get("receipts"), dict)
                         else None)
