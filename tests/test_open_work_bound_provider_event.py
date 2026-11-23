@@ -280,7 +280,7 @@ def test_internal_admission_requests_have_json_content_type(monkeypatch):
     result = asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
     assert result["receipt_persisted"] is False
     assert seen.count("review") >= 3
-    assert seen.count("receipts") == 3
+    assert seen.count("receipts") == 4
 
 
 def test_missing_retained_run_blocks_provider_network_io(monkeypatch):
