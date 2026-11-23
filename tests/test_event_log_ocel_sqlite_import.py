@@ -82,6 +82,11 @@ def test_limits(tmp_path, monkeypatch):
     with pytest.raises(sq.SqliteError, match="more than 5 rows"):
         sq.to_ocel_json(BytesIO(data), folder=tmp_path)
 
+    # Dynamic event/object type tables must share the same cumulative budget.
+    monkeypatch.setattr(sq, "MAX_OCEL_ROWS", 7)
+    with pytest.raises(sq.SqliteError, match="more than 7 rows"):
+        sq.to_ocel_json(BytesIO(data), folder=tmp_path)
+
     def untimed(conn):
         build(conn)
         conn.execute("DELETE FROM event_CreateOrder")
