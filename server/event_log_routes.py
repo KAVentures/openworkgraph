@@ -767,6 +767,15 @@ async def combine_event_logs(request: Request):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/derive/preview")
+async def preview_derived_event_log(request: Request, log_id: str):
+    from . import event_log_derive as derived_logs
+    _require_dashboard(request)
+    spec = await _json_body(request, "derived log selection", strict=True, limit=32768)
+    return await run_in_threadpool(_respond, derived_logs.preview, log_id, spec)
+
+
+
 @router.post("/v1/event-logs/{log_id}/derive")
 async def derive_event_log(request: Request, log_id: str):
     """Save the cases matching a filter as a new event log; the source log is unchanged."""

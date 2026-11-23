@@ -734,6 +734,8 @@
     const name=input('owgDeriveName','text');name.maxLength=120;name.autocomplete='off';
     const current=state.logs.find(l=>l.log_id===state.logId);name.value=((current&&current.name)||'Log')+' (subset)';
     const run=button('Save as new log','secondary');run.id='owgDeriveRun';
+    const preview=button('Preview copy','secondary');
+    const previewStatus=el('div',null,'muted');previewStatus.id='owgDerivePreview';previewStatus.setAttribute('role','status');
     const formats=select('owgDeriveExportFormat',[['csv','CSV (exact interchange)'],['csv-review','CSV for spreadsheet review'],
       ['xes','XES'],['xes-attributes','XES with retained attributes']]);
     const download=button('Download matching cases','secondary');download.id='owgDeriveExport';
@@ -748,27 +750,57 @@
     }
     formats.onchange=describeFormat;describeFormat();
     const out=el('div');out.id='owgDeriveResult';out.setAttribute('role','status');
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('New log name',name),run);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('New log name',name),preview,run);
     // Optional time window: keep only the events inside it (trim to timeframe).
     const windowFrom=input('owgDeriveEventsFrom','datetime-local'),windowBefore=input('owgDeriveEventsBefore','datetime-local');
     const windowRow=el('div',null,'row');windowRow.style.alignItems='end';
     windowRow.append(field('Only events from (optional, local time)',windowFrom),field('Only events before (optional)',windowBefore));
     const exportRow=el('div',null,'row');exportRow.style.alignItems='end';
     exportRow.append(field('Matching case export format',formats),download);
-    box.append(filter.node,windowRow,row,exportRow,formatNote,out);
+    box.append(filter.node,windowRow,row,previewStatus,exportRow,formatNote,out);
     const generation=state.generation;
-    function selectedCases(missingFilter){
+    function selectedCases(){
       const cohort=filter.read();delete cohort.label;
       if(filterOn())applyActiveCohort(cohort);
-      if(!Object.keys(cohort).length)throw new Error(missingFilter);
       return state.caseType?{cohort,case_type:state.caseType}:{cohort};
     }
+    function copySelection(){
+      const cases=selectedCases(),window={};
+      if(windowFrom.value)window.events_from=new Date(windowFrom.value).toISOString();
+      if(windowBefore.value)window.events_before=new Date(windowBefore.value).toISOString();
+      if(!Object.keys(cases.cohort).length&&!Object.keys(window).length){
+        throw new Error('Choose which cases to copy. Or set a time window.');
+      }
+      return {...cases,...window};
+    }
+    let revision=0;
+    const clearPreview=()=>{revision++;preview.disabled=false;previewStatus.textContent='';};
+    for(const control of [filter.node,windowRow]){
+      control.addEventListener('input',clearPreview);control.addEventListener('change',clearPreview);
+    }
+    preview.onclick=async()=>{
+      const ticket=++revision;
+      const current=()=>ticket===revision&&generation===state.generation&&box.isConnected;
+      preview.disabled=true;previewStatus.textContent='Counting cases and events…';
+      try{
+        const response=await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/derive/preview',{
+          method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(copySelection())});
+        const result=await response.json();
+        if(!current())return;
+        const n=value=>Number(value).toLocaleString();
+        previewStatus.textContent=n(result.cases)+' of '+n(result.source_cases)+' cases match. The copy would retain '+
+          n(result.events)+' events and '+n(result.objects)+' linked objects'+
+          (result.trimmed?' across '+n(result.kept_cases)+' matching cases with events in the window.':'.');
+      }catch(error){if(current())previewStatus.textContent=error.message;}
+      finally{if(current())preview.disabled=false;}
+    };
     download.onclick=async()=>{
       const logId=state.logId,format=formats.value;
       const extension=format==='csv-review'?'review.csv':format.startsWith('xes')?'xes':'csv';
       download.disabled=true;
       try{
-        const spec=selectedCases('Choose which cases to export.');
+        const spec=selectedCases();
+        if(!Object.keys(spec.cohort).length)throw new Error('Choose which cases to export.');
         out.textContent='Preparing matching cases…';
         const response=await api('/v1/event-logs/'+encodeURIComponent(logId)+'/export/matching-cases?'+new URLSearchParams({format}),{
           method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)});
@@ -785,17 +817,13 @@
     run.onclick=async()=>{
       run.disabled=true;
       try{
-        const window={};
-        if(windowFrom.value)window.events_from=new Date(windowFrom.value).toISOString();
-        if(windowBefore.value)window.events_before=new Date(windowBefore.value).toISOString();
-        let cases;
-        try{cases=selectedCases('Choose which cases to copy. Or set a time window.');}
-        catch(error){if(!Object.keys(window).length)throw error;cases=state.caseType?{cohort:{},case_type:state.caseType}:{cohort:{}};}
-        const spec={...cases,...window,name:name.value.trim()};
+        const spec={...copySelection(),name:name.value.trim()};
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/derive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
         if(generation!==state.generation)return;
         // Add the new log to the picker without leaving the current analysis.
-        const data=await getJSON('/v1/event-logs');state.logs=Array.isArray(data.logs)?data.logs:state.logs;
+        const data=await getJSON('/v1/event-logs');
+        if(generation!==state.generation)return;
+        state.logs=Array.isArray(data.logs)?data.logs:state.logs;
         const pick=document.getElementById('owgEventLogPick');setOptions(pick,state.logs.map(l=>[l.log_id,l.name+' · '+Number(l.events).toLocaleString()+' events']));pick.value=state.logId;
         const open=button('Open '+r.log.name,'secondary');open.id='owgDeriveOpen';
         open.onclick=()=>refreshLogs(r.log.log_id,r.derived_from.case_notion).then(()=>status('Opened '+r.log.name+'. Select Analyse to explore it.')).catch(error=>status(error.message));
