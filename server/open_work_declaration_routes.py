@@ -3595,10 +3595,7 @@ async def read_local_bound_provider_event(request: Request, response: Response):
             ref = row.get("attempt_ref")
             if isinstance(ref, str) and 0 < len(ref) <= 160:
                 correlation_candidates.append(ref)
-    unique_correlation = (len(correlation_candidates) == 1
-                          and entries.count(next(
-                              (row for row in entries if row.get("attempt_ref") ==
-                               correlation_candidates[0]), None)) == 1)
+    unique_correlation = len(correlation_candidates) == 1
     journal_correlation = {
         "status": ("untrusted_exact_match" if unique_correlation
                    else "ambiguous" if correlation_candidates else "not_recorded"),
