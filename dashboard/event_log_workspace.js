@@ -2099,7 +2099,13 @@
     const message=el('div',filterOn()?'':'Apply a filter to save it.','muted');message.id='owgFilterSetStatus';message.setAttribute('role','status');
     const list=el('div');list.id='owgFilterSetList';
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Name for the active filter',name),save);
-    wrap.append(el('h4','Saved filters'),row,message,list);
+    const transfer=document.createElement('details');
+    const file=input('owgFilterSetFile','file');file.accept='.json,application/json';
+    const importButton=button('Import filter','secondary');importButton.disabled=true;
+    const importRow=el('div',null,'row');importRow.style.alignItems='end';
+    importRow.append(field('OpenWorkGraph filter JSON',file),importButton);
+    transfer.append(el('summary','Import a filter from another log'),importRow);
+    wrap.append(el('h4','Saved filters'),row,transfer,message,list);
     const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/filter-sets';
     const generation=state.generation;
     async function refresh(){
@@ -2125,10 +2131,31 @@
           ...(set.activities_not_in_log.length?['Not in this log: '+set.activities_not_in_log.join(', ')]:[]),
           ...(set.log_appended_since_saved?['Newer exports were appended since it was saved']:[]),
           ...(other.length?['Also filters by '+other.join(', ')+', which this panel cannot apply']:[])];
-        const actions=el('span');actions.append(use,' ',del);
+        const exportButton=button('Export JSON','secondary');exportButton.setAttribute('aria-label','Export saved filter '+set.name);
+        exportButton.onclick=()=>{
+          const document={format:r.format,name:set.name,cohort:set.cohort};
+          if(set.case_type)document.case_type=set.case_type;
+          download('owg-case-filter.json',JSON.stringify(document,null,2),'application/json');
+        };
+        const actions=el('span');actions.append(use,' ',exportButton,' ',del);
         return [set.name,set.case_type||'Current selection',[...follows.map(followText),...(activity?['contains activity '+JSON.stringify(activity)]:[]),attr.attribute||'',attr.attribute_range?rangeText(attr.attribute_range):'',attr.starts_with?'starts with '+JSON.stringify(attr.starts_with):'',attr.ends_with?'ends with '+JSON.stringify(attr.ends_with):'',attr.duration?durationText(attr.duration):'',moreFilterText(attr)].filter(Boolean).join('; ')||'—',notes.join('. ')||'—',actions];
       })):el('div','No saved filters yet.','muted'));
     }
+    file.onchange=()=>{importButton.disabled=!file.files.length;};
+    importButton.onclick=async()=>{
+      const selected=file.files[0];
+      if(!selected)return;
+      if(selected.size>65536){message.textContent='Choose a filter file up to 64 KB.';return;}
+      importButton.disabled=file.disabled=true;
+      try{
+        const body=await selected.text();
+        if(generation!==state.generation)return;
+        const imported=await (await api(base()+'/import',{method:'POST',headers:{'Content-Type':'application/json'},body})).json();
+        if(generation!==state.generation)return;
+        file.value='';message.textContent='Imported "'+imported.name+'".';await refresh();
+      }catch(error){if(generation===state.generation)message.textContent=error.message;}
+      finally{file.disabled=false;importButton.disabled=!file.files.length;}
+    };
     save.onclick=async()=>{
       try{
         const definition={name:name.value,cohort:globalCohort(),case_type:state.caseType||null};
