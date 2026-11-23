@@ -149,6 +149,18 @@ number. At most 2,000,000 lines, 500 columns and 1 MB per line are read, and the
 most 256 MB. `POST /v1/event-logs/jsonl-to-csv` with the file as the body returns `rows`, `columns`
 and `csv`. Nothing is stored. A `.json` file is still read as OCEL 2.0 JSON.
 
+### Parquet files
+
+A `.parquet` file, as data warehouses and lakes export, is read with DuckDB's `read_parquet` in an
+in-memory connection that cannot install or load extensions, converted to CSV and then mapped like
+any CSV. The file must start and end with the Parquet magic bytes. Timestamps with a time zone become
+ISO 8601 in UTC with `Z`; timestamps without one are written without an offset and the import asks
+which offset they use; dates stay ISO dates, lists and structs become compact JSON, NULL an empty
+cell, and binary values are left empty and counted. At most 2,000,000 rows and 500 columns are read,
+and the upload may be at most 512 MB. `POST /v1/event-logs/parquet-to-csv` with the file as the body
+returns `rows`, `columns`, `csv` and `dates_have_no_offset`. Nothing is stored: the upload is copied
+to a temporary file in the data folder, read and removed.
+
 ### Excel workbooks
 
 Choosing an `.xlsx` file in the dashboard converts its first worksheet to CSV
