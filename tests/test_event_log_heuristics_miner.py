@@ -54,11 +54,39 @@ def test_parallel_and_choice_and_noise():
 
 def test_self_loops_and_short_loops():
     traces = [["A", "B", "B", "B", "C"]] * 10 + [["A", "D", "E", "D", "E", "D", "C"]] * 10
-    result = hm.heuristics_net(_import(traces))
+    log = _import(traces)
+    result = hm.heuristics_net(log)
     kinds = {(lp["kind"], tuple(lp["activities"])) for lp in result["loops"]}
     assert ("self", ("B",)) in kinds and ("length_two", ("D", "E")) in kinds
     edges = _edges(result)
     assert ("B", "B") in edges and ("D", "E") in edges and ("E", "D") in edges
+    short = next(loop for loop in result["loops"] if loop["kind"] == "length_two")
+    picked = {"group": "length_two", "activities": short["activities"], "limit": 5}
+    first = hm.evidence_cases(log, selection=picked)
+    second = hm.evidence_cases(log, selection={**picked, "after": first["next_after"]})
+    assert first["total"] == second["total"] == 10
+    assert first["occurrences"] == second["occurrences"] == short["occurrences"] == 30
+    assert all(c["occurrences"] == 3 for c in first["cases"] + second["cases"])
+    assert second["next_after"] is None
+    repeated = hm.evidence_cases(log, selection={"group": "transition", "activities": ["B", "B"]})
+    assert repeated["occurrences"] == edges[("B", "B")]["transition_count"] == 20
+
+
+def test_boundary_evidence_uses_exact_labels_and_the_case_filter():
+    log = _import([[hm.START, "B", hm.END], ["X", "B", hm.END], [hm.START, "B", "Y"]])
+    cohort = {"activity": hm.END}
+    report = hm.heuristics_net(log, cohort=cohort)
+    start = hm.evidence_cases(log, cohort=cohort, selection={"group": "start", "activities": [hm.START]})
+    end = hm.evidence_cases(log, cohort=cohort, selection={"group": "end", "activities": [hm.END]})
+    transition = hm.evidence_cases(log, cohort=cohort,
+                                   selection={"group": "transition", "activities": [hm.START, "B"]})
+    assert start["total"] == report["start_activities"][hm.START] == 1
+    assert end["total"] == report["end_activities"][hm.END] == 2
+    assert start["cases"] == transition["cases"]
+    for bad in ({"group": "length_two", "activities": ["B", "B"]},
+                {"group": "transition", "activities": ["X", "B"], "limit": True}):
+        with pytest.raises(EventLogWorkspaceError):
+            hm.evidence_cases(log, selection=bad)
 
 
 def test_threshold_and_all_connected():

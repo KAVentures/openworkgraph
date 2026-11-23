@@ -1082,7 +1082,7 @@
     results.appendChild(combineSection());
     results.appendChild(dottedSection());
     results.appendChild(spectrumSection(inspection));
-    results.appendChild(heuristicsSection());
+    results.appendChild(heuristicsSection(inspection));
     results.appendChild(glossarySection());
     results.appendChild(activityProfileSection(names));
     results.appendChild(breakdownSection(names,inspection));
@@ -5313,23 +5313,71 @@
     return box;
   }
 
-  function heuristicsSection(){
+  function heuristicsSection(inspection){
     const box=section('Heuristics net');box.id='owgHeuristics';
-    box.appendChild(el('div','A model that ignores weak and two-way evidence: an arrow is kept only when one activity follows another clearly more often than the other way round. Splits and joins are marked AND when their branches happen in either order, and XOR when one or the other happens.','muted'));
+    box.appendChild(el('div','Build a model from directly following activities. The miner uses the dependency and loop thresholds to keep arrows, with optional fallback connections. Split and join labels use the observed frequency of both branch orders.','muted'));
     const dep=select('owgHeuristicsDependency',[['0.5','0.5 (default)'],['0.7','0.7'],['0.9','0.9 (strict)'],['0.3','0.3 (loose)']]);
-    const support=input('owgHeuristicsSupport','number');support.min='1';support.value='1';
+    const and=select('owgHeuristicsAnd',[['0.65','0.65 (default)'],['0.5','0.5'],['0.8','0.8'],['1','1.0']]);
+    const loop=select('owgHeuristicsLoop',[['0.5','0.5 (default)'],['0.75','0.75'],['0.9','0.9'],['1','1.0']]);
+    const connected=input('owgHeuristicsConnected','checkbox');connected.checked=true;
+    const support=input('owgHeuristicsSupport','number');support.min='1';support.max='1000000';support.step='1';support.value='1';
     const run=button('Discover heuristics net','secondary');run.id='owgHeuristicsRun';
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Dependency threshold',dep),field('Seen at least (times)',support),run);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Dependency threshold',dep),field('AND threshold',and),
+      field('Back-and-forth loop threshold',loop),field('Seen at least (times)',support),field('Keep best fallback connections',connected),run);
     const statusLine=el('div',null,'muted');statusLine.id='owgHeuristicsStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const graphHost=el('div');graphHost.id='owgHeuristicsGraph';
     const out=el('div');out.id='owgHeuristicsResults';
-    box.append(row,statusLine,graphHost,out);
+    const review=el('div');review.id='owgHeuristicsCaseReview';
+    box.append(row,statusLine,graphHost,out,review);
     const kind=k=>({and:'AND (parallel)',xor:'XOR (choice)',mixed:'Mixed'})[k]||k;
+    const number=n=>Number(n).toLocaleString();
+    let reviewTurn=0;
+    function evidenceButton(url,group,activities,label){
+      const pick=button('Inspect cases','secondary');pick.setAttribute('aria-label','Inspect cases for '+label);
+      pick.onclick=()=>{
+        const generation=state.generation,turn=++reviewTurn,current=()=>generation===state.generation&&turn===reviewTurn;
+        const title=el('h4',label);title.tabIndex=-1;
+        const status=el('div');status.setAttribute('role','status');
+        const rows=el('div'),nav=el('div',null,'row');
+        const previous=button('Previous case page','secondary'),next=button('Next case page','secondary');
+        nav.append(previous,next);review.replaceChildren(title,status,rows,nav);title.focus();
+        const cursors=[null];let index=0,following=null;
+        const time=value=>value.replace('T',' ').replace('Z',' UTC');
+        async function load(page){
+          previous.disabled=next.disabled=true;status.textContent='Loading cases…';rows.inert=true;
+          try{
+            const spec={group,activities,...(cursors[page]!==null?{after:cursors[page]}:{})};
+            const r=await (await api(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+            if(!current())return;
+            index=page;following=r.next_after;
+            status.textContent=number(r.occurrences)+(r.occurrences===1?' occurrence in ':' occurrences in ')+
+              number(r.total)+(r.total===1?' case.':' cases.')+' Showing '+number(r.cases.length)+' on this page.';
+            rows.replaceChildren(r.cases.length?table(['Case','Occurrences','First occurrence start','Last occurrence start','Evidence'],r.cases.map(c=>{
+              const open=button('Open case','secondary');open.setAttribute('aria-label','Open case '+c.case_id);
+              open.onclick=()=>inspection.open(c.case_id);
+              return [c.case_id,number(c.occurrences),time(c.first_at),time(c.last_at),open];
+            })):el('div','No matching cases.','muted'));
+          }catch(error){if(current())status.textContent=error.message;}
+          finally{if(current()){rows.inert=false;previous.disabled=index===0;next.disabled=following===null;}}
+        }
+        previous.onclick=()=>load(index-1);
+        next.onclick=()=>{cursors[index+1]=following;load(index+1);};
+        load(0);
+      };
+      return pick;
+    }
     run.onclick=async()=>{
       const generation=state.generation;run.disabled=true;statusLine.textContent='Discovering…';graphHost.replaceChildren();out.replaceChildren();
+      ++reviewTurn;review.replaceChildren();
       try{
-        const r=await getJSON(logPath('heuristics-net',{dependency_threshold:dep.value,min_occurrences:String(Math.max(1,Number(support.value)||1))}));
+        if(!support.value||!support.validity.valid)throw new Error('Enter a whole number from 1 to 1,000,000 for minimum occurrences.');
+        const settings={dependency_threshold:dep.value,and_threshold:and.value,loop_two_threshold:loop.value,
+          min_occurrences:String(Number(support.value)),all_connected:connected.checked};
+        const url=logPath('heuristics-net',settings),r=await getJSON(url);
         if(generation!==state.generation)return;
+        const endpoint=new URL(url,window.location.origin);endpoint.pathname+='/cases';
+        for(const key of Object.keys(settings))endpoint.searchParams.delete(key);
+        const evidenceURL=endpoint.pathname+endpoint.search;
         const arrows=r.edges.filter(e=>e.dependency!==null);
         statusLine.textContent=arrows.length+' arrows kept between '+r.activities.length+' activities, covering '+Math.round((r.coverage.transitions_on_kept_arrows_share||0)*100)+'% of recorded transitions; '+r.splits.length+' splits, '+r.joins.length+' joins, '+r.loops.length+' loops.'+(r.cases_before_filter?' Filtered from '+Number(r.cases_before_filter).toLocaleString()+' cases.':'');
         const draw=window.owgProcessGraph&&window.owgProcessGraph.drawObserved;
@@ -5339,11 +5387,22 @@
         if(gates.length){out.appendChild(el('h4','Splits and joins'));
           out.appendChild(table(['Where','Activity','Branches','Type'],gates.map(([w,g])=>[w,g.activity,g.branches.join(', '),kind(g.type)])));}
         if(r.loops.length){out.appendChild(el('h4','Loops'));
-          out.appendChild(table(['Kind','Activities','Measure'],r.loops.map(l=>[l.kind==='self'?'Repeats itself':'Back and forth',l.activities.join(' ⇄ '),String(l.measure)])));}
+          out.appendChild(table(['Kind','Activities','Occurrences','Measure','Evidence'],r.loops.map(l=>{
+            const label=l.kind==='self'?l.activities[0]+' repeated':l.activities.join(' ⇄ ');
+            return [l.kind==='self'?'Repeats itself':'Back and forth',l.activities.join(' ⇄ '),number(l.occurrences),String(l.measure),
+              evidenceButton(evidenceURL,l.kind==='self'?'transition':'length_two',l.kind==='self'?[l.activities[0],l.activities[0]]:l.activities,label)];
+          })));}
         const more=document.createElement('details');more.appendChild(el('summary','All arrows'));
-        more.appendChild(table(['From','To','Transitions','Dependency','Kept because'],arrows.map(e=>[e.from,e.to,Number(e.transition_count).toLocaleString(),String(e.dependency),({threshold:'above threshold',best_connection:'best connection',short_loop:'short loop'})[e.kept_by]||e.kept_by])));
+        more.appendChild(table(['From','To','Occurrences','Dependency','Kept because','Evidence'],r.edges.map(e=>{
+          const group=e.dependency!==null?'transition':e.kept_by;
+          const activities=group==='transition'?[e.from,e.to]:[group==='start'?e.to:e.from];
+          const label=group==='transition'?e.from+' → '+e.to:(group==='start'?'Start at ':'End at ')+activities[0];
+          return [e.from,e.to,number(e.transition_count),e.dependency===null?'—':String(e.dependency),
+            ({threshold:'above threshold',best_connection:'best connection',short_loop:'short loop',start:'case starts here',end:'case ends here'})[e.kept_by],
+            evidenceButton(evidenceURL,group,activities,label)];
+        })));
         out.append(more,el('div',r.note,'muted'));
-      }catch(error){statusLine.textContent=error.message;}
+      }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
       finally{run.disabled=false;}};
     return box;
   }

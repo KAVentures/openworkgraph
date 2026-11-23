@@ -2682,8 +2682,18 @@ the section offers 0.3, 0.5, 0.7 and 0.9) and when seen at least the chosen numb
   and why it was kept. Logs with more than 64 activities need an activity mapping or a case filter
   first. The case filter applies.
 
-`GET /v1/event-logs/{log_id}/heuristics-net?dependency_threshold=&and_threshold=&min_occurrences=&all_connected=`
+Choose **Inspect cases** for a kept arrow, loop, or start or end boundary. The case list reports
+the number of matching occurrences, including repeated and overlapping loops. Open a case
+to see its recorded event history.
+
+`GET /v1/event-logs/{log_id}/heuristics-net?dependency_threshold=&and_threshold=&loop_two_threshold=&min_occurrences=&all_connected=`
 plus the case-filter parameters. Agents with access to a shared log use `get_process_heuristics_net`.
+
+The dashboard-only `POST /v1/event-logs/{log_id}/heuristics-net/cases` keeps the report's case
+notion and filter. Send `group` as `transition`, `length_two`, `start`, or `end`, and `activities`
+as the two literal labels for a transition or back-and-forth loop, or one for a boundary.
+For a repeated activity, send a transition with the same label twice. Send the returned
+`next_after` as `after` to page by literal case key. The optional `limit` is 1–100 (default 50).
 
 ## Activity profile
 
