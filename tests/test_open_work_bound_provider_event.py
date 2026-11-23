@@ -427,3 +427,24 @@ def test_unusable_or_oversized_journal_never_contacts_provider(monkeypatch, entr
         asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
     assert exc.value.status_code == 409
     assert calls == []
+
+
+def test_retained_journal_revoked_during_preflight_blocks_provider_io(monkeypatch):
+    """A journal revoked during source admission cannot authorize Stripe I/O."""
+    install(monkeypatch)
+    from server import open_work_provider_attempt_verification as verifier
+    calls = []
+    monkeypatch.setattr(verifier, "verify_provider_attempt",
+                        lambda **kwargs: calls.append("provider"))
+    journal_reads = []
+    async def changing(req, resp):
+        journal_reads.append(1)
+        if len(journal_reads) > 1:
+            raise HTTPException(403, "attempt access revoked")
+        return {"run_ref": "run-1", "entries": [{"attempt_ref": "attempt-1"}]}
+    monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", changing)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
+    assert exc.value.status_code == 403
+    assert len(journal_reads) == 2
+    assert calls == []
