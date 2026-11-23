@@ -303,6 +303,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET`/`POST /v1/event-logs/{log_id}/expiry` (`{"delete_after": ISO time \| null}`) | Read, set or clear the date after which the log is deleted automatically (below). |
 | `POST /v1/event-logs/{log_id}/export/matching-cases` | Download complete matching cases. Body contains `cohort` and optional `case_type`. Query `format` is `csv` (default), `csv-review`, `xes`, or `xes-attributes`. |
 | `POST /v1/event-logs/{log_id}/derive` | Save the cases matching a filter as a new log (below). |
+| `POST /v1/event-logs/combine` | Combine 2 to 10 saved logs into a new log (below). |
 | `GET /v1/event-logs/{log_id}/quality` | Stored quality and mapping reports per import and append, plus current whole-log diagnostics (below). |
 | `GET /v1/event-logs/{log_id}/summary` | Events, cases, activities, time span and case-duration median/p90/mean. |
 | `GET`/`POST /v1/event-logs/{log_id}/description` (`{"description"}`) | The owner's description of the log (at most 2,000 characters; an empty text removes it), shown and edited in **About this log**. It never changes the events and is deleted with the log. |
@@ -1561,6 +1562,29 @@ under the chosen case notion and the source's activity mapping.
 * **The new log:** counts against the 50-log limit. It can be analysed,
   exported, compared with the source (see *Comparing two logs*) or deleted like
   any other log.
+
+### Combining saved logs
+
+The same process is often exported in pieces: one file per region or per year, or one system each
+for the order and invoice steps. **Combine with other saved logs** (under Analyse) copies the open
+log and the logs you tick, 2 to 10 in all, into a new saved log; `POST /v1/event-logs/combine` with
+`{"name": ..., "log_ids": [...], "cases": "shared" | "separate"}` does the same. The sources are
+unchanged.
+
+- **Shared** (default): an ID found in several logs is one case or object, with the events of all of
+  them. Use it to join systems that use the same case key. Its type and attributes come from the
+  first log listed that has it; the response counts `ids_in_several_sources` and
+  `object_type_conflicts`.
+- **Separate**: every log keeps its own cases. Object IDs are prefixed with the source number
+  (`s1:c7`), so equal IDs in two regional exports never merge.
+
+Event IDs are always prefixed (`s1:`, `s2:`, ... in the order listed, given per source as
+`event_id_prefix`), and every event gets a `source_log` attribute naming its log, so you can filter
+or break down by source. An existing `source_log` attribute is replaced and counted
+(`source_attribute_replaced_on_events`). The combined log keeps the sources' format if they share
+one, otherwise it is recorded as OCEL. As with a derived log, activity mappings, saved filters and
+analyses, signals, domain packs, source-identity keys, object-to-object relationships, quality
+reports, case tags and cost models are not copied.
 
 ### Anonymized export
 

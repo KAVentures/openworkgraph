@@ -776,6 +776,43 @@
     return box;
   }
 
+  // Combine this log with other saved logs into a new log (one export per region, or one system per step).
+  function combineSection(){
+    const box=section('Combine with other saved logs');box.id='owgCombine';
+    const others=state.logs.filter(l=>l.log_id!==state.logId);
+    const current=state.logs.find(l=>l.log_id===state.logId);
+    box.appendChild(el('div','Copies this log and the logs you tick into a new saved log. The logs themselves are unchanged. Every event gets a source_log attribute naming the log it came from.','muted'));
+    if(!others.length){box.appendChild(el('div','Import another log to combine it with this one.','muted'));return box;}
+    const list=el('fieldset');list.id='owgCombineLogs';list.append(el('legend','Logs to add (up to 9)'));
+    const boxes=others.map((l,i)=>{const c=input('owgCombineLog'+i,'checkbox');c.value=l.log_id;const label=el('label');label.style.cssText='display:flex;gap:6px;align-items:center';
+      label.append(c,document.createTextNode(' '+l.name+' · '+Number(l.events).toLocaleString()+' events'));list.append(label);return c;});
+    const cases=select('owgCombineCases',[['shared','Same ID is the same case (join systems of one process)'],['separate','Keep each log’s cases apart (one export per region or period)']]);
+    const name=input('owgCombineName','text');name.maxLength=120;name.autocomplete='off';name.value=((current&&current.name)||'Log')+' (combined)';
+    const run=button('Save combined log','secondary');run.id='owgCombineRun';
+    const out=el('div');out.id='owgCombineResult';out.setAttribute('role','status');
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Case IDs',cases),field('New log name',name),run);
+    box.append(list,row,out);
+    const generation=state.generation;
+    run.onclick=async()=>{
+      const chosen=boxes.filter(c=>c.checked).map(c=>c.value);
+      if(!chosen.length){out.replaceChildren(el('div','Tick at least one log to add.','muted'));return;}
+      run.disabled=true;
+      try{
+        const spec={name:name.value.trim(),log_ids:[state.logId,...chosen],cases:cases.value};
+        const r=await (await api('/v1/event-logs/combine',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(generation!==state.generation)return;
+        const data=await getJSON('/v1/event-logs');state.logs=Array.isArray(data.logs)?data.logs:state.logs;
+        const pick=document.getElementById('owgEventLogPick');setOptions(pick,state.logs.map(l=>[l.log_id,l.name+' · '+Number(l.events).toLocaleString()+' events']));pick.value=state.logId;
+        const open=button('Open '+r.log.name,'secondary');open.id='owgCombineOpen';
+        open.onclick=()=>refreshLogs(r.log.log_id).then(()=>status('Opened '+r.log.name+'. Select Analyse to explore it.')).catch(error=>status(error.message));
+        const shared=r.cases==='shared'&&r.ids_in_several_sources?' '+Number(r.ids_in_several_sources).toLocaleString()+' IDs appear in more than one log and were joined'+(r.object_type_conflicts?' ('+r.object_type_conflicts+' with different types; the first log’s type was kept)':'')+'.':'';
+        out.replaceChildren(el('div','Saved '+r.log.name+': '+Number(r.copied.events).toLocaleString()+' events from '+r.combined_from.length+' logs.'+shared),open);
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{run.disabled=false;}
+    };
+    return box;
+  }
+
   async function selectLog(logId,preferredCaseType){
     const savedPanel=document.getElementById('owgEventLogSavedList');if(savedPanel){show(savedPanel,false);document.getElementById('owgEventLogSavedReports')?.setAttribute('aria-expanded','false');}
     const generation=++state.generation;state.logId=logId;state.caseType='';state.follows=[];state.attr={};state.caseActivity='';state.objectTypes=[];
@@ -1011,6 +1048,7 @@
     results.appendChild(expirySection());
     results.appendChild(deriveSection(names));
     results.appendChild(anonymizedExportSection());
+    results.appendChild(combineSection());
     results.appendChild(dottedSection());
     results.appendChild(spectrumSection(inspection));
     results.appendChild(heuristicsSection());
