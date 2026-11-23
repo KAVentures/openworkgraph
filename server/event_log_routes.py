@@ -2681,6 +2681,13 @@ async def event_log_add_signal_rule(request: Request, log_id: str):
     return _respond(signals.add_rule, log_id, await _json_body(request, "signal rule"))
 
 
+@router.post("/v1/event-logs/{log_id}/signals/preview")
+async def event_log_preview_signal_rule(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "signal rule", strict=True)
+    return await run_in_threadpool(_respond, signals.preview_rule, log_id, spec)
+
+
 @router.get("/v1/event-logs/{log_id}/signals/scorecard")
 def event_log_signal_scorecard(request: Request, log_id: str, months: int = Query(default=6, ge=1, le=24)):
     """Value-based signals month by month (read-only)."""

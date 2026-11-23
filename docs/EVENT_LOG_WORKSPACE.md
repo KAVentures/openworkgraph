@@ -1484,8 +1484,13 @@ Celonis Action Engine and UiPath process alerts. Rules belong to one log, are im
 - `GET /v1/event-logs/{log_id}/signals` lists the rules.
 - `POST /v1/event-logs/{log_id}/signals` adds one, for example:
   `{"name":"Left open","when":{"kind":"cases","condition":"open_longer_than","seconds":172800,"end_activities":["Close"]}}`
+- `POST /v1/event-logs/{log_id}/signals/preview` checks one draft with the same request body.
+  It returns whether the draft would trigger, the measured value or matching cases, and the
+  case population checked. The draft preview leaves saved signals and evaluation history alone.
 - `POST /v1/event-logs/{log_id}/signals/{rule_id}/delete` removes one.
 - `POST /v1/event-logs/{log_id}/signals/evaluate` checks every rule now.
+
+Use **Preview signal** to check the current draft before choosing **Save signal**.
 
 Rule kinds:
 

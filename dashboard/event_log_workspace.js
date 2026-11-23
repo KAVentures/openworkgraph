@@ -8581,6 +8581,21 @@
       return Number(c.lower_bound).toLocaleString()+'–'+Number(c.upper_bound).toLocaleString()+' (bounded history)';
     return 'unknown (bounded history)';
   }
+  function signalValueText(signal){
+    const {when,value}=signal;
+    if(when.kind==='due_date')return value===null?'—':when.metric==='late_share'?pct(value)+' late':Number(value).toLocaleString()+' overdue';
+    if(when.kind==='conformance')return value===null?'—':pct(value)+' of '+Number(signal.conformance.cases).toLocaleString()+' cases';
+    if(when.kind==='kpi'){
+      if(value===null)return '—';
+      if(when.metric.endsWith('_rate'))return pct(value);
+      return when.metric==='case_count'?Number(value).toLocaleString():duration(value);
+    }
+    return Number(signal.matching_cases).toLocaleString()+(signal.matching_cases===1?' case':' cases');
+  }
+  function signalEvidenceText(signal){
+    return (signal.evidence_cases||[]).slice(0,5).map(c=>c.case_id+(signal.when.condition==='open_longer_than'&&c.age_since_first_event_seconds!==undefined?
+      ' (age '+duration(c.age_since_first_event_seconds)+', idle '+duration(c.idle_since_last_event_seconds)+')':'')).join(', ');
+  }
   function signalRule(values){
     const name=String(values.name||'').trim();if(!name)throw new Error('Name the signal.');
     const hours=Number(values.hours);
@@ -8611,13 +8626,15 @@
     const activity=select('owgSignalActivity',activityNames.slice(0,500).map(a=>[a,a]));
     const ends=input('owgSignalEnds','text','Close, Cancel');
     const add=button('Save signal','secondary');add.id='owgSignalAdd';
+    const preview=button('Preview signal','secondary');preview.id='owgSignalPreview';
+    const previewStatus=el('div',null,'muted');previewStatus.id='owgSignalPreviewStatus';previewStatus.setAttribute('role','status');
     const evaluate=button('Check signals');evaluate.id='owgSignalEvaluate';
     const fields={condition:field('Condition',condition),metric:field('KPI',metric),operator:field('Comparison',operator),threshold:field('Threshold',threshold),hours:field('Hours',hours),activity:field('Activity',activity),ends:field('Activities that end a case',ends)};
     const sync=()=>{const k=kind.value==='kpi';show(fields.condition,!k);show(fields.metric,k);show(fields.operator,k);show(fields.threshold,k);
       show(fields.hours,k?metric.value==='sla_breach_rate':['duration_over','open_longer_than'].includes(condition.value));
       show(fields.activity,!k&&['contains_activity','lacks_activity'].includes(condition.value));show(fields.ends,!k&&condition.value==='open_longer_than');};
     kind.onchange=condition.onchange=metric.onchange=sync;sync();
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Name',name),field('Watch',kind),...Object.values(fields),add);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Name',name),field('Watch',kind),...Object.values(fields),preview,add);
     const rules=el('div');rules.id='owgSignalRules';
     const message=el('div',null,'muted');message.id='owgSignalStatus';message.setAttribute('role','status');
     const out=el('div');out.id='owgSignalResults';
@@ -8682,7 +8699,7 @@
     const timelineResults=el('div');timelineResults.id='owgSignalTimelineResults';
     const timelineControls=el('div',null,'actions');timelineControls.append(timelineFilter,timelineRefresh,timelinePrevious,timelineNext);
     const allControls=el('div',null,'actions');allControls.append(allFilter,allRefresh,allPrevious,allNext);
-    box.append(row,message,rules,evaluate,out,reviewHeading,reviewNote,reviewRefresh,inbox,
+    box.append(row,previewStatus,message,rules,evaluate,out,reviewHeading,reviewNote,reviewRefresh,inbox,
       deliveryPanel,transitionHeading,transitionNote,transitionRefresh,transitionPrevious,transitionNext,transitionStatus,transitionResults,
       allHeading,allNote,allControls,allStatus,allResults,
       timelineHeading,timelineNote,timelineControls,timelineStatus,timelineResults);
@@ -8997,12 +9014,34 @@
       await refreshHistory();
       await refreshDelivery().catch(error=>{deliveryStatus.textContent=error.message;});
     }
+    const draftRule=()=>{
+      const values={name:name.value,kind:kind.value,condition:condition.value,metric:metric.value,operator:operator.value,threshold:threshold.value,hours:hours.value,activity:activity.value,ends:ends.value};
+      const body=signalRule(values);if(state.caseType)body.case_type=state.caseType;
+      return body;
+    };
+    let previewTurn=0;
+    const clearPreview=()=>{++previewTurn;previewStatus.textContent='';preview.disabled=false;};
+    row.addEventListener('input',clearPreview);row.addEventListener('change',clearPreview);
+    preview.onclick=async()=>{
+      const ticket=++previewTurn;
+      const current=()=>ticket===previewTurn&&generation===state.generation&&box.isConnected;
+      preview.disabled=true;previewStatus.textContent='Checking draft signal…';
+      try{
+        const r=await (await api(base()+'/preview',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify(draftRule())})).json();
+        if(!current())return;
+        const examples=signalEvidenceText(r.signal);
+        const cases=Number(r.cohort_cases).toLocaleString()+(r.cohort_cases===1?' case.':' cases.');
+        previewStatus.textContent=(r.signal.triggered?'Would trigger. ':'Would stay clear. ')+
+          'Result: '+signalValueText(r.signal)+'. Checked '+cases+(examples?' Examples: '+examples+'.':'');
+      }catch(error){if(current())previewStatus.textContent=error.message;}
+      finally{if(current())preview.disabled=false;}
+    };
     add.onclick=async()=>{
       try{
-        const values={name:name.value,kind:kind.value,condition:condition.value,metric:metric.value,operator:operator.value,threshold:threshold.value,hours:hours.value,activity:activity.value,ends:ends.value};
-        const body=signalRule(values);if(state.caseType)body.case_type=state.caseType;
+        const body=draftRule();
         await api(base(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-        message.textContent='Signal saved.';name.value='';await refresh();
+        message.textContent='Signal saved.';name.value='';clearPreview();await refresh();
       }catch(error){message.textContent=error.message;}
     };
     evaluate.onclick=async()=>{
@@ -9012,10 +9051,9 @@
           el('div',r.triggered+' of '+r.signals.length+' signals hold now.','muted'),
           table(['Signal','Holds','Value or matching cases','New since last check','Example cases'],r.signals.map(sig=>[
             sig.name,sig.triggered?'yes':'no',
-            sig.when.kind==='due_date'?(sig.value===null?'—':sig.when.metric==='late_share'?pct(sig.value)+' late':Number(sig.value).toLocaleString()+' overdue'):sig.when.kind==='conformance'?(sig.value===null?'—':pct(sig.value)+' of '+Number(sig.conformance.cases).toLocaleString()+' cases'):sig.when.kind==='kpi'?(sig.value===null?'—':sig.when.metric.endsWith('_rate')?pct(sig.value):sig.when.metric==='case_count'?Number(sig.value).toLocaleString():duration(sig.value)):Number(sig.matching_cases).toLocaleString()+' cases',
+            signalValueText(sig),
             (sig.when.kind==='kpi'||sig.when.kind==='conformance'||sig.when.kind==='due_date')?(sig.changed_since_last_evaluation?'changed':'—'):newCaseChange(sig),
-            (sig.evidence_cases||[]).slice(0,5).map(c=>c.case_id+(sig.when.condition==='open_longer_than'&&c.age_since_first_event_seconds!==undefined?
-              ' (age '+duration(c.age_since_first_event_seconds)+', idle '+duration(c.idle_since_last_event_seconds)+')':'')).join(', ')])),
+            signalEvidenceText(sig)])),
           el('div',r.interpretation,'muted'));
         await refresh();
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
