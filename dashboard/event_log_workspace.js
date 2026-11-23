@@ -1084,8 +1084,8 @@
     results.appendChild(logComparisonSection());
     results.appendChild(analysisSection(names));
     results.appendChild(signalSection((activities.activities||[]).map(a=>a.activity)));
-    results.appendChild(predictionSection((activities.activities||[]).map(a=>a.activity)));
-    results.appendChild(nextActivitySection((activities.activities||[]).map(a=>a.activity)));
+    results.appendChild(predictionSection(names,inspection));
+    results.appendChild(nextActivitySection(names,inspection));
     results.appendChild(complianceSection((activities.activities||[]).map(a=>a.activity),inspection));
     results.appendChild(domainPackSection());
     results.appendChild(costSection(names));
@@ -8725,16 +8725,31 @@
     return spec;
   }
 
+  function predictionCaseButton(inspection,caseId){
+    const open=button('Open case','secondary');open.setAttribute('aria-label','Open case '+caseId);
+    open.onclick=()=>inspection.open(caseId);
+    return open;
+  }
+
+  function predictionCaseStatus(result){
+    return {
+      not_in_selection:'This case key does not match any case in the current selection.',
+      completed:'This case has reached one of the selected end activities.',
+      unsupported:'This open case has too little comparable history for an estimate.'
+    }[result.case_selection];
+  }
+
   // What usually happens next in open cases, learned from completed cases and checked by a temporal backtest.
-  function nextActivitySection(activityNames){
+  function nextActivitySection(activityNames,inspection){
     const box=section('Next activity in open cases');box.id='owgNextActivity';
     box.appendChild(el('div','Estimate what usually comes next in each open case, from completed cases that had the same recent activities. Check the backtest before relying on it.','muted'));
     const ends=input('owgNextEnds','text','for example Pay, Close');ends.maxLength=2000;
     const listId='owgNextEndsList';const list=document.createElement('datalist');list.id=listId;activityNames.slice(0,500).forEach(a=>{const o=document.createElement('option');o.value=a;list.appendChild(o);});ends.setAttribute('list',listId);
     const history=select('owgNextHistory',[['1','1 activity'],['2','2 activities'],['3','3 activities']]);history.value='2';
+    const exact=input('owgNextCaseKey','text');exact.maxLength=200;
     const run=button('Predict next activities','secondary');run.id='owgNextRun';
     const out=el('div');out.id='owgNextResults';out.setAttribute('role','status');
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities that end a case (comma-separated)',ends),field('Recent history to match',history),run);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities that end a case (comma-separated)',ends),field('Recent history to match',history),field('Exact case key (optional)',exact),run);
     box.append(row,list,out);
     const generation=state.generation;
     const name=n=>n.case_ends?'(case ends)':n.activity;
@@ -8744,19 +8759,21 @@
         const endList=ends.value.split(',').map(x=>x.trim()).filter(Boolean);
         if(!endList.length)throw new Error('List the activities that end a case.');
         const spec={end_activities:endList,history:Number(history.value),limit:50};
+        if(exact.value)spec.case_id=exact.value;
         if(state.caseType)spec.case_type=state.caseType;
         if(filterOn())spec.cohort=globalCohort();
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/next-activity',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
         if(generation!==state.generation)return;
         const b=r.backtest;
         const quality=b.available?'Backtest on '+Number(b.test_cases).toLocaleString()+' cases that ended after '+String(b.cutoff_case_ended_at).slice(0,10)+': the first guess was right '+pct(b.top1_accuracy)+' of the time and one of the top three '+pct(b.top3_accuracy)+', against '+pct(b.baseline_current_activity_only)+' when looking at the current activity only and '+pct(b.baseline_most_frequent_next)+' when always guessing the most common step.':'No backtest: '+b.reason+'.';
-        const rows=r.predictions.map(p=>[p.case_id,p.last_activity,p.next.map(n=>name(n)+' '+pct(n.probability)).join(', '),p.history_used?'last '+p.history_used+' '+(p.history_used===1?'activity':'activities'):'all completed cases',Number(p.support).toLocaleString()]);
+        const rows=r.predictions.map(p=>[p.case_id,p.last_activity,p.next.map(n=>name(n)+' '+pct(n.probability)).join(', '),p.history_used?'last '+p.history_used+' '+(p.history_used===1?'activity':'activities'):'all completed cases',Number(p.support).toLocaleString(),predictionCaseButton(inspection,p.case_id)]);
         const expected=r.expected_next_across_open_cases.map(e=>[name(e),e.expected_cases.toLocaleString()]);
+        const heading=spec.case_id?'Selected case':rows.length<r.open_cases?'Most recently active open cases (showing '+rows.length+' of '+Number(r.open_cases).toLocaleString()+')':'Most recently active open cases';
         out.replaceChildren(
           el('div',Number(r.open_cases).toLocaleString()+' open and '+Number(r.completed_cases).toLocaleString()+' completed cases. '+quality),
           el('h4','Expected next steps across open cases'),table(['Next step','Expected cases'],expected),
-          el('h4','Most recently active open cases'),
-          rows.length?table(['Case','Last activity','Likely next','Matched on','Completed-case steps behind it'],rows):el('div','No open cases.','muted'),
+          el('h4',heading),
+          rows.length?table(['Case','Last activity','Likely next','Matched on','Completed-case steps behind it','Evidence'],rows):el('div',predictionCaseStatus(r)||'No open cases.','muted'),
           el('div',r.interpretation,'muted'));
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
       finally{run.disabled=false;}
@@ -8775,7 +8792,7 @@
       Number(b.still_open_unscored_cases).toLocaleString()+' are still open and not scored'+(b.still_open_already_beyond_p90?', '+Number(b.still_open_already_beyond_p90).toLocaleString()+' already past their 90th percentile':'')+'. '+b.scoring_note;
   };
 
-  function predictionSection(activityNames){
+  function predictionSection(activityNames,inspection){
     const box=section('Predict open cases');box.id='owgEventLogPredictions';
     box.appendChild(el('div','Estimate how much longer open cases will take, and how likely an outcome is, from cases that were at the same point. Learning from completed cases only is biased toward short times when long cases are still open; including still-open cases corrects for that and takes into account how long each case has already waited. A backtest shows how accurate these estimates have been. Estimates are not commitments, and nobody is rated.','muted'));
     const ends=input('owgPredictEnds','text','Close, Cancel');
@@ -8783,12 +8800,13 @@
     const hours=input('owgPredictHours','number');hours.min='0';hours.step='any';
     const activity=select('owgPredictActivity',activityNames.slice(0,500).map(x=>[x,x]));
     const estimator=select('owgPredictEstimator',[['completed_cases','Completed cases only'],['survival','Completed and still-open cases']]);
+    const exact=input('owgPredictCaseKey','text');exact.maxLength=200;
     const run=button('Predict');run.id='owgPredictRun';
     const watch=button('Monitor quality over time','secondary');watch.id='owgPredictMonitor';
     const f={hours:field('Hours',hours),activity:field('Activity',activity)};
     const sync=()=>{show(f.hours,outcome.value==='duration_over');show(f.activity,outcome.value==='contains_activity');};
     outcome.onchange=sync;sync();
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities that end a case',ends),field('Also predict',outcome),f.hours,f.activity,field('Learn from',estimator),run,watch);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities that end a case',ends),field('Also predict',outcome),f.hours,f.activity,field('Learn from',estimator),field('Exact case key (optional)',exact),run,watch);
     const out=el('div');out.id='owgPredictResults';out.setAttribute('role','status');
     const monitorOut=el('div');monitorOut.id='owgPredictMonitoring';monitorOut.setAttribute('role','status');
     const snapButton=button('Save a snapshot to score later','secondary');snapButton.id='owgPredictSnapshot';
@@ -8836,23 +8854,32 @@
     };
     listSnapshots().catch(()=>{});
     run.onclick=async()=>{
+      run.disabled=true;
       try{
         const spec=predictionSpec({ends:ends.value,outcome:outcome.value,hours:hours.value,activity:activity.value,estimator:estimator.value});
+        if(exact.value)spec.case_id=exact.value;
         if(state.caseType)spec.case_type=state.caseType;
+        if(filterOn())spec.cohort=globalCohort();
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/predictions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
         if(generation!==state.generation)return;
         const b=r.backtest;
         const quality=b.design==='as_of_replay'?asOfBacktestText(b):b.available?'Backtest on '+Number(b.scored_prefixes).toLocaleString()+' later steps: typical error '+duration(b.mean_absolute_error_seconds)+' vs '+duration(b.naive_mean_absolute_error_seconds)+' for a naive guess; the range held the actual time '+pct(b.p10_p90_coverage)+' of the time (target 80%).'+(b.brier_score!==undefined?' Outcome Brier score '+b.brier_score.toFixed(3)+' vs '+b.base_rate_brier_score.toFixed(3)+' for the base rate.':''):'No backtest: '+b.reason+'.';
-        const headers=['Case','Latest activity','Open for','Expected remaining','Likely range',...(spec.outcome?['Outcome likelihood']:[]),'Based on'];
+        const headers=['Case','Latest activity','Open for','Expected remaining','Likely range',...(spec.outcome?['Outcome likelihood']:[]),'Based on','Evidence'];
         const rows=r.predictions.map(p=>[p.case_id,p.last_activity,duration(p.age_seconds),remainingText(p),
           (p.remaining_p10_seconds===null?'unknown':duration(p.remaining_p10_seconds))+' – '+(p.remaining_p90_seconds===null?'unknown':duration(p.remaining_p90_seconds)),
           ...(spec.outcome?[p.outcome_probability_ci95?pct(p.outcome_probability)+' ['+pct(p.outcome_probability_ci95[0])+', '+pct(p.outcome_probability_ci95[1])+']':'—']:[]),
           Number(p.comparable_cases).toLocaleString()+' cases ('+({same_activity_and_step:'same step',same_activity:'same activity',all_completed_cases:'all cases',all_cases:'all cases'})[p.basis]+')'+
-            (p.comparable_cases_still_open?', '+Number(p.comparable_cases_still_open).toLocaleString()+' still open':'')]);
+            (p.comparable_cases_still_open?', '+Number(p.comparable_cases_still_open).toLocaleString()+' still open':''),
+          predictionCaseButton(inspection,p.case_id)]);
+        const selection=predictionCaseStatus(r);
         out.replaceChildren(el('div',Number(r.open_cases).toLocaleString()+' open cases; '+Number(r.predicted_open_cases).toLocaleString()+' have enough comparable history'+
             (r.withheld_estimates?'; '+Number(r.withheld_estimates).toLocaleString()+' estimates withheld because too many comparable cases are still open':'')+'.','muted'),
-          el('div',quality,'muted'),table(headers,rows),el('div',r.interpretation,'muted'));
-      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+          el('div',quality,'muted'),
+          ...(r.predictions_truncated?[el('div','Showing '+rows.length+' estimates. Enter an exact case key to look up another open case.','muted')]:[]),
+          rows.length?table(headers,rows):el('div',selection||'No estimates are available for the selected open cases.','muted'),
+          el('div',r.interpretation,'muted'));
+      }catch(error){if(generation===state.generation)out.replaceChildren(el('div',error.message,'muted'));}
+      finally{run.disabled=false;}
     };
     let watchTurn=0;
     watch.onclick=async()=>{

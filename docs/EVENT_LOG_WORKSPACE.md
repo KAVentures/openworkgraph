@@ -1951,6 +1951,13 @@ Nothing is uploaded; activity names in the file are as sensitive as the log.
 optionally, an outcome risk for open cases. This is the local equivalent of ABBYY Timeline, IBM
 Process Mining or Celonis predictive monitoring.
 
+Enter an **Exact case key** to look up an open case, including one outside the preview. Both
+live prediction views respect the active case filter and offer **Open case** to show recorded
+event history. In either dashboard-only API, pass the optional literal `case_id` in the JSON
+body. It restricts the returned prediction rows while keeping the comparison population and
+backtest based on the selected cohort. Lookups report `case_selection` as `predicted`, `completed`,
+`unsupported`, or `not_in_selection`.
+
 ```json
 {"end_activities": ["Close", "Cancel"],
  "outcome": {"kind": "duration_over", "seconds": 172800},
@@ -2036,6 +2043,7 @@ Optional settings:
 * `top`: the number of next steps returned per case (1–10, default 3);
 * `limit`: the number of open cases returned, most recently active first
   (1–500, default 50);
+* `case_id`: the exact case key to return, including cases outside the default preview;
 * `backtest_share`: the share of completed cases used for the backtest
   (default 0.3);
 * `cohort` and `case_type`: as for other analyses.

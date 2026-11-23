@@ -102,7 +102,7 @@ def _prepare(conn, settings: PredictionSpec, log_id: str):
     return as_of
 
 
-def predict(log_id: str, spec: Any) -> dict[str, Any]:
+def predict(log_id: str, spec: Any, *, case_id: str | None = None) -> dict[str, Any]:
     settings = parse(spec)
 
     def run(conn):
@@ -116,14 +116,15 @@ def predict(log_id: str, spec: Any) -> dict[str, Any]:
         _choose(conn, "po", settings.min_support)
         has_outcome = settings.outcome is not None
         if settings.estimator == "survival":
-            return _survival_result(conn, settings, as_of, completed, open_total, has_outcome)
+            return _survival_result(conn, settings, as_of, completed, open_total, has_outcome, case_id)
         rows = conn.execute("""SELECT case_id, activity, step, age, idle, basis, cases, q50, q10, q90, rate, hits, n
-            FROM po_est WHERE basis IS NOT NULL ORDER BY """ + ("rate DESC" if has_outcome else "q50 DESC") +
-                            ", case_id LIMIT ?", [settings.limit + 1]).fetchall()
+            FROM po_est WHERE basis IS NOT NULL AND (? IS NULL OR case_id = ?) ORDER BY """
+                            + ("rate DESC" if has_outcome else "q50 DESC") + ", case_id LIMIT ?",
+                            [case_id, case_id, settings.limit]).fetchall()
         predicted = conn.execute("SELECT count(*) FROM po_est WHERE basis IS NOT NULL").fetchone()[0]
         predictions = []
-        for case_id, activity, step, age, idle, basis, cases, q50, q10, q90, rate, hits, n in rows[:settings.limit]:
-            item = {"case_id": case_id, "last_activity": activity, "events_so_far": step, "age_seconds": age,
+        for key, activity, step, age, idle, basis, cases, q50, q10, q90, rate, hits, n in rows:
+            item = {"case_id": key, "last_activity": activity, "events_so_far": step, "age_seconds": age,
                     "idle_seconds": idle, "basis": basis, "comparable_cases": cases, "median_remaining_seconds": q50,
                     "remaining_p10_seconds": q10, "remaining_p90_seconds": q90}
             if has_outcome:
@@ -134,7 +135,8 @@ def predict(log_id: str, spec: Any) -> dict[str, Any]:
             "as_of": as_of.isoformat() + "Z" if as_of else None,
             "completed_cases": completed, "open_cases": open_total,
             "predicted_open_cases": predicted, "unsupported_open_cases": open_total - predicted,
-            "predictions": predictions, "predictions_truncated": predicted > len(predictions),
+            "predictions": predictions, "predictions_truncated": case_id is None and predicted > len(predictions),
+            **_case_selection(conn, case_id, predictions),
             "backtest": _backtest(conn, settings),
             "settings": settings.model_dump(),
             "basis": "historical completed cases in a comparable state (latest activity and step), with fallbacks",
@@ -145,8 +147,19 @@ def predict(log_id: str, spec: Any) -> dict[str, Any]:
     return workspace._query(log_id, settings.case_type, run)
 
 
+def _case_selection(conn, case_id: str | None, predictions: list[dict[str, Any]]) -> dict[str, Any]:
+    if case_id is None:
+        return {}
+    if predictions:
+        return {"case_selection": "predicted"}
+    row = conn.execute("SELECT complete FROM pc WHERE case_id = ?", [case_id]).fetchone()
+    if row is None:
+        return {"case_selection": "not_in_selection"}
+    return {"case_selection": "completed" if row[0] else "unsupported"}
+
+
 def _survival_result(conn, settings: PredictionSpec, as_of, completed: int, open_total: int,
-                     has_outcome: bool) -> dict[str, Any]:
+                     has_outcome: bool, case_id: str | None) -> dict[str, Any]:
     survival.observations(conn)
     survival.fit(conn)
     survival.estimate(conn, "po", settings.min_support)
@@ -156,13 +169,15 @@ def _survival_result(conn, settings: PredictionSpec, as_of, completed: int, open
     rows = conn.execute(f"""SELECT v.case_id, v.activity, v.step, v.age, v.idle, v.basis, v.cases, v.censored_cases,
           v.q50, v.q10, v.q90, v.at_least, e.rate, e.hits, e.n
         FROM po_sv v JOIN po_est e USING (case_id) WHERE v.basis IS NOT NULL
-        ORDER BY {order}(v.q50 IS NULL) DESC, v.q50 DESC, v.case_id LIMIT ?""", [settings.limit + 1]).fetchall()
+          AND (? IS NULL OR v.case_id = ?)
+        ORDER BY {order}(v.q50 IS NULL) DESC, v.q50 DESC, v.case_id LIMIT ?""",
+                        [case_id, case_id, settings.limit]).fetchall()
     predicted, withheld = conn.execute("""SELECT count(*) FILTER (WHERE basis IS NOT NULL),
           count(*) FILTER (WHERE basis IS NOT NULL AND q50 IS NULL) FROM po_sv""").fetchone()
     predictions = []
-    for (case_id, activity, step, age, idle, basis, cases, still_open, q50, q10, q90, at_least,
-         rate, hits, n) in rows[:settings.limit]:
-        item = {"case_id": case_id, "last_activity": activity, "events_so_far": step, "age_seconds": age,
+    for (key, activity, step, age, idle, basis, cases, still_open, q50, q10, q90, at_least,
+         rate, hits, n) in rows:
+        item = {"case_id": key, "last_activity": activity, "events_so_far": step, "age_seconds": age,
                 "idle_seconds": idle, "basis": basis, "comparable_cases": cases,
                 "comparable_cases_still_open": still_open, "median_remaining_seconds": q50,
                 "remaining_p10_seconds": q10, "remaining_p90_seconds": q90, "remaining_measured_from": "end_of_log",
@@ -180,7 +195,8 @@ def _survival_result(conn, settings: PredictionSpec, as_of, completed: int, open
         "completed_cases": completed, "open_cases": open_total,
         "predicted_open_cases": predicted, "unsupported_open_cases": open_total - predicted,
         "withheld_estimates": withheld,
-        "predictions": predictions, "predictions_truncated": predicted > len(predictions),
+        "predictions": predictions, "predictions_truncated": case_id is None and predicted > len(predictions),
+        **_case_selection(conn, case_id, predictions),
         "backtest": (survival.backtest(conn, cutoff, settings.min_support) if cutoff is not None
                      else {"available": False, "reason": "no completed cases"}),
         "settings": settings.model_dump(),

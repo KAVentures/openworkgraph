@@ -2056,12 +2056,23 @@ async def event_log_rework(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+async def _live_prediction_settings(request: Request, what: str, *, strict: bool = False,
+                                    limit: int = 65536) -> tuple[Any, str | None]:
+    spec = await _json_body(request, what, strict=strict, limit=limit)
+    if not isinstance(spec, dict) or "case_id" not in spec:
+        return spec, None
+    case_id = spec.pop("case_id")
+    if not isinstance(case_id, str) or not 1 <= len(case_id) <= 200:
+        raise HTTPException(422, "case_id must be a non-empty case key of at most 200 characters")
+    return spec, case_id
+
+
 @router.post("/v1/event-logs/{log_id}/predictions")
 async def event_log_predictions(request: Request, log_id: str):
     _require_dashboard(request)
-    spec = await _json_body(request, "prediction settings")
+    spec, case_id = await _live_prediction_settings(request, "prediction settings")
     try:
-        result = await run_in_threadpool(predictions.predict, log_id, spec)
+        result = await run_in_threadpool(predictions.predict, log_id, spec, case_id=case_id)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
@@ -2084,9 +2095,9 @@ async def event_log_next_activity(request: Request, log_id: str):
     """What usually happens next in open cases, learned from completed cases and backtested."""
     from . import event_log_next_activity as next_activity
     _require_dashboard(request)
-    spec = await _json_body(request, "next-activity settings", strict=True, limit=32768)
+    spec, case_id = await _live_prediction_settings(request, "next-activity settings", strict=True, limit=32768)
     try:
-        result = await run_in_threadpool(next_activity.next_activity, log_id, spec)
+        result = await run_in_threadpool(next_activity.next_activity, log_id, spec, case_id=case_id)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
