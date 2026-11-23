@@ -3573,10 +3573,13 @@ async def read_local_bound_provider_event(request: Request, response: Response):
     # Adapter output is evidence, never permission to assert customer success.
     # Fail closed on malformed or contradictory verdicts before disclosure.
     if (not isinstance(verdict, dict)
-            or verdict.get("status") not in ("unknown", "verified_provider_event")
+            or verdict.get("status") not in ("unknown", "verified_provider_event", "verified_provider_operation")
             or verdict.get("customer_outcome") != "unknown"
-            or verdict.get("provider_operation") != "unknown"
-            or (verdict.get("status") == "verified_provider_event" and
+            or (verdict.get("status") == "verified_provider_operation"
+                and verdict.get("provider_operation") not in ("succeeded", "failed"))
+            or (verdict.get("status") != "verified_provider_operation"
+                and verdict.get("provider_operation") != "unknown")
+            or (verdict.get("status") != "unknown" and
                 verdict.get("event_id") != payload["provider_event_id"])
             or (verdict.get("status") == "unknown" and verdict.get("event_id") is not None)):
         raise HTTPException(409, "provider verification verdict unavailable or contradictory")
