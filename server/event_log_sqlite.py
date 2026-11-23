@@ -214,6 +214,8 @@ def to_ocel_json(source: IO[bytes], *, folder: Path) -> dict[str, Any]:
                 names = [d[0] for d in cursor.description]
                 for row in cursor:
                     budget[0] += 1
+                    if budget[0] > MAX_OCEL_ROWS:
+                        raise SqliteError(f"the OCEL database has more than {MAX_OCEL_ROWS:,} rows")
                     record = dict(zip(names, row))
                     event = events.get(str(record.get("ocel_id")))
                     if event is None:
@@ -233,6 +235,8 @@ def to_ocel_json(source: IO[bytes], *, folder: Path) -> dict[str, Any]:
                 names = [d[0] for d in cursor.description]
                 for row in cursor:
                     budget[0] += 1
+                    if budget[0] > MAX_OCEL_ROWS:
+                        raise SqliteError(f"the OCEL database has more than {MAX_OCEL_ROWS:,} rows")
                     record = dict(zip(names, row))
                     obj = objects.get(str(record.get("ocel_id")))
                     if obj is None:
