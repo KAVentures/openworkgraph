@@ -705,14 +705,20 @@
     const run=button('Save as new log','secondary');run.id='owgDeriveRun';
     const preview=button('Preview copy','secondary');
     const previewStatus=el('div',null,'muted');previewStatus.id='owgDerivePreview';previewStatus.setAttribute('role','status');
-    const formats=select('owgDeriveExportFormat',[['csv','CSV (exact interchange)'],['csv-review','CSV for spreadsheet review'],
-      ['xes','XES'],['xes-attributes','XES with retained attributes'],['ocel','OCEL 2.0 JSON'],['ocelxml','OCEL 2.0 XML']]);
+    const formatOptions=[['csv','CSV (exact interchange)'],['csv-review','CSV for spreadsheet review'],
+      ['xes','XES'],['xes-attributes','XES with retained attributes'],['ocel','OCEL 2.0 JSON'],['ocelxml','OCEL 2.0 XML']];
+    if(current?.source_identity&&state.caseType==='source_case'){
+      formatOptions.push(['sourcecsv','Source-ID CSV (exact interchange)'],['sourcecsv-review','Source-ID CSV for spreadsheet review']);
+    }
+    const formats=select('owgDeriveExportFormat',formatOptions);
     const download=button('Download matching cases','secondary');download.id='owgDeriveExport';
     const formatNote=el('p',null,'muted');
     function describeFormat(){
       formatNote.textContent={
         'csv':'Includes case IDs, activity names, timestamps and resources.',
         'csv-review':'Changes formula-like cells for spreadsheet review. Use exact CSV for re-import.',
+        'sourcecsv':'Includes supplied event IDs, namespaces, raw case keys and retained event attributes for re-import.',
+        'sourcecsv-review':'Includes supplied IDs and changes formula-like cells for spreadsheet review. Use exact Source-ID CSV for re-import.',
         'xes':'Includes one trace per matching case with activity names, timestamps and resources.',
         'xes-attributes':'Also includes retained trace and event attribute values. Use OCEL for timed object attributes and relationships.',
         'ocel':'Includes objects linked to matching events, their timed attributes, and relationships between included objects.',
@@ -767,7 +773,7 @@
     };
     download.onclick=async()=>{
       const logId=state.logId,format=formats.value;
-      const extension={'csv-review':'review.csv',xes:'xes','xes-attributes':'xes',ocel:'jsonocel',ocelxml:'xmlocel'}[format]||'csv';
+      const extension={'csv-review':'review.csv','sourcecsv-review':'review.csv',xes:'xes','xes-attributes':'xes',ocel:'jsonocel',ocelxml:'xmlocel'}[format]||'csv';
       download.disabled=true;
       try{
         const spec=copySelection('export');

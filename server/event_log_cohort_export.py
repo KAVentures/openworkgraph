@@ -7,10 +7,11 @@ from shared.event_log_formats import EventLogFormatError, write_csv, write_ocel_
 
 from . import event_log_cohorts as cohorts
 from . import event_log_derive as derived
+from . import event_log_source_identity as source_identity
 from . import event_log_workspace as workspace
 
 
-MatchingExportFormat = Literal["csv", "csv-review", "xes", "xes-attributes", "ocel", "ocelxml"]
+MatchingExportFormat = Literal["csv", "csv-review", "sourcecsv", "sourcecsv-review", "xes", "xes-attributes", "ocel", "ocelxml"]
 
 
 class ExportSpec(BaseModel):
@@ -37,20 +38,28 @@ def export_matching_cases(log_id: str, spec: Any, out: IO[str], *,
         cohorts.restrict(conn, chosen, log_id)
         if conn.execute("SELECT 1 FROM ce LIMIT 1").fetchone() is None:
             raise workspace.EventLogWorkspaceError("No cases match the filter")
-        if export_format in ("ocel", "ocelxml"):
+        is_ocel = export_format in ("ocel", "ocelxml")
+        is_source_csv = export_format in ("sourcecsv", "sourcecsv-review")
+        has_window = start is not None or end is not None
+        if is_ocel or is_source_csv or has_window:
             derived._select_original_events(conn, log_id, start, end)
+        if is_ocel:
             objects, events = workspace._ocel_export_projection(conn, log_id, matching=True)
             writer = write_ocel_json if export_format == "ocel" else write_ocel_xml
             writer(objects, events, out)
             return {}
         notion = workspace._case_type(conn, log_id, settings.case_type)
+        if is_source_csv:
+            try:
+                source_identity.export_csv(conn, log_id, notion, out, matching=True,
+                                           spreadsheet_review=export_format == "sourcecsv-review")
+            except EventLogFormatError as exc:
+                raise workspace.EventLogWorkspaceError(str(exc)) from None
+            return {}
 
         # Filters see the analysis mapping. Export writes the original rows
         # for the matching cases, restricted to the optional event window.
-        window_join = ""
-        if start is not None or end is not None:
-            derived._select_original_events(conn, log_id, start, end)
-            window_join = "SEMI JOIN dv_events ON source.event_id = dv_events.event_id"
+        window_join = "SEMI JOIN dv_events ON source.event_id = dv_events.event_id" if has_window else ""
         is_xes = export_format in ("xes", "xes-attributes")
         include_attributes = export_format == "xes-attributes"
         fields = "source.*" if is_xes else "source.case_id, source.activity, source.ts, source.resource"

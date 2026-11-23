@@ -47,6 +47,11 @@ source_namespace,source_event_id,case_namespace,case_id,activity,timestamp,resou
 
 It preserves supplied IDs, namespaces, the raw case key, UTC timestamps, resource and retained attributes. It refuses a missing/inconsistent source index or ambiguous case links before writing output. Reimport as `format=csv`, map case/activity/timestamp/resource normally, and use `source_event_id`, `source_namespace`, `case_namespace` and `attributes` for the four corresponding identity/JSON column mappings. The UI recognizes those column names for selection but leaves the source-ID option explicit. A raw case key already starting with `src:` round-trips without an extra prefix.
 
+With the `source_case` notion selected, **Download matching cases** also offers
+both Source-ID CSV formats. Choose a case filter, an event window, or both.
+Matching uses the analysis view and the download preserves supplied keys and
+original events within the selected window.
+
 Ordinary CSV, XES and OCEL exports retain their existing contracts and **omit these source-key associations**. They are not source-ID round trips. Shared coded-case disclosure still omits original source/case/person labels, resources, attributes and absolute dates. Source IDs are not automatically synchronized or included in that disclosure.
 
 ## Verification and limits

@@ -301,7 +301,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `POST /v1/event-logs/xlsx-to-csv?sheet=...` | Convert one worksheet of the `.xlsx` request body to CSV (`csv`, `sheet`, `sheets`, `rows`, `columns`, `date_columns`, `dates_have_no_offset`). Nothing is stored. |
 | `POST /v1/event-logs/{log_id}/delete` | Delete the log and every row that belongs to it. |
 | `GET`/`POST /v1/event-logs/{log_id}/expiry` (`{"delete_after": ISO time \| null}`) | Read, set or clear the date after which the log is deleted automatically (below). |
-| `POST /v1/event-logs/{log_id}/export/matching-cases` | Download matching cases. Body contains `cohort` and optional `case_type`, `events_from` and `events_before`. Query `format` is `csv` (default), `csv-review`, `xes`, `xes-attributes`, `ocel`, or `ocelxml`. |
+| `POST /v1/event-logs/{log_id}/export/matching-cases` | Download matching cases. Body contains `cohort` and optional `case_type`, `events_from` and `events_before`. Query `format` is `csv` (default), `csv-review`, `xes`, `xes-attributes`, `ocel`, `ocelxml`, `sourcecsv`, or `sourcecsv-review`. Source-ID formats require the `source_case` notion. |
 | `POST /v1/event-logs/{log_id}/derive` | Save the cases matching a filter as a new log (below). |
 | `GET /v1/event-logs/{log_id}/quality` | Stored quality and mapping reports per import and append, plus current whole-log diagnostics (below). |
 | `GET /v1/event-logs/{log_id}/summary` | Events, cases, activities, time span and case-duration median/p90/mean. |

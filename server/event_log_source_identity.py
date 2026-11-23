@@ -149,7 +149,7 @@ def copy_append_keys(conn,log_id,staging,prefix):
     conn.execute('''INSERT INTO event_source_keys SELECT ?,?||s.event_id,s.source_namespace,s.source_event_id FROM event_source_keys s
         JOIN keep k ON k.event_id=s.event_id WHERE s.log_id=?''',[log_id,prefix,staging])
 
-def export_csv(conn,log_id,case_type,out,*,spreadsheet_review=False):
+def export_csv(conn,log_id,case_type,out,*,spreadsheet_review=False,matching=False):
     if case_type!=CASE_TYPE:raise EventLogFormatError('Choose the source_case notion for identity-preserving source CSV export')
     validate_index(conn,log_id)
     if conn.execute('''SELECT k.event_id FROM event_source_keys k
@@ -162,13 +162,14 @@ def export_csv(conn,log_id,case_type,out,*,spreadsheet_review=False):
     from shared.spreadsheet_review import review_cell
     fields=['source_namespace','source_event_id','case_namespace','case_id','activity','timestamp','resource','attributes']
     writer=csv.writer(out);writer.writerow([name+'_review' for name in fields] if spreadsheet_review else fields)
-    cursor=conn.execute('''SELECT k.source_namespace,k.source_event_id,n.case_namespace,
+    event_filter = 'AND k.event_id IN (SELECT event_id FROM dv_events)' if matching else ''
+    cursor=conn.execute(f'''SELECT k.source_namespace,k.source_event_id,n.case_namespace,
         substring(o.object_id,length('src:'||n.case_namespace||':')+1),e.activity,e.ts,e.resource,e.attributes
         FROM event_source_keys k JOIN event_source_namespaces n ON n.log_id=k.log_id AND n.source_namespace=k.source_namespace
         JOIN events e ON e.log_id=k.log_id AND e.event_id=k.event_id
         JOIN (SELECT DISTINCT log_id,event_id,object_id FROM event_objects) l ON l.log_id=e.log_id AND l.event_id=e.event_id
         JOIN objects o ON o.log_id=l.log_id AND o.object_id=l.object_id AND o.object_type=?
-        WHERE k.log_id=? ORDER BY o.object_id,e.ts,e.event_id''',[CASE_TYPE,log_id])
+        WHERE k.log_id=? {event_filter} ORDER BY o.object_id,e.ts,e.event_id''',[CASE_TYPE,log_id])
     while rows:=cursor.fetchmany(10000):
         for ns,event,case,key,activity,stamp,resource,attributes in rows:
             row=[ns,event,case,key,activity,stamp.isoformat()+'Z',resource,attributes]
