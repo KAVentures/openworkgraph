@@ -63,6 +63,11 @@ const path=require('node:path');
    await evidence.getByRole('button',{name:'Open case south1',exact:true}).click();
    await evidence.getByText(/Showing 3 of 3 events/).waitFor();
    assert.match(await evidence.locator('table').last().innerText(),/Approve/);
+   const [single]=await Promise.all([page.waitForEvent('download'),
+     evidence.getByRole('button',{name:'Download case events (CSV)',exact:true}).click()]);
+   const singleRows=(await fs.readFile(await single.path(),'utf8')).trim().split(/\r?\n/).slice(1);
+   assert.equal(singleRows.length,3);
+   assert.deepEqual([...new Set(singleRows.map(line=>line.split(',')[0]))],['south1']);
    await out.getByRole('button',{name:/Review baseline cases for Receive → Check → Check → Approve → Pay/}).click();
    await evidence.getByText('3 matching cases in north (case).').waitFor();
    assert.equal(await evidence.getByRole('button',{name:/Open case north/}).count(),3);
