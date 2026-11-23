@@ -78,6 +78,18 @@ const path=require('node:path');
     // The overview intentionally does not depend on which log is selected.
     await page.locator('#owgEventLogAnalyze').click();
     await page.locator('#owgSignalAllStatus').filter({hasText:/2 signal states need attention across 2 saved logs/}).waitFor();
+    await page.locator('#owgSignalName').fill('Draft preview');
+    await page.locator('#owgSignalKind').selectOption('kpi');
+    await page.locator('#owgSignalMetric').selectOption('case_count');
+    await page.locator('#owgSignalThreshold').fill('0');
+    await page.getByRole('button',{name:'Preview signal',exact:true}).click();
+    const preview=page.locator('#owgSignalPreviewStatus');
+    await preview.getByText('Would trigger. Result: 1. Checked 1 case.',{exact:true}).waitFor();
+    await page.locator('#owgSignalThreshold').fill('100');
+    assert.equal(await preview.textContent(),'');
+    await page.getByRole('button',{name:'Preview signal',exact:true}).click();
+    await preview.getByText('Would stay clear. Result: 1. Checked 1 case.',{exact:true}).waitFor();
+    assert.equal(await page.getByRole('button',{name:'Delete signal Draft preview'}).count(),0);
     const rows=page.locator('#owgSignalAllResults tbody tr');
     assert.equal(await rows.count(),2);
     assert.equal(await page.locator('#owgSignalAllResults img').count(),0);

@@ -81,6 +81,44 @@ def test_kpi_and_case_rules_trigger_with_evidence_and_remember_new_cases():
 
 
 
+def test_preview_matches_evaluation_without_recording_signal_state():
+    from server import event_log_signal_inbox as inbox
+
+    log = _log()
+    spec = {**_rule("Slow", kind="cases", condition="duration_over", seconds=24 * 3600),
+            "cohort": {"activity": "Close"}}
+    first = signals.preview_rule(log, spec)
+    assert first["cohort_cases"] == 2
+    assert first["signal"]["triggered"] and first["signal"]["matching_cases"] == 1
+    assert [case["case_id"] for case in first["signal"]["evidence_cases"]] == ["slow"]
+    assert first["signals_execute_actions"] is False
+    assert signals.list_rules(log)["rules"] == []
+    made = signals.add_rule(log, spec)
+    evaluated = signals.evaluate(log)["signals"][0]
+    assert first["signal"] == {key: value for key, value in evaluated.items() if key not in {
+        "rule_id", "new_cases_since_last_evaluation", "new_cases_comparison",
+    }}
+
+    current = inbox.list_inbox(log)["items"][0]
+    inbox.snooze(log, made["rule_id"], {"state_fingerprint": current["state_fingerprint"], "minutes": 60})
+
+    def saved_state():
+        with workspace._LOCK:
+            conn = workspace._connect()
+            try:
+                return [conn.execute(f"SELECT * FROM {table} WHERE log_id = ?", [log]).fetchall()
+                        for table in ("signal_rules", "signal_transitions", "signal_reviews", "signal_snoozes")]
+            finally:
+                conn.close()
+
+    before = saved_state()
+    kpi = _rule("Large cohort", kind="kpi", metric="case_count", operator="above", threshold=10)
+    second = signals.preview_rule(log, kpi)
+    assert second["cohort_cases"] == second["signal"]["value"] == 4
+    assert not second["signal"]["triggered"]
+    assert saved_state() == before
+
+
 def test_saved_signals_use_fractional_seconds_for_kpis_sla_and_case_evidence():
     """Synthetic timestamps: 1.5s breaches a strict 1s rule; exactly 1s does not."""
     rows = [
@@ -259,6 +297,12 @@ with TestClient(app) as client:
     bearer = {"Authorization": "Bearer " + local_auth.ensure_api_token()}
     assert client.post(base, json=rule, headers=bearer).status_code in (401, 403)
     assert client.post(base + "/evaluate", headers=bearer).status_code in (401, 403)
+    assert client.post(base + "/preview", json=rule, headers=bearer).status_code in (401, 403)
+    preview = client.post(base + "/preview", json=rule, headers=headers)
+    assert preview.status_code == 200 and preview.headers["cache-control"] == "no-store"
+    assert preview.json()["cohort_cases"] == preview.json()["signal"]["matching_cases"] == 1
+    assert client.get(base, headers=headers).json()["rules"] == []
+    assert client.post(base + "/preview", json={**rule, "cohort": {"activity": []}}, headers=headers).status_code == 422
     created = client.post(base, json=rule, headers=headers)
     assert created.status_code == 200, created.text
     assert client.post(base, content=b"not json", headers={**headers, "content-type": "application/json"}).status_code == 422
