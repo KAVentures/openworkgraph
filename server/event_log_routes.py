@@ -1520,7 +1520,8 @@ def event_log_model_change(request: Request, log_id: str, split: str | None = Qu
     """How the discovered model differs before and after a date: orderings, activities and cross-fit."""
     from . import event_log_model_change as change
     _require_dashboard(request)
-    return _respond(change.model_change, log_id, case_type, split=split, noise=noise, cohort=cohort)
+    return _respond(change.model_change, log_id, case_type, split=split, noise=noise, cohort=cohort,
+                    include_case_evidence=True)
 
 
 @router.get("/v1/event-logs/{log_id}/model-comparison")
@@ -1532,7 +1533,8 @@ def event_log_model_comparison(request: Request, log_id: str, group_a: str = Que
     """The discovered models of two groups of cases (case attribute values) compared."""
     from . import event_log_model_change as change
     _require_dashboard(request)
-    return _respond(change.model_comparison, log_id, group_a, group_b, case_type, noise=noise, cohort=cohort)
+    return _respond(change.model_comparison, log_id, group_a, group_b, case_type, noise=noise, cohort=cohort,
+                    include_case_evidence=True)
 
 
 @router.get("/v1/event-logs/{log_id}/story")
