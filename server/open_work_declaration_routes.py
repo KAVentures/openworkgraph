@@ -3441,6 +3441,17 @@ async def read_local_bound_provider_event(request: Request, response: Response):
         raise HTTPException(409, "retained receipt run does not match admitted run")
     await _recheck_source(scope)
     _dashboard_only(request)
+    # Source admission can yield while the actor loses access to the retained
+    # attempt journal. Re-admit that journal and the case immediately before
+    # any provider I/O; stale retained evidence must never authorize a read.
+    preflight_retained = await retained_attempt_review()
+    if preflight_retained != retained:
+        raise HTTPException(409, "retained receipt journal changed before provider read")
+    preflight_review = await review()
+    if preflight_review != before:
+        raise HTTPException(409, "run/case admission changed before provider read")
+    await _recheck_source(scope)
+    _dashboard_only(request)
     from .local_source_credentials import _metadata_path, _read_metadata
     from .open_work_provider_attempt_verification import verify_provider_attempt
     from .open_work_stripe_attempt_event_reader import read_exact_stripe_attempt_event
