@@ -64,6 +64,10 @@ def read_exact_stripe_attempt_event(
     Only exact event ID GETs are used, never a partial list/search result.
     """
     unknown = {"complete": False, "authenticated": False, "revoked": False}
+    # A direct adapter caller must not bypass the dashboard/source grant by
+    # omitting the callback. The route supplies a fresh actor-scoped guard.
+    if recheck_authorization is None or not callable(recheck_authorization):
+        return {**unknown, "revoked": True}
     if (not _ACCOUNT.fullmatch(str(account or ""))
             or not _EVENT.fullmatch(str(expected_event_id or ""))
             or not _OBJECT.fullmatch(str(object_id or ""))
