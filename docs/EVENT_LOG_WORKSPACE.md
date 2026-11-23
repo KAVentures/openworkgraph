@@ -2192,7 +2192,8 @@ Colours follow each activity's event count in the whole log, not in the filtered
 never repaints an activity. The seven most frequent activities get their own colour from a
 colour-blind-checked palette and the rest share "Other". The dashboard section draws the chart
 with a hover tooltip (case, activity, time), a legend with event counts and a table view of the
-same cases. One million events take well under a second to sample
+same cases. Click a dot or open a case from the table to review its recorded events.
+One million events take well under a second to sample
 (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_dotted_chart.py`).
 
 ## Process map comparison
@@ -2485,7 +2486,9 @@ activities that the map shows for the same `activities` share. At most `max_case
 to 500) cases are returned, sampled evenly by start time, and at most 30,000 events in total. The
 dashboard moves one token per case along the drawn arrow between consecutive events. A step whose
 arrow the paths slider hid moves in a straight line, and steps that share a timestamp jump instantly;
-the status line counts both. Play, pause and the position slider work from the keyboard. With reduced
+the status line counts both. Choose a sampled case to isolate its token and scrub within its
+displayed time span. **Open selected case** shows the case's recorded events. Play, pause and
+the position slider work from the keyboard. With reduced
 motion the playback advances in steps once per second. Tokens show recorded timestamps, not work
 being done, and nothing is executed. A million events filter and play back in a few seconds
 (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_playback_filters.py`).
