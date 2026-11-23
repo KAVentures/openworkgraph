@@ -1853,6 +1853,14 @@ def event_log_organization(request: Request, log_id: str, case_type: str | None 
                     automation_resources=automation_resource, limit=limit)
 
 
+@router.post("/v1/event-logs/{log_id}/organization/cases")
+async def event_log_organization_cases(request: Request, log_id: str,
+                                       case_type: str | None = Query(default=None, max_length=200)):
+    _require_dashboard(request)
+    spec = await _json_body(request, "relationship case query", strict=True)
+    return await run_in_threadpool(_respond, organization.relationship_cases, log_id, spec, case_type)
+
+
 async def _json_body(request: Request, what: str, *, strict: bool = False, limit: int = 65536) -> Any:
     if not str(request.headers.get("content-type") or "").startswith("application/json"):
         raise HTTPException(415, f"{what} must be JSON")

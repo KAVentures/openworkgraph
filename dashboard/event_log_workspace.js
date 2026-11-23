@@ -1079,7 +1079,7 @@
     results.appendChild(temporalProfileSection(inspection));
     results.appendChild(waitingSection(inspection));
     results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity),inspection));
-    results.appendChild(organizationSection());
+    results.appendChild(organizationSection(inspection));
     results.appendChild(privateMapSection());
     results.appendChild(logComparisonSection());
     results.appendChild(analysisSection(names));
@@ -6813,7 +6813,7 @@
     return box;
   }
 
-  function organizationSection(){
+  function organizationSection(inspection){
     const box=section('Who hands work to whom');box.id='owgEventLogOrganization';
     box.appendChild(el('div','Handovers and shared cases between the resources in this log. Resources are shown as Resource 01, 02… unless you choose to show names. No speed, waiting time or performance score is calculated for anyone.','muted'));
     const namesLabel=el('label');namesLabel.style.cssText='display:flex;gap:6px;align-items:center';
@@ -6823,14 +6823,52 @@
     const threshold=input('owgEventLogRolesThreshold','number');threshold.value='0.65';threshold.min='0.01';threshold.max='0.99';threshold.step='0.01';
     const row=el('div',null,'row');row.style.alignItems='end';row.append(namesLabel,run,field('Role similarity threshold',threshold),rolesRun);
     const out=el('div');out.id='owgEventLogOrgResults';out.setAttribute('role','status');
-    box.append(row,out);
+    const evidence=el('div');evidence.id='owgEventLogOrgCaseReview';
+    box.append(row,out,evidence);
     let request=0;
-    names.addEventListener('change',()=>{request++;out.replaceChildren();});
-    threshold.addEventListener('input',()=>{request++;out.replaceChildren();});
+    const clear=()=>{request++;out.replaceChildren();evidence.replaceChildren();};
+    names.addEventListener('change',clear);threshold.addEventListener('input',clear);
+    function reviewCases(kind,pair,report,current){
+      const panel=el('div');
+      const titles={handover:'Handover',return:'Return handover',shared:'Shared cases'};
+      const heading=el('h4',titles[kind]+' · '+pair.join(kind==='shared'?' + ':' → '));heading.tabIndex=-1;
+      const message=el('div',null,'muted');message.setAttribute('role','status');
+      const rows=el('div'),nav=el('div',null,'row');
+      const first=button('First case page','secondary'),next=button('Next case page','secondary');
+      nav.append(first,next);panel.append(heading,message,rows,nav);
+      evidence.replaceChildren(panel);heading.focus();
+      const valid=()=>current()&&names.checked&&panel.isConnected;
+      let cursor=null;
+      async function load(after){
+        first.disabled=next.disabled=true;rows.replaceChildren();message.textContent='Loading cases…';
+        try{
+          const endpoint='/v1/event-logs/'+encodeURIComponent(state.logId)+'/organization/cases?case_type='+encodeURIComponent(report.case_notion);
+          const found=await (await api(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({names:'shown',kind,resources:pair,cohort:report.cohort,after,limit:30})})).json();
+          if(!valid())return;
+          cursor=found.next_after;
+          message.textContent=found.selected_cases.toLocaleString()+' matching cases. Showing '+found.cases.length+' on this page.';
+          if(found.cases.length){
+            rows.appendChild(table(['Case',...(kind==='shared'?[]:['Matches in case'])],found.cases.map(item=>{
+              const open=button(item.case_id,'secondary');open.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%';
+              open.setAttribute('aria-label','Open case '+item.case_id);
+              open.onclick=()=>{if(valid())inspection.open(item.case_id);};
+              return [open,...(kind==='shared'?[]:[item.matches])];
+            })));
+          }
+          first.disabled=after===null;next.disabled=cursor===null;
+        }catch(error){
+          if(!valid())return;
+          message.textContent=error.message;
+          const retry=button('Retry loading cases','secondary');retry.onclick=()=>load(after);rows.appendChild(retry);
+        }
+      }
+      first.onclick=()=>load(null);next.onclick=()=>load(cursor);load(null);
+    }
     rolesRun.onclick=async()=>{
       const generation=state.generation,ticket=++request;
       try{
-        rolesRun.disabled=true;out.replaceChildren(el('div','Grouping resources by the activities they perform…','muted'));
+        rolesRun.disabled=true;evidence.replaceChildren();out.replaceChildren(el('div','Grouping resources by the activities they perform…','muted'));
         const cutoff=Number(threshold.value);
         if(!(cutoff>0&&cutoff<1))throw new Error('Choose a role similarity threshold above 0 and below 1.');
         const r=await getJSON(logPath('roles',{names:names.checked?'shown':'pseudonymous',threshold:cutoff}));
@@ -6855,17 +6893,26 @@
     };
     run.onclick=async()=>{
       const generation=state.generation,ticket=++request;
+      const current=()=>generation===state.generation&&ticket===request&&box.isConnected;
       try{
-        out.replaceChildren(el('div','Reading resources…','muted'));
+        evidence.replaceChildren();out.replaceChildren(el('div','Reading resources…','muted'));
         const r=await getJSON(logPath('organization',{names:names.checked?'shown':'pseudonymous'}));
-        if(generation!==state.generation||ticket!==request)return;
+        if(!current())return;
         if(!r.resources.length){out.replaceChildren(el('div','This log has no resource column values to analyse.','muted'));return;}
-        const m=r.activity_resource_matrix;
+        const m=r.activity_resource_matrix,named=new Set(r.resources.map(item=>item.resource));
+        const count=(kind,pair,n)=>{
+          if(r.names!=='shown'||!pair.every(label=>named.has(label)))return n.toLocaleString();
+          const open=button(n.toLocaleString(),'secondary');
+          open.setAttribute('aria-label','Review '+kind+' cases for '+pair.join(kind==='shared'?' + ':' → '));
+          open.setAttribute('aria-controls',evidence.id);
+          open.onclick=()=>reviewCases(kind,pair,r,current);
+          return open;
+        };
         out.replaceChildren(
           el('div',Number(r.coverage.events_with_resource).toLocaleString()+' of '+Number(r.coverage.events).toLocaleString()+' events name a resource; '+Number(r.cases_with_handover).toLocaleString()+' cases contain a handover.'+(r.resources_truncated?' Less active resources are grouped as “Other resources”.':''),'muted'),
-          table(['From','To','Handovers','Cases'],r.handover_of_work.slice(0,25).map(h=>[h.from,h.to,Number(h.handovers).toLocaleString(),Number(h.cases).toLocaleString()])),
-          ...(r.subcontracting&&r.subcontracting.length?[el('h4','Subcontracting: work passed to another resource and straight back'),table(['From','To and back','Times','Cases'],r.subcontracting.slice(0,25).map(s=>[s.from,s.to,Number(s.times).toLocaleString(),Number(s.cases).toLocaleString()]))]:[]),
-          table(['Resources','Shared cases'],r.working_together.slice(0,25).map(w=>[w.resources.join(' + '),Number(w.shared_cases).toLocaleString()])),
+          table(['From','To','Handovers','Cases'],r.handover_of_work.slice(0,25).map(h=>[h.from,h.to,Number(h.handovers).toLocaleString(),count('handover',[h.from,h.to],h.cases)])),
+          ...(r.subcontracting&&r.subcontracting.length?[el('h4','Subcontracting: work passed to another resource and straight back'),table(['From','To and back','Times','Cases'],r.subcontracting.slice(0,25).map(s=>[s.from,s.to,Number(s.times).toLocaleString(),count('return',[s.from,s.to],s.cases)]))]:[]),
+          table(['Resources','Shared cases'],r.working_together.slice(0,25).map(w=>[w.resources.join(' + '),count('shared',w.resources,w.shared_cases)])),
           table(['Activity',...m.resources.slice(0,10)],m.activities.slice(0,15).map((a,i)=>[a,...m.events[i].slice(0,10).map(n=>n?Number(n).toLocaleString():'')])),
           el('div',r.interpretation+(r.working_together_excluded_cases?' '+r.working_together_excluded_cases+' cases with very many resources are left out of shared-case pairs.':''),'muted'));
       }catch(error){if(generation===state.generation&&ticket===request)out.textContent=error.message;}

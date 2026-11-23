@@ -1369,6 +1369,16 @@ left out of the shared-case pairs and counted in `working_together_excluded_case
 same case filters as KPIs apply (`started_from`, `started_before`, `resource`, `activity`,
 `attribute`).
 
+With resource names shown, select a case count for a named handover, return handover,
+or shared pair. Select a supplied case key to open the recorded events. Each case
+contributes once to an edge's case count, including when several resources in the
+case fall into the grouped bucket. Occurrence counts still include every match.
+
+The dashboard-only `POST /v1/event-logs/{log_id}/organization/cases` accepts
+`names: "shown"`, two literal `resources`, a `kind` of `handover`, `return` or
+`shared`, and the report's `cohort`. Use the response's `next_after` as the next
+request's `after` to page through matching case keys.
+
 No per-person duration, waiting time, speed, ranking or performance score is calculated,
 not even on handover edges. Handover counts say who touched a case next, not who was
 responsible or how well anyone worked. One million events are analysed in seconds
