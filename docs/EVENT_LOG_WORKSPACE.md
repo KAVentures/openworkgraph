@@ -2553,7 +2553,9 @@ including the case notions and applied filters, to a local file.
 Select a case count to review cases from that side of the report. The activity, path and
 variant tables list only cases that match that row and the side's case selection. Select a
 supplied case key to see its event history. Case keys and event rows are available in the
-local dashboard and are excluded from the comparison download.
+local dashboard. The aggregate JSON omits case keys and events. Use **Download
+baseline events (CSV)** or **Download comparison events (CSV)** to save the
+complete original traces for that side's case selection and case notion.
 
 `cohort` takes the same keys as other analyses. `limit` (1–200) caps each ranked
 list. The response contains:

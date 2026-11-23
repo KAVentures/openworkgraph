@@ -49,6 +49,14 @@ const path=require('node:path');
    assert.match(text,/0 variants occur in both logs/);
    assert.match(text,/not evidence of its cause/);
    assert.equal(await out.locator('table').count(),4);
+   async function downloadCaseIds(role){
+     const [download]=await Promise.all([page.waitForEvent('download'),
+       out.getByRole('button',{name:'Download '+role+' events (CSV)',exact:true}).click()]);
+     assert.match(download.suggestedFilename(),new RegExp('-'+role+'-events\.csv$'));
+     const lines=(await fs.readFile(await download.path(),'utf8')).trim().split(/\r?\n/).slice(1);
+     return [...new Set(lines.map(line=>line.split(',')[0]))].sort();
+   }
+   assert.equal((await downloadCaseIds('baseline')).length,12);
    const evidence=page.locator('#owgLogCompareEvidence');
    await out.getByRole('button',{name:/Review comparison cases for Receive → Approve \(/}).click();
    await evidence.getByText('8 matching cases in south (case).').waitFor();
@@ -84,6 +92,8 @@ const path=require('node:path');
    await out.getByRole('button',{name:/Review comparison cases for Escalate \(/}).click();
    await evidence.getByText('2 matching cases in south (case).').waitFor();
    assert.deepEqual(await evidence.getByRole('button',{name:/Open case /}).allTextContents(),['south3','south6']);
+   assert.deepEqual(await downloadCaseIds('baseline'),['north4','north8']);
+   assert.deepEqual(await downloadCaseIds('comparison'),['south2','south3','south4','south5','south6']);
    const save=page.locator('#owgLogCompareJson');
    const [download]=await Promise.all([page.waitForEvent('download'),save.click()]);
    assert.deepEqual(JSON.parse(await fs.readFile(await download.path(),'utf8')),scoped);

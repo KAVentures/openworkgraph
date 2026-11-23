@@ -7149,8 +7149,30 @@
           return side.name+' uses '+side.case_notion+(start||end?' cases starting'+
             (start?' on or after '+start.slice(0,10):'')+(start&&end?' and':'')+(end?' before '+end.slice(0,10):'')+' UTC':' cases')+'.';
         };
+        const exports=el('div',null,'row');
+        const exportStatus=el('div',null,'muted');exportStatus.setAttribute('role','status');
+        for(const [role,title] of [['baseline','Baseline'],['comparison','Comparison']]){
+          const control=button('Download '+title.toLowerCase()+' events (CSV)','secondary');
+          const side=r[role];
+          control.onclick=async()=>{
+            if(!current())return;
+            control.disabled=true;exportStatus.textContent='Preparing '+title.toLowerCase()+' events…';
+            try{
+              const scope={case_type:side.case_notion,cohort:spec[role].cohort,include_unfiltered:true};
+              const path='/v1/event-logs/'+encodeURIComponent(side.log_id)+'/export/matching-cases?format=csv';
+              const response=await api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(scope)});
+              const blob=await response.blob();
+              if(!current())return;
+              downloadBlob(blob,side.log_id+'-'+role+'-events.csv');
+              exportStatus.textContent=title+' events downloaded.';
+            }catch(error){if(current())exportStatus.textContent=error.message;}
+            finally{if(current())control.disabled=false;}
+          };
+          exports.appendChild(control);
+        }
         const headers=label=>[label,'Baseline · '+r.baseline.name,'Comparison · '+r.comparison.name,'Difference'];
         out.replaceChildren(el('p','Baseline '+selection(r.baseline)+' Comparison '+selection(r.comparison),'muted'),kpiTable,
+          exports,exportStatus,
           el('div','A random case in '+r.comparison.name+' takes longer than a random case in '+r.baseline.name+' '+pct(longer)+' of the time (50% means no shift).','muted'),
           ...[only('Only in '+r.baseline.name,r.activities.only_baseline),only('Only in '+r.comparison.name,r.activities.only_comparison)].filter(Boolean),
           el('h4','Activities: share of cases'),table(headers('Activity'),actRows),
