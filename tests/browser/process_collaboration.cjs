@@ -204,7 +204,11 @@ const pathModule = require("node:path");
     const detailUrl = "**/v1/human/processes/" + handoffProcess.workflow_id;
     await deniedHandoffPage.route(detailUrl, async route => route.continue({headers:{...route.request().headers(),authorization:"Bearer no-process"}}), {times:1});
     await deniedHandoffPage.locator("#handoffCheck").click();
-    await deniedHandoffPage.locator("#handoffStatus").filter({hasText:/REFUSED:|Session cleared/}).waitFor();
+    await deniedHandoffPage.waitForFunction(() => !document.querySelector("#selected")?.hidden || document.querySelector("#handoffStatus")?.textContent?.includes("REFUSED:"));
+    assert.equal(await deniedHandoffPage.locator("#selected").isHidden(), true,
+      "denied Gateway access must invalidate the entire selected process and its actions");
+    assert.match(await deniedHandoffPage.locator("#handoffStatus").textContent(), /REFUSED:|Session cleared/,
+      "denial must retain a diagnostic even when the selection is hidden");
     assert.equal(uploadedHandoff, false);
 
     // Recovery is an explicit fresh login and fresh server verification, never
