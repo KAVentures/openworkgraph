@@ -151,3 +151,28 @@ def test_new_definitions_are_deterministic_and_names_do_not_collide():
         assert first==second and first is not second
         first["activities"].clear()
         assert packs.definitions(pack_id)["activities"]
+
+
+@pytest.mark.parametrize("pack_id",PACK_IDS)
+def test_every_optional_role_is_explicit_when_unmapped(pack_id):
+    log,spec=fixture(pack_id)
+    definition=packs.definitions(pack_id)
+    missing={a["role"] for a in definition["activities"] if not a["required"]}
+    for role in missing:
+        del spec["mapping"]["activities"][role]
+    installed=packs.install(log,pack_id,spec)
+    assert missing <= {r["unmapped_role"] for r in installed["not_applicable"]}
+    report=packs.report(log,pack_id)
+    assert missing <= {r["unmapped_role"] for r in report["not_applicable"]}
+    assert report["object_model"]["summary"]["objects"]==6
+
+
+def test_security_investigation_has_an_actual_metric_and_sequence_checks():
+    log,spec=fixture("security_incident_response")
+    packs.install(log,"security_incident_response",spec)
+    report=packs.report(log,"security_incident_response")
+    metric=next(m for m in report["metrics"] if m["name"]=="sec_investigation_records")
+    assert metric["median"]==1
+    assert metric["coverage"]["cases_with_value"]==6
+    assert rule(report,"precedence","contained","investigated")
+    assert rule(report,"precedence","investigated","recovered")

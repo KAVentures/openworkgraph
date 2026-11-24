@@ -923,7 +923,7 @@ def resolve(pack: dict[str, Any], mapping: dict[str, dict[str, str]], params: di
     # The claims pack explicitly discloses every unmapped optional intake/receipt
     # activity. Preserve the existing per-definition not_applicable contract
     # for previously shipped packs, whose consumers expect only omitted rules.
-    if pack["pack_id"] == "insurance_claims":
+    if pack["pack_id"] == "insurance_claims" or pack["pack_id"] in OPERATIONS_PACKS:
         reported_missing = {row["unmapped_role"] for row in out["not_applicable"]}
         for index, activity in enumerate(pack["activities"]):
             role = activity["role"]
