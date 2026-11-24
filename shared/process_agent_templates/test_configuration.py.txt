@@ -216,6 +216,75 @@ class ConfigurationCases(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ImplementationError):
             audit_bindings(spec,catalog|{'omitted_tool_count':'PRIVATE_INVALID_COUNT'},suite,bindings)
 
+    async def test_execution_queue_prepares_distinct_cases_and_refuses_cross_case_collisions(self):
+        from configure import shortlist_case_batch, prepare_execution_queue, write_execution_queue
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        original=suite['cases'][0]['input']
+        first={**original,'issue':'PRIVATE_FIRST','request_id':'key-first','record_ref':'owg:r:'+'d'*32}
+        second={**original,'issue':'PRIVATE_SECOND','request_id':'key-second','record_ref':'owg:r:'+'e'*32}
+        batch={'format':'openworkgraph.selected-route-cases.v1','case_inputs_authorized':True,
+               'cases':[{'id':'case_11','input':first},{'id':'case_12','input':second}]}
+        saved=shortlist_case_batch(spec,suite,bindings,batch)
+        route=saved['cases'][0]['routes'][0]['route_sha256']
+        selection={'format':'openworkgraph.execution-queue-selection.v1','selections':[
+            {'case_id':'case_11','route_sha256':route},{'case_id':'case_12','route_sha256':route}]}
+        packets,manifest=prepare_execution_queue(spec,suite,bindings,batch,saved,selection)
+        self.assertEqual(manifest['case_count'],2)
+        self.assertEqual(manifest['batch_review_sha256'],digest(saved))
+        self.assertEqual(manifest['selection_sha256'],digest(selection))
+        self.assertFalse(manifest['execution_authorized'])
+        self.assertFalse(manifest['provider_collision_freedom_verified'])
+        self.assertNotIn('PRIVATE_',json.dumps(manifest))
+        for row in manifest['cases']:
+            packet=packets[row['case_id']]
+            self.assertEqual(row['case_sha256'],digest(packet['case.json']))
+            self.assertEqual(row['disabled_intent_sha256'],digest(packet['customer-intent.json']))
+            self.assertFalse(packet['customer-intent.json']['customer_authorization_confirmed'])
+        with TemporaryDirectory() as directory:
+            root=Path(directory)/'queue'
+            write_execution_queue(root,packets,manifest)
+            self.assertEqual(load_object(root/'queue-review.json'),manifest)
+            self.assertEqual(load_object(root/'case_12'/'case.json'),second)
+            with self.assertRaises(FileExistsError):
+                write_execution_queue(root,packets,manifest)
+            real_open=os.open
+            for fail_index in range(1,12):
+                calls=[]
+                def fail(*args,**kwargs):
+                    calls.append(1)
+                    if len(calls)==fail_index:
+                        raise OSError('synthetic failure')
+                    return real_open(*args,**kwargs)
+                failed=root.parent/('failed_'+str(fail_index))
+                with patch('os.open',side_effect=fail),self.assertRaises(OSError):
+                    write_execution_queue(failed,packets,manifest)
+                self.assertFalse(failed.exists())
+        for field in ('record_ref','request_id'):
+            colliding=deepcopy(batch)
+            colliding['cases'][1]['input'][field]=first[field]
+            current=shortlist_case_batch(spec,suite,bindings,colliding)
+            with self.assertRaisesRegex(ImplementationError,'share a declared write key or outcome target'):
+                prepare_execution_queue(spec,suite,bindings,colliding,current,selection)
+        with self.assertRaises(ImplementationError):
+            prepare_execution_queue(spec,suite,bindings,batch,saved,{**selection,'selections':selection['selections'][:1]*2})
+        with self.assertRaises(ImplementationError):
+            prepare_execution_queue(spec,suite,bindings,batch,{**saved,'status_counts':{}},selection)
+        self.assertFalse(self.tools.business_calls)
+
+    async def test_queue_collision_checker_matches_random_pairwise_oracle(self):
+        from configure import _queue_collision_check
+        from random import Random
+        rng=Random(20261124)
+        for _ in range(1000):
+            records=[(str(j),{(rng.choice(('write_key','outcome_target')),rng.randrange(40))
+                             for i in range(rng.randrange(9))}) for j in range(rng.randrange(1,21))]
+            collision=any(a&b for j,(_,a) in enumerate(records) for _,b in records[j+1:])
+            if collision:
+                with self.assertRaises(ImplementationError):
+                    _queue_collision_check(records)
+            else:
+                _queue_collision_check(records)
+
     async def test_prepare_batch_selection_recomputes_exact_review_before_materializing(self):
         from configure import shortlist_case_batch, prepare_batch_selection
         spec,catalog,suite,bindings=self.reviewed_audit_fixture()
@@ -584,6 +653,18 @@ class ConfigurationCases(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(receipt['batch_review_sha256'],digest(report))
             self.assertTrue(receipt['batch_review_recomputed'])
             self.assertFalse(receipt['execution_authorized'])
+            selection={'format':'openworkgraph.execution-queue-selection.v1','selections':[
+                {'case_id':'case_1','route_sha256':route}]}
+            (root/'selection.json').write_text(json.dumps(selection),encoding='utf-8')
+            queue=[sys.executable,'configure.py','--prepare-execution-queue','--cases','suite.json',
+                   '--bindings','bindings.json','--case-batch','batch.json','--batch-review','batch-review.json',
+                   '--queue-selection','selection.json','--confirm-retain-case-inputs','--output','queue']
+            result=subprocess.run(queue,cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            manifest=load_object(root/'queue'/'queue-review.json')
+            self.assertEqual(manifest['case_count'],1)
+            self.assertFalse(manifest['execution_authorized'])
+            self.assertFalse(load_object(root/'queue'/'case_1'/'customer-intent.json')['customer_authorization_confirmed'])
 
             new_case={**suite['cases'][0]['input'],'issue':'SYNTHETIC_NEW_CASE',
                       'request_id':'new-case-idempotency-key','record_ref':'owg:r:'+'e'*32}
