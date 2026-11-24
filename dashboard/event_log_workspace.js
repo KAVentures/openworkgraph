@@ -10130,6 +10130,28 @@
         (p.previous_window_coverage_after===null?'.':' and '+pct(p.previous_window_coverage_after)+' of the window before.'):null};
   }
 
+  // Called only by explicit local snapshot handoff. Never load another log
+  // if the requested retained ID has disappeared or a newer selection wins.
+  window.owgEventLogWorkspace=Object.freeze({
+    async openSaved(logId){
+      if(typeof logId!=='string'||!/^log_[a-f0-9]{16}$/.test(logId))throw Error('Invalid event-log reference.');
+      const pick=document.getElementById('owgEventLogPick');
+      if(!pick)throw Error('Event-log workspace not available.');
+      const request=++state.refresh;
+      const data=await getJSON('/v1/event-logs');
+      if(request!==state.refresh)throw Error('Event-log selection changed.');
+      const logs=Array.isArray(data.logs)?data.logs:[];
+      if(!logs.some(log=>log.log_id===logId))throw Error('The requested event log is no longer retained.');
+      state.logs=logs;
+      setOptions(pick,logs.map(log=>[log.log_id,log.name+' · '+Number(log.events).toLocaleString()+' events']));
+      show(document.getElementById('owgEventLogManage'),true);
+      pick.value=logId;
+      await selectLog(logId);
+      if(state.logId!==logId||pick.value!==logId)throw Error('Event-log selection changed.');
+      status('Opened saved workflow snapshot. Select Analyse to explore the retained observations.');
+      return true;
+    }
+  });
   window.__owgEventLogModel={simBatch,simPriorities,objectModelArcs,objectModelText,visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,refactorMetricGraph,savedMetricBundle,stageComparisonMetrics,activityComparisonMetrics,activityShareMetrics,metricText,reasonText,followSpec,followText,mergeActiveCohort,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,analysisDraft,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths,packMapping,packGuess,packReportRows,monitoringRows,impactSpec,impactRows};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
