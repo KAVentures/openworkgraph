@@ -23,6 +23,18 @@
       original_history_rechecked:false,business_case_identity_verified:false,business_outcomes_verified:false};
   }
 
+  function minimizedEffectiveInput(item){
+    if(!item||(!item.effective_input&&!item.effective_input_status))return undefined;
+    const hash=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value)?value:null;
+    const original=hash(item.effective_input?.sha256),current=hash(item.current_effective_input?.sha256);
+    let status='not_checked';
+    if(item.effective_input_status==='not_recorded'&&!original)status='not_recorded';
+    else if(item.effective_input_status==='matches'&&original&&original===current)status='matches';
+    else if(item.effective_input_status==='changed'&&original&&current&&original!==current)status='changed';
+    return {original_sha256:original,current_sha256:current,status,
+      historical_rows_retained:false,business_case_identity_verified:false,business_outcomes_verified:false};
+  }
+
   function handoffReviewPacket(journey,projectId,ideaId,createdAt){
     const project=(journey.projects||[]).find(item=>item.project_id===projectId);
     if(!project)throw new Error('Select a recorded project before preparing its review packet.');
@@ -30,7 +42,8 @@
     const origins=(journey.dataset_origins||[]).slice(0,64).map(item=>({
       status:item.status||'unknown',source_content_sha256:item.source_content_sha256||null,
       selection_sha256:item.selection_sha256||null,
-      ...(item.observed_execution_origin?{observed_execution_origin:minimizedObservedOrigin(item)}:{})
+      ...(item.observed_execution_origin?{observed_execution_origin:minimizedObservedOrigin(item)}:{}),
+      ...(item.effective_input||item.effective_input_status?{effective_input:minimizedEffectiveInput(item)}:{})
     }));
     const originsTruncated=(journey.dataset_origins||[]).length>64;
     const reportsTruncated=(project.reported_specifications||[]).length>64;
@@ -48,6 +61,8 @@
       blockers.push('original_observation_manifest_unavailable');
     if(origins.some(item=>item.observed_execution_origin))
       blockers.push('original_observation_history_not_rechecked');
+    if(origins.some(item=>item.effective_input&&item.effective_input.status!=='matches'))
+      blockers.push('effective_discovery_input_not_current');
     if(!['approved','implemented'].includes(journey.idea?.state))blockers.push('idea_not_approved');
     if(!project.idea_revision_is_current)blockers.push('project_uses_historical_idea_revision');
     if(!reported.length)blockers.push('no_imported_report');
@@ -173,7 +188,8 @@
     const originCount=packet.dataset_origins.length;
     const originCurrent=originCount>0&&!packet.dataset_origins_truncated&&
       packet.dataset_origins.every(origin=>origin.status==='current'&&
-        (!origin.observed_execution_origin||origin.observed_execution_origin.retained_manifest_status==='matches'));
+        (!origin.observed_execution_origin||origin.observed_execution_origin.retained_manifest_status==='matches')&&
+        (!origin.effective_input||origin.effective_input.status==='matches'));
     const processCurrent=process.status==='current'&&!!process.workflow_id&&
       Number.isSafeInteger(process.revision)&&process.revision>0&&sha(process.content_sha256);
     const ideaCurrent=['approved','implemented'].includes(packet.idea.state)&&
@@ -241,7 +257,8 @@
           status:origin.status==='current'?'current':'needs_review',
           source_content_sha256:sha(origin.source_content_sha256)?origin.source_content_sha256:null,
           selection_sha256:sha(origin.selection_sha256)?origin.selection_sha256:null,
-          ...(origin.observed_execution_origin?{observed_execution_origin:origin.observed_execution_origin}:{})
+          ...(origin.observed_execution_origin?{observed_execution_origin:origin.observed_execution_origin}:{}),
+          ...(origin.effective_input?{effective_input:origin.effective_input}:{})
         })),
         dataset_origins_truncated:packet.dataset_origins_truncated,
         reports_truncated:packet.reported_specifications_truncated},
@@ -338,6 +355,7 @@
     dataset_origin_list_truncated:'Dataset origins truncated',
     dataset_origin_not_linked:'Dataset origin not linked',
     dataset_origin_not_current:'Dataset origin not current',
+    effective_discovery_input_not_current:'Effective discovery input changed or not checked',
     idea_not_approved:'Human approval missing',
     project_uses_historical_idea_revision:'Historical project revision',
     reported_specification_list_truncated:'Report history truncated',
@@ -460,7 +478,18 @@
             (o.observed_execution_origin.retained_manifest_status==='matches'&&o.observed_execution_origin.snapshot_sha256===null)||
             o.observed_execution_origin.original_history_rechecked!==false||
             o.observed_execution_origin.business_case_identity_verified!==false||
-            o.observed_execution_origin.business_outcomes_verified!==false)))||
+            o.observed_execution_origin.business_outcomes_verified!==false))||
+          (o.effective_input!==undefined&&(!object(o.effective_input)||
+            !sha(o.effective_input.original_sha256)||!sha(o.effective_input.current_sha256)||
+            !['matches','changed','not_recorded','not_checked'].includes(o.effective_input.status)||
+            (o.effective_input.status==='matches'&&(!o.effective_input.original_sha256||
+              o.effective_input.original_sha256!==o.effective_input.current_sha256))||
+            (o.effective_input.status==='changed'&&(!o.effective_input.original_sha256||
+              !o.effective_input.current_sha256||o.effective_input.original_sha256===o.effective_input.current_sha256))||
+            (o.effective_input.status==='not_recorded'&&o.effective_input.original_sha256!==null)||
+            o.effective_input.historical_rows_retained!==false||
+            o.effective_input.business_case_identity_verified!==false||
+            o.effective_input.business_outcomes_verified!==false)))||
         packet.reported_specifications.some(o=>!object(o)||!status(o.status)||
           (o.reported_run_count!==null&&(!Number.isSafeInteger(o.reported_run_count)||o.reported_run_count<0))))fail();
     };
@@ -1793,7 +1822,7 @@
             review.appendChild(el('div','Handoff review: '+packet.readiness.blockers.length+' outstanding checks. This is not permission to execute an agent.'));
             const issues=el('ul');
             const names={no_exact_saved_process:'Exact saved process missing',process_not_current:'Process revision changed or unavailable',
-              dataset_origin_not_linked:'Source dataset/cohort not linked',dataset_origin_not_current:'Source dataset/cohort changed or unavailable',
+              dataset_origin_not_linked:'Source dataset/cohort not linked',dataset_origin_not_current:'Source dataset/cohort changed or unavailable',effective_discovery_input_not_current:'Effective discovery input changed or not checked',
               dataset_origin_list_truncated:'Source dataset/cohort checks truncated to 64',reported_specification_list_truncated:'Reported specification checks truncated to 64',
               idea_not_approved:'Human opportunity approval missing',project_uses_historical_idea_revision:'Project based on historical idea revision',
               no_imported_report:'No imported run report',reported_specification_unverified:'Reported specification unavailable or mismatched',
@@ -1819,6 +1848,7 @@
               process_not_current:'Only the pinned revision may be opened. If unavailable, return to the catalog; a newer design cannot be substituted.',
               dataset_origin_not_linked:'Return to the originating event-log workspace, confirm opt-in and source/cohort selection, then create a newly linked design and opportunity.',
               dataset_origin_not_current:'Recheck consent, retention, dataset availability and completeness in the originating workspace; do not assume the saved snapshot is current.',
+              effective_discovery_input_not_current:'Reopen the exact discovery selection and review changed activity mappings, hidden activities or cohort membership before relying on the saved design.',
               dataset_origin_list_truncated:'Only 64 source/cohort checks are included. Inspect the original workspace; this summary cannot certify full coverage.',
               reported_specification_list_truncated:'Only 64 reported specifications are summarized. Review the full report-link list before drawing conclusions.',
               project_uses_historical_idea_revision:'This export is historical. A new reviewed idea revision requires its own explicitly requested project.',
