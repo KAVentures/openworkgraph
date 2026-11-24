@@ -1075,6 +1075,12 @@ def get_process_catalog_revision(workflow_id: str = Query(pattern=_PROCESS_ID), 
     return JSONResponse(_catalog_record(workflow_id, revision), headers={'Cache-Control': 'no-store'})
 
 
+@app.get('/v1/process-catalog/history')
+def get_process_catalog_history(workflow_id: str = Query(pattern=_PROCESS_ID), before_revision: int | None = Query(default=None, ge=1), limit: int = Query(default=20, ge=1, le=100)) -> Response:
+    _catalog_record(workflow_id)
+    return JSONResponse(_knowledge.history('local', workflow_id, before_revision=before_revision, limit=limit), headers={'Cache-Control': 'no-store'})
+
+
 def _policy_assurance_packet(workflow_id: str, revision: int, digest: str):
     packet = _catalog_export(workflow_id, revision)
     if packet['content_sha256'] != digest:
@@ -1101,12 +1107,6 @@ def compare_process_policy_impact(request: Request,
     _policy_assurance_packet(workflow_id, after_revision, after_sha256)
     _require_dashboard(request)
     return JSONResponse(result, headers={'Cache-Control': 'no-store'})
-
-
-@app.get('/v1/process-catalog/history')
-def get_process_catalog_history(workflow_id: str = Query(pattern=_PROCESS_ID), before_revision: int | None = Query(default=None, ge=1), limit: int = Query(default=20, ge=1, le=100)) -> Response:
-    _catalog_record(workflow_id)
-    return JSONResponse(_knowledge.history('local', workflow_id, before_revision=before_revision, limit=limit), headers={'Cache-Control': 'no-store'})
 
 
 @app.get('/v1/process-catalog/export')
