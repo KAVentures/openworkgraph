@@ -5489,11 +5489,15 @@
   function capacityCSV(report){
     const rows=[['design','arrivals_per_hour','status','seed','post_warmup_arrivals','completed_on_time',
       'completed_late','abandoned','unresolved','target_share_lower','target_share_upper','overloaded',
-      'completed_case_p90_seconds','calibration_and_inputs_sha256']];
+      'completed_case_p90_seconds_or_paired_change','calibration_and_inputs_sha256']];
     for(const cell of report.cells)for(const r of cell.runs)rows.push([
       cell.design,cell.arrival_rate_per_hour,cell.status,r.seed,r.post_warmup_arrivals,r.completed_on_time,
       r.completed_late,r.abandoned,r.unresolved,r.target_share_lower,r.target_share_upper,r.overloaded,
       r.cycle_time_seconds_completed_only.p90,report.calibration_and_inputs_sha256]);
+    for(const comparison of report.paired_comparisons||[])for(const pair of comparison.pairs)rows.push([
+      comparison.design,comparison.arrival_rate_per_hour,'paired_change_vs_baseline',pair.seed,'','','','','',
+      pair.target_share_change_bounds.lower,pair.target_share_change_bounds.upper,'',
+      pair.completed_case_p90_change_seconds,report.calibration_and_inputs_sha256]);
     return rows;
   }
   function capacityPanel(cal, getContext, isCurrent){
@@ -5580,6 +5584,16 @@
       const envelope=table(['Design','Tested rates meeting target','Other tested rates','Highest tested rate meeting target'],
         report.tested_envelope.map(e=>[e.design,e.tested_rates_meeting_target.join(', ')||'None',
           e.tested_rates_not_demonstrated.join(', ')||'None',e.highest_tested_rate_meeting_target??'—']));
+      const pp=x=>(x>0?'+':'')+(x*100).toFixed(2)+' pp';
+      const signedTime=x=>(x<0?'−':x>0?'+':'')+duration(Math.abs(x));
+      const comparisons=table(['Design','Demand / hour','On-time share change bounds vs baseline','Completed-case p90 change range','Comparable cycle runs'],
+        (report.paired_comparisons||[]).map(c=>[
+          c.design,c.arrival_rate_per_hour,pp(c.target_share_change_bounds_across_tested_seeds.lower)+' – '+
+            pp(c.target_share_change_bounds_across_tested_seeds.upper),
+          c.completed_case_p90_change_seconds_across_replications?
+            signedTime(c.completed_case_p90_change_seconds_across_replications.min)+' – '+
+            signedTime(c.completed_case_p90_change_seconds_across_replications.max):'Withheld',
+          c.comparable_cycle_replications+' / '+c.replications]));
       const cellSelect=select('owgCapacityCell',report.cells.map((c,i)=>[String(i),c.design+' · '+c.arrival_rate_per_hour+'/h']));
       const details=el('div');
       const draw=()=>{
@@ -5597,6 +5611,8 @@
         el('p','No extrapolation to untested demand, staffing recommendation or production capacity guarantee.','note'),
         ...(report.tested_envelope.some(e=>e.nonmonotonic_tested_pattern)?
           [el('p','At least one design passed a higher tested rate but did not pass a lower rate. Inspect individual runs; do not assume monotonic behavior.','note')]:[]),
+        el('h4','Paired changes against baseline'),comparisons,
+        el('p','Target-share differences are percentage-point bounds across the tested seeds. Cycle-time differences are withheld unless every pair has complete, stable completion populations.','muted'),
         el('h4','Inspect every replication'),field('Design and demand',cellSelect),details,el('h4','Assumptions'),assumptions);
     }
     run.onclick=async()=>{

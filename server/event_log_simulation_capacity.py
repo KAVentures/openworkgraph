@@ -42,6 +42,8 @@ ASSUMPTIONS = [
     "unresolved arrivals bound the target share. An overloaded cell never qualifies as meeting the target.",
     "Reported cycle-time quantiles summarize completed cases only, and ranges across replications are descriptive, "
     "not confidence intervals or evidence of production reliability.",
+    "Paired target-share changes subtract the opposite endpoints of the alternative and baseline bounds "
+    "at the same rate and seed. Cycle-time deltas require complete stable populations in every paired run.",
     "Only explicitly tested demand levels are reported. No interpolation, monotonicity, recommendation, "
     "causal benefit, live execution or production capacity guarantee is inferred.",
 ]
@@ -215,6 +217,59 @@ def summarize_cell(label: str, rate: float, runs: list[dict], target_share: floa
     }
 
 
+def paired_comparisons(cells: list[dict]) -> list[dict]:
+    """Compare target bounds against the matching baseline demand and seed.
+
+    Interval differences remain valid when some arrivals are unresolved. The
+    p90 comparison is withheld unless both runs have a complete, stable
+    post-warm-up completion population.
+    """
+    reference = {c["arrival_rate_per_hour"]: c for c in cells if c["design"] == "Baseline"}
+    comparisons = []
+    for cell in cells:
+        if cell["design"] == "Baseline":
+            continue
+        base = reference[cell["arrival_rate_per_hour"]]
+        baseline_runs = {r["seed"]: r for r in base["runs"]}
+        if set(baseline_runs) != {r["seed"] for r in cell["runs"]}:
+            raise EventLogWorkspaceError("Paired comparison seeds do not match")
+        pairs = []
+        for right in cell["runs"]:
+            left = baseline_runs[right["seed"]]
+            lo = right["target_share_lower"] - left["target_share_upper"]
+            hi = right["target_share_upper"] - left["target_share_lower"]
+            reasons = []
+            if left["post_warmup_arrivals"] != right["post_warmup_arrivals"]:
+                raise EventLogWorkspaceError("Paired comparison arrival counts do not match")
+            if left["overloaded"] or right["overloaded"]:
+                reasons.append("overloaded_run")
+            if left["unresolved"] or right["unresolved"] or left["abandoned"] or right["abandoned"]:
+                reasons.append("incomplete_completion_population")
+            before = left["cycle_time_seconds_completed_only"]["p90"]
+            after = right["cycle_time_seconds_completed_only"]["p90"]
+            if before is None or after is None:
+                reasons.append("missing_cycle_quantile")
+            pairs.append({"seed": right["seed"],
+                          "target_share_change_bounds": {"lower": lo, "upper": hi},
+                          "completed_case_p90_change_seconds": after - before if not reasons else None,
+                          "cycle_delta_withheld_reasons": reasons})
+        lowers = [p["target_share_change_bounds"]["lower"] for p in pairs]
+        uppers = [p["target_share_change_bounds"]["upper"] for p in pairs]
+        cycle = [p["completed_case_p90_change_seconds"] for p in pairs]
+        all_comparable = all(value is not None for value in cycle)
+        comparisons.append({
+            "design": cell["design"], "arrival_rate_per_hour": cell["arrival_rate_per_hour"],
+            "target_share_change_bounds_across_tested_seeds": {"lower": min(lowers), "upper": max(uppers)},
+            "positive_target_change_demonstrated_in_all_runs": all(value > 0 for value in lowers),
+            "negative_target_change_demonstrated_in_all_runs": all(value < 0 for value in uppers),
+            "completed_case_p90_change_seconds_across_replications": _range(cycle) if all_comparable else None,
+            "comparable_cycle_replications": sum(value is not None for value in cycle),
+            "replications": len(pairs), "pairs": pairs,
+            "shared_seed_not_same_observed_cases": True,
+        })
+    return comparisons
+
+
 def _envelope(cells: list[dict]) -> list[dict]:
     designs = list(dict.fromkeys(c["design"] for c in cells))
     report = []
@@ -263,6 +318,7 @@ def run_grid(log_id: str, spec: Any, case_type: str | None = None) -> dict:
                                   allow_nan=False, ensure_ascii=False).encode()).hexdigest()
         return {"format": REPORT_FORMAT, **identity, "calibration_and_inputs_sha256": digest,
                 "seeds": seeds, "cells": cells, "tested_envelope": _envelope(cells),
+                "paired_comparisons": paired_comparisons(cells),
                 "simulated_cases": len(cells) * len(seeds) * packet["baseline"]["cases"],
                 "single_calibration_used": True, "source_content_independently_verified": False,
                 "simulated_not_observed": True, "production_capacity_certified": False,

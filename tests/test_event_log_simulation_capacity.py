@@ -233,3 +233,38 @@ with TestClient(app) as c:
     done=subprocess.run([sys.executable,"-c",code],cwd=Path(__file__).resolve().parents[1],
         env=env,text=True,capture_output=True,timeout=60)
     assert done.returncode==0,done.stdout+done.stderr
+
+
+def test_paired_bounds_and_cycle_deltas_use_same_rate_and_seed():
+    def run(seed, lower, upper, p90, unresolved=0, overloaded=False):
+        return {"seed":seed,"post_warmup_arrivals":90,
+                "target_share_lower":lower,"target_share_upper":upper,
+                "unresolved":unresolved,"abandoned":0,"overloaded":overloaded,
+                "cycle_time_seconds_completed_only":{"p90":p90}}
+    base = {"design":"Baseline","arrival_rate_per_hour":1,
+            "runs":[run(1,.4,.6,20,18),run(2,.5,.5,50)]}
+    alternative = {"design":"A","arrival_rate_per_hour":1,
+                   "runs":[run(2,.7,.7,40),run(1,.65,.8,15,14)]}
+    result = capacity.paired_comparisons([base,alternative])[0]
+    assert result["target_share_change_bounds_across_tested_seeds"]["lower"] == pytest.approx(.05)
+    assert result["target_share_change_bounds_across_tested_seeds"]["upper"] == pytest.approx(.4)
+    assert result["positive_target_change_demonstrated_in_all_runs"]
+    assert result["comparable_cycle_replications"] == 1
+    assert result["completed_case_p90_change_seconds_across_replications"] is None
+    assert result["pairs"][0]["completed_case_p90_change_seconds"] == -10
+    assert result["pairs"][1]["cycle_delta_withheld_reasons"] == ["incomplete_completion_population"]
+    base["runs"][0] = run(1,.4,.4,20)
+    alternative["runs"][1] = run(1,.65,.65,15)
+    complete = capacity.paired_comparisons([base,alternative])[0]
+    assert complete["completed_case_p90_change_seconds_across_replications"] == {
+        "min":-10,"median":-7.5,"max":-5,"replications_with_value":2}
+    alternative["runs"][1]["overloaded"] = True
+    overloaded = capacity.paired_comparisons([base,alternative])[0]
+    assert overloaded["completed_case_p90_change_seconds_across_replications"] is None
+
+
+def test_paired_comparison_refuses_mismatched_seeds():
+    base = {"design":"Baseline","arrival_rate_per_hour":1,"runs":[{"seed":1}]}
+    other = {"design":"Other","arrival_rate_per_hour":1,"runs":[{"seed":2}]}
+    with pytest.raises(workspace.EventLogWorkspaceError, match="seeds"):
+        capacity.paired_comparisons([base,other])
