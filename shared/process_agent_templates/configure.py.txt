@@ -1049,7 +1049,7 @@ def main():
             load_object(args.batch_review,limit=2*1024*1024),load_object(args.queue_selection))
         write_execution_queue(args.output,packets,manifest)
         return {'mode':'offline_execution_queue_preparation','output_written':True,
-                'case_count':manifest['case_count'],'review_required':True,
+                'case_count':manifest['case_count'],'queue_sha256':digest(manifest),'review_required':True,
                 'execution_authorized':False,'business_tools_called':False}
     if args.prepare_batch_selection:
         if (not all((args.cases,args.bindings,args.case_batch,args.batch_review,args.case_id,
