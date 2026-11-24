@@ -2693,6 +2693,14 @@ async def event_log_save_filter_set(request: Request, log_id: str):
     return _respond(filter_sets.save, log_id, await _json_body(request, "filter set"))
 
 
+@router.post("/v1/event-logs/{log_id}/filter-sets/import")
+async def event_log_import_filter_set(request: Request, log_id: str):
+    from . import event_log_filter_sets as filters
+    _require_dashboard(request)
+    spec = await _json_body(request, "filter file", strict=True, limit=65536)
+    return await run_in_threadpool(_respond, filters.import_set, log_id, spec)
+
+
 @router.post("/v1/event-logs/{log_id}/filter-sets/{set_id}/delete")
 def event_log_delete_filter_set(request: Request, log_id: str, set_id: str):
     _require_dashboard(request)

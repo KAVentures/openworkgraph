@@ -125,8 +125,20 @@ const path=require('node:path');
    await page.locator('#owgFilterSetName').fill('Picked items');
    await page.locator('#owgFilterSetSave').click();
    await page.locator('#owgFilterSetStatus').filter({hasText:'Saved "Picked items".'}).waitFor();
+   const [exported]=await Promise.all([page.waitForEvent('download'),
+     page.getByRole('button',{name:'Export saved filter Picked items'}).click()]);
+   const filterFile=await exported.path();
+   const portable=JSON.parse(await fs.readFile(filterFile,'utf8'));
+   assert.deepEqual(portable,{format:'openworkgraph.event-log-filter-set.v1',name:'Picked items',cohort:{activity:'Pick'},case_type:'item'});
+   await page.getByRole('button',{name:'Delete saved filter Picked items'}).click();
+   await page.locator('#owgFilterSetStatus').getByText('Saved filter deleted.').waitFor();
    await notions.selectOption('order');
    await summaryAfter(()=>page.locator('#owgEventLogAnalyze').click());
+   await page.getByText('Import a filter from another log',{exact:true}).click();
+   await page.locator('#owgFilterSetFile').setInputFiles({name:exported.suggestedFilename(),mimeType:'application/json',
+     buffer:await fs.readFile(filterFile)});
+   await page.getByRole('button',{name:'Import filter',exact:true}).click();
+   await page.locator('#owgFilterSetStatus').getByText('Imported "Picked items".').waitFor();
    s=await summaryAfter(()=>page.getByRole('button',{name:'Apply saved filter Picked items'}).click());
    assert.equal(s.body.cases,1);
    assert.match(s.url,/case_type=item/);

@@ -101,6 +101,12 @@ def save(log_id: str, body: Any) -> dict[str, Any]:
             **({"case_type": case_type} if case_type is not None else {})}
 
 
+def import_set(log_id: str, document: Any) -> dict[str, Any]:
+    if not isinstance(document, dict) or document.get("format") != FORMAT:
+        raise workspace.EventLogWorkspaceError("choose an OpenWorkGraph filter JSON file")
+    return save(log_id, {key: value for key, value in document.items() if key != "format"})
+
+
 def delete(log_id: str, set_id: str) -> dict[str, Any]:
     with workspace._LOCK:
         conn = workspace._connect()
@@ -115,4 +121,4 @@ def delete(log_id: str, set_id: str) -> dict[str, Any]:
     return {"deleted": True, "set_id": set_id}
 
 
-__all__ = ["delete", "list_sets", "save", "FORMAT", "MAX_SETS"]
+__all__ = ["delete", "import_set", "list_sets", "save", "FORMAT", "MAX_SETS"]
