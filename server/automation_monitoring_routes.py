@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from . import automation_incidents as incidents
+from . import automation_deployment_portfolio as deployment_portfolio
 from . import automation_monitoring as monitoring
 from . import automation_release_inventory as release_inventory
 from . import automation_report_channels as channels
@@ -58,6 +59,12 @@ async def _respond(operation: Callable[..., Any], *args: Any, **kwargs: Any) -> 
 def automation_monitoring_script() -> FileResponse:
     """Static dashboard client; it only calls the authenticated routes below."""
     return FileResponse(_SCRIPT, media_type="application/javascript")
+
+
+@router.get("/v1/automation-monitoring/portfolio")
+async def get_deployment_portfolio(request: Request, recent_days: int = Query(default=30, ge=1, le=365)):
+    _require_dashboard(request)
+    return await _respond(deployment_portfolio.portfolio, recent_days=recent_days)
 
 
 @router.get("/v1/automation-monitoring/deployments")

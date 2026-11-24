@@ -47,6 +47,22 @@ def test_save_read_replace_and_forget():
     assert costs.delete_model(log)["deleted"] is False
 
 
+def test_portable_model_preview_preserves_exact_prices_without_saving():
+    log = _log()
+    costs.save_model(log, MODEL)
+    model = {"activity_costs": {" Rare, exact ": 8.5, "__proto__": 0}, "default_activity_cost": 0}
+    packet = {"format": costs.MODEL_FILE_FORMAT, "model": model}
+    expected = {"currency": "EUR", "activity_costs": model["activity_costs"],
+                "default_activity_cost": 0.0, "hourly_open_case_cost": 0.0}
+    assert costs.preview_model(log, packet) == {"format": costs.MODEL_FILE_FORMAT, "model": expected}
+    assert costs.saved_model(log)["model"]["activity_costs"] == MODEL["activity_costs"]
+    for bad in ({"format": "unknown", "model": model}, {**packet, "log_id": log},
+                {**packet, "model": {**model, "cohort": {}}},
+                {**packet, "model": {"activity_costs": {"\ud800": 1}}}):
+        with pytest.raises(workspace.EventLogWorkspaceError):
+            costs.preview_model(log, bad)
+
+
 def test_invalid_models_and_unknown_logs():
     log = _log()
     for bad in (None, [], {}, {"activity_costs": {"Check": -1}}, {"activity_costs": {"Check": 1}, "cohort": {}},
@@ -90,6 +106,7 @@ def test_routes_require_the_dashboard(tmp_path):
     import sys
     from pathlib import Path
     code = r'''
+import json
 from fastapi.testclient import TestClient
 from server.secure_app import app
 from server import local_auth
@@ -104,6 +121,14 @@ with TestClient(app) as client:
     model = {"currency": "EUR", "activity_costs": {"A": 2}}
     assert client.get(base + "/cost-model", headers=bearer).status_code == 403
     assert client.post(base + "/cost-model", json=model, headers=bearer).status_code == 403
+    packet = {"format": "openworkgraph.event-log-cost-model.v1", "model": model}
+    assert client.post(base + "/cost-model/preview", json=packet, headers=bearer).status_code == 403
+    preview = client.post(base + "/cost-model/preview", json=packet, headers=owner)
+    assert preview.status_code == 200 and preview.headers["cache-control"] == "no-store", preview.text
+    assert preview.json()["model"]["activity_costs"] == {"A": 2.0}
+    long_model = {"activity_costs": {f"{i:03}" + chr(0x1F680) * 197: 1 for i in range(500)}}
+    assert client.post(base + "/cost-model/preview", content=json.dumps({**packet, "model": long_model}, ensure_ascii=False).encode(),
+                       headers={**owner, "Content-Type": "application/json"}).status_code == 200
     assert client.get(base + "/cost-model", headers=owner).json()["saved"] is None
     assert client.post(base + "/cost-model", json=model, headers=owner).status_code == 200
     assert client.get(base + "/cost-model", headers=owner).json()["saved"]["model"]["activity_costs"] == {"A": 2.0}

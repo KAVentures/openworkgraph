@@ -120,6 +120,8 @@ def rework(log_id: str, spec: Any = None) -> dict[str, Any]:
             "rework_rate": round(len(with_rework) / total, 4) if total else 0.0,
             "loop_kinds": {k: kinds.get(k, 0) for k in ("self_loop", "short_loop", "longer_loop")},
             "activities": activities[:settings.limit], "activities_truncated": len(activities) > settings.limit,
+            "distinct_repeated_activities": len(activities), "distinct_loop_patterns": len(patterns),
+            "loop_patterns_truncated": len(patterns) > settings.limit,
             "loop_patterns": [{"pattern": list(p), "cases": n} for p, n in
                               sorted(patterns.items(), key=lambda q: (-q[1], q[0]))[:settings.limit]],
             "comparison": comparison,

@@ -176,12 +176,20 @@ async def event_log_save_cost_model(request: Request, log_id: str):
     """Keep the analyst's prices with the log; the report then includes a cost section."""
     from . import event_log_costs as cost_model
     _require_dashboard(request)
-    spec = await _json_body(request, "cost model", strict=True, limit=131072)
+    spec = await _json_body(request, "cost model", strict=True, limit=cost_model.MAX_REQUEST_BYTES)
     try:
         result = await run_in_threadpool(cost_model.save_model, log_id, spec)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/cost-model/preview")
+async def event_log_preview_cost_model(request: Request, log_id: str):
+    from . import event_log_costs as cost_model
+    _require_dashboard(request)
+    spec = await _json_body(request, "cost model file", strict=True, limit=cost_model.MAX_REQUEST_BYTES)
+    return await run_in_threadpool(_respond, cost_model.preview_model, log_id, spec)
 
 
 @router.post("/v1/event-logs/{log_id}/cost-model/delete")
@@ -196,7 +204,7 @@ async def event_log_costs(request: Request, log_id: str):
     """Process cost from a user-supplied cost model: per case, activity, variant and resource."""
     from . import event_log_costs as cost_model
     _require_dashboard(request)
-    spec = await _json_body(request, "cost model", strict=True, limit=131072)
+    spec = await _json_body(request, "cost model", strict=True, limit=cost_model.MAX_REQUEST_BYTES)
     try:
         result = await run_in_threadpool(cost_model.costs, log_id, spec)
     except workspace.EventLogWorkspaceError as exc:
@@ -208,7 +216,7 @@ async def event_log_costs(request: Request, log_id: str):
 async def event_log_cost_cases(request: Request, log_id: str):
     from . import event_log_costs as cost_model
     _require_dashboard(request)
-    spec = await _json_body(request, "case cost settings", strict=True, limit=131072)
+    spec = await _json_body(request, "case cost settings", strict=True, limit=cost_model.MAX_REQUEST_BYTES)
     return await run_in_threadpool(_respond, cost_model.case_costs, log_id, spec)
 
 
@@ -1004,6 +1012,22 @@ async def event_log_add_case_tags(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/case-tags/preview")
+async def event_log_preview_case_tags(request: Request, log_id: str):
+    from . import event_log_case_tags as case_tags
+    _require_dashboard(request)
+    spec = await _json_body(request, "case tag preview", strict=True, limit=262144)
+    return await run_in_threadpool(_respond, case_tags.preview, log_id, spec)
+
+
+@router.post("/v1/event-logs/{log_id}/case-tags/note")
+async def event_log_edit_case_tag_note(request: Request, log_id: str):
+    from . import event_log_case_tags as case_tags
+    _require_dashboard(request)
+    spec = await _json_body(request, "case tag note", strict=True, limit=16384)
+    return await run_in_threadpool(_respond, case_tags.edit_note, log_id, spec)
+
+
 @router.post("/v1/event-logs/{log_id}/case-tags/remove")
 async def event_log_remove_case_tags(request: Request, log_id: str):
     from . import event_log_case_tags as case_tags
@@ -1251,21 +1275,24 @@ def event_log_decision_rules(request: Request, log_id: str,
                              decision_activity: str = Query(min_length=1, max_length=200),
                              case_type: str | None = Query(default=None, max_length=200),
                              max_depth: int = Query(default=3, ge=1, le=4),
+                             include_case_attributes: bool = Query(default=True),
                              cohort: dict[str, Any] = Depends(_case_filter)):
     from . import event_log_decision_mining as decisions
     _require_dashboard(request)
-    return _respond(decisions.analyse, log_id, decision_activity, case_type, max_depth=max_depth, cohort=cohort)
+    return _respond(decisions.analyse, log_id, decision_activity, case_type, max_depth=max_depth, cohort=cohort,
+                    include_case_attributes=include_case_attributes)
 
 
 @router.get("/v1/event-logs/{log_id}/temporal-profile")
 def event_log_temporal_profile(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                                zeta: float = Query(default=3.0, ge=0.5, le=10),
                                min_occurrences: int = Query(default=5, ge=2, le=10_000),
+                               baseline_cutoff: str | None = Query(default=None, max_length=64),
                                cohort: dict[str, Any] = Depends(_case_filter)):
     from . import event_log_temporal_profile as temporal
     _require_dashboard(request)
     return _respond(temporal.temporal_profile, log_id, case_type, zeta=zeta, min_occurrences=min_occurrences,
-                    cohort=cohort)
+                    cohort=cohort, baseline_cutoff=baseline_cutoff)
 
 
 @router.post("/v1/event-logs/{log_id}/temporal-profile/cases")
@@ -1273,6 +1300,7 @@ async def event_log_temporal_cases(request: Request, log_id: str,
         case_type: str | None = Query(default=None, max_length=200),
         zeta: float = Query(default=3.0, ge=0.5, le=10),
         min_occurrences: int = Query(default=5, ge=2, le=10_000),
+        baseline_cutoff: str | None = Query(default=None, max_length=64),
         cohort: dict[str, Any] = Depends(_case_filter)):
     from . import event_log_temporal_profile as temporal
     _require_dashboard(request)
@@ -1280,7 +1308,8 @@ async def event_log_temporal_cases(request: Request, log_id: str,
     if not isinstance(spec, dict) or set(spec) - {"source", "destination", "direction", "after", "limit"}:
         raise HTTPException(422, "invalid temporal case page settings")
     return await run_in_threadpool(_respond, temporal.temporal_cases, log_id, case_type, zeta=zeta,
-                                   min_occurrences=min_occurrences, cohort=cohort, **spec)
+                                   min_occurrences=min_occurrences, cohort=cohort,
+                                   baseline_cutoff=baseline_cutoff, **spec)
 
 
 @router.get("/v1/event-logs/{log_id}/heuristics-net")
@@ -1464,11 +1493,13 @@ async def event_log_tag_non_fitting_cases(request: Request, log_id: str,
 def event_log_model_quality(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                             levels: str | None = Query(default=None, max_length=100),
                             activities: float = Query(default=1.0, gt=0, le=1),
+                            include_nets: bool = False,
                             cohort: dict = Depends(_case_filter)):
     """Fitness, precision, generalization and simplicity of the discovered net at several noise levels."""
     from . import event_log_model_quality as quality
     _require_dashboard(request)
-    return _respond(quality.model_quality, log_id, case_type, levels=levels, activities=activities, cohort=cohort)
+    return _respond(quality.model_quality, log_id, case_type, levels=levels, activities=activities, cohort=cohort,
+                    include_nets=include_nets)
 
 
 @router.get("/v1/event-logs/{log_id}/funnel")
@@ -1502,6 +1533,7 @@ def event_log_due_dates(request: Request, log_id: str, due_activity: str = Query
                         due_attribute: str | None = Query(default=None, max_length=200),
                         due_days: float | None = Query(default=None, gt=0), early_days: float | None = Query(default=None, gt=0),
                         case_type: str | None = Query(default=None, max_length=200),
+                        as_of: str | None = Query(default=None, max_length=64),
                         cohort: dict = Depends(_case_filter)):
     """Whether the chosen activity happened by each case's due date: on time, early, late or still open.
 
@@ -1509,7 +1541,7 @@ def event_log_due_dates(request: Request, log_id: str, due_activity: str = Query
     from . import event_log_due_dates as due
     _require_dashboard(request)
     return _respond(due.due_dates, log_id, due_activity, case_type, due_attribute=due_attribute, due_days=due_days,
-                    early_days=early_days, cohort=cohort)
+                    early_days=early_days, cohort=cohort, as_of=as_of)
 
 
 @router.get("/v1/event-logs/{log_id}/due-dates/cases")
@@ -1518,12 +1550,13 @@ def event_log_due_cases(request: Request, log_id: str, due_activity: str = Query
                         due_attribute: str | None = Query(default=None, max_length=200),
                         due_days: float | None = Query(default=None, gt=0), early_days: float | None = Query(default=None, gt=0),
                         case_type: str | None = Query(default=None, max_length=200),
+                        as_of: str | None = Query(default=None, max_length=64),
                         after: str | None = Query(default=None, min_length=1, max_length=200),
                         limit: int = Query(default=50, ge=1, le=100), cohort: dict = Depends(_case_filter)):
     from . import event_log_due_dates as due
     _require_dashboard(request)
     return _respond(due.due_cases, log_id, due_activity, case_type, group=due_group, after=after, limit=limit,
-                    due_attribute=due_attribute, due_days=due_days, early_days=early_days, cohort=cohort)
+                    due_attribute=due_attribute, due_days=due_days, early_days=early_days, cohort=cohort, as_of=as_of)
 
 
 @router.get("/v1/event-logs/{log_id}/next-steps")
@@ -2584,38 +2617,24 @@ async def event_log_run_analysis(request: Request, log_id: str):
 
 @router.post("/v1/event-logs/{log_id}/analysis-source-bound")
 async def event_log_run_analysis_source_bound(request: Request, log_id: str):
-    """Return full local analysis with complete source lineage, atomically.
-
-    Ordinary downloads must compare this digest, not merely aggregate values.
-    Fail closed if a complete fingerprint exceeds its bounded source budget.
-    """
+    """Return full local analysis and source lineage under one workspace lock."""
+    from . import event_log_analysis_review as review
     _require_dashboard(request)
-    from . import process_discovery_provenance as provenance
     spec = await _json_body(request, "source-bound analysis")
-    try:
-        def compute():
-            with workspace._LOCK:
-                # Refuse oversized sources before running potentially expensive
-                # analysis. Keep the preflight, analysis, and digest under one
-                # workspace lock so a concurrent import cannot change lineage.
-                conn = workspace._connect()
-                try:
-                    if provenance.source_rows(conn, log_id) > provenance.MAX_SOURCE_ROWS:
-                        raise workspace.EventLogWorkspaceError(
-                            "Source exceeds complete fingerprint budget; source-bound export unavailable")
-                finally:
-                    conn.close()
-                result = analysis.run(log_id, spec)
-                conn = workspace._connect()
-                try:
-                    result["source_content_sha256"] = provenance.source_digest(conn, log_id)
-                finally:
-                    conn.close()
-                return result
-        result = await run_in_threadpool(compute)
-    except workspace.EventLogWorkspaceError as exc:
-        raise HTTPException(422, str(exc)) from None
-    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+    response = await run_in_threadpool(_respond, review.source_bound, log_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/analysis/groups/cases")
+async def event_log_analysis_group_cases(request: Request, log_id: str):
+    """Return one page of cases in a previously reviewed analysis group."""
+    from . import event_log_analysis_review as review
+    _require_dashboard(request)
+    body = await _json_body(request, "analysis group case review", strict=True, limit=131072)
+    response = await run_in_threadpool(_respond, review.group_cases, log_id, body)
+    _require_dashboard(request)
+    return response
 
 
 @router.post("/v1/event-logs/{log_id}/case-sharing-preview")
