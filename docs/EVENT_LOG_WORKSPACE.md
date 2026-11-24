@@ -798,6 +798,15 @@ by literal case key, with an optional `limit` of 1–100 (default 50). Send the 
 `next_after` as `after` to continue. If the cluster changes, rerun the report to get
 its current key. This route requires a dashboard session.
 
+From **Inspect cases**, **Download cluster cases (CSV)** recomputes the selected
+cluster with its original settings and scope, then downloads case keys, duration,
+event count and first/last activity. The file contains up to 50,000 cases in
+case-key order; the dashboard reports the total, written count and truncation.
+Formula-like text is escaped for spreadsheet review. The cluster key detects a
+change in the cluster's variant composition and counts; it is not a frozen
+case-membership snapshot, so later changes can alter the exported cases even if
+those counts stay the same. This download requires a dashboard session.
+
 Clusters describe the structure of the imported log. They are not process types,
 causes, or a judgement of how any case was handled.
 

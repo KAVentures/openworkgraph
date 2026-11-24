@@ -9582,7 +9582,11 @@
     box.append(row,message,out,review);
     const generation=state.generation,endpoint='/v1/event-logs/'+encodeURIComponent(state.logId)+'/trace-clusters';
     const number=n=>Number(n).toLocaleString();
-    let reviewTurn=0;
+    let reviewTurn=0,reportTurn=0;
+    k.addEventListener('input',()=>{
+      ++reportTurn;++reviewTurn;run.disabled=false;out.replaceChildren();review.replaceChildren();
+      message.textContent='Settings changed. Find clusters again.';
+    });
     const request=async(suffix,spec)=>(await api(endpoint+suffix,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
     function inspect(settings,cluster){
       const turn=++reviewTurn,current=()=>generation===state.generation&&turn===reviewTurn;
@@ -9590,7 +9594,24 @@
       const status=el('div');status.setAttribute('role','status');
       const rows=el('div'),nav=el('div',null,'row');
       const previous=button('Previous case page','secondary'),next=button('Next case page','secondary');
-      nav.append(previous,next);review.replaceChildren(title,status,rows,nav);title.focus();
+      const download=button('Download cluster cases (CSV)','secondary');
+      download.setAttribute('aria-label','Download cases in cluster '+cluster.cluster+' as CSV');
+      const exportStatus=el('div',null,'muted');exportStatus.setAttribute('role','status');
+      nav.append(previous,next,download);review.replaceChildren(title,status,rows,nav,exportStatus);title.focus();
+      download.onclick=async()=>{
+        if(!current())return;download.disabled=true;exportStatus.textContent='Preparing cluster cases…';
+        try{
+          const response=await api(endpoint+'/cases.csv',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({...settings,cluster_key:cluster.cluster_key})});
+          const blob=await response.blob();if(!current())return;
+          downloadBlob(blob,'cluster-'+cluster.cluster+'-cases.csv');
+          const info=response.headers.get('X-OWG-Cluster-Cases')||'';
+          const written=/written=(\d+)/.exec(info),total=/total=(\d+)/.exec(info);
+          exportStatus.textContent='Downloaded '+(written?Number(written[1]).toLocaleString():'the')+' of '+(total?Number(total[1]).toLocaleString():'the matching')+' cases'+
+            (/truncated=true/.test(info)?' (limited to 50,000).':'.')+' Formula-like values are protected for spreadsheets.';
+        }catch(error){if(current())exportStatus.textContent=error.message;}
+        finally{if(current())download.disabled=false;}
+      };
       const cursors=[null];let index=0,following=null;
       async function load(page){
         previous.disabled=next.disabled=true;status.textContent='Loading cases…';
@@ -9614,17 +9635,18 @@
     }
     const shares=list=>list.map(a=>a.activity+' ('+pct(a.case_share_in_cluster)+' vs '+pct(a.case_share_in_log)+')').join('; ')||'—';
     run.onclick=async()=>{
+      const ticket=++reportTurn,current=()=>generation===state.generation&&box.isConnected&&ticket===reportTurn;
       ++reviewTurn;review.replaceChildren();out.replaceChildren();
       try{
         message.textContent='Clustering…';run.disabled=true;
         const body={};if(k.value)body.k=Number(k.value);if(state.caseType)body.case_type=state.caseType;
         if(filterOn())body.cohort=globalCohort();
         const r=await request('',body);
-        if(generation!==state.generation)return;
+        if(!current())return;
         if(!r.cases){message.textContent='No cases match this selection.';return;}
         const rows=r.clusters.map(c=>{
           const open=button('Inspect cases','secondary');open.setAttribute('aria-label','Inspect cases in cluster '+c.cluster);
-          open.onclick=()=>inspect(body,c);
+          open.onclick=()=>{if(current())inspect(body,c);};
           return ['Cluster '+c.cluster,number(c.cases)+' ('+pct(c.share)+')',number(c.variants),
           c.median_throughput_seconds===null?'—':duration(c.median_throughput_seconds),c.mean_events_per_case===null?'—':c.mean_events_per_case.toFixed(1),
           (c.top_variants[0]||{activities:[]}).activities.join(' → '),shares(c.more_common_activities),shares(c.less_common_activities),open];
@@ -9634,7 +9656,7 @@
           table(['Cluster','Cases','Variants','Median throughput','Events per case','Most common variant','More common than in the log','Less common than in the log','Evidence'],rows),
           el('div',r.interpretation,'muted'));
         message.textContent='';
-      }catch(error){if(generation===state.generation)message.textContent=error.message;}finally{run.disabled=false;}
+      }catch(error){if(current())message.textContent=error.message;}finally{if(current())run.disabled=false;}
     };
     return box;
   }
