@@ -264,33 +264,67 @@ def _step_statistics(selected: list[dict[str, Any]]) -> tuple[list[dict[str, Any
     return step_rows, transition_rows
 
 
+def _clipboard_marker(event: dict[str, Any]) -> tuple[float, str, str] | None:
+    meta = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+    transfer = str(meta.get("clipboard_transfer_id") or "").strip()
+    action = str(meta.get("action") or "").strip().casefold()
+    if not action and str(event.get("event_type") or "").startswith("clipboard_"):
+        action = str(event["event_type"]).split("clipboard_", 1)[1].casefold()
+    at = _ts(event.get("observed_at"))
+    if not transfer or action not in {"copy", "cut", "paste"} or at is None or not math.isfinite(at):
+        return None
+    return at, transfer, action
+
+
+def _directional_clipboard_pairs(events: Iterable[dict[str, Any]]) -> Iterable[
+    tuple[dict[str, Any], dict[str, Any]]
+]:
+    """Link a paste only to a preceding unambiguous copy/cut in its capture scope.
+
+    A reused token must not associate an earlier paste with a later copy.
+    Equal timestamps do not establish direction. Session identity is required;
+    actor/device differences never join. Legacy missing actor/device values
+    remain separate from known values. This does not verify case membership.
+    """
+    from itertools import groupby
+    by_scope: dict[tuple[str, str, str, str], list[tuple[float, str, dict[str, Any]]]] = defaultdict(list)
+    for event in events:
+        marker = _clipboard_marker(event)
+        session = str(event.get("session_id") or "")
+        if marker is None or not session:
+            continue
+        at, token, action = marker
+        scope = (session, str(event.get("device_id") or ""), str(event.get("actor_id") or ""), token)
+        by_scope[scope].append((at, action, event))
+    for rows in by_scope.values():
+        rows.sort(key=lambda row: row[0])
+        source = None
+        for _at, batch in groupby(rows, key=lambda row: row[0]):
+            same_time = list(batch)
+            sources = [event for _, action, event in same_time if action in {"copy", "cut"}]
+            if sources:
+                # A paste at the same instant as a new source has unknown
+                # ordering, including relative to an earlier source.
+                source = sources[0] if len(sources) == 1 else None
+                continue
+            if source is not None:
+                for _, action, event in same_time:
+                    if action == "paste":
+                        yield source, event
+
+
 def _rank_clipboard_evidence(
     raw_events: list[dict[str, Any]],
     projected_runs: list[dict[str, Any]],
 ) -> None:
-    """Only verified cross-app clipboard ID pairs contribute to navigation.
-
-    Reuses canonical metadata, never text; index per session once to avoid
-    scanning 50,000 events separately for every candidate run.
-    """
+    """Only directional, scoped cross-app clipboard pairs contribute to rank."""
     from bisect import bisect_left, bisect_right
-    by_session: dict[str, list[tuple[float, str, str, str]]] = defaultdict(list)
+    by_session: dict[str, list[tuple[float, dict[str, Any]]]] = defaultdict(list)
     for event in raw_events:
-        meta = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
-        transfer = str(meta.get("clipboard_transfer_id") or "")
-        if not transfer:
-            continue
-        action = str(meta.get("action") or "").casefold()
-        if not action and str(event.get("event_type") or "").startswith("clipboard_"):
-            action = str(event["event_type"]).split("clipboard_", 1)[1].casefold()
-        if action not in {"copy", "cut", "paste"}:
-            continue
-        at = _ts(event.get("observed_at"))
-        if at is None:
-            continue
-        by_session[str(event.get("session_id") or "")].append(
-            (at, transfer, action, _surface_for_event(event))
-        )
+        marker = _clipboard_marker(event)
+        sid = str(event.get("session_id") or "")
+        if marker is not None and sid:
+            by_session[sid].append((marker[0], event))
     timestamps: dict[str, list[float]] = {}
     for sid, events in by_session.items():
         events.sort(key=lambda item: item[0])
@@ -300,22 +334,15 @@ def _rank_clipboard_evidence(
         start, end = _ts(run.get("started_at")), _ts(run.get("ended_at"))
         if start is None or end is None:
             continue
-        transfer_pairs: dict[str, dict[str, set[str]]] = defaultdict(
-            lambda: {"sources": set(), "pastes": set()}
-        )
-        for session_id in run.get("_session_ids") or []:
-            sid = str(session_id)
+        scoped = []
+        for sid in dict.fromkeys(str(value) for value in run.get("_session_ids") or []):
             events, stamps = by_session.get(sid, []), timestamps.get(sid, [])
-            if not events:
-                continue
-            for _at, transfer, action, surface in events[
+            scoped.extend(event for _, event in events[
                 bisect_left(stamps, start - 0.001):bisect_right(stamps, end + 0.001)
-            ]:
-                transfer_pairs[transfer]["pastes" if action == "paste" else "sources"].add(surface)
+            ])
         run["cross_surface_clipboard_observed"] = any(
-            source != destination
-            for pair in transfer_pairs.values()
-            for source in pair["sources"] for destination in pair["pastes"]
+            _surface_for_event(source) != _surface_for_event(paste)
+            for source, paste in _directional_clipboard_pairs(scoped)
         )
 
 
@@ -533,35 +560,21 @@ def _resource_types(per_run_events: dict[str, list[dict[str, Any]]]) -> list[dic
 def _clipboard_transfers(per_run_events: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
     grouped: dict[tuple[str, str], dict[str, Any]] = {}
     for execution_id, events in per_run_events.items():
-        by_transfer: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: {"sources": [], "pastes": []})
-        for event in events:
-            meta = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
-            transfer_id = str(meta.get("clipboard_transfer_id") or "").strip()
-            action = str(meta.get("action") or "").strip().lower()
-            if not action and str(event.get("event_type") or "").startswith("clipboard_"):
-                action = str(event.get("event_type") or "").split("clipboard_", 1)[1].lower()
-            if not transfer_id or action not in {"copy", "cut", "paste"}:
-                continue
-            (by_transfer[transfer_id]["pastes"] if action == "paste" else by_transfer[transfer_id]["sources"]).append(event)
         seen_pairs: set[tuple[str, str]] = set()
-        for bundle in by_transfer.values():
-            if not bundle["sources"] or not bundle["pastes"]:
-                continue
-            source = bundle["sources"][-1]
-            for paste in bundle["pastes"]:
-                pair = (_surface_for_event(source), _surface_for_event(paste))
-                slot = grouped.setdefault(pair, {
-                    "occurrences": 0,
-                    "execution_ids": [],
-                    "example_event_refs": [],
-                })
-                slot["occurrences"] += 1
-                if len(slot["example_event_refs"]) < 8:
-                    slot["example_event_refs"].extend([
-                        _event_ref(source.get("event_id")), _event_ref(paste.get("event_id")),
-                    ])
-                    slot["example_event_refs"] = list(dict.fromkeys(slot["example_event_refs"]))[:8]
-                seen_pairs.add(pair)
+        for source, paste in _directional_clipboard_pairs(events):
+            pair = (_surface_for_event(source), _surface_for_event(paste))
+            slot = grouped.setdefault(pair, {
+                "occurrences": 0,
+                "execution_ids": [],
+                "example_event_refs": [],
+            })
+            slot["occurrences"] += 1
+            if len(slot["example_event_refs"]) < 8:
+                slot["example_event_refs"].extend([
+                    _event_ref(source.get("event_id")), _event_ref(paste.get("event_id")),
+                ])
+                slot["example_event_refs"] = list(dict.fromkeys(slot["example_event_refs"]))[:8]
+            seen_pairs.add(pair)
         for pair in seen_pairs:
             if execution_id not in grouped[pair]["execution_ids"]:
                 grouped[pair]["execution_ids"].append(execution_id)
