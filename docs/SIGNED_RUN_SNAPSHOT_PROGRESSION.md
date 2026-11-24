@@ -10,7 +10,7 @@ runtime's underlying snapshot. A late arrival can describe an older run.
 The monitoring importer checks all incoming run IDs against existing rows for
 the same deployment, inside the same transaction used for the import.
 
-- A new run ID is accepted normally.
+- A new run ID is accepted only if its reported step chronology is consistent: steps must occur at or after the run start, in nondecreasing order, and no later than a supplied finish time.
 - An identical normalized snapshot is accepted without rewriting its stored
   rows. An identical previously unhashed run can acquire the exact declared
   specification attribution when the report supplies it.
@@ -18,8 +18,11 @@ the same deployment, inside the same transaction used for the import.
   recorded steps, retaining its start identity, known specification claim,
   source, prior non-null reported verification claim and existing step order.
 - A last pending step reported as handed to a human may acquire a later
-  disposition on the same step identity, as in the generated customer
-  execution journal projector.
+  disposition on the same step identity only for the declared
+  `customer_execution_journal` source, whose generated projector uses that
+  convention. Other reporting sources cannot rewrite a human handoff through
+  the unattended path. The entire advanced timeline must remain consistent,
+  including steps appended after the pending disposition.
 - An existing terminal snapshot cannot be replaced by a different signed
   snapshot, even if the incoming channel sequence is higher. Shortened
   histories, altered retained steps, regressed timestamps and conflicting
@@ -70,3 +73,7 @@ it is not an exhaustive history beyond the bounded replay ledger. A revision
 conflict refusal is persisted before attempting secondary incident recording.
 If the incident ledger is full or unavailable, the original refusal remains
 reviewable in the channel inventory and an exact resend cannot import it.
+
+New malformed chronologies are refused as atomic revision conflicts, including when the same submission contains otherwise valid new runs. An identical legacy snapshot remains idempotent; old retained data is not retroactively repaired. The source label remains a sender declaration, not proof that a specific projector produced the snapshot.
+
+The two extracted chronology/progression functions were checked locally against 7,775 exhaustive timestamp combinations and 250 pending-resolution combinations (8,025 total). This is targeted algorithm validation, not the full signed HTTP/database integration suite.
