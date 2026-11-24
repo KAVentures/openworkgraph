@@ -85,9 +85,11 @@ def _diagram_fixture(nodes, flows, lanes=None):
     for index,(source,target) in enumerate(flows):
         ET.SubElement(process,'{'+MODEL+'}sequenceFlow',
                       {'id':f'f{index}','sourceRef':source,'targetRef':target})
-    semantic=ET.tostring(process)
+    def semantic_snapshot():
+        return [(node.tag, dict(node.attrib), node.text, len(node)) for node in process.iter()]
+    semantic=semantic_snapshot()
     add_process_diagram(root,process,entry_id=nodes[0][0])
-    assert ET.tostring(process)==semantic
+    assert semantic_snapshot()==semantic
     return root
 
 
