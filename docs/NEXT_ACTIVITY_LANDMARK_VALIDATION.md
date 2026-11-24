@@ -9,3 +9,5 @@ The dashboard offers landmark drill-down, exact source-bound paginated case evid
 Work limits: 300,000 visible events, 100,000 cases, 2,000 events per trace, 1.2M event-landmark workload, six cutoffs, one concurrent evaluation, and at most 100 cases per page. No truncation is called exact. Completion labels and cutoff rules are modeling choices; reopenings, backfilled history and missing source events may affect the reconstructed as-of population. No intervention, forecast or execution permission is inferred.
 
 Synthetic case-end-only guesses have no possible hit against a recorded next activity, even for unresolved outcomes. The upper bounds exclude these guesses. HTTP regression coverage exercises dashboard-session authorization, stale review rejection, request size and unsupported retrospective cohort refusal.
+
+When completion and non-completion activities share the final visible timestamp, membership is unknown independent of event ID order. The report shows exact uncertain membership counts, open-population size bounds, membership-sensitive prediction bounds and up to 100 examples. No prediction or training example is produced for those cases.

@@ -10719,8 +10719,14 @@
       detail.replaceChildren(el('h4','Landmark '+l.cutoff),
         el('p','Training: '+l.training_cases+' cases; '+l.training_cases_excluded_ambiguous_timestamps+' excluded for ambiguous timestamps. Observed through '+l.observed_until+
           (l.observation_window_shortened_by_log_end?' (shortened at log end).':'.'),'muted'),
-        table(['Estimator','Predicted','Resolved','Hits','Resolved accuracy','Whole-open-population bounds'],
-          scoreRows.map(([label,s])=>[label,s.predicted,s.resolved_predictions,s.hits,share(s.resolved_accuracy),bounds(s.whole_population_hit_share_bounds)])),
+        el('p','Open population: '+l.open_population_size_bounds.lower+' – '+l.open_population_size_bounds.upper+
+          ' cases. '+l.ambiguous_open_membership+' mixed completion ties are excluded from prediction.','muted'),
+        table(['Estimator','Predicted','Resolved','Hits','Resolved accuracy','Definitely-open bounds','Membership-sensitive bounds'],
+          scoreRows.map(([label,s])=>[label,s.predicted,s.resolved_predictions,s.hits,share(s.resolved_accuracy),bounds(s.whole_population_hit_share_bounds),bounds(s.membership_sensitive_hit_share_bounds)])),
+        ...(l.ambiguous_open_membership?[el('h5','Uncertain membership examples'),
+          table(['Case','Last visible timestamp','Tied activities'],l.ambiguous_membership_examples.map(r=>[
+            r.case_id,r.last_event_at,r.last_timestamp_activities.join(' · ')])),
+          el('p',l.ambiguous_membership_examples_truncated?'Showing the first 100 examples; the full count is included in the bounds.':'All uncertain membership cases shown.','muted')]:[]),
         table(['Paired comparison','Common predictions','Resolved pairs','Hit-share difference bounds'],
           [['Overall',l.paired_vs_overall],['Current activity',l.paired_vs_last_activity]].map(([label,s])=>
             [label,s.paired_predictions,s.paired_resolved,delta(s.paired_hit_share_change_bounds)])),
