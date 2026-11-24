@@ -2133,6 +2133,16 @@ async def event_log_save_object_rule_set(request: Request, log_id: str):
     return await run_in_threadpool(_respond, rule_sets.save, log_id, spec)
 
 
+@router.post("/v1/event-logs/{log_id}/object-rule-sets/template/preview")
+async def event_log_preview_object_rule_set(request: Request, log_id: str):
+    from . import event_log_object_rule_sets as rule_sets
+    _require_dashboard(request)
+    spec = await _json_body(request, "object rule set file", strict=True, limit=rule_sets.MAX_TEMPLATE_BYTES)
+    response = await run_in_threadpool(_respond, rule_sets.preview_template, log_id, spec)
+    _require_dashboard(request)
+    return response
+
+
 @router.get("/v1/event-logs/{log_id}/object-rule-sets/{set_id}")
 def event_log_load_object_rule_set(request: Request, log_id: str, set_id: str):
     from . import event_log_object_rule_sets as rule_sets
