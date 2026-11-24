@@ -120,6 +120,10 @@ that value unknown rather than reconstructing it from an attached design.
 workspace (case = run, activity = step, resource = step status), where
 variants, KPIs, cohorts, simulation and conformance apply.
 
+## Service objectives
+
+[Reported service objective review](AUTOMATION_SERVICE_OBJECTIVES.md) adds deadline and success targets, exact retained-cohort error budgets, unresolved attainment bounds, daily cohorts and pinned run evidence. It is retrospective reported evidence, not a verified live SLA.
+
 ## Storage
 
 Imports need **Store these runs on this computer**. Runs are kept in
