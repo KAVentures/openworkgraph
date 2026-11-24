@@ -473,7 +473,7 @@
           if(attempt!==originGeneration)return;
           origin.replaceChildren(el('h4','Saved revision source snapshots'));
           result.origins.forEach(item=>{
-            const labels={current:'Source data unchanged',source_advanced:'Source data changed since this snapshot',unavailable:'Source snapshot unavailable',check_failed:'Source snapshot could not be checked',reference_mismatch:'Snapshot metadata no longer matches its reference',not_checked_work_budget:'Source not checked: fingerprint work budget exceeded'};
+            const labels={current:'Source data unchanged',source_advanced:'Source data changed since this snapshot',unavailable:'Source snapshot unavailable',check_failed:'Source snapshot could not be checked',reference_mismatch:'Snapshot metadata no longer matches its reference',not_checked_work_budget:'Source not checked: fingerprint work budget exceeded',projection_changed:'Effective discovery input changed',projection_not_checked:'Effective discovery input could not be checked'};
             origin.appendChild(el('p',labels[item.status]||'Source status unknown'));
             if(item.source_content_sha256){
               origin.appendChild(el('p','Recorded '+item.recorded_at+' · source SHA-256 '+item.source_content_sha256));
@@ -493,6 +493,18 @@
                   });
                   origin.appendChild(openSource);
                 }
+              }
+              if(item.effective_input){
+                origin.appendChild(el('p','Effective discovery input: '+item.effective_input.cases+' cases · '+item.effective_input.events+' case-event rows · '+String(item.effective_input_status||'unknown')+'.'));
+              }else origin.appendChild(el('p','Older source snapshot: effective cohort membership was not fingerprinted.','muted'));
+              if(/^urn:openworkgraph:local-log-discovery:[a-f0-9]{64}$/.test(item.reference||'')&&/^log_[a-f0-9]{16}$/.test(item.log_id||'')){
+                const basis={workflow_id:record.workflow_id,revision:record.revision,content_sha256:record.content_sha256,reference:item.reference,log_id:item.log_id};
+                const openSelection=button('Inspect exact discovery cohort',async()=>{
+                  if(attempt!==originGeneration)throw Error('Inspect the saved source again.');
+                  if(typeof window.owgEventLogWorkspace?.openDiscoverySelection!=='function')throw Error('Event-log workspace unavailable.');
+                  await window.owgEventLogWorkspace.openDiscoverySelection(basis);
+                });
+                origin.appendChild(openSelection);
               }
               const selection=el('pre',JSON.stringify(item.selection,null,2));selection.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere';origin.appendChild(selection);
             }
