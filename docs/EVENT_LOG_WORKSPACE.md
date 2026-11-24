@@ -1657,9 +1657,9 @@ static trace and event values. The XES projection follows the chosen case notion
 Use OCEL when you need timed object attributes or relationships. An empty filter
 or a filter with no matches produces an error.
 
-Choose **Preview copy** to see how many cases, events and linked objects the
-current case selection and optional time window would retain. Saving a copy
-recalculates the selection against the source log.
+Choose **Preview copy** to see how many cases, events, linked objects and
+supplied object relationships the current selection would retain. Saving a
+copy recalculates the selection against the source log.
 
 **Save or export matching cases → Save as new log** (after **Analyse**), or
 `POST /v1/event-logs/{log_id}/derive` with
@@ -1672,10 +1672,10 @@ under the chosen case notion and the source's activity mapping.
   so a case keeps its full history. The objects those events are linked to are
   copied too, with their links and timed attribute values. In an
   object-centric log, an event linked to a matching case also brings its other
-  objects, which keep only the copied events.
+  objects, which keep only the copied events. A supplied object relationship is
+  copied when both endpoints are retained. It keeps its direction and qualifier.
 * **What is not copied:** activity mapping, saved filters and analyses,
-  signals, domain packs, source-identity keys, object-to-object relationships
-  and quality reports. The new log starts without them.
+  signals, domain packs, source-identity keys and quality reports.
 * **The source log:** unchanged.
 * **Time window (optional):** `events_from` and/or `events_before` (times with
   a UTC offset; the dashboard's *Only events from / before* fields) trim the
