@@ -206,3 +206,33 @@ passed 1,000 local randomized cases covering 21,423 route references against
 an independent intersection and provenance oracle using a local canonical
 JSON digest helper. Runtime integration and CLI regression cases have been
 added but remain pending full CI.
+
+
+## Triage a selected queue of new cases
+
+    python configure.py --shortlist-case-batch --cases reviewed-cases.json --bindings bindings.json --case-batch selected-cases.json --output batch-review.json
+
+The selected input document has format
+`openworkgraph.selected-route-cases.v1`, explicit
+`case_inputs_authorized: true`, and a cases array of objects with
+`id` (case_ followed by 1–4 digits) and `input` (the selected JSON
+case object). Select 1–20 cases and no more than 400 distinct case-route
+checks. The whole input and work budget are checked before triage. Every
+case is reviewed by the same single-case shortlist logic. The report
+preserves the selected IDs and case digests, per-case route candidates,
+their reference case and alternative index, static requirements and
+human/source dependencies. Identical selected case inputs are flagged
+but never silently dropped or treated as independently identified
+business records. The report contains no case values or tool arguments.
+
+Use the resulting reference case and alternative with the separate
+reviewed-case preparation command and original selected input after
+reviewing the new case. Batch triage does not select or execute a route,
+authorize actions, create intents or contact a model or provider.
+
+Targeted local validation: the exact batch function (4,079 characters,
+FNV-1a 3937536043) passed 1,000 randomized batches covering 105,768
+simulated case-route checks and nine invalid-input/work-budget refusals.
+The suite validator and single-case shortlist were simulated in that
+test; generated-runtime and CLI integration regressions are committed
+but require CI.
