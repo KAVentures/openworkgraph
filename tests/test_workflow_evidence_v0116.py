@@ -124,6 +124,12 @@ def test_evidence_bundle_preserves_provenance_without_inventing_payloads(monkeyp
 
     assert bundle["provenance"]["source"] == "canonical_local_event_store"
     assert bundle["canonical_evidence_included"] is True
+    coverage = bundle["timing"]["per_execution_foreground_coverage"]["runs"][0]
+    assert coverage["execution_id"] == "execution:aaaaaaaaaaaaaaaa"
+    assert coverage["foreground_union_seconds"] == 30
+    assert coverage["uncovered_window_seconds"] == 270
+    assert coverage["observed_event_count"] == 3
+    assert coverage["coverage_complete"] is False
     returned = bundle["canonical_evidence"][0]
     assert returned["execution_id"] == "execution:aaaaaaaaaaaaaaaa"
     assert all(event["untrusted_observed_data"] is True for event in returned["events"])
