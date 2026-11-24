@@ -24,7 +24,7 @@ def _condition(condition):
     expected = condition.expected
     # The declared evaluator treats numeric representations equivalently,
     # membership order/duplicates as irrelevant, and bool separately.
-    key = (tuple(sorted(set(_scalar(v) for v in expected), key=repr))
+    key = (frozenset(_scalar(v) for v in expected)
            if isinstance(expected, list) else _scalar(expected))
     return (condition.path, condition.operator, key)
 
@@ -154,6 +154,8 @@ def _impact(model,index,rule_ids,table_ids,edge_changes,manual,outcomes):
         guarded_edges.update(rule_edges.get(rid,()))
     for row in edge_changes:
         pair = tuple(row["edge"])
+        # A removed edge also affects its surviving source's alternatives.
+        starts.update(node for node in pair if node in {a.id for a in model.activities})
         if pair in edges:
             guarded_edges.add(pair)
             # If a decision table exists at this activity it is potentially affected.
