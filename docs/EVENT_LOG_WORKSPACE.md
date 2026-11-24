@@ -2997,6 +2997,15 @@ for a case ending. Each response gives the exact branch total and up to `limit` 
 default 50) in literal case-key order. Send the returned `next_after` as `after` in the next body.
 Each page reflects the current log.
 
+**Download JSON** and **Download CSV** save the branches at the current point. Each CSV row gives:
+
+- the path that leads there and whether it is anchored at the case start or anywhere;
+- the next activity, or `(case ends)`;
+- its cases and share;
+- the median hours from the previous step and to the case end.
+
+Going deeper or back replaces the download with the new point.
+
 ## Due dates
 
 Use **Inspect cases** next to a deadline group to view its case keys, due and completion times,
