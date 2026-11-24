@@ -775,6 +775,33 @@ async def _process_json(request: Request, *, maximum: int = 128 * 1024) -> dict[
     return value
 
 
+@app.get("/v1/workflow-evidence/event-log/source")
+def observed_execution_log_source(request: Request, log_id: str = Query(pattern=r"^log_[a-f0-9]{16}$")):
+    _require_process_log_dashboard(request)
+    from . import observed_execution_log as snapshots
+    from .event_log_workspace import EventLogWorkspaceError
+    try:
+        return JSONResponse(snapshots.source(log_id), headers={"Cache-Control": "no-store"})
+    except (snapshots.SnapshotError, EventLogWorkspaceError) as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
+@app.post("/v1/workflow-evidence/event-log/recheck")
+async def observed_execution_log_recheck(request: Request):
+    _require_process_log_dashboard(request)
+    from starlette.concurrency import run_in_threadpool
+    from . import observed_execution_log as snapshots
+    from .event_log_workspace import EventLogWorkspaceError
+    spec = await _process_json(request, maximum=1024)
+    if set(spec) != {"log_id"} or not isinstance(spec["log_id"], str) or not re.fullmatch(r"log_[a-f0-9]{16}", spec["log_id"]):
+        raise HTTPException(422, "Select the exact retained snapshot log")
+    try:
+        result = await run_in_threadpool(snapshots.recheck, spec["log_id"])
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+    except (snapshots.SnapshotError, EventLogWorkspaceError) as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
 @app.post("/v1/workflow-evidence/event-log/preview")
 async def preview_observed_execution_log(request: Request):
     """Preview an explicit local snapshot; no data is retained."""
