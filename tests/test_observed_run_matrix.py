@@ -15,7 +15,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const scope = {window:{},document:{readyState:'loading',addEventListener(){}}};
 vm.runInNewContext(fs.readFileSync('dashboard/workflow_explorer.js','utf8'),scope);
-const {observedRunMatrix,runDifference,projectedSurfaceRoutes,projectedProcessPaths,observedPathProposal,selectedRunTrace,automationReviewSignals}=scope.window.__owgWorkflowExplorerModel;
+const {observedRunMatrix,runDifference,projectedSurfaceRoutes,projectedProcessPaths,observedPathProposal,projectedPathAgentBrief,selectedRunTrace,automationReviewSignals}=scope.window.__owgWorkflowExplorerModel;
 const a='execution:aaaaaaaaaaaaaaaa',b='execution:bbbbbbbbbbbbbbbb';
 const ids=[a,b];
 const fixture=()=>({
@@ -146,6 +146,21 @@ model=observedRunMatrix(f,ids);
 assert.equal(model.projectionMayBeCapped,true);
 paths=projectedProcessPaths(model);
 assert.equal(observedPathProposal(paths.paths.find(p=>p.ids.includes(b)),model,f),null);
+f=fixture();
+f.executions[0].steps=['action:private-captured-label'];
+model=observedRunMatrix(f,ids);
+paths=projectedProcessPaths(model);
+const selected=paths.paths.find(p=>p.ids.includes(b));
+const criteria={goal:'Resolve the case',source:'Approved case API',rules:'Ask about exceptions',verification:'Independent readback'};
+const brief=projectedPathAgentBrief(selected,model,f,{since:'2026-10-01T00:00:00Z'},criteria);
+assert(brief.includes(b));
+assert(!brief.includes(a));
+assert(!brief.includes('private-captured-label'));
+assert(brief.includes('Independent readback'));
+assert(brief.includes('Do not run a workflow'));
+assert.equal(projectedPathAgentBrief(selected,model,f,{since:'invalid'},criteria),null);
+assert.equal(projectedPathAgentBrief(selected,model,f,{},{...criteria,goal:''}),null);
+assert.equal(projectedPathAgentBrief(selected,model,f,{},{...criteria,goal:'a'.repeat(321)}),null);
 console.log('Observed run matrix, surface routes, trace and opportunity checks passed');
 """
     result = subprocess.run(["node", "-e", script], cwd=ROOT, text=True,
