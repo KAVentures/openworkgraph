@@ -3362,3 +3362,10 @@ Dashboard owners can download a saved log as an Excel workbook (`GET /v1/event-l
 ### Rework and loop case evidence
 
 The local rework report offers explicit case-evidence links for repeated activities and exact closed activity loops. Selectors respect the active case cohort and retain literal event order; timestamp ties do not establish business order.
+
+### Exact completion labels in next-activity estimates
+
+Under **Next activity in open cases**, add each activity that marks a completed
+case separately. The labels are matched exactly, so commas and leading or
+trailing spaces are part of the activity name. Remove a label to revise the
+selection; predictions are cleared until rerun with the new selection.

@@ -10270,15 +10270,18 @@
   function nextActivitySection(activityNames,inspection){
     const box=section('Next activity in open cases');box.id='owgNextActivity';
     box.appendChild(el('div','Estimate what usually comes next in each open case, from completed cases that had the same recent activities. Check the backtest before relying on it.','muted'));
-    const ends=input('owgNextEnds','text','for example Pay, Close');ends.maxLength=2000;
+    const ends=input('owgNextEnds','text','Choose or enter one exact activity');ends.maxLength=200;
+    const endLabels=[];const endListView=el('ul');endListView.id='owgNextEndLabels';
+    const addEnd=button('Add end activity','secondary');addEnd.id='owgNextAddEnd';
+    const endStatus=el('div',null,'muted');endStatus.setAttribute('role','status');
     const listId='owgNextEndsList';const list=document.createElement('datalist');list.id=listId;activityNames.slice(0,500).forEach(a=>{const o=document.createElement('option');o.value=a;list.appendChild(o);});ends.setAttribute('list',listId);
     const history=select('owgNextHistory',[['1','1 activity'],['2','2 activities'],['3','3 activities'],['4','4 activities']]);history.value='2';
     const exact=input('owgNextCaseKey','text');exact.maxLength=200;
     const run=button('Predict next activities','secondary');run.id='owgNextRun';
     const out=el('div');out.id='owgNextResults';out.setAttribute('role','status');
     const evidence=el('div');evidence.id='owgNextTrainingEvidence';
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities that end a case (comma-separated)',ends),field('Recent history to match',history),field('Exact case key (optional)',exact),run);
-    box.append(row,list,out,evidence);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activity that ends a case',ends),addEnd,field('Recent history to match',history),field('Exact case key (optional)',exact),run);
+    box.append(row,list,endListView,endStatus,out,evidence);
     const generation=state.generation;
     const base='/v1/event-logs/'+encodeURIComponent(state.logId)+'/next-activity';
     const post=async(path,spec)=>(await api(base+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
@@ -10289,6 +10292,19 @@
     for(const control of [ends,history,exact])control.addEventListener('input',()=>{
       ++turn;run.disabled=false;out.replaceChildren();evidence.replaceChildren();
     });
+    const invalidate=()=>{++turn;run.disabled=false;out.replaceChildren();evidence.replaceChildren();};
+    const drawEnds=()=>endListView.replaceChildren(...endLabels.map((label,index)=>{
+      const item=el('li',JSON.stringify(label)+' '),remove=button('Remove','secondary');
+      remove.setAttribute('aria-label','Remove end activity '+label);
+      remove.onclick=()=>{endLabels.splice(index,1);drawEnds();invalidate();};item.appendChild(remove);return item;
+    }));
+    addEnd.onclick=()=>{
+      const value=ends.value;
+      if(!value.length){endStatus.textContent='Enter an activity label.';return;}
+      if(endLabels.includes(value)){endStatus.textContent='This activity is already selected.';return;}
+      if(endLabels.length>=20){endStatus.textContent='Select at most 20 end activities.';return;}
+      endLabels.push(value);ends.value='';endStatus.textContent='';drawEnds();invalidate();
+    };
     function inspect(t,settings,snapshot,prediction){
       const selected=++selection,active=()=>current(t)&&selected===selection;
       const title=el('h4','Training observations for '+prediction.case_id);title.tabIndex=-1;
@@ -10316,9 +10332,9 @@
       const t=++turn;
       run.disabled=true;out.replaceChildren(el('div','Estimating next activities…','muted'));evidence.replaceChildren();
       try{
-        const endList=ends.value.split(',').map(x=>x.trim()).filter(Boolean);
-        if(!endList.length)throw new Error('List the activities that end a case.');
-        const spec={end_activities:endList,history:Number(history.value),limit:50};
+        if(ends.value.length)throw new Error('Add the entered end activity before predicting.');
+        if(!endLabels.length)throw new Error('Add the activities that end a case.');
+        const spec={end_activities:[...endLabels],history:Number(history.value),limit:50};
         if(state.caseType)spec.case_type=state.caseType;
         if(filterOn())spec.cohort=globalCohort();
         const caseId=exact.value;
