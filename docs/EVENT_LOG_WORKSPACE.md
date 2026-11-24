@@ -2611,6 +2611,11 @@ applies follower rules, case-attribute values, numeric ranges, endpoints and cas
 when newer exports were appended after it was saved and names any activities it uses that the log
 does not contain. Saved filters are deleted with the log and never change events.
 
+Use **Preview** to check the current match count and see up to five case keys
+before applying a saved filter. The preview uses the saved case notion, or the
+current case notion for an older filter. Activity availability reflects hidden
+activities and the active mapping.
+
 Use **Export JSON** on a saved filter and **Import a filter from another log**
 on the destination. The JSON carries the filter name, rules and saved case
 notion. Import validates the rules and case notion against the destination log.

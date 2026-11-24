@@ -2743,9 +2743,10 @@ def event_log_delete_metric(request: Request, log_id: str, metric_id: str):
 
 
 @router.get("/v1/event-logs/{log_id}/filter-sets")
-def event_log_filter_sets(request: Request, log_id: str):
+def event_log_filter_sets(request: Request, log_id: str,
+                          case_type: str | None = Query(default=None, max_length=200)):
     _require_dashboard(request)
-    return _respond(filter_sets.list_sets, log_id)
+    return _respond(filter_sets.list_sets, log_id, case_type)
 
 
 @router.post("/v1/event-logs/{log_id}/filter-sets")

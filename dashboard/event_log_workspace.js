@@ -2158,6 +2158,7 @@
     const save=button('Save active filter','secondary');save.id='owgFilterSetSave';save.disabled=!filterOn();
     const message=el('div',filterOn()?'':'Apply a filter to save it.','muted');message.id='owgFilterSetStatus';message.setAttribute('role','status');
     const list=el('div');list.id='owgFilterSetList';
+    const preview=el('div');preview.id='owgFilterSetPreview';
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Name for the active filter',name),save);
     const transfer=document.createElement('details');
     const file=input('owgFilterSetFile','file');file.accept='.json,application/json';
@@ -2165,11 +2166,36 @@
     const importRow=el('div',null,'row');importRow.style.alignItems='end';
     importRow.append(field('OpenWorkGraph filter JSON',file),importButton);
     transfer.append(el('summary','Import a filter from another log'),importRow);
-    wrap.append(el('h4','Saved filters'),row,transfer,message,list);
+    wrap.append(el('h4','Saved filters'),row,transfer,message,list,preview);
     const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/filter-sets';
     const generation=state.generation;
+    async function previewFilter(set){
+      const heading=el('h5',set.name);heading.tabIndex=-1;
+      const progress=el('div','Counting matching cases…','muted');progress.setAttribute('role','status');
+      const page=el('div');page.append(heading,progress);
+      preview.replaceChildren(page);heading.focus();
+      const notion=set.case_type||state.caseType;
+      const params=new URLSearchParams();
+      if(notion)params.set('case_type',notion);
+      const url='/v1/event-logs/'+encodeURIComponent(state.logId)+'/cases/query?'+params;
+      const current=()=>generation===state.generation&&page.isConnected;
+      try{
+        const result=await (await api(url,{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({cohort:set.cohort,limit:5})})).json();
+        if(!current())return;
+        const count=result.selected_cases;
+        progress.textContent=Number(count).toLocaleString()+(count===1?' matching case in ':' matching cases in ')+result.case_notion+'.';
+        if(result.cases.length){
+          page.append(el('div','Showing the first '+result.cases.length+' case keys.','muted'),
+            table(['Case','Events'],result.cases.map(item=>[item.case_id,item.events])));
+        }
+      }catch(error){if(current())progress.textContent=error.message;}
+    }
     async function refresh(){
-      const r=await getJSON(base());if(generation!==state.generation)return;
+      const params=new URLSearchParams();
+      if(state.caseType)params.set('case_type',state.caseType);
+      const r=await getJSON(base()+'?'+params);if(generation!==state.generation)return;
+      preview.replaceChildren();
       list.replaceChildren(r.filter_sets.length?table(['Filter','Case notion','Rules','Notes',''],r.filter_sets.map(set=>{
         const follows=set.cohort.follows||[],activity=set.cohort.activity||'',other=Object.keys(set.cohort).filter(k=>!['follows','attribute','attribute_range','activity','starts_with','ends_with','duration',...MORE_FILTER_KEYS].includes(k));
         const attr={...(set.cohort.attribute?{attribute:set.cohort.attribute}:{}),...(set.cohort.attribute_range?{attribute_range:set.cohort.attribute_range}:{}),...(set.cohort.starts_with?{starts_with:set.cohort.starts_with}:{}),...(set.cohort.ends_with?{ends_with:set.cohort.ends_with}:{}),...(set.cohort.duration?{duration:set.cohort.duration}:{}),...Object.fromEntries(MORE_FILTER_KEYS.filter(k=>set.cohort[k]!==undefined).map(k=>[k,set.cohort[k]]))};
@@ -2188,7 +2214,7 @@
         const del=button('Delete','secondary');del.setAttribute('aria-label','Delete saved filter '+set.name);
         del.onclick=async()=>{try{await api(base()+'/'+encodeURIComponent(set.set_id)+'/delete',{method:'POST'});message.textContent='Saved filter deleted.';await refresh();}catch(error){message.textContent=error.message;}};
         const notes=[...(!available?['Saved case notion is unavailable']:[]),
-          ...(set.activities_not_in_log.length?['Not in this log: '+set.activities_not_in_log.join(', ')]:[]),
+          ...(set.activities_not_in_log.length?['Unavailable in this case view: '+set.activities_not_in_log.join(', ')]:[]),
           ...(set.log_appended_since_saved?['Newer exports were appended since it was saved']:[]),
           ...(other.length?['Also filters by '+other.join(', ')+', which this panel cannot apply']:[])];
         const exportButton=button('Export JSON','secondary');exportButton.setAttribute('aria-label','Export saved filter '+set.name);
@@ -2197,7 +2223,9 @@
           if(set.case_type)document.case_type=set.case_type;
           download('owg-case-filter.json',JSON.stringify(document,null,2),'application/json');
         };
-        const actions=el('span');actions.append(use,' ',exportButton,' ',del);
+        const showCases=button('Preview','secondary');showCases.setAttribute('aria-label','Preview saved filter '+set.name);
+        showCases.disabled=!available;showCases.onclick=()=>previewFilter(set);
+        const actions=el('span');actions.append(use,' ',showCases,' ',exportButton,' ',del);
         return [set.name,set.case_type||'Current selection',[...follows.map(followText),...(activity?['contains activity '+JSON.stringify(activity)]:[]),attr.attribute||'',attr.attribute_range?rangeText(attr.attribute_range):'',attr.starts_with?'starts with '+JSON.stringify(attr.starts_with):'',attr.ends_with?'ends with '+JSON.stringify(attr.ends_with):'',attr.duration?durationText(attr.duration):'',moreFilterText(attr)].filter(Boolean).join('; ')||'—',notes.join('. ')||'—',actions];
       })):el('div','No saved filters yet.','muted'));
     }
