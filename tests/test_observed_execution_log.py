@@ -207,3 +207,70 @@ print("ok")
     done = subprocess.run([sys.executable, "-c", code], cwd=root, env=env,
                           capture_output=True, text=True, timeout=180)
     assert done.returncode == 0 and done.stdout.strip().endswith("ok"), done.stdout + done.stderr
+
+
+def test_navigation_context_mode_is_explicit_and_pins_real_events(selection):
+    raw, spec = selection
+    raw.extend([
+        event("nav-1", "focus_change", "2026-10-01T10:00:00Z"),
+        event("nav-2", "browser_page_view", "2026-10-01T10:00:02Z"),
+        event("nav-3", "browser_tab_activated", "2026-10-01T10:00:03Z"),
+        event("nav-4", "browser_navigation", "2026-10-01T10:00:04Z", session="s2"),
+        event("nav-5", "focus_span", "2026-10-01T10:00:04Z", session="s2"),
+    ])
+    ordinary = snapshots.preview(spec)
+    assert ordinary == snapshots.preview({**spec, "projection": "actions"})
+    rows, contextual = snapshots.prepare({**spec, "projection": "actions_and_navigation"})
+    assert contextual["event_count"] == ordinary["event_count"] + 4
+    assert contextual["snapshot_sha256"] != ordinary["snapshot_sha256"]
+    assert contextual["scope"]["projection"] == "actions_and_navigation"
+    assert any(row[1].endswith("Foreground changed") for row in rows)
+    assert any(row[1].endswith("Navigation observed") for row in rows)
+    assert contextual == snapshots.preview(contextual["scope"])
+    with pytest.raises(snapshots.SnapshotError, match="Choose actions"):
+        snapshots.preview({**spec, "projection": "raw text"})
+
+
+def test_corrupt_snapshot_manifest_does_not_break_ordinary_event_log_queries(tmp_path, monkeypatch, selection):
+    _, spec = selection
+    monkeypatch.setattr(workspace, "DATA_DIR", tmp_path)
+    preview = snapshots.preview(spec)
+    log = snapshots.create(spec, expected_sha256=preview["snapshot_sha256"], name="corrupt")["log_id"]
+    conn = workspace._connect()
+    try:
+        conn.execute("UPDATE observed_execution_log_sources SET source_report=? WHERE log_id=?", ["{broken", log])
+    finally:
+        conn.close()
+    metadata = workspace.summary(log)["log"]["observed_execution_snapshot"]
+    assert metadata["manifest_available"] is False
+    assert workspace.summary(log)["events"] == 4
+    with pytest.raises(snapshots.SnapshotError, match="manifest is unavailable"):
+        snapshots.source(log)
+    from io import BytesIO
+    with pytest.raises(workspace.EventLogWorkspaceError, match="preserve their original rows"):
+        workspace.append_log(log, BytesIO(b"not needed"), source_format="csv")
+    workspace.delete_log(log)
+
+
+def test_observed_snapshot_lineage_reaches_existing_model_discovery(tmp_path, monkeypatch, selection):
+    from server import event_log_model_discovery as discovery
+    from server import process_discovery_provenance as provenance
+    _, spec = selection
+    monkeypatch.setattr(workspace, "DATA_DIR", tmp_path)
+    preview = snapshots.preview(spec)
+    log = snapshots.create(spec, expected_sha256=preview["snapshot_sha256"], name="lineage")["log_id"]
+    model = discovery.discover(log)
+    recorded = provenance.record_draft(log, {"expected_model_sha256": model["process_model_sha256"]})
+    record = {"process_model": recorded["process_model"],
+              "evidence_refs": [recorded["source_snapshot"]["reference"]]}
+    origins = provenance.origins(record)
+    origin = origins[0]["observed_execution_origin"]
+    assert origins[0]["status"] == "current"
+    assert origin["snapshot_sha256"] == preview["snapshot_sha256"]
+    assert origin["original_case_count"] == 2
+    assert origin["retained_manifest_status"] == "matches"
+    assert origin["original_history_rechecked"] is False
+    assert origin["business_outcomes_verified"] is False
+    assert A not in json.dumps(origins) and B not in json.dumps(origins)
+    workspace.delete_log(log)
+    assert provenance.origins(record)[0]["status"] == "unavailable"
