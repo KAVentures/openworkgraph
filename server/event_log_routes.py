@@ -450,6 +450,37 @@ async def refresh_agent_runs(request: Request, log_id: str):
     return await run_in_threadpool(_respond, agent_mining.refresh, log_id)
 
 
+@router.post("/v1/event-logs/import/preview")
+async def preview_event_log_import(
+    request: Request,
+    partial: bool = Query(default=False),
+    case_column: str = Query(default="", max_length=200),
+    activity_column: str = Query(default="", max_length=200),
+    timestamp_column: str = Query(default="", max_length=200),
+    resource_column: str = Query(default="", max_length=200),
+    attribute_column: list[str] = Query(default=[], max_length=200),
+    delimiter: str = Query(default=",", max_length=1),
+    keep_rejected: bool = Query(default=False),
+    naive_timestamp_offset: str = Query(default="", max_length=6),
+    timestamp_format: str = Query(default="", max_length=64),
+    identity: dict = Depends(_source_identity_mapping),
+):
+    _require_dashboard(request)
+    from . import event_log_import_preview as preview
+
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > preview.MAX_BYTES:
+            raise HTTPException(413, "CSV preview exceeds its supported size")
+        body.extend(chunk)
+    mapping = {"case_column": case_column, "activity_column": activity_column,
+               "timestamp_column": timestamp_column, "resource_column": resource_column,
+               "attribute_columns": attribute_column[:64], "delimiter": "\t" if delimiter == "t" else delimiter,
+               "keep_rejected": keep_rejected, "naive_timestamp_offset": naive_timestamp_offset,
+               "timestamp_format": timestamp_format, **identity}
+    return await run_in_threadpool(_respond, preview.preview_csv, bytes(body), mapping, partial=partial)
+
+
 @router.post("/v1/event-logs/import")
 async def import_event_log(
     request: Request,
