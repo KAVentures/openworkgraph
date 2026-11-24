@@ -65,6 +65,60 @@ const path=require('node:path');
   const result=await page.evaluate(async id=>{const r=await fetch('/v1/process-catalog/agent-project?'+new URLSearchParams({workflow_id:id,revision:2}));return {status:r.status,type:r.headers.get('content-type'),bytes:(await r.arrayBuffer()).byteLength};},saved.workflow_id);assert.equal(result.status,200);assert.match(result.type,/zip/);assert.ok(result.bytes>10000);
   const axe=await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8');await page.addScriptTag({content:axe});assert.deepEqual(await page.evaluate(async()=>{const r=await axe.run(document.querySelector('#owgCatalogEditor'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}});return r.violations.map(v=>v.id);}),[]);
   await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2));
+  const multi={...model,
+    baseline_path:['Review','Accept','Audit','Close'],
+    activities:[...model.activities,{id:'audit',label:'Audit',kind:'decision'},{id:'close',label:'Close'},{id:'hold',label:'Hold'}],
+    transitions:[...model.transitions,{source:'accept',target:'audit'},{source:'audit',target:'close'},{source:'audit',target:'hold'}],
+    terminal_activity_ids:['escalate','close','hold']
+  };
+  const designed=await page.evaluate(async process_model=>{
+    const response=await fetch('/v1/process-catalog',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({title:'Two purchase decisions',process_model,user_confirmed:true})});
+    if(!response.ok)throw new Error(await response.text());
+    return response.json();
+  },multi);
+  page.once('dialog',dialog=>dialog.accept());
+  await page.getByRole('button',{name:'Load saved designs',exact:true}).click();
+  page.once('dialog',dialog=>dialog.accept());
+  await page.getByRole('button',{name:'Two purchase decisions · r1',exact:true}).click();
+  const table=(name,path,rows)=>`<decision id="${name}" name="${name}"><decisionTable>
+    <input><inputExpression><text>${path}</text></inputExpression></input><output/>
+    ${rows.map(([test,next])=>`<rule><inputEntry><text>${test}</text></inputEntry>
+      <outputEntry><text>"${next}"</text></outputEntry></rule>`).join('')}
+    </decisionTable></decision>`;
+  const xml=`<definitions xmlns="https://www.omg.org/spec/DMN/20191111/MODEL/">
+    ${table('Review','amount',[['&lt; 100','Accept'],['&gt;= 100','Escalate']])}
+    ${table('Audit','reviewed',[['true','Close'],['false','Hold']])}
+    </definitions>`;
+  const dmn=page.locator('#owgCatalogDMN');
+  await dmn.getByLabel('Choose DMN file',{exact:true}).setInputFiles({
+    name:'two-tables.dmn',mimeType:'application/xml',buffer:Buffer.from(xml)
+  });
+  await dmn.getByRole('button',{name:'Inspect DMN file',exact:true}).click();
+  await dmn.getByText('2 tables found.',{exact:true}).waitFor();
+  await dmn.getByLabel('Design decision for Table 1 · Review',{exact:true}).selectOption('choose');
+  await dmn.getByLabel('Design decision for Table 2 · Audit',{exact:true}).selectOption('audit');
+  await dmn.getByLabel('DMN effective from',{exact:true}).fill('2026-01-01');
+  await dmn.getByLabel('DMN effective until (optional)',{exact:true}).fill('2027-01-01');
+  const preview=dmn.getByRole('button',{name:'Preview selected DMN tables',exact:true});
+  await preview.click();
+  await dmn.getByText('2 tables ready for review.',{exact:true}).waitFor();
+  await dmn.getByText('Audit · UNIQUE · 2 unconfirmed rules',{exact:true}).waitFor();
+  const open=dmn.getByRole('button',{name:'Open proposal in editor',exact:true});
+  await dmn.getByLabel('DMN effective until (optional)',{exact:true}).fill('2028-01-01');
+  assert.equal(await open.count(),0);
+  await preview.click();
+  await open.waitFor();
+  page.once('dialog',dialog=>dialog.accept());
+  await open.click();
+  await page.locator('#owgCatalogStatus').filter({hasText:'Opened the DMN tables as unsaved edits of revision 1.'}).waitFor();
+  assert.deepEqual(await page.locator('input[data-table-confirmation]').evaluateAll(nodes=>nodes.map(node=>node.checked)),[false,false]);
+  const stored=await page.evaluate(async workflow_id=>{
+    const response=await fetch('/v1/process-catalog/revision?'+new URLSearchParams({workflow_id,revision:'1'}));
+    return response.ok?response.json():null;
+  },designed.workflow_id);
+  assert.ok(stored);
+  assert.deepEqual(stored.process_model.decision_tables||[],[]);
   assert.deepEqual(errors,[]);console.log('Local decision-table browser passed: shared editor, confirmation invalidation, exact save, numeric boundary/unknown checks, minimized export, disabled implementation-project export, WCAG/mobile.');
  }finally{if(browser)await browser.close();server.kill('SIGTERM');await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);if(server.exitCode===null)server.kill('SIGKILL');await fs.rm(scratch,{recursive:true,force:true});}
 })().catch(error=>{console.error(error);process.exit(1);});
