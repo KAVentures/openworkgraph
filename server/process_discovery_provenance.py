@@ -57,6 +57,18 @@ def retain(conn, log_id, notion, result, expected_model_sha256):
                'source_content_sha256': source_digest(conn, log_id), 'selection': selection,
                'selection_sha256': digest(selection), 'discovered_model_sha256': result['process_model_sha256'],
                'quality': result['quality'], 'discovery_method': result['discovery_method'], 'source_rows': rows}
+    # Preserve the original task-mining snapshot identity, where present.
+    # This pins the connection to recorded execution evidence without
+    # copying source cases or permitting a new history read.
+    observed = workspace._check_log(conn, log_id).get("observed_execution_snapshot")
+    if observed:
+        payload["observed_execution_origin"] = {
+            "snapshot_sha256": observed["snapshot_sha256"],
+            "original_case_count": observed["original_case_count"],
+            "original_event_count": observed["original_event_count"],
+            "business_case_identity_verified": False,
+            "capture_complete": False,
+        }
     reference = PREFIX + digest(payload)
     old = conn.execute('SELECT created_at FROM discovery_snapshots WHERE reference=?', [reference]).fetchone()
     if old:
@@ -113,7 +125,7 @@ def origins(record, *, include_selection=False):
                     if saved.get('log_id') != log or PREFIX + digest(saved) != ref:
                         results.append({'reference': ref, 'status': 'reference_mismatch'}); continue
                     try:
-                        workspace._check_log(conn, log)
+                        log_info = workspace._check_log(conn, log)
                     except workspace.EventLogWorkspaceError:
                         results.append({'reference': ref, 'status': 'unavailable'}); continue
                     if log not in current:
@@ -133,6 +145,20 @@ def origins(record, *, include_selection=False):
                                   reviewed_graph_matches_discovery=model_digest(record['process_model']) == saved['discovered_model_sha256'],
                                   association_basis='user_selected_snapshot_reference', derivation_independently_verified=False,
                                   business_rules_verified=False, execution_authorized=False)
+                    if "observed_execution_origin" in saved:
+                        pinned = saved["observed_execution_origin"]
+                        retained = log_info.get("observed_execution_snapshot")
+                        matching = bool(retained and all(
+                            retained.get(key) == pinned.get(key)
+                            for key in ("snapshot_sha256", "original_case_count", "original_event_count",
+                                        "business_case_identity_verified", "capture_complete")
+                        ))
+                        result["observed_execution_origin"] = {
+                            **pinned,
+                            "retained_manifest_status": "matches" if matching else "unavailable_or_changed",
+                            "original_history_rechecked": False,
+                            "business_outcomes_verified": False,
+                        }
                     if include_selection:
                         result['selection'] = saved['selection']
                     results.append(result)
