@@ -63,14 +63,19 @@
     const channelHost=el('div');channelHost.id='owgMonitorChannelPanel';const incidentHost=el('div');incidentHost.id='owgMonitorIncidentPanel';
     const releaseHost=el('div');releaseHost.id='owgMonitorReleasePanel';
     manage.append(mrow,arow,channelHost,incidentHost,releaseHost);show(manage,false);
+    const portfolio=el('div');portfolio.id='owgMonitorPortfolio';
+    const portfolioDays=input('owgMonitorPortfolioDays','number');portfolioDays.min='1';portfolioDays.max='365';portfolioDays.value='30';
+    const portfolioButton=button('Review all deployment evidence','secondary');portfolioButton.id='owgMonitorPortfolioShow';
+    const portfolioControls=el('div',null,'row');portfolioControls.style.alignItems='end';
+    portfolioControls.append(field('Portfolio recent days',portfolioDays),portfolioButton);
     const results=el('div');results.id='owgMonitorResults';
-    card.append(row,consentLabel,importButton,status,manage,results);
+    card.append(row,consentLabel,importButton,status,portfolioControls,portfolio,manage,results);
     const anchor=document.getElementById('owgPddCard')||document.getElementById('owgCommsCard')||document.getElementById('owgEventLogCard');
     if(anchor)anchor.insertAdjacentElement('afterend',card);else panel.appendChild(card);
 
-    let deployments=[],renderVersion=0,loadVersion=0,incidentVersion=0,releaseVersion=0;
+    let deployments=[],renderVersion=0,loadVersion=0,incidentVersion=0,releaseVersion=0,portfolioVersion=0;
     let incidentScope='selected',incidentStatus='',incidentSearch='';
-    const clearResults=()=>{renderVersion++;incidentVersion++;incidentScope='selected';incidentStatus='';incidentSearch='';results.replaceChildren();channelHost.replaceChildren();incidentHost.replaceChildren();releaseVersion++;releaseHost.replaceChildren();};
+    const clearResults=()=>{portfolioVersion++;portfolio.replaceChildren();renderVersion++;incidentVersion++;incidentScope='selected';incidentStatus='';incidentSearch='';results.replaceChildren();channelHost.replaceChildren();incidentHost.replaceChildren();releaseVersion++;releaseHost.replaceChildren();};
     const refresh=()=>{importButton.disabled=!(file.files&&file.files[0]&&consent.checked);};
     file.onchange=refresh;consent.onchange=refresh;
     async function load(select){
@@ -228,7 +233,7 @@
             })
           });
           if(version===releaseVersion&&pick.value===selected){
-            status.textContent='Release review saved locally.';await renderRelease();
+            status.textContent='Release review saved locally.';portfolioVersion++;portfolio.replaceChildren();await renderRelease();
           }
         }catch(error){
           if(version===releaseVersion&&pick.value===selected){feedback.textContent=error.message;save.disabled=!confirmation.checked;}
@@ -242,6 +247,52 @@
       parts.push(el('p','An attached design or matching hash does not establish what executed or what a provider returned. Deleting the deployment also removes this inventory.','muted'));
       releaseHost.replaceChildren(...parts);
     }
+    const flagText={
+      no_release_declaration:'No release declaration',release_pins_missing_or_changed:'Release pins missing or changed',
+      reported_spec_missing:'Reported specification missing',reviewed_design_missing:'Reviewed design missing',
+      reported_spec_design_mismatch:'Reported specification and design differ',artifact_digest_missing:'Artifact digest missing',
+      no_runs_claiming_current_spec:'No retained runs claim current specification',runs_claiming_other_spec:'Retained runs claim another specification',
+      runs_without_comparable_spec:'Retained runs lack comparable specification',no_recent_retained_runs:'No recent retained runs',
+      no_recent_runs_claiming_current_spec:'No recent runs claim current specification',recent_runs_claiming_other_spec:'Recent runs claim another specification',
+      recent_runs_without_comparable_spec:'Recent runs lack comparable specification'
+    };
+    portfolioDays.oninput=()=>{portfolioVersion++;portfolio.replaceChildren();};
+    async function renderPortfolio(){
+      const version=++portfolioVersion;
+      const days=Number(portfolioDays.value);
+      if(!Number.isInteger(days)||days<1||days>365){portfolio.replaceChildren(el('p','Choose 1–365 recent days.','note'));return;}
+      portfolio.replaceChildren(el('p','Loading retained deployment evidence…','muted'));
+      let data;
+      try{data=await api('/v1/automation-monitoring/portfolio?recent_days='+encodeURIComponent(days));}
+      catch(error){if(version===portfolioVersion)portfolio.replaceChildren(el('p',error.message,'note'));return;}
+      if(version!==portfolioVersion)return;
+      const parts=[el('h3','Deployment portfolio evidence'),
+        el('p',data.deployment_count+' retained deployments; '+data.deployments_with_review_flags+
+          ' with listed evidence gaps. Snapshot '+data.as_of+'. Recent window: '+data.recent_window.days+' days.','muted'),
+        el('p',data.interpretation,'note')];
+      if(data.deployments.length){
+        parts.push(table(['Deployment','Runtime','Declared stage','Current spec claims / all','Other / unknown','Recent claims / all','Most recent retained run start','Review flags'],
+          data.deployments.map(d=>[d.name,d.runtime,d.current_declaration?d.current_declaration.stage:'Undeclared',
+            d.runs.claiming_current_spec+' / '+d.runs.retained,d.runs.claiming_other_spec+' / '+d.runs.without_comparable_spec,
+            d.recent_runs.claiming_current_spec+' / '+d.recent_runs.retained,d.latest_retained_run_start||'None',
+            d.review_flags.map(f=>flagText[f]||f).join('; ')||'No listed evidence gaps'])));
+        const selected=document.createElement('select');selected.id='owgMonitorPortfolioPick';
+        setOptions(selected,data.deployments.map(d=>[d.deployment_id,d.name+' · '+d.runtime]));
+        const open=button('Open selected release inventory','secondary');
+        open.onclick=async()=>{
+          const ident=selected.value;
+          try{
+            await load(ident);
+            if(pick.value!==ident)throw new Error('Deployment no longer retained; refresh portfolio.');
+            await renderRelease();
+          }catch(error){status.textContent=error.message;}
+        };
+        const controls=el('div',null,'row');controls.append(field('Inspect deployment',selected),open);
+        parts.push(controls);
+      }else parts.push(el('p','No deployments retained.','muted'));
+      portfolio.replaceChildren(...parts);
+    }
+    portfolioButton.onclick=renderPortfolio;
     releaseButton.onclick=()=>renderRelease().catch(error=>{status.textContent=error.message;});
     channelButton.onclick=()=>renderChannel().catch(error=>{status.textContent=error.message;});
     incidentButton.onclick=()=>{incidentScope='selected';incidentStatus='';incidentSearch='';renderIncidents();};
