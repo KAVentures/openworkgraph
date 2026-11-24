@@ -4460,10 +4460,10 @@
           const remove=button('Uninstall','secondary');remove.id='owgDomainPackUninstall';remove.disabled=!installed;
           const paramRow=el('div',null,'row');paramRow.style.alignItems='end';paramRow.append(...params);
           let reportSnapshot=null,reportTurn=null;
-          let previewSnapshot=null;const previewButton=button('Preview and test mapping','secondary');previewButton.id='owgDomainPackPreflight';
+          let previewSnapshot=null,previewRequired=false,installing=false,previewing=false;const previewButton=button('Preview and test mapping','secondary');previewButton.id='owgDomainPackPreflight';
           const exportReport=button('Download report JSON','secondary');exportReport.id='owgDomainPackDownload';exportReport.disabled=true;
           const invalidate=()=>{turn++;reportSnapshot=null;reportTurn=null;previewSnapshot=null;exportReport.disabled=true;out.replaceChildren();};
-          const edited=()=>{invalidate();install.disabled=false;run.disabled=true;status.textContent='Inputs changed. Preview or install the new mapping.';};
+          const edited=()=>{invalidate();install.disabled=installing||previewing||previewRequired;run.disabled=true;status.textContent='Inputs changed. Preview or install the new mapping.';};
           exportReport.onclick=()=>{
             if(!reportSnapshot||!current(reportTurn))return;
             download('owg-domain-pack-'+pack.pack_id+'-'+reportSnapshot.report.pack.version+'.json',
@@ -4506,7 +4506,7 @@
             return {version:pack.latest_version,mapping:packMapping(pack,choices),parameters,expected_installation:basis?basis.installation_token:null};
           };
           previewButton.onclick=async()=>{
-            invalidate();const t2=++turn;previewButton.disabled=true;install.disabled=true;run.disabled=true;
+            if(installing||previewing)return;previewRequired=true;previewing=true;invalidate();const t2=++turn;previewButton.disabled=true;install.disabled=true;run.disabled=true;
             out.replaceChildren(el('p','Testing unsaved mapping on the retained log…','muted'));
             try{
               const proposed=proposedSetup();
@@ -4533,16 +4533,18 @@
                   ...(v.objectRules.length?[el('h4','Trial object rules'),table(['Rule','Applies to','Violating'],v.objectRules)]:[]),
                   el('h4','Trial reference model'),el('div',v.model,'note'));
               }else parts.push(el('p','Trial analytics unavailable within the population bound. Setup checks only.','note'));
+              if(response.trial?.not_applicable?.length)parts.push(el('p','Not applicable: '+response.trial.not_applicable.map(x=>x.section+' '+(x.index+1)+' (needs '+x.unmapped_role+')').join(', '),'muted'));
               parts.push(el('p',response.interpretation,'muted'));
               const savePreview=button('Download preview JSON','secondary');
               savePreview.onclick=()=>{if(current(t2)&&previewSnapshot)download('owg-domain-pack-preflight-'+pack.pack_id+'.json',JSON.stringify(response,null,2),'application/json');};
               parts.push(savePreview);out.replaceChildren(...parts);
               status.textContent=response.installable?'Preview ready. Install will recheck this exact setup and retained revision.':'Preview found installation blockers; correct the setup.';
             }catch(error){if(current(t2)){out.replaceChildren(el('p',error.message,'note'));status.textContent='Preview unavailable.';}}
-            finally{if(previewButton.isConnected){previewButton.disabled=false;install.disabled=!!previewSnapshot&&!previewSnapshot.response.installable;}}
+            finally{previewing=false;if(previewButton.isConnected){previewButton.disabled=false;install.disabled=previewRequired&&(!previewSnapshot||!previewSnapshot.response.installable);}}
           };
           install.onclick=async()=>{
-            const preview=previewSnapshot;invalidate();const t2=++turn;install.disabled=true;run.disabled=true;historyTurn++;historyOut.replaceChildren();
+            if(installing||previewing||(previewRequired&&!previewSnapshot))return;
+            const preview=previewSnapshot;installing=true;previewButton.disabled=true;invalidate();const t2=++turn;install.disabled=true;run.disabled=true;historyTurn++;historyOut.replaceChildren();
             try{
               const proposed=proposedSetup();
               if(preview){
@@ -4552,11 +4554,12 @@
               const r=await (await post(base+'/'+pack.pack_id,proposed)).json();
               // Keep the completed save's basis even if later inputs invalidated its display.
               installs.installs=[...installs.installs.filter(i=>i.pack_id!==pack.pack_id),r];
+              previewRequired=false;
               if(!current(t2))return;
               run.disabled=remove.disabled=reviewHistory.disabled=false;
               status.textContent=({installed:'Installed',upgraded:'Upgraded from '+r.previous_version+' to',reconfigured:'Reinstalled'}[r.change])+' '+r.version+'. '+r.metric_ids.length+' case metrics were added to this log’s metric library.'+(r.not_applicable.length?' '+r.not_applicable.length+' definitions do not apply without their optional roles.':'');
             }catch(error){if(current(t2))status.textContent=error.message;}
-            finally{if(install.isConnected)install.disabled=false;}
+            finally{installing=false;if(install.isConnected){previewButton.disabled=false;install.disabled=previewRequired;}}
           };
           run.onclick=async()=>{
             invalidate();const t2=++turn;run.disabled=true;out.replaceChildren(el('div','Running…','muted'));
