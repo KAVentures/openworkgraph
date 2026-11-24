@@ -314,3 +314,5 @@ accepts the original JSON bytes. It returns minimized historical status and
 local association checks, without returning the receipt or record identifier.
 No provider read, execution, persistence of the supplied document, or durable
 review occurs. Use a separately consented fresh check for current source state.
+
+The source-check review also distinguishes a matching historical expectation from the latest saved process status. An old pinned expectation may still exist even after a newer revision removes it; that does not make the old design current. Current design and run status are local snapshots, not a cross-store transaction.
