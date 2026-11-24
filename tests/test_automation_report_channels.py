@@ -59,6 +59,29 @@ def test_revision_refusal_remains_durable_when_incident_store_is_unavailable(set
     replay = send(cid, secret, 2, stale)
     assert replay["duplicate"] and replay["outcome"] == "refused_run_revision_conflict"
     assert am.attributed_run(dep, "durable", SPEC)["run_status"] == "succeeded"
+    public = channels.listing()["channels"][0]
+    assert public["recent_sequence_receipts"][0]["sequence"] == "2"
+    assert public["recent_sequence_receipts"][0]["outcome"] == "refused_run_revision_conflict"
+    assert public["recent_sequence_receipts"][0]["original_status"] == 409
+    assert public["retained_receipt_count"] == 2
+    assert set(public["recent_sequence_receipts"][0]) == {
+        "sequence", "received_at", "outcome", "original_status"}
+
+
+def test_public_receipt_window_preserves_large_sequence_strings_and_minimizes_metadata(setup, monkeypatch):
+    dep, cid, secret = setup
+    monkeypatch.setattr(channels, "MAX_VISIBLE_RECEIPTS", 2)
+    with channels._LOCK:
+        data = channels._load()
+        channel = data["channels"][cid]
+        for number in (1, 2, signing.MAX_SEQUENCE):
+            channels._outcome(channel, number, "PRIVATE_HASH", "refused_invalid", 422, "PRIVATE_DETAIL")
+        channels._write(data)
+    public = channels.listing()["channels"][0]
+    assert [r["sequence"] for r in public["recent_sequence_receipts"]] == [str(signing.MAX_SEQUENCE), "2"]
+    assert public["retained_receipt_count"] == 3
+    assert public["receipt_list_truncated"]
+    assert "PRIVATE_" not in json.dumps(public)
 
 
 def test_signature_is_standard_hmac_and_verification_codes():
