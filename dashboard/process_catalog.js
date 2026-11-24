@@ -445,6 +445,109 @@
     }));
     host.appendChild(section);
   }
+  function matchingRediscovery(result,basis,retained,preview){
+    const sha=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
+    const pin=value=>value?.format==='openworkgraph.discovery-projection.v1'&&sha(value.sha256)&&
+      Number.isSafeInteger(value.cases)&&value.cases>0&&Number.isSafeInteger(value.events)&&value.events>=value.cases;
+    const model=result?.process_model;
+    if(!result||result.format!=='openworkgraph.discovery-rediscovery.v1'||
+      result.workflow_id!==basis.workflow_id||result.revision!==basis.revision||result.process_sha256!==basis.content_sha256||
+      result.reference!==basis.reference||result.log_id!==basis.log_id||result.selection_sha256!==basis.selection_sha256||
+      !sha(result.original_model_sha256)||!sha(result.current_model_sha256)||!pin(result.current_effective_input)||
+      !(result.original_effective_input===null||pin(result.original_effective_input))||
+      result.saved_process_changed!==false||result.previous_approvals_carried!==false||
+      result.execution_authorized!==false||result.business_outcomes_verified!==false||
+      result.source_snapshot_recorded!==retained||model?.format!=='openworkgraph.process-model.v1'||
+      model.execution_authorized!==false||model.goal!==''||model.outcomes_verified!==false||
+      !Array.isArray(model.activities)||!model.activities.length||model.activities.length>40||
+      model.activities.some(node=>node.implementation!=='unmapped')||
+      !Array.isArray(model.transitions)||!Array.isArray(model.business_rules)||
+      model.business_rules.some(rule=>rule.user_confirmed!==false)||
+      (model.decision_tables||[]).length||(model.manual_review_conditions||[]).length||(model.outcome_expectations||[]).length||
+      model.opportunity_scenario!=null||!result.current_quality||!result.original_quality)return false;
+    if(!retained)return result.source_snapshot===null;
+    return !!preview&&result.current_model_sha256===preview.current_model_sha256&&
+      result.current_effective_input.sha256===preview.current_effective_input.sha256&&
+      /^urn:openworkgraph:local-log-discovery:[a-f0-9]{64}$/.test(result.source_snapshot?.reference||'')&&
+      result.source_snapshot.selection_sha256===basis.selection_sha256&&
+      result.source_snapshot.effective_input?.sha256===preview.current_effective_input.sha256;
+  }
+
+  function renderRediscovery(parent,item,attempt){
+    const basis={workflow_id:record.workflow_id,revision:record.revision,content_sha256:record.content_sha256,
+      reference:item.reference,log_id:item.log_id,selection_sha256:item.selection_sha256};
+    const original=record;
+    const section=el('section');section.setAttribute('aria-label','Rediscover original process selection');
+    const previewButton=button('Rediscover current data for this selection',async()=>{await preview();});
+    const out=el('div'),message=el('p');message.setAttribute('role','status');
+    const current=()=>attempt===originGeneration&&record===original&&section.isConnected;
+    let turn=0;
+    async function call(retain,review){
+      await window.__owgAuthReady;
+      const response=await fetch('/v1/event-log-discovery/rediscover?'+new URLSearchParams({
+        workflow_id:basis.workflow_id,revision:String(basis.revision),retain:String(retain)}),
+        {method:'POST',headers:{'Content-Type':'application/json',...(retain?{'X-OWG-Local-Storage-Confirmed':'true'}:{})},
+          body:JSON.stringify({reference:basis.reference,expected_process_sha256:basis.content_sha256,
+            ...(retain?{expected_model_sha256:review.current_model_sha256,expected_projection_sha256:review.current_effective_input.sha256}:{})}),cache:'no-store'});
+      const result=await response.json().catch(()=>({}));
+      if(!response.ok)throw Error(String(result.detail||'Rediscovery unavailable'));
+      if(!matchingRediscovery(result,basis,retain,review))throw Error('Rediscovery response does not match the saved source and reviewed pins.');
+      return result;
+    }
+    async function preview(){
+      if(!current())return;
+      const serial=++turn;previewButton.disabled=true;out.replaceChildren();message.textContent='Rediscovering current data using the original case notion, filters and settings…';
+      try{
+        const review=await call(false);
+        if(!current()||serial!==turn)return;
+        message.textContent='Fresh proposal ready. No source metadata or process revisions have been saved.';
+        const changed=review.original_model_sha256!==review.current_model_sha256;
+        const pin=review.original_effective_input;
+        out.append(el('p',changed?'Generated model differs from the original generated model.':'Generated model digest matches the original generated model.'),
+          el('p',pin?(pin.sha256===review.current_effective_input.sha256?'Effective input matches the original.':'Effective input has changed.'):'Original effective input was not fingerprinted.'),
+          el('p','Original selected cases: '+review.original_quality.cases_total+' · current: '+review.current_quality.cases_total+
+            '. Current draft replay: '+review.current_quality.fitting_cases+' of '+review.current_quality.checked_cases+' checked cases.'),
+          el('p','Fresh model SHA-256 '+review.current_model_sha256),
+          el('p','Fresh effective input SHA-256 '+review.current_effective_input.sha256),
+          el('p','The fresh draft has no inherited business goal, confirmed rules, mappings, outcome expectations or approvals. Review the differences against the saved design before replacing the editor.'));
+        const diffs=revisionDifferences(original,{title:original.title,process_model:review.process_model});
+        const list=el('ul');
+        diffs.slice(0,120).forEach(change=>list.appendChild(el('li',change.area+' · '+change.key+' · '+change.kind+' · '+change.before+' → '+change.after)));
+        out.append(el('p',diffs.length+' detected saved-design differences'+(diffs.length>120?' (first 120 shown)':'')+'.'),list);
+        const label=el('label',' I reviewed the fresh model and accept retention of its independent local source snapshot. I will re-review all business rules and outcomes before saving a new revision. ');
+        const consent=el('input');consent.type='checkbox';label.appendChild(consent);
+        const prepare=button('Record refreshed source and prepare successor draft',async()=>{
+          if(!current()||serial!==turn||!consent.checked||prepare.disabled)return;
+          prepare.disabled=true;previewButton.disabled=true;
+          try{
+            // Never retarget an old source review onto a newer process revision.
+            const latest=await request('/v1/process-catalog/revision?'+new URLSearchParams({workflow_id:basis.workflow_id}));
+            if(!current()||serial!==turn)return;
+            if(latest.revision!==basis.revision||latest.content_sha256!==basis.content_sha256)
+              throw Error('A newer process revision exists. Open the latest saved revision and review its source first.');
+            if(!replaceDraft())return;
+            const made=await call(true,review);
+            if(!current()||serial!==turn)return;
+            const latestAfter=await request('/v1/process-catalog/revision?'+new URLSearchParams({workflow_id:basis.workflow_id}));
+            if(!current()||serial!==turn)return;
+            if(latestAfter.revision!==basis.revision||latestAfter.content_sha256!==basis.content_sha256)
+              throw Error('Refreshed source retained, but a newer process revision exists. No successor draft was opened.');
+            record={...latestAfter,evidence_refs:[made.source_snapshot.reference]};
+            model=clearHistoricalConfirmations(copy(made.process_model));
+            restorationDraft={kind:'rediscovery',base:basis.revision,reference:made.source_snapshot.reference};
+            changed();renderEditor();
+            status('UNSAVED rediscovery successor against r'+basis.revision+'. Earlier rules and approvals were not carried. Review and explicitly save the next revision.');
+          }catch(error){if(current())message.textContent=String(error.message||error);}
+          finally{if(current()){previewButton.disabled=false;prepare.disabled=!consent.checked;}}
+        });
+        prepare.disabled=true;consent.addEventListener('change',()=>{prepare.disabled=!consent.checked;});
+        out.append(label,prepare);
+      }catch(error){if(current()&&serial===turn)message.textContent=String(error.message||error);}
+      finally{if(current())previewButton.disabled=false;}
+    }
+    section.append(previewButton,message,out);parent.appendChild(section);
+  }
+
   function renderEditor(){
     clearRevisionComparison();
     clearOrigins();
@@ -454,7 +557,9 @@
     const host=document.getElementById('owgCatalogEditor');if(!host||!model)return;
     host.replaceChildren(el('h3',record.revision?'Review process · revision '+record.revision:'Review process · unsaved observed proposal'));
     if(restorationDraft){
-      const warning=el('p','UNSAVED restoration draft from historical r'+restorationDraft.from+
+      const warning=restorationDraft.kind==='rediscovery'?
+        el('p','UNSAVED rediscovery successor against latest r'+restorationDraft.base+'. Fresh source snapshot recorded; earlier business goals, rules, mappings and approvals were not carried. Review and explicitly save a new revision.'):
+        el('p','UNSAVED restoration draft from historical r'+restorationDraft.from+
         ' against latest r'+restorationDraft.base+'. Earlier approvals and evidence references were cleared. ' +
         'Source state remains unverified. Review and explicitly save a new revision.');
       warning.id='owgCatalogRestorationDraft';warning.setAttribute('role','status');host.appendChild(warning);
@@ -463,7 +568,7 @@
     if((record.evidence_refs||[]).some(ref=>ref.startsWith('urn:openworkgraph:local-log-discovery:'))){
       const origin=el('div');origin.id='owgCatalogOriginResult';origin.style.overflowWrap='anywhere';
       host.appendChild(el('p','Local discovery snapshot reference retained. Source details stay in the imported-log store. Inspect the saved revision; unsaved graph edits have no verified relationship to it.'));
-      if(record.workflow_id&&record.revision){
+      if(record.workflow_id&&record.revision&&restorationDraft?.kind!=='rediscovery'){
         const inspect=button('Inspect discovery source snapshots',async()=>{
           const attempt=++originGeneration;
           inspect.disabled=true;
@@ -505,6 +610,7 @@
                   await window.owgEventLogWorkspace.openDiscoverySelection(basis);
                 });
                 origin.appendChild(openSelection);
+                renderRediscovery(origin,item,attempt);
               }
               const selection=el('pre',JSON.stringify(item.selection,null,2));selection.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere';origin.appendChild(selection);
             }
@@ -652,7 +758,7 @@
     check.addEventListener('change',()=>reviewed=check.checked);reviewLabel.appendChild(check);host.appendChild(reviewLabel);
     const actions=el('div');actions.className='owg-catalog-actions';
     actions.append(button('Save new revision',()=>save()),button('Save as a new process',()=>save(true)));
-    if(record.revision){
+    if(record.revision&&restorationDraft?.kind!=='rediscovery'){
     actions.appendChild(button('Load revision history',()=>history()));
     actions.appendChild(button('Add saved revision to automation pipeline',()=>locked(async()=>{
       const selected={workflow_id:record.workflow_id,revision:record.revision,content_sha256:record.content_sha256};
@@ -681,7 +787,7 @@
     })));
     }
     host.appendChild(actions);
-    if(record.revision){renderRuleChecks(host);renderSourceRuleChecks(host);renderShadowReview(host);renderClarification(host);renderDMNImport(host);renderRuleLibrary(host);}
+    if(record.revision&&restorationDraft?.kind!=='rediscovery'){renderRuleChecks(host);renderSourceRuleChecks(host);renderShadowReview(host);renderClarification(host);renderDMNImport(host);renderRuleLibrary(host);}
     const historyHost=el('div');historyHost.id='owgCatalogHistory';host.appendChild(historyHost);
   }
   function renderRuleChecks(host){
@@ -1186,6 +1292,6 @@
     panel.appendChild(host);
   }
   window.owgProcessCatalog={saveDesigner,draftObserved,draftDiscovered,openSaved:ref=>load(ref.workflow_id,ref.revision,ref.content_sha256)};
-  window.__owgProcessCatalogModel={linearModel,designPathDifferences,revisionDifferences};
+  window.__owgProcessCatalogModel={linearModel,designPathDifferences,revisionDifferences,matchingRediscovery};
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install);else install();
 })();
