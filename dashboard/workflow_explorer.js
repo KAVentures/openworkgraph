@@ -831,6 +831,118 @@
         ? null : b.duration-a.duration};
   }
 
+  // Occurrence-specific comparison against an explicitly chosen observed
+  // reference. Prefix/suffix LCS tables distinguish unavoidable differences
+  // from ambiguous repeated-token alignments, without inventing policy rules.
+  function referenceOccurrenceAlignment(a,b){
+    const valid=steps=>Array.isArray(steps)&&steps.length>0&&steps.length<48&&
+      steps.every(step=>typeof step==='string'&&step.length>0&&step.length<=240);
+    if(!valid(a)||!valid(b))return null;
+    const n=a.length,m=b.length;
+    const prefix=Array.from({length:n+1},()=>Array(m+1).fill(0));
+    const suffix=Array.from({length:n+1},()=>Array(m+1).fill(0));
+    for(let i=0;i<n;i++)for(let j=0;j<m;j++)
+      prefix[i+1][j+1]=a[i]===b[j]?prefix[i][j]+1:Math.max(prefix[i][j+1],prefix[i+1][j]);
+    for(let i=n-1;i>=0;i--)for(let j=m-1;j>=0;j--)
+      suffix[i][j]=a[i]===b[j]?suffix[i+1][j+1]+1:Math.max(suffix[i+1][j],suffix[i][j+1]);
+    const shared=prefix[n][m];
+    const reference=a.map((token,i)=>{
+      const positions=[];
+      for(let j=0;j<m;j++)if(token===b[j]&&prefix[i][j]+1+suffix[i+1][j+1]===shared)positions.push(j+1);
+      let canOmit=false;
+      for(let j=0;j<=m;j++)if(prefix[i][j]+suffix[i+1][j]===shared){canOmit=true;break;}
+      return {position:i+1,token,positions,status:!positions.length?'not_aligned':canOmit?'ambiguous':'aligned'};
+    });
+    const comparison=b.map((token,j)=>{
+      const positions=[];
+      for(let i=0;i<n;i++)if(token===a[i]&&prefix[i][j]+1+suffix[i+1][j+1]===shared)positions.push(i+1);
+      let canOmit=false;
+      for(let i=0;i<=n;i++)if(prefix[i][j]+suffix[i][j+1]===shared){canOmit=true;break;}
+      return {position:j+1,token,positions,status:!positions.length?'not_aligned':canOmit?'ambiguous':'aligned'};
+    });
+    return {shared,reference,comparison,exact:n===m&&shared===n};
+  }
+
+  function observedReferenceReview(matrix,referenceId){
+    if(!matrix||matrix.sourceLimited||!Array.isArray(matrix.rows))return null;
+    const reference=matrix.rows.find(row=>row.id===referenceId);
+    if(!reference||!reference.steps||reference.projectionMayBeCapped||reference.actor==='unknown')return null;
+    const others=matrix.rows.filter(row=>row.id!==referenceId);
+    const rows=others.map(row=>{
+      if(row.actor!==reference.actor)return {id:row.id,status:'unlike_actor',alignment:null};
+      if(!row.steps||row.projectionMayBeCapped)return {id:row.id,status:'projection_unavailable',alignment:null};
+      const alignment=referenceOccurrenceAlignment(reference.steps,row.steps);
+      return {id:row.id,status:alignment?(alignment.exact?'exact_projection':'different_projection'):'projection_unavailable',alignment};
+    });
+    const comparable=rows.filter(row=>row.alignment);
+    const occurrenceSupport=reference.steps.map((token,i)=>{
+      const counts={aligned:0,ambiguous:0,not_aligned:0};
+      for(const row of comparable)counts[row.alignment.reference[i].status]++;
+      return {position:i+1,token,...counts};
+    });
+    return {referenceId,actor:reference.actor,rows,occurrenceSupport,selectedComparisons:others.length,
+      comparable:comparable.length,exact:comparable.filter(row=>row.alignment.exact).length};
+  }
+
+  function renderObservedReferenceReview(panel,matrix,bundle){
+    if(matrix.rows.length<2)return;
+    const section=element('section');section.id='owgExplorerReferenceReview';
+    section.appendChild(element('h5','Compare selected runs to an observed reference'));
+    section.appendChild(element('p','Choose one observed execution as a structural reference, not an approved procedure. Repeated steps can admit multiple optimal alignments; ambiguous occurrences are shown separately. Unlike actor types and capped or unavailable projections are excluded.','muted'));
+    const labels=bundle?.structural_alignment?.surface_labels||{};
+    const referenceLabel=element('label','Reference execution ');
+    const reference=element('select');
+    matrix.rows.forEach((row,i)=>{
+      const option=element('option','Run '+(i+1)+' · '+row.actor);option.value=row.id;
+      option.disabled=row.actor==='unknown'||!row.steps||row.projectionMayBeCapped;
+      reference.appendChild(option);
+    });
+    referenceLabel.appendChild(reference);
+    const detail=element('div');detail.setAttribute('role','status');
+    const runName=id=>'Run '+(matrix.rows.findIndex(row=>row.id===id)+1);
+    const table=(title,headers,rows)=>{
+      const table=element('table');table.setAttribute('aria-label',title);
+      const head=element('thead'),header=element('tr');
+      for(const label of headers){const th=element('th',label);th.scope='col';header.appendChild(th);}
+      head.appendChild(header);table.appendChild(head);
+      const body=element('tbody');
+      for(const row of rows){const tr=element('tr');for(const value of row)tr.appendChild(element('td',value));body.appendChild(tr);}
+      table.appendChild(body);const scroll=element('div',null,'owg-map-scroll');scroll.appendChild(table);return scroll;
+    };
+    const refresh=()=>{
+      detail.replaceChildren();
+      const review=observedReferenceReview(matrix,reference.value);
+      if(!review){detail.appendChild(element('p','Reference review unavailable: narrow the evidence window or choose an uncapped known-actor execution.','muted'));return;}
+      detail.appendChild(element('p',review.comparable+' of '+review.selectedComparisons+' other selected executions comparable; '+review.exact+' have the same returned structural sequence. These are selected projections, not measured process compliance.'));
+      detail.appendChild(table('Reference occurrence support',
+        ['Reference occurrence','Aligned in every optimal alignment','Ambiguous alignment','Not aligned in any optimal alignment'],
+        review.occurrenceSupport.map(row=>[row.position+'. '+readable(row.token,labels),row.aligned,row.ambiguous,row.not_aligned])));
+      detail.appendChild(table('Selected run reference comparison',['Execution','Comparison status','Shared ordered steps'],
+        review.rows.map(row=>[runName(row.id),({unlike_actor:'Unlike actor type',projection_unavailable:'Projection unavailable or capped',
+          exact_projection:'Same returned sequence',different_projection:'Different returned sequence'})[row.status],row.alignment?row.alignment.shared:'—'])));
+      const comparable=review.rows.filter(row=>row.alignment);
+      if(!comparable.length)return;
+      const label=element('label','Inspect comparison execution ');
+      const pick=element('select');
+      comparable.forEach(row=>{const option=element('option',runName(row.id));option.value=row.id;pick.appendChild(option);});
+      label.appendChild(pick);
+      const occurrence=element('div');
+      const render=()=>{
+        const row=comparable.find(item=>item.id===pick.value);
+        if(!row)return;
+        const status=kind=>({aligned:'Aligned in every optimum',ambiguous:'May be omitted in an optimum',not_aligned:'Not aligned in any optimum'})[kind];
+        const rows=items=>items.map(item=>[item.position+'. '+readable(item.token,labels),status(item.status),
+          item.positions.length?item.positions.join(', '):'—']);
+        occurrence.replaceChildren(table('Reference occurrence alignment',['Reference occurrence','Alignment status','Possible comparison positions'],rows(row.alignment.reference)),
+          table('Comparison occurrence alignment',['Comparison occurrence','Alignment status','Possible reference positions'],rows(row.alignment.comparison)));
+      };
+      pick.addEventListener('change',render);render();
+      append(detail,label,occurrence);
+    };
+    reference.addEventListener('change',refresh);
+    append(section,referenceLabel,detail);panel.appendChild(section);refresh();
+  }
+
   function renderObservedRunMatrix(host, bundle, ids) {
     const matrix = observedRunMatrix(bundle,ids);
     if (!matrix) return;
@@ -897,6 +1009,7 @@
         append(panel,controls,result);
       }
     }
+    renderObservedReferenceReview(panel,matrix,bundle);
     renderForegroundCoverage(panel, matrix, bundle);
     renderSurfaceRoutes(panel, matrix, bundle);
     renderProjectedPaths(panel, matrix, bundle);
@@ -2565,7 +2678,7 @@
   }
 
   // Read-only model exposed for pure Node regression tests; no sensor or server changes.
-  window.__owgWorkflowExplorerModel = {buildLanes, titleFor, readable, observedRunMatrix, runDifference, projectedSurfaceRoutes, projectedProcessPaths, observedPathProposal, projectedPathAgentBrief, selectedRunTrace, automationReviewSignals, foregroundCoverageRows};
+  window.__owgWorkflowExplorerModel = {buildLanes, titleFor, readable, observedRunMatrix, runDifference, projectedSurfaceRoutes, projectedProcessPaths, observedPathProposal, projectedPathAgentBrief, selectedRunTrace, automationReviewSignals, foregroundCoverageRows, referenceOccurrenceAlignment, observedReferenceReview};
   window.owgWorkflowExplorer=Object.freeze({
     async inspectSnapshotExecution({executionId,window:scope={}}){
       if(typeof executionId!=='string'||!/^execution:[a-f0-9]{16}$/.test(executionId)||
