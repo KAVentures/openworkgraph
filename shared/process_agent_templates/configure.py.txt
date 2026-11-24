@@ -155,8 +155,7 @@ def validate_catalog(spec, catalog, *, require_fresh=True):
     if (not isinstance(catalog,dict) or catalog.get('format') != 'openworkgraph.customer-tool-catalog.v1'
             or digest(catalog.get('process_reference')) != digest(reference(spec))
             or catalog.get('spec_sha256') != digest(spec)
-            or not isinstance(catalog.get('tools'), list) or len(catalog['tools']) > 100
-            or type(catalog.get('omitted_tool_count')) is not int or catalog['omitted_tool_count'] < 0):
+            or not isinstance(catalog.get('tools'), list) or len(catalog['tools']) > 100):
         raise ImplementationError('Re-inspect the tool catalog for this exact specification')
     endpoint(catalog.get('tool_server_url'))
     try:
@@ -297,6 +296,13 @@ def _contract_finding(code, activity=None):
     return {'code': code, 'activity_id': activity}
 
 
+def _validate_audit_projection(catalog):
+    if (type(catalog.get('omitted_tool_count')) is not int
+            or catalog['omitted_tool_count'] < 0
+            or not isinstance(catalog.get('inspected_at'), str)):
+        raise ImplementationError('Binding audits require an inspected catalog with bounded coverage metadata')
+
+
 def _mapped_catalog_changes(spec, previous, current, mapping):
     """Compare only tools referenced by mappings, including write preconditions.
 
@@ -305,6 +311,7 @@ def _mapped_catalog_changes(spec, previous, current, mapping):
     deliberately excluded from this output.
     """
     validate_catalog(spec, previous, require_fresh=False)
+    _validate_audit_projection(previous)
     if endpoint(previous['tool_server_url']) != endpoint(current['tool_server_url']):
         raise ImplementationError('Previous and current catalogs must identify the same tool endpoint')
     old_time = datetime.fromisoformat(previous['inspected_at'].replace('Z', '+00:00'))
@@ -361,6 +368,7 @@ def audit_bindings(spec, catalog, suite, bindings, *, previous_catalog=None):
     from evaluate import validate_suite
     from execute import prepare, arguments_for, schema_reference
     validate_catalog(spec, catalog)
+    _validate_audit_projection(catalog)
     cases = validate_suite(spec, suite, allow_current_source_rules=True)
     if (not isinstance(bindings, dict)
             or bindings.get('format') != 'openworkgraph.customer-mcp-bindings.v1'
