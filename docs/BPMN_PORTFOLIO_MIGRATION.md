@@ -63,6 +63,34 @@ Exit code 0 means every selected source can become an unreviewed draft;
 Unexpected implementation errors fail the command rather than being
 misclassified as invalid business models.
 
+
+## Reassess remediation before migration
+
+Keep the original authorized files and explicitly pair each with its revised
+version. OWG assesses both sets using the current importer:
+
+    python -m shared.process_bpmn_migration_compare --pair old-order.bpmn new-order.bpmn --pair old-billing.bpmn new-billing.bpmn
+    python -m shared.process_bpmn_migration_compare --format csv --fail-on-population-change --pair old-order.bpmn new-order.bpmn > comparison.csv
+
+The comparison shows exact before/after digests where available, file-level
+readiness transitions, known process-population changes and differences in
+counts of refused, remediation-needed and review-required drafts. Counts are
+blank or null when a document could not be assessed. Each side has its own
+bounded portfolio budget. The command never matches changed documents by name
+or process ordinal, and **a smaller refusal count is not proof that a process
+was repaired**: processes may have been replaced or removed. A population change
+is reported separately even when the new document is importable. Identical
+source bytes with contradictory aggregate assessment results are flagged.
+
+Exit 0 requires a complete before assessment and every after source to be
+importable as an unreviewed draft, without an identical-source assessment
+mismatch. It does not imply the before sources were importable or that the
+after sources have no extra remediation. Add the population-change gate to
+also reject changed or unknown process populations. This is a conservative
+migration-readiness aid, not semantic equivalence, model approval, or an
+execution authorization. The minimized JSON and CSV use pair ordinals rather
+than source paths. Original files are not modified or saved in the catalog.
+
 ## Migrate a selected design
 
 Use the normal [catalog BPMN import](PROCESS_BPMN_IMPORT.md) and inspect the
