@@ -1001,6 +1001,826 @@ def process_rule_editor_script() -> Response:
     return FileResponse(ROOT / 'gateway' / 'process_rule_editor.js',media_type='application/javascript')
 
 
+@app.get('/v1/process-catalog/policy-impact')
+def compare_process_policy_impact(request: Request,
+        workflow_id: str = Query(pattern=_PROCESS_ID),
+        before_revision: int = Query(ge=1), after_revision: int = Query(ge=1),
+        before_sha256: str = Query(pattern=r'^[a-f0-9]{64}
+async def check_declared_process_rules(request: Request,
+        workflow_id: str = Query(pattern=r'^[A-Za-z0-9_-]{1,80}$'),revision: int = Query(ge=1)) -> Response:
+    from .local_source_routes import _require_dashboard
+    from shared.process_rule_checks import RuleCaseBatch,check_case_rules
+    _require_dashboard(request)
+    if request.headers.get('x-owg-case-facts-authorized')!='true':
+        raise HTTPException(403,'explicit local case-fact analysis authorization required')
+    try:body=RuleCaseBatch.model_validate(await _process_json(request))
+    except (ValidationError,ValueError):raise HTTPException(422,'invalid bounded case-fact check') from None
+    record=_catalog_record(workflow_id,revision)
+    result=check_case_rules(record,body.cases,body.as_of_date)
+    latest=_catalog_record(workflow_id)
+    result['latest_revision_at_check']=latest['revision']
+    result['references_latest_revision_at_check']=latest['revision']==revision
+    return JSONResponse(result,headers={'Cache-Control':'no-store'})
+
+
+@app.post('/v1/process-catalog/check-current-source-rules')
+async def check_current_source_process_rules(request: Request,
+        workflow_id: str = Query(pattern=r'^[A-Za-z0-9_-]{1,80}$'),revision: int = Query(ge=1)) -> Response:
+    from .local_source_routes import _require_dashboard
+    from .process_source_rule_checks import SourceRuleCheck,check_current_source_rules
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    if request.headers.get('x-owg-source-rule-read-authorized')!='true':
+        raise HTTPException(403,'explicit selected source-record refresh authorization required')
+    try:selection=SourceRuleCheck.model_validate(await _process_json(request,maximum=4096))
+    except (ValidationError,ValueError):raise HTTPException(422,'invalid bounded source-rule selection') from None
+    record=_catalog_record(workflow_id,revision)
+    result=await run_in_threadpool(check_current_source_rules,record,selection)
+    try:latest=_catalog_record(workflow_id)['revision']
+    except HTTPException as exc:
+        if exc.status_code!=404:raise
+        latest=None
+    result['latest_revision_at_check']=latest
+    result['references_latest_revision_at_check']=latest==revision
+    return JSONResponse(result,headers={'Cache-Control':'no-store'})
+
+
+@app.get('/v1/process-catalog')
+def list_process_catalog(after: str = Query(default='', max_length=80), limit: int = Query(default=20, ge=1, le=100)) -> Response:
+    page = _knowledge.page('local', after=after, limit=limit)
+    summaries = []
+    for record in page['workflows']:
+        if not record.get('process_model'):
+            continue
+        model = record['process_model']
+        summaries.append({key: record[key] for key in ('workflow_id', 'title', 'revision', 'content_sha256', 'saved_at')} | {
+            'activity_count': len(model['activities']), 'owner_label': model['owner_label'],
+            'unconfirmed_rule_count': sum(not rule['user_confirmed'] for rule in model['business_rules']),
+        })
+    return JSONResponse({'processes': summaries, 'has_more': page['has_more'], 'next_after': page['next_after']}, headers={'Cache-Control': 'no-store'})
+
+
+@app.post('/v1/process-catalog')
+async def save_process_catalog(request: Request) -> Response:
+    value = await _process_json(request)
+    try:
+        record = CatalogWrite.model_validate(value)
+        result = _catalog.save(record)
+    except ValidationError as exc:
+        messages = '; '.join(str(error['msg'])[:200] for error in exc.errors(include_input=False)[:5])
+        raise HTTPException(status_code=422, detail='Invalid process graph: ' + messages) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
+@app.get('/v1/process-catalog/revision')
+def get_process_catalog_revision(workflow_id: str = Query(pattern=_PROCESS_ID), revision: int | None = Query(default=None, ge=1)) -> Response:
+    return JSONResponse(_catalog_record(workflow_id, revision), headers={'Cache-Control': 'no-store'})
+
+
+@app.get('/v1/process-catalog/history')
+def get_process_catalog_history(workflow_id: str = Query(pattern=_PROCESS_ID), before_revision: int | None = Query(default=None, ge=1), limit: int = Query(default=20, ge=1, le=100)) -> Response:
+    _catalog_record(workflow_id)
+    return JSONResponse(_knowledge.history('local', workflow_id, before_revision=before_revision, limit=limit), headers={'Cache-Control': 'no-store'})
+
+
+@app.get('/v1/process-catalog/export')
+def export_process_catalog(workflow_id: str = Query(pattern=_PROCESS_ID), revision: int = Query(ge=1), format: str = Query(default='json', pattern='^(json|bpmn|pdd|dmn)$')) -> Response:
+    packet = _catalog_export(workflow_id, revision)
+    headers = {'Cache-Control': 'no-store', 'Content-Disposition':
+               f'attachment; filename="openworkgraph-process-r{revision}.{ {"json": "json", "bpmn": "bpmn", "pdd": "txt", "dmn": "dmn"}[format]}"'}
+    if format == 'json':
+        return JSONResponse(packet, headers=headers)
+    if format == 'dmn':
+        from shared.process_dmn import DMNError, export_dmn
+        try:
+            return Response(export_dmn(packet), media_type='application/xml', headers=headers)
+        except DMNError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from None
+    return Response(process_bpmn(packet) if format == 'bpmn' else process_document(packet),
+                    media_type='application/xml' if format == 'bpmn' else 'text/plain', headers=headers)
+
+
+def _local_dependency_response(request, operation, *args):
+    from .local_source_routes import _require_dashboard
+    _require_dashboard(request)
+    try:
+        result = operation(*args)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from None
+    except ValidationError:
+        raise HTTPException(422, 'Invalid prerequisite declaration') from None
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+    _require_dashboard(request)
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
+@app.get('/v1/process-catalog/prerequisites')
+def local_process_prerequisites(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID)):
+    from . import local_process_dependencies as prerequisites
+    return _local_dependency_response(request, prerequisites.detail, workflow_id)
+
+
+@app.post('/v1/process-catalog/prerequisites')
+async def save_local_process_prerequisites(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID)):
+    from . import local_process_dependencies as prerequisites
+    from .local_source_routes import _require_dashboard
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    try:
+        body = prerequisites.SaveDependencies.model_validate(await _process_json(request, maximum=32 * 1024))
+    except ValidationError:
+        raise HTTPException(422, 'Invalid prerequisite declaration') from None
+    return await run_in_threadpool(_local_dependency_response, request, prerequisites.save, workflow_id, body)
+
+
+@app.post('/v1/process-catalog/forget')
+async def forget_process_catalog(request: Request) -> Response:
+    value = await _process_json(request)
+    if set(value) != {'workflow_id', 'user_confirmed'} or value.get('user_confirmed') is not True:
+        raise HTTPException(status_code=422, detail='explicit deletion review required')
+    workflow_id = value.get('workflow_id')
+    if not isinstance(workflow_id, str) or not re.fullmatch(_PROCESS_ID, workflow_id):
+        raise HTTPException(status_code=422, detail='invalid process ID')
+    _catalog_record(workflow_id)
+    from . import process_clarification_store
+    process_clarification_store.forget(workflow_id)
+    from .local_process_dependencies import forget_process
+    try:
+        deleted = forget_process(workflow_id)
+    except LookupError:
+        raise HTTPException(404, 'Process revision not found') from None
+    return JSONResponse(deleted, headers={'Cache-Control': 'no-store'})
+
+
+@app.get('/v1/process-catalog/agent-project')
+def export_process_agent_project(workflow_id: str = Query(pattern=_PROCESS_ID), revision: int = Query(ge=1)) -> Response:
+    from .process_agent_project import build_runtime_project
+    packet=_catalog_export(workflow_id, revision)
+    try:archive = build_runtime_project(packet)
+    except ValueError as exc:raise HTTPException(409,str(exc)) from None
+    return Response(archive, media_type='application/zip', headers={
+        'Cache-Control': 'no-store',
+        'Content-Disposition': 'attachment; filename="openworkgraph-openai-agents-project.zip"',
+    })
+
+
+@app.get('/v1/semantic-linker')
+def get_semantic_linker(request: Request) -> Response:
+    from .local_source_routes import _require_dashboard
+    from .semantic_linker import settings
+    _require_dashboard(request)
+    return JSONResponse(settings(), headers={'Cache-Control': 'no-store'})
+
+
+@app.put('/v1/semantic-linker')
+async def put_semantic_linker(request: Request) -> Response:
+    from .local_source_routes import _require_dashboard
+    from .semantic_linker import SemanticLinkerError, configure
+    _require_dashboard(request)
+    try:return JSONResponse(configure(await _process_json(request, maximum=2048)), headers={'Cache-Control': 'no-store'})
+    except SemanticLinkerError as exc:raise HTTPException(409, str(exc)) from None
+
+
+@app.post('/v1/process-catalog/clarify')
+async def clarify_process_design(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
+                                 revision: int = Query(ge=1)) -> Response:
+    """Cited questions and contradictions for one exact revision; documents are not stored."""
+    from shared.process_clarification import ClarificationRequest, clarify, documents_sha256
+    from .local_source_routes import _require_dashboard
+    from . import process_clarification_store as ledger
+    _require_dashboard(request)
+    try:body = ClarificationRequest.model_validate(await _process_json(request, maximum=400 * 1024))
+    except (ValidationError, ValueError):raise HTTPException(422, 'invalid clarification documents') from None
+    record = _catalog_record(workflow_id, revision)
+    result = clarify(record, body, ledger.decisions(workflow_id, revision, record['content_sha256'],
+                                                   documents_sha256(body.documents)))
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
+@app.post('/v1/process-catalog/clarify/decide')
+async def decide_process_clarification(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
+                                       revision: int = Query(ge=1)) -> Response:
+    """Record one human decision; a confirm returns a proposed model change, never applied here."""
+    from shared.process_clarification import (ClarificationRequest, Decision, clarify,
+        documents_sha256, proposed_change, validate_decision_evidence)
+    from .local_source_routes import _require_dashboard
+    from . import process_clarification_store as ledger
+    _require_dashboard(request)
+    value = await _process_json(request, maximum=400 * 1024)
+    try:
+        decision = Decision.model_validate(value.get('decision'))
+        docs = ClarificationRequest.model_validate({'documents': value.get('documents', [])})
+    except (ValidationError, ValueError, AttributeError):raise HTTPException(422, 'invalid clarification decision') from None
+    record = _catalog_record(workflow_id, revision)
+    source_pin = documents_sha256(docs.documents)
+    if decision.expected_documents_sha256 != source_pin:
+        raise HTTPException(409, 'Clarification documents changed or were not pinned; reload questions before deciding')
+    questions = {q['question_id']: q for q in clarify(record, docs)['questions']}
+    question = questions.get(decision.question_id)
+    if question is None:
+        raise HTTPException(409, 'question not found for this revision and these documents')
+    by_id = {c['statement_id']: c for c in question['citations']}
+    for conflict in question['contradictions']:
+        by_id.update({c['statement_id']: c for c in conflict['statements']})
+    if any(sid not in by_id for sid in decision.cited_statement_ids):
+        raise HTTPException(422, 'cite only statements shown with this question')
+    try:
+        validate_decision_evidence(question, decision)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    entry = ledger.record(workflow_id, revision, record['content_sha256'], question, decision.model_dump(),
+                          [by_id[sid] for sid in decision.cited_statement_ids], source_pin)
+    return JSONResponse({'decision': entry, 'proposed_change': proposed_change(record, question, decision)},
+                        headers={'Cache-Control': 'no-store'})
+
+
+@app.get('/v1/process-catalog/clarify/decisions')
+def list_process_clarification_decisions(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID)) -> Response:
+    from .local_source_routes import _require_dashboard
+    from . import process_clarification_store as ledger
+    _require_dashboard(request)
+    return JSONResponse({'workflow_id': workflow_id, 'decisions': ledger.history(workflow_id)},
+                        headers={'Cache-Control': 'no-store'})
+
+
+def _rule_library_call(request, operation, *args, **kwargs):
+    from .local_source_routes import _require_dashboard
+    from .process_rule_library import RuleLibraryError
+    _require_dashboard(request)
+    try:
+        return JSONResponse(operation(*args, **kwargs), headers={'Cache-Control': 'no-store'})
+    except RuleLibraryError as exc:
+        raise HTTPException(409, str(exc)) from None
+
+
+@app.get('/v1/process-catalog/rule-library')
+def list_rule_library(request: Request) -> Response:
+    from . import process_rule_library as library
+    return _rule_library_call(request, library.listing)
+
+
+@app.get('/v1/process-catalog/rule-library/set')
+def get_rule_library_set(request: Request, rule_set_id: str = Query(pattern=r'^rs_[0-9a-f]{16}$'),
+                         revision: int | None = Query(default=None, ge=1)) -> Response:
+    from . import process_rule_library as library
+    return _rule_library_call(request, library.get, rule_set_id, revision)
+
+
+@app.post('/v1/process-catalog/rule-library')
+async def save_rule_library_set(request: Request) -> Response:
+    from . import process_rule_library as library
+    from .local_source_routes import _require_dashboard
+    _require_dashboard(request)
+    return _rule_library_call(request, library.save, await _process_json(request, maximum=256 * 1024))
+
+
+@app.post('/v1/process-catalog/rule-library/link')
+async def link_rule_library_rule(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
+                                 revision: int = Query(ge=1)) -> Response:
+    """Proposed model where one design rule uses a library rule; the design is not saved."""
+    from . import process_rule_library as library
+    from .local_source_routes import _require_dashboard
+    _require_dashboard(request)
+    value = await _process_json(request, maximum=4096)
+    allowed = {'rule_id', 'rule_set_id', 'library_rule_id', 'library_revision'}
+    if not set(value) <= allowed or not all(isinstance(value.get(k), str) for k in ('rule_id', 'rule_set_id', 'library_rule_id')):
+        raise HTTPException(422, 'rule_id, rule_set_id and library_rule_id are required')
+    pinned = value.get('library_revision')
+    if pinned is not None and (not isinstance(pinned, int) or isinstance(pinned, bool) or pinned < 1):
+        raise HTTPException(422, 'library_revision must be a positive integer')
+    record = _catalog_record(workflow_id, revision)
+    def proposal():
+        model = library.link(record['process_model'], value['rule_id'], value['rule_set_id'],
+                             value['library_rule_id'], pinned)
+        return {'based_on': {'workflow_id': workflow_id, 'revision': revision,
+                             'content_sha256': record['content_sha256']},
+                'proposed_process_model': model, 'process_model_saved': False, 'evaluates_rules': False}
+    return _rule_library_call(request, proposal)
+
+
+@app.get('/v1/process-catalog/rule-library/drift')
+def rule_library_drift(request: Request) -> Response:
+    """Latest saved designs that use an outdated or locally edited library rule."""
+    from . import process_rule_library as library
+    def scan():
+        records, after = [], ''
+        for _ in range(50):
+            page = _knowledge.page('local', after=after, limit=100)
+            records.extend(r for r in page['workflows'] if r.get('process_model'))
+            if not page['has_more']:
+                break
+            after = page['next_after']
+        return library.drift(records)
+    return _rule_library_call(request, scan)
+
+
+@app.get('/v1/process-catalog/opportunities')
+def get_process_opportunities(currency: str = Query(default='USD', pattern='^(USD|EUR|GBP|SEK)$')) -> Response:
+    return JSONResponse(_catalog.opportunities(currency), headers={'Cache-Control': 'no-store'})
+
+
+@app.post('/v1/process-catalog/shadow-review')
+async def review_process_shadow_report(request: Request) -> Response:
+    from .local_source_routes import _require_dashboard
+    from shared.process_shadow_review import ShadowReviewRequest, inspect_shadow_report
+    _require_dashboard(request)
+    try:
+        body = ShadowReviewRequest.model_validate(await _process_json(request))
+    except ValidationError:
+        raise HTTPException(status_code=422, detail='invalid minimized shadow evaluation report') from None
+    packet = _catalog_export(body.workflow_id, body.revision)
+    latest = _catalog_record(body.workflow_id)
+    try:
+        result = inspect_shadow_report(packet, body.report, latest_revision=latest['revision'])
+    except ValueError:
+        raise HTTPException(status_code=422, detail='report does not match this exact saved process specification') from None
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
+class ProcessOutcomeCheck(BaseModel):
+    model_config = {'extra': 'forbid'}
+    workflow_id: str = Field(pattern=_PROCESS_ID)
+    revision: int = Field(ge=1, strict=True)
+    terminal_activity_id: str = Field(pattern=r'^[A-Za-z][A-Za-z0-9_-]{0,63}$')
+    expected_operation: Literal['github_pr_merged', 'stripe_invoice_paid', 'stripe_refund_processor_succeeded', 'jira_issue_resolved']
+    resource_ref: str = Field(pattern=r'^owg:r:[0-9a-f]{32}$')
+    source_reads_confirmed: StrictBool = False
+
+
+@app.post('/v1/process-catalog/check-outcome')
+async def check_process_outcome(request: Request) -> Response:
+    from .local_source_routes import _require_dashboard
+    import asyncio
+    _require_dashboard(request)
+    try:
+        body = ProcessOutcomeCheck.model_validate(await _process_json(request))
+    except ValidationError:
+        raise HTTPException(status_code=422, detail='invalid exact-record outcome check') from None
+    if not body.source_reads_confirmed:
+        raise HTTPException(status_code=403, detail='confirm this exact source read')
+    record = _catalog_record(body.workflow_id, body.revision)
+    model = ProcessModel.model_validate(record['process_model'])
+    if not any(e.terminal_activity_id == body.terminal_activity_id and e.operation == body.expected_operation
+               and e.user_confirmed for e in model.outcome_expectations):
+        raise HTTPException(status_code=422, detail='source-state expectation must be confirmed in this saved revision')
+    receipt = await asyncio.to_thread(source_operation_receipt, body.resource_ref, body.expected_operation)
+    return JSONResponse({
+        'format': 'openworkgraph.process-outcome-check.v1',
+        'reference': {key: record[key] for key in ('workflow_id', 'revision', 'content_sha256')},
+        'terminal_activity_id': body.terminal_activity_id,
+        'association_basis': 'user_selected_process_expectation_and_exact_observed_record',
+        'receipt': receipt, 'agent_caused_operation_verified': False,
+        'business_objective_verified': False, 'execution_authorization': False,
+        'result_persisted': False,
+    }, headers={'Cache-Control': 'no-store'})
+
+
+@app.post('/v1/event-logs/{log_id}/process-conformance')
+async def compare_event_log_saved_process(request: Request, log_id: str,
+                                          case_type: str | None = Query(default=None, max_length=200)):
+    from starlette.concurrency import run_in_threadpool
+    from . import event_log_model_conformance as graph_comparison
+    from .event_log_workspace import EventLogWorkspaceError
+    _require_process_log_dashboard(request)
+    value = await _process_json(request, maximum=65536)
+    try:
+        spec = graph_comparison.SavedGraphQuery.model_validate(value)
+    except ValidationError:
+        raise HTTPException(422, 'Invalid saved process comparison fields') from None
+    record = _catalog_record(spec.workflow_id, spec.revision)
+    if record['content_sha256'] != spec.content_sha256:
+        raise HTTPException(409, 'Saved process reference changed; select the revision again')
+    try:
+        result = await run_in_threadpool(graph_comparison.compare, log_id, record, spec, case_type)
+    except EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    # A deleted/recreated revision cannot masquerade as the selected artifact
+    # while a potentially expensive log query is in progress.
+    current = _catalog_record(spec.workflow_id, spec.revision)
+    if current['content_sha256'] != spec.content_sha256:
+        raise HTTPException(409, 'Saved process reference changed during comparison')
+    return JSONResponse(result, headers={'Cache-Control':'no-store'})
+),
+        after_sha256: str = Query(pattern=r'^[a-f0-9]{64}
+async def check_declared_process_rules(request: Request,
+        workflow_id: str = Query(pattern=r'^[A-Za-z0-9_-]{1,80}$'),revision: int = Query(ge=1)) -> Response:
+    from .local_source_routes import _require_dashboard
+    from shared.process_rule_checks import RuleCaseBatch,check_case_rules
+    _require_dashboard(request)
+    if request.headers.get('x-owg-case-facts-authorized')!='true':
+        raise HTTPException(403,'explicit local case-fact analysis authorization required')
+    try:body=RuleCaseBatch.model_validate(await _process_json(request))
+    except (ValidationError,ValueError):raise HTTPException(422,'invalid bounded case-fact check') from None
+    record=_catalog_record(workflow_id,revision)
+    result=check_case_rules(record,body.cases,body.as_of_date)
+    latest=_catalog_record(workflow_id)
+    result['latest_revision_at_check']=latest['revision']
+    result['references_latest_revision_at_check']=latest['revision']==revision
+    return JSONResponse(result,headers={'Cache-Control':'no-store'})
+
+
+@app.post('/v1/process-catalog/check-current-source-rules')
+async def check_current_source_process_rules(request: Request,
+        workflow_id: str = Query(pattern=r'^[A-Za-z0-9_-]{1,80}$'),revision: int = Query(ge=1)) -> Response:
+    from .local_source_routes import _require_dashboard
+    from .process_source_rule_checks import SourceRuleCheck,check_current_source_rules
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    if request.headers.get('x-owg-source-rule-read-authorized')!='true':
+        raise HTTPException(403,'explicit selected source-record refresh authorization required')
+    try:selection=SourceRuleCheck.model_validate(await _process_json(request,maximum=4096))
+    except (ValidationError,ValueError):raise HTTPException(422,'invalid bounded source-rule selection') from None
+    record=_catalog_record(workflow_id,revision)
+    result=await run_in_threadpool(check_current_source_rules,record,selection)
+    try:latest=_catalog_record(workflow_id)['revision']
+    except HTTPException as exc:
+        if exc.status_code!=404:raise
+        latest=None
+    result['latest_revision_at_check']=latest
+    result['references_latest_revision_at_check']=latest==revision
+    return JSONResponse(result,headers={'Cache-Control':'no-store'})
+
+
+@app.get('/v1/process-catalog')
+def list_process_catalog(after: str = Query(default='', max_length=80), limit: int = Query(default=20, ge=1, le=100)) -> Response:
+    page = _knowledge.page('local', after=after, limit=limit)
+    summaries = []
+    for record in page['workflows']:
+        if not record.get('process_model'):
+            continue
+        model = record['process_model']
+        summaries.append({key: record[key] for key in ('workflow_id', 'title', 'revision', 'content_sha256', 'saved_at')} | {
+            'activity_count': len(model['activities']), 'owner_label': model['owner_label'],
+            'unconfirmed_rule_count': sum(not rule['user_confirmed'] for rule in model['business_rules']),
+        })
+    return JSONResponse({'processes': summaries, 'has_more': page['has_more'], 'next_after': page['next_after']}, headers={'Cache-Control': 'no-store'})
+
+
+@app.post('/v1/process-catalog')
+async def save_process_catalog(request: Request) -> Response:
+    value = await _process_json(request)
+    try:
+        record = CatalogWrite.model_validate(value)
+        result = _catalog.save(record)
+    except ValidationError as exc:
+        messages = '; '.join(str(error['msg'])[:200] for error in exc.errors(include_input=False)[:5])
+        raise HTTPException(status_code=422, detail='Invalid process graph: ' + messages) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
+@app.get('/v1/process-catalog/revision')
+def get_process_catalog_revision(workflow_id: str = Query(pattern=_PROCESS_ID), revision: int | None = Query(default=None, ge=1)) -> Response:
+    return JSONResponse(_catalog_record(workflow_id, revision), headers={'Cache-Control': 'no-store'})
+
+
+@app.get('/v1/process-catalog/history')
+def get_process_catalog_history(workflow_id: str = Query(pattern=_PROCESS_ID), before_revision: int | None = Query(default=None, ge=1), limit: int = Query(default=20, ge=1, le=100)) -> Response:
+    _catalog_record(workflow_id)
+    return JSONResponse(_knowledge.history('local', workflow_id, before_revision=before_revision, limit=limit), headers={'Cache-Control': 'no-store'})
+
+
+@app.get('/v1/process-catalog/export')
+def export_process_catalog(workflow_id: str = Query(pattern=_PROCESS_ID), revision: int = Query(ge=1), format: str = Query(default='json', pattern='^(json|bpmn|pdd|dmn)$')) -> Response:
+    packet = _catalog_export(workflow_id, revision)
+    headers = {'Cache-Control': 'no-store', 'Content-Disposition':
+               f'attachment; filename="openworkgraph-process-r{revision}.{ {"json": "json", "bpmn": "bpmn", "pdd": "txt", "dmn": "dmn"}[format]}"'}
+    if format == 'json':
+        return JSONResponse(packet, headers=headers)
+    if format == 'dmn':
+        from shared.process_dmn import DMNError, export_dmn
+        try:
+            return Response(export_dmn(packet), media_type='application/xml', headers=headers)
+        except DMNError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from None
+    return Response(process_bpmn(packet) if format == 'bpmn' else process_document(packet),
+                    media_type='application/xml' if format == 'bpmn' else 'text/plain', headers=headers)
+
+
+def _local_dependency_response(request, operation, *args):
+    from .local_source_routes import _require_dashboard
+    _require_dashboard(request)
+    try:
+        result = operation(*args)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from None
+    except ValidationError:
+        raise HTTPException(422, 'Invalid prerequisite declaration') from None
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+    _require_dashboard(request)
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
+@app.get('/v1/process-catalog/prerequisites')
+def local_process_prerequisites(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID)):
+    from . import local_process_dependencies as prerequisites
+    return _local_dependency_response(request, prerequisites.detail, workflow_id)
+
+
+@app.post('/v1/process-catalog/prerequisites')
+async def save_local_process_prerequisites(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID)):
+    from . import local_process_dependencies as prerequisites
+    from .local_source_routes import _require_dashboard
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    try:
+        body = prerequisites.SaveDependencies.model_validate(await _process_json(request, maximum=32 * 1024))
+    except ValidationError:
+        raise HTTPException(422, 'Invalid prerequisite declaration') from None
+    return await run_in_threadpool(_local_dependency_response, request, prerequisites.save, workflow_id, body)
+
+
+@app.post('/v1/process-catalog/forget')
+async def forget_process_catalog(request: Request) -> Response:
+    value = await _process_json(request)
+    if set(value) != {'workflow_id', 'user_confirmed'} or value.get('user_confirmed') is not True:
+        raise HTTPException(status_code=422, detail='explicit deletion review required')
+    workflow_id = value.get('workflow_id')
+    if not isinstance(workflow_id, str) or not re.fullmatch(_PROCESS_ID, workflow_id):
+        raise HTTPException(status_code=422, detail='invalid process ID')
+    _catalog_record(workflow_id)
+    from . import process_clarification_store
+    process_clarification_store.forget(workflow_id)
+    from .local_process_dependencies import forget_process
+    try:
+        deleted = forget_process(workflow_id)
+    except LookupError:
+        raise HTTPException(404, 'Process revision not found') from None
+    return JSONResponse(deleted, headers={'Cache-Control': 'no-store'})
+
+
+@app.get('/v1/process-catalog/agent-project')
+def export_process_agent_project(workflow_id: str = Query(pattern=_PROCESS_ID), revision: int = Query(ge=1)) -> Response:
+    from .process_agent_project import build_runtime_project
+    packet=_catalog_export(workflow_id, revision)
+    try:archive = build_runtime_project(packet)
+    except ValueError as exc:raise HTTPException(409,str(exc)) from None
+    return Response(archive, media_type='application/zip', headers={
+        'Cache-Control': 'no-store',
+        'Content-Disposition': 'attachment; filename="openworkgraph-openai-agents-project.zip"',
+    })
+
+
+@app.get('/v1/semantic-linker')
+def get_semantic_linker(request: Request) -> Response:
+    from .local_source_routes import _require_dashboard
+    from .semantic_linker import settings
+    _require_dashboard(request)
+    return JSONResponse(settings(), headers={'Cache-Control': 'no-store'})
+
+
+@app.put('/v1/semantic-linker')
+async def put_semantic_linker(request: Request) -> Response:
+    from .local_source_routes import _require_dashboard
+    from .semantic_linker import SemanticLinkerError, configure
+    _require_dashboard(request)
+    try:return JSONResponse(configure(await _process_json(request, maximum=2048)), headers={'Cache-Control': 'no-store'})
+    except SemanticLinkerError as exc:raise HTTPException(409, str(exc)) from None
+
+
+@app.post('/v1/process-catalog/clarify')
+async def clarify_process_design(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
+                                 revision: int = Query(ge=1)) -> Response:
+    """Cited questions and contradictions for one exact revision; documents are not stored."""
+    from shared.process_clarification import ClarificationRequest, clarify, documents_sha256
+    from .local_source_routes import _require_dashboard
+    from . import process_clarification_store as ledger
+    _require_dashboard(request)
+    try:body = ClarificationRequest.model_validate(await _process_json(request, maximum=400 * 1024))
+    except (ValidationError, ValueError):raise HTTPException(422, 'invalid clarification documents') from None
+    record = _catalog_record(workflow_id, revision)
+    result = clarify(record, body, ledger.decisions(workflow_id, revision, record['content_sha256'],
+                                                   documents_sha256(body.documents)))
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
+@app.post('/v1/process-catalog/clarify/decide')
+async def decide_process_clarification(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
+                                       revision: int = Query(ge=1)) -> Response:
+    """Record one human decision; a confirm returns a proposed model change, never applied here."""
+    from shared.process_clarification import (ClarificationRequest, Decision, clarify,
+        documents_sha256, proposed_change, validate_decision_evidence)
+    from .local_source_routes import _require_dashboard
+    from . import process_clarification_store as ledger
+    _require_dashboard(request)
+    value = await _process_json(request, maximum=400 * 1024)
+    try:
+        decision = Decision.model_validate(value.get('decision'))
+        docs = ClarificationRequest.model_validate({'documents': value.get('documents', [])})
+    except (ValidationError, ValueError, AttributeError):raise HTTPException(422, 'invalid clarification decision') from None
+    record = _catalog_record(workflow_id, revision)
+    source_pin = documents_sha256(docs.documents)
+    if decision.expected_documents_sha256 != source_pin:
+        raise HTTPException(409, 'Clarification documents changed or were not pinned; reload questions before deciding')
+    questions = {q['question_id']: q for q in clarify(record, docs)['questions']}
+    question = questions.get(decision.question_id)
+    if question is None:
+        raise HTTPException(409, 'question not found for this revision and these documents')
+    by_id = {c['statement_id']: c for c in question['citations']}
+    for conflict in question['contradictions']:
+        by_id.update({c['statement_id']: c for c in conflict['statements']})
+    if any(sid not in by_id for sid in decision.cited_statement_ids):
+        raise HTTPException(422, 'cite only statements shown with this question')
+    try:
+        validate_decision_evidence(question, decision)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    entry = ledger.record(workflow_id, revision, record['content_sha256'], question, decision.model_dump(),
+                          [by_id[sid] for sid in decision.cited_statement_ids], source_pin)
+    return JSONResponse({'decision': entry, 'proposed_change': proposed_change(record, question, decision)},
+                        headers={'Cache-Control': 'no-store'})
+
+
+@app.get('/v1/process-catalog/clarify/decisions')
+def list_process_clarification_decisions(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID)) -> Response:
+    from .local_source_routes import _require_dashboard
+    from . import process_clarification_store as ledger
+    _require_dashboard(request)
+    return JSONResponse({'workflow_id': workflow_id, 'decisions': ledger.history(workflow_id)},
+                        headers={'Cache-Control': 'no-store'})
+
+
+def _rule_library_call(request, operation, *args, **kwargs):
+    from .local_source_routes import _require_dashboard
+    from .process_rule_library import RuleLibraryError
+    _require_dashboard(request)
+    try:
+        return JSONResponse(operation(*args, **kwargs), headers={'Cache-Control': 'no-store'})
+    except RuleLibraryError as exc:
+        raise HTTPException(409, str(exc)) from None
+
+
+@app.get('/v1/process-catalog/rule-library')
+def list_rule_library(request: Request) -> Response:
+    from . import process_rule_library as library
+    return _rule_library_call(request, library.listing)
+
+
+@app.get('/v1/process-catalog/rule-library/set')
+def get_rule_library_set(request: Request, rule_set_id: str = Query(pattern=r'^rs_[0-9a-f]{16}$'),
+                         revision: int | None = Query(default=None, ge=1)) -> Response:
+    from . import process_rule_library as library
+    return _rule_library_call(request, library.get, rule_set_id, revision)
+
+
+@app.post('/v1/process-catalog/rule-library')
+async def save_rule_library_set(request: Request) -> Response:
+    from . import process_rule_library as library
+    from .local_source_routes import _require_dashboard
+    _require_dashboard(request)
+    return _rule_library_call(request, library.save, await _process_json(request, maximum=256 * 1024))
+
+
+@app.post('/v1/process-catalog/rule-library/link')
+async def link_rule_library_rule(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
+                                 revision: int = Query(ge=1)) -> Response:
+    """Proposed model where one design rule uses a library rule; the design is not saved."""
+    from . import process_rule_library as library
+    from .local_source_routes import _require_dashboard
+    _require_dashboard(request)
+    value = await _process_json(request, maximum=4096)
+    allowed = {'rule_id', 'rule_set_id', 'library_rule_id', 'library_revision'}
+    if not set(value) <= allowed or not all(isinstance(value.get(k), str) for k in ('rule_id', 'rule_set_id', 'library_rule_id')):
+        raise HTTPException(422, 'rule_id, rule_set_id and library_rule_id are required')
+    pinned = value.get('library_revision')
+    if pinned is not None and (not isinstance(pinned, int) or isinstance(pinned, bool) or pinned < 1):
+        raise HTTPException(422, 'library_revision must be a positive integer')
+    record = _catalog_record(workflow_id, revision)
+    def proposal():
+        model = library.link(record['process_model'], value['rule_id'], value['rule_set_id'],
+                             value['library_rule_id'], pinned)
+        return {'based_on': {'workflow_id': workflow_id, 'revision': revision,
+                             'content_sha256': record['content_sha256']},
+                'proposed_process_model': model, 'process_model_saved': False, 'evaluates_rules': False}
+    return _rule_library_call(request, proposal)
+
+
+@app.get('/v1/process-catalog/rule-library/drift')
+def rule_library_drift(request: Request) -> Response:
+    """Latest saved designs that use an outdated or locally edited library rule."""
+    from . import process_rule_library as library
+    def scan():
+        records, after = [], ''
+        for _ in range(50):
+            page = _knowledge.page('local', after=after, limit=100)
+            records.extend(r for r in page['workflows'] if r.get('process_model'))
+            if not page['has_more']:
+                break
+            after = page['next_after']
+        return library.drift(records)
+    return _rule_library_call(request, scan)
+
+
+@app.get('/v1/process-catalog/opportunities')
+def get_process_opportunities(currency: str = Query(default='USD', pattern='^(USD|EUR|GBP|SEK)$')) -> Response:
+    return JSONResponse(_catalog.opportunities(currency), headers={'Cache-Control': 'no-store'})
+
+
+@app.post('/v1/process-catalog/shadow-review')
+async def review_process_shadow_report(request: Request) -> Response:
+    from .local_source_routes import _require_dashboard
+    from shared.process_shadow_review import ShadowReviewRequest, inspect_shadow_report
+    _require_dashboard(request)
+    try:
+        body = ShadowReviewRequest.model_validate(await _process_json(request))
+    except ValidationError:
+        raise HTTPException(status_code=422, detail='invalid minimized shadow evaluation report') from None
+    packet = _catalog_export(body.workflow_id, body.revision)
+    latest = _catalog_record(body.workflow_id)
+    try:
+        result = inspect_shadow_report(packet, body.report, latest_revision=latest['revision'])
+    except ValueError:
+        raise HTTPException(status_code=422, detail='report does not match this exact saved process specification') from None
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
+class ProcessOutcomeCheck(BaseModel):
+    model_config = {'extra': 'forbid'}
+    workflow_id: str = Field(pattern=_PROCESS_ID)
+    revision: int = Field(ge=1, strict=True)
+    terminal_activity_id: str = Field(pattern=r'^[A-Za-z][A-Za-z0-9_-]{0,63}$')
+    expected_operation: Literal['github_pr_merged', 'stripe_invoice_paid', 'stripe_refund_processor_succeeded', 'jira_issue_resolved']
+    resource_ref: str = Field(pattern=r'^owg:r:[0-9a-f]{32}$')
+    source_reads_confirmed: StrictBool = False
+
+
+@app.post('/v1/process-catalog/check-outcome')
+async def check_process_outcome(request: Request) -> Response:
+    from .local_source_routes import _require_dashboard
+    import asyncio
+    _require_dashboard(request)
+    try:
+        body = ProcessOutcomeCheck.model_validate(await _process_json(request))
+    except ValidationError:
+        raise HTTPException(status_code=422, detail='invalid exact-record outcome check') from None
+    if not body.source_reads_confirmed:
+        raise HTTPException(status_code=403, detail='confirm this exact source read')
+    record = _catalog_record(body.workflow_id, body.revision)
+    model = ProcessModel.model_validate(record['process_model'])
+    if not any(e.terminal_activity_id == body.terminal_activity_id and e.operation == body.expected_operation
+               and e.user_confirmed for e in model.outcome_expectations):
+        raise HTTPException(status_code=422, detail='source-state expectation must be confirmed in this saved revision')
+    receipt = await asyncio.to_thread(source_operation_receipt, body.resource_ref, body.expected_operation)
+    return JSONResponse({
+        'format': 'openworkgraph.process-outcome-check.v1',
+        'reference': {key: record[key] for key in ('workflow_id', 'revision', 'content_sha256')},
+        'terminal_activity_id': body.terminal_activity_id,
+        'association_basis': 'user_selected_process_expectation_and_exact_observed_record',
+        'receipt': receipt, 'agent_caused_operation_verified': False,
+        'business_objective_verified': False, 'execution_authorization': False,
+        'result_persisted': False,
+    }, headers={'Cache-Control': 'no-store'})
+
+
+@app.post('/v1/event-logs/{log_id}/process-conformance')
+async def compare_event_log_saved_process(request: Request, log_id: str,
+                                          case_type: str | None = Query(default=None, max_length=200)):
+    from starlette.concurrency import run_in_threadpool
+    from . import event_log_model_conformance as graph_comparison
+    from .event_log_workspace import EventLogWorkspaceError
+    _require_process_log_dashboard(request)
+    value = await _process_json(request, maximum=65536)
+    try:
+        spec = graph_comparison.SavedGraphQuery.model_validate(value)
+    except ValidationError:
+        raise HTTPException(422, 'Invalid saved process comparison fields') from None
+    record = _catalog_record(spec.workflow_id, spec.revision)
+    if record['content_sha256'] != spec.content_sha256:
+        raise HTTPException(409, 'Saved process reference changed; select the revision again')
+    try:
+        result = await run_in_threadpool(graph_comparison.compare, log_id, record, spec, case_type)
+    except EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    # A deleted/recreated revision cannot masquerade as the selected artifact
+    # while a potentially expensive log query is in progress.
+    current = _catalog_record(spec.workflow_id, spec.revision)
+    if current['content_sha256'] != spec.content_sha256:
+        raise HTTPException(409, 'Saved process reference changed during comparison')
+    return JSONResponse(result, headers={'Cache-Control':'no-store'})
+)) -> Response:
+    from .local_source_routes import _require_dashboard
+    from shared.process_policy_impact import compare
+    _require_dashboard(request)
+    before = _catalog_export(workflow_id, before_revision)
+    after = _catalog_export(workflow_id, after_revision)
+    if before['content_sha256'] != before_sha256 or after['content_sha256'] != after_sha256:
+        raise HTTPException(409, 'Selected revision digest changed; inspect both revisions again')
+    try:
+        result = compare(before, after)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    _require_dashboard(request)
+    for revision, digest in ((before_revision, before_sha256), (after_revision, after_sha256)):
+        if _catalog_export(workflow_id, revision)['content_sha256'] != digest:
+            raise HTTPException(409, 'Selected revision changed during comparison')
+    return JSONResponse(result, headers={'Cache-Control':'no-store'})
+
+
 @app.post('/v1/process-catalog/check-rules')
 async def check_declared_process_rules(request: Request,
         workflow_id: str = Query(pattern=r'^[A-Za-z0-9_-]{1,80}$'),revision: int = Query(ge=1)) -> Response:
