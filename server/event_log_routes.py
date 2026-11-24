@@ -1464,11 +1464,13 @@ async def event_log_tag_non_fitting_cases(request: Request, log_id: str,
 def event_log_model_quality(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                             levels: str | None = Query(default=None, max_length=100),
                             activities: float = Query(default=1.0, gt=0, le=1),
+                            include_nets: bool = False,
                             cohort: dict = Depends(_case_filter)):
     """Fitness, precision, generalization and simplicity of the discovered net at several noise levels."""
     from . import event_log_model_quality as quality
     _require_dashboard(request)
-    return _respond(quality.model_quality, log_id, case_type, levels=levels, activities=activities, cohort=cohort)
+    return _respond(quality.model_quality, log_id, case_type, levels=levels, activities=activities, cohort=cohort,
+                    include_nets=include_nets)
 
 
 @router.get("/v1/event-logs/{log_id}/funnel")
