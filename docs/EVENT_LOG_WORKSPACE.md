@@ -2853,6 +2853,11 @@ and authorizes nothing.
 `GET /v1/event-logs/{log_id}/automation-candidates?limit=&case_type=` plus the usual case-filter
 parameters; dashboard session only.
 
+**Download JSON** and **Download CSV** save the ranking shown. The CSV has one row per activity
+with the score and its volume, routine and waiting components, occurrences, cases, per-week
+rate, routing pattern, same-predecessor and same-successor shares, median wait before, resources
+and repeats per case. Cells that a spreadsheet would read as formulas start with `'`.
+
 ## Performance spectrum
 
 The performance spectrum shows how long each step-to-step segment took, over calendar time. It
@@ -3108,6 +3113,11 @@ parameters. Dashboard sessions can additionally request `evidence_step=2&evidenc
 (or `reached`); the first 50 matching case IDs in sorted order are returned with a total and
 truncation flag. Case evidence is not available through the shared agent tool; agents with access
 to a shared log use `get_process_funnel` (aggregates only).
+
+**Download JSON** and **Download CSV** save the funnel shown. The CSV has one row per step with
+cases reached, share of step 1, conversion from the previous step, cases dropped (and how many may
+still be open), the median hours from the previous step and what stopped cases did last. Changing
+a step, the window or the evidence choice disables the download until the funnel is shown again.
 
 ## Model change
 

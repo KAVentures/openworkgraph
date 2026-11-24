@@ -2708,10 +2708,17 @@
     box.appendChild(el('div','Rank this process\u2019s activities by how often they happen, how fixed their routing is and how much waiting comes right before them. Every component is shown. It is evidence for a review, not a recommendation, and it estimates no savings.','muted'));
     const run=button('Rank activities','secondary');run.id='owgAutomationRun';
     const out=el('div');out.id='owgAutomationResults';out.setAttribute('role','status');
-    box.append(run,out);
+    // The ranking with every score component, for a review document or spreadsheet.
+    let last=null;
+    const exports=exportButtons('owgAutomationReport',()=>last,r=>[
+      ['activity','score','volume_component','routine_component','waiting_component','occurrences','cases','per_week',
+        'routing_pattern','same_predecessor_share','same_successor_share','median_wait_before_seconds','resources','repeats_per_case'],
+      ...r.candidates.map(c=>[c.activity,c.score,c.components.volume,c.components.routine,c.components.time,c.occurrences,c.cases,c.per_week,
+        c.routing_pattern,c.same_predecessor_share,c.same_successor_share,c.median_wait_before_seconds,c.resources,c.repeats_per_case])]);
+    box.append(run,out,exports.node);
     const PATTERNS={fixed:'Fixed',mostly_fixed:'Mostly fixed',variable:'Variable'};
     const pct=x=>Math.round(x*100)+'%';
-    run.onclick=async()=>{run.disabled=true;out.replaceChildren(el('div','Ranking activities\u2026','muted'));
+    run.onclick=async()=>{run.disabled=true;last=null;exports.enable(false);out.replaceChildren(el('div','Ranking activities\u2026','muted'));
       try{
         const r=await getJSON(logPath('automation-candidates',{limit:15}));
         if(!r.candidates.length){out.replaceChildren(el('div','No activity occurs in at least '+r.min_cases+' cases.','muted'));return;}
@@ -2734,6 +2741,7 @@
           el('div','Score = 100 \u00d7 (0.4 volume + 0.4 routine + 0.2 waiting share), over '+Number(r.cases).toLocaleString()+' cases and '+r.weeks_observed+' weeks'+(r.cases_before_filter?' (filtered from '+Number(r.cases_before_filter).toLocaleString()+')':'')+'.'+(r.activities_below_min_cases?' '+r.activities_below_min_cases+' rarer activit'+(r.activities_below_min_cases===1?'y is':'ies are')+' left out.':''),'muted'),
           table(['Activity','Score','Volume / routine / waiting','Per week','Routing','Median wait before','Resources','Per case','Action'],rows),
           el('div','Fixed routing suggests rules may cover the step; variable routing suggests judgement, where an AI agent with human review may fit. '+r.caveat,'muted'));
+        last=r;exports.enable(true);
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
       finally{run.disabled=false;}};
     return box;
@@ -7130,7 +7138,19 @@
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Conversion window',windowPick),field('Case evidence',evidenceStep),field('Evidence group',evidenceStatus),more,run);
     const statusLine=el('div',null,'muted');statusLine.id='owgFunnelStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgFunnelResults';
-    box.append(steps,row,statusLine,out);
+    // One row per step with conversion, drop-off and time from the previous step.
+    let lastFunnel=null;
+    const exports=exportButtons('owgFunnelReport',()=>lastFunnel,r=>[
+      ['step','activity','cases','share_of_first_step','conversion_from_previous','dropped_after_previous',
+        'stopped_cases_possibly_open','median_hours_from_previous','stopped_cases_last_activities'],
+      ...r.steps.map(x=>[x.step,x.activity,x.cases,x.share_of_first_step,x.step===1?'':x.conversion_from_previous,
+        x.step===1?'':x.dropped_after_previous,x.step===1?'':(x.stopped_cases_possibly_open||0),
+        x.step===1||!x.hours_from_previous?'':x.hours_from_previous.median,
+        x.step===1?'':(x.stopped_cases_last_activity||[]).map(a=>a.activity+' ('+a.cases+')').join('; ')])]);
+    box.append(steps,row,statusLine,out,exports.node);
+    // A changed step, window or evidence choice no longer matches the downloaded funnel.
+    const stale=()=>{lastFunnel=null;exports.enable(false);};
+    steps.addEventListener('change',stale);row.addEventListener('change',stale);
     for(let i=0;i<3;i++)addStep();
     const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
     const hrs=x=>x===null||x===undefined?'—':(x<48?(Math.round(x*10)/10)+' h':(Math.round(x/24*10)/10)+' d');
@@ -7138,7 +7158,7 @@
       const chosen=pickers.map(p=>p.value).filter(Boolean);
       if(chosen.length<2){statusLine.textContent='Choose at least two steps.';out.replaceChildren();return;}
       if(evidenceStep.value&&(Number(evidenceStep.value)>chosen.length||(evidenceStep.value==='1'&&evidenceStatus.value==='dropped'))){statusLine.textContent='Choose a valid evidence step; drop-off requires step 2 or later.';out.replaceChildren();return;}
-      const generation=state.generation;run.disabled=true;statusLine.textContent='Following cases…';out.replaceChildren();
+      const generation=state.generation;run.disabled=true;statusLine.textContent='Following cases…';out.replaceChildren();stale();
       try{
         const params={step:chosen};if(windowPick.value)params.within_hours=windowPick.value;
         if(evidenceStep.value){params.evidence_step=evidenceStep.value;params.evidence_status=evidenceStatus.value;}
@@ -7153,6 +7173,7 @@
           out.appendChild(el('div','Showing '+e.cases.length+' of '+e.total+' cases '+(e.status==='reached'?'reaching step ':'stopping before step ')+e.step+(e.truncated?' (first 50 by case ID).':'.'),'muted'));
           if(e.cases.length)out.appendChild(table(['Case ID','Last recorded activity','Steps reached'],e.cases.map(c=>[c.case_id,c.last_activity,c.steps_reached])));}
         out.appendChild(el('div',r.caveat,'muted'));
+        lastFunnel=r;exports.enable(true);
       }catch(error){statusLine.textContent=error.message;}
       finally{run.disabled=false;}};
     return box;
