@@ -251,6 +251,174 @@ async def propose_bindings(spec, catalog, case, *, model):
             'case_values_sent_to_model':False,'business_tools_called':False,'execution_authorized':False}}
 
 
+MAX_REVIEW_ROUTES = 80
+
+
+def _json_kind(value):
+    return ('null' if value is None else 'boolean' if type(value) is bool else
+            'integer' if type(value) is int else 'number' if type(value) is float else
+            'string' if isinstance(value, str) else 'object' if isinstance(value, dict) else
+            'array' if isinstance(value, list) else 'unknown')
+
+
+def _metadata_findings(contract, tools, *, role):
+    """Compare resolved arguments with the inspected top-level projection.
+
+    Metadata omits schema constraints; even a matching digest cannot establish
+    semantics or permission. Do not copy names, arguments or endpoint URLs.
+    """
+    findings = set()
+    tool = tools.get(contract.get('tool_name'))
+    if tool is None:
+        return {role + ':tool_not_in_inspected_projection'}
+    if not contract.get('tool_schema_sha256'):
+        findings.add(role + ':schema_pin_missing')
+    elif contract['tool_schema_sha256'] != tool['input_schema_sha256']:
+        findings.add(role + ':schema_pin_changed')
+    fields = {row['name']: row for row in tool['input_fields']}
+    arguments = contract['arguments']
+    if any(field['required'] and name not in arguments for name, field in fields.items()):
+        findings.add(role + ':required_argument_missing')
+    for name, value in arguments.items():
+        field = fields.get(name)
+        if field is None:
+            findings.add(role + ':argument_not_in_inspected_projection')
+            continue
+        expected, actual = field['type'], _json_kind(value)
+        if expected == 'unknown':
+            findings.add(role + ':argument_type_not_established')
+        elif actual != expected and not (expected == 'number' and actual == 'integer'):
+            findings.add(role + ':argument_type_mismatch')
+    return findings
+
+
+def _contract_finding(code, activity=None):
+    return {'code': code, 'activity_id': activity}
+
+
+def audit_bindings(spec, catalog, suite, bindings):
+    """Offline review of exact reviewed route alternatives against current mapping.
+
+    A reviewed route is an expectation, not a captured execution or a model
+    result. Review every alternative, not just the easiest one. This is never
+    an execution intent, a permission check or a live provider/schema test.
+    """
+    from evaluate import validate_suite
+    from execute import prepare
+    validate_catalog(spec, catalog)
+    cases = validate_suite(spec, suite, allow_current_source_rules=True)
+    if (not isinstance(bindings, dict)
+            or bindings.get('format') != 'openworkgraph.customer-mcp-bindings.v1'
+            or digest(bindings.get('process_reference')) != digest(reference(spec))):
+        raise ImplementationError('Bindings must identify this exact process revision')
+    if endpoint(bindings.get('tool_server_url')) != endpoint(catalog['tool_server_url']):
+        raise ImplementationError('Bindings and inspected catalog must identify the same tool endpoint')
+    mapped = bindings.get('bindings')
+    if not isinstance(mapped, list) or len(mapped) > 40 or any(not isinstance(row, dict) for row in mapped):
+        raise ImplementationError('Supply at most 40 explicit activity bindings')
+    activities = {a['id']: a for a in spec['process_model']['activities'] if a['kind'] == 'activity'}
+    identifiers = [row.get('activity_id') for row in mapped]
+    if (any(not isinstance(i, str) or i not in activities for i in identifiers)
+            or len(set(identifiers)) != len(identifiers)):
+        raise ImplementationError('Bindings require unique existing activity IDs')
+    # Reject over-budget inputs instead of silently dropping alternatives.
+    route_count = sum(len(case['expected']['accepted_routes']) for case in cases)
+    if route_count > MAX_REVIEW_ROUTES:
+        raise ImplementationError('Select at most 80 reviewed route alternatives per binding audit')
+    tools = {tool['name']: tool for tool in catalog['tools']}
+    covered = set()
+    report_cases = []
+    all_route_rows = []
+    for case in cases:
+        route_rows = []
+        for index, route in enumerate(case['expected']['accepted_routes']):
+            covered.update(i for i in route if i in activities)
+            plan = {'revision': spec['revision'], 'content_sha256': spec['content_sha256'],
+                    'status': 'proposal', 'activity_ids': route, 'missing_business_inputs': []}
+            findings = []
+            counts = {'actions': 0, 'human_activities': 0, 'manual_conditions': 0,
+                      'source_outcomes': 0, 'source_rules': 0, 'decision_tables': 0}
+            try:
+                prepared = prepare(spec, plan, case['input'], bindings)
+            except (ImplementationError, ValueError, TypeError, KeyError, OverflowError, RecursionError):
+                # Do not echo exception text or customer values; a refused
+                # route cannot be counted as a complete contract.
+                findings.append(_contract_finding('offline_preparation_refused'))
+            else:
+                for requirement in prepared['requirements']:
+                    code, _, activity = requirement.partition(':')
+                    findings.append(_contract_finding(code, activity if activity in activities else None))
+                counts = {'actions': len(prepared['actions']),
+                          'human_activities': len(prepared['human_activity_ids']),
+                          'manual_conditions': len(prepared['manual_condition_ids']),
+                          'source_outcomes': len(prepared['outcomes']),
+                          'source_rules': len(prepared['source_rules']),
+                          'decision_tables': len(prepared.get('decision_tables', []))}
+                for action in prepared['actions']:
+                    identifier = action['activity_id']
+                    for code in sorted(_metadata_findings(action, tools, role='action')):
+                        findings.append(_contract_finding(code, identifier))
+                    if action['precondition'] is not None:
+                        for code in sorted(_metadata_findings(action['precondition'], tools, role='precondition')):
+                            findings.append(_contract_finding(code, identifier))
+                if counts['source_outcomes'] or counts['source_rules'] or counts['decision_tables']:
+                    try:
+                        endpoint(bindings.get('source_api_url'), source=True)
+                    except ImplementationError:
+                        findings.append(_contract_finding('source_endpoint_missing_or_invalid'))
+                if spec.get('organization_catalog_reference'):
+                    try:
+                        endpoint(bindings.get('process_catalog_url'))
+                    except ImplementationError:
+                        findings.append(_contract_finding('shared_catalog_endpoint_missing_or_invalid'))
+            # Stable bounded per-route report; duplicate findings from repeated
+            # visits are deduplicated rather than inflating the issue counts.
+            findings = [dict(items) for items in sorted(
+                {tuple(sorted(f.items())) for f in findings},
+                key=lambda items: (dict(items)['code'], dict(items)['activity_id'] or ''))]
+            row = {'alternative': index + 1, 'route_sha256': digest(route),
+                   'static_contract_checks_clear': not findings,
+                   'requires_separate_human_resolution': bool(counts['human_activities'] or counts['manual_conditions']),
+                   'counts': counts, 'findings': findings}
+            route_rows.append(row)
+            all_route_rows.append(row)
+        report_cases.append({'case_id': case['id'], 'category': case['category'],
+                             'case_sha256': digest(case['input']),
+                             'expected_status': case['expected']['status'],
+                             'route_review_applicable': bool(route_rows), 'routes': route_rows,
+                             'all_reviewed_routes_clear': all(r['static_contract_checks_clear'] for r in route_rows)
+                                 if route_rows else None})
+    category_counts = {category: sum(c['category'] == category for c in report_cases)
+                       for category in ('normal', 'exception', 'missing_facts')}
+    counts = {}
+    for row in all_route_rows:
+        for f in row['findings']:
+            counts[f['code']] = counts.get(f['code'], 0) + 1
+    uncovered = sorted(i for i, a in activities.items() if a['implementation'] != 'human' and i not in covered)
+    clear = sum(r['static_contract_checks_clear'] for r in all_route_rows)
+    return {'format': 'openworkgraph.customer-binding-readiness.v1',
+            'process_reference': reference(spec), 'spec_sha256': digest(spec),
+            'catalog_sha256': digest(catalog), 'suite_sha256': digest(suite),
+            'bindings_sha256': digest(bindings), 'catalog_inspected_at': catalog['inspected_at'],
+            'catalog_omitted_tool_count': catalog.get('omitted_tool_count'),
+            'case_count': len(cases), 'reviewed_route_count': route_count,
+            'routes_with_clear_static_checks': clear,
+            'routes_with_findings': route_count - clear,
+            'routes_requiring_human_resolution': sum(r['requires_separate_human_resolution'] for r in all_route_rows),
+            'clarification_only_cases_not_route_tested': sum(not c['route_review_applicable'] for c in report_cases),
+            'category_counts': category_counts,
+            'missing_categories': [category for category, n in category_counts.items() if not n],
+            'uncovered_nonhuman_activity_ids': uncovered,
+            'finding_counts': dict(sorted(counts.items())), 'cases': report_cases,
+            'review_required': not route_count or clear != route_count or bool(uncovered),
+            'schema_constraints_fully_validated': False,
+            'provider_semantics_or_permissions_verified': False,
+            'live_catalog_refreshed': False, 'business_tools_called': False,
+            'execution_authorized': False, 'business_outcomes_verified': False,
+            'case_values_and_tool_arguments_included': False,
+            'expectations_are_customer_declarations': True}
+
+
 def write_new(path, value, *, limit=262144):
     payload=json.dumps(value,indent=2,allow_nan=False).encode('utf-8')
     if len(payload)>limit:
@@ -266,12 +434,23 @@ def main():
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--inspect-tools',action='store_true')
     mode.add_argument('--propose-bindings',action='store_true')
+    mode.add_argument('--audit-bindings',action='store_true',help='Offline reviewed-case binding contract audit')
     parser.add_argument('--tool-server-url');parser.add_argument('--catalog');parser.add_argument('--case');parser.add_argument('--model')
+    parser.add_argument('--cases');parser.add_argument('--bindings')
     parser.add_argument('--output',required=True,help='New output JSON file; existing files are never overwritten')
     args = parser.parse_args()
     if Path(args.output).exists():
         raise ImplementationError('Choose a new output file; existing configuration is never overwritten')
     spec = load_object(Path(__file__).parent/'workflow.spec.json',limit=262144)
+    if args.audit_bindings:
+        if not all((args.catalog, args.cases, args.bindings)) or any((args.model, args.case, args.tool_server_url)):
+            raise ImplementationError('Choose only a saved inspected catalog, reviewed case suite and bindings for offline audit')
+        result = audit_bindings(spec, load_object(args.catalog, limit=262144),
+                                load_object(args.cases, limit=262144), load_object(args.bindings))
+        write_new(args.output, result, limit=2*1024*1024)
+        return {'mode':'offline_binding_audit','output_written':True,
+                'review_required':result['review_required'],
+                'business_tools_called':False,'execution_authorized':False}
     if args.inspect_tools:
         result = asyncio.run(inspect_tools(spec,args.tool_server_url))
     else:
@@ -284,6 +463,10 @@ def main():
 
 
 if __name__=='__main__':
-    try:print(json.dumps(main(),indent=2))
+    try:
+        result = main()
+        print(json.dumps(result,indent=2))
+        if result.get('mode') == 'offline_binding_audit' and result['review_required']:
+            raise SystemExit(2)
     except ImplementationError as exc:raise SystemExit(str(exc)) from None
     except Exception:raise SystemExit('Tool configuration stopped. Review the exact specification, catalog, selected case and credentials; no execution was approved.') from None
