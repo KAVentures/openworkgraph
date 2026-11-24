@@ -104,12 +104,6 @@ def acceptance(root: Path, pinned_digest: str) -> dict:
         raise ReleaseIntegrityError("Manifest changed after verification")
     manifest = json.loads(raw)
     hashes = manifest["files"]
-    spec = json.loads((root / "workflow.spec.json").read_bytes())
-    modules = list(REQUIRED)
-    if spec.get("process_model", {}).get("decision_tables"):
-        modules += OPTIONAL
-    if any(module + ".py" not in hashes for module in modules):
-        raise ReleaseIntegrityError("Required synthetic acceptance suite missing from the manifest")
     with tempfile.TemporaryDirectory(prefix="owg-runtime-acceptance-") as directory:
         work = Path(directory)
         staged = work / "release"
@@ -127,6 +121,12 @@ def acceptance(root: Path, pinned_digest: str) -> dict:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
         verify_directory(staged, expected_manifest_sha256=pinned_digest)
+        spec = json.loads((staged / "workflow.spec.json").read_bytes())
+        modules = list(REQUIRED)
+        if spec.get("process_model", {}).get("decision_tables"):
+            modules += OPTIONAL
+        if any(module + ".py" not in hashes for module in modules):
+            raise ReleaseIntegrityError("Required synthetic acceptance suite missing from the manifest")
         suites = [_run_suite(module, staged, home) for module in modules]
     statuses = {s["status"] for s in suites}
     status = ("failed" if statuses & {"failed", "runner_error", "timed_out"}
