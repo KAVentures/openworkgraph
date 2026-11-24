@@ -480,6 +480,20 @@
               if(item.source_fingerprint_checked_at)origin.appendChild(el('p','Source data checked at '+item.source_fingerprint_checked_at+'. Inspect again after changes.'));
               origin.appendChild(el('p','At recording: '+item.quality.cases_used+' of '+item.quality.cases_total+' cohort cases used; '+item.quality.checked_cases+' checked by draft replay. Coverage describes the supplied log.'));
               origin.appendChild(el('p',item.reviewed_graph_matches_discovery?'Saved graph matches the recorded generated graph. Business rules remain unverified.':'User-selected reference to an edited graph; derivation is not independently verified.'));
+              if(item.observed_execution_origin){
+                const source=item.observed_execution_origin;
+                origin.appendChild(el('p','Original observed execution snapshot: '+source.original_case_count+' inferred executions, '+source.original_event_count+' structural observations. Manifest '+(source.retained_manifest_status==='matches'?'matches':'unavailable or changed')+'. Retained observation history has not been rechecked. Business identity and outcomes remain unverified.'));
+                if(source.retained_manifest_status==='matches'&&/^log_[a-f0-9]{16}$/.test(item.log_id||'')){
+                  const openSource=button('Open original observed execution log',async()=>{
+                    if(attempt!==originGeneration)throw Error('Inspect the saved source again.');
+                    if(typeof window.owgEventLogWorkspace?.openSaved!=='function')throw Error('Event-log workspace unavailable.');
+                    await window.owgEventLogWorkspace.openSaved(item.log_id);
+                    document.querySelector('[role=tab][data-tab=evidence]')?.click();
+                    document.getElementById('owgEventLogCard')?.scrollIntoView({block:'start'});
+                  });
+                  origin.appendChild(openSource);
+                }
+              }
               const selection=el('pre',JSON.stringify(item.selection,null,2));selection.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere';origin.appendChild(selection);
             }
           });
