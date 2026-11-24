@@ -150,6 +150,12 @@ def _prepare(packet: dict, calibration: dict) -> list[tuple[str, float, dict]]:
             unknown = set(inputs.get("activities", {})) - set(model["activities"])
             if unknown:
                 raise EventLogWorkspaceError("An activity override is absent from the selected paths")
+            # Simulation's team capacity is taken from pools, not a member's
+            # individual resources. Do not accept a silently ineffective
+            # staffing override, including one inherited from the baseline.
+            pooled={a for p in model["pools"].values() for a in p["activities"]}
+            if any(a in pooled and "resources" in cfg for a,cfg in inputs.get("activities",{}).items()):
+                raise EventLogWorkspaceError("Staff pooled activities by changing their shared pool resources, not individual resources")
             planned.append((design["label"], rate, model))
     work = sum(max(len(path) for path, weight in model["paths"] if weight > 0)
                * model["cases"] * packet["replications"] for _, _, model in planned)
@@ -308,7 +314,13 @@ def run_grid(log_id: str, spec: Any, case_type: str | None = None) -> dict:
                         raise
                     raise EventLogWorkspaceError("A grid run exceeds the supported simulation time range") from None
                 runs.append(summarize_run(result, samples, target["cycle_time_minutes"] * 60, seed))
-            cells.append(summarize_cell(label, rate, runs, target["minimum_completion_share"]))
+            cell=summarize_cell(label, rate, runs, target["minimum_completion_share"])
+            pool_of={a:name for name,pool in model["pools"].items() for a in pool["activities"]}
+            cell["effective_resource_basis"]={
+                "dedicated_activities":{a:cfg["resources"] for a,cfg in sorted(model["activities"].items()) if a not in pool_of},
+                "shared_pools":{name:{"resources":p["resources"],"activities":sorted(p["activities"])}
+                                for name,p in sorted(model["pools"].items())}}
+            cells.append(cell)
         calibration = {k: base[k] for k in ("arrivals_per_hour", "paths", "paths_cover_cases_share",
                        "activities", "observed_cases", "calibrated_cases", "excluded_case_reasons",
                        "limits", "arrival_rate_basis") if k in base}

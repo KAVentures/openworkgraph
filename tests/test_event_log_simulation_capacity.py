@@ -268,3 +268,25 @@ def test_paired_comparison_refuses_mismatched_seeds():
     other = {"design":"Other","arrival_rate_per_hour":1,"runs":[{"seed":2}]}
     with pytest.raises(workspace.EventLogWorkspaceError, match="seeds"):
         capacity.paired_comparisons([base,other])
+
+
+def test_pooled_activity_staffing_override_is_rejected_before_any_simulation(monkeypatch):
+    spec=proposal()
+    spec["baseline"]["pools"]={"Shared":{"resources":1,"activities":["Receive","Finish"]}}
+    monkeypatch.setattr(sim,"simulate",lambda *args:pytest.fail("invalid grid executed"))
+    with pytest.raises(workspace.EventLogWorkspaceError,match="shared pool resources"):
+        capacity.run_grid(fixture_log(),spec)
+
+
+def test_shared_pool_staffing_is_effective_and_reported():
+    spec=proposal()
+    spec["baseline"]["pools"]={"Shared":{"resources":1,"activities":["Receive","Finish"]}}
+    spec["designs"]=[{"label":"Two shared reviewers","pools":{"Shared":{"resources":2,
+                         "activities":["Receive","Finish"]}}}]
+    result=capacity.run_grid(fixture_log(),spec)
+    before=result["cells"][0]["effective_resource_basis"]
+    after=result["cells"][2]["effective_resource_basis"]
+    assert before["dedicated_activities"]==after["dedicated_activities"]=={}
+    assert before["shared_pools"]["Shared"]["resources"]==1
+    assert after["shared_pools"]["Shared"]["resources"]==2
+    assert after["shared_pools"]["Shared"]["activities"]==["Finish","Receive"]
