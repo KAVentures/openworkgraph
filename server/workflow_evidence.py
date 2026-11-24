@@ -270,8 +270,10 @@ def _clipboard_marker(event: dict[str, Any]) -> tuple[float, str, str] | None:
     action = str(meta.get("action") or "").strip().casefold()
     if not action and str(event.get("event_type") or "").startswith("clipboard_"):
         action = str(event["event_type"]).split("clipboard_", 1)[1].casefold()
+    if not transfer or action not in {"copy", "cut", "paste"}:
+        return None
     at = _ts(event.get("observed_at"))
-    if not transfer or action not in {"copy", "cut", "paste"} or at is None or not math.isfinite(at):
+    if at is None or not math.isfinite(at):
         return None
     return at, transfer, action
 
