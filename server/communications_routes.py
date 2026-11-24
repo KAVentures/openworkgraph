@@ -305,6 +305,51 @@ def get_intent_model(request: Request):
     return _review_call(review.model_status, _intent_names())
 
 
+@router.get("/v1/communications/review/paired-evaluation")
+async def get_paired_intent_evaluation(request: Request):
+    """Compare both methods on the same retained, reviewed holdout."""
+    _require_dashboard(request)
+    result = await run_in_threadpool(_paired_evaluation)
+    _require_dashboard(request)
+    return _no_store(result)
+
+
+def _paired_evaluation():
+    from shared import communications_paired_evaluation as paired
+    from shared import communications_learning as learning
+    taxonomy = load_taxonomy()
+    names = [i.name for i in mining.parse_taxonomy(taxonomy) if i.name.lower() not in review.RESERVED]
+    taxonomy_digest = paired.digest(taxonomy)
+    with review._LOCK:
+        data = review._load()
+        if not data['settings'].get('enabled'):
+            raise HTTPException(409, 'turn on review examples first')
+        model = review._load_model()
+        if model is None or not review._freshness(model, data, names)[0]:
+            raise HTTPException(409, "train a current model before paired evaluation")
+        basis = review._training_basis(data["examples"], names)
+        model_digest = model["model_sha256"]
+        labelled = [e for e in data["examples"] if isinstance(e.get("labels"), list)]
+        training = [e for e in labelled if e["split"] == "train"]
+        holdout = [e for e in labelled if e["split"] == "holdout"]
+    try:
+        result = paired.evaluate(model, training, holdout, taxonomy, names)
+    except (learning.LearningError, review.ReviewError) as exc:
+        raise HTTPException(422, str(exc)) from None
+    # A revoked grant, expired example, edited taxonomy or replaced model
+    # invalidates the report; no per-example predictions leave the server.
+    with review._LOCK:
+        latest = review._load()
+        current = review._load_model()
+        if (current is None or current.get("model_sha256") != model_digest
+                or not review._freshness(current, latest, names)[0]
+                or review._training_basis(latest["examples"], names) != basis
+                or paired.digest(load_taxonomy()) != taxonomy_digest):
+            raise HTTPException(409, "review evidence or model changed during evaluation; inspect again")
+    return {**result, "model_sha256": model_digest, "training_basis_sha256": basis,
+            "trained_at": model["trained_at"], "local_only": True}
+
+
 @router.post("/v1/communications/review/model/delete")
 def delete_intent_model(request: Request):
     _require_dashboard(request)
