@@ -3008,6 +3008,23 @@ def event_log_model_discovery_pnml(request: Request, log_id: str, case_type: str
         "X-OWG-Petri-Net": f"places={meta['places']}; transitions={meta['transitions']}; silent={meta['silent_transitions']}"})
 
 
+@router.get("/v1/event-logs/{log_id}/model-discovery.bpmn")
+def event_log_model_discovery_bpmn(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                                   noise: float = Query(default=0.2, ge=0, lt=1),
+                                   activities: float = Query(default=1.0, gt=0, le=1),
+                                   cohort: dict[str, Any] = Depends(_case_filter)):
+    """The discovered model as BPMN 2.0 with diagram interchange, for process designers."""
+    from . import event_log_bpmn_export as bpmn
+    _require_dashboard(request)
+    try:
+        xml, meta = bpmn.discovered_bpmn(log_id, case_type, noise=noise, activities=activities, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(xml, media_type="application/xml", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-discovered.bpmn"',
+        "X-OWG-BPMN": f"tasks={meta['tasks']}; gateways={meta['gateways']}; flows={meta['flows']}"})
+
+
 @router.get("/v1/event-logs/{log_id}/variant.pnml")
 def event_log_variant_pnml(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                            rank: int = Query(default=1, ge=1, le=50), cohort: dict[str, Any] = Depends(_case_filter)):
