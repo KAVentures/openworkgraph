@@ -13,6 +13,7 @@ import json
 from typing import Any
 
 from . import automation_pipeline as pipeline
+from shared.portfolio_dependency_cycles import cycle_inventory
 
 FORMAT = "openworkgraph.automation-dependency-schedule-review.v1"
 MAX_RISKS = 100
@@ -22,7 +23,7 @@ MAX_PATH = 20
 def _quarter(value: Any) -> int | None:
     if not isinstance(value, str) or len(value) != 7 or value[4:6] != "-Q":
         return None
-    if not (value[:4].isdigit() and value[6:] in ("1", "2", "3", "4")):
+    if not (value[:4].isascii() and value[:4].isdigit() and value[6:] in ("1", "2", "3", "4")):
         return None
     return int(value[:4]) * 4 + int(value[6])
 
@@ -61,6 +62,8 @@ def dependency_waves(ideas: list[dict[str, Any]]) -> dict[str, Any]:
             blockers.append({"idea_id": k, "state": "on_hold"})
         if blockers:
             direct_blocks[k] = blockers
+    cycle_groups, cycle_membership, cycle_downstream = cycle_inventory(pending)
+    unknown_links = sum(d not in by_id for k in active for d in deps[k])
     blocked = set(direct_blocks)
     queue = deque(sorted(blocked))
     while queue:
@@ -102,6 +105,9 @@ def dependency_waves(ideas: list[dict[str, Any]]) -> dict[str, Any]:
             "idea_id": k, "revision": idea["revision"], "state": idea["state"],
             "target_quarter": _planning(idea).get("target_quarter") or None,
             "status": status, "wave": wave.get(k),
+            "cycle_group": cycle_membership.get(k),
+            "depends_on_cycle": k in cycle_downstream,
+            "also_blocked_by_declared_state": k in blocked,
             "unfinished_prerequisite_ids": sorted(d for d in deps[k]
                 if d not in by_id or by_id[d]["state"] != "implemented"),
             "direct_blockers": direct_blocks.get(k, []),
@@ -113,6 +119,10 @@ def dependency_waves(ideas: list[dict[str, Any]]) -> dict[str, Any]:
         "portfolio_basis_sha256": pin, "active_idea_count": len(active),
         "layered_idea_count": len(wave), "blocked_idea_count": len(blocked),
         "cycle_or_downstream_idea_count": len(residual),
+        "exact_cycle_member_count": len(cycle_membership),
+        "exact_cycle_downstream_count": len(cycle_downstream),
+        "cycle_groups": [{"group": i+1, "idea_ids": group} for i, group in enumerate(cycle_groups)],
+        "unknown_dependency_link_count": unknown_links,
         "wave_count": len(groups), "waves": [
             {"wave": level, "idea_ids": groups[level]} for level in sorted(groups)],
         "ideas": rows, "all_active_ideas_classified": True,
@@ -195,18 +205,19 @@ def review() -> dict[str, Any]:
         if truncated:
             break
 
+    waves = dependency_waves(all_ideas)
     return {
         "format": FORMAT,
-        "dependency_waves": dependency_waves(all_ideas),
+        "dependency_waves": waves,
         "active_ideas": len(active),
         "active_ideas_with_target_quarter": with_targets,
         "active_ideas_with_dependencies": with_dependencies,
         "risk_candidates": risks,
         "risk_candidates_truncated": truncated,
-        "review_complete": not truncated and not any(
+        "review_complete": not truncated and not waves["cycle_groups"] and not waves["unknown_dependency_link_count"] and not any(
             r["kind"] in {"review_depth_limit", "dependency_cycle", "deleted_or_unknown_dependency"}
             for r in risks),
-        "status": "review_candidates" if risks else "no_declared_conflicts_detected",
+        "status": "review_candidates" if risks or waves["cycle_groups"] or waves["unknown_dependency_link_count"] else "no_declared_conflicts_detected",
         "all_ideas_evaluated": not truncated,
         "source_systems_queried": False,
         "planned_quarters_are_verified": False,
