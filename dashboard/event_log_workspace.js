@@ -1181,6 +1181,8 @@
     const collapse=input('owgActivityMappingCollapse','checkbox');
     const addGroup=button('Add group','secondary');addGroup.id='owgActivityGroupAdd';
     const save=button('Save mapping','secondary');save.id='owgActivityMappingSave';
+    const cancel=button('Cancel editing','secondary');cancel.id='owgActivityMappingCancel';cancel.hidden=true;
+    let editing=null;
     const msg=el('div',null,'muted');msg.id='owgActivityMappingStatus';msg.setAttribute('role','status');msg.setAttribute('aria-live','polite');
     const generation=state.generation;
     const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/activity-mappings';
@@ -1196,7 +1198,15 @@
         toggle.onclick=async()=>{try{await post(base()+'/applied',{mapping_id:m.applied?null:m.mapping_id});await analyse();}catch(e){msg.textContent=e.message;}};
         const del=button('Delete','secondary');del.setAttribute('aria-label','Delete mapping '+m.name);
         del.onclick=async()=>{try{await post(base()+'/'+encodeURIComponent(m.mapping_id)+'/delete',{});if(m.applied)await analyse();else render({...r,mappings:(await (await api(base())).json()).mappings});}catch(e){msg.textContent=e.message;}};
-        li.append(toggle,del);list.appendChild(li);
+        const edit=button('Edit','secondary');edit.setAttribute('aria-label','Edit mapping '+m.name);edit.disabled=m.applied;
+        edit.title=m.applied?'Stop applying this mapping before editing.':'';
+        edit.onclick=()=>{
+          if(groups.length&&!window.confirm('Replace the current mapping draft?'))return;
+          editing={id:m.mapping_id,revision:m.definition_sha256};groups.splice(0,groups.length,...m.groups.map(g=>({label:g.label,activities:[...g.activities]})));
+          name.value=m.name;collapse.checked=m.collapse_repeats;drawDraft();save.textContent='Save changes';cancel.hidden=false;
+          msg.textContent='Editing “'+m.name+'”. Changes are saved only when you choose Save changes.';
+        };
+        li.append(toggle,del,edit);list.appendChild(li);
       });
       host.replaceChildren(r.mappings.length?list:el('div','No saved mappings.','muted'));
     };
@@ -1207,11 +1217,13 @@
     };
     save.onclick=async()=>{
       if(!groups.length){msg.textContent='Add at least one group.';return;}
-      try{const m=await post(base(),{name:name.value.trim()||'Activity mapping',groups,collapse_repeats:collapse.checked});
-        groups.length=0;drawDraft();msg.textContent='Saved “'+m.name+'”. Apply it to see it in every analysis.'+(m.activities_not_in_log.length?' Not in this log: '+m.activities_not_in_log.join(', ')+'.':'');
+      try{const definition={name:name.value.trim()||'Activity mapping',groups,collapse_repeats:collapse.checked};
+        const m=editing?await post(base()+'/'+encodeURIComponent(editing.id)+'/update',{expected_sha256:editing.revision,mapping:definition}):await post(base(),definition);
+        editing=null;save.textContent='Save mapping';cancel.hidden=true;groups.length=0;drawDraft();msg.textContent='Saved “'+m.name+'”. Apply it to see it in every analysis.'+(m.activities_not_in_log.length?' Not in this log: '+m.activities_not_in_log.join(', ')+'.':'');
         render(await (await api(base())).json());}
       catch(e){msg.textContent=e.message;}
     };
+    cancel.onclick=()=>{editing=null;groups.length=0;drawDraft();name.value='';collapse.checked=false;save.textContent='Save mapping';cancel.hidden=true;msg.textContent='Editing cancelled.';};
     const row=el('div',null,'row');row.style.alignItems='end';
     const collapseWrap=el('div');const collapseLabel=el('label',' Collapse consecutive repeats into the first');collapseLabel.htmlFor=collapse.id;collapseWrap.append(collapse,collapseLabel);
     row.append(field('Mapping name',name),field('Group name',label),field('Activities in the group',pick),addGroup);
@@ -1238,7 +1250,7 @@
         suggestions.replaceChildren(el('div',r.groups.length+' groups of names that may be the same activity'+(r.groups_total>r.groups.length?' (showing '+r.groups.length+' of '+r.groups_total+')':'')+'. '+r.caveat,'muted'),list,use);
       }catch(e){suggestions.replaceChildren(el('div',e.message,'muted'));}
       finally{suggest.disabled=false;}};
-    box.append(host,row,suggest,suggestions,draft,collapseWrap,save,msg);
+    box.append(host,row,suggest,suggestions,draft,collapseWrap,save,cancel,msg);
     api(base()).then(r=>r.json()).then(render).catch(e=>{msg.textContent=e.message;});
     return box;
   }

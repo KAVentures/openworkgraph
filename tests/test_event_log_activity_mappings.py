@@ -93,6 +93,28 @@ def test_validation_one_applied_at_a_time_delete_and_erase():
         mappings.listing(log)
 
 
+def test_edit_requires_reviewed_revision_and_inactive_mapping():
+    log = _log()
+    made = mappings.create(log, ENTER)
+    mid, revision = made["mapping_id"], made["definition_sha256"]
+    replacement = {**ENTER, "name": "Revised", "collapse_repeats": False}
+    mappings.apply_mapping(log, mid)
+    with pytest.raises(mappings.MappingConflict, match="stop applying"):
+        mappings.update(log, mid, {"expected_sha256": revision, "mapping": replacement})
+    assert mappings.listing(log)["mappings"][0]["name"] == "Data entry"
+    mappings.apply_mapping(log, None)
+    updated = mappings.update(log, mid, {"expected_sha256": revision, "mapping": replacement})
+    assert updated["mapping_id"] == mid and updated["created_at"] == made["created_at"]
+    assert updated["applied"] is False and updated["definition_sha256"] != revision
+    with pytest.raises(mappings.MappingConflict, match="changed since"):
+        mappings.update(log, mid, {"expected_sha256": revision, "mapping": ENTER})
+    assert mappings.listing(log)["mappings"][0]["name"] == "Revised"
+    assert "activity_mapping" not in workspace.variants(log)
+    mappings.apply_mapping(log, mid)
+    assert ("Open form", "Enter data", "Enter data", "Submit", "Approve") in {
+        tuple(v["path"]) for v in workspace.variants(log)["variants"]}
+
+
 def test_routes_require_the_dashboard(tmp_path):
     import os
     import subprocess
@@ -115,10 +137,18 @@ with TestClient(app) as client:
     made = client.post(base, json=body, headers=owner)
     assert made.status_code == 200, made.text
     mid = made.json()["mapping_id"]
+    revision = made.json()["definition_sha256"]
+    update = {"expected_sha256": revision, "mapping": {**body, "name": "Revised"}}
+    assert client.post(f"{base}/{mid}/update", json=update, headers=bearer).status_code == 403
+    assert client.post(f"{base}/{mid}/update", json=update, headers=owner).status_code == 200
+    assert client.post(f"{base}/{mid}/update", json=update, headers=owner).status_code == 409
     assert client.post(base + "/applied", json={"mapping_id": mid}, headers=bearer).status_code == 403
     assert client.post(base + "/applied", json={"mapping_id": 5}, headers=owner).status_code == 422
     assert client.post(base + "/applied", json={"mapping_id": "amap_x"}, headers=owner).status_code == 404
     assert client.post(base + "/applied", json={"mapping_id": mid}, headers=owner).status_code == 200
+    current = client.get(base, headers=owner).json()["mappings"][0]
+    assert client.post(f"{base}/{mid}/update", json={"expected_sha256": current["definition_sha256"], "mapping": body}, headers=owner).status_code == 409
+    assert client.post(f"{base}/{mid}/update", json={"expected_sha256": "bad", "mapping": body}, headers=owner).status_code == 422
     variants = client.get(f"/v1/event-logs/{log}/variants", headers=owner).json()
     assert [v["path"] for v in variants["variants"]] == [["A", "B", "C"]] and variants["activity_mapping"]["mapping_id"] == mid
     assert client.get(base, headers=bearer).status_code == 403

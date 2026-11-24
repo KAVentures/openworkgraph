@@ -3442,3 +3442,12 @@ Dashboard owners can download a saved log as an Excel workbook (`GET /v1/event-l
 ### Rework and loop case evidence
 
 The local rework report shows the total number of repeated activities and recorded loop patterns, with an adjustable display limit of 20, 50 or 100. JSON and CSV downloads contain the displayed results and the JSON includes the selected cohort and analysis settings. The report offers explicit case-evidence links for repeated activities and exact closed activity loops. Selectors respect the active case cohort and retain literal event order; timestamp ties do not establish business order.
+
+### Editing saved activity groupings
+
+Use **Edit** on an inactive saved activity mapping to load its groups into a
+draft. Save changes to update that mapping, or cancel to discard the draft.
+Stop applying a mapping before editing it; saving never applies it. A change
+made elsewhere since the draft was loaded is refused, so reload before saving.
+The update endpoint accepts the reviewed `expected_sha256` and a `mapping`
+definition at `POST /v1/event-logs/{log_id}/activity-mappings/{id}/update`.
