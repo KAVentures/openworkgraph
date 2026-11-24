@@ -176,12 +176,20 @@ async def event_log_save_cost_model(request: Request, log_id: str):
     """Keep the analyst's prices with the log; the report then includes a cost section."""
     from . import event_log_costs as cost_model
     _require_dashboard(request)
-    spec = await _json_body(request, "cost model", strict=True, limit=131072)
+    spec = await _json_body(request, "cost model", strict=True, limit=cost_model.MAX_REQUEST_BYTES)
     try:
         result = await run_in_threadpool(cost_model.save_model, log_id, spec)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/cost-model/preview")
+async def event_log_preview_cost_model(request: Request, log_id: str):
+    from . import event_log_costs as cost_model
+    _require_dashboard(request)
+    spec = await _json_body(request, "cost model file", strict=True, limit=cost_model.MAX_REQUEST_BYTES)
+    return await run_in_threadpool(_respond, cost_model.preview_model, log_id, spec)
 
 
 @router.post("/v1/event-logs/{log_id}/cost-model/delete")
@@ -196,7 +204,7 @@ async def event_log_costs(request: Request, log_id: str):
     """Process cost from a user-supplied cost model: per case, activity, variant and resource."""
     from . import event_log_costs as cost_model
     _require_dashboard(request)
-    spec = await _json_body(request, "cost model", strict=True, limit=131072)
+    spec = await _json_body(request, "cost model", strict=True, limit=cost_model.MAX_REQUEST_BYTES)
     try:
         result = await run_in_threadpool(cost_model.costs, log_id, spec)
     except workspace.EventLogWorkspaceError as exc:
@@ -208,7 +216,7 @@ async def event_log_costs(request: Request, log_id: str):
 async def event_log_cost_cases(request: Request, log_id: str):
     from . import event_log_costs as cost_model
     _require_dashboard(request)
-    spec = await _json_body(request, "case cost settings", strict=True, limit=131072)
+    spec = await _json_body(request, "case cost settings", strict=True, limit=cost_model.MAX_REQUEST_BYTES)
     return await run_in_threadpool(_respond, cost_model.case_costs, log_id, spec)
 
 
