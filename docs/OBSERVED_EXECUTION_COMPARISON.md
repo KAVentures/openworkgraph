@@ -91,3 +91,22 @@ or event contents. Editing criteria or changing paths clears sharing
 confirmation. This is not a grant, an execution request, or a verified
 outcome; use the existing agent implementation and authorization workflow
 for any subsequent action.
+
+## Per-execution foreground coverage
+
+The workbench reports retained event counts and wall-clock foreground coverage
+within each inferred human execution window. It clips focus spans to that
+window and unions overlaps instead of adding duplicated durations. Intervals
+with more than one distinct surface token are reported as ambiguous overlap,
+not attributed twice. The remaining window is unknown time: not idle,
+waiting, billable hours or labor. Runs may themselves overlap; adding their
+coverage does not measure unique work time.
+
+Select a run to examine exclusive surface attribution, ambiguous overlap,
+and ignored invalid spans. Missing foreground evidence is reported as
+unobserved, not a measured zero. For agent runs, foreground coverage is
+not applicable. Only already-selected evidence is used, so spans outside
+the retained event scope can be missing. At most 30 surface rows are
+displayed; the remaining exclusive seconds are preserved separately.
+The evidence response adds an optional versioned timing projection without
+changing existing timing fields or requiring additional source queries.
