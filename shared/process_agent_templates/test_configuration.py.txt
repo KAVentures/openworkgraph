@@ -216,6 +216,53 @@ class ConfigurationCases(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ImplementationError):
             audit_bindings(spec,catalog|{'omitted_tool_count':'PRIVATE_INVALID_COUNT'},suite,bindings)
 
+    async def test_batch_route_triage_preserves_exact_cases_and_duplicate_inputs(self):
+        from configure import shortlist_case_batch, shortlist_reviewed_routes
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        original=suite['cases'][0]['input']
+        selected=[original,{**original,'issue':'PRIVATE_NEW_CASE'},deepcopy(original),
+                  suite['cases'][2]['input'],{'issue':'PRIVATE_MISSING_INPUT'}]
+        batch={'format':'openworkgraph.selected-route-cases.v1','case_inputs_authorized':True,
+               'cases':[{'id':'case_'+str(i+1),'input':case} for i,case in enumerate(selected)]}
+        report=shortlist_case_batch(spec,suite,bindings,batch)
+        self.assertEqual(report['selected_batch_sha256'],digest(batch))
+        self.assertEqual(report['selected_case_count'],5)
+        self.assertEqual(report['distinct_selected_input_count'],4)
+        self.assertEqual(report['case_route_check_count'],5)
+        self.assertEqual([row['duplicate_selected_input'] for row in report['cases']],
+                         [True,False,True,False,False])
+        self.assertEqual(report['status_counts'],{
+            'one_exact_reviewed_route_static_checks_clear':2,
+            'new_input_requires_route_review':2,'exact_input_requires_clarification':1})
+        for row,case in zip(report['cases'],selected):
+            independent=shortlist_reviewed_routes(spec,suite,bindings,case)
+            self.assertEqual(row['case_sha256'],digest(case))
+            self.assertEqual(row['status'],independent['status'])
+            self.assertEqual(row['routes_with_clear_offline_requirements'],
+                             independent['routes_with_clear_offline_requirements'])
+            self.assertEqual([option['route_sha256'] for option in row['routes']],
+                             [option['route_sha256'] for option in independent['routes']])
+        self.assertNotIn('PRIVATE_',json.dumps(report))
+        self.assertNotIn('SYNTHETIC_PRIVATE_RECORD',json.dumps(report))
+        self.assertFalse(report['execution_authorized'])
+        self.assertFalse(report['automatic_route_selected'])
+        self.assertFalse(self.tools.business_calls)
+        for invalid in ({**batch,'case_inputs_authorized':False},
+                        {**batch,'cases':[]},
+                        {**batch,'cases':batch['cases'][:1]*2},
+                        {**batch,'cases':[{'id':'PRIVATE_ID','input':{}}]},
+                        {**batch,'cases':[{'id':'case_1','input':{'x':'a'*65536}}]},
+                        {**batch,'cases':[{'id':'case_'+str(i),'input':{}} for i in range(21)]}):
+            with self.assertRaises(ImplementationError):
+                shortlist_case_batch(spec,suite,bindings,invalid)
+        # Bound the entire Cartesian workload before any route preparation.
+        synthetic=[{'expected':{'accepted_routes':[['start',str(i),'end'] for i in range(21)]}}]
+        large={**batch,'cases':[{'id':'case_'+str(i),'input':{}} for i in range(20)]}
+        with patch('evaluate.validate_suite',return_value=synthetic),patch('configure.shortlist_reviewed_routes') as check:
+            with self.assertRaises(ImplementationError):
+                shortlist_case_batch(spec,suite,bindings,large)
+            check.assert_not_called()
+
     async def test_shortlist_distinguishes_exact_reviews_from_new_case_and_conflicts(self):
         from configure import shortlist_reviewed_routes
         spec,catalog,suite,bindings=self.reviewed_audit_fixture()
@@ -474,6 +521,19 @@ class ConfigurationCases(unittest.IsolatedAsyncioTestCase):
             result=subprocess.run(shortlist+['--confirm-retain-case-inputs'],cwd=root,capture_output=True,text=True,timeout=20)
             self.assertNotEqual(result.returncode,0)
             self.assertFalse((root/'ambiguous.json').exists())
+            batch={'format':'openworkgraph.selected-route-cases.v1','case_inputs_authorized':True,
+                   'cases':[{'id':'case_1','input':suite['cases'][0]['input']},
+                            {'id':'case_2','input':suite['cases'][2]['input']}]}
+            (root/'batch.json').write_text(json.dumps(batch),encoding='utf-8')
+            batch_command=[sys.executable,'configure.py','--shortlist-case-batch','--cases','suite.json',
+                           '--bindings','bindings.json','--case-batch','batch.json','--output','batch-review.json']
+            result=subprocess.run(batch_command,cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            report=load_object(root/'batch-review.json')
+            self.assertEqual(report['selected_case_count'],2)
+            self.assertEqual(report['cases'][1]['status'],'exact_input_requires_clarification')
+            self.assertFalse(report['execution_authorized'])
+
             new_case={**suite['cases'][0]['input'],'issue':'SYNTHETIC_NEW_CASE',
                       'request_id':'new-case-idempotency-key','record_ref':'owg:r:'+'e'*32}
             (root/'new-case.json').write_text(json.dumps(new_case),encoding='utf-8')
