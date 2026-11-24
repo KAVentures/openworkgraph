@@ -147,3 +147,31 @@ or execution call occurs during preparation. A reviewed expectation is
 not evidence of current provider state or permission to act.
 
 Local validation of the exact extracted directory writer (1,596 characters, FNV-1a 352013743): 100 real filesystem round trips with permission and JSON checks, 100 overwrite refusals, five injected file-open failures and three invalid-input refusals passed. Full route preparation and generated executor integration tests are committed but have not been run locally.
+
+
+## Reuse a reviewed route on a new business case
+
+    python configure.py --prepare-reviewed-case --cases reviewed-cases.json --bindings bindings.json --case-id case_1 --alternative 1 --new-case authorized-new-case.json --confirm-retain-case-inputs --output new-case-prepared
+
+This is a deterministic route reuse operation, not a new planner prediction.
+The selected suite case and alternative supply the route only. The newly
+selected input supplies every case argument, result predicate input, source
+record reference and other case-bound value through the normal executor
+preparation contract. The old case values are not copied into the new
+package. The review retains the original case digest for lineage and the
+new case digest for exact intent binding. The disabled intent is freshly
+generated. A reviewed route for the old case does not establish its
+applicability or authorization for the new case, even if the inputs happen
+to have the same bytes. An operator must assess the new case and resolve
+any missing facts, current conditions and binding requirements before
+authorizing execution. Clarification-only reference cases cannot provide
+an executable route.
+
+The exact extracted route-materialization function (3,326 characters,
+FNV-1a 3969273020) passed 2,000 locally exercised original/new-input selection
+and intent handoff cases and seven refusal cases using stubbed suite
+validation and preparation. Added generated-runtime tests exercise actual
+executor preparation and synthetic tools/source receipts on a different
+case, including refusal of the disabled intent and reuse of its later
+synthetic authorization with the original case. These end-to-end tests
+remain pending full CI; no real provider was contacted.
