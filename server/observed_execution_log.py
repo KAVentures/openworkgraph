@@ -83,7 +83,7 @@ def _iso(value: Any) -> str:
         if parsed.tzinfo is None:
             raise ValueError
         return parsed.astimezone(timezone.utc).isoformat(timespec="microseconds")
-    except (ValueError, OverflowError):
+    except (ValueError, OverflowError, OSError):
         raise SnapshotError("A timezone-qualified timestamp is required") from None
 
 
@@ -208,6 +208,78 @@ def preview(spec: Any) -> dict[str, Any]:
     return prepare(spec)[1]
 
 
+def source(log_id: str) -> dict[str, Any]:
+    """Read the original immutable manifest, without consulting source history."""
+    from . import event_log_workspace as workspace
+
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            log = workspace._check_log(conn, log_id)
+            row = conn.execute(
+                "SELECT snapshot_sha256, source_report FROM observed_execution_log_sources WHERE log_id = ?",
+                [log_id],
+            ).fetchone()
+            if row is None:
+                raise SnapshotError("This log is not an observed execution snapshot")
+            report = json.loads(row[1])
+            if report.get("format") != FORMAT or report.get("snapshot_sha256") != row[0]:
+                raise SnapshotError("The original snapshot manifest is unavailable")
+            return {
+                **report, "log_id": log_id, "name": log["name"],
+                "stored_event_count": log["events"],
+                "source_history_rechecked": False,
+                "stored_independent_snapshot": True,
+            }
+        finally:
+            conn.close()
+
+
+def recheck(log_id: str) -> dict[str, Any]:
+    """Compare the original projection with the currently retained evidence.
+
+    A match concerns only the selected structural rows and scope, never
+    business truth or the completeness of capture. The log is not changed.
+    """
+    original = source(log_id)
+    observed_at = datetime.now(timezone.utc).isoformat()
+    current_digest = None
+    status = "source_unavailable"
+    reason = "Selected retained evidence is unavailable in the original scope"
+    try:
+        current = preview(original["scope"])
+        current_digest = current["snapshot_sha256"]
+        if current_digest == original["snapshot_sha256"]:
+            status = "projection_matches"
+            reason = "The currently retained structural projection matches the original snapshot"
+        else:
+            status = "projection_changed"
+            reason = "The currently retained structural projection differs from the original snapshot"
+    except (SnapshotError, evidence.WorkflowEvidenceError):
+        # Missing, overlapping, ambiguous or capped evidence must not become
+        # a false match or an assertion that the original observations were wrong.
+        pass
+
+    # Do not return an authoritative result about a deleted/replaced log.
+    latest = source(log_id)
+    if latest["snapshot_sha256"] != original["snapshot_sha256"]:
+        raise SnapshotError("The selected snapshot changed; reopen the retained log")
+    return {
+        "format": "openworkgraph.observed-execution-log-recheck.v1",
+        "log_id": log_id,
+        "original_snapshot_sha256": original["snapshot_sha256"],
+        "current_projection_sha256": current_digest,
+        "checked_at": observed_at,
+        "status": status,
+        "reason": reason,
+        "business_case_identity_verified": False,
+        "business_outcomes_verified": False,
+        "capture_complete": False,
+        "stored_log_changed": False,
+    }
+
+
+
 def create(spec: Any, *, expected_sha256: str, name: str) -> dict[str, Any]:
     if not isinstance(expected_sha256, str) or not re.fullmatch(r"[a-f0-9]{64}", expected_sha256):
         raise SnapshotError("Review the exact snapshot preview before importing")
@@ -265,4 +337,4 @@ def create(spec: Any, *, expected_sha256: str, name: str) -> dict[str, Any]:
             "stored_independent_snapshot": True, "existing_snapshot_reused": False}
 
 
-__all__ = ["preview", "create", "project", "SnapshotError"]
+__all__ = ["preview", "create", "project", "source", "recheck", "SnapshotError"]
