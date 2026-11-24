@@ -108,3 +108,40 @@ comparisons and five mismatched-basis refusal checks in a local isolated
 test. This validates the delta algorithm, not end-to-end generated runtime
 integration. Additional generated-runtime and CLI regression tests are
 included; full exact-head CI is required.
+
+
+## Turn one reviewed route into actual executor inputs
+
+No further planner model call is required when an authorized customer has
+already reviewed the exact route and case in the suite:
+
+    python configure.py --prepare-reviewed-case --cases reviewed-cases.json --bindings bindings.json --case-id case_1 --alternative 1 --confirm-retain-case-inputs --output prepared-case
+
+The case ID and one-based alternative must be explicit. Clarification-only
+cases are refused, rather than silently choosing an executable route. The
+same runtime preparation contract used by execute.py validates the selected
+case, model and mappings. The new directory contains case.json, plan.json,
+bindings.json, customer-intent.json and preparation-review.json. The first
+four can be passed directly to the existing executor. The minimized review
+pins the selected case, suite, route, bindings, spec and disabled intent and
+reports offline implementation requirements and human/source dependencies.
+
+The explicit retention confirmation is necessary because the directory
+contains actual selected case values and binding configuration, not merely
+a minimized report. Store it in a trusted local folder, protect it under
+customer retention policy and never commit it or share it automatically.
+Each file is bounded to the executor input limit, created exclusively with
+private POSIX permissions; Windows inherits ACLs. No existing files are
+overwritten. Failed writes attempt to remove only the newly created files.
+
+Review using the existing offline executor:
+
+    python execute.py --plan prepared-case/plan.json --case prepared-case/case.json --bindings prepared-case/bindings.json
+
+All implementation requirements must be resolved. The emitted intent has
+authorization and source-read confirmation false and no expiry; it cannot
+execute as generated. An authorized human must separately review the exact
+inputs, resolve requirements and supply the existing exact customer intent
+before using the existing execution mode. No model, source provider, tool
+or execution call occurs during preparation. A reviewed expectation is
+not evidence of current provider state or permission to act.
