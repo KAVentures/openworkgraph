@@ -266,8 +266,102 @@ def _bulk_load(conn, deployment_id: str, runs: list[dict[str, Any]], spec_hash: 
     return steps
 
 
-def import_report(document: Any, deployment_id: str | None = None) -> dict[str, Any]:
-    """Store a report; runs with an existing run_id in the same deployment are replaced."""
+class RunRevisionConflict(MonitoringError):
+    """A signed replacement would change or discard retained run evidence."""
+
+    def __init__(self, counts):
+        self.counts = dict(sorted(counts.items()))
+        super().__init__("signed report conflicts with retained run evidence; review before manual correction")
+
+
+def _revision_relation(previous, incoming, spec_hash):
+    """Classify snapshots, without relying on delivery order as execution order.
+
+    Both documents are customer claims. A terminal snapshot is immutable on
+    the unattended signed path; the existing local operator import remains
+    the explicit correction route. Running snapshots may advance conservatively.
+    """
+    if previous["started_at"] != incoming["started_at"]:
+        return "start_identity_changed"
+    old_spec = previous["spec_hash"]
+    if old_spec is not None and old_spec != spec_hash:
+        return "retained_spec_attribution_changed"
+    if all(previous[k] == incoming[k] for k in
+           ("finished_at", "status", "verified", "source", "steps")):
+        return "identical" if old_spec == spec_hash else "attribution_enriched"
+    if previous["status"] != "running":
+        return "terminal_snapshot_changed"
+    if previous["source"] and previous["source"] != incoming["source"]:
+        return "outcome_source_changed"
+    if previous["verified"] is not None and previous["verified"] != incoming["verified"]:
+        return "reported_verification_changed"
+    old_steps, new_steps = previous["steps"], incoming["steps"]
+    if len(new_steps) < len(old_steps):
+        return "step_history_shortened"
+    for index, old in enumerate(old_steps):
+        new = new_steps[index]
+        if old == new:
+            continue
+        # The journal projector uses handed_to_human for its outstanding
+        # attempt in a running snapshot. The same final pending step can
+        # acquire a later completed/failed disposition, not a new identity.
+        if (index == len(old_steps) - 1 and old[:2] == new[:2]
+                and old[2] == "handed_to_human"
+                and new[2] in {"completed", "failed", "handed_to_human"}
+                and new[3] >= old[3]):
+            continue
+        return "retained_step_changed"
+    if old_steps and any(step[3] < old_steps[-1][3] for step in new_steps[len(old_steps):]):
+        return "step_history_time_regressed"
+    if incoming["finished_at"] is not None and new_steps and any(
+            step[3] > incoming["finished_at"] for step in new_steps):
+        return "finish_precedes_retained_step"
+    return "advanced"
+
+
+def _guard_signed_revisions(conn, deployment_id, incoming, spec_hash):
+    """Check the entire batch inside its import transaction before mutation.
+
+    Retrieve matching run headers and ordered step rows in two bulk queries.
+    No per-run SQL, raw report bodies or additional durable state required.
+    """
+    ids = [r["run_id"] for r in incoming]
+    previous = {}
+    for row in conn.execute("""
+        SELECT run_id, started_at, finished_at, status, outcome_reported_verified,
+               outcome_source, reported_spec_sha256 FROM runs
+        WHERE deployment_id = ? AND list_contains(?, run_id)
+    """, [deployment_id, ids]).fetchall():
+        previous[row[0]] = dict(zip(
+            ("started_at", "finished_at", "status", "verified", "source", "spec_hash"), row[1:]))
+        previous[row[0]]["steps"] = []
+    if previous:
+        for row in conn.execute("""
+            SELECT run_id, step_id, activity, status, observed_at FROM steps
+            WHERE deployment_id = ? AND list_contains(?, run_id)
+            ORDER BY run_id, seq
+        """, [deployment_id, list(previous)]).fetchall():
+            previous[row[0]]["steps"].append(tuple(row[1:]))
+    counts = {"new": 0, "identical": 0, "advanced": 0, "attribution_enriched": 0}
+    conflicts = {}
+    replacements = []
+    for run in incoming:
+        old = previous.get(run["run_id"])
+        relation = _revision_relation(old, run, spec_hash) if old is not None else "new"
+        if relation in counts:
+            counts[relation] += 1
+            if relation != "identical":
+                replacements.append(run)
+        else:
+            conflicts[relation] = conflicts.get(relation, 0) + 1
+    if conflicts:
+        raise RunRevisionConflict(conflicts)
+    return replacements, counts
+
+
+def import_report(document: Any, deployment_id: str | None = None, *,
+                  protect_signed_revisions: bool = False) -> dict[str, Any]:
+    """Store reports; unattended signed delivery cannot erase retained evidence."""
     report = parse_report(document)
     with _LOCK:
         conn = _connect()
@@ -291,16 +385,24 @@ def import_report(document: Any, deployment_id: str | None = None) -> dict[str, 
                 if report['spec_hash'] and not info['reported_spec_sha256']:
                     conn.execute('UPDATE deployments SET reported_spec_sha256=? WHERE deployment_id=?',
                                  [report['spec_hash'],deployment_id])
-                ids = [r["run_id"] for r in report["runs"]]
-                conn.execute("DELETE FROM steps WHERE deployment_id = ? AND list_contains(?, run_id)", [deployment_id, ids])
-                conn.execute("DELETE FROM runs WHERE deployment_id = ? AND list_contains(?, run_id)", [deployment_id, ids])
-                step_count = _bulk_load(conn, deployment_id, report["runs"], report["spec_hash"])
+                replacements = report["runs"]
+                revision_counts = None
+                if protect_signed_revisions:
+                    replacements, revision_counts = _guard_signed_revisions(
+                        conn, deployment_id, replacements, report["spec_hash"])
+                ids = [r["run_id"] for r in replacements]
+                step_count = 0
+                if ids:
+                    conn.execute("DELETE FROM steps WHERE deployment_id = ? AND list_contains(?, run_id)", [deployment_id, ids])
+                    conn.execute("DELETE FROM runs WHERE deployment_id = ? AND list_contains(?, run_id)", [deployment_id, ids])
+                    step_count = _bulk_load(conn, deployment_id, replacements, report["spec_hash"])
                 conn.execute("COMMIT")
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
-            return {"deployment": _check(conn, deployment_id), "runs_imported": len(report["runs"]),
-                    "steps_imported": step_count}
+            return {"deployment": _check(conn, deployment_id), "runs_imported": len(replacements),
+                    "steps_imported": step_count,
+                    **({"revision_counts": revision_counts} if revision_counts is not None else {})}
         finally:
             conn.close()
 
