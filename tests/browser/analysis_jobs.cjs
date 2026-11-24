@@ -70,6 +70,52 @@ const path=require('node:path');
   // Same result can still be explicitly saved and re-run via the normal builder.
   await page.locator('#owgAnalysisName').fill('Two cases');await page.locator('#owgAnalysisSave').click();
   await page.getByRole('button',{name:'Run saved analysis Two cases',exact:true}).click();await complete();
+  await page.locator('#owgCaseFilterContainsActivity').fill('B');
+  await page.locator('#owgCaseFilterApply').click();
+  const scope=page.getByLabel('Cases to analyse',{exact:true});
+  await scope.waitFor();
+  assert.equal(await scope.inputValue(),'all');
+  await run();await complete();assert.match(await out.textContent(),/2 matching cases/);
+  await scope.selectOption('active');assert.ok(await page.locator('#owgAnalysisSave').isDisabled());
+  await run();await complete();assert.match(await out.textContent(),/1 matching cases/);
+  await page.locator('#owgAnalysisName').fill('Only B');
+  await page.locator('#owgAnalysisSave').click();
+  const load=page.getByRole('button',{name:'Load saved analysis Only B into builder',exact:true});
+  await load.waitFor();
+  await page.locator('#owgCaseFilterClear').click();
+  await scope.waitFor({state:'hidden'});
+  await load.click();
+  await status.getByText('Loaded Only B into the builder.',{exact:false}).waitFor();
+  assert.equal(await scope.inputValue(),'saved');
+  await run();await complete();assert.match(await out.textContent(),/1 matching cases/);
+  await scope.selectOption('all');
+  await run();await complete();assert.match(await out.textContent(),/2 matching cases/);
+
+  const ocel={objectTypes:[],eventTypes:[],
+    objects:[{id:'order-1',type:'order'},{id:'item-1',type:'item'},{id:'item-2',type:'item'}],
+    events:[{id:'e1',type:'Pack',time:'2024-02-01T08:00:00Z',
+      relationships:['order-1','item-1','item-2'].map(objectId=>({objectId,qualifier:''}))}]};
+  await page.locator('#owgEventLogFile').setInputFiles({name:'object-scope.jsonocel',mimeType:'application/json',
+    buffer:Buffer.from(JSON.stringify(ocel))});
+  await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
+  await page.locator('#owgEventLogStatus').getByText('Imported 1 events.',{exact:false}).waitFor();
+  await page.locator('#owgEventLogCaseType').selectOption('order');
+  await page.locator('#owgEventLogAnalyze').click();
+  await run();await complete();assert.match(await out.textContent(),/1 matching cases.*Case notion: order/);
+  await page.locator('#owgAnalysisName').fill('Orders');
+  await page.locator('#owgAnalysisSave').click();
+  const savedOrder=page.getByRole('button',{name:'Run saved analysis Orders',exact:true});
+  await savedOrder.waitFor();
+  await page.locator('#owgEventLogCaseType').selectOption('item');
+  await page.locator('#owgEventLogAnalyze').click();
+  await run();await complete();assert.match(await out.textContent(),/2 matching cases.*Case notion: item/);
+  await page.locator('#owgAnalysisBackground').uncheck();
+  await savedOrder.click();await complete();assert.match(await out.textContent(),/1 matching cases.*Case notion: order/);
+  assert.equal(await page.locator('#owgEventLogCaseType').inputValue(),'item');
+  const [scopedExport]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisJson').click()]);
+  const exported=JSON.parse(await fs.readFile(await scopedExport.path(),'utf8'));
+  assert.equal(exported.case_notion,'order');assert.deepEqual(exported.rows,[[1]]);
+
   const axe=await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8');
   await page.addScriptTag({content:axe});
   const audit=await page.evaluate(async()=>{const r=await axe.run(document.querySelector('#owgEventLogAnalysis'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}});return r.violations.map(v=>({id:v.id,nodes:v.nodes.length}));});
