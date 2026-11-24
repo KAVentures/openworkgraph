@@ -80,3 +80,45 @@ does not write to a company account or source provider.
   additional files present.
 - Full cross-platform, generated starter and packaged CI must pass before
   this capability is merged.
+
+
+## Compare two generated runtime releases before an upgrade
+
+Extract the original and candidate releases into separate dedicated directories.
+Obtain both manifest SHA-256 digests from trusted records outside the archives.
+Use a trusted copy of the current verifier (do not execute a verifier supplied
+by an untrusted candidate):
+
+```sh
+python /trusted/verify_release.py --root /review/baseline \
+  --manifest-sha256 BASELINE_PIN \
+  --compare-root /review/candidate \
+  --compare-manifest-sha256 CANDIDATE_PIN
+```
+
+The standard-library-only command verifies both generated-file inventories
+against their independently retained pins before producing a JSON comparison.
+Missing pins, changed files, inconsistent manifests or a different workflow ID
+cause refusal rather than a partial report. The report distinguishes:
+
+- newer or older saved revisions, unchanged revision identity, and reuse of
+  the same revision number with different content;
+- exact workflow-specification bytes versus canonical process-model changes;
+- generated paths added, removed or changed, their relevant SHA-256 digests,
+  and unchanged file count.
+
+A change to generator code can therefore be reviewed even when the design
+has not changed. An older candidate is flagged as such, not automatically
+rejected or deployed. The comparison also works with older compatible
+manifest-v1 bundles. It reads only generated inventory files and does not
+execute, copy, overwrite or install either runtime. The result is a local
+snapshot, not a filesystem lock or a signature. Successful comparison is
+not an assertion of dependency compatibility, runtime equivalence,
+customer-managed binding safety, remote deployment or business outcomes.
+Customer-managed files remain outside the generated inventory; review them
+separately. Run synthetic acceptance and the applicable reviewed case,
+binding, and provider checks before any upgrade. No execution is authorized.
+
+Tests cover same-design code changes, added/removed paths, upgrades,
+rollbacks, revision reuse, missing pins, changed files, forged manifests
+and the standalone CLI.
