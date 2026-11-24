@@ -45,7 +45,7 @@ const path=require('node:path');
     await page.locator('#owgEventLogCard').waitFor();
 
     const malicious='<img src=x onerror="window.signalOverviewInjected=true">';
-    const csv='case,activity,time\nC1,Open,2024-01-01T00:00:00Z\nC1,Close,2024-01-02T00:00:00Z\n';
+    const csv='case,activity,time\nC1,Open,2024-01-01T00:00:00Z\nC1,Close,2024-01-02T00:00:00Z\nC2,Open,2024-01-03T00:00:00Z\n';
     const setup=await page.evaluate(async({csv,malicious})=>{
       async function json(url,options={}){
         const r=await fetch(url,{...options,cache:'no-store'});
@@ -81,14 +81,16 @@ const path=require('node:path');
     await page.locator('#owgSignalName').fill('Draft preview');
     await page.locator('#owgSignalKind').selectOption('kpi');
     await page.locator('#owgSignalMetric').selectOption('case_count');
-    await page.locator('#owgSignalThreshold').fill('0');
     await page.getByRole('button',{name:'Preview signal',exact:true}).click();
     const preview=page.locator('#owgSignalPreviewStatus');
-    await preview.getByText('Would trigger. Result: 1. Checked 1 case.',{exact:true}).waitFor();
+    await preview.getByText('Enter a threshold.',{exact:true}).waitFor();
+    await page.locator('#owgSignalThreshold').fill('0');
+    await page.getByRole('button',{name:'Preview signal',exact:true}).click();
+    await preview.getByText('Would trigger. Result: 2. Checked 2 cases.',{exact:true}).waitFor();
     await page.locator('#owgSignalThreshold').fill('100');
     assert.equal(await preview.textContent(),'');
     await page.getByRole('button',{name:'Preview signal',exact:true}).click();
-    await preview.getByText('Would stay clear. Result: 1. Checked 1 case.',{exact:true}).waitFor();
+    await preview.getByText('Would stay clear. Result: 2. Checked 2 cases.',{exact:true}).waitFor();
     assert.equal(await page.getByRole('button',{name:'Delete signal Draft preview'}).count(),0);
     const rows=page.locator('#owgSignalAllResults tbody tr');
     assert.equal(await rows.count(),2);
@@ -220,6 +222,38 @@ const path=require('node:path');
     await pack.getByText('0 to add. 2 already present or repeated in the file.',{exact:true}).waitFor();
     assert(await pack.getByRole('button',{name:'Import signal rules',exact:true}).isDisabled());
 
+    await page.locator('#owgEventLogPick').selectOption(setup.a);
+    await page.locator('#owgEventLogAnalyze').click();
+    await page.locator('#owgCaseFilterContainsActivity').fill('Close');
+    await page.locator('#owgCaseFilterApply').click();
+    const scope=page.getByLabel('Cases to check',{exact:true});
+    await scope.waitFor();
+    assert.equal(await scope.inputValue(),'all');
+    await page.locator('#owgSignalName').fill('Closed cohort');
+    await page.locator('#owgSignalCondition').selectOption('contains_activity');
+    await page.locator('#owgSignalActivity').selectOption('Open');
+    await page.locator('#owgSignalMinimumCases').fill('2');
+    await page.getByRole('button',{name:'Preview signal',exact:true}).click();
+    await preview.getByText('Would trigger. Result: 2 cases. Checked 2 cases.',{exact:false}).waitFor();
+    await scope.selectOption('active');
+    await page.getByRole('button',{name:'Preview signal',exact:true}).click();
+    await preview.getByText('Would stay clear. Result: 1 case. Checked 1 case. Examples: C1.',{exact:true}).waitFor();
+    await page.getByRole('button',{name:'Save signal',exact:true}).click();
+    const saved=page.locator('#owgSignalRules tr').filter({hasText:'Closed cohort'});
+    await saved.getByText('Saved case filter',{exact:false}).waitFor();
+    await saved.getByText('minimum 2 cases',{exact:false}).waitFor();
+    const definition=await page.evaluate(async id=>{
+      const response=await fetch('/v1/event-logs/'+id+'/signals');
+      return (await response.json()).rules.find(rule=>rule.name==='Closed cohort');
+    },setup.a);
+    assert.deepEqual(definition.cohort,{activity:'Close'});
+    assert.equal(definition.when.minimum_cases,2);
+    await page.locator('#owgCaseFilterClear').click();
+    await scope.waitFor({state:'hidden'});
+    await page.locator('#owgSignalEvaluate').click();
+    const evaluated=page.locator('#owgSignalResults tbody tr').filter({hasText:'Closed cohort'});
+    await evaluated.getByText('no',{exact:true}).waitFor();
+    await evaluated.getByText('1 case',{exact:true}).waitFor();
     await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
     const audit=await page.evaluate(()=>window.axe.run(document.querySelector('#owgEventLogSignals'),{
       runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']}
