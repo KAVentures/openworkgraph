@@ -26,10 +26,12 @@ const path=require('node:path');
    // Five cases A,B,C ending Jan 1–5; two A,B,B,C (rework) ending Feb 1–2; one A,X ending Mar 1.
    const paths=[...Array(5).fill(['A','B','C']),...Array(2).fill(['A','B','B','C']),['A','X']];
    const ends=['2024-01-01','2024-01-02','2024-01-03','2024-01-04','2024-01-05','2024-02-01','2024-02-02','2024-03-01'];
-   const rows=['case,activity,time'];
-   paths.forEach((p,i)=>p.forEach((a,j)=>rows.push(`c${i},${a},${ends[i]}T0${j}:00:00Z`)));
+   const rows=['case,activity,time,who,channel'];
+   paths.forEach((p,i)=>p.forEach((a,j)=>rows.push(`c${i},${a},${ends[i]}T0${j}:00:00Z,${j===0&&i<2?'Åna':'Team'},${j===1&&(i===1||i===2)?'web':'email'}`)));
    await page.locator('#owgEventLogFile').setInputFiles({name:'more.csv',mimeType:'text/csv',buffer:Buffer.from(rows.join('\n'))});
-   await page.waitForFunction(()=>document.querySelector('#owgEventLogCase').options.length===3);
+   await page.waitForFunction(()=>document.querySelector('#owgEventLogCase').options.length===5);
+   await page.locator('#owgEventLogResource').selectOption('who');
+   await page.locator('#owgEventLogAttributes').selectOption(['channel']);
    await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Imported 25 events'}).waitFor();
    const summaryAfter=async action=>{const [response]=await Promise.all([page.waitForResponse(r=>/\/v1\/event-logs\/log_[0-9a-f]+\/summary(\?|$)/.test(r.url())),action()]);return {url:decodeURIComponent(response.url()),body:await response.json()};};
@@ -82,9 +84,72 @@ const path=require('node:path');
    s=await summaryAfter(()=>page.getByRole('button',{name:'Apply saved filter February starts'}).click());
    assert.equal(s.body.cases,2);
    assert.equal(await page.locator('#owgCaseFilterStartedFrom').inputValue(),'2024-02-01');
+   await summaryAfter(()=>page.locator('#owgCaseFilterClear').click());
+   await page.locator('#owgCaseFilterResource').fill('Å');
+   await page.locator('#owgCaseFilterResourceFind').click();
+   await page.locator('#owgCaseFilterResourceMatches').selectOption('Åna');
+   await page.locator('#owgCaseFilterResourceUse').click();
+   assert.equal(await page.locator('#owgCaseFilterResource').inputValue(),'Åna');
+   await page.locator('#owgCaseFilterEventAttribute').fill('channel=web');
+   s=await summaryAfter(()=>page.locator('#owgCaseFilterApply').click());
+   assert.equal(s.body.cases,1);
+   assert.equal(s.body.events,3,'the resource and attribute may match different events in the same case');
+   assert.equal(s.body.cohort.resource,'Åna');
+   assert.equal(s.body.cohort.event_attribute,'channel=web');
+   await page.locator('#owgFilterSetName').fill('Web cases touched by Åna');
+   await page.locator('#owgFilterSetSave').click();
+   await page.locator('#owgFilterSetStatus').getByText('Saved "Web cases touched by Åna".').waitFor();
+   await summaryAfter(()=>page.locator('#owgCaseFilterClear').click());
+   s=await summaryAfter(()=>page.getByRole('button',{name:'Apply saved filter Web cases touched by Åna'}).click());
+   assert.equal(s.body.cases,1);
+   assert.equal(await page.locator('#owgCaseFilterResource').inputValue(),'Åna');
+   assert.equal(await page.locator('#owgCaseFilterEventAttribute').inputValue(),'channel=web');
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgCaseFilter'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
+   const ocel={objectTypes:[],eventTypes:[],
+     objects:[{id:'o1',type:'order'},{id:'i1',type:'item'},{id:'i2',type:'item'}],
+     events:[
+       {id:'start',type:'Open',time:'2024-01-01T00:00:00Z',relationships:['o1','i1','i2'].map(objectId=>({objectId}))},
+       {id:'pick',type:'Pick',time:'2024-01-01T01:00:00Z',relationships:[{objectId:'i1'}]}
+     ]};
+   await page.locator('#owgEventLogFile').setInputFiles({name:'items.jsonocel',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(ocel))});
+   await page.locator('#owgEventLogConsent').check();
+   await page.locator('#owgEventLogImport').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Imported 2 events'}).waitFor();
+   const notions=page.locator('#owgEventLogCaseType');
+   await notions.selectOption('item');
+   await summaryAfter(()=>page.locator('#owgEventLogAnalyze').click());
+   await page.locator('#owgCaseFilterContainsActivity').fill('Pick');
+   await summaryAfter(()=>page.locator('#owgCaseFilterApply').click());
+   await page.locator('#owgFilterSetName').fill('Picked items');
+   await page.locator('#owgFilterSetSave').click();
+   await page.locator('#owgFilterSetStatus').filter({hasText:'Saved "Picked items".'}).waitFor();
+   const [exported]=await Promise.all([page.waitForEvent('download'),
+     page.getByRole('button',{name:'Export saved filter Picked items'}).click()]);
+   const filterFile=await exported.path();
+   const portable=JSON.parse(await fs.readFile(filterFile,'utf8'));
+   assert.deepEqual(portable,{format:'openworkgraph.event-log-filter-set.v1',name:'Picked items',cohort:{activity:'Pick'},case_type:'item'});
+   await page.getByRole('button',{name:'Delete saved filter Picked items'}).click();
+   await page.locator('#owgFilterSetStatus').getByText('Saved filter deleted.').waitFor();
+   await notions.selectOption('order');
+   await summaryAfter(()=>page.locator('#owgEventLogAnalyze').click());
+   await page.getByText('Import a filter from another log',{exact:true}).click();
+   await page.locator('#owgFilterSetFile').setInputFiles({name:exported.suggestedFilename(),mimeType:'application/json',
+     buffer:await fs.readFile(filterFile)});
+   await page.getByRole('button',{name:'Import filter',exact:true}).click();
+   await page.locator('#owgFilterSetStatus').getByText('Imported "Picked items".').waitFor();
+   const picked=page.getByRole('row').filter({hasText:'Picked items'});
+   assert.doesNotMatch(await picked.innerText(),/Unavailable in this case view/);
+   await page.getByRole('button',{name:'Preview saved filter Picked items',exact:true}).click();
+   const preview=page.locator('#owgFilterSetPreview');
+   await preview.getByText('1 matching case in item.',{exact:true}).waitFor();
+   assert.equal(await preview.getByRole('cell',{name:'i1',exact:true}).count(),1);
+   assert.equal(await notions.inputValue(),'order');
+   s=await summaryAfter(()=>page.getByRole('button',{name:'Apply saved filter Picked items'}).click());
+   assert.equal(s.body.cases,1);
+   assert.match(s.url,/case_type=item/);
+   assert.equal(await notions.inputValue(),'item');
    assert.deepEqual(errors,[]);
    console.log('More case filters browser acceptance passed: rework, path frequency, events per case and end period applied, validated, saved and re-applied, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}

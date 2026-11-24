@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import json
 import math
+import re
+from hashlib import sha256
 from typing import Any
 
 from . import event_log_cohorts as cohorts
@@ -73,6 +75,24 @@ def _window_label(bucket, count: int, window: str, window_cases: int) -> str:
     return bucket.isoformat()[:10]
 
 
+def _sample_basis(conn, log_id, case_type, window, window_size, chosen) -> list[Any]:
+    # _query has already applied these settings under the same workspace lock.
+    # Window membership can survive an append or remapping that changes its paths.
+    revision = conn.execute("SELECT coalesce(max(batch), 0) FROM log_appends WHERE log_id = ?",
+                            [log_id]).fetchone()[0]
+    mapping = conn.execute("SELECT definition FROM activity_mappings WHERE log_id = ? AND applied",
+                           [log_id]).fetchone()
+    hidden = [name for (name,) in conn.execute("SELECT activity FROM hidden_activities WHERE log_id = ? ORDER BY 1",
+                                             [log_id]).fetchall()]
+    return [log_id, workspace._case_type(conn, log_id, case_type), revision, mapping, hidden,
+            window, window_size if window == 'cases' else None, cohorts.describe(chosen)]
+
+
+def _sample_sha256(basis, index, label, total, median, keys) -> str:
+    payload = [basis, index, label, total, median, keys]
+    return sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
 def drift(log_id: str, case_type: str | None = None, *, window: str = "month", window_cases: int = 500,
           min_cases: int = 30, cohort: dict[str, Any] | None = None) -> dict[str, Any]:
     _validate_window(window, window_cases)
@@ -92,20 +112,24 @@ def drift(log_id: str, case_type: str | None = None, *, window: str = "month", w
         # The statistical comparison uses dcase (at most SAMPLE_PER_WINDOW
         # deterministic cases per window), not all cases in dw. Disclose the
         # actual analysis denominator rather than only the configured cap.
-        sampled_by_window = dict(conn.execute(
-            "SELECT w, count(*) FROM dcase GROUP BY w").fetchall())
+        keys_by_window = dict(conn.execute(
+            "SELECT w, list(case_id ORDER BY case_id) FROM dcase GROUP BY w").fetchall())
+        sampled_by_window = {i: len(keys) for i, keys in keys_by_window.items()}
+        basis = _sample_basis(conn, log_id, case_type, window, window_cases, chosen)
         # Single-event cases provide no directly-follows observations. Even
         # when the total sampled case count meets min_cases, a distribution
         # supported by only one or a few cases is too sparse for this test.
         path_cases_by_window = dict(conn.execute(
             "SELECT c.w, count(DISTINCT c.case_id) FROM dcase c "
             "JOIN ce_edges e USING (case_id) GROUP BY c.w").fetchall())
-        windows = [{"window": _window_label(b, n, window, window_cases), "cases": n,
-                    "sampled_cases": sampled_by_window.get(i, 0),
-                    "sampled_cases_with_paths": path_cases_by_window.get(i, 0),
-                    "sampling_truncated": sampled_by_window.get(i, 0) < n,
-                    "median_case_duration_seconds": med}
-                   for i, (b, n, med) in enumerate(buckets)]
+        windows = []
+        for i, (bucket, total, median) in enumerate(buckets):
+            label = _window_label(bucket, total, window, window_cases)
+            keys = keys_by_window.get(i, [])
+            windows.append({"window": label, "cases": total, "sampled_cases": len(keys),
+                            "sampled_cases_with_paths": path_cases_by_window.get(i, 0),
+                            "sampling_truncated": len(keys) < total, "median_case_duration_seconds": median,
+                            "sample_sha256": _sample_sha256(basis, i, label, total, median, keys)})
         # The statistical test operates on dcase, not every eligible case in
         # dw. Require min_cases actual sampled cases AND min_cases sampled
         # path-bearing cases per side; single-event cases are not evidence
@@ -238,7 +262,7 @@ def drift(log_id: str, case_type: str | None = None, *, window: str = "month", w
 def window_cases(log_id: str, case_type: str | None = None, *, window_index: int,
                  window: str = "month", window_size: int = 500, source: str | None = None,
                  destination: str | None = None, after: str | None = None, limit: int = 50,
-                 expected_window: str | None = None,
+                 expected_window: str | None = None, expected_sample_sha256: str | None = None,
                  cohort: dict[str, Any] | None = None) -> dict[str, Any]:
     _validate_window(window, window_size)
     if type(window_index) is not int or not 0 <= window_index < MAX_WINDOWS:
@@ -251,6 +275,9 @@ def window_cases(log_id: str, case_type: str | None = None, *, window_index: int
         raise workspace.EventLogWorkspaceError("invalid case key cursor")
     if expected_window is not None and (not isinstance(expected_window, str) or len(expected_window) > 80):
         raise workspace.EventLogWorkspaceError("invalid drift window label")
+    if expected_sample_sha256 is not None and (not isinstance(expected_sample_sha256, str) or
+                                               not re.fullmatch(r"[0-9a-f]{64}", expected_sample_sha256)):
+        raise workspace.EventLogWorkspaceError("invalid drift sample digest")
     if type(limit) is not int or not 1 <= limit <= 100:
         raise workspace.EventLogWorkspaceError("page size must be a whole number from 1 to 100")
     chosen = cohorts.parse_cohort(cohort)
@@ -258,13 +285,19 @@ def window_cases(log_id: str, case_type: str | None = None, *, window_index: int
     def run(conn):
         cohorts.restrict(conn, chosen, log_id)
         _windows(conn, window, window_size)
-        bucket, total = conn.execute("SELECT first(bucket), count(*) FROM dw WHERE w = ?", [window_index]).fetchone()
+        bucket, total, median = conn.execute("SELECT first(bucket), count(*), quantile_cont(duration, 0.5) "
+                                             "FROM dw WHERE w = ?", [window_index]).fetchone()
         if not total:
             raise workspace.EventLogWorkspaceError("this drift window no longer exists")
         label = _window_label(bucket, total, window, window_size)
         if expected_window is not None and expected_window != label:
             raise workspace.EventLogWorkspaceError("this drift window changed; run the analysis again")
-        sample = conn.execute("SELECT count(*) FROM dcase WHERE w = ?", [window_index]).fetchone()[0]
+        keys = [key for (key,) in conn.execute("SELECT case_id FROM dcase WHERE w = ? ORDER BY case_id",
+                                              [window_index]).fetchall()]
+        basis = _sample_basis(conn, log_id, case_type, window, window_size, chosen)
+        digest = _sample_sha256(basis, window_index, label, total, median, keys)
+        if expected_sample_sha256 is not None and expected_sample_sha256 != digest:
+            raise workspace.EventLogWorkspaceError("this drift sample changed; run the analysis again")
         selection, args = "", []
         if source is not None:
             selection = """ AND case_id IN (
@@ -282,7 +315,7 @@ def window_cases(log_id: str, case_type: str | None = None, *, window_index: int
         rows = conn.execute("SELECT case_id, duration FROM drift_evidence" + where + " ORDER BY case_id LIMIT ?",
                             [*cursor, limit + 1]).fetchall()
         return {"window": label, "window_index": window_index,
-                "window_cases": total, "sampled_cases": sample, "matching_cases": matching,
+                "window_cases": total, "sampled_cases": len(keys), "sample_sha256": digest, "matching_cases": matching,
                 "cases": [{"case_id": key, "duration_seconds": duration} for key, duration in rows[:limit]],
                 "next_after": rows[limit-1][0] if len(rows) > limit else None}
 

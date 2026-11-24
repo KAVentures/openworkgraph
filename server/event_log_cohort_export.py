@@ -3,20 +3,25 @@ from datetime import timezone
 from typing import Any, IO, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from shared.event_log_formats import EventLogFormatError, write_csv, write_xes
+from shared.event_log_formats import EventLogFormatError, write_csv, write_ocel_json, write_ocel_xml, write_xes
 
 from . import event_log_cohorts as cohorts
+from . import event_log_derive as derived
+from . import event_log_source_identity as source_identity
 from . import event_log_workspace as workspace
 
 
-MatchingExportFormat = Literal["csv", "csv-review", "xes", "xes-attributes"]
+MatchingExportFormat = Literal["csv", "csv-review", "sourcecsv", "sourcecsv-review", "xes", "xes-attributes", "ocel", "ocelxml"]
 
 
 class ExportSpec(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     cohort: dict[str, Any]
     include_unfiltered: bool = False
+    case_id: str | None = Field(default=None, min_length=1, max_length=200)
     case_type: str | None = Field(default=None, min_length=1, max_length=200)
+    events_from: str | None = Field(default=None, min_length=10, max_length=40)
+    events_before: str | None = Field(default=None, min_length=10, max_length=40)
 
 
 def export_matching_cases(log_id: str, spec: Any, out: IO[str], *,
@@ -26,17 +31,39 @@ def export_matching_cases(log_id: str, spec: Any, out: IO[str], *,
     except ValidationError:
         raise workspace.EventLogWorkspaceError("Invalid matching-case export settings") from None
     chosen = cohorts.parse_cohort(settings.cohort)
-    if not settings.include_unfiltered and not any(key != "label" for key in chosen):
-        raise workspace.EventLogWorkspaceError("Choose a case filter before exporting matching cases")
+    start, end = derived._window(settings.events_from, settings.events_before)
+    if (settings.case_id is None and not settings.include_unfiltered
+            and not any(key != "label" for key in chosen) and start is None and end is None):
+        raise workspace.EventLogWorkspaceError("Choose a case filter or a time window before exporting matching cases")
 
     def run(conn):
         cohorts.restrict(conn, chosen, log_id)
+        if settings.case_id is not None:
+            conn.execute("DELETE FROM ce WHERE case_id <> ?", [settings.case_id])
         if conn.execute("SELECT 1 FROM ce LIMIT 1").fetchone() is None:
             raise workspace.EventLogWorkspaceError("No cases match the filter")
+        is_ocel = export_format in ("ocel", "ocelxml")
+        is_source_csv = export_format in ("sourcecsv", "sourcecsv-review")
+        has_window = start is not None or end is not None
+        if is_ocel or is_source_csv or has_window:
+            derived._select_original_events(conn, log_id, start, end)
+        if is_ocel:
+            objects, events = workspace._ocel_export_projection(conn, log_id, matching=True)
+            writer = write_ocel_json if export_format == "ocel" else write_ocel_xml
+            writer(objects, events, out)
+            return {}
         notion = workspace._case_type(conn, log_id, settings.case_type)
+        if is_source_csv:
+            try:
+                source_identity.export_csv(conn, log_id, notion, out, matching=True,
+                                           spreadsheet_review=export_format == "sourcecsv-review")
+            except EventLogFormatError as exc:
+                raise workspace.EventLogWorkspaceError(str(exc)) from None
+            return {}
 
-        # Filters see the analysis mapping. The download retains the complete
-        # original trace, including rows collapsed by an activity mapping.
+        # Filters see the analysis mapping. Export writes the original rows
+        # for the matching cases, restricted to the optional event window.
+        window_join = "SEMI JOIN dv_events ON source.event_id = dv_events.event_id" if has_window else ""
         is_xes = export_format in ("xes", "xes-attributes")
         include_attributes = export_format == "xes-attributes"
         fields = "source.*" if is_xes else "source.case_id, source.activity, source.ts, source.resource"
@@ -49,6 +76,7 @@ def export_matching_cases(log_id: str, spec: Any, out: IO[str], *,
         cursor = conn.execute(f"""
             SELECT {fields} FROM ({workspace._CASE_EVENTS}) source
             SEMI JOIN ce ON source.case_id = ce.case_id
+            {window_join}
             {join}
             ORDER BY source.case_id, source.ts, source.event_id
         """, params)

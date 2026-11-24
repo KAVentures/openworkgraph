@@ -341,9 +341,7 @@ def arc_evidence(log_id: str, spec: Any) -> dict[str, Any]:
         conn = workspace._connect()
         try:
             workspace._check_log(conn, log_id)
-            present = {row[0] for row in conn.execute(
-                "SELECT DISTINCT object_type FROM objects WHERE log_id = ?", [log_id]).fetchall()}
-            _validate_types(present, settings.model)
+            _validate_types(_present_types(conn, log_id), settings.model)
             _prepare_arc_issues(conn, log_id, settings.model, activity=settings.activity, event_id=settings.event_id)
             if settings.event_id is not None:
                 match = conn.execute("""SELECT ts, n FROM arc_issues WHERE object_type = ? AND issue = ?""",
@@ -386,10 +384,33 @@ def check(log_id: str, spec: Any) -> dict[str, Any]:
         return _check(log_id, parsed)
 
 
+def _present_types(conn, log_id: str) -> set[str]:
+    return {row[0] for row in conn.execute(
+        "SELECT DISTINCT object_type FROM objects WHERE log_id = ?", [log_id]).fetchall()}
+
+
 def _validate_types(present: set[str], model: Model) -> None:
     for name in [t.object_type for t in model.types] + [a.object_type for a in model.arcs]:
         if name not in present:
             raise workspace.EventLogWorkspaceError(f"unknown object type for this log: {name}")
+
+
+def preview(log_id: str, spec: Any) -> dict[str, Any]:
+    """Validate a portable model and its target types without replaying events."""
+    model = _parse(Model, spec)
+    check_body = CheckSpec(model=model).model_dump_json(exclude={"max_variants"})
+    if len(check_body.encode()) > MAX_REQUEST_BYTES:
+        raise workspace.EventLogWorkspaceError("the model is too large for a conformance request")
+    for type_model in model.types:
+        _validated(type_model)
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            target = workspace._check_log(conn, log_id)
+            _validate_types(_present_types(conn, log_id), model)
+        finally:
+            conn.close()
+    return {"log": target, "model": model.model_dump(), **workspace.DESCRIPTIVE_ONLY}
 
 
 def _check(log_id: str, parsed: CheckSpec) -> dict[str, Any]:
@@ -421,4 +442,4 @@ def _check(log_id: str, parsed: CheckSpec) -> dict[str, Any]:
     }
 
 
-__all__ = ["VERSION", "check", "discover", "arc_evidence"]
+__all__ = ["VERSION", "check", "discover", "arc_evidence", "preview"]

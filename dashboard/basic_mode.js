@@ -1207,6 +1207,8 @@
           ' · every ' + item.interval_minutes + ' min · ' + (item.enabled ? 'next ' + String(item.next_run_at || '').slice(0, 16).replace('T', ' ')
           : (item.paused_reason === 'signal_rules_changed_requires_reapproval' ? 'paused: saved signal rules changed'
             : (item.paused_reason ? 'paused after repeated failures' : 'paused'))) +
+          (item.report_scope ? ' · '+item.report_scope.case_type+
+            (Object.keys(item.report_scope.cohort || {}).length ? ' · filtered cases' : '') : '') +
           (item.kind === 'event_log_signals'
             ? (item.signal_rules_fingerprint ? ' · pinned ' + Number(item.signal_rules_count || 0) + ' signal rules'
               : ' · rule set not approved') : '') +

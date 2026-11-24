@@ -145,7 +145,8 @@ with TestClient(app) as client:
     export = f"/v1/event-logs/{imported.json()['log_id']}/export/matching-cases"
     cohort = {"cohort": {"activity": "A"}}
     assert client.post(export + "?format=xes-attributes", json=cohort, headers=bearer).status_code == 403
-    for fmt, suffix in (("csv-review", ".review.csv"), ("xes", ".xes"), ("xes-attributes", ".xes")):
+    for fmt, suffix in (("csv-review", ".review.csv"), ("xes", ".xes"), ("xes-attributes", ".xes"),
+                        ("ocel", ".jsonocel"), ("ocelxml", ".xmlocel")):
         response = client.post(export + "?format=" + fmt, json=cohort, headers=owner)
         assert response.status_code == 200, response.text
         assert response.headers["content-disposition"].endswith(suffix + '"')
@@ -155,10 +156,19 @@ with TestClient(app) as client:
     assert client.post(export, json=explicit, headers=bearer).status_code == 403
     all_cases = client.post(export, json=explicit, headers=owner)
     assert all_cases.status_code == 200 and len(all_cases.text.splitlines()) == 4
+    single = client.post(export, json={"cohort": {}, "case_id": "c1", "case_type": "case"}, headers=owner)
+    assert single.status_code == 200 and [row.split(",")[0] for row in single.text.splitlines()[1:]] == ["c1"]
+    mismatch = client.post(export, json={"cohort": {"activity": "B"}, "case_id": "c1"}, headers=owner)
+    assert mismatch.status_code == 422
     assert client.post(export, json={**explicit, "include_unfiltered": "true"}, headers=owner).status_code == 422
-    assert client.post(export + "?format=ocel", json=cohort, headers=owner).status_code == 422
+    assert client.post(export + "?format=ocel", json={"cohort": {}}, headers=owner).status_code == 422
 
     assert client.post(path, json=body, headers=bearer).status_code == 403
+    preview_body = {key: value for key, value in body.items() if key != "name"}
+    assert client.post(path + "/preview", json=preview_body, headers=bearer).status_code == 403
+    preview = client.post(path + "/preview", json=preview_body, headers=owner)
+    assert preview.status_code == 200 and preview.json()["events"] == 2
+    assert len(client.get("/v1/event-logs", headers=owner).json()["logs"]) == 1
     made = client.post(path, json=body, headers=owner)
     assert made.status_code == 200, made.text
     assert made.json()["log"]["events"] == 2
@@ -251,6 +261,58 @@ def test_a_time_window_trims_the_copy_to_its_events():
     assert "time_window" not in derive.derive(log, {"name": "esc", "cohort": {"activity": "Escalate"}})
 
 
+def test_matching_case_export_applies_the_window_to_original_events():
+    from server.event_log_cohort_export import export_matching_cases
+
+    log = _csv_log()
+    selection = {"cohort": {}, "events_from": "2024-03-05T09:00:00Z",
+                 "events_before": "2024-03-06T09:00:00Z"}
+    out = StringIO(newline="")
+    export_matching_cases(log, selection, out)
+    rows = list(csv.DictReader(StringIO(out.getvalue())))
+    assert [(row["case_id"], row["activity"]) for row in rows] == [("c1", "Pay"), ("c2", "Receive")]
+    assert len(rows) == derive.preview(log, selection)["events"]
+    for settings, message in (
+        ({"events_from": "2024-03-05"}, "UTC offset"),
+        ({"events_before": "2024-03-04T00:00:00Z"}, "before"),
+        ({"cohort": {"activity": "Escalate"}}, "no event"),
+        ({"cohort": {"activity": []}}, "activity"),
+    ):
+        with pytest.raises(workspace.EventLogWorkspaceError, match=message):
+            export_matching_cases(log, {**selection, **settings}, StringIO())
+
+
+def test_preview_copy_and_export_include_original_events_that_were_collapsed():
+    from server import event_log_activity_mappings as mappings
+    from server.event_log_cohort_export import export_matching_cases
+
+    raw = b"""case,activity,time
+c,Start,2024-03-04T08:00:00Z
+c,Retry,2024-03-04T09:00:00Z
+"""
+    imported = workspace.import_log(BytesIO(raw), name="collapsed", source_format="csv",
+                                    mapping={"case_column": "case", "activity_column": "activity",
+                                             "timestamp_column": "time"})
+    log = imported["log_id"]
+    saved = mappings.create(log, {"name": "Collapsed attempts",
+                                  "groups": [{"label": "Attempt", "activities": ["Start", "Retry"]}],
+                                  "collapse_repeats": True})
+    mappings.apply_mapping(log, saved["mapping_id"])
+    selection = {"cohort": {"activity": "Attempt"}, "events_from": "2024-03-04T09:00:00Z"}
+    preview = derive.preview(log, selection)
+    assert preview["kept_cases"] == preview["events"] == preview["objects"] == 1
+    assert preview["trimmed"] == 1
+    assert len(workspace.list_logs()["logs"]) == 1
+    copied = derive.derive(log, {**selection, "name": "Retry period"})
+    assert copied["time_window"]["cases_with_events_in_window"] == 1
+    assert copied["copied"] == {"events": 1, "objects": 1}
+
+    out = StringIO()
+    export_matching_cases(log, selection, out, export_format="xes-attributes")
+    assert 'key="concept:name" value="Retry"' in out.getvalue()
+    assert 'key="concept:name" value="Start"' not in out.getvalue()
+
+
 def test_time_window_validation():
     log = _csv_log()
     for bad, match in (({"name": "x", "events_from": "2024-03-05"}, "UTC offset"),
@@ -259,3 +321,59 @@ def test_time_window_validation():
                        ({"name": "x", "events_from": "2030-01-01T00:00:00Z"}, "no event")):
         with pytest.raises(workspace.EventLogWorkspaceError, match=match):
             derive.derive(log, bad)
+
+
+@pytest.mark.parametrize("export_format", ["ocel", "ocelxml"])
+def test_matching_ocel_preserves_in_scope_links_and_object_history(export_format):
+    from server.event_log_cohort_export import export_matching_cases
+
+    payload = {"objectTypes": [], "eventTypes": [], "objects": [
+        {"id": "order-in", "type": "order",
+         "attributes": [{"name": "status", "value": "open", "time": "2024-01-01T00:00:00Z"},
+                        {"name": "status", "value": "closed", "time": "2024-01-03T00:00:00Z"}],
+         "relationships": [{"objectId": "shared", "qualifier": "contains"},
+                           {"objectId": "order-out", "qualifier": "outside"}]},
+        {"id": "order-out", "type": "order"},
+        {"id": "shared", "type": "item", "relationships": [{"objectId": "order-in", "qualifier": "inside"}]},
+    ], "events": [
+        {"id": "e1", "type": "Start", "time": "2024-01-01T00:00:00Z",
+         "relationships": [{"objectId": "order-in", "qualifier": "order"},
+                           {"objectId": "shared", "qualifier": "item"}]},
+        {"id": "e2", "type": "Close", "time": "2024-01-03T00:00:00Z",
+         "attributes": [{"name": "result", "value": "complete"}],
+         "relationships": [{"objectId": "order-in", "qualifier": "review"},
+                           {"objectId": "order-in", "qualifier": "close"}]},
+        {"id": "e3", "type": "Private", "time": "2024-01-03T01:00:00Z",
+         "relationships": [{"objectId": "shared", "qualifier": "item"},
+                           {"objectId": "order-out", "qualifier": "order"}]},
+    ]}
+    log = workspace.import_log(BytesIO(json.dumps(payload).encode()), name="scope", source_format="ocel")["log_id"]
+    out = StringIO()
+    export_matching_cases(log, {"cohort": {"activity": "Close"}, "case_type": "order"},
+                          out, export_format=export_format)
+    assert len(workspace.list_logs()["logs"]) == 1
+    result = workspace.import_log(BytesIO(out.getvalue().encode()), name="round trip",
+                                  source_format=export_format)
+    normalized = StringIO()
+    workspace.export_log(result["log_id"], "ocel", normalized)
+    parsed = json.loads(normalized.getvalue())
+    objects = {obj["id"]: obj for obj in parsed["objects"]}
+    assert set(objects) == {"order-in", "shared"}
+    assert objects["order-in"]["relationships"] == [{"objectId": "shared", "qualifier": "contains"}]
+    assert objects["shared"]["relationships"] == [{"objectId": "order-in", "qualifier": "inside"}]
+    assert [a["value"] for a in objects["order-in"]["attributes"]] == ["open", "closed"]
+    assert [e["id"] for e in parsed["events"]] == ["e1", "e2"]
+    assert parsed["events"][1]["attributes"] == [{"name": "result", "value": "complete"}]
+    assert {(r["objectId"], r["qualifier"]) for r in parsed["events"][1]["relationships"]} == {
+        ("order-in", "close"), ("order-in", "review"),
+    }
+
+    scope = {"cohort": {"activity": "Close"}, "case_type": "order", "events_before": "2024-01-03T00:00:00Z"}
+    trimmed = StringIO()
+    export_matching_cases(log, scope, trimmed, export_format=export_format)
+    imported = workspace.import_log(BytesIO(trimmed.getvalue().encode()), name="trimmed", source_format=export_format)
+    normalized = StringIO()
+    workspace.export_log(imported["log_id"], "ocel", normalized)
+    parsed_trimmed = json.loads(normalized.getvalue())
+    assert parsed_trimmed["events"] == parsed["events"][:1]
+    assert parsed_trimmed["objects"] == parsed["objects"]

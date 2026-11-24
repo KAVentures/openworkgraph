@@ -10,7 +10,9 @@ import sys
 
 import pytest
 
+from server import event_log_activity_mappings as mappings
 from server import event_log_cases as cases
+from server import event_log_hidden_activities as hidden
 from server import event_log_filter_sets as filter_sets
 from server import event_log_workspace as workspace
 
@@ -54,6 +56,52 @@ def test_save_list_apply_and_delete_a_filter_set():
     assert filter_sets.list_sets(log)["filter_sets"] == []
     with pytest.raises(workspace.EventLogWorkspaceError):
         filter_sets.delete(log, saved["set_id"])
+
+
+def test_saved_case_notion_is_validated_and_legacy_filter_stays_portable():
+    log = _log()
+    legacy = filter_sets.save(log, {"name": "Legacy", "cohort": FIX})
+    chosen = filter_sets.save(log, {"name": "Chosen case notion", "cohort": FIX, "case_type": "case"})
+    assert "case_type" not in legacy
+    assert chosen["case_type"] == "case"
+    listed = {entry["name"]: entry for entry in filter_sets.list_sets(log)["filter_sets"]}
+    assert "case_type" not in listed["Legacy"]
+    assert listed["Chosen case notion"]["case_type"] == "case"
+    for invalid in ("invoice", "", True):
+        with pytest.raises(workspace.EventLogWorkspaceError):
+            filter_sets.save(log, {"name": "Invalid", "cohort": FIX, "case_type": invalid})
+
+
+def test_import_creates_an_independent_filter_and_validates_the_destination():
+    source, destination = _log(), _log()
+    original = filter_sets.save(source, {"name": "Rework", "cohort": FIX, "case_type": "case"})
+    portable = {"format": filter_sets.FORMAT, **{key: original[key] for key in ("name", "cohort", "case_type")}}
+    copied = filter_sets.import_set(destination, portable)
+    assert copied["set_id"] != original["set_id"]
+    assert copied["cohort"] == original["cohort"] and copied["case_type"] == "case"
+    assert workspace.summary(destination, copied["case_type"], copied["cohort"])["cases"] == 3
+    for invalid in (portable, {**portable, "format": "foreign"}, {**portable, "case_type": "invoice"},
+                    {**portable, "unexpected": True}):
+        with pytest.raises(workspace.EventLogWorkspaceError):
+            filter_sets.import_set(destination, invalid)
+    assert len(filter_sets.list_sets(destination)["filter_sets"]) == 1
+
+
+def test_availability_uses_visible_mapped_labels_instead_of_raw_events():
+    log = _log()
+    filter_sets.save(log, {"name": "Mapped", "cohort": {"activity": "Review"}})
+    filter_sets.save(log, {"name": "Raw", "cohort": {"activity": "Check", "without_activity": "Fix"}})
+    mapping = mappings.create(log, {"name": "Group review",
+                                    "groups": [{"label": "Review", "activities": ["Check", "Fix"]}],
+                                    "collapse_repeats": True})
+    mappings.apply_mapping(log, mapping["mapping_id"])
+    statuses = {entry["name"]: entry["activities_not_in_log"] for entry in filter_sets.list_sets(log)["filter_sets"]}
+    assert statuses == {"Mapped": [], "Raw": ["Check", "Fix"]}
+    assert workspace.summary(log, cohort={"activity": "Review"})["cases"] == 9
+    hidden.set_hidden(log, {"activities": ["Check", "Fix"]})
+    statuses = {entry["name"]: entry["activities_not_in_log"] for entry in filter_sets.list_sets(log)["filter_sets"]}
+    assert statuses == {"Mapped": ["Review"], "Raw": ["Check", "Fix"]}
+    assert workspace.summary(log, cohort={"activity": "Review"})["cases"] == 0
 
 
 def test_filter_sets_are_validated():
@@ -104,6 +152,11 @@ with TestClient(app) as client:
     body = {"name": "A then B", "cohort": {"follows": [{"from": "A", "to": "B", "mode": "direct"}]}}
     assert client.post(base + "/filter-sets", json=body, headers=bearer).status_code in (401, 403)
     assert client.get(base + "/filter-sets", headers=bearer).status_code in (401, 403)
+    portable = {"format": "openworkgraph.event-log-filter-set.v1", **body}
+    assert client.post(base + "/filter-sets/import", json=portable, headers=bearer).status_code == 403
+    imported = client.post(base + "/filter-sets/import", json=portable, headers=headers)
+    assert imported.status_code == 200
+    assert client.post(base + "/filter-sets/" + imported.json()["set_id"] + "/delete", headers=headers).status_code == 200
     saved = client.post(base + "/filter-sets", json=body, headers=headers)
     assert saved.status_code == 200 and saved.headers["cache-control"] == "no-store", saved.text
     assert client.post(base + "/filter-sets", json=body, headers=headers).status_code == 422

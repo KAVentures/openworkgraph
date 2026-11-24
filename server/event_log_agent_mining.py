@@ -17,10 +17,9 @@ fields the agent-run report already exposes are used. Nothing here judges whethe
 from __future__ import annotations
 
 import csv
-import tempfile
+import json
 from datetime import datetime, timedelta, timezone
 from io import BytesIO, StringIO
-from pathlib import Path
 from typing import Any
 
 from . import event_log_workspace as workspace
@@ -150,15 +149,16 @@ def _events_csv(events: list[list[str]]) -> BytesIO:
     return BytesIO(buffer.getvalue().encode("utf-8"))
 
 
-def _add_case_attributes(log_id: str, cases: list[list[str]]) -> None:
-    from . import event_log_case_attributes as case_attributes
-    with tempfile.TemporaryDirectory(prefix="owg-agentmine-", dir=str(workspace.DATA_DIR)) as tmp:
-        path = Path(tmp) / "runs.csv"
-        with path.open("w", encoding="utf-8", newline="") as handle:
-            table = csv.writer(handle)
-            table.writerow(["run", *CASE_ATTRIBUTES])
-            table.writerows(cases)
-        case_attributes.add(log_id, path, id_column="run", columns=CASE_ATTRIBUTES)
+def _store_case_attributes(conn, log_id: str, cases: list[list[str]]) -> None:
+    """Store structural run metadata inside the same transaction as its events."""
+    rows = []
+    for case in cases:
+        attrs = {key: value.replace("\x00", "").strip()[:workspace.MAX_ATTRIBUTE_VALUE]
+                 for key, value in zip(CASE_ATTRIBUTES, case[1:]) if value.strip()}
+        rows.append((json.dumps(attrs), log_id, case[0]))
+    if rows:
+        conn.executemany("""UPDATE objects SET attributes = json_merge_patch(attributes, ?)::VARCHAR
+            WHERE log_id = ? AND object_id = ?""", rows)
 
 
 def _now() -> datetime:
@@ -190,16 +190,12 @@ def import_agent_runs(spec: Any) -> dict[str, Any]:
         raise EventLogWorkspaceError("no finished AI agent runs with timed steps in this range")
 
     def remember(conn, log_id):
+        _store_case_attributes(conn, log_id, cases)
         conn.execute("INSERT INTO event_log_agent_run_sources VALUES (?, ?, ?, ?)",
                      [log_id, include_model_calls, _now(), _now()])
     result = workspace.import_log(_events_csv(events), name=name, source_format="csv", mapping=_MAPPING,
                                   _transaction_hook=remember)
     log_id = result["log_id"]
-    try:
-        _add_case_attributes(log_id, cases)
-    except Exception:
-        workspace.delete_log(log_id)
-        raise
     return {"format": FORMAT, "log_id": log_id, "name": name.strip(), "runs": len(cases), "events": len(events),
             "runs_still_running": running, "runs_with_steps_truncated": truncated,
             "max_steps_per_run": MAX_STEPS_PER_RUN, "model_calls_included": include_model_calls,
@@ -227,30 +223,34 @@ def source(log_id: str) -> dict[str, Any]:
 
 def refresh(log_id: str) -> dict[str, Any]:
     """Append agent runs that finished since the log was made or last refreshed. Runs already in it are kept as they are."""
-    current = source(log_id)
-    if not current["agent_runs"]:
-        raise EventLogWorkspaceError("this log was not made from AI agent runs")
-    last = current["last_refreshed_at"] or current["created_at"]
-    since = (datetime.fromisoformat(last.replace("Z", "+00:00")) - timedelta(days=REFRESH_OVERLAP_DAYS)).isoformat()
-
-    def known(conn):
-        return {"case_ids": [r[0] for r in conn.execute("SELECT DISTINCT case_id FROM ce").fetchall()]}
-    existing = set(workspace._query(log_id, None, known)["case_ids"])
-    traces, running = _traces(since, None, MAX_RUNS, skip=existing)
-    events, cases, truncated = _rows(traces, current["include_model_calls"])
-    appended = 0
-    if events:
-        appended = workspace.append_log(log_id, _events_csv(events), source_format="csv", mapping=_MAPPING)["added_events"]
-        _add_case_attributes(log_id, cases)
     with workspace._LOCK:
-        conn = workspace._connect()
-        try:
-            conn.execute("UPDATE event_log_agent_run_sources SET last_refreshed_at = ? WHERE log_id = ?", [_now(), log_id])
-        finally:
-            conn.close()
-    return {"format": FORMAT, "log_id": log_id, "runs_added": len(cases), "events_added": appended,
-            "runs_still_running": running, "runs_with_steps_truncated": truncated,
-            "note": "Runs already in the log are not changed. Analyse again to include the new runs."}
+        current = source(log_id)
+        if not current["agent_runs"]:
+            raise EventLogWorkspaceError("this log was not made from AI agent runs")
+        last = current["last_refreshed_at"] or current["created_at"]
+        since = (datetime.fromisoformat(last.replace("Z", "+00:00")) - timedelta(days=REFRESH_OVERLAP_DAYS)).isoformat()
+
+        def known(conn):
+            return {"case_ids": [r[0] for r in conn.execute("SELECT DISTINCT case_id FROM ce").fetchall()]}
+        existing = set(workspace._query(log_id, None, known)["case_ids"])
+        traces, running = _traces(since, None, MAX_RUNS, skip=existing)
+        events, cases, truncated = _rows(traces, current["include_model_calls"])
+        appended = 0
+        if events:
+            def commit_refresh(conn, target):
+                _store_case_attributes(conn, target, cases)
+                conn.execute("UPDATE event_log_agent_run_sources SET last_refreshed_at = ? WHERE log_id = ?", [_now(), target])
+            appended = workspace.append_log(log_id, _events_csv(events), source_format="csv", mapping=_MAPPING,
+                                            _transaction_hook=commit_refresh)["added_events"]
+        if not events:
+            conn = workspace._connect()
+            try:
+                conn.execute("UPDATE event_log_agent_run_sources SET last_refreshed_at = ? WHERE log_id = ?", [_now(), log_id])
+            finally:
+                conn.close()
+        return {"format": FORMAT, "log_id": log_id, "runs_added": len(cases), "events_added": appended,
+                "runs_still_running": running, "runs_with_steps_truncated": truncated,
+                "note": "Runs already in the log are not changed. Analyse again to include the new runs."}
 
 
 def run_scheduled(log_id: str) -> tuple[str, float]:

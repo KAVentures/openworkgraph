@@ -216,10 +216,10 @@ def _digest(path: Path, expected: os.stat_result, limit: int, destination: Binar
 
 
 @contextmanager
-def _snapshot(path: Path, expected: os.stat_result):
+def _snapshot(path: Path, expected: os.stat_result, *, limit: int | None = None):
     """Hash exactly the bytes later appended."""
     with tempfile.TemporaryFile() as snapshot:
-        sha, size = _digest(path, expected, workspace.MAX_IMPORT_BYTES, snapshot)
+        sha, size = _digest(path, expected, workspace.MAX_IMPORT_BYTES if limit is None else limit, snapshot)
         snapshot.seek(0)
         yield sha, size, snapshot
 
@@ -278,7 +278,10 @@ def preview(feed_id: str, *, now: float | None = None) -> dict[str, Any]:
             conn.close()
     seen: set[str] = set()
     for index, sha in pending.items():
-        files[index]["state"] = previous.get(sha, "repeated_content" if sha in seen else "new_content")
+        state = previous.get(sha, "repeated_content" if sha in seen else "new_content")
+        files[index]["state"] = state
+        if state == "new_content":
+            files[index]["sha256"] = sha
         seen.add(sha)
     counts: dict[str, int] = {}
     for row in files:
@@ -313,15 +316,28 @@ def failures(feed_id: str, *, after: str = "") -> dict[str, Any]:
             "next_after": shown[-1][1] if more else None}
 
 
-def run(feed_id: str, *, now: float | None = None, retry_failed: bool = False, retry_hash: str | None = None) -> dict[str, Any]:
-    """Append new files, or explicitly retry only previously failed content."""
+def append_one(feed_id: str, spec: Any) -> dict[str, Any]:
+    if not isinstance(spec, dict) or set(spec) != {"name", "sha256"}:
+        raise EventLogWorkspaceError("choose a previewed file by its exact name and SHA-256")
+    name, sha = spec["name"], spec["sha256"]
+    if (not isinstance(name, str) or not name or len(name) > 1024 or "/" in name or "\x00" in name
+            or any(0xD800 <= ord(char) <= 0xDFFF for char in name)
+            or not isinstance(sha, str) or not _SHA256.fullmatch(sha)):
+        raise EventLogWorkspaceError("choose a previewed file by its exact name and SHA-256")
+    return run(feed_id, selected=(name, sha))
+
+
+def run(feed_id: str, *, now: float | None = None, retry_failed: bool = False,
+        retry_hash: str | None = None, selected: tuple[str, str] | None = None) -> dict[str, Any]:
+    """Append all new files, one selected file, or an explicit retry set."""
     if type(retry_failed) is not bool:
         raise EventLogWorkspaceError("retry_failed must be a boolean")
     if retry_hash is not None and (not retry_failed or not isinstance(retry_hash, str) or not _SHA256.fullmatch(retry_hash)):
         raise EventLogWorkspaceError("retry hash must be a SHA-256 for a failed file")
     feed = get(feed_id)
     current = time.time() if now is None else now
-    candidates = sorted(_candidates(feed))
+    candidates = sorted(item for item in _candidates(feed) if selected is None or item[1] == selected[0])
+    selected_changed = False
     waiting, already, previously_failed, skipped_new, duplicate_failed, results, attempted = 0, 0, 0, 0, 0, [], set()
     for mtime, name, path, info in candidates:
         if current - mtime < SETTLE_SECONDS:
@@ -329,8 +345,16 @@ def run(feed_id: str, *, now: float | None = None, retry_failed: bool = False, r
             continue
         if len(results) >= MAX_FILES_PER_RUN:
             break
+        if selected is not None and info.st_size + 1 > MAX_PREVIEW_BYTES:
+            selected_changed = True
+            break
         try:
-            with _snapshot(path, info) as (sha, size, snapshot), workspace._LOCK:
+            snap = (_snapshot(path, info) if selected is None
+                    else _snapshot(path, info, limit=min(info.st_size, workspace.MAX_IMPORT_BYTES)))
+            with snap as (sha, size, snapshot), workspace._LOCK:
+                if selected is not None and sha != selected[1]:
+                    selected_changed = True
+                    break
                 if retry_hash is not None and sha != retry_hash:
                     skipped_new += 1
                     continue
@@ -396,8 +420,14 @@ def run(feed_id: str, *, now: float | None = None, retry_failed: bool = False, r
             waiting += 1
             continue
         except OSError:
+            if selected is not None:
+                selected_changed = True
+                break
             continue
         except EventLogWorkspaceError as exc:
+            if selected is not None and str(exc) == "event log is larger than the supported limit":
+                selected_changed = True
+                break
             if retry_failed and str(exc) == "event log is larger than the supported limit":
                 skipped_new += 1
                 continue
@@ -414,7 +444,8 @@ def run(feed_id: str, *, now: float | None = None, retry_failed: bool = False, r
             **({"retry_failed_only": True, "new_files_left_for_normal_run": skipped_new,
                 "duplicate_failed_files_skipped": duplicate_failed} if retry_failed else {}),
             "more_files_waiting": len(candidates) - waiting - already - previously_failed - skipped_new - duplicate_failed - len(results) > 0 and len(results) >= MAX_FILES_PER_RUN,
-            "files": results}
+            "files": results,
+            **({"selected_changed": selected_changed or not candidates} if selected is not None else {})}
 
 
 def run_scheduled(feed_id: str) -> tuple[str, float]:

@@ -187,3 +187,33 @@ def test_refresh_appends_only_new_finished_runs_and_can_be_scheduled(_data, tmp_
     workspace.delete_log(log)
     assert all(s["target_id"] != log for s in scheduler.status()["schedules"])
     assert mining.run_scheduled(log) == ("failed:event_log_unavailable", 0.0)
+
+
+def test_refresh_rolls_back_events_attributes_and_checkpoint_on_failure(_data, monkeypatch):
+    log = mining.import_agent_runs({"name": "agents"})["log_id"]
+    before = mining.source(log)["last_refreshed_at"]
+    _data.raw.extend(_run(20, fail=False))
+    original = mining._store_case_attributes
+
+    def fail_after_write(conn, log_id, cases):
+        original(conn, log_id, cases)
+        raise RuntimeError("simulated interruption")
+
+    monkeypatch.setattr(mining, "_store_case_attributes", fail_after_write)
+    with pytest.raises(RuntimeError, match="simulated interruption"):
+        mining.refresh(log)
+    assert workspace.summary(log)["cases"] == 12
+    assert mining.source(log)["last_refreshed_at"] == before
+    monkeypatch.setattr(mining, "_store_case_attributes", original)
+    assert mining.refresh(log)["runs_added"] == 1
+    assert workspace.summary(log)["cases"] == 13
+
+
+def test_concurrent_refreshes_do_not_duplicate_runs(_data):
+    from concurrent.futures import ThreadPoolExecutor
+    log = mining.import_agent_runs({"name": "agents"})["log_id"]
+    _data.raw.extend(_run(20, fail=False))
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: mining.refresh(log), range(2)))
+    assert sorted(r["runs_added"] for r in results) == [0, 1]
+    assert workspace.summary(log)["cases"] == 13

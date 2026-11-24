@@ -135,7 +135,9 @@ def _kpis(p: dict[str, Any]) -> dict[str, Any]:
 
 def compare(spec: Any) -> dict[str, Any]:
     settings = _parse(spec)
-    base, comp = _profile(settings.baseline), _profile(settings.comparison)
+    # Capture both profiles before an append or mapping change can affect a side.
+    with workspace._LOCK:
+        base, comp = _profile(settings.baseline), _profile(settings.comparison)
     if (settings.baseline.log_id == settings.comparison.log_id and base["case_notion"] == comp["case_notion"]
             and cohorts.parse_cohort(settings.baseline.cohort) == cohorts.parse_cohort(settings.comparison.cohort)):
         raise workspace.EventLogWorkspaceError("baseline and comparison are the same log, case notion and filter")

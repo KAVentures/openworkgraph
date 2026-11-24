@@ -1,4 +1,4 @@
-"""Owner-directed literal activity lookup for the current case notion."""
+"""Owner-directed literal label lookup for the current case notion."""
 from __future__ import annotations
 
 from typing import Any
@@ -15,22 +15,31 @@ def _literal(value: Any, *, allow_empty: bool) -> bool:
 
 
 def search(log_id: str, text: str, after: str = '', case_type: str | None = None) -> dict[str, Any]:
+    return _search(log_id, text, after, case_type, 'activity', FORMAT)
+
+
+def resource_search(log_id: str, text: str, after: str = '', case_type: str | None = None) -> dict[str, Any]:
+    return _search(log_id, text, after, case_type, 'resource', 'openworkgraph.event-log-resource-lookup.v1')
+
+
+def _search(log_id: str, text: str, after: str, case_type: str | None,
+            column: str, format_name: str) -> dict[str, Any]:
     if (not _literal(text, allow_empty=False) or not _literal(after, allow_empty=True)
             or (case_type is not None and not _literal(case_type, allow_empty=False))):
-        raise workspace.EventLogWorkspaceError('Enter valid search text and a valid activity cursor')
+        raise workspace.EventLogWorkspaceError(f'Enter valid search text and a valid {column} cursor')
 
     def run(conn):
         # ce already applies the current case notion and optional activity
         # mapping. Search is literal and independent of the active case filter,
         # so a filter that currently matches nothing cannot hide all choices.
-        rows = conn.execute('''SELECT DISTINCT activity FROM ce
-            WHERE contains(activity, ?) AND activity > ? ORDER BY activity LIMIT ?''',
+        rows = conn.execute(f'''SELECT DISTINCT {column} FROM ce
+            WHERE contains({column}, ?) AND {column} > ? ORDER BY {column} LIMIT ?''',
                             [text, after, MAX_PAGE + 1]).fetchall()
         labels = [row[0] for row in rows[:MAX_PAGE]]
         return {'labels': labels, 'next_after': labels[-1] if len(rows) > MAX_PAGE else None}
 
     result = workspace._query(log_id, case_type, run)
-    return {'format': FORMAT, 'labels': result['labels'], 'next_after': result['next_after'],
+    return {'format': format_name, 'labels': result['labels'], 'next_after': result['next_after'],
             'limit': MAX_PAGE, 'stable_snapshot': False,
             'case_notion': result['case_notion'],
             'activity_mapping': result.get('activity_mapping')}

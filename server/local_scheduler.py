@@ -226,9 +226,33 @@ def _run_pinned_signal_job(item: dict[str, Any]) -> tuple[str, float]:
     return f"succeeded:{len(result.get('signals', []))}_signals{notification_code}", 0.0
 
 
+def _report_scope(log_id: str, scope: Any) -> dict[str, Any]:
+    from . import event_log_cohorts as cohorts
+    from . import event_log_workspace as workspace
+
+    if not isinstance(scope, dict) or set(scope) - {"case_type", "cohort"}:
+        raise ScheduleError("report scope accepts case_type and cohort")
+    case_type = scope.get("case_type")
+    if case_type is not None and (not isinstance(case_type, str) or not 0 < len(case_type) <= 200):
+        raise ScheduleError("choose a valid case notion")
+    try:
+        cohort = cohorts.describe(cohorts.parse_cohort(scope.get("cohort")))
+        with workspace._LOCK:
+            conn = workspace._connect()
+            try:
+                workspace._check_log(conn, log_id)
+                selected = workspace._case_type(conn, log_id, case_type)
+            finally:
+                conn.close()
+    except workspace.EventLogWorkspaceError as error:
+        raise ScheduleError(str(error)) from None
+    return {"case_type": selected, "cohort": cohort}
+
+
 def create(kind: str, target_id: str, *, interval_minutes: int, confirm_scheduled_runs: bool,
            confirm_unencrypted_local_backup: bool = False,
-           quiet_hours: dict[str, str] | None = None) -> dict[str, Any]:
+           quiet_hours: dict[str, str] | None = None,
+           report_scope: dict[str, Any] | None = None) -> dict[str, Any]:
     if confirm_scheduled_runs is not True:
         raise ScheduleError("explicit confirmation required to run this job on a schedule")
     if kind not in KINDS:
@@ -243,6 +267,10 @@ def create(kind: str, target_id: str, *, interval_minutes: int, confirm_schedule
             raise ScheduleError("local backup interval must be at least 1440 minutes")
         if confirm_unencrypted_local_backup is not True:
             raise ScheduleError("explicit unencrypted local backup acknowledgement required")
+    if report_scope is not None:
+        if kind != "event_log_report":
+            raise ScheduleError("report scope applies only to event log report jobs")
+        report_scope = _report_scope(target_id, report_scope)
     _check_target(kind, target_id)
     if kind == "local_backup":
         _check_backup_location()
@@ -264,6 +292,7 @@ def create(kind: str, target_id: str, *, interval_minutes: int, confirm_schedule
                 "configuration_revision": 1,
                 "next_run_epoch": now + interval_minutes * 60, "last_run_epoch": None,
                 **({"quiet_hours": quiet} if quiet is not None else {}),
+                **({"report_scope": report_scope} if report_scope is not None else {}),
                 "last_result": None, "consecutive_failures": 0, "paused_reason": None, "history": [],
                 **({"unencrypted_local_backup_acknowledged": True} if kind == "local_backup" else {}),
                 **({"signal_rules_fingerprint": signal_pin["fingerprint"],
@@ -404,6 +433,25 @@ def _recording() -> bool:
         return False
 
 
+def _run_scoped_report(item: dict[str, Any]) -> tuple[str, float]:
+    from . import event_log_saved_reports as saved_reports
+    from .event_log_workspace import EventLogWorkspaceError
+
+    target = item["target_id"]
+    try:
+        scope = item["report_scope"]
+        if (not isinstance(scope, dict) or set(scope) != {"case_type", "cohort"}
+                or not scope["case_type"] or not isinstance(scope["cohort"], dict)):
+            raise ScheduleError("invalid stored report scope")
+        normalized = _report_scope(target, scope)
+        saved_reports.save(target, normalized["case_type"], normalized["cohort"])
+    except ScheduleError:
+        return "failed:invalid_report_scope", 0.0
+    except EventLogWorkspaceError:
+        return "failed:event_log_unavailable", 0.0
+    return "succeeded:report_saved", 0.0
+
+
 def _run_job(kind: str, target_id: str) -> tuple[str, float]:
     """Run one job; returns (outcome code, provider retry-after seconds)."""
     if kind == "local_backup":
@@ -501,6 +549,8 @@ def run_due(now: float | None = None, runner: Runner | None = None) -> list[dict
                 try:
                     if runner is _run_job and item["kind"] == "event_log_signals":
                         outcome, retry_after = _run_pinned_signal_job(item)
+                    elif runner is _run_job and item["kind"] == "event_log_report" and "report_scope" in item:
+                        outcome, retry_after = _run_scoped_report(item)
                     else:
                         outcome, retry_after = runner(item["kind"], item["target_id"])
                 except Exception as exc:  # never let one job stop the scheduler

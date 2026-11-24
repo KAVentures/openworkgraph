@@ -113,6 +113,47 @@ def test_small_logs_report_that_the_backtest_is_unavailable():
     assert r["predictions"][0]["next"][0] == {"activity": "B", "case_ends": False, "probability": 1.0}
 
 
+def test_training_evidence_pages_match_the_prediction_support_and_exact_successors():
+    log = _log(_paths())
+    settings = {"end_activities": ["Pay", "Close"], "cohort": {"activity": "Receive"}}
+    result = nxt.next_activity(log, settings, case_id="c040", include_evidence=True)
+    [estimate] = result["predictions"]
+    assert estimate["matched_history"] == ["Receive", "Check"]
+    request = {"settings": settings, "case_id": "c040", "expected_snapshot": result["evidence_snapshot"], "limit": 7}
+    after, all_rows = None, []
+    while True:
+        page = nxt.training_evidence(log, {**request, "after": after})
+        assert page["support"] == estimate["support"] == 20
+        assert page["matched_history"] == estimate["matched_history"]
+        all_rows.extend(page["occurrences"])
+        after = page["next_after"]
+        if after is None:
+            break
+    assert all_rows == [{"case_id": f"c{i:03d}", "step": 2, "activity": "Check", "next_activity": "Approve", "case_ends": False}
+                        for i in range(0, 40, 2)]
+    for target in ("c000", "c041"):
+        with pytest.raises(workspace.EventLogWorkspaceError, match="predicted open case"):
+            nxt.training_evidence(log, {**request, "case_id": target})
+
+
+def test_training_evidence_preserves_repeated_and_terminal_steps_and_refuses_stale_projection():
+    log = _log([["Check", "Check", "Close"], ["Check"]])
+    settings = {"end_activities": ["Close"], "min_support": 10}
+    result = nxt.next_activity(log, settings, include_evidence=True)
+    request = {"settings": settings, "case_id": "c001", "expected_snapshot": result["evidence_snapshot"]}
+    page = nxt.training_evidence(log, request)
+    assert page["matched_history"] == [] and page["support"] == 3
+    assert [(r["step"], r["activity"], r["next_activity"], r["case_ends"]) for r in page["occurrences"]] == [
+        (1, "Check", "Check", False), (2, "Check", "Close", False), (3, "Close", None, True)]
+    first = nxt.training_evidence(log, {**request, "limit": 1})
+    following = nxt.training_evidence(log, {**request, "after": first["next_after"]})
+    assert first["occurrences"] + following["occurrences"] == page["occurrences"]
+    workspace.append_log(log, BytesIO(b"case,activity,time\nc001,Close,2024-01-31T01:00:00Z\n"),
+                         source_format="csv", mapping=MAPPING)
+    with pytest.raises(workspace.EventLogWorkspaceError, match="prediction history changed"):
+        nxt.training_evidence(log, request)
+
+
 def test_route_requires_the_dashboard(tmp_path):
     import os
     import subprocess
@@ -135,6 +176,12 @@ with TestClient(app) as client:
     found = client.post(path, json=body, headers=owner)
     assert found.status_code == 200, found.text
     assert found.json()["predictions"][0]["next"][0]["activity"] == "B"
+    training = {"settings": body, "case_id": "c3", "expected_snapshot": found.json()["evidence_snapshot"], "limit": 1}
+    assert client.post(path + "/training-evidence", json=training, headers=bearer).status_code == 403
+    page = client.post(path + "/training-evidence", json=training, headers=owner)
+    assert page.status_code == 200 and page.headers["cache-control"] == "no-store", page.text
+    assert page.json()["support"] == 3 and page.json()["next_after"] == ["c0", 1]
+    assert client.post(path + "/training-evidence", json={**training, "expected_snapshot": "0"*64}, headers=owner).status_code == 422
     selection = {**body, "case_id": "c3"}
     assert client.post(path, json=selection, headers=bearer).status_code == 403
     assert client.post(path, json=selection, headers=owner).json()["case_selection"] == "predicted"
