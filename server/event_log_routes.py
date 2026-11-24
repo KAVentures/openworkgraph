@@ -2291,11 +2291,11 @@ async def _live_prediction_settings(request: Request, what: str, *, strict: bool
 
 
 @router.post("/v1/event-logs/{log_id}/predictions")
-async def event_log_predictions(request: Request, log_id: str):
+async def event_log_predictions(request: Request, log_id: str, rank_by: predictions.PredictionOrder = "automatic"):
     _require_dashboard(request)
     spec, case_id = await _live_prediction_settings(request, "prediction settings")
     try:
-        result = await run_in_threadpool(predictions.predict, log_id, spec, case_id=case_id)
+        result = await run_in_threadpool(predictions.predict, log_id, spec, case_id=case_id, rank_by=rank_by)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
