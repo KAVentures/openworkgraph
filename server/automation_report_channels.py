@@ -84,7 +84,16 @@ def _write(data: dict[str, Any]) -> None:
             pass
 
 
+MAX_VISIBLE_RECEIPTS = 50
+
+
 def _public(channel: dict[str, Any]) -> dict[str, Any]:
+    received = channel["received"]
+    # Sequence order is not arrival or execution order. Show the highest
+    # retained sequences, with actual receipt time and original disposition.
+    recent = [{"sequence": key, "received_at": received[key]["at"],
+               "outcome": received[key]["outcome"], "original_status": received[key]["status"]}
+              for key in sorted(received, key=int, reverse=True)[:MAX_VISIBLE_RECEIPTS]]
     return {"channel_id": channel["channel_id"], "deployment_id": channel["deployment_id"],
             "created_at": channel["created_at"], "rotated_at": channel.get("rotated_at"),
             "revoked_at": channel.get("revoked_at"), "highest_sequence": channel["highest_sequence"],
@@ -92,6 +101,8 @@ def _public(channel: dict[str, Any]) -> dict[str, Any]:
             "missing_truncated": channel.get("missing_truncated", False),
             "versions": sorted(channel["versions"].values(), key=lambda v: v["first_seen"]),
             "accepted_reports": channel.get("accepted_reports", 0), "refused_reports": channel.get("refused_reports", 0),
+            "recent_sequence_receipts": recent, "retained_receipt_count": len(received),
+            "receipt_list_truncated": len(received) > len(recent),
             "secret_shown_again": False}
 
 
