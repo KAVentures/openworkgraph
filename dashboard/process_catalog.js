@@ -1157,12 +1157,27 @@
       output.replaceChildren(el('p',result.questions.length+' open questions · '+result.answered_question_count+
         ' answered on this process revision and exact source bundle · '+result.statement_count+
         ' source statements. Full documents are not retained; selected citations and answers are recorded.'));
+      const coverage=result.source_coverage;
+      if(coverage){
+        const omitted=coverage.documents.reduce((sum,d)=>sum+d.overlong_statements+d.omitted_by_budget,0);
+        const incomplete=coverage.subjects.filter(s=>!s.conflict_review_complete).length;
+        if(omitted||incomplete)output.append(el('p',
+          'Source review incomplete: '+omitted+' statement(s) omitted and '+incomplete+
+          ' subject(s) with incomplete conflict coverage. Narrow or split the sources before confirming affected questions.','note'));
+        else output.append(el('p','All bounded source and conflict scans completed. Lexical matches are review prompts, not proof of policy accuracy.'));
+      }
       if(result.instruction_like_statements.length)output.append(el('p',
         result.instruction_like_statements.length+' statement(s) look like instructions to the system and were excluded from evidence.'));
       for(const q of result.questions){
         const box=el('section');box.append(el('h5',q.prompt));
+        if(q.source_coverage)box.append(el('p',q.source_coverage.matching_statements+
+          ' matching statements · '+q.source_coverage.conflict_candidates_checked+
+          ' checked for possible conflicts · '+q.source_coverage.displayed_conflict_count+' of '+
+          q.source_coverage.possible_conflict_count+' possible conflicts displayed.','muted'));
+        if(q.coverage_blocked)box.append(el('p','Confirmation is unavailable until source coverage is complete. Narrow the supplied documents or defer this question.','note'));
+        if(q.previous_decision)box.append(el('p','Previous decision: '+q.previous_decision+'. This question remains unresolved.','muted'));
         const cites=el('ul');
-        const citeText=c=>'“'+c.text+'” — '+c.document_title+' (characters '+c.start+'–'+c.end+')';
+        const citeText=c=>'“'+c.text+'” — '+c.document_title+' (source '+(Number(c.document_index)+1)+', characters '+c.start+'–'+c.end+')';
         for(const c of q.citations)cites.append(el('li',citeText(c)));
         box.append(cites);
         const disputed=new Map();
