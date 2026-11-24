@@ -874,6 +874,15 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    const checkHistory=await page.evaluate(async({id,project})=>(await fetch('/v1/automation-pipeline/'+id+'/projects/'+project+'/source-check-exports')).json(),{id:linked.idea_id,project:manifest.project_id});
    assert.equal(checkHistory.exports.length,1);assert.equal(checkHistory.exports[0].document_sha256,checkResponse.headers()['x-owg-document-sha256']);
    assert(!JSON.stringify(checkHistory).includes(sourceB));assert(!JSON.stringify(checkHistory).includes('resource_ref'));
+   const reviewFile=page.locator('#owgPipelineSourceReviewFile');
+   await reviewFile.setInputFiles({name:'original.json',mimeType:'application/json',buffer:checkBytes});
+   await page.getByRole('button',{name:'Reconcile original downloaded check',exact:true}).click();
+   await page.getByText('Exact retained export bytes match',{exact:false}).waitFor();
+   await page.getByText('Historical source operation: not established',{exact:false}).waitFor();
+   await reviewFile.setInputFiles({name:'changed.json',mimeType:'application/json',buffer:Buffer.concat([checkBytes,Buffer.from(' ')])});
+   await page.getByRole('button',{name:'Reconcile original downloaded check',exact:true}).click();
+   await page.getByText('document does not match a retained export for this project',{exact:false}).waitFor();
+   assert.equal(sourceDownloads,1);
    const sourceAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgPipelineCard'),{
      runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
    assert.deepEqual(sourceAudit.violations.map(v=>v.id),[]);
