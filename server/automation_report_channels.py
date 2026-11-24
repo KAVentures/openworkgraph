@@ -247,13 +247,19 @@ def ingest(channel_id: str, timestamp: str, sequence_header: str, signature: str
         try:
             result = monitoring.import_report(envelope["report"], deployment_id, protect_signed_revisions=True)
         except monitoring.RunRevisionConflict as exc:
-            incidents.record(deployment_id, "run_revision_conflict", f"channel:{channel_id}",
-                             count=sum(exc.counts.values()),
-                             detail={"channel_id": channel_id, "conflict_counts": exc.counts})
+            # The refusal receipt is the primary durable evidence. A full or
+            # unavailable incident ledger must not lose the sequence outcome.
             _outcome(channel, sequence, digest, "refused_run_revision_conflict", 409, str(exc))
             channel["refused_reports"] = channel.get("refused_reports", 0) + 1
             _track_sequence(channel, sequence)
             _write(data)
+            try:
+                incidents.record(deployment_id, "run_revision_conflict", f"channel:{channel_id}",
+                                 count=sum(exc.counts.values()),
+                                 detail={"channel_id": channel_id, "conflict_counts": exc.counts})
+            except (incidents.IncidentError, OSError):
+                # The signed refusal remains visible in channel history.
+                raise ChannelError("signed report conflicts with retained run evidence; incident recording unavailable", 409) from None
             raise ChannelError(str(exc), 409) from None
         except monitoring.MonitoringError as exc:
             drift = "different workflow spec" in str(exc)
