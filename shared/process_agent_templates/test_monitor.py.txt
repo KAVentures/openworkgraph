@@ -200,7 +200,7 @@ class MonitoringCases(unittest.TestCase):
             another=self.write_journal(root,'PRIVATE_OTHER.jsonl',
                 [{**self.start,'execution_id':'c'*64},*rows[1:]])
             rewritten=root/'PRIVATE_REWRITTEN.jsonl'
-            rewritten.write_text(''.join(json.dumps(row,sort_keys=True)+'\\n' for row in rows),encoding='utf-8')
+            rewritten.write_text(''.join(json.dumps(row,sort_keys=True)+'\n' for row in rows),encoding='utf-8')
             for baseline,candidate,relation,accepted,additional in (
                 (old,same,'identical_snapshot',True,0),
                 (old,newer,'exact_append_only_extension',True,2),
