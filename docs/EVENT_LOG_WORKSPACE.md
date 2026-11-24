@@ -3282,8 +3282,11 @@ A numeric condition with `includes_non_numeric` also matches unusable numbers.
    - the latest non-empty value of every event attribute recorded on the case at or before the
      decision event (`event.*`).
 
-   Values recorded after the decision are never used. Case attributes carry no time, so they may
-   have been set later; the result says so.
+   Use **Timed event attributes only** to exclude untimed case attributes.
+   This setting keeps event values recorded at or before the decision. The
+   combined setting also uses case attributes, which can have been set later.
+   Pass `include_case_attributes=false` to the decision-rules endpoint for
+   the event-only mode.
 3. **Rules.** A CART decision tree (Gini impurity, depth 1–4, default 3) is learned on about 70% of
    the cases and scored on the rest.
    - The split is by a hash of the case id, so it is repeatable and keeps each case on one side.
@@ -3291,6 +3294,11 @@ A numeric condition with `includes_non_numeric` also matches unusable numbers.
      are split on their 30 most common values.
    - Each leaf is a rule. It shows its conditions, the usual next activity, its confidence and the
      number of training occurrences.
+   - **Held-out results by branch** lists recorded and predicted occurrences,
+     correct predictions, precision, and recall. Precision is undefined without
+     predictions for that branch. Recall is undefined without recorded holdout
+     occurrences. **Held-out branch mix-ups** shows which recorded branches were
+     predicted as another branch and how often.
 
 The result also gives:
 - the held-out accuracy, next to the accuracy of always predicting the most common branch;
