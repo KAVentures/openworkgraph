@@ -3249,6 +3249,15 @@ far too long, or suspiciously little time, overall between two points.
 - The profile is learned from the same cases it checks, so a few extreme cases widen it; read the
   results as timings to review, not errors. The case filter applies.
 
+Set **Baseline cutoff (UTC)** to check later cases against an earlier period.
+OWG learns from cases whose last recorded event is before the cutoff, then checks
+cases whose first recorded event is at or after it. It counts cases spanning the
+cutoff separately and excludes them from both periods. The result shows how many
+later cases have a checked pair and how many later pair occurrences lack a usable
+baseline. Both periods use the active case filters and case notion. An optional
+`baseline_cutoff` query parameter accepts a timezone-qualified ISO timestamp
+on both the summary and the case review endpoints.
+
 **Browse all deviating cases** opens the complete set of flagged cases. **Inspect cases** on
 a pair limits the review to that pair. Either review can show slower or faster deviations and
 open complete event histories.

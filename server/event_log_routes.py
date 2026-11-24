@@ -1212,11 +1212,13 @@ def event_log_decision_rules(request: Request, log_id: str,
 def event_log_temporal_profile(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                                zeta: float = Query(default=3.0, ge=0.5, le=10),
                                min_occurrences: int = Query(default=5, ge=2, le=10_000),
-                               cohort: dict[str, Any] = Depends(_case_filter)):
+                               baseline_cutoff: str | None = Query(default=None, max_length=64),
+                               baseline_cutoff: str | None = Query(default=None, max_length=64),
+        cohort: dict[str, Any] = Depends(_case_filter)):
     from . import event_log_temporal_profile as temporal
     _require_dashboard(request)
     return _respond(temporal.temporal_profile, log_id, case_type, zeta=zeta, min_occurrences=min_occurrences,
-                    cohort=cohort)
+                    cohort=cohort, baseline_cutoff=baseline_cutoff)
 
 
 @router.post("/v1/event-logs/{log_id}/temporal-profile/cases")
@@ -1231,7 +1233,8 @@ async def event_log_temporal_cases(request: Request, log_id: str,
     if not isinstance(spec, dict) or set(spec) - {"source", "destination", "direction", "after", "limit"}:
         raise HTTPException(422, "invalid temporal case page settings")
     return await run_in_threadpool(_respond, temporal.temporal_cases, log_id, case_type, zeta=zeta,
-                                   min_occurrences=min_occurrences, cohort=cohort, **spec)
+                                   min_occurrences=min_occurrences, cohort=cohort,
+                                   baseline_cutoff=baseline_cutoff, **spec)
 
 
 @router.get("/v1/event-logs/{log_id}/heuristics-net")
