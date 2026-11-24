@@ -76,6 +76,16 @@ def test_currency_basis_and_missing_budget_never_become_free_candidates():
         "Missing":"missing_budget"}
 
 
+def test_required_closure_subtotal_never_adds_incompatible_currencies_or_bases():
+    usd=idea("USD prerequisite",200,currency="USD")
+    other=idea("Other basis",300,basis="approved_budget")
+    good=idea("Comparable",10,[usd,other])
+    result=s.solve(request([(usd,1),(other,1),(good,20)],required=[good["idea_id"]]))
+    assert result["status"]=="no_feasible_portfolio"
+    assert Decimal(result["required_closure_known_budget"])==Decimal("10")
+    assert result["required_closure_cost_complete"] is False
+
+
 def test_decimal_budget_exact_required_and_count_constraints():
     a=idea("A",0.1);b=idea("B",0.2)
     result=s.solve(request([(a,20),(b,20)],limit=0.3,required=[a["idea_id"],b["idea_id"]]))
