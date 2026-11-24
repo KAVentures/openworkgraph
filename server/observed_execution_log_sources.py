@@ -38,7 +38,11 @@ def read_manifest(conn, log_id: str) -> tuple[bool, dict[str, Any] | None]:
         if not 1 <= counts[0] <= 12 or not 1 <= counts[1] <= 10000 or counts[2] > counts[1]:
             return True, None
         scope = report.get("scope")
-        if not isinstance(scope, dict) or not isinstance(scope.get("execution_ids"), list):
+        if (not isinstance(scope, dict) or set(scope) - {"execution_ids", "since", "until", "projection"}
+                or not isinstance(scope.get("execution_ids"), list)
+                or scope.get("projection", "actions") not in {"actions", "actions_and_navigation"}):
+            return True, None
+        if any(scope.get(key) is not None and not isinstance(scope[key], str) for key in ("since", "until")):
             return True, None
         cases = report.get("cases")
         if not isinstance(cases, list) or len(cases) != counts[0] or len(scope["execution_ids"]) != counts[0]:
@@ -57,7 +61,9 @@ def read_manifest(conn, log_id: str) -> tuple[bool, dict[str, Any] | None]:
         if sum(case["events"] for case in cases) != counts[1] or sum(case["timestamp_tie_groups"] for case in cases) != counts[2]:
             return True, None
         if (report.get("capture_complete") is not False or report.get("business_case_identity_verified") is not False
-                or report.get("business_outcomes_verified") is not False):
+                or report.get("business_outcomes_verified") is not False
+                or report.get("source_limit_reached") is not False
+                or report.get("sensor_observations_not_deduplicated_actions") is not True):
             return True, None
         return True, report
     except (ValueError, TypeError, KeyError, RecursionError):
