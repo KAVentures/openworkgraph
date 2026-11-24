@@ -230,6 +230,17 @@ with TestClient(app) as c:
  assert inspected.json()['effective_input_status']=='matches'
  detail=c.post(inspect,json={**inspect_body,'case_id':'PRIVATE_CASE','expected_projection_sha256':inspected.json()['current_effective_input']['sha256']},headers=h)
  assert detail.status_code==200 and len(detail.json()['events'])==2,detail.text
+ rediscover='/v1/event-log-discovery/rediscover?workflow_id='+saved['workflow_id']+'&revision=1'
+ assert c.post(rediscover,json=inspect_body,headers=bearer).status_code in (401,403)
+ proposed=c.post(rediscover,json=inspect_body,headers=h)
+ assert proposed.status_code==200 and proposed.json()['source_snapshot_recorded'] is False,proposed.text
+ fresh=proposed.json()
+ pins={**inspect_body,'expected_model_sha256':fresh['current_model_sha256'],'expected_projection_sha256':fresh['current_effective_input']['sha256']}
+ assert c.post(rediscover+'&retain=true',json=pins,headers=h).status_code==403
+ renewed=c.post(rediscover+'&retain=true',json=pins,headers={**h,'x-owg-local-storage-confirmed':'true'})
+ assert renewed.status_code==200 and renewed.json()['source_snapshot_recorded'] is True,renewed.text
+ assert catalog.get(saved['workflow_id'],1)==saved
+
 
  idea=assess(pipeline.create_from_process(ref(saved)))
  idea=pipeline.transition(idea['idea_id'],{'to':'approved','expected_revision':idea['revision']})
@@ -547,3 +558,51 @@ console.log('Exact discovery inspection and handoff model checks passed');
     result = subprocess.run(["node", "-e", script], cwd=Path(__file__).resolve().parents[1],
                             capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr
+
+
+def test_rediscovery_from_saved_selection_does_not_carry_confirmed_rules_or_write_process():
+    from server import event_log_hidden_activities as hidden
+
+    log, _, _, original = prepare()
+    saved, basis = _inspection_basis(original)
+    saved["process_model"] = {**saved["process_model"], "goal": "Approved historical goal",
+                              "outcome_expectations": [{"private": "HISTORICAL_POLICY"}]}
+    saved_before = json.dumps(saved, sort_keys=True)
+    hidden.set_hidden(log, {"activities": ["Review"]})
+    proposed = provenance.rediscover_saved_selection(saved, basis)
+    assert proposed["source_snapshot"] is None
+    assert proposed["source_snapshot_recorded"] is False
+    assert proposed["saved_process_changed"] is False
+    assert proposed["previous_approvals_carried"] is False
+    assert proposed["current_model_sha256"] != proposed["original_model_sha256"]
+    assert proposed["current_effective_input"]["events"] == 8
+    assert proposed["process_model"]["goal"] == ""
+    assert all(not r["user_confirmed"] for r in proposed["process_model"]["business_rules"])
+    assert all(node["implementation"] == "unmapped" for node in proposed["process_model"]["activities"])
+    assert proposed["process_model"]["outcome_expectations"] == []
+    assert "HISTORICAL_POLICY" not in json.dumps(proposed)
+    assert json.dumps(saved, sort_keys=True) == saved_before
+    conn = workspace._connect()
+    try:
+        assert conn.execute("SELECT count(*) FROM discovery_snapshots").fetchone()[0] == 1
+    finally:
+        conn.close()
+    pins = {**basis, "expected_model_sha256": proposed["current_model_sha256"],
+            "expected_projection_sha256": proposed["current_effective_input"]["sha256"]}
+    with pytest.raises(workspace.EventLogWorkspaceError, match="Review the exact fresh"):
+        provenance.rediscover_saved_selection(saved, basis, retain_snapshot=True)
+    with pytest.raises(workspace.EventLogWorkspaceError, match="Preview rediscovery"):
+        provenance.rediscover_saved_selection(saved, pins)
+    hidden.set_hidden(log, {"activities": []})
+    with pytest.raises(workspace.EventLogWorkspaceError, match="discovery changed"):
+        provenance.rediscover_saved_selection(saved, pins, retain_snapshot=True)
+    hidden.set_hidden(log, {"activities": ["Review"]})
+    recorded = provenance.rediscover_saved_selection(saved, pins, retain_snapshot=True)
+    assert recorded["source_snapshot_recorded"] is True
+    assert recorded["source_snapshot"]["reference"] != basis["reference"]
+    assert recorded["source_snapshot"]["effective_input"] == proposed["current_effective_input"]
+    assert recorded["source_snapshot"]["selection_sha256"] == proposed["selection_sha256"]
+    assert json.dumps(saved, sort_keys=True) == saved_before
+    assert provenance.origins(saved)[0]["status"] == "projection_changed"
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        provenance.rediscover_saved_selection(saved, {**basis, "expected_process_sha256": "0"*64})
