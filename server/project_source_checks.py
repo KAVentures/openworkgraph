@@ -257,6 +257,7 @@ def review_export(idea_id: str, project_id: str, content: bytes) -> dict[str, An
             else:
                 run_status = ('retained_run_snapshot_matches' if current_run == run
                               else 'retained_run_snapshot_changed')
+    process_status = pipeline._process_status(reference)
     return {
         'format': 'openworkgraph.project-source-check-review.v1',
         'project_id': project_id, 'export_id': export_id, 'document_sha256': digest,
@@ -265,6 +266,9 @@ def review_export(idea_id: str, project_id: str, content: bytes) -> dict[str, An
         'idea_revision_matches_export': current_idea['revision'] == metadata[0],
         'exact_retained_export_bytes_match': True,
         'process_expectation_status': expectation_status, 'run_attribution_status': run_status,
+        'current_process_reference_status': process_status['status'],
+        'process_reference_is_current': process_status['reference_is_current'],
+        'latest_process_revision': process_status['latest_revision'],
         'historical_source_operation_reported_verified': receipt['operation_verified'],
         'historical_source_availability': receipt.get('availability'),
         'historical_source_checked_at': receipt.get('verified_at'),
