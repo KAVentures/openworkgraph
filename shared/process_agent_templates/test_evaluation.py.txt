@@ -132,6 +132,48 @@ class EvaluationCases(unittest.TestCase):
             self.assertNotEqual(run.returncode, 0)
             self.assertFalse((root / 'invalid.json').exists())
 
+    def test_live_capture_is_explicit_private_bounded_and_reusable_offline(self):
+        with TemporaryDirectory() as directory:
+            import os
+            import stat
+            root = Path(directory)
+            for name, value in [('workflow.spec.json', self.spec), ('suite.json', self.suite),
+                                ('mock-plans.json', self.results)]:
+                (root / name).write_text(json.dumps(value), encoding='utf-8')
+            for name in ('evaluate.py', 'execute.py', 'runtime.py',
+                         'process_source_state.py', 'process_rule_conditions.py'):
+                (root / name).write_bytes((Path(__file__).parent / name).read_bytes())
+            runner = ('import evaluate,json,pathlib,socket; '
+                      'socket.socket=lambda *a,**k: (_ for _ in ()).throw(AssertionError("network"))\\n'
+                      'async def fake(*a,**k): return json.loads(pathlib.Path("mock-plans.json").read_text())\\n'
+                      'evaluate.run_planner=fake; raise SystemExit(evaluate.main())')
+            command = [sys.executable, '-c', runner, '--cases', 'suite.json',
+                       '--model', 'fixture', '--output', 'report.json',
+                       '--capture-results', 'capture.json']
+            denied = subprocess.run(command, cwd=root, capture_output=True, text=True, timeout=20)
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertFalse((root / 'capture.json').exists())
+            self.assertFalse((root / 'report.json').exists())
+            command.append('--confirm-retain-model-output')
+            accepted = subprocess.run(command, cwd=root, capture_output=True, text=True, timeout=20)
+            self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
+            captured = root / 'capture.json'
+            self.assertEqual(json.loads(captured.read_text()), self.results)
+            self.assertNotIn('PRIVATE_QUESTION', (root / 'report.json').read_text())
+            if os.name == 'posix':
+                self.assertEqual(stat.S_IMODE(captured.stat().st_mode), 0o600)
+            paired = subprocess.run([sys.executable, 'evaluate.py', '--cases', 'suite.json',
+                                     '--results', 'capture.json', '--baseline-results', 'capture.json',
+                                     '--output', 'paired.json'], cwd=root, capture_output=True,
+                                    text=True, timeout=20)
+            self.assertEqual(paired.returncode, 0, paired.stdout + paired.stderr)
+            self.assertEqual(json.loads((root / 'paired.json').read_text())['paired_transitions']['unchanged_match'], 2)
+            command[command.index('report.json')] = 'second.json'
+            refused = subprocess.run(command, cwd=root, capture_output=True, text=True, timeout=20)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertEqual(json.loads(captured.read_text()), self.results)
+            self.assertFalse((root / 'second.json').exists())
+
     def test_stale_duplicate_unreviewed_unauthorized_and_tampered_suites_are_rejected(self):
         for field, value in [('reviewed_by_customer', False), ('case_inputs_authorized', False),
                              ('spec_sha256', 'c'*64), ('cases', [])]:
