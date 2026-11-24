@@ -290,8 +290,12 @@ def inspect_selection(record, payload):
                     clauses.append("case_id > ?")
                     params.append(request.after)
                 if request.case_status != "all":
-                    clauses.append("list_contains(?, case_id)")
-                    params.append([key for key, status in statuses.items() if status == request.case_status])
+                    matching_keys = [key for key, status in statuses.items() if status == request.case_status]
+                    if matching_keys:
+                        clauses.append("list_contains(?, case_id)")
+                        params.append(matching_keys)
+                    else:
+                        clauses.append("FALSE")
                 where = "WHERE " + " AND ".join(clauses) if clauses else ""
                 rows = conn.execute(f"""
                     SELECT case_id, count(*), epoch(max(ts)-min(ts)),
