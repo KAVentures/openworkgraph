@@ -24,18 +24,18 @@ SCENARIOS = [
      ("contained", "corrective_action", "verified", "reopened"),
      ("reported", "contained", "investigated", "disposition",
       "corrective_action", "verified", "closed"),
-     "investigation_hours", 96, 9),
+     "investigation_hours", 96),
     ("supplier_qualification", "qualification",
      ("requested", "checked", "decision"),
      ("documents_requested", "documents_received", "activated", "reopened"),
      ("requested", "documents_requested", "documents_received", "checked",
       "decision", "activated"),
-     "check_days", 90, 9),
+     "check_days", 90),
     ("financial_close", "close_task",
      ("assigned", "prepared", "reviewed", "closed"),
      ("adjustment", "reopened"),
      ("assigned", "prepared", "adjustment", "reviewed", "closed"),
-     "preparation_hours", 96, 9),
+     "preparation_hours", 96),
 ]
 
 
@@ -93,7 +93,7 @@ def _cases(rule):
 
 @pytest.mark.parametrize("scenario", SCENARIOS, ids=[s[0] for s in SCENARIOS])
 def test_discover_install_report_and_uninstall(scenario):
-    pack, _, required, optional, _, target, new_target, _ = scenario
+    pack, _, required, optional, _, target, new_target = scenario
     catalog = next(p for p in packs.catalog()["packs"] if p["pack_id"] == pack)
     assert catalog["versions"] == ["1.0.0"]
     assert catalog["definitions"]["metrics"] == 6
@@ -130,13 +130,13 @@ def test_discover_install_report_and_uninstall(scenario):
 
 @pytest.mark.parametrize("scenario", SCENARIOS, ids=[s[0] for s in SCENARIOS])
 def test_optional_coverage_and_invalid_install_is_atomic(scenario):
-    pack, _, required, optional, _, target, _, _ = scenario
+    pack, _, required, optional, _, target, _ = scenario
     log, mapping = _log(scenario)
     for role in optional:
         mapping["activities"].pop(role)
     saved = _install(log, pack, mapping)
     assert saved["not_applicable"]
-    assert {row["unmapped_role"] for row in saved["not_applicable"]} <= set(optional)
+    assert {row["unmapped_role"] for row in saved["not_applicable"]} == set(optional)
     assert len(saved["metric_ids"]) < 6
     report = packs.report(log, pack)
     assert report["source_system_validated"] is False
