@@ -221,6 +221,16 @@ with TestClient(app) as c:
  assert origins.status_code==200 and origins.headers['cache-control']=='no-store'
  assert origins.json()['origins'][0]['status']=='current'
  assert origins.json()['origins'][0]['reviewed_graph_matches_discovery'] is False
+ inspect='/v1/event-log-discovery/inspect-selection?workflow_id='+saved['workflow_id']+'&revision=1'
+ inspect_body={'reference':snapshot['reference'],'expected_process_sha256':saved['content_sha256']}
+ assert c.post(inspect,json=inspect_body,headers=bearer).status_code in (401,403)
+ inspected=c.post(inspect,json=inspect_body,headers=h)
+ assert inspected.status_code==200 and inspected.headers['cache-control']=='no-store',inspected.text
+ assert inspected.json()['cases'][0]['case_id']=='PRIVATE_CASE'
+ assert inspected.json()['effective_input_status']=='matches'
+ detail=c.post(inspect,json={**inspect_body,'case_id':'PRIVATE_CASE','expected_projection_sha256':inspected.json()['current_effective_input']['sha256']},headers=h)
+ assert detail.status_code==200 and len(detail.json()['events'])==2,detail.text
+
  idea=assess(pipeline.create_from_process(ref(saved)))
  idea=pipeline.transition(idea['idea_id'],{'to':'approved','expected_revision':idea['revision']})
  project,artifact=export_project(idea['idea_id'],{'expected_revision':idea['revision']})
@@ -277,3 +287,129 @@ def test_large_source_snapshot_and_lookup_cover_every_case():
     print(f'\nsource fingerprint acceptance: {events:,} events, {cases:,} cases, '
           f'{2*events+cases:,} total source rows; record {recorded_seconds:.2f}s, '
           f'lookup {checked_seconds:.2f}s; DuckDB {duckdb.__version__}; supplied synthetic data only')
+
+
+def _inspection_basis(result):
+    saved = {**record(result), "workflow_id": "reviewed_model", "revision": 1,
+             "content_sha256": "a" * 64}
+    request = {"reference": result["source_snapshot"]["reference"],
+               "expected_process_sha256": saved["content_sha256"]}
+    return saved, request
+
+
+def test_exact_effective_input_detects_same_model_changed_case_membership():
+    from server import event_log_case_tags as tags
+
+    log = _log([["Receive", "Close"]] * 3)
+    tags.add(log, {"tag": "Reviewed", "case_ids": ["c0"]})
+    cohort = {"tag": "Reviewed"}
+    preview = discovery.discover(log, cohort=cohort, _pin_projection=True)
+    original = preview["effective_input"]
+    assert original["cases"] == 1 and original["events"] == 2
+    body = {"expected_model_sha256": preview["process_model_sha256"],
+            "expected_projection_sha256": original["sha256"], "cohort": cohort}
+    saved = provenance.record_draft(log, body)
+    assert saved["source_snapshot"]["effective_input"] == original
+    assert provenance.origins(record(saved))[0]["effective_input_status"] == "matches"
+
+    # Equal path, count, timestamps relative to each case and model: only
+    # the selected case membership changes, with no modification of raw rows.
+    tags.remove(log, {"tag": "Reviewed", "case_ids": ["c0"]})
+    tags.add(log, {"tag": "Reviewed", "case_ids": ["c1"]})
+    changed = discovery.discover(log, cohort=cohort, _pin_projection=True)
+    assert changed["process_model_sha256"] == preview["process_model_sha256"]
+    assert changed["effective_input"]["sha256"] != original["sha256"]
+    with pytest.raises(workspace.EventLogWorkspaceError, match="effective discovery input changed"):
+        provenance.record_draft(log, body)
+    origin = provenance.origins(record(saved))[0]
+    assert origin["status"] == "projection_changed"
+    assert origin["effective_input_status"] == "changed"
+    assert origin["current_effective_input"] == changed["effective_input"]
+    assert origin["source_content_sha256"] == saved["source_snapshot"]["source_content_sha256"]
+
+
+def test_hidden_and_mapped_activities_change_effective_input_without_changing_raw_digest():
+    from server import event_log_hidden_activities as hidden
+    from server import event_log_activity_mappings as mappings
+
+    log, _, _, made = prepare()
+    saved = record(made)
+    initial = provenance.origins(saved)[0]
+    hidden.set_hidden(log, {"activities": ["Review"]})
+    changed = provenance.origins(saved)[0]
+    assert changed["status"] == "projection_changed"
+    assert changed["current_effective_input"]["events"] == 8
+    assert changed["source_content_sha256"] == initial["source_content_sha256"]
+    hidden.set_hidden(log, {"activities": []})
+    assert provenance.origins(saved)[0]["effective_input_status"] == "matches"
+    mapping = mappings.create(log, {"name": "Group review", "groups": [
+        {"label": "Check", "activities": ["Review"]}]})
+    mappings.apply_mapping(log, mapping["mapping_id"])
+    changed = provenance.origins(saved)[0]
+    assert changed["status"] == "projection_changed"
+    assert changed["current_effective_input"]["events"] == initial["effective_input"]["events"]
+    mappings.apply_mapping(log, None)
+    assert provenance.origins(saved)[0]["effective_input_status"] == "matches"
+
+
+def test_exact_selection_pages_reject_outside_case_and_stale_projection():
+    from server import event_log_case_tags as tags
+
+    log = _log([["Open", "Review", "Close"]] * 4)
+    tags.add(log, {"tag": "selected", "case_ids": ["c0", "c2", "c3"]})
+    preview = discovery.discover(log, cohort={"tag": "selected"}, _pin_projection=True)
+    result = provenance.record_draft(log, {"expected_model_sha256": preview["process_model_sha256"],
+        "expected_projection_sha256": preview["effective_input"]["sha256"], "cohort": {"tag": "selected"}})
+    saved, basis = _inspection_basis(result)
+    first = provenance.inspect_selection(saved, {**basis, "limit": 1})
+    assert first["effective_input_status"] == "matches"
+    assert first["historical_rows_retained"] is False
+    assert first["raw_source_fingerprint_rechecked"] is False
+    assert first["current_effective_input"]["cases"] == 3
+    assert first["cases"][0]["case_id"] == "c0" and first["next_after"] == "c0"
+    pinned = {**basis, "expected_projection_sha256": first["current_effective_input"]["sha256"]}
+    rest = provenance.inspect_selection(saved, {**pinned, "after": "c0", "limit": 2})
+    assert [row["case_id"] for row in rest["cases"]] == ["c2", "c3"]
+    assert rest["next_after"] is None
+    detail = provenance.inspect_selection(saved, {**pinned, "case_id": "c2", "limit": 2})
+    assert [event["activity"] for event in detail["events"]] == ["Open", "Review"]
+    assert detail["next_offset"] == 2
+    last = provenance.inspect_selection(saved, {**pinned, "case_id": "c2", "offset": 2})
+    assert [event["activity"] for event in last["events"]] == ["Close"]
+    assert last["next_offset"] is None
+    for bad in ({**pinned, "case_id": "c1"}, {**basis, "case_id": "c0"},
+                {**basis, "after": "c0"}, {**pinned, "expected_process_sha256": "b"*64},
+                {**pinned, "reference": provenance.PREFIX+"0"*64},
+                {**pinned, "cohort": {}}, {**pinned, "case_id": "c2", "after": "c0"}):
+        with pytest.raises(workspace.EventLogWorkspaceError):
+            provenance.inspect_selection(saved, bad)
+    tags.remove(log, {"tag": "selected", "case_ids": ["c2"]})
+    with pytest.raises(workspace.EventLogWorkspaceError, match="changed since inspection"):
+        provenance.inspect_selection(saved, {**pinned, "after": "c0"})
+    changed = provenance.inspect_selection(saved, basis)
+    assert changed["effective_input_status"] == "changed"
+    assert [row["case_id"] for row in changed["cases"]] == ["c0", "c3"]
+    workspace.delete_log(log)
+    with pytest.raises(workspace.EventLogWorkspaceError, match="unavailable"):
+        provenance.inspect_selection(saved, basis)
+
+
+def test_legacy_discovery_selection_reports_unknown_historical_membership():
+    log, _, _, result = prepare()
+    original_ref = result["source_snapshot"]["reference"]
+    conn = workspace._connect()
+    try:
+        payload = json.loads(conn.execute("SELECT payload FROM discovery_snapshots WHERE reference=?", [original_ref]).fetchone()[0])
+        payload.pop("effective_input")
+        legacy_ref = provenance.PREFIX + provenance.digest(payload)
+        conn.execute("UPDATE discovery_snapshots SET reference=?,payload=? WHERE reference=?",
+                     [legacy_ref, json.dumps(payload), original_ref])
+    finally:
+        conn.close()
+    result["source_snapshot"]["reference"] = legacy_ref
+    saved, basis = _inspection_basis(result)
+    assert provenance.origins(saved)[0]["effective_input_status"] == "not_recorded"
+    inspected = provenance.inspect_selection(saved, basis)
+    assert inspected["original_effective_input"] is None
+    assert inspected["effective_input_status"] == "not_recorded"
+    assert inspected["historical_rows_retained"] is False
