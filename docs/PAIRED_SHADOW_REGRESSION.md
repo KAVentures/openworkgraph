@@ -72,8 +72,9 @@ bindings, actual runtime safeguards and source-verifiable outcomes before
 deploying.
 
 This change preserves the existing single-result shadow comparison and the
-separate explicitly consented current-source evaluation. It does not send
-case data to a provider or modify the reviewed process.
+separate explicitly consented current-source evaluation. The offline paired comparison does not send
+case data to a provider or modify the reviewed process; only the existing
+explicit live-model mode sends case inputs.
 
 Regression tests are part of the existing generated `test_evaluation.py`
 suite: case swaps at equal aggregate scores, newly introduced review bypasses,
