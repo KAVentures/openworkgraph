@@ -178,7 +178,13 @@ def _fit_cases(xml, rows):
     for key,value in sorted(net["transitions"].items()):
         if value is not None:
             labels.setdefault(value,[]).append(key)
-    return {tuple(path):petri._replay(net,tuple(path),labels)["fits"] for path,_ in rows}
+    results={}
+    for path,_ in rows:
+        replay=petri._replay(net,tuple(path),labels)
+        results[tuple(path)]={"fits":replay["fits"],"fitness":replay["fitness"],
+                              "unknown_activities":sorted(set(replay["unknown"])),
+                              "missing_tokens":replay["missing"],"remaining_tokens":replay["remaining"]}
+    return results
 
 
 def evaluate(histories,packet):
@@ -203,10 +209,19 @@ def evaluate(histories,packet):
     # Only the selected net is ever scored on the test cohort.
     test_score=_scores(selected,test[1])
     exact=_fit_cases(selected["pnml"],test[1])
-    test_score["fitting_cases_exact"]=sum(n for p,n in test[1] if exact[p])
+    test_score["fitting_cases_exact"]=sum(n for p,n in test[1] if exact[p]["fits"])
     test_score["whole_assigned_case_fitting_share_bounds"]=_bound(test[0],test_score)
-    test_cases=[{**r,"fits_selected_net":exact.get(r["path"]) if r["path"] is not None else None}
-                for r in windows[2]["cases"]]
+    test_score["cases_with_unknown_activities"]=sum(n for p,n in test[1] if exact[p]["unknown_activities"])
+    unknown_counts=Counter()
+    for p,n in test[1]:
+        for label in exact[p]["unknown_activities"]:
+            unknown_counts[label]+=n
+    test_score["unknown_activities_by_case_count"]=dict(sorted(unknown_counts.items()))
+    test_cases=[]
+    for r in windows[2]["cases"]:
+        diagnostics=exact.get(r["path"])
+        test_cases.append({**r,"fits_selected_net":diagnostics["fits"] if diagnostics else None,
+                           "replay_diagnostics":diagnostics})
     report={"windows":[x[0] for x in (train,validation,test)],"cases_outside_windows":outside,
             "candidates":[{k:v for k,v in c.items() if k not in ("pnml","tree")} for c in candidates],
             "selection":{"noise":selected["noise"],"pnml":selected["pnml"],"pnml_sha256":selected["pnml_sha256"],
@@ -225,7 +240,7 @@ def review(log_id,spec,*,page=None):
     try:
         data=_projection(log_id,packet)
         boundaries=[_time(x) for x in packet["boundaries"]]
-        if boundaries[-1]>data["last"]+timedelta(microseconds=1):
+        if boundaries[-1]>data["last"] and boundaries[-1]-data["last"]>timedelta(microseconds=1):
             _fail("Final boundary must not extend beyond the visible observation horizon")
         identity={"format":FORMAT,"log_id":log_id,"case_notion":data["case_notion"],
                   "inputs":packet,"projection_sha256":data["projection_sha256"]}

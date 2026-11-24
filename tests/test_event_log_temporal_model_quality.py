@@ -108,3 +108,57 @@ def test_complete_budget_and_minimum(log,monkeypatch):
         tm.review(log,packet(minimum_cases=3))
     monkeypatch.setattr(tm,"MAX_EVENTS",1)
     with pytest.raises(workspace.EventLogWorkspaceError,match="budget"):tm.review(log,packet())
+
+
+def test_unknown_labels_remain_exact_replay_deviations():
+    result,cases=tm.evaluate(histories(),tm.normalize(packet()))
+    assert result["test"]["cases_with_unknown_activities"]==1
+    assert result["test"]["unknown_activities_by_case_count"]=={"Novel":1}
+    by={r["case_id"]:r for r in cases}
+    assert by["test-new"]["replay_diagnostics"]["unknown_activities"]==["Novel"]
+    assert by["test-new"]["fits_selected_net"] is False
+    assert by["test-open"]["replay_diagnostics"] is None
+
+
+def test_dashboard_only_http_and_evidence(tmp_path):
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    code=r'''
+from io import BytesIO
+from fastapi.testclient import TestClient
+from server.secure_app import app
+from server import local_auth, event_log_workspace as ws
+from server.event_log_temporal_model_quality import FORMAT
+csv=b"case,activity,time\na,A,2026-01-01T00:00:00Z\na,Done,2026-01-02T00:00:00Z\nb,A,2026-01-05T00:00:00Z\nb,Done,2026-01-06T00:00:00Z\nc,A,2026-01-09T00:00:00Z\nc,Done,2026-01-10T00:00:00Z\nd,A,2026-01-13T00:00:00Z"
+log=ws.import_log(BytesIO(csv),name="temporal",source_format="csv",
+    mapping={"case_column":"case","activity_column":"activity","timestamp_column":"time"})["log_id"]
+body={"format":FORMAT,"boundaries":[f"2026-01-{d:02}T00:00:00Z" for d in (1,5,9,13)],
+      "end_activities":["Done"],"minimum_cases":1,"noise_levels":[0,.2]}
+path=f"/v1/event-logs/{log}/model-quality/temporal"
+with TestClient(app) as client:
+    assert client.post(path,json=body).status_code in (401,403)
+    bearer={"Authorization":"Bearer "+local_auth.ensure_api_token()}
+    assert client.post(path,json=body,headers=bearer).status_code in (401,403)
+    auth={"Authorization":"OWG-Session "+local_auth.create_dashboard_session()}
+    response=client.post(path,json=body,headers=auth)
+    assert response.status_code==200,response.text
+    assert response.headers["cache-control"]=="no-store"
+    r=response.json()
+    assert r["test"]["fitting_cases_exact"]==1
+    spec={"settings":body,"expected_review_sha256":r["review_sha256"],"status":"all","offset":0,"limit":50}
+    page=client.post(path+"/evidence",json=spec,headers=auth)
+    assert page.status_code==200,page.text
+    assert page.json()["cases"][0]["case_id"]=="c"
+    assert client.post(path+"/evidence",json=spec,headers=bearer).status_code in (401,403)
+    assert client.post(path+"/evidence",json={**spec,"expected_review_sha256":"0"*64},headers=auth).status_code==422
+    assert client.post(path,json={**body,"cohort":{}},headers=auth).status_code==422
+    assert client.post(path,headers={**auth,"Content-Type":"application/json"},content=b"{}"+b" "*40000).status_code==413
+'''
+    env={**os.environ,"WORKFLOW_OBSERVER_DATA":str(tmp_path/"data"),
+         "WORKFLOW_OBSERVER_AUTH_DIR":str(tmp_path/"auth"),
+         "WORKFLOW_OBSERVER_CONFIG":str(tmp_path/"config.json")}
+    done=subprocess.run([sys.executable,"-c",code],cwd=Path(__file__).resolve().parents[1],
+                        env=env,text=True,capture_output=True,timeout=60)
+    assert done.returncode==0,done.stdout+done.stderr
