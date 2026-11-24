@@ -61,6 +61,8 @@ def retain(conn, log_id, notion, result, expected_model_sha256):
     # This pins the connection to recorded execution evidence without
     # copying source cases or permitting a new history read.
     observed = workspace._check_log(conn, log_id).get("observed_execution_snapshot")
+    if observed and observed.get("manifest_available") is not True:
+        raise workspace.EventLogWorkspaceError("Original observed execution snapshot manifest is unavailable")
     if observed:
         payload["observed_execution_origin"] = {
             "snapshot_sha256": observed["snapshot_sha256"],
@@ -148,7 +150,7 @@ def origins(record, *, include_selection=False):
                     if "observed_execution_origin" in saved:
                         pinned = saved["observed_execution_origin"]
                         retained = log_info.get("observed_execution_snapshot")
-                        matching = bool(retained and all(
+                        matching = bool(retained and retained.get("manifest_available") is True and all(
                             retained.get(key) == pinned.get(key)
                             for key in ("snapshot_sha256", "original_case_count", "original_event_count",
                                         "business_case_identity_verified", "capture_complete")
