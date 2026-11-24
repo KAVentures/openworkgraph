@@ -282,9 +282,12 @@ def main():
         # These are raw planner outputs, unlike the minimized evaluation report.
         # Exclusive creation and a private mode on POSIX; Windows inherits ACLs.
         import os
+        payload = json.dumps(results, separators=(',', ':'), allow_nan=False).encode('utf-8')
+        if len(payload) > 262144:
+            raise ImplementationError('Captured plans exceed the supported offline results size; select fewer cases')
         fd = os.open(args.capture_results, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
-            json.dump(results, stream, indent=2, allow_nan=False)
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write(payload)
     with Path(args.output).open('x', encoding='utf-8') as stream:
         json.dump(report, stream, indent=2, allow_nan=False)
     summary = {'case_count': report['case_count'], 'review_required': report['review_required'],
