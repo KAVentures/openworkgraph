@@ -886,7 +886,7 @@
     const until=el('input');until.type='date';
     const file=el('input');file.type='file';file.accept='.dmn,.xml,application/xml';
     const labelled=(title,control)=>{
-      const label=el('label',title+' ');label.append(control);return label;
+      const label=el('label',title+' ');control.setAttribute('aria-label',title);label.append(control);return label;
     };
     const settings=el('div');settings.className='row';
     const output=el('div');output.setAttribute('role','status');

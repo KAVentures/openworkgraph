@@ -106,6 +106,11 @@ const path=require('node:path');
   await preview.click();
   await dmn.getByText('2 tables ready for review.',{exact:true}).waitFor();
   await dmn.getByText('Audit · UNIQUE · 2 unconfirmed rules',{exact:true}).waitFor();
+  assert.deepEqual(await page.evaluate(async()=>{
+    const audit=await axe.run(document.querySelector('#owgCatalogDMN'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}});
+    return audit.violations.map(v=>v.id);
+  }),[]);
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2));
   const open=dmn.getByRole('button',{name:'Open proposal in editor',exact:true});
   await dmn.getByLabel('DMN effective until (optional)',{exact:true}).fill('2028-01-01');
   assert.equal(await open.count(),0);
@@ -121,6 +126,6 @@ const path=require('node:path');
   },designed.workflow_id);
   assert.ok(stored);
   assert.deepEqual(stored.process_model.decision_tables||[],[]);
-  assert.deepEqual(errors,[]);console.log('Local decision-table browser passed: shared editor, confirmation invalidation, exact save, numeric boundary/unknown checks, minimized export, disabled implementation-project export, WCAG/mobile.');
+  assert.deepEqual(errors,[]);console.log('Local decision-table browser passed: shared editor, confirmation invalidation, exact save, numeric boundary/unknown checks, minimized export, disabled implementation-project export, multi-table DMN preview, WCAG/mobile.');
  }finally{if(browser)await browser.close();server.kill('SIGTERM');await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);if(server.exitCode===null)server.kill('SIGKILL');await fs.rm(scratch,{recursive:true,force:true});}
 })().catch(error=>{console.error(error);process.exit(1);});
