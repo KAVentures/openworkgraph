@@ -76,8 +76,9 @@ _RUN_COLUMNS = """run_id,started_at,finished_at,status,outcome_reported_verified
                   outcome_source,reported_spec_sha256"""
 
 
-def _detail(conn, deployment_id, run_id):
-    info = m._check(conn, deployment_id)
+def _detail(conn, deployment_id, run_id, info=None):
+    if info is None:
+        info = m._check(conn, deployment_id)
     row = conn.execute("SELECT "+_RUN_COLUMNS+" FROM runs WHERE deployment_id=? AND run_id=?",
                        [deployment_id, run_id]).fetchone()
     if row is None:
@@ -182,7 +183,7 @@ def search(deployment_id, spec):
                      [settings.limit,settings.offset]).fetchall()
             rows = []
             for (rid,) in page:
-                item = _detail(conn,deployment_id,rid)
+                item = _detail(conn,deployment_id,rid,info)
                 run = item["run"]
                 first_issue = next(({"step_id":s["step_id"], "status":s["status"], "seq":s["seq"]}
                                     for s in run["steps"] if s["status"] in ("failed","handed_to_human")),None)
