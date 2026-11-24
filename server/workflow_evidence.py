@@ -17,7 +17,8 @@ from typing import Any, Iterable
 
 from . import analytics
 from shared.agent_workflow_map import build_agent_workflow_map
-from .procedural_memory import derive_executions, load_recent_evidence
+from .procedural_memory import derive_executions, load_recent_evidence, _surface_key
+from .execution_foreground_coverage import build_foreground_coverage
 from .work_profile import _canonical_surface
 from .workflow_candidates import cluster_runs
 from .record_evidence import record_linked_activity
@@ -845,6 +846,9 @@ def build_workflow_evidence(
                 "maximum": round(max(durations), 3) if durations else 0.0,
             },
             "observed_surface_foreground_time": _surface_timing(per_run_events),
+            "per_execution_foreground_coverage": build_foreground_coverage(
+                selected, per_run_events, lambda event: _surface_key(_surface_for_event(event))
+            ),
             "timing_is_productivity_score": False,
         },
         "agent_history": {
