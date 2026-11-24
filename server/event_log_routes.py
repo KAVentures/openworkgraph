@@ -774,9 +774,10 @@ async def export_event_log_matching_cases(request: Request, log_id: str,
                                           format: MatchingExportFormat = Query(default="csv")):
     _require_dashboard(request)
     spec = await _json_body(request, "matching-case export settings", strict=True, limit=32768)
+    suffix = "review.csv" if format == "sourcecsv-review" else _SUFFIX[format]
 
     def prepare():
-        handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="", suffix="." + _SUFFIX[format],
+        handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="", suffix="." + suffix,
                                              dir=str(DATA_DIR), delete=False)
         try:
             with handle:
@@ -790,7 +791,7 @@ async def export_event_log_matching_cases(request: Request, log_id: str,
         filename = await run_in_threadpool(prepare)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
-    return FileResponse(filename, media_type=_TYPES[format], filename=f"{log_id}-matching-cases.{_SUFFIX[format]}",
+    return FileResponse(filename, media_type=_TYPES[format], filename=f"{log_id}-matching-cases.{suffix}",
                         headers={"Cache-Control": "no-store"}, background=BackgroundTask(os.unlink, filename))
 
 
