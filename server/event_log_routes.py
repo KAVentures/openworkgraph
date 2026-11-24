@@ -3294,6 +3294,16 @@ async def event_log_create_activity_mapping(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/activity-mappings/template/preview")
+async def event_log_preview_activity_mapping(request: Request, log_id: str):
+    from . import event_log_activity_mappings as activity_mappings
+    _require_dashboard(request)
+    spec = await _json_body(request, "activity mapping file", strict=True, limit=262144)
+    response = await run_in_threadpool(_respond, activity_mappings.preview_template, log_id, spec)
+    _require_dashboard(request)
+    return response
+
+
 @router.post("/v1/event-logs/{log_id}/activity-mappings/applied")
 async def event_log_apply_activity_mapping(request: Request, log_id: str):
     """Body ``{"mapping_id": "amap_..."}`` applies one mapping; ``{"mapping_id": null}`` removes it."""
