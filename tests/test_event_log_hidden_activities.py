@@ -70,6 +70,21 @@ def test_validation():
         hidden.hidden("log_0000000000000000")
 
 
+def test_hidden_labels_outside_initial_choices_remain_selected_and_stale_edits_fail(monkeypatch):
+    log = _log()
+    monkeypatch.setattr(hidden, "MAX_LISTED", 1)
+    initial = hidden.hidden(log)
+    hidden.set_hidden(log, {"activities": ["Close"], "expected_sha256": initial["definition_sha256"]})
+    result = hidden.hidden(log)
+    assert [(a["activity"], a["hidden"]) for a in result["activities"]] == [("Sync", False), ("Close", True)]
+    with pytest.raises(hidden.HiddenActivitiesConflict):
+        hidden.set_hidden(log, {"activities": ["Sync"], "expected_sha256": initial["definition_sha256"]})
+    assert [a["activity"] for a in hidden.hidden(log)["hidden"]] == ["Close"]
+    current = result["definition_sha256"]
+    assert {a["activity"] for a in hidden.set_hidden(log, {"activities": ["Sync", "Close"], "expected_sha256": current})["hidden"]} == {"Sync", "Close"}
+    assert hidden.set_hidden(log, {"activities": []})["hidden"] == []  # legacy callers remain supported
+
+
 def test_deleting_the_log_deletes_the_list():
     log = _log()
     hidden.set_hidden(log, {"activities": ["Sync"]})
@@ -99,6 +114,9 @@ with TestClient(app) as client:
     assert client.post(url,json={"activities":["Ping"]},headers=bearer).status_code in (401,403)
     r=client.post(url,json={"activities":["Ping"]},headers=owner)
     assert r.status_code==200 and r.headers['cache-control']=='no-store' and r.json()['events_hidden']==4, r.text
+    stale=client.post(url,json={"activities":[],"expected_sha256":"0"*64},headers=owner)
+    assert stale.status_code==409 and client.get(url,headers=owner).json()['hidden'][0]['activity']=='Ping'
+    assert client.post(url,json={"activities":[],"expected_sha256":"bad"},headers=owner).status_code==422
     s=client.get('/v1/event-logs/'+log+'/summary',headers=owner).json()
     assert s['events']==8 and s['hidden_activities']['activities']==['Ping'], s
     assert client.post(url,json={"activities":["Zed"]},headers=owner).status_code==422

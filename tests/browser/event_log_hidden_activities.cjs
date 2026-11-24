@@ -45,6 +45,19 @@ const path=require('node:path');
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgHiddenActivities'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
+   // A second view changes the hidden set; the stale draft must not overwrite it.
+   await page.evaluate(async()=>{
+     const id=(await (await fetch('/v1/event-logs')).json()).logs[0].log_id;
+     const response=await fetch('/v1/event-logs/'+id+'/hidden-activities',{
+       method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({activities:['Receive']})});
+     if(!response.ok)throw Error('Could not change hidden activities');
+   });
+   await page.locator('#owgHiddenActivitiesClear').click();
+   await page.locator('#owgHiddenActivitiesStatus').filter({hasText:'Hidden activities changed since this view loaded.'}).waitFor();
+   assert.deepEqual(await page.locator('#owgHiddenActivitiesPick option:checked').allTextContents(),['Sync (6 events)']);
+   await page.locator('#owgHiddenActivitiesReload').click();
+   await page.locator('#owgHiddenActivitiesStatus').filter({hasText:'Hidden: Receive'}).waitFor();
+   assert.deepEqual(await page.locator('#owgHiddenActivitiesPick option:checked').allTextContents(),['Receive (6 events)']);
    await page.locator('#owgHiddenActivitiesClear').click();
    await page.locator('#owgHiddenActivitiesStatus').filter({hasText:'No activities are hidden.'}).waitFor();
    assert.equal(await page.locator('#owgHiddenActivitiesNotice').count(),0);

@@ -11,6 +11,8 @@ object-centric views keep every event, as with activity mappings. Deleting the l
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
+import json
 from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -30,6 +32,15 @@ _DDL = """CREATE TABLE IF NOT EXISTS hidden_activities (
 class HiddenSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
     activities: list[Label] = Field(max_length=MAX_HIDDEN)
+    expected_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
+class HiddenActivitiesConflict(EventLogWorkspaceError):
+    """The hidden set changed since the dashboard loaded it."""
+
+
+def _revision(names) -> str:
+    return hashlib.sha256(json.dumps(sorted(names), ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 def _ensure(conn) -> None:
@@ -44,7 +55,10 @@ def _status(conn, log_id: str) -> dict[str, Any]:
     total = conn.execute("SELECT count(*) FROM events WHERE log_id = ?", [log_id]).fetchone()[0]
     in_log = dict(conn.execute("""SELECT activity, count(*) FROM events WHERE log_id = ? AND activity IN
         (SELECT activity FROM hidden_activities WHERE log_id = ?) GROUP BY 1""", [log_id, log_id]).fetchall())
-    return {"format": FORMAT, "log_id": log_id,
+    # Preserve every hidden label, including labels outside the most frequent page.
+    listed = {a for a, _ in counts}
+    counts.extend((a, in_log.get(a, 0)) for a in sorted(hidden) if a not in listed)
+    return {"format": FORMAT, "log_id": log_id, "definition_sha256": _revision(hidden),
             "hidden": [{"activity": a, "events": in_log.get(a, 0), "hidden_at": at.isoformat() + "Z"}
                        for a, at in sorted(hidden.items())],
             "activities": [{"activity": a, "events": n, "hidden": a in hidden} for a, n in counts],
@@ -70,7 +84,8 @@ def hidden(log_id: str) -> dict[str, Any]:
 def set_hidden(log_id: str, spec: Any) -> dict[str, Any]:
     """Replace the log's hidden activities with the given list (an empty list shows everything)."""
     try:
-        names = HiddenSpec.model_validate(spec).activities
+        parsed = HiddenSpec.model_validate(spec)
+        names = parsed.activities
     except ValidationError as exc:
         first = exc.errors()[0]
         where = ".".join(str(p) for p in first["loc"])
@@ -80,6 +95,10 @@ def set_hidden(log_id: str, spec: Any) -> dict[str, Any]:
 
     def run(conn):
         _ensure(conn)
+        if parsed.expected_sha256 is not None:
+            current = [a for (a,) in conn.execute("SELECT activity FROM hidden_activities WHERE log_id = ?", [log_id]).fetchall()]
+            if _revision(current) != parsed.expected_sha256:
+                raise HiddenActivitiesConflict("Hidden activities changed since this view loaded. Reload before saving.")
         known = {a for (a,) in conn.execute("SELECT DISTINCT activity FROM events WHERE log_id = ? AND list_contains(?, activity)",
                                             [log_id, names]).fetchall()} if names else set()
         unknown = [n for n in names if n not in known]

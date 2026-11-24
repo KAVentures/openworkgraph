@@ -1250,24 +1250,27 @@
     const pick=document.createElement('select');pick.id='owgHiddenActivitiesPick';pick.multiple=true;pick.size=6;
     const save=button('Hide selected','secondary');save.id='owgHiddenActivitiesSave';
     const clear=button('Show all activities','secondary');clear.id='owgHiddenActivitiesClear';
+    const reload=button('Reload hidden activities','secondary');reload.id='owgHiddenActivitiesReload';
+    save.disabled=clear.disabled=true;let revision=null;
     const msg=el('div',null,'muted');msg.id='owgHiddenActivitiesStatus';msg.setAttribute('role','status');msg.setAttribute('aria-live','polite');
     const generation=state.generation;
     const url=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/hidden-activities';
     const render=r=>{
       if(generation!==state.generation)return;
       pick.replaceChildren(...r.activities.map(a=>{const o=el('option',a.activity+' ('+Number(a.events).toLocaleString()+' events)');o.value=a.activity;o.selected=a.hidden;return o;}));
-      clear.disabled=!r.hidden.length;
+      revision=r.definition_sha256;save.disabled=false;clear.disabled=!r.hidden.length;
       msg.textContent=r.hidden.length?'Hidden: '+r.hidden.map(h=>h.activity).join(', ')+' · '+Number(r.events_hidden).toLocaleString()+' of '+Number(r.events_total).toLocaleString()+' events left out.':'No activities are hidden.';
     };
     const store=async names=>{
       save.disabled=clear.disabled=true;
-      try{await api(url(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({activities:names})});
+      try{await api(url(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({activities:names,expected_sha256:revision})});
         if(generation===state.generation)await analyse();}
       catch(e){msg.textContent=e.message;save.disabled=false;clear.disabled=false;}
     };
     save.onclick=()=>{const names=[...pick.selectedOptions].map(o=>o.value);if(!names.length){msg.textContent='Choose at least one activity to hide, or use Show all activities.';return;}store(names);};
     clear.onclick=()=>store([]);
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities to hide (stored names)',pick),save,clear);
+    reload.onclick=()=>analyse().catch(e=>{msg.textContent=e.message;});
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities to hide (stored names)',pick),save,clear,reload);
     box.append(row,msg);
     getJSON(url()).then(render).catch(e=>{msg.textContent=e.message;});
     return box;

@@ -3299,6 +3299,8 @@ async def event_log_set_hidden_activities(request: Request, log_id: str):
     spec = await _json_body(request, "hidden activities", strict=True, limit=131072)
     try:
         result = await run_in_threadpool(hidden_activities.set_hidden, log_id, spec)
+    except hidden_activities.HiddenActivitiesConflict as exc:
+        raise HTTPException(409, str(exc)) from None
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
