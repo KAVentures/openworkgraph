@@ -332,6 +332,87 @@ def inspect_selection(record, payload):
             conn.close()
 
 
+class RediscoveryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    reference: str = Field(pattern=r"^urn:openworkgraph:local-log-discovery:[a-f0-9]{64}$")
+    expected_process_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    expected_model_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    expected_projection_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+
+def rediscover_saved_selection(record, payload, *, retain_snapshot=False):
+    """Discover the current result of the original exact selection.
+
+    Never carry approved rules, implementations or outcome claims into the
+    generated proposal. The existing catalog separately reviews and saves a
+    new revision; retaining source metadata alone never changes that catalog.
+    """
+    from . import event_log_model_discovery as discovery
+    try:
+        request = RediscoveryRequest.model_validate(payload)
+    except ValidationError:
+        raise workspace.EventLogWorkspaceError("invalid exact rediscovery request") from None
+    if (record.get("content_sha256") != request.expected_process_sha256
+            or request.reference not in record.get("evidence_refs", [])):
+        raise workspace.EventLogWorkspaceError("Source reference does not belong to the exact saved process revision")
+    if retain_snapshot:
+        if not request.expected_model_sha256 or not request.expected_projection_sha256:
+            raise workspace.EventLogWorkspaceError("Review the exact fresh model and effective input before recording")
+    elif request.expected_model_sha256 is not None or request.expected_projection_sha256 is not None:
+        raise workspace.EventLogWorkspaceError("Preview rediscovery before supplying fresh digest pins")
+    if not workspace.database_path().exists():
+        raise workspace.EventLogWorkspaceError("Original discovery source is unavailable")
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            row = conn.execute("SELECT log_id,payload FROM discovery_snapshots WHERE reference=?",
+                               [request.reference]).fetchone()
+            if row is None:
+                raise workspace.EventLogWorkspaceError("Original discovery source is unavailable")
+            log_id, raw = row
+            try:
+                saved = json.loads(raw)
+                if (saved["log_id"] != log_id or PREFIX + digest(saved) != request.reference
+                        or digest(saved["selection"]) != saved["selection_sha256"]):
+                    raise ValueError
+            except (KeyError, TypeError, ValueError, RecursionError):
+                raise workspace.EventLogWorkspaceError("Discovery source metadata does not match its reference") from None
+            workspace._check_log(conn, log_id)
+            if source_rows(conn, log_id) > MAX_SOURCE_ROWS:
+                raise workspace.EventLogWorkspaceError("Original source exceeds the rediscovery work budget")
+            selection = saved["selection"]
+            notion = selection["case_notion"]
+            if workspace._case_type(conn, log_id, notion) != notion:
+                raise workspace.EventLogWorkspaceError("Original case notion is unavailable")
+        finally:
+            conn.close()
+        result = discovery.discover(
+            log_id, notion, noise=selection["settings"]["noise"], activities=selection["settings"]["activities"],
+            cohort=selection["cohort"], _pin_projection=True, _record_snapshot=retain_snapshot,
+            _expected_model_sha256=request.expected_model_sha256,
+            _expected_projection_sha256=request.expected_projection_sha256,
+        )
+    if digest({"case_notion": result["case_notion"], "cohort": result["cohort"], "settings": result["settings"]}) != saved["selection_sha256"]:
+        raise workspace.EventLogWorkspaceError("Rediscovery selection no longer matches its original definition")
+    return {
+        "format": "openworkgraph.discovery-rediscovery.v1",
+        "workflow_id": record["workflow_id"], "revision": record["revision"],
+        "process_sha256": record["content_sha256"], "reference": request.reference,
+        "log_id": log_id, "selection_sha256": saved["selection_sha256"],
+        "original_model_sha256": saved["discovered_model_sha256"],
+        "current_model_sha256": result["process_model_sha256"],
+        "original_effective_input": saved.get("effective_input"),
+        "current_effective_input": result["effective_input"],
+        "original_quality": saved["quality"], "current_quality": result["quality"],
+        "process_model": result["process_model"], "tree": result["tree"],
+        "simplifications": result["simplifications"],
+        "source_snapshot": result.get("source_snapshot"),
+        "source_snapshot_recorded": retain_snapshot,
+        "saved_process_changed": False, "previous_approvals_carried": False,
+        "execution_authorized": False, "business_outcomes_verified": False,
+    }
+
+
 def origins(record, *, include_selection=False):
     refs = list(dict.fromkeys(r for r in record.get('evidence_refs', []) if r.startswith(PREFIX)))
     if not refs:
