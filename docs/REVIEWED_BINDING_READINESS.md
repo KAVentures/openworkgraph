@@ -175,3 +175,34 @@ executor preparation and synthetic tools/source receipts on a different
 case, including refusal of the disabled intent and reuse of its later
 synthetic authorization with the original case. These end-to-end tests
 remain pending full CI; no real provider was contacted.
+
+
+## Shortlist reusable reviewed routes for a selected case
+
+    python configure.py --shortlist-reviewed-routes --cases reviewed-cases.json --bindings bindings.json --case authorized-new-case.json --output route-shortlist.json
+
+This offline command groups identical reviewed activity sequences and checks
+each distinct alternative against the selected input using the existing
+executor preparation contract. Every alternative retains its suite case ID
+and one-based route index, usable by the separate preparation command.
+The report lists implementation blockers and whether human resolution or
+source checks are needed. It does not copy selected case values or tool
+arguments, although activity IDs and case digests may themselves be sensitive.
+
+If the selected input has an exact canonical digest match with reviewed
+inputs, only the intersection of their accepted routes is supported by
+all exact reviews. Conflicting reviews and clarification expectations are
+surfaced explicitly. A unique exact reviewed route with clear static
+requirements is not execution permission, proof of applicability or a
+current policy check. For a new input with no exact reference match, even
+a single statically clear candidate remains a suggestion requiring review.
+The list is deterministically ordered and no route is automatically
+selected; the operator separately chooses the appropriate case ID and
+alternative using the existing preparation command. No new plan or intent
+file, tool call, source read or model request is produced by shortlisting.
+
+The exact extracted inventory function (919 characters, FNV-1a 4041194232)
+passed 1,000 local randomized cases covering 21,423 route references against
+an independent intersection and provenance oracle using a local canonical
+JSON digest helper. Runtime integration and CLI regression cases have been
+added but remain pending full CI.
