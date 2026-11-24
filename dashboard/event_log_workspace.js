@@ -9880,14 +9880,14 @@
     // bounded display, and the source-log selection is refreshed before opening.
     // An old response cannot replace the current view after switching datasets.
     let allRequestId=0,allPreviousOffset=null,allNextOffset=null,allFingerprint=null;
-    async function refreshAllSignals(offset=0){
+    async function refreshAllSignals(offset=0,pinned=false){
       const requestId=++allRequestId;
       allRefresh.disabled=true;allPrevious.disabled=true;allNext.disabled=true;
       allResults.replaceChildren();
       allStatus.textContent='Inspecting saved signal states across local logs…';
       try{
         const params=new URLSearchParams({status:allFilter.value,limit:'100',offset:String(offset)});
-        if(offset&&allFingerprint)params.set('expected_fingerprint',allFingerprint);
+        if(pinned&&allFingerprint)params.set('expected_fingerprint',allFingerprint);
         const r=await getJSON('/v1/event-logs/signal-overview?'+params);
         if(generation!==state.generation||requestId!==allRequestId)return;
         allFingerprint=r.fingerprint;
@@ -9940,8 +9940,8 @@
     }
     allFilter.onchange=()=>{allFingerprint=null;refreshAllSignals();};
     allRefresh.onclick=()=>{allFingerprint=null;refreshAllSignals();};
-    allPrevious.onclick=()=>{if(allPreviousOffset!==null)refreshAllSignals(allPreviousOffset);};
-    allNext.onclick=()=>{if(allNextOffset!==null)refreshAllSignals(allNextOffset);};
+    allPrevious.onclick=()=>{if(allPreviousOffset!==null)refreshAllSignals(allPreviousOffset,true);};
+    allNext.onclick=()=>{if(allNextOffset!==null)refreshAllSignals(allNextOffset,true);};
     // This journal describes state *changes*, not the current signal inbox.
     // An old request cannot repaint a different dataset after navigation.
     let timelineRequestId=0,timelineCursor='',timelineHistory=[],timelineNextCursor=null;
