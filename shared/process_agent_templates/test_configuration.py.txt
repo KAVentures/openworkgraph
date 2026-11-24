@@ -13,7 +13,7 @@ try:
     from agents.items import ModelResponse
     from agents.usage import Usage
     from openai.types.responses import ResponseOutputMessage,ResponseOutputText
-    from configure import inspect_tools,propose_bindings,case_fields,validate_catalog,write_new
+    from configure import inspect_tools,propose_bindings,case_fields,validate_catalog,write_new,audit_bindings
     from execute import ImplementationError,digest,load_object
     from test_execution import fixture
     SDK_AVAILABLE=True
@@ -65,6 +65,131 @@ class ConfigurationCases(unittest.IsolatedAsyncioTestCase):
                              {'name':'request_id','case_pointer':'/request_id'}],'rationale':'Use the declared conditional API'},
                 {'activity_id':'readback','tool_name':'read_case','operation_kind':'read',
                  'arguments':[{'name':'issue','case_pointer':'/issue'}],'rationale':'Inspect current state'}]}
+    def reviewed_audit_fixture(self):
+        spec, plan, case, bindings, _ = fixture()
+        catalog = deepcopy(self.catalog)
+        hashes = {row['name']: row['input_schema_sha256'] for row in catalog['tools']}
+        for row in bindings['bindings']:
+            row['tool_schema_sha256'] = hashes[row['tool_name']]
+            if row.get('precondition'):
+                row['precondition']['tool_schema_sha256'] = hashes[row['precondition']['tool_name']]
+        suite = {'format':'openworkgraph.reviewed-shadow-cases.v1',
+                 'process_reference':catalog['process_reference'], 'spec_sha256':digest(spec),
+                 'reviewed_by_customer':True, 'case_inputs_authorized':True,
+                 'cases':[
+                     {'id':'case_1','category':'normal','input':case,
+                      'expected':{'status':'proposal','accepted_routes':[plan['activity_ids']], 'review_confirmed':True}},
+                     {'id':'case_2','category':'exception','input':deepcopy(case),
+                      'expected':{'status':'proposal','accepted_routes':[plan['activity_ids']], 'review_confirmed':True}},
+                     {'id':'case_3','category':'missing_facts','input':{'text':'PRIVATE_AUDIT_INPUT'},
+                      'expected':{'status':'needs_clarification','accepted_routes':[], 'review_confirmed':True}}]}
+        return spec, catalog, suite, bindings
+
+    async def test_binding_audit_checks_exact_reviewed_routes_without_business_io(self):
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        report=audit_bindings(spec,catalog,suite,bindings)
+        self.assertEqual(report['reviewed_route_count'],2)
+        self.assertEqual(report['routes_with_clear_static_checks'],2)
+        self.assertEqual(report['clarification_only_cases_not_route_tested'],1)
+        self.assertIsNone(report['cases'][2]['all_reviewed_routes_clear'])
+        self.assertFalse(report['review_required'])
+        self.assertEqual(report['uncovered_nonhuman_activity_ids'],[])
+        self.assertEqual(report['missing_categories'],[])
+        self.assertEqual(report['bindings_sha256'],digest(bindings))
+        self.assertEqual(report['suite_sha256'],digest(suite))
+        self.assertEqual(report['catalog_sha256'],digest(catalog))
+        self.assertEqual(report['cases'][0]['routes'][0]['counts']['source_outcomes'],1)
+        self.assertEqual(report['cases'][0]['routes'][0]['counts']['actions'],2)
+        for key in ('execution_authorized','business_tools_called','business_outcomes_verified',
+                    'provider_semantics_or_permissions_verified','live_catalog_refreshed',
+                    'schema_constraints_fully_validated','case_values_and_tool_arguments_included'):
+            self.assertIs(report[key],False)
+        for secret in ('PRIVATE_AUDIT_INPUT','SYNTHETIC_PRIVATE_RECORD','SYNTHETIC_MCP_SECRET',
+                       'resolve_case','read_case','http://127.0.0.1'):
+            self.assertNotIn(secret,json.dumps(report))
+        self.assertFalse(self.tools.business_calls)
+
+    async def test_binding_audit_finds_drift_bad_types_and_missing_input_on_selected_cases(self):
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        bindings['bindings'][0]['tool_schema_sha256']='f'*64
+        bindings['bindings'][0]['precondition'].pop('tool_schema_sha256')
+        suite['cases'][1]['input']['version']=True
+        report=audit_bindings(spec,catalog,suite,bindings)
+        self.assertEqual(report['routes_with_findings'],2)
+        self.assertEqual(report['finding_counts']['action:schema_pin_changed'],2)
+        self.assertEqual(report['finding_counts']['precondition:schema_pin_missing'],2)
+        self.assertEqual(report['finding_counts']['action:argument_type_mismatch'],1)
+        self.assertTrue(report['review_required'])
+        suite['cases'][1]['input'].pop('issue')
+        report=audit_bindings(spec,catalog,suite,bindings)
+        self.assertIn('action:argument_or_schema_reference_invalid',report['finding_counts'])
+        self.assertIn('offline_preparation_refused',report['finding_counts'])
+
+    async def test_binding_audit_review_disabled_mappings_and_missing_case_categories(self):
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        bindings['enabled']=False
+        bindings['bindings'][0]['authorized']=False
+        bindings['bindings'][0]['operation_kind']='unmapped'
+        bindings['bindings'][0]['argument_map'].pop('issue')
+        suite['cases'].pop(1)
+        report=audit_bindings(spec,catalog,suite,bindings)
+        self.assertEqual(report['missing_categories'],['exception'])
+        self.assertIn('action:required_argument_missing',report['finding_counts'])
+        self.assertIn('customer_bindings_disabled',report['finding_counts'])
+        self.assertIn('missing_authorized_tool_binding',report['finding_counts'])
+        self.assertTrue(report['review_required'])
+        self.assertFalse(bindings['enabled'])
+        self.assertFalse(bindings['bindings'][0]['authorized'])
+
+    async def test_binding_audit_refuses_wrong_endpoint_stale_catalog_and_duplicate_routes(self):
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        with self.assertRaises(ImplementationError):
+            audit_bindings(spec,catalog,suite,bindings|{'tool_server_url':'https://other.example/mcp'})
+        with self.assertRaises(ImplementationError):
+            audit_bindings(spec,catalog|{'inspected_at':'2000-01-01T00:00:00Z'},suite,bindings)
+        with self.assertRaises(ImplementationError):
+            audit_bindings(spec,catalog,suite|{'spec_sha256':'c'*64},bindings)
+        duplicate=deepcopy(suite)
+        duplicate['cases'][0]['expected']['accepted_routes'] *= 2
+        with self.assertRaises(ImplementationError):
+            audit_bindings(spec,catalog,duplicate,bindings)
+        extra=deepcopy(bindings)
+        extra['bindings'].append(deepcopy(extra['bindings'][0]))
+        with self.assertRaises(ImplementationError):
+            audit_bindings(spec,catalog,suite,extra)
+        self.assertFalse(self.tools.business_calls)
+
+    async def test_binding_audit_cli_replays_exact_inputs_and_reports_failure_exit(self):
+        import subprocess
+        import sys
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        with TemporaryDirectory() as folder:
+            root=Path(folder)
+            for name,value in [('workflow.spec.json',spec),('catalog.json',catalog),
+                               ('cases.json',suite),('bindings.json',bindings)]:
+                (root/name).write_text(json.dumps(value),encoding='utf-8')
+            for name in ('configure.py','evaluate.py','execute.py','runtime.py',
+                         'process_source_state.py','process_rule_conditions.py'):
+                (root/name).write_bytes((Path(__file__).parent/name).read_bytes())
+            command=[sys.executable,'-c',
+                     'import configure,runpy,socket; socket.socket=lambda *a,**k: (_ for _ in ()).throw(AssertionError("network")); runpy.run_path("configure.py",run_name="__main__")',
+                     '--audit-bindings','--catalog','catalog.json','--cases','cases.json',
+                     '--bindings','bindings.json','--output','audit.json']
+            result=subprocess.run(command,cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            report=json.loads((root/'audit.json').read_text())
+            self.assertEqual(report['routes_with_clear_static_checks'],2)
+            bindings['enabled']=False
+            (root/'bindings.json').write_text(json.dumps(bindings),encoding='utf-8')
+            command[-1]='review.json'
+            result=subprocess.run(command,cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,2,result.stdout+result.stderr)
+            self.assertTrue(json.loads((root/'review.json').read_text())['review_required'])
+            command[-1]='forbidden.json'
+            result=subprocess.run(command+['--model','unused'],cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertNotEqual(result.returncode,0)
+            self.assertFalse((root/'forbidden.json').exists())
+
     async def test_inspection_minimizes_metadata_and_never_calls_business_tools(self):
         self.assertEqual(len(self.catalog['tools']),2);self.assertEqual(self.catalog['omitted_tool_count'],1)
         self.assertFalse(self.tools.business_calls)
