@@ -15,7 +15,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const scope = {window:{},document:{readyState:'loading',addEventListener(){}}};
 vm.runInNewContext(fs.readFileSync('dashboard/workflow_explorer.js','utf8'),scope);
-const {observedRunMatrix,runDifference}=scope.window.__owgWorkflowExplorerModel;
+const {observedRunMatrix,runDifference,projectedSurfaceRoutes,selectedRunTrace,automationReviewSignals}=scope.window.__owgWorkflowExplorerModel;
 const a='execution:aaaaaaaaaaaaaaaa',b='execution:bbbbbbbbbbbbbbbb';
 const ids=[a,b];
 const fixture=()=>({
@@ -69,7 +69,54 @@ assert.equal(model.steps.length,40);
 assert.equal(model.omitted,8);
 f=fixture();f.executions[0].steps=Array(161).fill('step');
 assert.equal(observedRunMatrix(f,ids).completeProjection,false);
-console.log('Observed run matrix regression checks passed');
+
+f=fixture();
+f.executions[0].steps=['surface:gmail','action:open','surface:salesforce','surface:gmail','surface:salesforce'];
+f.executions[1].steps=['surface:gmail','surface:gmail','surface:salesforce','surface:browser','surface:slack','surface:0123456789ab','surface:github','action:click','action:click'];
+model=observedRunMatrix(f,ids);
+const routes=projectedSurfaceRoutes(model);
+assert.equal(routes.surfaceCount,4);
+assert.equal(routes.edges.length,2);
+assert.equal(routes.edges[0].from,'surface:gmail');
+assert.equal(routes.edges[0].to,'surface:salesforce');
+assert.equal(routes.edges[0].support,2);
+assert.equal(routes.edges[0].occurrences,3);
+assert(!routes.edges.some(e=>e.from==='surface:salesforce'&&e.to==='surface:slack'));
+assert(!routes.edges.some(e=>e.from==='surface:slack'&&e.to==='surface:github'));
+f.executions[0].steps.push('action:click','action:click');
+f.data_movement={clipboard_transfers:[
+  {cross_surface:true,clipboard_contents_observed:false,support_runs:2,source_surface:'Gmail',destination_surface:'Salesforce'},
+  {cross_surface:true,clipboard_contents_observed:true,support_runs:2,source_surface:'private',destination_surface:'private'},
+  {cross_surface:true,clipboard_contents_observed:false,support_runs:3,source_surface:'wrong',destination_surface:'wrong'}
+]};
+const signals=automationReviewSignals(observedRunMatrix(f,ids),f);
+assert.equal(signals.transfers.length,1);
+assert.equal(signals.repeated.length,1);
+assert.equal(signals.repeated[0].support,2);
+assert.equal(signals.variants,2);
+const traceFixture=()=>({selector:{execution_ids:[a],selected_execution_count:1},
+  provenance:{source_limit_reached:false},canonical_evidence_included:true,
+  canonical_evidence:[{execution_id:a,observed_event_count:2,returned_event_count:1,events_truncated:true,
+    event_membership_basis:'inferred_time_and_session_window',nearby_events_may_be_unrelated:true,
+    events:[{event_ref:'event:aaaaaaaaaaaaaaaa',observed_at:'2026-11-24T00:00:00Z',event_type:'browser_click',
+      app:'Browser',window_title:'private title',metadata:{secret:'do not expose'}}]}]});
+const trace=selectedRunTrace(traceFixture(),a);
+assert.equal(trace.truncated,true);
+assert.equal(trace.nearby,true);
+assert.equal(trace.membership,'Inferred time/session window');
+assert.deepEqual(Object.keys(trace.rows[0]).sort(),['app','ref','time','type']);
+assert.equal(selectedRunTrace(traceFixture(),b),null);
+for(const edit of [
+  t=>t.canonical_evidence_included=false,
+  t=>t.canonical_evidence[0].events_truncated=false,
+  t=>t.canonical_evidence[0].returned_event_count=2,
+  t=>t.canonical_evidence[0].events[0].observed_at='invalid',
+  t=>t.canonical_evidence[0].events[0].event_ref='private'
+]){
+  const t=traceFixture();edit(t);assert.equal(selectedRunTrace(t,a),null);
+}
+
+console.log('Observed run matrix, surface routes, trace and opportunity checks passed');
 """
     result = subprocess.run(["node", "-e", script], cwd=ROOT, text=True,
                             capture_output=True, timeout=20)
