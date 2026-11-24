@@ -68,6 +68,11 @@ def test_glossary_csv_retains_literal_activity_spaces_and_refuses_ambiguous_guar
     gl.import_csv(log, exported)
     found = {row["activity"]: row["description"] for row in gl.glossary(log)["activities"]}
     assert found == {" Check ": "spaced", "Check": "plain", "=Total": "formula"}
+    extra = workspace.import_log(BytesIO(b"case,activity,time\na,=Total,2024-01-01T00:00:00Z\nb,'=Total,2024-01-01T00:00:01Z\n"),
+                                 name="ambiguous", source_format="csv", mapping=MAPPING)["log_id"]
+    with pytest.raises(EventLogWorkspaceError, match="ambiguous"):
+        gl.import_csv(extra, "activity,description\n'=Total,check\n", preview=True)
+
 
 
 def test_notes_coverage_and_clearing():
