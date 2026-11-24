@@ -7173,10 +7173,10 @@
     const base='/v1/event-logs/'+encodeURIComponent(state.logId)+'/model-quality/temporal';
     const post=async(path,spec)=>(await api(base+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
     const downloads=exportButtons('owg-temporal-model-quality',()=>report,r=>[
-      ['noise','population','eligible_cases','fitness','precision','f_score','simplicity','fitting_share','pnml_sha256'],
+      ['noise','population','eligible_cases','fitness','precision','f_score','label_event_coverage','coverage_adjusted_fitness','coverage_adjusted_f_score','simplicity','fitting_share','pnml_sha256'],
       ...r.candidates.flatMap(c=>[['train',c.training],['validation',c.validation]].map(([k,s])=>
-        [c.noise,k,r.windows.find(w=>w.name===k).eligible_cases,s.fitness,s.precision,s.f_score,s.simplicity,s.fitting_case_share,c.pnml_sha256])),
-      [r.selection.noise,'test',r.windows[2].eligible_cases,r.test.fitness,r.test.precision,r.test.f_score,r.test.simplicity,r.test.fitting_case_share,r.selection.pnml_sha256]]);
+        [c.noise,k,r.windows.find(w=>w.name===k).eligible_cases,s.fitness,s.precision,s.f_score,s.activity_event_label_coverage,s.coverage_adjusted_fitness,s.coverage_adjusted_f_score,s.simplicity,s.fitting_case_share,c.pnml_sha256])),
+      [r.selection.noise,'test',r.windows[2].eligible_cases,r.test.fitness,r.test.precision,r.test.f_score,r.test.activity_event_label_coverage,r.test.coverage_adjusted_fitness,r.test.coverage_adjusted_f_score,r.test.simplicity,r.test.fitting_case_share,r.selection.pnml_sha256]]);
     function clear(){++turn;++pageTurn;report=null;results.replaceChildren();evidence.replaceChildren();downloads.enable(false);run.disabled=false;}
     for(const c of [dates,ends,levels,minimum])c.addEventListener('input',()=>{clear();notice.textContent='Settings changed; evaluate again.';});
     function browse(status){
@@ -7225,12 +7225,13 @@
               Object.entries(w.exclusion_reasons).map(([k,n])=>k+': '+n).join(', ')||'—'])),
           el('p',r.cases_outside_windows+' cases started outside the requested windows.','muted'),
           el('h4','Candidate selection on validation only'),
-          table(['Noise','Training fitness','Validation fitness','Validation precision','Validation F-score','Validation simplicity'],
+          el('p','Unknown labels reduce the selection score: token fitness × event label coverage, harmonically combined with precision. Original token metrics remain visible. This is a selection heuristic, not an alignment score.','muted'),
+          table(['Noise','Training fitness','Validation token fitness','Validation precision','Validation F-score','Validation label coverage','Adjusted selection score','Validation simplicity'],
             r.candidates.map(c=>[share(c.noise)+(c.noise===r.selection.noise?' (selected)':''),share(c.training.fitness),
-              share(c.validation.fitness),share(c.validation.precision),share(c.validation.f_score),share(c.validation.simplicity)])),
+              share(c.validation.fitness),share(c.validation.precision),share(c.validation.f_score),share(c.validation.activity_event_label_coverage),share(c.validation.coverage_adjusted_f_score),share(c.validation.simplicity)])),
           el('h4','Final test: selected training net only'),
-          table(['Fitness','Precision','F-score','Fitting cases','All-assigned fitting share bounds'],[
-            [share(score.fitness),share(score.precision),share(score.f_score),score.fitting_cases_exact,share(b.lower)+' – '+share(b.upper)]]),
+          table(['Token fitness','Precision','F-score','Label coverage','Adjusted F-score','Fitting cases','All-assigned fitting share bounds'],[
+            [share(score.fitness),share(score.precision),share(score.f_score),share(score.activity_event_label_coverage),share(score.coverage_adjusted_f_score),score.fitting_cases_exact,share(b.lower)+' – '+share(b.upper)]]),
           el('p','Do not tune settings against this test period after inspecting it. Repeated reviews are not a sealed holdout.','note'),
           save,replay,actions,assumptions);
         downloads.enable(true);notice.textContent='Temporal evaluation complete.';

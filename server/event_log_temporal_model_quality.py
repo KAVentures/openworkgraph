@@ -153,14 +153,36 @@ def _build(rows, noise):
 
 
 def _scores(candidate, rows):
-    return quality._score(candidate["pnml"],rows)
+    score=quality._score(candidate["pnml"],rows)
+    net=petri.parse_pnml(candidate["pnml"].encode())
+    known={label for label in net["transitions"].values() if label is not None}
+    events=unknown=unknown_cases=0
+    for path,count in rows:
+        missing=sum(label not in known for label in path)
+        events+=len(path)*count
+        unknown+=missing*count
+        unknown_cases+=count if missing else 0
+    coverage=(events-unknown)/events if events else None
+    # Existing greedy replay skips unmodeled labels when computing token
+    # counts. Preserve that metric, but explicitly penalize missing labels
+    # in the validation selection criterion. This is a declared heuristic,
+    # not the standard token fitness or optimal alignment score.
+    adjusted=score["fitness"]*coverage if coverage is not None else None
+    precision=score["precision"]
+    f=None if adjusted is None or precision is None else (
+        2*adjusted*precision/(adjusted+precision) if adjusted+precision else 0.0)
+    return {**score,"observed_activity_events":events,
+            "unknown_activity_events":unknown,"cases_with_unknown_activities":unknown_cases,
+            "activity_event_label_coverage":coverage,"coverage_adjusted_fitness":adjusted,
+            "coverage_adjusted_f_score":f}
 
 
 def _winner(candidates):
-    comparable=[c for c in candidates if c["validation"]["f_score"] is not None]
+    comparable=[c for c in candidates if c["validation"]["coverage_adjusted_f_score"] is not None]
     if not comparable:
-        _fail("No validation candidate has a comparable F-score")
-    return max(comparable,key=lambda c:(c["validation"]["f_score"],c["validation"]["simplicity"],-c["noise"]))
+        _fail("No validation candidate has a comparable coverage-adjusted F-score")
+    return max(comparable,key=lambda c:(c["validation"]["coverage_adjusted_f_score"],
+        c["validation"]["simplicity"],-c["noise"]))
 
 
 def _bound(summary,score):
@@ -225,7 +247,7 @@ def evaluate(histories,packet):
     report={"windows":[x[0] for x in (train,validation,test)],"cases_outside_windows":outside,
             "candidates":[{k:v for k,v in c.items() if k not in ("pnml","tree")} for c in candidates],
             "selection":{"noise":selected["noise"],"pnml":selected["pnml"],"pnml_sha256":selected["pnml_sha256"],
-                         "basis":"validation_f_score_then_simplicity_then_lower_noise"},
+                         "basis":"validation_coverage_adjusted_f_score_then_simplicity_then_lower_noise"},
             "test":test_score,"test_scored_candidate_count":1,
             "test_scores_used_for_selection":False,"disjoint_case_membership":True,
             "activity_filter_learned_from_test":False,"historical_not_prospective":True,
@@ -264,9 +286,9 @@ def review(log_id,spec,*,page=None):
                     "Cases are assigned once by their first visible event; each window includes only events strictly before its end.",
                     "Completion means the last visible activity before that boundary matches a declared label. Later reopenings are not used to determine earlier eligibility.",
                     "Ambiguous timestamp ordering, unfinished cases and overlong traces remain excluded and are explicitly counted. Fitting-share bounds include all assigned test cases.",
-                    "Training discovers each model on training cases only; validation F-score selects one net. Test scores are calculated only for that selected net.",
+                    "Training discovers each model on training cases only; validation coverage-adjusted F-score selects one net. Test scores are calculated only for that selected net.",
                     "All raw activity labels are retained. No test-derived vocabulary or activity filter is applied.",
-                    "Token replay and precision are the existing bounded greedy replay metrics, not optimal alignment. Generalization is a heuristic, not a forecast.",
+                    "Token replay and precision are the existing bounded greedy replay metrics, not optimal alignment. The declared selection heuristic multiplies token fitness by observed event label coverage before computing its harmonic mean with precision; the original metrics remain visible. Generalization is a heuristic, not a forecast.",
                     "This is reconstructed history. Re-running with different settings after viewing test results can invalidate the holdout interpretation; no truly sealed or independent prospective test is claimed."]}
     finally:
         _GUARD.release()

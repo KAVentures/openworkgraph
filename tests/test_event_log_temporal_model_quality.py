@@ -162,3 +162,22 @@ with TestClient(app) as client:
     done=subprocess.run([sys.executable,"-c",code],cwd=Path(__file__).resolve().parents[1],
                         env=env,text=True,capture_output=True,timeout=60)
     assert done.returncode==0,done.stdout+done.stderr
+
+
+def test_unknown_labels_penalize_selection_without_overwriting_token_fitness():
+    report,_=tm.evaluate(histories(),tm.normalize(packet()))
+    score=report["test"]
+    assert score["observed_activity_events"]==4
+    assert score["unknown_activity_events"]==1
+    assert score["activity_event_label_coverage"]==.75
+    assert score["coverage_adjusted_fitness"]==pytest.approx(score["fitness"]*.75)
+    assert score["coverage_adjusted_f_score"]<=score["f_score"]
+    assert report["selection"]["basis"]=="validation_coverage_adjusted_f_score_then_simplicity_then_lower_noise"
+
+
+def test_selection_uses_penalized_score_not_unadjusted_token_f_score():
+    candidates=[
+        {"noise":.2,"validation":{"f_score":.99,"coverage_adjusted_f_score":.55,"simplicity":1}},
+        {"noise":0,"validation":{"f_score":.8,"coverage_adjusted_f_score":.8,"simplicity":.9}},
+    ]
+    assert tm._winner(candidates)["noise"]==0
