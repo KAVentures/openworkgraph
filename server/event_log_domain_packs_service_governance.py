@@ -5,7 +5,7 @@ legal obligations, approve changes, judge employees or authorize source access.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Sequence
 
 FORMAT = "openworkgraph.domain-pack.v1"
 
@@ -18,15 +18,17 @@ def _pack(pack_id: str, title: str, description: str, case_role: str,
           deadlines: list[tuple[str, str, str]],
           cardinalities: list[tuple[str, int, int]],
           steps: list[str | dict[str, str]], assumptions: list[str],
-          segregation: list[tuple[str, str]] = ()) -> dict[str, Any]:
+          segregation: Sequence[tuple[str, str]] = ()) -> dict[str, Any]:
     """Build the existing pack schema without changing resolution or storage."""
     case_type = "@" + case_role
+    prefix = {"change_control": "chg", "customer_complaints": "complaint",
+              "data_access_requests": "dar"}[pack_id]
     def rule(template: str, **fields: Any) -> dict[str, Any]:
         return {"case_type": case_type, "rule": {"template": template, **fields}}
 
     def metric(name: str, kind: str, **fields: Any) -> dict[str, Any]:
         return {"case_type": case_type,
-                "metric": {"name": pack_id + "_" + name, "kind": kind, **fields}}
+                "metric": {"name": prefix + "_" + name, "kind": kind, **fields}}
 
     step_roles = [step if isinstance(step, str) else step["optional"] for step in steps]
     return {
