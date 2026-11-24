@@ -216,6 +216,44 @@ class ConfigurationCases(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ImplementationError):
             audit_bindings(spec,catalog|{'omitted_tool_count':'PRIVATE_INVALID_COUNT'},suite,bindings)
 
+    async def test_prepare_batch_selection_recomputes_exact_review_before_materializing(self):
+        from configure import shortlist_case_batch, prepare_batch_selection
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        original=suite['cases'][0]['input']
+        new={**original,'issue':'PRIVATE_NEW_CASE','record_ref':'owg:r:'+'d'*32}
+        batch={'format':'openworkgraph.selected-route-cases.v1','case_inputs_authorized':True,
+               'cases':[{'id':'case_11','input':new},{'id':'case_12','input':suite['cases'][2]['input']},
+                        {'id':'case_13','input':original},{'id':'case_14','input':deepcopy(original)},
+                        {'id':'case_15','input':{'issue':'missing'}}]}
+        saved=shortlist_case_batch(spec,suite,bindings,batch)
+        route=saved['cases'][0]['routes'][0]['route_sha256']
+        docs=prepare_batch_selection(spec,suite,bindings,batch,saved,'case_11',route)
+        review=docs['preparation-review.json']
+        self.assertTrue(review['batch_review_recomputed'])
+        self.assertEqual(review['batch_review_sha256'],digest(saved))
+        self.assertEqual(review['selected_batch_sha256'],digest(batch))
+        self.assertEqual(review['selected_batch_case_id'],'case_11')
+        self.assertEqual(review['selected_route_sha256'],route)
+        self.assertEqual(docs['case.json'],new)
+        self.assertEqual(docs['customer-intent.json']['case_sha256'],digest(new))
+        self.assertFalse(docs['customer-intent.json']['customer_authorization_confirmed'])
+        self.assertNotIn('PRIVATE_NEW_CASE',json.dumps(review))
+        for case_id,route_id in [('case_12',route),('case_13',route),('case_14',route),
+                                 ('case_15',route),('case_99',route),('case_11','f'*64)]:
+            with self.assertRaises(ImplementationError):
+                prepare_batch_selection(spec,suite,bindings,batch,saved,case_id,route_id)
+        changed=deepcopy(batch)
+        changed['cases'][0]['input']['issue']='changed'
+        with self.assertRaises(ImplementationError):
+            prepare_batch_selection(spec,suite,bindings,changed,saved,'case_11',route)
+        tampered=deepcopy(saved)
+        tampered['cases'][0]['status']='one_exact_reviewed_route_static_checks_clear'
+        with self.assertRaises(ImplementationError):
+            prepare_batch_selection(spec,suite,bindings,batch,tampered,'case_11',route)
+        with self.assertRaises(ImplementationError):
+            prepare_batch_selection(spec,suite,{**bindings,'enabled':False},batch,saved,'case_11',route)
+        self.assertFalse(self.tools.business_calls)
+
     async def test_batch_route_triage_preserves_exact_cases_and_duplicate_inputs(self):
         from configure import shortlist_case_batch, shortlist_reviewed_routes
         spec,catalog,suite,bindings=self.reviewed_audit_fixture()
@@ -533,6 +571,19 @@ class ConfigurationCases(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(report['selected_case_count'],2)
             self.assertEqual(report['cases'][1]['status'],'exact_input_requires_clarification')
             self.assertFalse(report['execution_authorized'])
+            route=report['cases'][0]['routes'][0]['route_sha256']
+            pick=[sys.executable,'configure.py','--prepare-batch-selection','--cases','suite.json',
+                  '--bindings','bindings.json','--case-batch','batch.json','--batch-review','batch-review.json',
+                  '--case-id','case_1','--route-sha256',route,'--output','batch-prepared']
+            denied=subprocess.run(pick,cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertNotEqual(denied.returncode,0)
+            self.assertFalse((root/'batch-prepared').exists())
+            accepted=subprocess.run(pick+['--confirm-retain-case-inputs'],cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(accepted.returncode,0,accepted.stdout+accepted.stderr)
+            receipt=load_object(root/'batch-prepared'/'preparation-review.json')
+            self.assertEqual(receipt['batch_review_sha256'],digest(report))
+            self.assertTrue(receipt['batch_review_recomputed'])
+            self.assertFalse(receipt['execution_authorized'])
 
             new_case={**suite['cases'][0]['input'],'issue':'SYNTHETIC_NEW_CASE',
                       'request_id':'new-case-idempotency-key','record_ref':'owg:r:'+'e'*32}
