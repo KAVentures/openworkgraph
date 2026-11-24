@@ -38,6 +38,15 @@ def _pointer(path):
     return keys
 
 
+def _declared_pointer(path):
+    # A valid rule pointer can name an object key beyond the supplied-fact
+    # key limit. Such a path is not a constructible synthetic dimension.
+    try:
+        return _pointer(path)
+    except ValueError:
+        return None
+
+
 def _key(value):
     if type(value) in (int, float):
         return ("number", Decimal(str(value)))
@@ -189,7 +198,7 @@ def analyze(model: ProcessModel, spec: Any) -> dict[str, Any]:
             "table_id": table.id, "hit_policy": table.hit_policy,
             "required_decision_table_ids": [d.table_id for d in table.required_decisions],
             "undeclared_predicate_paths": sorted(p for p in declared
-                if _pointer(p) not in provided and _pointer(p) not in injected),
+                if _declared_pointer(p) not in provided and _declared_pointer(p) not in injected),
             "status_counts": dict(sorted(acc["statuses"].items())),
             "status_examples": acc["examples"], "rows": rows, "co_matching_pairs": pairs,
             "all_cases_selected": sum(acc["statuses"][s] for s in ("unique_match", "first_match")) == count,
@@ -241,7 +250,10 @@ def suggested_domain(model: ProcessModel) -> dict[str, Any]:
     dimensions, omitted, clipped = [], [], []
     keys = []
     for path, constants in sorted(values.items()):
-        key = _pointer(path)
+        key = _declared_pointer(path)
+        if key is None:
+            omitted.append({"path": path, "reason": "not_constructible_as_bounded_object_path"})
+            continue
         if any(key[:len(p)] == p or p[:len(key)] == key for p in injected | set(keys)):
             omitted.append({"path": path, "reason": "overlapping_or_injected_path"})
             continue
