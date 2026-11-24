@@ -15,7 +15,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const scope = {window:{},document:{readyState:'loading',addEventListener(){}}};
 vm.runInNewContext(fs.readFileSync('dashboard/workflow_explorer.js','utf8'),scope);
-const {observedRunMatrix,runDifference,projectedSurfaceRoutes,selectedRunTrace,automationReviewSignals}=scope.window.__owgWorkflowExplorerModel;
+const {observedRunMatrix,runDifference,projectedSurfaceRoutes,projectedProcessPaths,observedPathProposal,selectedRunTrace,automationReviewSignals}=scope.window.__owgWorkflowExplorerModel;
 const a='execution:aaaaaaaaaaaaaaaa',b='execution:bbbbbbbbbbbbbbbb';
 const ids=[a,b];
 const fixture=()=>({
@@ -116,6 +116,36 @@ for(const edit of [
   const t=traceFixture();edit(t);assert.equal(selectedRunTrace(t,a),null);
 }
 
+f=fixture();
+f.executions[0].steps=['action:open','action:review','action:open','action:close'];
+f.executions[1].steps=f.executions[0].steps.slice();
+model=observedRunMatrix(f,ids);
+let paths=projectedProcessPaths(model);
+assert.equal(paths.paths.length,1);
+assert.deepEqual(Array.from(paths.paths[0].ids),ids);
+const edges=paths.edges.filter(e=>e.from==='action:open');
+assert.equal(edges.length,2);
+assert.equal(paths.branchingTokens[0].targets,2);
+assert.equal(paths.edges.find(e=>e.from==='action:open'&&e.to==='action:review').occurrences,2);
+let proposal=observedPathProposal(paths.paths[0],model,f);
+assert.equal(proposal.count,2);
+assert.deepEqual(Array.from(proposal.evidenceRefs),ids);
+assert.deepEqual(Array.from(proposal.path),['open','review','open','close']);
+f.executions[0].actor_kind='agent';
+model=observedRunMatrix(f,ids);
+paths=projectedProcessPaths(model);
+assert.equal(paths.paths.length,2);
+assert.deepEqual(Array.from(paths.paths[0].ids),[a]);
+assert.deepEqual(Array.from(observedPathProposal(paths.paths[1],model,f).evidenceRefs),[b]);
+f.provenance.source_limit_reached=true;
+model=observedRunMatrix(f,ids);
+assert.equal(observedPathProposal(projectedProcessPaths(model).paths[0],model,f),null);
+f=fixture();
+f.executions[0].steps=Array(48).fill('action:open');
+model=observedRunMatrix(f,ids);
+assert.equal(model.projectionMayBeCapped,true);
+paths=projectedProcessPaths(model);
+assert.equal(observedPathProposal(paths.paths.find(p=>p.ids.includes(b)),model,f),null);
 console.log('Observed run matrix, surface routes, trace and opportunity checks passed');
 """
     result = subprocess.run(["node", "-e", script], cwd=ROOT, text=True,
