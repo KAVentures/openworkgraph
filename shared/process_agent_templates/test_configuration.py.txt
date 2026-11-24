@@ -109,6 +109,28 @@ class ConfigurationCases(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(secret,json.dumps(report))
         self.assertFalse(self.tools.business_calls)
 
+    async def test_binding_audit_detects_uncovered_edges_even_with_every_activity_covered(self):
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        # Two valid route alternatives traverse the same known nodes across
+        # the suite, but the direct skip edge is not represented initially.
+        spec['process_model']['transitions'].append({'source':'resolve','target':'done'})
+        spec['process_model_sha256']=digest(spec['process_model'])
+        catalog['spec_sha256']=digest(spec)
+        suite['spec_sha256']=digest(spec)
+        report=audit_bindings(spec,catalog,suite,bindings)
+        self.assertEqual(report['uncovered_nonhuman_activity_ids'],[])
+        self.assertEqual(report['structural_transition_coverage']['total'],3)
+        self.assertEqual(report['structural_transition_coverage']['covered'],2)
+        self.assertEqual(report['structural_transition_coverage']['uncovered'],
+                         [{'source':'resolve','target':'done','rule_id':None}])
+        self.assertTrue(report['review_required'])
+        suite['cases'][1]['expected']['accepted_routes'].append(['resolve','done'])
+        reviewed=audit_bindings(spec,catalog,suite,bindings)
+        self.assertEqual(reviewed['reviewed_route_count'],3)
+        self.assertEqual(reviewed['structural_transition_coverage']['covered'],3)
+        self.assertEqual(reviewed['structural_transition_coverage']['uncovered'],[])
+        self.assertFalse(reviewed['review_required'])
+
     async def test_binding_audit_finds_drift_bad_types_and_missing_input_on_selected_cases(self):
         spec,catalog,suite,bindings=self.reviewed_audit_fixture()
         bindings['bindings'][0]['tool_schema_sha256']='f'*64
