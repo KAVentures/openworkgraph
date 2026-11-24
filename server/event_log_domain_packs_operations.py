@@ -16,14 +16,17 @@ def _pack(pack_id, title, description, case_role, case_label, required, optional
     assert len(roles) == len(required) + len(optional)
     assert set(sequence) <= set(roles)
     required_roles = dict(required)
+    metric_prefix = {"manufacturing_quality": "mfg_quality",
+                     "supplier_qualification": "supplier_qual",
+                     "financial_close": "fin_close"}[pack_id]
     metrics = [
         {"case_type": case, "metric": {
-            "name": pack_id + "_" + name, "kind": "time_between",
+            "name": metric_prefix + "_" + name, "kind": "time_between",
             "from_activity": "@" + a, "to_activity": "@" + b}}
         for name, a, b in durations
     ] + [
         {"case_type": case, "metric": {
-            "name": pack_id + "_" + name, "kind": "activity_count",
+            "name": metric_prefix + "_" + name, "kind": "activity_count",
             "activity": "@" + a}}
         for name, a in counts
     ]

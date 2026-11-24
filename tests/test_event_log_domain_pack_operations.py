@@ -209,3 +209,15 @@ with TestClient(app) as client:
     run = subprocess.run([sys.executable, "-c", code], cwd=root, env=env,
                          capture_output=True, text=True, timeout=120)
     assert run.returncode == 0, f"stdout={run.stdout}\nstderr={run.stderr}"
+
+
+def test_operation_metric_names_fit_existing_schema():
+    from server import event_log_domain_packs_operations as definitions
+    names = []
+    for pack in (definitions.MANUFACTURING_QUALITY_1_0_0,
+                 definitions.SUPPLIER_QUALIFICATION_1_0_0,
+                 definitions.FINANCIAL_CLOSE_1_0_0):
+        for item in pack["metrics"]:
+            metric = query.SavedMetric.model_validate({"metric": item["metric"]}).metric
+            names.append(metric.name)
+    assert len(names) == len(set(names)) == 18
