@@ -29,6 +29,12 @@ const path=require('node:path');
    await page.waitForFunction(()=>document.querySelector('#owgEventLogCase').options.length===3);
    await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Imported 18 events'}).waitFor();
+   // Simulate a label omitted from the initial bounded list.
+   await page.route('**/hidden-activities',async route=>{
+     const response=await route.fetch(),body=await response.json();
+     body.activities=body.activities.filter(item=>item.activity!=='Pay');
+     await route.fulfill({response,json:body});
+   },{times:1});
    await page.locator('#owgEventLogAnalyze').click();
    const box=page.locator('#owgHiddenActivities');await box.waitFor();await box.scrollIntoViewIfNeeded();
    await page.locator('#owgHiddenActivitiesStatus').filter({hasText:'No activities are hidden.'}).waitFor();
@@ -36,6 +42,11 @@ const path=require('node:path');
    await page.locator('#owgHiddenActivitiesSave').click();
    await page.locator('#owgHiddenActivitiesStatus').filter({hasText:'Choose at least one activity'}).waitFor();
    await page.locator('#owgHiddenActivitiesPick').selectOption(['Sync']);
+   await page.locator('#owgHiddenActivitiesSearch').fill('Pay');
+   await page.locator('#owgHiddenActivitiesFind').click();
+   await page.locator('#owgHiddenActivitiesSearchStatus').filter({hasText:'1 matching label found; 1 added'}).waitFor();
+   assert.deepEqual(await page.locator('#owgHiddenActivitiesPick').evaluate(el=>[...el.selectedOptions].map(o=>o.value)),['Sync']);
+   assert.equal(await page.locator('#owgHiddenActivitiesPick option[value="Pay"]').count(),1);
    await page.locator('#owgHiddenActivitiesSave').click();
    await page.locator('#owgHiddenActivitiesNotice').filter({hasText:'Hidden activities left out: Sync (6 events)'}).waitFor();
    await page.locator('#owgHiddenActivitiesStatus').filter({hasText:'Hidden: Sync · 6 of 18 events left out.'}).waitFor();

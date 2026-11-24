@@ -1248,6 +1248,10 @@
     const box=section('Hide activities');box.id='owgHiddenActivities';
     box.appendChild(el('div','Leave chosen activities out of variants, maps, KPIs and the other case analyses of this log. The stored events are never changed, and saved signals and object views keep every event.','muted'));
     const pick=document.createElement('select');pick.id='owgHiddenActivitiesPick';pick.multiple=true;pick.size=6;
+    const search=input('owgHiddenActivitiesSearch','search','Search original activities');search.maxLength=200;
+    const find=button('Find activities','secondary');find.id='owgHiddenActivitiesFind';
+    const more=button('More activities','secondary');more.id='owgHiddenActivitiesMore';more.disabled=true;
+    const searchStatus=el('div',null,'muted');searchStatus.id='owgHiddenActivitiesSearchStatus';searchStatus.setAttribute('role','status');
     const save=button('Hide selected','secondary');save.id='owgHiddenActivitiesSave';
     const clear=button('Show all activities','secondary');clear.id='owgHiddenActivitiesClear';
     const reload=button('Reload hidden activities','secondary');reload.id='owgHiddenActivitiesReload';
@@ -1270,8 +1274,32 @@
     save.onclick=()=>{const names=[...pick.selectedOptions].map(o=>o.value);if(!names.length){msg.textContent='Choose at least one activity to hide, or use Show all activities.';return;}store(names);};
     clear.onclick=()=>store([]);
     reload.onclick=()=>analyse().catch(e=>{msg.textContent=e.message;});
+    let searchTurn=0,searchQuery='',nextAfter=null;
+    async function searchPage(after){
+      const ticket=++searchTurn,query=searchQuery;
+      const current=()=>ticket===searchTurn&&generation===state.generation&&box.isConnected;
+      find.disabled=more.disabled=true;searchStatus.textContent='Searching original activities…';
+      try{
+        const response=await api(url()+'/search',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({search:query,...(after?{after}:{})})});
+        const result=await response.json();if(!current())return;
+        const present=new Set([...pick.options].map(option=>option.value));let added=0;
+        for(const activity of result.activities){
+          if(present.has(activity.activity))continue;
+          const option=el('option',activity.activity+' ('+Number(activity.events).toLocaleString()+' events)');
+          option.value=activity.activity;pick.appendChild(option);present.add(option.value);added++;
+        }
+        nextAfter=result.next_after;
+        searchStatus.textContent=result.activities.length+' matching '+(result.activities.length===1?'label':'labels')+' found; '+added+' added to the activity choices.'+(nextAfter?' More matches are available.':'');
+      }catch(error){if(current()){nextAfter=null;searchStatus.textContent=error.message;}}
+      finally{if(current()){find.disabled=false;more.disabled=nextAfter===null;}}
+    }
+    search.addEventListener('input',()=>{++searchTurn;nextAfter=null;more.disabled=true;find.disabled=false;searchStatus.textContent='';});
+    find.onclick=()=>{searchQuery=search.value;nextAfter=null;if(!searchQuery){searchStatus.textContent='Enter activity search text.';return;}searchPage(null);};
+    more.onclick=()=>{if(nextAfter!==null)searchPage(nextAfter);};
+    const searchRow=el('div',null,'row');searchRow.style.alignItems='end';searchRow.append(field('Find original activity labels',search),find,more);
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities to hide (stored names)',pick),save,clear,reload);
-    box.append(row,msg);
+    box.append(el('div','The picker starts with up to 2,000 frequent labels and all currently hidden labels. Search to add others.','muted'),searchRow,searchStatus,row,msg);
     getJSON(url()).then(render).catch(e=>{msg.textContent=e.message;});
     return box;
   }

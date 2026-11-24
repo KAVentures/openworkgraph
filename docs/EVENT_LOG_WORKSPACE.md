@@ -3446,6 +3446,8 @@ The local rework report shows the total number of repeated activities and record
 ### Keeping hidden-activity selections intact
 
 The hide-activities picker includes all currently hidden labels, even when they
-fall outside the initial 2,000 frequent activities. The dashboard checks that
+fall outside the initial 2,000 frequent activities. Search original labels and
+page through matches to add other activities to the picker without changing
+the current selection. The dashboard checks that
 the saved hidden set has not changed since it loaded. If another view changed
 it, reload before saving; the stale selection is not applied.

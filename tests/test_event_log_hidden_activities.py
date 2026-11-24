@@ -70,6 +70,29 @@ def test_validation():
         hidden.hidden("log_0000000000000000")
 
 
+def test_search_stored_names_outside_initial_choices_even_after_hiding_and_mapping(monkeypatch):
+    log = _log()
+    monkeypatch.setattr(hidden, "MAX_LISTED", 1)
+    made = mappings.create(log, {"name": "m", "groups": [{"label": "Work", "activities": ["Close"]}]})
+    mappings.apply_mapping(log, made["mapping_id"])
+    hidden.set_hidden(log, {"activities": ["Close"]})
+    assert hidden.search_original_activities(log, {"search": "Close"})["activities"] == [{"activity": "Close", "events": 5}]
+    assert hidden.search_original_activities(log, {"search": "Work"})["activities"] == []
+    for bad in ({"search": ""}, {"search": "Close", "after": None}, {"search": "Close", "extra": 1}):
+        with pytest.raises(EventLogWorkspaceError):
+            hidden.search_original_activities(log, bad)
+
+
+def test_search_original_activity_choices_paginates():
+    rows = ["case,activity,time"] + [f"c{i},Activity {i:03},2024-01-01T00:00:00Z" for i in range(125)]
+    log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="choices", source_format="csv", mapping=MAPPING)["log_id"]
+    first = hidden.search_original_activities(log, {"search": "Activity"})
+    assert len(first["activities"]) == 100 and first["next_after"] == "Activity 099"
+    second = hidden.search_original_activities(log, {"search": "Activity", "after": first["next_after"]})
+    assert len(second["activities"]) == 25 and second["activities"][0]["activity"] == "Activity 100"
+    assert second["next_after"] is None
+
+
 def test_hidden_labels_outside_initial_choices_remain_selected_and_stale_edits_fail(monkeypatch):
     log = _log()
     monkeypatch.setattr(hidden, "MAX_LISTED", 1)
@@ -112,6 +135,10 @@ with TestClient(app) as client:
     url='/v1/event-logs/'+log+'/hidden-activities'
     assert client.get(url,headers=bearer).status_code in (401,403)
     assert client.post(url,json={"activities":["Ping"]},headers=bearer).status_code in (401,403)
+    assert client.post(url+'/search',json={'search':'Ping'},headers=bearer).status_code in (401,403)
+    search=client.post(url+'/search',json={'search':'Ping'},headers=owner)
+    assert search.status_code==200 and search.headers['cache-control']=='no-store'
+    assert search.json()['activities']==[{'activity':'Ping','events':4}]
     r=client.post(url,json={"activities":["Ping"]},headers=owner)
     assert r.status_code==200 and r.headers['cache-control']=='no-store' and r.json()['events_hidden']==4, r.text
     stale=client.post(url,json={"activities":[],"expected_sha256":"0"*64},headers=owner)

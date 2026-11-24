@@ -81,6 +81,25 @@ def hidden(log_id: str) -> dict[str, Any]:
     return _with_conn(log_id, lambda conn: _status(conn, log_id))
 
 
+def search_original_activities(log_id: str, spec: Any) -> dict[str, Any]:
+    """Find stored labels independently of the active filter and activity mapping."""
+    from .event_log_activity_lookup import _literal
+    if (not isinstance(spec, dict) or set(spec) - {"search", "after"}
+            or not _literal(spec.get("search"), allow_empty=False)
+            or not _literal(spec.get("after", ""), allow_empty=True)):
+        raise EventLogWorkspaceError("enter valid activity search text and cursor")
+
+    def run(conn):
+        rows = conn.execute("""SELECT activity, count(*) FROM events
+            WHERE log_id = ? AND contains(activity, ?) AND activity > ?
+            GROUP BY activity ORDER BY activity LIMIT 101""",
+                            [log_id, spec["search"], spec.get("after", "")]).fetchall()
+        return {"activities": [{"activity": label, "events": count} for label, count in rows[:100]],
+                "next_after": rows[99][0] if len(rows) > 100 else None,
+                "limit": 100, "stable_snapshot": False}
+    return _with_conn(log_id, run)
+
+
 def set_hidden(log_id: str, spec: Any) -> dict[str, Any]:
     """Replace the log's hidden activities with the given list (an empty list shows everything)."""
     try:
