@@ -57,7 +57,7 @@ const path=require('node:path');
    assert.equal(report.format,'openworkgraph.work-in-progress-report.v1');
    assert.equal(report.settings.bucket,'week');
    assert.deepEqual(report.settings.end_activities,['Close']);
-   assert.equal(report.report.buckets.length,3);
+   assert.equal(report.report.buckets.length,2);
    await page.locator('#owgWipEnds').fill('["Close, disputed"]');
    assert.equal(await page.locator('#owgWipReportJson').isDisabled(),true);
    const [response]=await Promise.all([
