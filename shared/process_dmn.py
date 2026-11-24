@@ -20,6 +20,7 @@ unconfirmed. Nothing here evaluates or executes a decision.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from typing import Any
@@ -31,6 +32,7 @@ from .process_rule_conditions import RuleCondition, RulePredicate
 DMN = "https://www.omg.org/spec/DMN/20191111/MODEL/"
 DMN_NAMESPACES = {DMN, "http://www.omg.org/spec/DMN/20180521/MODEL/", "https://www.omg.org/spec/DMN/20230324/MODEL/"}
 MAX_BYTES = 256 * 1024
+MAX_TABLES = 12
 _SEGMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 _NUMBER = re.compile(r"^-?(?:0|[1-9][0-9]{0,14})(?:\.[0-9]{1,6})?$")
 _STRING = re.compile(r'^"((?:[^"\\]|\\["\\])*)"$')
@@ -174,7 +176,7 @@ def export_dmn(packet: dict[str, Any]) -> str:
     _sub(root, "documentation").text = (
         f"Exported from reviewed design {packet['workflow_id']} revision {packet['revision']} "
         f"sha256 {packet['content_sha256']}. Declarations only; not policy certification or execution authority.")
-    for table in model.decision_tables:
+    for table_index, table in enumerate(model.decision_tables, 1):
         decision = _sub(root, "decision", id="Decision_" + table.id, name=labels[table.decision_activity_id])
         basis = table.source_basis
         _sub(decision, "description").text = (
@@ -203,13 +205,14 @@ def export_dmn(packet: dict[str, Any]) -> str:
             expression = _sub(column, "inputExpression", id=f"InputExpression_{table.id}_{index}", typeRef="Any")
             _sub(expression, "text").text = path
         _sub(dmn_table, "output", id=f"Output_{table.id}", name="next_step", label="Next step", typeRef="string")
-        for row, entries in zip(table.rows, per_row):
-            rule = _sub(dmn_table, "rule", id="Rule_" + row.id)
+        for row_index, (row, entries) in enumerate(zip(table.rows, per_row), 1):
+            xml_row = f"{table_index}_{row_index}"
+            rule = _sub(dmn_table, "rule", id="Rule_" + xml_row)
             _sub(rule, "description").text = rules[row.rule_id].text[:500]
             for index, path in enumerate(paths, 1):
-                entry = _sub(rule, "inputEntry", id=f"InputEntry_{row.id}_{index}")
+                entry = _sub(rule, "inputEntry", id=f"InputEntry_{xml_row}_{index}")
                 _sub(entry, "text").text = entries.get(path, "-")
-            output = _sub(rule, "outputEntry", id=f"OutputEntry_{row.id}")
+            output = _sub(rule, "outputEntry", id=f"OutputEntry_{xml_row}")
             _sub(output, "text").text = _literal(labels[row.target_activity_id])
     ET.indent(root)
     return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="unicode")
@@ -223,7 +226,8 @@ def _local(element) -> tuple[str, str]:
 
 
 def _child(element, name):
-    return [c for c in element if _local(c)[1] == name]
+    namespace = _local(element)[0]
+    return [c for c in element if _local(c) == (namespace, name)]
 
 
 def _text_of(element, name="text") -> str:
@@ -231,10 +235,7 @@ def _text_of(element, name="text") -> str:
     return (nodes[0].text or "") if nodes else ""
 
 
-def import_dmn(raw: bytes, model_value: dict[str, Any], decision_activity_id: str, *,
-               effective_from: str, effective_until: str | None = None,
-               decision_name: str | None = None) -> dict[str, Any]:
-    """Propose unconfirmed rules and a table for one OWG decision from one DMN decision table."""
+def _document(raw: bytes) -> list[ET.Element]:
     if not isinstance(raw, bytes) or not raw or len(raw) > MAX_BYTES:
         raise DMNError("DMN must be a nonempty UTF-8 file of at most 256 KiB")
     try:
@@ -252,37 +253,93 @@ def import_dmn(raw: bytes, model_value: dict[str, Any], decision_activity_id: st
     namespace, name = _local(root)
     if name != "definitions" or namespace not in DMN_NAMESPACES:
         raise DMNError("A DMN 1.2–1.5 definitions document is required")
+    if _child(root, "import"):
+        raise DMNError("DMN documents with imported definitions are unsupported")
+    decisions = [decision for decision in _child(root, "decision") if _child(decision, "decisionTable")]
+    if not 1 <= len(decisions) <= MAX_TABLES:
+        raise DMNError(f"Choose a DMN file with 1 to {MAX_TABLES} decision tables")
+    return decisions
+
+
+def _unsupported(decision: ET.Element) -> str | None:
+    if any(_child(decision, tag) for tag in ("informationRequirement", "knowledgeRequirement", "authorityRequirement")):
+        # A requiredInput declares a fact already named by a simple input expression.
+        requirements = _child(decision, "informationRequirement")
+        if (_child(decision, "knowledgeRequirement") or _child(decision, "authorityRequirement") or
+                any(not _child(requirement, "requiredInput") or len(requirement) != 1 for requirement in requirements)):
+            return "This table has decision, knowledge or authority dependencies"
+    tables = _child(decision, "decisionTable")
+    if len(tables) != 1 or any(_child(decision, tag) for tag in (
+            "literalExpression", "invocation", "context", "relation", "list", "functionDefinition")):
+        return "Each decision must contain one table as its only expression"
+    table = tables[0]
+    if table.get("hitPolicy", "UNIQUE") not in ("UNIQUE", "FIRST"):
+        return "Only UNIQUE and FIRST hit policies map onto OWG decision tables"
+    if table.get("aggregation") or table.get("preferredOrientation") not in (None, "Rule-as-Row"):
+        return "Aggregations and non-row table orientations are unsupported"
+    if len(_child(table, "output")) != 1:
+        return "A decision table needs exactly one output naming the next step"
+    return None
+
+
+def inspect_dmn(raw: bytes) -> dict[str, Any]:
+    decisions = _document(raw)
+    entries = []
+    for index, decision in enumerate(decisions):
+        table = _child(decision, "decisionTable")[0]
+        entries.append({
+            "index": index, "name": " ".join((decision.get("name") or "").split())[:200],
+            "hit_policy": table.get("hitPolicy", "UNIQUE")[:20],
+            "rule_count": len(_child(table, "rule")),
+            "unsupported_reason": _unsupported(decision),
+        })
+    return {"format": "openworkgraph.dmn-inspection.v1", "document_sha256": hashlib.sha256(raw).hexdigest(),
+            "decisions": entries}
+
+
+def _unused_id(base: str, existing: set[str]) -> str:
+    identifier = base
+    suffix = 2
+    while identifier in existing:
+        identifier = f"{base}_{suffix}"
+        suffix += 1
+    return identifier
+
+
+def _propose(model_value: dict[str, Any], decision: ET.Element, decision_activity_id: str,
+             document_sha256: str, effective_from: str, effective_until: str | None) -> dict[str, Any]:
+    unsupported = _unsupported(decision)
+    if unsupported:
+        raise DMNError(unsupported)
     model = ProcessModel.model_validate(model_value)
     activities = {a.id: a for a in model.activities}
     decision_node = activities.get(decision_activity_id)
     if decision_node is None or decision_node.kind != "decision":
         raise DMNError("Choose a decision step of the saved design")
+    existing_table = next((table for table in model.decision_tables
+                           if table.decision_activity_id == decision_activity_id), None)
+    if existing_table is not None and existing_table.required_decisions:
+        raise DMNError("This design table has required decisions that DMN import cannot preserve")
     targets = {}
     for edge in model.transitions:
         if edge.source == decision_activity_id:
-            targets.setdefault(activities[edge.target].label, edge.target)
-    decisions = [d for d in _child(root, "decision") if _child(d, "decisionTable")]
-    if decision_name is not None:
-        decisions = [d for d in decisions if d.get("name") == decision_name]
-    if len(decisions) != 1:
-        raise DMNError("Select exactly one DMN decision with a decision table")
-    table = _child(decisions[0], "decisionTable")[0]
+            label = activities[edge.target].label
+            if label in targets and targets[label] != edge.target:
+                raise DMNError("Each next step must have a distinct label in the saved design")
+            targets[label] = edge.target
+    table = _child(decision, "decisionTable")[0]
     hit = table.get("hitPolicy", "UNIQUE")
-    if hit not in ("UNIQUE", "FIRST"):
-        raise DMNError("Only UNIQUE and FIRST hit policies map onto OWG decision tables")
-    if table.get("aggregation") or table.get("preferredOrientation") not in (None, "Rule-as-Row"):
-        raise DMNError("Aggregations and non-row table orientations are unsupported")
     inputs = _child(table, "input")
-    outputs = _child(table, "output")
-    if len(outputs) != 1:
-        raise DMNError("A decision table needs exactly one output naming the next step")
     paths = []
     for column in inputs:
         expressions = _child(column, "inputExpression")
         if len(expressions) != 1:
             raise DMNError("Every input needs one input expression")
         paths.append(_text_of(expressions[0]).strip())
+    if len(set(paths)) != len(paths):
+        raise DMNError("Choose a table with a distinct path for each input")
     rows, rules, seen_targets = [], [], set()
+    existing_rule_ids = {rule.id for rule in model.business_rules}
     for index, rule in enumerate(_child(table, "rule"), 1):
         entries = _child(rule, "inputEntry")
         out = _child(rule, "outputEntry")
@@ -295,22 +352,31 @@ def import_dmn(raw: bytes, model_value: dict[str, Any], decision_activity_id: st
         if target in seen_targets:
             raise DMNError("Each next step may appear in only one rule, as in OWG decision tables")
         seen_targets.add(target)
-        conditions = [c for c in (unary_test_to_condition(p, _text_of(e)) for p, e in zip(paths, entries)) if c]
+        try:
+            conditions = [
+                c for c in (unary_test_to_condition(p, _text_of(e)) for p, e in zip(paths, entries)) if c
+            ]
+        except DMNError:
+            raise
+        except ValueError:
+            raise DMNError("A table condition is outside the supported OWG predicate bounds") from None
         if not conditions:
             raise DMNError("A rule that matches every case cannot be a structured OWG rule")
         if len(conditions) > 8:
             raise DMNError("OWG rules hold at most eight conditions")
         description = " ".join(_text_of(rule, "description").split())[:500]
         rule_id = f"dmn_{re.sub(r'[^A-Za-z0-9_-]', '_', decision_activity_id)[:40]}_r{index}"
-        if any(r.id == rule_id for r in model.business_rules):
-            rule_id += "_imported"
-        predicate = RulePredicate(match="all", conditions=conditions)
+        rule_id = _unused_id(rule_id, existing_rule_ids)
+        existing_rule_ids.add(rule_id)
+        try:
+            predicate = RulePredicate(match="all", conditions=conditions)
+        except ValueError:
+            raise DMNError("A table predicate is outside the supported OWG bounds") from None
         rules.append({"id": rule_id, "text": description or f"DMN rule {index} for {target_label}",
                       "user_confirmed": False, "predicate": predicate.model_dump()})
         rows.append({"id": f"dmn_row_{index}", "rule_id": rule_id, "target_activity_id": target})
     if set(targets.values()) != seen_targets:
         raise DMNError("The DMN rules must cover every next step of the decision exactly once")
-    import hashlib
     from .process_decision_tables import validate_date
     try:
         validate_date(effective_from)
@@ -327,13 +393,16 @@ def import_dmn(raw: bytes, model_value: dict[str, Any], decision_activity_id: st
     still_used = {e.get("rule_id") for e in proposed["transitions"]}
     proposed["business_rules"] = [r for r in proposed["business_rules"]
                                   if r["id"] not in replaced or r["id"] in still_used] + rules
-    label = ("DMN " + (decisions[0].get("name") or "decision"))[:120]
+    label = ("DMN " + (" ".join((decision.get("name") or "").split()) or "decision"))[:120]
+    table_id = existing_table.id if existing_table is not None else _unused_id(
+        "dmn_table_" + decision_activity_id[:48], {item.id for item in model.decision_tables})
+
     proposed["decision_tables"] = [t for t in proposed.get("decision_tables", [])
                                    if t["decision_activity_id"] != decision_activity_id] + [{
-        "id": "dmn_table_" + re.sub(r"[^A-Za-z0-9_-]", "_", decision_activity_id)[:50],
+        "id": table_id,
         "decision_activity_id": decision_activity_id, "hit_policy": hit,
         "effective_from": effective_from, "effective_until": effective_until,
-        "source_basis": {"label": label, "document_sha256": hashlib.sha256(raw).hexdigest(),
+        "source_basis": {"label": label, "document_sha256": document_sha256,
                          "basis": "human_declared_document_digest", "independently_verified": False},
         "rows": rows, "user_confirmed": False, "execution_authorized": False}]
     try:
@@ -353,4 +422,52 @@ def import_dmn(raw: bytes, model_value: dict[str, Any], decision_activity_id: st
     }
 
 
-__all__ = ["DMNError", "condition_to_test", "export_dmn", "import_dmn", "unary_test_to_condition"]
+def import_dmn(raw: bytes, model_value: dict[str, Any], decision_activity_id: str, *,
+               effective_from: str, effective_until: str | None = None,
+               decision_name: str | None = None) -> dict[str, Any]:
+    """Propose unconfirmed rules and a table for one decision."""
+    decisions = _document(raw)
+    if decision_name is not None:
+        decisions = [decision for decision in decisions if decision.get("name") == decision_name]
+    if len(decisions) != 1:
+        raise DMNError("Select exactly one DMN decision with a decision table")
+    return _propose(model_value, decisions[0], decision_activity_id, hashlib.sha256(raw).hexdigest(),
+                    effective_from, effective_until)
+
+
+def import_dmn_batch(raw: bytes, model_value: dict[str, Any], assignments: Any, *,
+                     document_sha256: str, effective_from: str, effective_until: str | None = None) -> dict[str, Any]:
+    """Prepare one validated draft from distinct document-to-design assignments."""
+    decisions = _document(raw)
+    if hashlib.sha256(raw).hexdigest() != document_sha256:
+        raise DMNError("The DMN file changed. Inspect it again before previewing.")
+    if not isinstance(assignments, list) or not 1 <= len(assignments) <= len(decisions):
+        raise DMNError("Select one or more DMN tables to import")
+    used_indices, used_targets = set(), set()
+    results = []
+    for assignment in assignments:
+        if not isinstance(assignment, dict) or set(assignment) != {"index", "decision_activity_id"}:
+            raise DMNError("Choose a design decision for each selected DMN table")
+        index, target = assignment["index"], assignment["decision_activity_id"]
+        if (type(index) is not int or not 0 <= index < len(decisions) or not isinstance(target, str)
+                or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", target)):
+            raise DMNError("Choose a design decision for each selected DMN table")
+        if index in used_indices or target in used_targets:
+            raise DMNError("Each selected table and design decision must be mapped once")
+        used_indices.add(index)
+        used_targets.add(target)
+        try:
+            proposal = _propose(model_value, decisions[index], target, document_sha256,
+                                effective_from, effective_until)
+        except DMNError as exc:
+            raise DMNError(f"DMN table {index + 1}: {exc}") from None
+        model_value = proposal["proposed_process_model"]
+        results.append({"index": index, **{key: proposal[key] for key in (
+            "decision_activity_id", "hit_policy", "proposed_rules", "proposed_table_rows")}})
+    return {"format": "openworkgraph.dmn-batch-import-preview.v1",
+            "proposed_process_model": model_value, "proposals": results,
+            "document_sha256": document_sha256, "process_model_saved": False, "execution_authorized": False}
+
+
+__all__ = ["DMNError", "condition_to_test", "export_dmn", "import_dmn", "import_dmn_batch",
+           "inspect_dmn", "unary_test_to_condition"]
