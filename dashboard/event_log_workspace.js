@@ -9656,7 +9656,7 @@
         apply.onclick=async()=>{
           if(!selection||!current())return;
           const chosen=selection,ticket=++tagTurn,active=()=>current()&&ticket===tagTurn;
-          selection=null;preview.disabled=apply.disabled=true;tagStatus.textContent='Applying tag…';
+          selection=null;preview.disabled=apply.disabled=tag.disabled=note.disabled=true;tagStatus.textContent='Applying tag…';
           try{
             const result=await postTag('',{...chosen.spec,expected_selection_sha256:chosen.digest});
             if(!active())return;
@@ -9664,7 +9664,7 @@
             ++reportTurn;++reviewTurn;lastReport=null;exports.enable(false);out.replaceChildren();review.replaceChildren();run.disabled=false;
             message.textContent='Tagged '+number(result.tagged)+' cases “'+result.tag+'”. Find clusters again; reanalyse other views if their filters use this tag.';
           }catch(error){if(active())tagStatus.textContent=error.message;}
-          finally{if(active())preview.disabled=false;}
+          finally{if(active()){preview.disabled=tag.disabled=note.disabled=false;}}
         };
       }
       review.replaceChildren(title,status,rows,nav,exportStatus,tagging);title.focus();

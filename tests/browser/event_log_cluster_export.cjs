@@ -55,12 +55,14 @@ const path=require('node:path');
   assert(await review.getByRole('button',{name:'Download next cases in cluster 1 as CSV'}).isDisabled());
   // Restrict the source scope, then preview and apply the matching paths as a tag.
   await page.locator('#owgCaseFilterContainsActivity').fill('Open');
+  await page.locator('#owgCaseFilterStartedFrom').fill('2024-01-05');
   await page.locator('#owgCaseFilterApply').click();
-  await page.locator('#owgCaseFilterCount').filter({hasText:'Filtered: 8 of 8 cases'}).waitFor();
+  await page.locator('#owgCaseFilterCount').filter({hasText:'Filtered: 4 of 8 cases'}).waitFor();
   await page.locator('#owgClusterK').selectOption('2');await page.locator('#owgClusterRun').click();
   const [scopedCases]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/trace-clusters/cases')),
     out.getByRole('button',{name:'Inspect cases in cluster 1'}).click()]);
-  const scoped=await scopedCases.json();assert.equal(scoped.total,4);
+  const scoped=await scopedCases.json();assert.equal(scoped.total,2);
+  assert(scoped.cases.every(item=>Number(item.case_id.slice(1))>=4));
   const tags=review.locator('#owgClusterTagging');await tags.locator('summary').click();
   await tags.locator('#owgClusterTagName').fill('cluster review');
   await tags.locator('#owgClusterTagNote').fill('reviewed path');
@@ -68,8 +70,9 @@ const path=require('node:path');
     tags.getByRole('button',{name:'Preview cluster tag'}).click()]);
   const previewRequest=preview.request().postDataJSON();
   assert.equal(previewRequest.cohort.all_of[0].activity,'Open');
+  assert.equal(previewRequest.cohort.all_of[0].started_from,'2024-01-05T00:00:00Z');
   assert.ok(previewRequest.cohort.all_of[1].variants.length>0);
-  await tags.locator('#owgClusterTagStatus').filter({hasText:'4 matching cases. 0 already have this tag.'}).waitFor();
+  await tags.locator('#owgClusterTagStatus').filter({hasText:'2 matching cases. 0 already have this tag.'}).waitFor();
   // A concurrent tag change invalidates the reviewed selection instead of overwriting its note.
   await page.evaluate(async caseId=>{
     const id=(await (await fetch('/v1/event-logs')).json()).logs[0].log_id;
@@ -82,8 +85,12 @@ const path=require('node:path');
   await tags.getByRole('button',{name:'Preview cluster tag'}).click();
   await tags.locator('#owgClusterTagStatus').filter({hasText:'1 already have this tag.'}).waitFor();
   await tags.getByText('other review',{exact:true}).waitFor();
-  await tags.getByRole('button',{name:'Apply cluster tag'}).click();
-  await page.locator('#owgClusterStatus').filter({hasText:'Tagged 4 cases “cluster review”.'}).waitFor();
+  let releaseTag,tagStarted;const heldTag=new Promise(resolve=>{releaseTag=resolve;}),startedTag=new Promise(resolve=>{tagStarted=resolve;});
+  await page.route('**/case-tags',async route=>{const response=await route.fetch();tagStarted();await heldTag;await route.fulfill({response});},{times:1});
+  await tags.getByRole('button',{name:'Apply cluster tag'}).click();await startedTag;
+  assert(await tags.locator('#owgClusterTagName').isDisabled());assert(await tags.locator('#owgClusterTagNote').isDisabled());
+  const savedTag=page.waitForResponse(r=>r.url().endsWith('/case-tags')&&r.request().method()==='POST');releaseTag();await savedTag;
+  await page.locator('#owgClusterStatus').filter({hasText:'Tagged 2 cases “cluster review”.'}).waitFor();
   assert.equal(await out.textContent(),'');assert.equal(await review.textContent(),'');
   const tagged=await page.evaluate(async()=>{
     const id=(await (await fetch('/v1/event-logs')).json()).logs[0].log_id;
