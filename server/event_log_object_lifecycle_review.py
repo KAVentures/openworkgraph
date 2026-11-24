@@ -8,7 +8,6 @@ every attribute of the source or external business relationships.
 """
 from __future__ import annotations
 
-import json
 from collections import Counter
 from typing import Any, Literal
 
@@ -55,6 +54,8 @@ def _parse(spec: Any) -> Request:
         raise workspace.EventLogWorkspaceError("A variant may only constrain object evidence")
     if request.view == "summary" and (request.offset or request.status != "all"):
         raise workspace.EventLogWorkspaceError("The summary always covers the entire selected object type")
+    if request.view == "variants" and request.status == "unknown":
+        raise workspace.EventLogWorkspaceError("Unknown objects have no reviewed replay variant; browse objects instead")
     return request
 
 

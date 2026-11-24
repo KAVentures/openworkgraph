@@ -129,3 +129,58 @@ def test_strict_scope_and_unreviewed_evidence():
         request(log,spec,summary,"object",object_id="o3",status="fitting")
     with pytest.raises(workspace.EventLogWorkspaceError,match="Invalid"):
         lifecycle.review(log,{**spec,"limit":101})
+
+
+def test_replay_budget_exclusion_stays_unknown(monkeypatch):
+    log,spec=setup()
+    monkeypatch.setattr(model,"MAX_REPLAY_EVENTS",1)
+    summary=lifecycle.review(log,spec)
+    assert summary["fitting_objects"]==summary["deviating_objects"]==0
+    assert summary["unknown_reasons"]=={"replay_budget":3,"no_visible_events":1}
+    page=request(log,spec,summary,"objects",status="unknown",limit=2)
+    assert page["total"]==4 and page["next_offset"]==2
+    more=request(log,spec,summary,"objects",status="unknown",limit=2,offset=2)
+    assert len(more["objects"])==2 and more["next_offset"] is None
+    assert not ({o["object_id"] for o in page["objects"]}&{o["object_id"] for o in more["objects"]})
+
+
+def test_http_dashboard_scope_and_strict_request(tmp_path):
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+    code=r'''
+from io import BytesIO
+from fastapi.testclient import TestClient
+from server.secure_app import app
+from server import local_auth, event_log_workspace as workspace
+from server import event_log_object_process_model as model
+log=workspace.import_log(BytesIO(b"case,activity,time\na,A,2026-01-01T00:00:00Z\na,B,2026-01-02T00:00:00Z\nb,A,2026-01-01T00:00:00Z\nb,B,2026-01-02T00:00:00Z\n"),
+    name="lifecycle",source_format="csv",mapping={"case_column":"case","activity_column":"activity","timestamp_column":"time"})["log_id"]
+found=model.discover(log)["model"]
+spec={"model":found,"object_type":found["types"][0]["object_type"]}
+path=f"/v1/event-logs/{log}/object-process-model/conformance/lifecycle-review"
+with TestClient(app) as client:
+    assert client.post(path,json=spec).status_code in (401,403)
+    bearer={"Authorization":"Bearer "+local_auth.ensure_api_token()}
+    assert client.post(path,json=spec,headers=bearer).status_code in (401,403)
+    auth={"Authorization":"OWG-Session "+local_auth.create_dashboard_session()}
+    good=client.post(path,json=spec,headers=auth)
+    assert good.status_code==200,good.text
+    assert good.headers["cache-control"]=="no-store"
+    report=good.json()
+    assert report["registered_objects"]==2
+    page=client.post(path,json={**spec,"view":"objects","expected_review_sha256":report["review_sha256"]},headers=auth)
+    assert page.status_code==200,page.text
+    assert len(page.json()["objects"])==2
+    assert client.post(path,json={**spec,"view":"objects"},headers=auth).status_code==422
+    assert client.post(path,json={**spec,"view":"objects","expected_review_sha256":"0"*64},headers=auth).status_code==422
+    assert client.post(path,json={**spec,"extra":True},headers=auth).status_code==422
+    assert client.post(path,headers={**auth,"Content-Type":"application/json"},content=b"{}"+b" "*300000).status_code==413
+'''
+    env={**os.environ,"WORKFLOW_OBSERVER_DATA":str(tmp_path/"data"),
+         "WORKFLOW_OBSERVER_AUTH_DIR":str(tmp_path/"auth"),
+         "WORKFLOW_OBSERVER_CONFIG":str(tmp_path/"config.json")}
+    done=subprocess.run([sys.executable,"-c",code],cwd=Path(__file__).resolve().parents[1],
+                        env=env,text=True,capture_output=True,timeout=60)
+    assert done.returncode==0,done.stdout+done.stderr

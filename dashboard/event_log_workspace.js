@@ -3965,36 +3965,43 @@
     const notice=el('p',null,'muted');notice.setAttribute('role','status');
     const summary=el('div'),pages=el('div'),trace=el('div');
     const exportSummary=button('Download lifecycle coverage JSON','secondary');exportSummary.disabled=true;
-    let ticket=0,review=null;
+    let ticket=0,listTicket=0,traceTicket=0,review=null;
     const active=t=>valid()&&panel.isConnected&&t===ticket;
     const base=()=>({model:spec.model,object_type:type.value,max_variants:spec.max_variants||200});
-    const clear=()=>{++ticket;review=null;summary.replaceChildren();pages.replaceChildren();trace.replaceChildren();
+    const clear=()=>{++ticket;++listTicket;++traceTicket;review=null;summary.replaceChildren();pages.replaceChildren();trace.replaceChildren();
       exportSummary.disabled=true;run.disabled=false;type.disabled=false;};
     type.onchange=()=>{clear();notice.textContent='Choose Review to inspect this object type.';};
     const page=(view,status,variant,object)=>{
-      const t=++ticket,identity=review;
+      const t=ticket,identity=review;
       if(!identity)return;
-      const container=view==='object'?trace:pages;
-      if(view!=='object')trace.replaceChildren();
+      const isTrace=view==='object';
+      const lane=isTrace?++traceTicket:++listTicket;
+      const isLive=()=>active(t)&&(isTrace?lane===traceTicket:lane===listTicket);
+      const container=isTrace?trace:pages;
+      if(!isTrace){++traceTicket;trace.replaceChildren();}
       const title=el('h5',view==='variants'?'Replayed lifecycle variants':view==='objects'?'Objects in reviewed population':'Object '+object);
       title.tabIndex=-1;
       const statusText=el('p',null,'muted');statusText.setAttribute('role','status');
       const body=el('div'),prev=button('Previous page','secondary'),next=button('Next page','secondary');
       container.replaceChildren(title,statusText,body,prev,next);title.focus();
-      let offset=0,following=null;
+      let offset=0,following=null,sequence=0;
       async function load(start){
+        if(!isLive())return;
+        const request=++sequence;
+        const live=()=>isLive()&&request===sequence;
+        if(!isTrace){++traceTicket;trace.replaceChildren();}
         prev.disabled=next.disabled=true;statusText.textContent='Loading source-bound evidence…';
         try{
           const packet={...base(),view,status,offset:start,limit:50,expected_review_sha256:identity.review_sha256,
             ...(variant?{variant_sha256:variant}:{}),...(object?{object_id:object}:{})};
           const data=await post(url,packet);
-          if(!active(t))return;
+          if(!live())return;
           offset=start;following=data.next_offset;
           if(view==='variants'){
             statusText.textContent=data.total+' replayed variants in this selection.';
             body.replaceChildren(table(['Activity sequence','Objects','Status','Token fitness','Missing','Remaining','Evidence'],
               data.variants.map(v=>{
-                const inspect=button('Review objects','secondary');inspect.onclick=()=>page('objects','all',v.variant_sha256);
+                const inspect=button('Review objects','secondary');inspect.onclick=()=>{if(live())page('objects','all',v.variant_sha256);};
                 return [v.path.join(' → '),v.objects,v.status,Number(v.fitness).toFixed(3),v.missing,v.remaining,inspect];
               })));
           }else if(view==='objects'){
@@ -4002,7 +4009,7 @@
             body.replaceChildren(table(['Object','Visible events','Status','Unknown reason','Token fitness','Evidence'],
               data.objects.map(o=>{
                 const inspect=button('Inspect object','secondary');inspect.setAttribute('aria-label','Inspect object '+o.object_id);
-                inspect.onclick=()=>page('object',status,variant,o.object_id);
+                inspect.onclick=()=>{if(live())page('object',status,variant,o.object_id);};
                 return [o.object_id,o.events,o.status,o.unknown_reason||'—',o.fitness==null?'—':Number(o.fitness).toFixed(3),inspect];
               })));
           }else{
@@ -4017,8 +4024,8 @@
               table(['Event','Activity','Timestamp (UTC)','Tied time'],data.events.map(e=>
                 [e.event_id,e.activity,e.timestamp,e.timestamp_tied?'Yes':'No'])));
           }
-        }catch(error){if(active(t)){statusText.textContent=error.message;body.replaceChildren();following=null;}}
-        finally{if(active(t)){prev.disabled=offset===0;next.disabled=following===null;}}
+        }catch(error){if(live()){statusText.textContent=error.message;body.replaceChildren();following=null;}}
+        finally{if(live()){prev.disabled=offset===0;next.disabled=following===null;}}
       }
       prev.onclick=()=>load(Math.max(0,offset-50));next.onclick=()=>load(following);load(0);
     };
