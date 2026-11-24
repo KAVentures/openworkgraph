@@ -149,6 +149,98 @@
     section.append(fieldset,nameLabel,preview,summary,confirmLabel,create,status,open);
     parent.appendChild(section);update();
   }
-  window.owgObservedExecutionLog=Object.freeze({render});
-  window.__owgObservedExecutionLogModel={matchingPreview};
+  function sourceManifestMatches(report,logId,metadata){
+    return !!report&&report.log_id===logId&&validLogId(logId)&&
+      report.stored_independent_snapshot===true&&report.source_history_rechecked===false&&
+      report.snapshot_sha256===metadata?.snapshot_sha256&&
+      report.case_count===metadata.original_case_count&&report.event_count===metadata.original_event_count&&
+      report.stored_event_count===report.event_count&&matchingPreview(report,report.scope||{});
+  }
+
+  function recheckMatches(report,logId,digest){
+    if(!report||report.format!=='openworkgraph.observed-execution-log-recheck.v1'||
+      report.log_id!==logId||report.original_snapshot_sha256!==digest||
+      !Number.isFinite(Date.parse(report.checked_at))||report.stored_log_changed!==false||
+      report.capture_complete!==false||report.business_case_identity_verified!==false||
+      report.business_outcomes_verified!==false)return false;
+    return report.status==='projection_matches'?report.current_projection_sha256===digest:
+      report.status==='projection_changed'?sha(report.current_projection_sha256)&&report.current_projection_sha256!==digest:
+      report.status==='source_unavailable'&&report.current_projection_sha256===null;
+  }
+
+  // Read the saved manifest on demand; a separate user action is required to
+  // query retained history. The event log remains useful even after history
+  // expires and the source cannot be re-read.
+  function renderSource(parent,log,isCurrent){
+    const metadata=log?.observed_execution_snapshot;
+    if(!metadata||!validLogId(log.log_id)||!sha(metadata.snapshot_sha256))return;
+    const section=el('section');section.id='owgObservedSnapshotSource';
+    section.appendChild(el('h4','Original observed execution snapshot'));
+    section.appendChild(el('p',metadata.original_case_count+' inferred executions · '+metadata.original_event_count+
+      ' original structural observations · '+metadata.timestamp_tie_groups+' timestamp tie groups. This independent saved log is not a verified business record. Its original event rows cannot be appended to.','muted'));
+    const load=button('Show original execution references'),check=button('Recheck retained source');
+    check.disabled=true;
+    const details=el('div'),status=el('p');status.setAttribute('role','status');
+    const current=()=>section.isConnected&&isCurrent();
+    let report=null,busy=false;
+    const update=()=>{load.disabled=busy||!current();check.disabled=busy||!report||!current();};
+    load.addEventListener('click',async()=>{
+      if(busy||!current())return;
+      busy=true;report=null;update();details.replaceChildren();
+      status.textContent='Reading saved snapshot provenance…';
+      try{
+        await window.__owgAuthReady;
+        const response=await fetch('/v1/workflow-evidence/event-log/source?'+new URLSearchParams({log_id:log.log_id}),{cache:'no-store'});
+        if(!response.ok)throw Error('Original snapshot unavailable ('+response.status+').');
+        const result=await response.json();
+        if(!current())return;
+        if(!sourceManifestMatches(result,log.log_id,metadata))throw Error('Saved source manifest does not match this log.');
+        report=result;
+        details.appendChild(el('p','Original scope: '+(report.scope.since||'All retained history')+' to '+(report.scope.until||'unbounded end')+'.'));
+        details.appendChild(el('p','Snapshot SHA-256: '+report.snapshot_sha256,'muted'));
+        const list=el('ul');
+        report.cases.forEach(row=>{
+          const item=el('li',row.execution_id+' · '+row.actor_kind+' · '+row.events+' observations ');
+          const open=button('Inspect retained source execution');
+          open.addEventListener('click',async()=>{
+            if(!current()||busy||report!==result)return;
+            open.disabled=true;
+            try{
+              if(typeof window.owgWorkflowExplorer?.inspectSnapshotExecution!=='function')throw Error('Workflow explorer unavailable.');
+              document.querySelector('[role=tab][data-tab=overview]')?.click();
+              await window.owgWorkflowExplorer.inspectSnapshotExecution({executionId:row.execution_id,
+                window:{since:result.scope.since,until:result.scope.until}});
+              document.getElementById('owgWorkflowExplorer')?.scrollIntoView({block:'start'});
+            }catch(error){if(current())status.textContent=String(error.message||error);}
+            finally{open.disabled=false;}
+          });
+          item.appendChild(open);list.appendChild(item);
+        });
+        details.appendChild(list);
+        status.textContent='Original manifest loaded. Retained source history has not been rechecked.';
+      }catch(error){if(current())status.textContent=String(error.message||error);}
+      finally{busy=false;update();}
+    });
+    check.addEventListener('click',async()=>{
+      if(busy||!current()||!report)return;
+      const selected=report;busy=true;update();status.textContent='Comparing the original scope with currently retained structural evidence…';
+      try{
+        const result=await request('/v1/workflow-evidence/event-log/recheck',{log_id:log.log_id});
+        if(!current()||selected!==report)return;
+        if(!recheckMatches(result,log.log_id,selected.snapshot_sha256))throw Error('Source recheck response could not be verified.');
+        const message={
+          projection_matches:'Retained structural projection matches the original snapshot.',
+          projection_changed:'Retained structural projection changed. The saved snapshot remains unchanged.',
+          source_unavailable:'Original source is unavailable or outside the retained bounded scope. The saved snapshot remains unchanged.'
+        }[result.status];
+        status.textContent=message+' Checked '+result.checked_at+'. This does not verify business outcomes or capture completeness.';
+      }catch(error){if(current())status.textContent=String(error.message||error);}
+      finally{busy=false;update();}
+    });
+    section.append(load,check,details,status);
+    parent.appendChild(section);update();
+  }
+
+  window.owgObservedExecutionLog=Object.freeze({render,renderSource});
+  window.__owgObservedExecutionLogModel={matchingPreview,sourceManifestMatches,recheckMatches};
 })();
