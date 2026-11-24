@@ -750,7 +750,8 @@ const path=require('node:path');
    await page.locator('#owgSignalEvaluate').click();
    await page.locator('#owgSignalResults').getByText('signals hold now').waitFor();
    const signalText=await page.locator('#owgSignalResults').textContent();
-   assert.match(signalText,/1 of 1 signals hold now/);assert.match(signalText,/6 cases/);assert.match(signalText,/C0\b/);assert.match(signalText,/first check/);
+   assert.match(signalText,/1 of 1 signals hold now/);assert.match(signalText,/6 cases/);assert.match(signalText,/first check/);
+   await page.locator('#owgSignalResults').getByRole('button',{name:'Open case C0',exact:true}).waitFor();
    await page.locator('#owgSignalEvaluate').click();
    await page.locator('#owgSignalResults').getByText('first check').waitFor({state:'detached'});
    // Manual reviews belong to the current evaluated state. They do not grant
