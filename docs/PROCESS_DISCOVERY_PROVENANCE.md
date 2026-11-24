@@ -98,3 +98,60 @@ automation. Legacy catalog records without snapshot references remain unlinked.
 The journey's existing `source_read_performed:false` field is scoped explicitly
 to live providers (`source_read_scope:live_provider_only`); authorized retained
 log fingerprint checks are local and described by the per-reference status.
+
+## Effective discovery input and exact cohort inspection (R5)
+
+The raw dataset fingerprint alone cannot detect changed case membership caused
+by analyst tags or changed labels caused by active activity mapping/hiding.
+The dashboard discovery request now opts into an effective input fingerprint:
+the full case-event projection **after** hidden-activity filtering, activity
+mapping/collapse and the selected cohort filter. It hashes structured case
+key, event key, effective activity, timestamp, resource and event attributes,
+with case and event counts. The original discovery source reference pins both
+the raw dataset and the effective projection. The dashboard sends the preview
+model digest and projection digest when recording; either changing refuses
+the save. No implicit approval or new graph revision is granted.
+
+The catalog and automation opportunity journey distinguish source advancement,
+effective projection changes and unperformed checks. Older snapshots remain
+resolvable with effective input explicitly not recorded. The fingerprint checks
+have independent bounded work budgets; they never report a partial projection
+as current. The effective input fingerprint has a 30M case-event-row limit;
+source inspection also limits underlying source rows to 30M. Origin checks
+process at most six distinct effective projections with a 30M underlying-row
+budget in addition to existing raw fingerprint limits.
+
+**Inspect exact discovery cohort** reopens the selection pinned to the
+saved process revision, not the current event-log UI filter. It reads current
+data using the original case notion, filters and settings. Original and
+current projection counts/digests are shown separately. If they differ,
+the result is labelled current rather than a historical case reconstruction.
+The local read-only inspector pages exact complete cases, then selected
+case events, rejecting a case outside the selected cohort. Pagination pins
+the freshly checked effective-input digest; a change stops the review until
+it is reopened. Event ordering at equal timestamps is a stable event-ID tie
+break, not evidence of the real order.
+
+For selections of at most 1,000 cases and 20,000 projected events the
+recorded snapshot additionally retains a complete index of log-scoped
+case-key digests and projected event-row digests. No raw case keys, paths,
+or rows are copied in this index. This is local pseudonymous fingerprinting,
+not anonymization. Inspection can compare complete bounded populations and
+report added, removed, modified and unchanged case projections, filtering
+the live rows by status. Removed raw case keys cannot be reconstructed.
+Larger or legacy selections return no partial case-change breakdown. Case
+fingerprints are not included in source metadata or portable handoff packets.
+
+The exact inspection endpoint is POST /v1/event-log-discovery/inspect-selection
+with workflow_id and revision query parameters, a content-addressed source
+reference and expected process digest in the strict JSON body. Subsequent
+case/event pages require the current effective projection digest. Requests
+are authenticated local dashboard only and responses are no-store; no
+external data retrieval or modifications occur. The ordinary log workspace
+filters are unchanged. Original observed execution logs also retain the
+existing explicit original-observation recheck from this inspector.
+
+Portable project handoff reviews carry only the minimized original/current
+effective input digests and check status, not filter values, case IDs or
+the case index. Changed, unavailable or unrecorded effective inputs remain
+human-review blockers, not automated permission decisions.
