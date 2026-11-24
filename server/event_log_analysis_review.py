@@ -54,8 +54,11 @@ def _bound(log_id: str, spec: Any, page: tuple[str, int] | None = None,
                     raise workspace.EventLogWorkspaceError(
                         "Source exceeds complete fingerprint budget; source-bound export unavailable")
                 source_digest = provenance.source_digest(reader, log_id)
-                case_digest = (_case_review_digest(reader, log_id, normalized, source_digest)
-                               if parsed.level == "cases" else None)
+                # Events can also be restricted by a case cohort. The raw
+                # source fingerprint alone does not include the local tag,
+                # mapping or visibility state that shapes these results.
+                view_digest = _case_review_digest(reader, log_id, normalized, source_digest)
+                case_digest = view_digest if parsed.level == "cases" else None
         finally:
             conn.close()
         if expected is not None and expected != case_digest:
@@ -66,6 +69,8 @@ def _bound(log_id: str, spec: Any, page: tuple[str, int] | None = None,
             options["group_page"] = page
         result = analysis.run(log_id, normalized, **options)
     result["source_content_sha256"] = source_digest
+    result["analysis_view_sha256"] = view_digest
+    result["analysis_view_fingerprint_basis"] = "raw_source_normalized_spec_applied_mapping_hidden_activities_case_tags"
     if case_digest is not None:
         result["case_review_sha256"] = case_digest
         if page is None:

@@ -379,3 +379,29 @@ def test_source_bound_job_refuses_incomplete_fingerprint(jobs, monkeypatch):
     assert 'fingerprint budget' in status['error']
     with pytest.raises(module.JobError):
         jobs.result('owner', source, made['job_id'])
+
+
+def test_event_level_job_pins_local_view_as_well_as_raw_source(jobs):
+    from server import event_log_analysis_review as review
+    source=log()
+    spec={"level":"events","measures":[{"fn":"count"}]}
+    before=review.source_bound(source,spec)
+    assert "case_review_sha256" not in before
+    assert len(before["analysis_view_sha256"])==64
+    made=jobs.submit("owner",source,spec,source_bound=True)
+    assert wait(jobs,source,made["job_id"])["state"]=="succeeded"
+    assert json.loads(jobs.result("owner",source,made["job_id"]))==before
+    # Local case tags are not part of the stored-source hash. Even a change
+    # to an unused tag invalidates the conservative view fingerprint.
+    with workspace._LOCK:
+        conn=workspace._connect()
+        try:
+            columns=[r[1] for r in conn.execute("PRAGMA table_info('case_tags')").fetchall()]
+            assert {"log_id","case_id","tag"}<=set(columns)
+            conn.execute("INSERT INTO case_tags (log_id,case_id,tag) VALUES (?,?,?)",
+                         [source,"1","reviewed"])
+        finally:conn.close()
+    after=review.source_bound(source,spec)
+    assert before["source_content_sha256"]==after["source_content_sha256"]
+    assert before["analysis_view_sha256"]!=after["analysis_view_sha256"]
+    assert json.loads(jobs.result("owner",source,made["job_id"]))==before
