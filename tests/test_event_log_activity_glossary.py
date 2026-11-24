@@ -36,6 +36,23 @@ def _log():
     return workspace.import_log(BytesIO("\n".join(rows).encode()), name="g", source_format="csv", mapping=MAPPING)["log_id"]
 
 
+def test_import_preview_detects_changes_and_refuses_stale_apply():
+    log = _log()
+    gl.set_note(log, {"activity": "Approve", "description": "Original"})
+    text = "activity,description\nApprove,Updated\nClose,New\nGhost,Missing\n"
+    review = gl.import_csv(log, text, preview=True)
+    assert [(row["activity"], row["action"]) for row in review["changes"]] == [
+        ("Approve", "update"), ("Close", "add")]
+    assert review["skipped_not_in_log"] == ["Ghost"]
+    gl.set_note(log, {"activity": "Approve", "description": "Edited meanwhile"})
+    with pytest.raises(EventLogWorkspaceError, match="Preview the import again"):
+        gl.import_csv(log, text, expected_fingerprint=review["fingerprint"])
+    assert next(row for row in gl.glossary(log)["activities"] if row["activity"] == "Approve")["description"] == "Edited meanwhile"
+    review = gl.import_csv(log, text, preview=True)
+    applied = gl.import_csv(log, text, expected_fingerprint=review["fingerprint"])
+    assert applied["imported"] == 2
+
+
 def test_notes_coverage_and_clearing():
     log = _log()
     empty = gl.glossary(log)
