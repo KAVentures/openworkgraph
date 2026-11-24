@@ -214,3 +214,65 @@ with TestClient(app) as client:
                             cwd=Path(__file__).resolve().parents[1],
                             capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+
+def test_cycle_inventory_detects_cycles_even_with_separate_state_blockers(monkeypatch):
+    def idea(n, deps=(), state="idea"):
+        return {"idea_id":n,"revision":1,"state":state,
+                "planning":{"depends_on":list(deps),"target_quarter":"2027-Q1"}}
+    ideas = [idea("a",("b","held")),idea("b",("a",)),idea("c",("a",)),
+             idea("held",state="on_hold"),idea("self",("self",)),
+             idea("independent"),idea("done",("done",),state="implemented")]
+    monkeypatch.setattr(pipeline,"pipeline",lambda:{"ideas":ideas})
+    result=review.review()
+    waves=result["dependency_waves"]
+    assert waves["cycle_groups"]==[
+        {"group":1,"idea_ids":["a","b"]},{"group":2,"idea_ids":["self"]}]
+    assert waves["exact_cycle_member_count"]==3
+    assert waves["exact_cycle_downstream_count"]==1
+    assert waves["cycle_or_downstream_idea_count"]==1
+    assert waves["blocked_idea_count"]==4
+    by_id={row["idea_id"]:row for row in waves["ideas"]}
+    assert by_id["a"]["cycle_group"]==1 and by_id["a"]["also_blocked_by_declared_state"]
+    assert by_id["c"]["depends_on_cycle"] and by_id["c"]["cycle_group"] is None
+    assert by_id["independent"]["wave"]==1
+    assert not result["review_complete"]
+
+
+def test_legacy_non_ascii_quarters_are_unknown_not_crashes():
+    for value in ("²027-Q1","２０２７-Q1","٢٠٢٧-Q1","2027-Q5",None):
+        assert review._quarter(value) is None
+    assert review._quarter("2027-Q3")==2027*4+3
+
+
+def test_exact_cycle_inventory_random_graph_reachability_oracle():
+    import random
+    from shared.portfolio_dependency_cycles import cycle_inventory
+    rng=random.Random(20261124)
+    for _ in range(1000):
+        nodes=[str(i) for i in range(rng.randrange(0,45))]
+        graph={i:[j for j in nodes if rng.random()<.12] for i in nodes}
+        reach={}
+        for i in graph:
+            seen=set()
+            todo=list(graph[i])
+            while todo:
+                j=todo.pop()
+                if j not in seen:
+                    seen.add(j)
+                    todo.extend(graph[j])
+            reach[i]=seen
+        cyclic={i for i in graph if i in reach[i]}
+        expected=sorted({tuple(sorted(j for j in cyclic if j in reach[i] and i in reach[j]))
+                         for i in cyclic})
+        groups,membership,downstream=cycle_inventory(graph)
+        assert [tuple(group) for group in groups]==expected
+        assert set(membership)==cyclic
+        assert downstream=={i for i in graph if i not in cyclic and reach[i]&cyclic}
+        assert cycle_inventory(dict(reversed(list(graph.items()))))==(groups,membership,downstream)
+    for n in (1000,10000):
+        graph={str(i):[str(i-1)] if i else [] for i in range(n)}
+        assert cycle_inventory(graph)==([],{},set())
+        graph["0"]=["1"]
+        groups,membership,downstream=cycle_inventory(graph)
+        assert groups==[["0","1"]] and len(downstream)==n-2
