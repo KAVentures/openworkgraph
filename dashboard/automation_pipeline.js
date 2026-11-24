@@ -2212,6 +2212,32 @@
             const confirmed=input('owgPipelineSourceConsent','checkbox');const consentText=el('label');consentText.append(confirmed,document.createTextNode(' Read this exact observed record and download the minimized source-check document. Existing provider opt-ins still apply.'));
             const run=button('Read source and download check','secondary');run.id='owgPipelineSourceExport';run.disabled=true;
             const note=el('div',null,'muted');note.setAttribute('role','status');const history=el('div');
+            const reviewFile=input('owgPipelineSourceReviewFile','file');reviewFile.accept='.json,application/json';
+            const reviewButton=button('Reconcile original downloaded check','secondary');
+            const reviewResult=el('div');reviewResult.setAttribute('role','status');
+            let reviewVersion=0;
+            reviewFile.onchange=()=>{reviewVersion++;reviewResult.replaceChildren();};
+            reviewButton.onclick=async()=>{
+              const file=reviewFile.files?.[0],path=base(),version=++reviewVersion;
+              if(!file||!file.size||file.size>65536){reviewResult.textContent='Choose the original JSON download of at most 64 KiB.';return;}
+              if(!selected.value){reviewResult.textContent='Choose the original exported project first.';return;}
+              reviewButton.disabled=true;
+              try{
+                const response=await api(path+'/source-check-review',{method:'POST',
+                  headers:{'Content-Type':'application/json'},body:file});
+                const value=await response.json();
+                if(generation!==detailGeneration||view!==sourceView||version!==reviewVersion)return;
+                reviewResult.replaceChildren(
+                  el('p','Exact retained export bytes match · exported '+value.exported_at),
+                  el('p','Historical source operation: '+(value.historical_source_operation_reported_verified?'reported verified':'not established')+
+                    ' · '+(value.historical_source_availability||'unknown')),
+                  el('p','Saved expectation: '+value.process_expectation_status.replaceAll('_',' ')+
+                    ' · Run association: '+value.run_attribution_status.replaceAll('_',' ')),
+                  el('p','Idea revision at export '+value.idea_revision_at_export+'; current '+value.current_idea_revision+
+                    '. No fresh source read, agent causality or business outcome verified.','muted'));
+              }catch(e){if(generation===detailGeneration&&view===sourceView&&version===reviewVersion)reviewResult.textContent=e.message;}
+              finally{reviewButton.disabled=false;reviewFile.value='';}
+            };
             let entries=[],formVersion=0,optionsVersion=0,pending=false;
             const ready=()=>{run.disabled=pending||!entries.length||!confirmed.checked||!/^owg:r:[0-9a-f]{32}$/.test(sourceRef.value.trim());confirmed.disabled=pending||!entries.length;};
             const invalidate=()=>{formVersion++;confirmed.checked=false;ready();};
@@ -2237,7 +2263,7 @@
               }
               ready();
             };
-            selected.onchange=()=>{sourceRef.value='';loadOptions().catch(e=>{if(generation===detailGeneration)note.textContent=e.message;});};
+            selected.onchange=()=>{sourceRef.value='';reviewVersion++;reviewFile.value='';reviewResult.replaceChildren();loadOptions().catch(e=>{if(generation===detailGeneration)note.textContent=e.message;});};
             run.onclick=async()=>{
               if(run.disabled)return;
               const entry=entries[Number(expectation.value)],path=base(),version=formVersion;
@@ -2256,7 +2282,9 @@
               finally{pending=false;ready();}
             };
             checkHost.replaceChildren(el('h4','Selected source-state check'),el('div','This performs an explicitly authorized read through existing source adapters. The receipt is downloaded only; OWG retains a checksum, not the receipt or a verified-state value.','muted'),
-              field('Exported project for source check',selected),field('Confirmed source-state expectation',expectation),field('Reported run (only runs that reported this project\'s exact specification, from linked reports)',runChoice),field('Observed record reference (owg:r:…)',sourceRef),consentText,run,note,history);
+              field('Exported project for source check',selected),field('Confirmed source-state expectation',expectation),field('Reported run (only runs that reported this project\'s exact specification, from linked reports)',runChoice),field('Observed record reference (owg:r:…)',sourceRef),consentText,run,note,history,
+              el('h5','Review a previous download'),el('p','Select the unchanged original file to compare its bytes with the retained export hash. This local review does not retain the file or contact a provider.','muted'),
+              field('Original source-check JSON file',reviewFile),reviewButton,reviewResult);
             await loadOptions();
           }catch(e){if(generation===detailGeneration&&view===sourceView)status.textContent=e.message;}
         };
