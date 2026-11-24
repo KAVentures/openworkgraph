@@ -11,11 +11,103 @@
   const status=text=>{const n=document.getElementById('owgCatalogStatus');if(n)n.textContent=String(text);};
   const copy=value=>JSON.parse(JSON.stringify(value));
   function clearShadowReview(){shadowGeneration++;document.getElementById('owgCatalogShadowResult')?.replaceChildren();}
-  function clearRuleChecks(){ruleCheckGeneration++;document.getElementById('owgCatalogRuleCheckResult')?.replaceChildren();}
+  function renderDecisionDomainLab(host){
+    if(!record?.workflow_id||!record.revision||!record.content_sha256||!model.decision_tables?.length)return;
+    const section=el('details');section.appendChild(el('summary','Decision coverage lab'));
+    section.appendChild(el('p','Test synthetic inputs against the exact saved revision. Every combination in your finite domain is checked, but this does not prove general policy coverage. Do not enter real customer or employee facts.'));
+    const date=el('input');date.type='date';date.setAttribute('aria-label','Declared decision test date');
+    const dateLabel=el('label','Declared decision test date ');dateLabel.appendChild(date);
+    const input=el('textarea');input.rows=12;input.style.cssText='width:100%;box-sizing:border-box;font-family:monospace';
+    input.setAttribute('aria-label','Synthetic domain dimensions JSON');input.value='[]';
+    const inputLabel=el('label','Synthetic domain dimensions JSON');inputLabel.appendChild(input);
+    const info=el('p','Each dimension has a JSON pointer path and choices, each containing either a scalar value or {"missing":true}.');
+    const output=el('div');output.id='owgDecisionDomainResult';output.setAttribute('role','status');
+    let report=null, turn=0;
+    const download=button('Download minimized coverage report',()=>{
+      if(!report)return;
+      const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));
+      const a=el('a');a.href=url;a.download='owg-decision-coverage-r'+report.reference.revision+'.json';a.click();
+      setTimeout(()=>URL.revokeObjectURL(url),1000);
+    });download.disabled=true;
+    const invalidate=()=>{turn++;report=null;download.disabled=true;output.replaceChildren();};
+    const ref=()=>({workflow_id:record.workflow_id,revision:String(record.revision),content_sha256:record.content_sha256});
+    const guard=(selected,generation,attempt)=>output.isConnected&&generation===editGeneration&&attempt===turn&&
+      record?.workflow_id===selected.workflow_id&&String(record.revision)===selected.revision&&record.content_sha256===selected.content_sha256;
+    const verify=(data,selected)=>{
+      if(data.reference.workflow_id!==selected.workflow_id||String(data.reference.revision)!==selected.revision||
+         data.reference.content_sha256!==selected.content_sha256)throw new Error('Unexpected saved revision reference.');
+    };
+    const suggest=button('Suggest synthetic boundary choices',async()=>{
+      if(input.value.trim()!=='[]'&&!window.confirm('Replace the current synthetic dimensions with new suggestions?'))return;
+      invalidate();const selected=ref(),generation=editGeneration,attempt=turn;
+      suggest.disabled=true;
+      try{
+        const data=await request('/v1/process-catalog/decision-domain/suggestions?'+new URLSearchParams(selected));
+        if(!guard(selected,generation,attempt))return;verify(data,selected);
+        input.value=JSON.stringify(data.dimensions,null,2);
+        info.textContent=data.suggested_combinations+' suggested combinations; limit '+data.max_combinations+
+          '. Review and narrow the dimensions if needed. Suggestions are not an exhaustive partition.';
+        for(const item of data.omitted_paths)info.appendChild(el('span',' Omitted '+item.path+' ('+item.reason+').'));
+        if(data.clipped_paths.length)info.appendChild(el('span',' Choice limit reached for: '+data.clipped_paths.join(', ')+'.'));
+      }catch(error){if(guard(selected,generation,attempt))output.replaceChildren(el('p',error.message));}
+      finally{suggest.disabled=false;}
+    });
+    const run=button('Check finite decision domain',async()=>{
+      invalidate();const selected=ref(),generation=editGeneration,attempt=turn;
+      if(!date.value){output.textContent='Choose an explicit test date.';return;}
+      let dimensions;try{dimensions=JSON.parse(input.value);}catch{output.textContent='Enter valid JSON dimensions.';return;}
+      run.disabled=true;output.textContent='Checking synthetic combinations…';
+      try{
+        const data=await request('/v1/process-catalog/decision-domain?'+new URLSearchParams(selected),
+          {as_of_date:date.value,dimensions});
+        if(!guard(selected,generation,attempt))return;verify(data,selected);report=data;download.disabled=false;
+        output.replaceChildren(el('h4','Coverage · saved revision '+data.reference.revision),
+          el('p',data.combinations+' / '+data.enumerated_combinations+' declared combinations checked for '+data.as_of_date+'.'),
+          el('p','Domain SHA-256: '+data.domain_sha256),
+          el('p','Witness vectors use zero-based choice indices in the submitted dimension order. The report omits input values.'));
+        for(const table of data.tables){
+          const group=el('details');group.open=true;
+          group.appendChild(el('summary',table.table_id+' · '+table.hit_policy));
+          group.appendChild(el('p',Object.entries(table.status_counts).map(([status,n])=>status+': '+n).join(' · ')));
+          if(table.required_decision_table_ids.length)group.appendChild(el('p','Requires: '+table.required_decision_table_ids.join(', ')));
+          if(table.undeclared_predicate_paths.length)group.appendChild(el('p','No explicit dimension or direct injection for: '+table.undeclared_predicate_paths.join(', ')));
+          for(const [status,vectors] of Object.entries(table.status_examples)){
+            group.appendChild(el('p',status+' example indices: '+vectors.map(v=>'['+v.join(', ')+']').join(' · ')));
+          }
+          const grid=el('table'),thead=el('thead'),head=el('tr'),tbody=el('tbody');
+          for(const title of ['Row','Matched','Selected','Unknown','Not evaluated','Shadowed','Finite-domain finding']){
+            const th=el('th',title);th.scope='col';head.appendChild(th);
+          }
+          thead.appendChild(head);grid.append(thead,tbody);
+          for(const row of table.rows){
+            const tr=el('tr');
+            const finding=row.fully_shadowed_when_matched_in_domain?'Fully shadowed when matched':
+              row.known_never_matches_in_domain?'Never matches in this domain':
+              row.never_selected_in_declared_domain?'Not selected in this domain':'Selected';
+            for(const value of [row.row_id,row.matched,row.selected,row.unknown,row.not_evaluated,row.shadowed_by_earlier_selection,finding])
+              tr.appendChild(el('td',value));
+            tbody.appendChild(tr);
+          }
+          const scroll=el('div');scroll.style.cssText='overflow-x:auto;max-width:100%';scroll.appendChild(grid);group.appendChild(scroll);
+          const pairs=el('details');pairs.appendChild(el('summary','Co-matching row pairs ('+table.co_matching_pairs.length+')'));
+          for(const pair of table.co_matching_pairs)pairs.appendChild(el('p',pair.row_ids.join(' + ')+': '+pair.both_matched_cases+
+            ' cases; witness ['+pair.witness_choice_indices.join(', ')+']'));
+          group.appendChild(pairs);output.appendChild(group);
+        }
+        output.appendChild(el('p','No facts, approvals, legal compliance, case distribution or execution permissions are verified.'));
+      }catch(error){if(guard(selected,generation,attempt))output.replaceChildren(el('p',error.message));}
+      finally{run.disabled=false;}
+    });
+    date.addEventListener('change',invalidate);input.addEventListener('input',invalidate);
+    section.addEventListener('owg-decision-domain-clear',()=>{invalidate();input.value='[]';date.value='';});
+    section.append(dateLabel,suggest,inputLabel,info,run,download,output);host.appendChild(section);
+  }
+
+  function clearRuleChecks(){document.getElementById('owgDecisionDomainResult')?.closest('details')?.dispatchEvent(new Event('owg-decision-domain-clear'));ruleCheckGeneration++;document.getElementById('owgCatalogRuleCheckResult')?.replaceChildren();}
   function clearSourceRuleChecks(){sourceRuleGeneration++;document.getElementById('owgCatalogSourceRuleResult')?.replaceChildren();}
   function clearOrigins(){originGeneration++;document.getElementById('owgCatalogOriginResult')?.replaceChildren();}
   function clearRevisionComparison(){revisionCompareGeneration++;document.getElementById('owgCatalogRevisionCompare')?.replaceChildren();}
-  function changed(invalidateTables=true){editGeneration++;document.getElementById('owgDecisionDomainResult')?.closest('details')?.dispatchEvent(new Event('owg-decision-domain-clear'));if(invalidateTables&&model?.decision_tables?.length){for(const t of model.decision_tables)t.user_confirmed=false;document.querySelectorAll("input[data-table-confirmation]").forEach(n=>{n.checked=false;});}clearOrigins();clearRevisionComparison();clearSourceRuleChecks();reviewed=false;const check=document.getElementById('owgCatalogReviewed');if(check)check.checked=false;clearShadowReview();clearRuleChecks();}
+  function changed(invalidateTables=true){editGeneration++;if(invalidateTables&&model?.decision_tables?.length){for(const t of model.decision_tables)t.user_confirmed=false;document.querySelectorAll("input[data-table-confirmation]").forEach(n=>{n.checked=false;});}clearOrigins();clearRevisionComparison();clearSourceRuleChecks();reviewed=false;const check=document.getElementById('owgCatalogReviewed');if(check)check.checked=false;clearShadowReview();clearRuleChecks();}
   function field(parent,title,value,apply,options){
     const label=el('label',title+' '),input=el(options?'select':'input');
     if(options)options.forEach(value=>{const option=el('option',value);option.value=value;input.appendChild(option);});
@@ -445,98 +537,6 @@
     }));
     host.appendChild(section);
   }
-  function renderDecisionDomainLab(host){
-    if(!record?.workflow_id||!record.revision||!record.content_sha256||!model.decision_tables?.length)return;
-    const section=el('details');section.appendChild(el('summary','Decision coverage lab'));
-    section.appendChild(el('p','Test synthetic inputs against the exact saved revision. Every combination in your finite domain is checked, but this does not prove general policy coverage. Do not enter real customer or employee facts.'));
-    const date=el('input');date.type='date';date.setAttribute('aria-label','Declared decision test date');
-    const dateLabel=el('label','Declared decision test date ');dateLabel.appendChild(date);
-    const input=el('textarea');input.rows=12;input.style.cssText='width:100%;box-sizing:border-box;font-family:monospace';
-    input.setAttribute('aria-label','Synthetic domain dimensions JSON');input.value='[]';
-    const inputLabel=el('label','Synthetic domain dimensions JSON');inputLabel.appendChild(input);
-    const info=el('p','Each dimension has a JSON pointer path and choices, each containing either a scalar value or {"missing":true}.');
-    const output=el('div');output.id='owgDecisionDomainResult';output.setAttribute('role','status');
-    let report=null, turn=0;
-    const download=button('Download minimized coverage report',()=>{
-      if(!report)return;
-      const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));
-      const a=el('a');a.href=url;a.download='owg-decision-coverage-r'+report.reference.revision+'.json';a.click();
-      setTimeout(()=>URL.revokeObjectURL(url),1000);
-    });download.disabled=true;
-    const invalidate=()=>{turn++;report=null;download.disabled=true;output.replaceChildren();};
-    const ref=()=>({workflow_id:record.workflow_id,revision:String(record.revision),content_sha256:record.content_sha256});
-    const guard=(selected,generation,attempt)=>output.isConnected&&generation===editGeneration&&attempt===turn&&
-      record?.workflow_id===selected.workflow_id&&String(record.revision)===selected.revision&&record.content_sha256===selected.content_sha256;
-    const verify=(data,selected)=>{
-      if(data.reference.workflow_id!==selected.workflow_id||String(data.reference.revision)!==selected.revision||
-         data.reference.content_sha256!==selected.content_sha256)throw new Error('Unexpected saved revision reference.');
-    };
-    const suggest=button('Suggest synthetic boundary choices',async()=>{
-      if(input.value.trim()!=='[]'&&!window.confirm('Replace the current synthetic dimensions with new suggestions?'))return;
-      invalidate();const selected=ref(),generation=editGeneration,attempt=turn;
-      suggest.disabled=true;
-      try{
-        const data=await request('/v1/process-catalog/decision-domain/suggestions?'+new URLSearchParams(selected));
-        if(!guard(selected,generation,attempt))return;verify(data,selected);
-        input.value=JSON.stringify(data.dimensions,null,2);
-        info.textContent=data.suggested_combinations+' suggested combinations; limit '+data.max_combinations+
-          '. Review and narrow the dimensions if needed. Suggestions are not an exhaustive partition.';
-        for(const item of data.omitted_paths)info.appendChild(el('span',' Omitted '+item.path+' ('+item.reason+').'));
-        if(data.clipped_paths.length)info.appendChild(el('span',' Choice limit reached for: '+data.clipped_paths.join(', ')+'.'));
-      }catch(error){if(guard(selected,generation,attempt))output.replaceChildren(el('p',error.message));}
-      finally{suggest.disabled=false;}
-    });
-    const run=button('Check finite decision domain',async()=>{
-      invalidate();const selected=ref(),generation=editGeneration,attempt=turn;
-      if(!date.value){output.textContent='Choose an explicit test date.';return;}
-      let dimensions;try{dimensions=JSON.parse(input.value);}catch{output.textContent='Enter valid JSON dimensions.';return;}
-      run.disabled=true;output.textContent='Checking synthetic combinations…';
-      try{
-        const data=await request('/v1/process-catalog/decision-domain?'+new URLSearchParams(selected),
-          {as_of_date:date.value,dimensions});
-        if(!guard(selected,generation,attempt))return;verify(data,selected);report=data;download.disabled=false;
-        output.replaceChildren(el('h4','Coverage · saved revision '+data.reference.revision),
-          el('p',data.combinations+' / '+data.enumerated_combinations+' declared combinations checked for '+data.as_of_date+'.'),
-          el('p','Domain SHA-256: '+data.domain_sha256),
-          el('p','Witness vectors use zero-based choice indices in the submitted dimension order. The report omits input values.'));
-        for(const table of data.tables){
-          const group=el('details');group.open=true;
-          group.appendChild(el('summary',table.table_id+' · '+table.hit_policy));
-          group.appendChild(el('p',Object.entries(table.status_counts).map(([status,n])=>status+': '+n).join(' · ')));
-          if(table.required_decision_table_ids.length)group.appendChild(el('p','Requires: '+table.required_decision_table_ids.join(', ')));
-          if(table.undeclared_predicate_paths.length)group.appendChild(el('p','No explicit dimension or direct injection for: '+table.undeclared_predicate_paths.join(', ')));
-          for(const [status,vectors] of Object.entries(table.status_examples)){
-            group.appendChild(el('p',status+' example indices: '+vectors.map(v=>'['+v.join(', ')+']').join(' · ')));
-          }
-          const grid=el('table'),thead=el('thead'),head=el('tr'),tbody=el('tbody');
-          for(const title of ['Row','Matched','Selected','Unknown','Not evaluated','Shadowed','Finite-domain finding']){
-            const th=el('th',title);th.scope='col';head.appendChild(th);
-          }
-          thead.appendChild(head);grid.append(thead,tbody);
-          for(const row of table.rows){
-            const tr=el('tr');
-            const finding=row.fully_shadowed_when_matched_in_domain?'Fully shadowed when matched':
-              row.known_never_matches_in_domain?'Never matches in this domain':
-              row.never_selected_in_declared_domain?'Not selected in this domain':'Selected';
-            for(const value of [row.row_id,row.matched,row.selected,row.unknown,row.not_evaluated,row.shadowed_by_earlier_selection,finding])
-              tr.appendChild(el('td',value));
-            tbody.appendChild(tr);
-          }
-          const scroll=el('div');scroll.style.cssText='overflow-x:auto;max-width:100%';scroll.appendChild(grid);group.appendChild(scroll);
-          const pairs=el('details');pairs.appendChild(el('summary','Co-matching row pairs ('+table.co_matching_pairs.length+')'));
-          for(const pair of table.co_matching_pairs)pairs.appendChild(el('p',pair.row_ids.join(' + ')+': '+pair.both_matched_cases+
-            ' cases; witness ['+pair.witness_choice_indices.join(', ')+']'));
-          group.appendChild(pairs);output.appendChild(group);
-        }
-        output.appendChild(el('p','No facts, approvals, legal compliance, case distribution or execution permissions are verified.'));
-      }catch(error){if(guard(selected,generation,attempt))output.replaceChildren(el('p',error.message));}
-      finally{run.disabled=false;}
-    });
-    date.addEventListener('change',invalidate);input.addEventListener('input',invalidate);
-    section.addEventListener('owg-decision-domain-clear',()=>{invalidate();input.value='[]';date.value='';});
-    section.append(dateLabel,suggest,inputLabel,info,run,download,output);host.appendChild(section);
-  }
-
   function renderEditor(){
     clearRevisionComparison();
     clearOrigins();
@@ -598,8 +598,8 @@
       'Inclusive splits run one or more branches: each branch has its own rule, and the join waits for exactly the branches that started. Rules stay unconfirmed until you confirm them. Generated projects check that a plan is a valid token flow and list the rules of the branches it chose; they do not evaluate those rules.'));
     host.appendChild(button('Refresh graph preview',()=>renderEditor()));
     renderDifferenceReview(host);
-    renderDecisionDomainLab(host);
     const mutate=fn=>{fn();changed();renderEditor();};
+    renderDecisionDomainLab(host);
     model.activities.forEach((activity,index)=>{
       const row=el('fieldset');row.appendChild(el('legend',activity.id));
       const label=field(row,'Activity '+activity.id,activity.label,value=>activity.label=value);label.id='owgCatalogActivity'+index;
