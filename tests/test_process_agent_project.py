@@ -33,7 +33,7 @@ def test_export_is_deterministic_safe_and_runs_synthetic_shadow_suite(tmp_path):
     archive=build_runtime_project(value)
     assert archive==build_runtime_project(value)
     with ZipFile(BytesIO(archive)) as zipfile:
-        assert len(zipfile.namelist())==32  # signed sender, operator stop and pinned release files
+        assert len(zipfile.namelist())==33  # includes portable synthetic acceptance checker
         assert 'send_report.py' in zipfile.namelist()
         assert 'stop.py' in zipfile.namelist()
         assert 'owg_report_signing.py' in zipfile.namelist()

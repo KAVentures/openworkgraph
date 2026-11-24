@@ -10,7 +10,9 @@ import sys
 
 import pytest
 
+from server import event_log_activity_mappings as mappings
 from server import event_log_cases as cases
+from server import event_log_hidden_activities as hidden
 from server import event_log_filter_sets as filter_sets
 from server import event_log_workspace as workspace
 
@@ -83,6 +85,37 @@ def test_import_creates_an_independent_filter_and_validates_the_destination():
         with pytest.raises(workspace.EventLogWorkspaceError):
             filter_sets.import_set(destination, invalid)
     assert len(filter_sets.list_sets(destination)["filter_sets"]) == 1
+
+
+def test_preview_import_checks_nested_activity_labels_without_saving():
+    log = _log()
+    doc = {"format": filter_sets.FORMAT, "name": "Both", "cohort": {
+        "all_of": [{"activity": "Check"}, {"follows": [{"from": "Check", "to": "Unknown"}]}]}}
+    preview = filter_sets.preview_import(log, doc)
+    assert preview["matching_cases"] == 0 and preview["cases_before_filter"] == 9
+    assert preview["activities_not_in_log"] == ["Unknown"]
+    assert filter_sets.list_sets(log)["filter_sets"] == []
+    filter_sets.import_set(log, preview["definition"])
+    assert filter_sets.list_sets(log)["filter_sets"][0]["activities_not_in_log"] == ["Unknown"]
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        filter_sets.preview_import(log, {**doc, "case_type": "missing"})
+
+
+def test_availability_uses_visible_mapped_labels_instead_of_raw_events():
+    log = _log()
+    filter_sets.save(log, {"name": "Mapped", "cohort": {"activity": "Review"}})
+    filter_sets.save(log, {"name": "Raw", "cohort": {"activity": "Check", "without_activity": "Fix"}})
+    mapping = mappings.create(log, {"name": "Group review",
+                                    "groups": [{"label": "Review", "activities": ["Check", "Fix"]}],
+                                    "collapse_repeats": True})
+    mappings.apply_mapping(log, mapping["mapping_id"])
+    statuses = {entry["name"]: entry["activities_not_in_log"] for entry in filter_sets.list_sets(log)["filter_sets"]}
+    assert statuses == {"Mapped": [], "Raw": ["Check", "Fix"]}
+    assert workspace.summary(log, cohort={"activity": "Review"})["cases"] == 9
+    hidden.set_hidden(log, {"activities": ["Check", "Fix"]})
+    statuses = {entry["name"]: entry["activities_not_in_log"] for entry in filter_sets.list_sets(log)["filter_sets"]}
+    assert statuses == {"Mapped": ["Review"], "Raw": ["Check", "Fix"]}
+    assert workspace.summary(log, cohort={"activity": "Review"})["cases"] == 0
 
 
 def test_filter_sets_are_validated():

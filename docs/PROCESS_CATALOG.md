@@ -328,3 +328,20 @@ structural analysis. SDK projects now support complete node-firing plans with
 serial customer-authorized execution across every required branch and join.
 Complete nested paired blocks are supported within the 40-node model limit;
 conditional regions remain unsupported.
+
+## Local process prerequisites
+
+Open a saved design and select **Review prerequisites**. Load the saved designs,
+choose a prerequisite, then record whether the selected process uses its output
+or policy and why. Confirm the exact revisions before saving. OWG pins both
+designs by revision and content digest and rejects cycles or concurrent edits.
+To clear the current declaration, remove the entries and save an empty revision.
+
+A new revision makes the earlier pin superseded. Review the latest revision
+before choosing **Use latest** and saving a new declaration. **Potential
+consumers** shows direct and indirect relationships from saved declarations.
+Deleting a saved design also deletes its own declarations. Other designs keep
+their pins and show the deleted prerequisite as unavailable.
+
+These declarations stay in the local reviewed catalog. The dashboard reads and
+saves them through `GET|POST /v1/process-catalog/prerequisites?workflow_id=...`.

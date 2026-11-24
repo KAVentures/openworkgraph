@@ -1084,6 +1084,52 @@ def _group_export_cursor(cursor):
         yield current, bucket, trace_attributes
 
 
+def _ocel_export_projection(conn, log_id, *, matching=False):
+    """Read the whole log or the original events selected in dv_events."""
+    object_filter = event_filter = attribute_filter = ""
+    if matching:
+        # Expand once to the objects linked to the selected events. Do not
+        # bring in other events or objects through those objects' edges.
+        conn.execute("""CREATE TEMP TABLE ocel_export_objects AS
+            SELECT DISTINCT links.object_id FROM event_objects links
+            SEMI JOIN dv_events selected USING (event_id)
+            WHERE links.log_id = ?""", [log_id])
+        object_filter = "AND object_id IN (SELECT object_id FROM ocel_export_objects)"
+        attribute_filter = "AND o.object_id IN (SELECT object_id FROM ocel_export_objects)"
+        event_filter = "AND event_id IN (SELECT event_id FROM dv_events)"
+    # Refuse before writing anything: a re-import keeps MAX_ATTRIBUTES names per object.
+    if conn.execute(f"""SELECT 1 FROM (SELECT object_id, name FROM object_attribute_values WHERE log_id = ? {object_filter}
+            UNION SELECT o.object_id, j.key FROM objects o, json_each(o.attributes) j WHERE o.log_id = ? {attribute_filter})
+            GROUP BY object_id HAVING count(*) > {MAX_ATTRIBUTES} LIMIT 1""", [log_id, log_id]).fetchone():
+        raise EventLogWorkspaceError(
+            f"an object has more than {MAX_ATTRIBUTES} attribute names, more than an OCEL re-import keeps; "
+            "no OCEL file was written")
+    try:
+        relationships = object_relationships.export_map(conn, log_id, matching=matching)
+    except EventLogFormatError as exc:
+        raise EventLogWorkspaceError(str(exc)) from None
+    history: dict[str, list[tuple[str, datetime, str]]] = {}
+    for object_id, name, at, value in conn.execute(
+            f"SELECT object_id, name, valid_from, value FROM object_attribute_values WHERE log_id = ? {object_filter} ORDER BY 1, 2, 3, 4",
+            [log_id]).fetchall():
+        history.setdefault(object_id, []).append((name, at.replace(tzinfo=timezone.utc), value))
+    objects = [{"object_id": i, "object_type": t, "attributes": json.loads(a or "{}"),
+                "history": history.get(i, []), "relationships": relationships.get(i, [])}
+               for i, t, a in conn.execute("SELECT object_id, object_type, attributes FROM objects "
+                                           f"WHERE log_id = ? {object_filter} ORDER BY 1", [log_id]).fetchall()]
+    links: dict[str, list[tuple[str, str]]] = {}
+    for event_id, object_id, qualifier in conn.execute(
+            f"SELECT event_id, object_id, qualifier FROM event_objects WHERE log_id = ? {event_filter} ORDER BY 1, 2",
+            [log_id]).fetchall():
+        links.setdefault(event_id, []).append((object_id, qualifier))
+    events = [{"event_id": i, "activity": a, "timestamp": ts.replace(tzinfo=timezone.utc),
+               "attributes": json.loads(attr or "{}"), "objects": links.get(i, [])}
+              for i, a, ts, attr in conn.execute(
+                  "SELECT event_id, activity, ts, attributes FROM events WHERE log_id = ? "
+                  f"{event_filter} ORDER BY ts, event_id", [log_id]).fetchall()]
+    return objects, events
+
+
 def export_log(log_id: str, export_format: str, out: IO[str], case_type: str | None = None) -> None:
     if export_format in ('sourcecsv', 'sourcecsv-review'):
         with _LOCK:
@@ -1111,36 +1157,7 @@ def export_log(log_id: str, export_format: str, out: IO[str], case_type: str | N
             conn = _connect()
             try:
                 _check_log(conn, log_id)
-                # Refuse before writing anything: a re-import keeps MAX_ATTRIBUTES names per object.
-                if conn.execute(f"""SELECT 1 FROM (SELECT object_id, name FROM object_attribute_values WHERE log_id = ?
-                        UNION SELECT o.object_id, j.key FROM objects o, json_each(o.attributes) j WHERE o.log_id = ?)
-                        GROUP BY object_id HAVING count(*) > {MAX_ATTRIBUTES} LIMIT 1""", [log_id, log_id]).fetchone():
-                    raise EventLogWorkspaceError(
-                        f"an object has more than {MAX_ATTRIBUTES} attribute names, more than an OCEL re-import keeps; "
-                        "no OCEL file was written")
-                try:
-                    relationships=object_relationships.export_map(conn,log_id)
-                except EventLogFormatError as exc:
-                    raise EventLogWorkspaceError(str(exc)) from None
-                history: dict[str, list[tuple[str, datetime, str]]] = {}
-                for object_id, name, at, value in conn.execute(
-                        "SELECT object_id, name, valid_from, value FROM object_attribute_values WHERE log_id = ? ORDER BY 1, 2, 3, 4",
-                        [log_id]).fetchall():
-                    history.setdefault(object_id, []).append((name, at.replace(tzinfo=timezone.utc), value))
-                objects = [{"object_id": i, "object_type": t, "attributes": json.loads(a or "{}"),
-                            "history": history.get(i, []), "relationships":relationships.get(i,[])}
-                           for i, t, a in conn.execute("SELECT object_id, object_type, attributes FROM objects "
-                                                       "WHERE log_id = ? ORDER BY 1", [log_id]).fetchall()]
-                links: dict[str, list[tuple[str, str]]] = {}
-                for event_id, object_id, qualifier in conn.execute(
-                        "SELECT event_id, object_id, qualifier FROM event_objects WHERE log_id = ? ORDER BY 1, 2",
-                        [log_id]).fetchall():
-                    links.setdefault(event_id, []).append((object_id, qualifier))
-                events = [{"event_id": i, "activity": a, "timestamp": ts.replace(tzinfo=timezone.utc),
-                           "attributes": json.loads(attr or "{}"), "objects": links.get(i, [])}
-                          for i, a, ts, attr in conn.execute(
-                              "SELECT event_id, activity, ts, attributes FROM events WHERE log_id = ? "
-                              "ORDER BY ts, event_id", [log_id]).fetchall()]
+                objects, events = _ocel_export_projection(conn, log_id)
             finally:
                 conn.close()
         (write_ocel_json if export_format == "ocel" else write_ocel_xml)(objects, events, out)

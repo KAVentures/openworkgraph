@@ -787,8 +787,124 @@
     })));
     }
     host.appendChild(actions);
-    if(record.revision&&restorationDraft?.kind!=='rediscovery'){renderRuleChecks(host);renderSourceRuleChecks(host);renderShadowReview(host);renderClarification(host);renderDMNImport(host);renderRuleLibrary(host);}
+    if(record.revision&&restorationDraft?.kind!=='rediscovery'){renderRuleChecks(host);renderSourceRuleChecks(host);renderShadowReview(host);renderClarification(host);renderDMNImport(host);renderRuleLibrary(host);renderPrerequisites(host);}
     const historyHost=el('div');historyHost.id='owgCatalogHistory';host.appendChild(historyHost);
+  }
+  function renderPrerequisites(host){
+    const selected=record,section=el('section');section.id='owgCatalogPrerequisites';
+    const output=el('div'),message=el('p');message.setAttribute('role','status');
+    const endpoint='/v1/process-catalog/prerequisites?'+new URLSearchParams({workflow_id:selected.workflow_id});
+    const current=()=>record===selected&&section.isConnected;
+    const pin=item=>({workflow_id:item.workflow_id,revision:item.revision,content_sha256:item.content_sha256});
+    const stateLabel={current:'Current',superseded:'Newer revision available',unavailable:'Pinned revision unavailable'};
+    const labelled=(label,control)=>{
+      control.setAttribute('aria-label',label);
+      const field=el('label',label+' ');field.append(control);return field;
+    };
+    function render(data){
+      const sameRevision=selected.revision===data.root.revision&&selected.content_sha256===data.root.content_sha256;
+      let links=data.links.map(link=>copy(link)),after='';
+      const rows=el('div'),candidates=el('select');candidates.append(new Option('Choose a saved design',''));
+      const choices=new Map();
+      const confirm=el('input');confirm.type='checkbox';
+      const saveLinks=button('Save prerequisites',()=>locked(async()=>{
+        if(!confirm.checked)return;
+        try{
+          const result=await request(endpoint,{expected_revision:data.declaration?.revision||0,root_process:pin(selected),
+            links:links.map(({id,prerequisite,relationship,reason})=>({id,prerequisite,relationship,reason})),
+            user_confirmed:true});
+          if(!current())return;
+          render(result);message.textContent='Saved prerequisite revision '+result.declaration.revision+'.';
+        }catch(error){if(current())message.textContent=error.message;}
+      }));
+      function updateSave(){
+        saveLinks.disabled=!sameRevision||!confirm.checked||links.some(link=>!link.reason.trim());
+      }
+      function changedLinks(){
+        confirm.checked=false;updateSave();
+      }
+      confirm.onchange=updateSave;
+      function drawLinks(){
+        rows.replaceChildren();
+        for(const link of links){
+          const id=link.prerequisite.workflow_id,resolution=link.resolution;
+          const title=resolution.pinned?.title||resolution.latest?.title||id;
+          const item=el('fieldset'),relation=el('select'),reason=el('input');
+          item.append(el('legend',title+' · r'+link.prerequisite.revision));
+          relation.append(new Option('Uses an output','uses_output'),new Option('Uses a policy','uses_policy'));
+          relation.value=link.relationship;reason.maxLength=500;reason.value=link.reason;
+          relation.disabled=reason.disabled=!sameRevision;
+          relation.onchange=()=>{link.relationship=relation.value;changedLinks();};
+          reason.oninput=()=>{link.reason=reason.value;changedLinks();};
+          item.append(el('p',stateLabel[resolution.state]),labelled('Relationship for '+title,relation),labelled('Reason for '+title,reason));
+          const latest=resolution.latest;
+          if(sameRevision&&latest&&resolution.state!=='current'){
+            item.append(button('Use latest '+title+' · r'+latest.revision,()=>{
+              link.prerequisite=pin(latest);link.resolution={state:'current',pinned:latest,latest};
+              changedLinks();drawLinks();
+            }));
+          }
+          if(sameRevision)item.append(button('Remove '+title,()=>{
+            links=links.filter(candidate=>candidate!==link);changedLinks();drawLinks();
+          }));
+          rows.append(item);
+        }
+        if(!links.length)rows.append(el('p','No prerequisites in this declaration.'));
+      }
+      const more=button('Load saved designs for prerequisites',()=>locked(async()=>{
+        try{
+          const page=await request('/v1/process-catalog?'+new URLSearchParams({after,limit:'50'}));
+          if(!current()||!output.contains(candidates))return;
+          for(const item of page.processes){
+            if(item.workflow_id===selected.workflow_id||choices.has(item.workflow_id))continue;
+            choices.set(item.workflow_id,item);
+            candidates.append(new Option(item.title+' · r'+item.revision,item.workflow_id));
+          }
+          after=page.next_after||'';
+          more.disabled=!page.has_more;more.textContent=page.has_more?'Load more saved designs':'Saved designs loaded';
+        }catch(error){if(current())message.textContent=error.message;}
+      }));
+      const add=button('Add prerequisite',()=>{
+        const item=choices.get(candidates.value);
+        if(!item)return;
+        if(links.some(link=>link.prerequisite.workflow_id===item.workflow_id)){
+          message.textContent='This design is already a prerequisite.';return;
+        }
+        if(links.length>=20){message.textContent='A design can have up to 20 prerequisites.';return;}
+        let number=1;
+        while(links.some(link=>link.id==='local_'+number))number++;
+        links.push({id:'local_'+number,prerequisite:pin(item),reason:'',relationship:'uses_output',
+          resolution:{state:'current',pinned:item,latest:item}});
+        candidates.value='';changedLinks();drawLinks();
+      });
+      output.replaceChildren(el('h5','Direct prerequisites'),
+        el('p',data.declaration?'Declaration r'+data.declaration.revision+' · '+stateLabel[data.root_resolution.state]+' root basis.':
+          'No prerequisite declaration has been saved for this design.'),rows);
+      if(sameRevision)output.append(more,labelled('Prerequisite design',candidates),add,
+        labelled('I reviewed these exact prerequisite revisions',confirm),saveLinks);
+      else output.append(el('p','Open the latest saved revision to edit this design’s prerequisites.'));
+      const consumers=el('ul');
+      for(const item of data.potential_consumers){
+        const title=item.pinned?.title||item.latest?.title||item.process.workflow_id;
+        consumers.append(el('li',title+' · r'+item.process.revision+
+          (item.distance===1?' · Pins this design at r'+item.direct_prerequisite_revision+
+            (item.direct_prerequisite_current?'':' · Prerequisite needs review'):
+            ' · Through '+item.distance+' links')+' · '+stateLabel[item.state]));
+      }
+      output.append(el('h5','Potential consumers'),data.potential_consumers.length?consumers:
+        el('p','No saved declarations identify a consumer.'));
+      drawLinks();updateSave();
+    }
+    const refresh=button('Review prerequisites',()=>locked(async()=>{
+      message.textContent='Loading prerequisite declarations…';
+      try{
+        const data=await request(endpoint);
+        if(current()){render(data);message.textContent='';}
+      }catch(error){if(current())message.textContent=error.message;}
+    }));
+    section.append(el('h4','Process prerequisites'),
+      el('p','Pin the saved designs whose outputs or policies this process uses.'),refresh,message,output);
+    host.append(section);
   }
   function renderRuleChecks(host){
     const section=el('section');section.append(el('h4','Check declared conditions against case facts'),
@@ -1009,33 +1125,103 @@
     host.appendChild(section);
   }
   function renderDMNImport(host){
-    const decisions=(record.process_model?.activities||[]).filter(a=>a.kind==='decision');
+    const decisions=(record.process_model?.activities||[]).filter(activity=>activity.kind==='decision');
     if(!decisions.length)return;
     const section=el('section');section.id='owgCatalogDMN';
-    section.append(el('h4','Import a DMN decision table'),el('p','Read one DMN decision table into a decision of this saved design. Only simple conditions (=, not, <, <=, >, >=, lists, null) and one output naming the next step are accepted. Imported rules and the table start unconfirmed and are opened in the editor; nothing is saved until you review and save.'));
-    const decision=el('select');decision.setAttribute('aria-label','Decision step');
-    decisions.forEach(d=>{const o=el('option',d.label);o.value=d.id;decision.appendChild(o);});
-    const from=el('input');from.type='date';from.setAttribute('aria-label','Effective from');
-    const file=el('input');file.type='file';file.accept='.dmn,.xml,application/xml';file.setAttribute('aria-label','Choose DMN file');
+    section.append(el('h4','Import DMN decision tables'),
+      el('p','Choose a DMN file, map its tables to decisions in this design, and preview them together. Imported tables and rules start unconfirmed.'));
+    const from=el('input');from.type='date';
+    const until=el('input');until.type='date';
+    const file=el('input');file.type='file';file.accept='.dmn,.xml,application/xml';
+    const labelled=(title,control)=>{
+      const label=el('label',title+' ');control.setAttribute('aria-label',title);label.append(control);return label;
+    };
+    const settings=el('div');settings.className='row';
     const output=el('div');output.setAttribute('role','status');
-    section.append(decision,from,file,button('Preview DMN table',()=>locked(async()=>{
-      const selected=record,source=file.files?.[0];
-      if(!source||source.size>256*1024)throw new Error('Choose a DMN file of at most 256 KiB.');
-      if(!from.value)throw new Error('Enter the date the table takes effect.');
+    const mappings=el('div');
+    const proposal=el('div');
+    let inspection=null, choices=[], edit=0;
+    const resetProposal=()=>{++edit;proposal.replaceChildren();output.textContent='';};
+    file.onchange=()=>{
+      inspection=null;choices=[];mappings.replaceChildren();resetProposal();
+      preview.disabled=true;
+    };
+    from.oninput=until.oninput=resetProposal;
+    async function send(suffix,parameters,source){
       await window.__owgAuthReady;
-      const response=await fetch('/v1/process-catalog/import-dmn?'+new URLSearchParams({workflow_id:selected.workflow_id,revision:String(selected.revision),
-        decision_activity_id:decision.value,effective_from:from.value}),{method:'POST',headers:{'Content-Type':'application/xml'},body:source,cache:'no-store'});
+      const query=parameters?'?'+new URLSearchParams(parameters):'';
+      const response=await fetch('/v1/process-catalog/import-dmn/'+suffix+query,
+        {method:'POST',headers:{'Content-Type':'application/xml'},body:source,cache:'no-store'});
       const value=await response.json().catch(()=>({}));
-      if(!response.ok)throw new Error(String(value.detail||'DMN import failed'));
-      if(record!==selected)return;
-      output.replaceChildren(el('p',value.proposed_rules.length+' unconfirmed rules · '+value.hit_policy+' hit policy'));
-      const list=el('ul');value.proposed_rules.forEach(r=>list.appendChild(el('li',r.text)));output.appendChild(list);
-      output.appendChild(button('Open proposal in editor',()=>{
-        if(model&&!window.confirm('Replace the editor contents with this DMN proposal?'))return;
-        model=copy(value.proposed_process_model);reviewed=false;renderEditor();
-        status('Opened the DMN proposal as unsaved edits of revision '+selected.revision+'. Review and confirm its rules, then save a new revision.');
+      if(!response.ok)throw new Error(typeof value.detail==='string'?value.detail:'DMN request failed');
+      return value;
+    }
+    const inspect=button('Inspect DMN file',()=>locked(async()=>{
+      const selected=record,source=file.files?.[0];
+      if(!source||source.size>256*1024){output.textContent='Choose a DMN file of at most 256 KiB.';return;}
+      file.onchange();
+      const current=()=>record===selected&&file.files?.[0]===source&&section.isConnected;
+      output.textContent='Inspecting the DMN file…';
+      try{
+        const result=await send('inspect',null,source);
+        if(!current())return;
+        inspection=result;choices=[];
+        for(const item of result.decisions){
+          const row=el('div');row.className='row';
+          const title='Table '+(item.index+1)+(item.name?' · '+item.name:'');
+          row.append(el('span',title+' · '+item.hit_policy+' · '+item.rule_count+' rules'));
+          if(item.unsupported_reason)row.append(el('span',item.unsupported_reason));
+          else{
+            const select=el('select');
+            select.append(new Option('Skip this table',''));
+            for(const decision of decisions)select.append(new Option(decision.label,decision.id));
+            select.onchange=resetProposal;
+            choices.push({item,select});
+            row.append(labelled('Design decision for '+title,select));
+          }
+          mappings.append(row);
+        }
+        if(choices.length===1&&decisions.length===1)choices[0].select.value=decisions[0].id;
+        preview.disabled=choices.length===0;
+        output.textContent=result.decisions.length+' tables found.';
+      }catch(error){if(current())output.textContent=error.message;}
+    }));
+    const preview=button('Preview selected DMN tables',()=>locked(async()=>{
+      if(!inspection)return;
+      const selected=record,source=file.files?.[0],ticket=++edit;
+      const current=()=>record===selected&&file.files?.[0]===source&&ticket===edit&&section.isConnected;
+      proposal.replaceChildren();
+      const assignments=choices.filter(choice=>choice.select.value).map(({item,select})=>({
+        index:item.index,decision_activity_id:select.value
       }));
-    })),output);
+      if(!from.value||assignments.length===0){output.textContent='Choose at least one design decision and enter the effective start date.';return;}
+      if(new Set(assignments.map(item=>item.decision_activity_id)).size!==assignments.length){
+        output.textContent='Choose a different design decision for each table.';return;
+      }
+      output.textContent='Checking the selected tables…';
+      try{
+        const result=await send('batch',{workflow_id:selected.workflow_id,revision:String(selected.revision),
+          document_sha256:inspection.document_sha256,assignments:JSON.stringify(assignments),effective_from:from.value,
+          ...(until.value?{effective_until:until.value}:{})},source);
+        if(!current())return;
+        output.textContent=result.proposals.length+' tables ready for review.';
+        for(const item of result.proposals){
+          const summary=el('details'),list=el('ul');
+          const decision=decisions.find(activity=>activity.id===item.decision_activity_id);
+          for(const rule of item.proposed_rules)list.append(el('li',rule.text));
+          summary.append(el('summary',decision.label+' · '+item.hit_policy+' · '+item.proposed_rules.length+' unconfirmed rules'),list);
+          proposal.append(summary);
+        }
+        proposal.append(button('Open proposal in editor',()=>{
+          if(!current()||!replaceDraft())return;
+          model=copy(result.proposed_process_model);reviewed=false;renderEditor();
+          status('Opened the DMN tables as unsaved edits of revision '+selected.revision+'. Review and confirm the tables and rules before saving.');
+        }));
+      }catch(error){if(current())output.textContent=error.message;}
+    }));
+    preview.disabled=true;
+    settings.append(labelled('Choose DMN file',file),inspect);
+    section.append(settings,mappings,labelled('DMN effective from',from),labelled('DMN effective until (optional)',until),preview,output,proposal);
     host.appendChild(section);
   }
   function renderClarification(host){
@@ -1211,23 +1397,73 @@
       (result.catalog_scan_truncated||result.ranked_results_truncated?'This ranked view is bounded; additional records are omitted.':'All local reviewed-knowledge pages were considered.')));
   }
   function installBPMNImport(parent){
-    const section=el('details');section.id='owgBPMNImport';section.appendChild(el('summary','Import a BPMN design as an unreviewed draft'));
-    section.appendChild(el('p','Select an authorized UTF-8 BPMN 2.0 file (128 KiB maximum). Preview supports tasks, plain start/end events, exclusive choices/merges and paired parallel gateways with disjoint unconditional branches and complete nested paired blocks. Plain embedded subprocesses (one start and end, no loops, boundary or event triggers) are inlined and their grouping is shown. Paired inclusive gateways, interrupting error/timer/escalation boundary events, sequential task loops, call activities, black-box pools with message flows, and lanes are supported. Conditional parallel regions, unpaired inclusive gateways, other subprocesses, call activities, event triggers, multi-process collaborations and executable extensions are rejected. XML never executes. No process is saved until separate graph review and Save.'));
+    const section=el('details');section.id='owgBPMNImport';
+    section.append(el('summary','Import a BPMN design as an unreviewed draft'),
+      el('p','Choose a UTF-8 BPMN 2.0 file of at most 128 KiB. Preview a single-process file directly, or inspect the file and choose an independent process. Review and save the draft separately.'));
     const file=el('input');file.type='file';file.accept='.bpmn,.xml,application/xml,application/bpmn+xml';
     file.setAttribute('aria-label','Choose BPMN process design');
-    const preview=button('Preview selected BPMN',()=>previewBPMN(file));preview.id='owgBPMNPreview';preview.disabled=true;
-    file.addEventListener('change',()=>{importGeneration++;importDraft=null;preview.disabled=!file.files?.length;
-      document.getElementById('owgBPMNImportResult').replaceChildren();});
-    const output=el('div');output.id='owgBPMNImportResult';section.append(file,preview,output);parent.appendChild(section);
+    const manifest=el('div'),message=el('p');message.setAttribute('role','status');
+    const options=el('select');options.setAttribute('aria-label','BPMN process');
+    const choice=el('label','Process to preview ');choice.append(options);choice.hidden=true;
+    const output=el('div');output.id='owgBPMNImportResult';
+    let sourceDigest=null;
+    const preview=button('Preview selected BPMN',()=>previewBPMN(file,choice.hidden?null:{
+      process_id:options.value,expected_source_sha256:sourceDigest
+    }));preview.id='owgBPMNPreview';preview.disabled=true;
+    const inspect=button('Inspect BPMN file',async()=>{
+      const source=file.files?.[0];
+      if(!source)return;
+      if(source.size>128*1024){message.textContent='BPMN exceeds the 128 KiB limit.';return;}
+      const attempt=++importGeneration;
+      importDraft=null;sourceDigest=null;output.replaceChildren();manifest.replaceChildren();choice.hidden=true;
+      preview.disabled=inspect.disabled=true;
+      message.textContent='Reading the process list…';
+      try{
+        await window.__owgAuthReady;
+        const response=await fetch('/v1/process-catalog/import-bpmn/inspect',{
+          method:'POST',headers:{'Content-Type':'application/bpmn+xml'},body:source,cache:'no-store'
+        });
+        const result=await response.json().catch(()=>({}));
+        if(attempt!==importGeneration)return;
+        if(!response.ok)throw new Error(typeof result.detail==='string'?result.detail:'BPMN inspection failed');
+        sourceDigest=result.source_sha256;
+        const placeholder=el('option','Choose a process');placeholder.value='';options.replaceChildren(placeholder);
+        let eligible=0;
+        result.processes.forEach((item,index)=>{
+          const label=item.name||'Process '+(index+1);
+          if(item.blocking_reason){manifest.append(el('p',label+' · '+item.blocking_reason));return;}
+          if(!item.id)return;
+          const option=el('option',label+' · '+item.id);option.value=item.id;options.append(option);eligible++;
+        });
+        choice.hidden=eligible===0;
+        message.textContent=result.processes.length+' '+(result.processes.length===1?'process':'processes')+' found.';
+        if(result.processes.length===1){
+          if(eligible===1)options.selectedIndex=1;
+          preview.disabled=false;
+        }
+      }catch(error){if(attempt===importGeneration)message.textContent=error.message;}
+      finally{if(attempt===importGeneration)inspect.disabled=false;}
+    });inspect.disabled=true;
+    options.addEventListener('change',()=>{
+      importGeneration++;importDraft=null;output.replaceChildren();preview.disabled=!options.value;inspect.disabled=false;
+    });
+    file.addEventListener('change',()=>{
+      importGeneration++;importDraft=null;sourceDigest=null;choice.hidden=true;options.replaceChildren();
+      preview.disabled=inspect.disabled=!file.files?.length;
+      output.replaceChildren();manifest.replaceChildren();message.textContent='';
+    });
+    section.append(file,inspect,message,manifest,choice,preview,output);
+    parent.appendChild(section);
   }
-  async function previewBPMN(input){
+  async function previewBPMN(input,selection){
     const file=input.files?.[0];if(!file)return;
     if(file.size>128*1024)throw new Error('BPMN exceeds the 128 KiB limit.');
     const attempt=++importGeneration,control=document.getElementById('owgBPMNPreview');control.disabled=true;
     importDraft=null;const host=document.getElementById('owgBPMNImportResult');host.replaceChildren(el('p','Inspecting BPMN as data; nothing is saved…'));
     try{
       await window.__owgAuthReady;
-      const response=await fetch('/v1/process-catalog/import-bpmn',{
+      const query=selection?'?'+new URLSearchParams(selection):'';
+      const response=await fetch('/v1/process-catalog/import-bpmn'+query,{
         method:'POST',headers:{'Content-Type':'application/bpmn+xml'},body:file,cache:'no-store'});
       const value=await response.json().catch(()=>({}));
       if(attempt!==importGeneration)return;
@@ -1236,6 +1472,7 @@
       importDraft=value;
       host.replaceChildren(el('h4','Unreviewed BPMN draft'),el('p',value.process_model.activities.length+' nodes · '+value.process_model.transitions.length+
         ' transitions · '+value.process_model.business_rules.length+' unconfirmed rules. Source SHA256 '+value.source_sha256));
+      if(value.selected_process)host.appendChild(el('p','Selected process: '+(value.selected_process.name||value.selected_process.id)));
       host.appendChild(el('p','This is declared design structure, with no observed executions, source outcomes, approved policy or execution rights. Typed tasks have no imported tool mappings. All rule text is untrusted and unevaluated.'));
       const warnings=el('ul');value.warnings.forEach(text=>warnings.appendChild(el('li',text.replaceAll('_',' '))));host.appendChild(warnings);
       if(value.label_corrections.length){
@@ -1271,7 +1508,7 @@
     if(busy)throw new Error('Wait for the current process request.');
     if(value!==importDraft)throw new Error('Preview the selected BPMN again before opening its draft.');
     if(!replaceDraft())return;
-    restorationDraft=null;record={workflow_id:null,revision:0,title:'Imported BPMN design',evidence_refs:[]};
+    restorationDraft=null;record={workflow_id:null,revision:0,title:value.selected_process?.name||'Imported BPMN design',evidence_refs:[]};
     model=copy(value.process_model);record.process_model=copy(model);reviewed=false;renderEditor();
     status('Opened an unsaved declared BPMN design. Review its goal, labels, branch rules and source documentation before saving. No observations, permissions or executable implementations were imported.');
     document.getElementById('owgCatalogEditor')?.scrollIntoView({block:'start'});

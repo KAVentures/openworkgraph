@@ -94,6 +94,34 @@ def test_cohorts_limit_and_settings_validation():
 
 
 @pytest.mark.parametrize("estimator", ["completed_cases", "survival"])
+def test_live_prediction_ranking_changes_only_selection_order(estimator):
+    log = _log(open_cases=(
+        ("z-old", [("Receive", -60), ("Check", 0)]),
+        ("a-old", [("Receive", -60), ("Check", 0)]),
+        ("idle", [("Receive", -30), ("Check", -29)]),
+        ("risk", [("Receive", 0), ("Fix", 1)]),
+    ))
+    spec = {"end_activities": ["Close"], "estimator": estimator,
+            "outcome": {"kind": "contains_activity", "activity": "Fix"}}
+    automatic = predictions.predict(log, spec)
+    assert automatic["ranked_by"] == "outcome" and automatic["predictions"][0]["case_id"] == "risk"
+    ranked = predictions.predict(log, {**spec, "limit": 2}, rank_by="age")
+    assert ranked["ranked_by"] == "age" and ranked["predictions_truncated"] is True
+    assert list(_by_case(ranked)) == ["a-old", "z-old"]
+    assert ranked["predicted_open_cases"] == 4
+    for field, value in automatic["backtest"].items():
+        assert ranked["backtest"][field] == (pytest.approx(value) if isinstance(value, float) else value)
+    assert all(item == _by_case(automatic)[item["case_id"]] for item in ranked["predictions"])
+    idle = predictions.predict(log, spec, rank_by="idle")
+    assert list(_by_case(idle)) == ["idle", "a-old", "z-old", "risk"]
+    remaining = predictions.predict(log, spec, rank_by="remaining")
+    assert sorted(remaining["predictions"], key=lambda item: (item["median_remaining_seconds"] is not None,
+                  -(item["median_remaining_seconds"] or 0), item["case_id"])) == remaining["predictions"]
+    with pytest.raises(workspace.EventLogWorkspaceError, match="choose an outcome"):
+        predictions.predict(log, {"end_activities": ["Close"]}, rank_by="outcome")
+
+
+@pytest.mark.parametrize("estimator", ["completed_cases", "survival"])
 def test_exact_open_case_preserves_model_and_cohort(estimator):
     log = _log()
     spec = {"end_activities": ["Close"], "estimator": estimator}
@@ -138,6 +166,9 @@ with TestClient(app) as client:
     assert result.status_code == 200 and result.headers["cache-control"] == "no-store", result.text
     assert result.json()["predictions"][0]["case_id"] == "open"
     assert result.json()["predictions"][0]["median_remaining_seconds"] == 7200
+    assert client.post(path + "?rank_by=idle", json=body, headers=headers).json()["ranked_by"] == "idle"
+    assert client.post(path + "?rank_by=other", json=body, headers=headers).status_code == 422
+    assert client.post(path + "?rank_by=outcome", json=body, headers=headers).status_code == 422
     selection = {**body, "case_id": "open"}
     assert client.post(path, json=selection, headers=bearer).status_code in (401, 403)
     assert client.post(path, json=selection, headers=headers).json()["case_selection"] == "predicted"

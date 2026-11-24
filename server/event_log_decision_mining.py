@@ -320,11 +320,31 @@ def _importance(node, total: int, into: Counter) -> Counter:
     return into
 
 
+def _branch_evaluation(training: Counter, confusion: dict[str, Counter], terminal: str) -> list[dict[str, Any]]:
+    actual = {branch: sum(counts.values()) for branch, counts in confusion.items()}
+    predicted: Counter = Counter()
+    for counts in confusion.values():
+        predicted.update(counts)
+    result = []
+    for branch in sorted(set(training) | set(actual) | set(predicted), key=lambda key: (-actual.get(key, 0), key)):
+        seen, called = actual.get(branch, 0), predicted[branch]
+        correct = confusion[branch][branch] if branch in confusion else 0
+        result.append({"next": branch, "next_is_terminal": branch == terminal,
+                       "training_occurrences": training[branch], "actual_occurrences": seen,
+                       "predicted_occurrences": called, "correct_occurrences": correct,
+                       "precision": round(correct / called, 4) if called else None,
+                       "recall": round(correct / seen, 4) if seen else None})
+    return result
+
+
 def analyse(log_id: str, activity: str, case_type: str | None = None, *, max_depth: int = DEFAULT_DEPTH,
-            cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+            cohort: dict[str, Any] | None = None,
+            include_case_attributes: bool = True) -> dict[str, Any]:
     """Learn which recorded data goes with which branch after ``activity``."""
     activity = _check_activity(activity)
     max_depth = _check_depth(max_depth)
+    if type(include_case_attributes) is not bool:
+        raise EventLogWorkspaceError("include_case_attributes must be true or false")
 
     def run(conn):
         terminal_label = _terminal_label(conn)
@@ -344,8 +364,9 @@ def analyse(log_id: str, activity: str, case_type: str | None = None, *, max_dep
                    SELECT case_id, pos, k, arg_max(v, epos) AS v FROM ev GROUP BY 1, 2, 3) GROUP BY 1, 2)
             SELECT d.case_id, d.pos, d.next, latest.attrs, o.attributes FROM d
               LEFT JOIN latest USING (case_id, pos)
-              LEFT JOIN objects o ON o.log_id = $log AND o.object_id = d.case_id""",
-                            {"a": activity, "cap": MAX_OCCURRENCES, "log": log_id}).fetchall()
+              LEFT JOIN objects o ON $use_case_attributes AND o.log_id = $log AND o.object_id = d.case_id""",
+                            {"a": activity, "cap": MAX_OCCURRENCES, "log": log_id,
+                             "use_case_attributes": include_case_attributes}).fetchall()
         return {"rows": rows, "total": total, "terminal_label": terminal_label}
 
     data = workspace._query_filtered(log_id, case_type, cohort, run)
@@ -375,10 +396,13 @@ def analyse(log_id: str, activity: str, case_type: str | None = None, *, max_dep
                          for k, v in sorted(branch_counts.items(), key=lambda kv: (-kv[1], kv[0]))],
             "method": ("CART decision tree (Gini impurity) on ~70% of cases, scored on the other ~30% "
                        "(split by a hash of the case id)"),
-            "features_known_at_decision": ("case attributes (case.*) and the latest value of each event attribute "
-                                           "recorded at or before the decision event (event.*)"),
-            "caveat": ("Rules describe associations in this log, not the business rule or its cause, and "
-                       "authorize nothing. Case attributes carry no time and may have been set after the decision.")}
+            "includes_case_attributes": include_case_attributes,
+            "features_known_at_decision": (
+                ("case attributes (case.*) and " if include_case_attributes else "") +
+                "the latest value of each event attribute recorded at or before the decision event (event.*)"),
+            "caveat": ("Rules describe associations in this log, not the business rule or its cause, and authorize nothing."
+                       + (" Case attributes carry no time and may have been set after the decision."
+                          if include_case_attributes else ""))}
     if len(branch_counts) < 2:
         return {**base, "rules": [], "note": "every occurrence continues the same way, so there is no decision here"}
     train = [s for s in samples if s["train"]]
@@ -389,19 +413,23 @@ def analyse(log_id: str, activity: str, case_type: str | None = None, *, max_dep
                 "note": "not enough cases or recorded data varies too little to learn a rule"}
     min_leaf = max(MIN_BRANCH_OCCURRENCES, round(0.02 * len(train)))
     tree = _grow(train, features, 0, max_depth, min_leaf)
-    majority = min(Counter(s["y"] for s in train).items(), key=lambda kv: (-kv[1], kv[0]))[0]
-    evaluation: dict[str, Any] = {"training_occurrences": len(train), "holdout_occurrences": len(test)}
+    training_counts = Counter(s["y"] for s in train)
+    majority = min(training_counts.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+    evaluation: dict[str, Any] = {"training_occurrences": len(train), "holdout_occurrences": len(test),
+                                  "training_cases": len({s["case_id"] for s in train}),
+                                  "holdout_cases": len({s["case_id"] for s in test})}
     if len(test) >= MIN_HOLDOUT:
         hits = sum(_predict(tree, s) == s["y"] for s in test)
         base_hits = sum(s["y"] == majority for s in test)
         evaluation.update({"holdout_accuracy": round(hits / len(test), 4),
-                           "majority_baseline": majority,
+                           "majority_baseline": majority, "majority_baseline_is_terminal": majority == terminal,
                            "majority_baseline_accuracy": round(base_hits / len(test), 4),
                            "beats_baseline": hits > base_hits})
         confusion: dict[str, Counter] = {}
         for s in test:
             confusion.setdefault(s["y"], Counter())[_predict(tree, s)] += 1
         evaluation["holdout_confusion"] = {actual: dict(sorted(c.items())) for actual, c in sorted(confusion.items())}
+        evaluation["holdout_branches"] = _branch_evaluation(training_counts, confusion, terminal)
     else:
         evaluation["note"] = f"fewer than {MIN_HOLDOUT} held-out occurrences: accuracy not assessed"
     importance = _importance(tree, len(train), Counter())

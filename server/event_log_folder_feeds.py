@@ -118,7 +118,8 @@ def create(log_id: str, spec: Any) -> dict[str, Any]:
                             "AND json_extract_string(definition, '$.pattern') = ?", [log_id, str(folder), pattern]).fetchone():
                 raise EventLogWorkspaceError("this log already has a feed for that folder and pattern")
             feed = {"format": FORMAT, "feed_id": "feed_" + secrets.token_hex(8), "log_id": log_id,
-                    "folder": str(folder), "pattern": pattern, "mapping": mapping, "created_at": _now()}
+                    "folder": str(folder), "pattern": pattern, "mapping": mapping, "mapping_revision": 0,
+                    "created_at": _now()}
             conn.execute("INSERT INTO event_log_feeds VALUES (?, ?, now(), ?)",
                          [log_id, feed["feed_id"], json.dumps(feed, sort_keys=True)])
         finally:
@@ -140,6 +141,59 @@ def get(feed_id: str) -> dict[str, Any]:
         conn = workspace._connect()
         try:
             return _feed(conn, feed_id)
+        finally:
+            conn.close()
+
+
+def _mapping_plan(conn, feed: dict[str, Any]) -> dict[str, Any]:
+    from .event_log_mapping_reuse import _mapping
+
+    rows = conn.execute("""SELECT batch, report FROM log_quality WHERE log_id = ?
+        AND json_extract_string(report, '$.kind') IN ('import', 'append')
+        ORDER BY created_at DESC, batch DESC""", [feed["log_id"]]).fetchall()
+    for batch, raw in rows:
+        transform = json.loads(raw).get("transform") or {}
+        candidate = _mapping(transform)
+        if candidate is None:
+            continue
+        if transform.get("mapping", {}).get("source_identity"):
+            raise EventLogWorkspaceError("the latest manual CSV mapping uses source IDs and cannot be applied to this feed")
+        encoded = json.dumps(candidate, sort_keys=True, separators=(",", ":")).encode()
+        return {"current_mapping": feed["mapping"], "proposed_mapping": candidate,
+                "mapping_revision": feed.get("mapping_revision", 0), "source_batch": batch,
+                "mapping_sha256": hashlib.sha256(encoded).hexdigest(),
+                "changed": candidate != feed["mapping"]}
+    raise EventLogWorkspaceError("this log has no manual CSV mapping to apply")
+
+
+def review_mapping(feed_id: str) -> dict[str, Any]:
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            return _mapping_plan(conn, _feed(conn, feed_id))
+        finally:
+            conn.close()
+
+
+def apply_mapping(feed_id: str, spec: Any) -> dict[str, Any]:
+    if (not isinstance(spec, dict) or set(spec) != {"mapping_revision", "mapping_sha256"}
+            or type(spec["mapping_revision"]) is not int or spec["mapping_revision"] < 0
+            or not isinstance(spec["mapping_sha256"], str) or not _SHA256.fullmatch(spec["mapping_sha256"])):
+        raise EventLogWorkspaceError("a reviewed mapping revision and SHA-256 are required")
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            feed = _feed(conn, feed_id)
+            plan = _mapping_plan(conn, feed)
+            if any(plan[key] != spec[key] for key in spec):
+                raise EventLogWorkspaceError("the feed or latest CSV mapping changed; review the mapping again")
+            revision = plan["mapping_revision"]
+            if plan["changed"]:
+                revision += 1
+                feed.update(mapping=plan["proposed_mapping"], mapping_revision=revision, mapping_updated_at=_now())
+                conn.execute("UPDATE event_log_feeds SET definition = ? WHERE feed_id = ?",
+                             [json.dumps(feed, sort_keys=True), feed_id])
+            return {"feed_id": feed_id, "mapping_revision": revision, "changed": plan["changed"]}
         finally:
             conn.close()
 
@@ -269,7 +323,9 @@ def preview(feed_id: str, *, now: float | None = None) -> dict[str, Any]:
     with workspace._LOCK:
         conn = workspace._connect()
         try:
-            _feed(conn, feed_id)
+            live = _feed(conn, feed_id)
+            if live.get("mapping_revision", 0) != feed.get("mapping_revision", 0):
+                raise EventLogWorkspaceError("the feed mapping changed; preview the folder again")
             previous = dict(conn.execute("""SELECT sha256,
                     CASE WHEN bool_or(outcome = 'appended') THEN 'already_appended' ELSE 'previously_failed' END
                 FROM event_log_feed_files WHERE feed_id = ? AND sha256 IN (SELECT unnest(?::VARCHAR[]))
@@ -286,7 +342,8 @@ def preview(feed_id: str, *, now: float | None = None) -> dict[str, Any]:
     counts: dict[str, int] = {}
     for row in files:
         counts[row["state"]] = counts.get(row["state"], 0) + 1
-    return {"format": FORMAT, "feed_id": feed_id, "files": files, "counts": counts,
+    return {"format": FORMAT, "feed_id": feed_id, "mapping_revision": feed.get("mapping_revision", 0),
+            "files": files, "counts": counts,
             "more_files": len(candidates) > MAX_PREVIEW_FILES, "max_files": MAX_PREVIEW_FILES,
             "max_bytes": MAX_PREVIEW_BYTES}
 
@@ -317,27 +374,35 @@ def failures(feed_id: str, *, after: str = "") -> dict[str, Any]:
 
 
 def append_one(feed_id: str, spec: Any) -> dict[str, Any]:
-    if not isinstance(spec, dict) or set(spec) != {"name", "sha256"}:
+    if (not isinstance(spec, dict) or not {"name", "sha256"} <= set(spec)
+            or set(spec) - {"name", "sha256", "mapping_revision"}):
         raise EventLogWorkspaceError("choose a previewed file by its exact name and SHA-256")
     name, sha = spec["name"], spec["sha256"]
     if (not isinstance(name, str) or not name or len(name) > 1024 or "/" in name or "\x00" in name
             or any(0xD800 <= ord(char) <= 0xDFFF for char in name)
             or not isinstance(sha, str) or not _SHA256.fullmatch(sha)):
         raise EventLogWorkspaceError("choose a previewed file by its exact name and SHA-256")
-    return run(feed_id, selected=(name, sha))
+    revision = spec.get("mapping_revision")
+    if "mapping_revision" in spec and (type(revision) is not int or revision < 0):
+        raise EventLogWorkspaceError("invalid preview mapping revision")
+    return run(feed_id, selected=(name, sha), expected_mapping_revision=revision)
 
 
 def run(feed_id: str, *, now: float | None = None, retry_failed: bool = False,
-        retry_hash: str | None = None, selected: tuple[str, str] | None = None) -> dict[str, Any]:
+        retry_hash: str | None = None, selected: tuple[str, str] | None = None,
+        expected_mapping_revision: int | None = None) -> dict[str, Any]:
     """Append all new files, one selected file, or an explicit retry set."""
     if type(retry_failed) is not bool:
         raise EventLogWorkspaceError("retry_failed must be a boolean")
     if retry_hash is not None and (not retry_failed or not isinstance(retry_hash, str) or not _SHA256.fullmatch(retry_hash)):
         raise EventLogWorkspaceError("retry hash must be a SHA-256 for a failed file")
     feed = get(feed_id)
+    revision = feed.get("mapping_revision", 0)
+    if expected_mapping_revision is not None and expected_mapping_revision != revision:
+        raise EventLogWorkspaceError("the feed mapping changed; preview the folder again")
     current = time.time() if now is None else now
     candidates = sorted(item for item in _candidates(feed) if selected is None or item[1] == selected[0])
-    selected_changed = False
+    selected_changed = mapping_changed = False
     waiting, already, previously_failed, skipped_new, duplicate_failed, results, attempted = 0, 0, 0, 0, 0, [], set()
     for mtime, name, path, info in candidates:
         if current - mtime < SETTLE_SECONDS:
@@ -362,7 +427,10 @@ def run(feed_id: str, *, now: float | None = None, retry_failed: bool = False,
                 try:
                     # Recheck under the append lock: another run may have won,
                     # or the feed may have been deleted during the snapshot.
-                    _feed(conn, feed_id)
+                    live = _feed(conn, feed_id)
+                    if live.get("mapping_revision", 0) != revision:
+                        mapping_changed = True
+                        break
                     prior = conn.execute("""SELECT outcome, detail FROM event_log_feed_files WHERE feed_id = ? AND sha256 = ?
                         ORDER BY (outcome = 'appended') DESC, processed_at DESC LIMIT 1""", [feed_id, sha]).fetchone()
                 finally:
@@ -445,6 +513,7 @@ def run(feed_id: str, *, now: float | None = None, retry_failed: bool = False,
                 "duplicate_failed_files_skipped": duplicate_failed} if retry_failed else {}),
             "more_files_waiting": len(candidates) - waiting - already - previously_failed - skipped_new - duplicate_failed - len(results) > 0 and len(results) >= MAX_FILES_PER_RUN,
             "files": results,
+            **({"mapping_changed": True} if mapping_changed else {}),
             **({"selected_changed": selected_changed or not candidates} if selected is not None else {})}
 
 
@@ -454,6 +523,8 @@ def run_scheduled(feed_id: str) -> tuple[str, float]:
         result = run(feed_id)
     except EventLogWorkspaceError:
         return "failed:feed_unavailable", 0.0
+    if result.get("mapping_changed"):
+        return "partial:feed_mapping_changed", 0.0
     if result["files_failed"]:
         return f"failed:{result['files_failed']}_files_not_appended", 0.0
     if any(item.get("warning") for item in result["files"]):

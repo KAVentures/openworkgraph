@@ -565,6 +565,37 @@ const path=require('node:path');
    await page.locator('#owgEventLogSimPortfolioResults table').waitFor();
    assert.equal(await page.locator('#owgEventLogSimPortfolioResults tbody tr').count(),3);
    assert.match(await page.locator('#owgEventLogSimPortfolioResults').textContent(),/no winning option|No winning option/i);
+   const portfolioResults=page.locator('#owgEventLogSimPortfolioResults');
+   await portfolioResults.getByRole('columnheader',{name:'90th percentile cycle time'}).waitFor();
+   const [inputDownload]=await Promise.all([
+     page.waitForEvent('download'),portfolioResults.getByRole('button',{name:'Download comparison inputs'}).click()
+   ]);
+   const [reportDownload]=await Promise.all([
+     page.waitForEvent('download'),portfolioResults.getByRole('button',{name:'Download comparison report'}).click()
+   ]);
+   const portfolioInputs=JSON.parse(await fs.readFile(await inputDownload.path(),'utf8'));
+   const exportedPortfolio=JSON.parse(await fs.readFile(await reportDownload.path(),'utf8'));
+   assert.deepEqual(portfolioInputs,portfolioResponse.request().postDataJSON());
+   assert.deepEqual(exportedPortfolio.submitted_portfolio,portfolioInputs);
+   assert.deepEqual(exportedPortfolio.comparison,portfolio);
+   await page.getByText('Rerun a saved staffing comparison',{exact:true}).click();
+   let replays=0;
+   page.on('request',request=>{if(request.url().includes('/simulation/portfolio'))replays++;});
+   await page.locator('#owgEventLogSimPortfolioFile').setInputFiles({
+     name:'staffing-report.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(exportedPortfolio))
+   });
+   const rerunPortfolio=page.locator('#owgEventLogSimPortfolioReplayRun');
+   await page.getByText(/Loaded comparison inputs from .*Review them before running/).waitFor();
+   assert.equal(replays,0);
+   assert.deepEqual(JSON.parse(await page.locator('#owgEventLogSimPortfolioDraft').inputValue()),portfolioInputs);
+   const [replayed]=await Promise.all([
+     page.waitForResponse(response=>response.url().includes('/simulation/portfolio')),
+     rerunPortfolio.click()
+   ]);
+   assert.equal(replayed.status(),200,await replayed.text());
+   assert.deepEqual(await replayed.json(),portfolio);
+   await page.locator('#owgEventLogSimPortfolioReplayResults table').waitFor();
+   assert.equal(replays,1);
    assert.match(await page.locator('#owgEventLogSimForm').textContent(),/Calibrated 60 of 60 complete cases/);
    const measuredPaths=await page.evaluate(()=>window.__owgEventLogModel.parseWeightedPaths(document.querySelector('#owgEventLogSimPaths').value));
    assert.deepEqual(measuredPaths[0],{activities:['Receive','Check','Approve','Close'],weight:0.6});
@@ -1426,6 +1457,23 @@ const path=require('node:path');
    const placeItems=page.locator('#owgObjectModelArcs').getByRole('combobox',{name:'Place order involves item',exact:true});
    assert.equal(await placeItems.inputValue(),'variable');
    await placeItems.selectOption('single');
+   const [objectModelDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#owgObjectModelDownload').click()]);
+   const portableModel=JSON.parse(await fs.readFile(await objectModelDownload.path(),'utf8'));
+   assert.deepEqual(portableModel.arcs.find(x=>x.activity==='Place order'&&x.object_type==='item'),
+     {activity:'Place order',object_type:'item',variable:false});
+   await placeItems.selectOption('variable');
+   const modelFile=page.locator('#owgObjectModelFile'),loadModel=page.locator('#owgObjectModelLoad');
+   const fileModel=value=>({name:'reviewed-model.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(value))});
+   await modelFile.setInputFiles(fileModel({...portableModel,arcs:[...portableModel.arcs,{activity:'Pay',object_type:'invoice',variable:false}]}));
+   await page.getByText('unknown object type for this log: invoice',{exact:true}).waitFor();
+   assert.equal(await loadModel.isDisabled(),true);
+   assert.equal(await placeItems.inputValue(),'variable');
+   await modelFile.setInputFiles(fileModel(portableModel));
+   await loadModel.waitFor();
+   await page.locator('#owgObjectModel').getByRole('status').filter({hasText:'event–object arcs.'}).waitFor();
+   assert.equal(await placeItems.inputValue(),'variable');
+   await loadModel.click();
+   assert.equal(await placeItems.inputValue(),'single');
    const [modelChecked]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/object-process-model/conformance')),page.locator('#owgObjectModelCheck').click()]);
    assert.equal(modelChecked.status(),200,await modelChecked.text());
    const sentArcs=JSON.parse(modelChecked.request().postData()).model.arcs;

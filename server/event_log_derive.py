@@ -3,13 +3,9 @@
 Analysts often want to study a slice of a log on its own: one region, one
 quarter, the cases that went through an escalation. Deriving copies every event
 of the matching cases (under the chosen case notion), the objects those events
-are linked to, their links and the objects' timed attribute values into a new
-saved log. The source log is unchanged, and the new log can be analysed,
-exported, compared with the source or deleted like any other.
-
-Not copied: the source's activity mapping, saved filters and analyses, signals,
-domain packs, source-identity keys, object-to-object relationships, quality
-reports, case tags and the cost model. The derived log starts without them, and the response says so.
+are linked to, their timed attribute values and supplied relationships between
+those objects into a new saved log. The new log can be analysed, exported,
+compared with the source or deleted like any other.
 
 An optional time window (``events_from``, ``events_before``) trims the copy to the events inside it,
 the "trim to timeframe" of other process-mining tools: a case keeps only its events in the window,
@@ -30,7 +26,15 @@ from . import event_log_workspace as workspace
 
 FORMAT = "openworkgraph.event-log-derived.v1"
 NOT_COPIED = ("activity mapping", "saved filters and analyses", "signals", "domain packs", "source-identity keys",
-              "object-to-object relationships", "quality reports", "case tags", "cost model")
+              "quality reports", "case tags", "cost model")
+
+
+_RETAINED_RELATIONSHIPS = """
+    FROM object_relationships r
+    SEMI JOIN dv_objects source ON r.source_object_id = source.object_id
+    SEMI JOIN dv_objects target ON r.target_object_id = target.object_id
+    WHERE r.log_id = ?
+"""
 
 
 class SelectionSpec(BaseModel):
@@ -45,10 +49,9 @@ class DeriveSpec(SelectionSpec):
     name: str = Field(min_length=1, max_length=120)
 
 
-def _window(parsed: SelectionSpec) -> tuple[datetime | None, datetime | None]:
+def _window(events_from: str | None, events_before: str | None) -> tuple[datetime | None, datetime | None]:
     bounds = []
-    for key in ("events_from", "events_before"):
-        value = getattr(parsed, key)
+    for key, value in (("events_from", events_from), ("events_before", events_before)):
         stamp = parse_timestamp(value) if value is not None else None
         if value is not None and stamp is None:
             raise workspace.EventLogWorkspaceError(f"{key} must be a time with a UTC offset")
@@ -71,18 +74,13 @@ def _parse(spec: Any, schema: type[_Selection]) -> tuple[_Selection, dict[str, A
     if isinstance(parsed, DeriveSpec) and not workspace._NAME.fullmatch(parsed.name.strip()):
         raise workspace.EventLogWorkspaceError("a short log name is required")
     chosen = cohorts.parse_cohort(parsed.cohort)
-    if not {k for k in chosen if k != "label"} and _window(parsed) == (None, None):
+    if not {k for k in chosen if k != "label"} and _window(parsed.events_from, parsed.events_before) == (None, None):
         raise workspace.EventLogWorkspaceError("choose a case filter or a time window; an unfiltered copy would duplicate the log")
     return parsed, chosen
 
 
-def _select_events(conn, log_id: str, chosen: dict[str, Any],
-                   window_from: datetime | None, window_before: datetime | None) -> dict[str, int]:
-    source_cases = conn.execute("SELECT count(DISTINCT case_id) FROM ce").fetchone()[0]
-    cohorts.restrict(conn, chosen, log_id)
-    cases = conn.execute("SELECT count(DISTINCT case_id) FROM ce").fetchone()[0]
-    if not cases:
-        raise workspace.EventLogWorkspaceError("no cases match the filter")
+def _select_original_events(conn, log_id: str, window_from: datetime | None,
+                            window_before: datetime | None) -> tuple[int, int]:
     # The mapped projection determines which cases match. A collapsed
     # analysis row still belongs to the original trace being copied.
     conn.execute("""CREATE OR REPLACE TEMP TABLE dv_events AS
@@ -98,32 +96,46 @@ def _select_events(conn, log_id: str, chosen: dict[str, Any],
     events = conn.execute("SELECT count(*) FROM dv_events").fetchone()[0]
     if not events:
         raise workspace.EventLogWorkspaceError("no event of the matching cases falls in the time window")
+    return events, before_trim - events if before_trim is not None else 0
+
+
+def _select_events(conn, log_id: str, chosen: dict[str, Any],
+                   window_from: datetime | None, window_before: datetime | None) -> dict[str, int]:
+    source_cases = conn.execute("SELECT count(DISTINCT case_id) FROM ce").fetchone()[0]
+    cohorts.restrict(conn, chosen, log_id)
+    cases = conn.execute("SELECT count(DISTINCT case_id) FROM ce").fetchone()[0]
+    if not cases:
+        raise workspace.EventLogWorkspaceError("no cases match the filter")
+    events, trimmed = _select_original_events(conn, log_id, window_from, window_before)
     kept_cases = cases
-    if before_trim is not None:
+    if window_from or window_before:
         # A surviving raw event can have been collapsed in the analytical projection.
         kept_cases = conn.execute("""SELECT count(DISTINCT links.object_id) FROM event_objects links
             SEMI JOIN ce ON links.object_id = ce.case_id
             SEMI JOIN dv_events ON links.event_id = dv_events.event_id WHERE links.log_id = ?""", [log_id]).fetchone()[0]
+    conn.execute("""CREATE OR REPLACE TEMP TABLE dv_objects AS
+        SELECT DISTINCT links.object_id FROM event_objects links
+        SEMI JOIN dv_events ON links.event_id = dv_events.event_id WHERE links.log_id = ?""", [log_id])
     return {"source_cases": source_cases, "cases": cases, "events": events,
-            "trimmed": before_trim - events if before_trim is not None else 0, "kept_cases": kept_cases}
+            "trimmed": trimmed, "kept_cases": kept_cases}
 
 
 def preview(log_id: str, spec: Any) -> dict[str, Any]:
     settings, chosen = _parse(spec, SelectionSpec)
-    start, end = _window(settings)
+    start, end = _window(settings.events_from, settings.events_before)
 
     def run(conn):
         selected = _select_events(conn, log_id, chosen, start, end)
-        objects = conn.execute("""SELECT count(DISTINCT links.object_id) FROM event_objects links
-            SEMI JOIN dv_events ON links.event_id = dv_events.event_id WHERE links.log_id = ?""", [log_id]).fetchone()[0]
-        return {**selected, "objects": objects}
+        objects = conn.execute("SELECT count(*) FROM dv_objects").fetchone()[0]
+        relationships = conn.execute("SELECT count(*) " + _RETAINED_RELATIONSHIPS, [log_id]).fetchone()[0]
+        return {**selected, "objects": objects, "object_relationships": relationships}
 
     return workspace._query(log_id, settings.case_type, run)
 
 
 def derive(log_id: str, spec: Any) -> dict[str, Any]:
     settings, chosen = _parse(spec, DeriveSpec)
-    window_from, window_before = _window(settings)
+    window_from, window_before = _window(settings.events_from, settings.events_before)
     new_id = "log_" + secrets.token_hex(8)
 
     def run(conn):
@@ -140,11 +152,13 @@ def derive(log_id: str, spec: Any) -> dict[str, Any]:
                          [new_id, log_id])
             conn.execute("""INSERT INTO objects SELECT ?, o.object_id, o.object_type, o.attributes
                 FROM objects o WHERE o.log_id = ?
-                  AND o.object_id IN (SELECT DISTINCT object_id FROM event_objects WHERE log_id = ?)""",
-                         [new_id, log_id, new_id])
+                  AND o.object_id IN (SELECT object_id FROM dv_objects)""", [new_id, log_id])
             conn.execute("""INSERT INTO object_attribute_values SELECT ?, v.object_id, v.name, v.valid_from, v.value
                 FROM object_attribute_values v WHERE v.log_id = ?
                   AND v.object_id IN (SELECT object_id FROM objects WHERE log_id = ?)""", [new_id, log_id, new_id])
+            relationships = conn.execute("""INSERT INTO object_relationships
+                SELECT ?, r.source_object_id, r.target_object_id, r.qualifier """ +
+                _RETAINED_RELATIONSHIPS, [new_id, log_id]).fetchone()[0]
             objects = conn.execute("SELECT count(*) FROM objects WHERE log_id = ?", [new_id]).fetchone()[0]
             conn.execute("INSERT INTO logs VALUES (?, ?, ?, ?, ?, ?, ?)",
                          [new_id, settings.name.strip(), source_format,
@@ -153,7 +167,7 @@ def derive(log_id: str, spec: Any) -> dict[str, Any]:
         except Exception:
             conn.execute("ROLLBACK")
             raise
-        return {**selected, "objects": objects}
+        return {**selected, "objects": objects, "object_relationships": relationships}
 
     data = workspace._query(log_id, settings.case_type, run)
     created = next(log for log in workspace.list_logs()["logs"] if log["log_id"] == new_id)
@@ -162,7 +176,8 @@ def derive(log_id: str, spec: Any) -> dict[str, Any]:
         "log": created,
         "derived_from": {"log_id": log_id, "case_notion": data["case_notion"], "cohort": cohorts.describe(chosen),
                          "cases_matched": data["cases"], "cases_in_source": data["source_cases"]},
-        "copied": {"events": data["events"], "objects": data["objects"]},
+        "copied": {"events": data["events"], "objects": data["objects"],
+                   **({"object_relationships": data["object_relationships"]} if data["object_relationships"] else {})},
         **({"time_window": {"events_from": window_from.isoformat() + "Z" if window_from else None,
                             "events_before": window_before.isoformat() + "Z" if window_before else None,
                             "events_outside_left_out": data["trimmed"],
