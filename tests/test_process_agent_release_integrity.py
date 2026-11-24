@@ -325,3 +325,16 @@ def test_structural_inventory_refuses_duplicate_identity(tmp_path):
         spec["process_model_sha256"]=hashlib.sha256(json.dumps(model,sort_keys=True,allow_nan=False).encode()).hexdigest()
     with pytest.raises(ReleaseIntegrityError,match="duplicate model inventory identity"):
         compare_directories(old,new,_pin(old),_reinventory(new,duplicate))
+
+
+def test_structural_comparison_distinguishes_boolean_and_numeric_json_values():
+    from shared.process_agent_release import _structural_changes
+    before = {"process_model":{"activities":[{"id":"a","value":True}],
+                              "extra":1}, "runtime_extra":1}
+    after = {"process_model":{"activities":[{"id":"a","value":1}],
+                             "extra":1.0}, "runtime_extra":True}
+    delta = _structural_changes(before, after)
+    assert delta["keyed_model_changes"]["activities"]["changed"] == [
+        {"id":"a","changed_fields":["value"]}]
+    assert delta["other_changed_model_fields"] == ["extra"]
+    assert delta["changed_runtime_contract_fields"] == ["runtime_extra"]
