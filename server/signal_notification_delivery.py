@@ -408,6 +408,8 @@ def deliver_due(*, now: float | None = None, transport=None) -> dict:
                     # including after an ambiguous previous transport attempt.
                     # Keep the live subset pending without resending stale states.
                     replacement = _message(survivors, current)
+                    if entry["attempts"]:
+                        replacement["next_attempt_epoch"] = max(current, entry["next_attempt_epoch"])
                     channel["pending"].insert(0, replacement)
                     _audit(channel, entry["notification_id"], "superseded_partial_state_change", current)
                 else:
@@ -443,18 +445,23 @@ def deliver_due(*, now: float | None = None, transport=None) -> dict:
         signature = "v1=" + hmac.new(bytes.fromhex(channel["signing_secret"]), body, hashlib.sha256).hexdigest()
         headers = {"X-OWG-Notification-ID": entry["notification_id"],
                    "X-OWG-Notification-Signature": signature}
+        # Commit the attempt before touching the network. After a process
+        # interruption the same ID/body remains pending, with a backoff and
+        # a conservative indication that the receiver might have received it.
+        entry["attempts"] += 1
+        entry["next_attempt_epoch"] = current + min(MAX_BACKOFF_SECONDS, 60 * 2 ** min(6, entry["attempts"] - 1))
+        channel["pending"][0] = entry
+        channel["consecutive_failures"] += 1
+        if channel["consecutive_failures"] >= MAX_FAILURES:
+            channel["enabled"] = False
+            channel["paused_reason"] = "delivery_paused_after_five_failures"
+        _audit(channel, entry["notification_id"], "transport_attempt_started", current)
+        _save(data)
         try:
             status_code = (transport or _send)(channel["receiver_url"], body, headers)
             if type(status_code) is not int or not 200 <= status_code < 300:
                 raise DeliveryError("notification receiver did not acknowledge delivery")
         except Exception:
-            entry["attempts"] += 1
-            entry["next_attempt_epoch"] = current + min(MAX_BACKOFF_SECONDS, 60 * 2 ** (entry["attempts"] - 1))
-            channel["pending"][0] = entry
-            channel["consecutive_failures"] += 1
-            if channel["consecutive_failures"] >= MAX_FAILURES:
-                channel["enabled"] = False
-                channel["paused_reason"] = "delivery_paused_after_five_failures"
             _audit(channel, entry["notification_id"], "transport_unacknowledged", current)
             _save(data)
             return {"attempted": 1, "sent": 0, "retry_pending": True,
@@ -464,6 +471,8 @@ def deliver_due(*, now: float | None = None, transport=None) -> dict:
         channel["delivered"] += 1
         channel["last_delivered_at"] = _now(current)
         channel["consecutive_failures"] = 0
+        channel["enabled"] = True
+        channel["paused_reason"] = None
         _audit(channel, entry["notification_id"], "receiver_acknowledged", current)
         _save(data)
         return {"attempted": 1, "sent": 1, "unreviewed_signal_states": len(entry["states"]),
