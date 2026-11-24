@@ -307,6 +307,7 @@
         const rawText=input.value.trim();
         const body='{"reviewed_by_user":true,'+rawText.slice(1);
         await window.__owgAuthReady;
+        if(!active()||n!==turn||!confirm.checked)return;
         const params=new URLSearchParams({workflow_id:selected.workflow_id,before_revision:String(previous.revision),
           after_revision:String(selected.revision),before_sha256:previous.content_sha256,after_sha256:selected.content_sha256});
         const response=await fetch('/v1/process-catalog/policy-regression?'+params,{method:'POST',cache:'no-store',
