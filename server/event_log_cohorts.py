@@ -14,6 +14,7 @@ from shared.event_log_formats import parse_timestamp
 
 from . import event_log_workspace as workspace
 from .event_log_analytics import risk_difference
+from .event_log_variant_coverage import VARIANT_KEY_SQL
 from .event_log_workspace import EventLogWorkspaceError
 
 _SEP = workspace._SEP
@@ -367,7 +368,7 @@ def median_difference(a: list[float], b: list[float], rounds: int = BOOTSTRAP_RO
 def _cohort_stats(conn, table: str, sla_seconds: int | None) -> dict[str, Any]:
     conn.execute(f"""CREATE OR REPLACE TEMP TABLE {table}_cs AS SELECT case_id,
           epoch(max(ts) - min(ts)) AS duration, count(*) > count(DISTINCT activity) AS rework,
-          string_agg(activity, '{_SEP}' ORDER BY ts, event_id) AS path
+          list(activity ORDER BY ts, event_id) AS path
         FROM {table} GROUP BY case_id""")
     cases, q, rework = conn.execute(f"""SELECT count(*), quantile_cont(duration, [0.5, 0.9]),
         count(*) FILTER (WHERE rework) FROM {table}_cs""").fetchone()
@@ -394,6 +395,8 @@ def benchmark(log_id: str, cohorts: Any, case_type: str | None = None, sla_secon
     if not isinstance(limit, int) or isinstance(limit, bool):
         raise EventLogWorkspaceError("limit must be an integer")
     limit = max(1, min(limit, 50))
+
+    variant_key = VARIANT_KEY_SQL.format(path="coalesce(va.path, vb.path)")
 
     def run(conn):
         restrict(conn, first, log_id, "ca")
@@ -440,13 +443,14 @@ def benchmark(log_id: str, cohorts: Any, case_type: str | None = None, sla_secon
         activities = []
         for activity, na, nb in presence:
             d, low, high = risk_difference(nb, b["cases"], na, a["cases"])
-            activities.append({"activity": activity, "share_in_first": round(na / a["cases"], 6),
+            activities.append({"activity": activity, "cases_in_first": na, "cases_in_second": nb,
+                               "share_in_first": round(na / a["cases"], 6),
                                "share_in_second": round(nb / b["cases"], 6), "difference": round(d, 6),
                                "ci95": [round(low, 6), round(high, 6)], "ci_excludes_zero": low > 0 or high < 0})
         activities.sort(key=lambda r: (not r["ci_excludes_zero"], -abs(r["difference"]), r["activity"]))
         variants = conn.execute(f"""WITH va AS (SELECT path, count(*) AS n FROM ca_cs GROUP BY 1),
               vb AS (SELECT path, count(*) AS n FROM cb_cs GROUP BY 1)
-            SELECT coalesce(va.path, vb.path) AS path, coalesce(va.n, 0), coalesce(vb.n, 0)
+            SELECT coalesce(va.path, vb.path) AS path, coalesce(va.n, 0), coalesce(vb.n, 0), {variant_key}
             FROM va FULL JOIN vb ON va.path = vb.path
             ORDER BY greatest(coalesce(va.n, 0) / {a['cases']}, coalesce(vb.n, 0) / {b['cases']}) DESC, 1
             LIMIT {limit}""").fetchall()
@@ -455,8 +459,9 @@ def benchmark(log_id: str, cohorts: Any, case_type: str | None = None, sla_secon
             "overlapping_cases": overlap,
             "differences_second_minus_first": differences,
             "activity_presence": activities[:limit * 2],
-            "variants": [{"path": p.split(_SEP), "share_in_first": round(na / a["cases"], 6),
-                          "share_in_second": round(nb / b["cases"], 6)} for p, na, nb in variants],
+            "variants": [{"path": path, "variant_id": key, "cases_in_first": na, "cases_in_second": nb,
+                          "share_in_first": round(na / a["cases"], 6), "share_in_second": round(nb / b["cases"], 6)}
+                         for path, na, nb, key in variants],
             "intervals_assume_independent_cohorts": True,
             "note": ("cohorts share cases; independent-cohort intervals may understate or overstate uncertainty" if overlap else
                      "differences describe these cohorts; they are not explained or caused by the cohort definition"),
