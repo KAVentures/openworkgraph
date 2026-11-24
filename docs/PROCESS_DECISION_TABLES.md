@@ -421,3 +421,7 @@ ANY, PRIORITY and other hit policies; several outputs; rows whose OWG predicate
 matches ANY of several conditions or tests one fact twice; and fact paths that are not
 simple identifiers. The DMN file is untrusted data. DOCTYPE and entities are rejected,
 size is bounded, and nothing is evaluated or executed.
+
+## Behavioral regression across saved revisions
+
+[Paired decision regression](PROCESS_POLICY_REGRESSION.md) evaluates the same explicitly dated reviewed case suite against two exact saved revisions, distinguishes regressions from intentional changes, and reports unreviewed table/case pairs without returning fact values.
