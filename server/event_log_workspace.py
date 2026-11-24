@@ -601,7 +601,11 @@ def append_log(log_id: str, source: IO[bytes], *, source_format: str,
         folder = Path(tmp)
         conn = _connect()
         try:
-            _check_log(conn, log_id)
+            info = _check_log(conn, log_id)
+            if info.get("observed_execution_snapshot"):
+                raise EventLogWorkspaceError(
+                    "Observed execution snapshots preserve their original rows. Create a new event log for additional observations."
+                )
             object_relationships.validate_index(conn,log_id)
             upload = _receive(source, folder)
             conn.execute("BEGIN")
