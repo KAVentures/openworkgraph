@@ -11,7 +11,7 @@ import pytest
 
 from server import automation_pipeline as pipeline, opportunity_projects as projects
 from server import project_archive_review as review
-from tests.test_process_opportunity_lineage import catalog, save, ref, assess
+from test_process_opportunity_lineage import catalog, save, ref, assess
 
 
 @pytest.fixture
@@ -94,7 +94,10 @@ from fastapi.testclient import TestClient
 from server.secure_app import app
 from server import local_auth, automation_pipeline as p, opportunity_projects as projects
 from server.local_process_catalog import catalog
-from tests.test_process_opportunity_lineage import save, ref, assess
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path.cwd() / 'tests'))
+from test_process_opportunity_lineage import save, ref, assess
 i=assess(p.create_from_process(ref(save(catalog))))
 i=p.transition(i['idea_id'],{'to':'approved','expected_revision':i['revision']})
 content,project=projects.export_project(i['idea_id'],{'expected_revision':i['revision']})
