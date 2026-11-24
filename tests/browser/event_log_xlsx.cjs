@@ -66,6 +66,16 @@ book.close()`,xlsxPath]);
    const summary=await page.evaluate(async id=>{return (await fetch('/v1/event-logs/'+id+'/summary')).json();},log.log_id);
    assert.equal(summary.cases,6);
    assert.equal(summary.first_event_at,'2024-03-01T08:30:15Z');
+   // Export the imported log as a workbook, then round-trip it through the importer.
+   await page.locator('#owgEventLogExportFormat').selectOption('xlsx');
+   const [download]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogExport').click()]);
+   assert.match(download.suggestedFilename(),/\.xlsx$/);
+   const exported=execFileSync(python,['-c',`import sys
+from server import event_log_xlsx
+with open(sys.argv[1],'rb') as f:
+  result=event_log_xlsx.to_csv(f)
+print(result['rows'], len(result['columns']))`,await download.path()]).toString().trim();
+   assert.equal(exported,'18 4');
    // A file that is not a workbook is refused with a clear message, and nothing is selected.
    await page.locator('#owgEventLogFile').setInputFiles({name:'broken.xlsx',mimeType:'application/octet-stream',buffer:Buffer.from('not a zip')});
    await page.locator('#owgEventLogStatus').filter({hasText:'not an .xlsx workbook'}).waitFor();

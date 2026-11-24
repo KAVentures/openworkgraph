@@ -702,6 +702,11 @@ cases are saved as a new log.
 
 ### Cohort benchmark
 
+Select a count to open the cases behind either cohort's totals, rework, SLA breaches,
+activities, or exact variants. The side-by-side process maps offer the same review for
+adjacent paths. A case breaches the SLA when its recorded elapsed time is strictly
+greater than the configured threshold.
+
 ```json
 {"cohorts": [{"label": "Q1", "started_from": "2024-01-01T00:00:00Z", "started_before": "2024-04-01T00:00:00Z"},
              {"label": "Q2", "started_from": "2024-04-01T00:00:00Z", "started_before": "2024-07-01T00:00:00Z"}],
@@ -3292,6 +3297,10 @@ global case filter applies.
 
 These routes need a dashboard session. Agents can read the aggregates
 through `get_process_decision_rules` (see PROCESS_INTELLIGENCE_FOR_AGENTS.md).
+
+### Excel event-log export
+
+Dashboard owners can download a saved log as an Excel workbook (`GET /v1/event-logs/{log_id}/events.xlsx`). The workbook preserves case IDs, activities, timestamps, and resources as literal text cells, with a frozen header and filter. It is a CSV-equivalent view rather than an OCEL relationship export.
 
 ### Rework and loop case evidence
 

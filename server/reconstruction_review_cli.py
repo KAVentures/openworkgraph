@@ -84,8 +84,8 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         # The digest includes navigation evidence. Bound untrusted records
         # before hashing so forged metadata cannot exhaust review requests.
         try:
-            encoded = json.dumps(group, sort_keys=True, allow_nan=False).encode("utf-8")
-        except (TypeError, ValueError, RecursionError) as exc:
+            encoded = json.dumps(group, sort_keys=True, allow_nan=False, ensure_ascii=False).encode("utf-8")
+        except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
             raise ValueError("invalid provisional group evidence") from exc
         if len(encoded) > 65536:
             raise ValueError("unbounded provisional group evidence")
@@ -109,12 +109,88 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         indexed[(window, event_id)].add(pair_key)
     # Validate *every* flag before aggregating. Short-circuiting with "or"
     # otherwise hides malformed later flags whenever an earlier flag is true.
+    identity_timelines = response.get("identity_timelines", [])
+    if not isinstance(identity_timelines, list) or len(identity_timelines) > 256:
+        raise ValueError("invalid or unbounded identity timelines")
+    # Inspection exposes at most twelve timelines. Bound each source record
+    # before digesting it, including records outside the visible HTTP cap.
+    for timeline in identity_timelines:
+        if not isinstance(timeline, dict):
+            raise ValueError("invalid identity timeline evidence")
+        try:
+            encoded_timeline = json.dumps(timeline, sort_keys=True, allow_nan=False, ensure_ascii=False).encode("utf-8")
+        except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
+            raise ValueError("invalid identity timeline evidence") from exc
+        if len(encoded_timeline) > 65536:
+            raise ValueError("unbounded identity timeline evidence")
+    # Continuity is visible only up to the HTTP inspection cap. An adapter
+    # omitting the truncation flag must not allow scoring partial evidence.
+    continuity = response.get("observed_group_continuity", [])
+    if not isinstance(continuity, list) or len(continuity) > 256:
+        raise ValueError("invalid or unbounded group continuity")
+    for record in continuity:
+        if not isinstance(record, dict):
+            raise ValueError("invalid group continuity evidence")
+        try:
+            encoded = json.dumps(record, sort_keys=True, allow_nan=False, ensure_ascii=False).encode("utf-8")
+        except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
+            raise ValueError("invalid group continuity evidence") from exc
+        if len(encoded) > 65536:
+            raise ValueError("unbounded group continuity evidence")
+    # A visible timeline can itself omit earlier episodes or source events.
+    # Treat nested omissions as incomplete review context, not a complete cohort.
+    nested_timeline_truncated = False
+    for timeline in identity_timelines:
+        nested_timeline_truncated |= _truncation_flag(timeline, "episodes_truncated")
+        episodes = timeline.get("episodes", [])
+        if not isinstance(episodes, list) or len(episodes) > 8:
+            raise ValueError("invalid or unbounded identity timeline episodes")
+        for episode in episodes:
+            if not isinstance(episode, dict):
+                raise ValueError("invalid identity timeline episode")
+            nested_timeline_truncated |= _truncation_flag(episode, "evidence_truncated")
+            # The engine may omit interruption bursts even when every
+            # retained burst has complete event evidence.
+            nested_timeline_truncated |= _truncation_flag(episode, "segments_truncated")
+            # An interruption segment may omit evidence independently of its episode.
+            # Do not certify partial nested provenance as a complete cohort.
+            segments = episode.get("segments", [])
+            if not isinstance(segments, list) or len(segments) > 8:
+                raise ValueError("invalid or unbounded identity timeline segments")
+            for segment in segments:
+                if not isinstance(segment, dict):
+                    raise ValueError("invalid identity timeline segment")
+                nested_timeline_truncated |= _truncation_flag(segment, "evidence_truncated")
+    continuity_flag = _truncation_flag(response, "observed_group_continuity_truncated")
+    identity_timelines_flag = _truncation_flag(response, "identity_timelines_truncated")
+    continuity_truncated = continuity_flag or len(continuity) > 24
+    identity_timelines_truncated = identity_timelines_flag or len(identity_timelines) > 12
     completeness_flags = (
+        identity_timelines_truncated,
+        nested_timeline_truncated,
         _truncation_flag(response, "observed_pair_event_assignments_truncated"),
-        _truncation_flag(response, "observed_group_continuity_truncated"),
+        continuity_truncated,
         _truncation_flag(response, "observed_case_groups_truncated"),
         _truncation_flag(coverage, "scan_truncated"),
     )
+    # Returned-count metadata is reviewer-visible provenance. If supplied by
+    # an API adapter, refuse inconsistent counts rather than silently trusting
+    # a forged or stale claim about how much evidence was actually displayed.
+    # Offline engine responses may omit these presentation-only fields.
+    for collection, cap in (
+        ("identity_timelines", 12),
+        ("observed_pair_event_assignments", 24),
+        ("observed_group_continuity", 24),
+        ("observed_case_groups", 24),
+    ):
+        count_key = collection + "_returned_count"
+        if count_key in response:
+            value = response[count_key]
+            records = response.get(collection, [])
+            if not isinstance(records, list):
+                raise ValueError("invalid " + collection)
+            if type(value) is not int or value != min(len(records), cap):
+                raise ValueError("inconsistent " + count_key)
     incomplete = any(completeness_flags)
     seen_pair_keys: set[str] = set()
     for pair in pairs:
@@ -188,7 +264,7 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         # Continuity is part of the reviewer-visible evidence basis. A changed
         # group linkage must invalidate old labels even when pair rows match.
         "observed_group_continuity": response.get("observed_group_continuity"),
-        "observed_group_continuity_truncated": response.get("observed_group_continuity_truncated"),
+        "observed_group_continuity_truncated": continuity_truncated,
         # The reviewer also sees the current connected-component navigation
         # groups. Their membership and truncation are part of the evidence
         # basis even when direct pair assignments remain unchanged.
@@ -202,16 +278,21 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         # inspection API. Their provenance is part of the reviewer decision
         # context even when the event/pair projection is unchanged.
         "identity_timelines": response.get("identity_timelines"),
+        "identity_timelines_truncated": identity_timelines_truncated,
         "event_reviews": rows,
     }
     # All reviewer-visible context participates in the evidence binding. Reject
     # malformed or excessive context before digesting; otherwise untrusted scan
     # metadata can cause an uncaught serialization failure or resource exhaustion.
     try:
+        # Validate Unicode scalar values without changing the canonical digest's
+        # historical ASCII-escaped serialization (saved review compatibility).
+        json.dumps(fingerprint_basis, sort_keys=True, separators=(",", ":"),
+                   allow_nan=False, ensure_ascii=False).encode("utf-8")
         evidence_bytes = json.dumps(
             fingerprint_basis, sort_keys=True, separators=(",", ":"), allow_nan=False
         ).encode("utf-8")
-    except (TypeError, ValueError, RecursionError) as exc:
+    except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
         raise ValueError("invalid review evidence context") from exc
     if len(evidence_bytes) > 1048576:
         raise ValueError("unbounded review evidence context")
@@ -244,7 +325,13 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
     for annotation in annotations:
         if not isinstance(annotation, dict):
             raise ValueError("invalid annotation")
-        key = (annotation.get("window"), annotation.get("event_id"))
+        # Untrusted JSON may contain arrays/objects in identifier fields. Reject
+        # them explicitly rather than raising TypeError during dict lookup and
+        # turning an invalid review request into an HTTP 500.
+        window, event_id = annotation.get("window"), annotation.get("event_id")
+        if not isinstance(window, str) or not isinstance(event_id, str):
+            raise ValueError("invalid annotated event identity")
+        key = (window, event_id)
         if key not in observed or key in labels:
             raise ValueError("unknown or duplicate annotated event")
         expected = annotation.get("true_resource_pairs")
@@ -273,6 +360,11 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
     if len(labels) != len(observed):
         raise ValueError("all surfaced review events require explicit labels")
     tp = fp = fn = ambiguous = 0
+    # Separately count explicitly negative (no true pair) events. These are
+    # interruption/rejection probes, not verified cross-case contamination.
+    negative_events = negative_events_with_false_links = 0
+    positive_events = positive_events_with_false_links = 0
+    false_positive_events = false_negative_events = 0
     # Window-level counts reveal regressions hidden by aggregate accuracy.
     by_window: dict[str, dict[str, int]] = {}
     by_ambiguity: dict[str, dict[str, int]] = {
@@ -287,6 +379,16 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
         tp += correct
         fp += extra
         fn += missed
+        false_positive_events += bool(extra)
+        false_negative_events += bool(missed)
+        if not true_pairs:
+            negative_events += 1
+            negative_events_with_false_links += bool(extra)
+        else:
+            # A correctly linked positive event can still leak into another case.
+            # Negative-only probes cannot detect this failure mode.
+            positive_events += 1
+            positive_events_with_false_links += bool(extra)
         ambiguous += row["review_status"] == "ambiguous_multiple_pairs"
         if extra or missed:
             # Exact event/window provenance lets an authorized reviewer inspect
@@ -303,6 +405,7 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
         counts["fp"] += extra
         counts["fn"] += missed
         counts["events"] += 1
+        counts["false_link_events"] = counts.get("false_link_events", 0) + bool(extra)
         cohort = by_ambiguity["ambiguous_multiple_pairs" if row["review_status"] == "ambiguous_multiple_pairs" else "single_pair"]
         cohort["tp"] += correct
         cohort["fp"] += extra
@@ -318,6 +421,7 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
         wr = counts["tp"] / (counts["tp"] + counts["fn"]) if counts["tp"] + counts["fn"] else 0.0
         per_window_metrics[window] = {
             **counts, "precision": wp, "recall": wr,
+            "false_link_event_rate": counts["false_link_events"] / counts["events"],
             "f1": 2 * wp * wr / (wp + wr) if wp + wr else 0.0,
         }
     ambiguity_metrics = {}
@@ -334,6 +438,20 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
         "unannotated_events": len(observed) - len(labels),
         "ambiguous_annotated_events": ambiguous,
         "true_positive_pairs": tp, "false_positive_pairs": fp, "false_negative_pairs": fn,
+        "false_positive_events": false_positive_events,
+        "false_link_event_rate": false_positive_events / len(labels),
+        "false_negative_events": false_negative_events,
+        "explicit_positive_events": positive_events,
+        "explicit_positive_events_with_false_links": positive_events_with_false_links,
+        "explicit_positive_false_link_rate": (
+            positive_events_with_false_links / positive_events if positive_events else None
+        ),
+        "explicit_negative_events": negative_events,
+        "explicit_negative_events_with_false_links": negative_events_with_false_links,
+        "explicit_negative_false_link_rate": (
+            negative_events_with_false_links / negative_events if negative_events else None
+        ),
+        "explicit_negative_metrics_are_reviewer_labels_not_held_out": True,
         "precision": precision, "recall": recall,
         "per_window_counts": {window: by_window[window] for window in sorted(by_window)},
         "per_window_metrics": per_window_metrics,
@@ -371,19 +489,33 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Review exact observed event-to-resource-pair evidence offline")
     parser.add_argument("input", help="Authorized work-resumption response JSON, or - for stdin")
     parser.add_argument("--annotations", help="Explicit reviewer labels JSON; scoring remains non-held-out")
+    parser.add_argument("--source-labels", help="Explicit complete source-event inventory; not automatically held-out")
     args = parser.parse_args()
+    if args.annotations and args.source_labels:
+        parser.error("--annotations and --source-labels are mutually exclusive")
     try:
         if args.input == "-":
             payload = json.load(sys.stdin)
         else:
             with open(args.input, encoding="utf-8") as stream:
                 payload = json.load(stream)
-        if args.annotations:
-            if args.input != "-" and os.path.samefile(args.annotations, args.input):
+        if args.annotations or args.source_labels:
+            labels_file = args.annotations or args.source_labels
+            if args.input != "-" and os.path.samefile(labels_file, args.input):
                 raise ValueError("source and annotation files must be distinct")
-            with open(args.annotations, encoding="utf-8") as stream:
+            with open(labels_file, encoding="utf-8") as stream:
                 labels = json.load(stream)
-            output = score_bound_review_annotations(payload, labels)
+            if args.source_labels:
+                if not isinstance(labels, dict) or set(labels) != {"evidence_sha256", "source_events"}:
+                    raise ValueError("source cohort envelope requires evidence_sha256 and source_events")
+                digest = labels["evidence_sha256"]
+                if not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+                    raise ValueError("invalid evidence digest")
+                if not hmac.compare_digest(digest, build_review_queue(payload)["evidence_sha256"]):
+                    raise ValueError("source cohort evidence digest mismatch")
+                output = score_source_event_cohort(payload, labels["source_events"])
+            else:
+                output = score_bound_review_annotations(payload, labels)
         else:
             output = build_review_queue(payload)
         print(json.dumps(output, sort_keys=True, separators=(",", ":")))
@@ -391,6 +523,185 @@ def main() -> int:
     except (ValueError, OSError, json.JSONDecodeError) as exc:
         print(f"reconstruction review refused: {exc}", file=sys.stderr)
         return 2
+
+
+
+def score_source_event_cohort(response: dict[str, Any], source_labels: list[dict[str, Any]]) -> dict[str, Any]:
+    """Measure a complete, externally labeled source-event cohort.
+
+    Unlike reviewer scoring, the denominator includes events with no surfaced
+    reconstruction assignment. Labels MUST be prepared independently before
+    predictions are inspected; this function cannot authenticate that fact.
+    The caller must also verify that the source-event inventory is exhaustive.
+    No automatic held-out or real-world accuracy claim is made.
+    """
+    queue = build_review_queue(response)
+    if queue["coverage_incomplete"]:
+        raise ValueError("truncated reconstruction evidence cannot be evaluated")
+    if not isinstance(source_labels, list) or not source_labels or len(source_labels) > 4096:
+        raise ValueError("source event labels must be a nonempty bounded list")
+    predictions = {(row["window"], row["event_id"]): {
+        json.dumps(pair, separators=(",", ":")) for pair in row["candidate_resource_pairs"]
+    } for row in queue["event_reviews"]}
+    truth: dict[tuple[str, str], set[str]] = {}
+    # An event is one source observation, not a separate observation per window.
+    # Reject cross-window duplicates rather than inflating the evaluation cohort.
+    event_windows: dict[str, str] = {}
+    for label in source_labels:
+        if not isinstance(label, dict):
+            raise ValueError("invalid source event label")
+        window, event_id = label.get("window"), label.get("event_id")
+        if (not isinstance(window, str) or not window or len(window) > 128
+                or not isinstance(event_id, str) or not event_id or len(event_id) > 120):
+            raise ValueError("invalid source event identity")
+        # Unsurfaced earlier observations must still use canonical UTC windows.
+        # Fabricated session labels must not inflate false-negative counts.
+        if window != "current":
+            if not window.startswith("earlier:"):
+                raise ValueError("noncanonical source event window")
+            try:
+                canonical_window = _session_window(window[len("earlier:"):])
+            except ValueError as exc:
+                raise ValueError("noncanonical source event window") from exc
+            if canonical_window != window:
+                raise ValueError("noncanonical source event window")
+        previous_window = event_windows.setdefault(event_id, window)
+        if previous_window != window:
+            raise ValueError("source event ID reused across windows")
+        key = (window, event_id)
+        if key in truth:
+            raise ValueError("duplicate source event label")
+        pairs = label.get("true_resource_pairs")
+        if not isinstance(pairs, list) or len(pairs) > MAX_PAIRS:
+            raise ValueError("invalid source ground truth")
+        canonical = set()
+        for pair in pairs:
+            if not isinstance(pair, list) or len(pair) != 2:
+                raise ValueError("invalid source pair")
+            if any(not isinstance(identity, list) or len(identity) != 3 or any(
+                not isinstance(part, str) or not part or len(part) > 256 for part in identity
+            ) for identity in pair) or pair[0] == pair[1]:
+                raise ValueError("invalid source pair identity")
+            canonical.add(json.dumps(sorted(pair), separators=(",", ":")))
+        if len(canonical) != len(pairs):
+            raise ValueError("duplicate source ground truth pair")
+        truth[key] = canonical
+    if not set(predictions).issubset(truth):
+        raise ValueError("source inventory omits surfaced prediction events")
+    tp = fp = fn = missed_events = negative_events = contaminated_negative_events = false_link_events = 0
+    positive_events = contaminated_positive_events = 0
+    per_window: dict[str, dict[str, int]] = {}
+    # Separate ambiguous multi-pair predictions from single-pair predictions
+    # and source events the engine never surfaced. This exposes contamination
+    # hidden by aggregate micro scores without claiming independent labels.
+    per_prediction_status: dict[str, dict[str, int]] = {
+        name: {"events": 0, "tp": 0, "fp": 0, "fn": 0, "false_link_events": 0}
+        for name in ("ambiguous_multiple_pairs", "single_pair", "no_prediction")
+    }
+    disagreements: list[dict[str, Any]] = []
+    for key, expected in sorted(truth.items()):
+        predicted = predictions.get(key, set())
+        correct, extra, missing = predicted & expected, predicted - expected, expected - predicted
+        tp += len(correct)
+        fp += len(extra)
+        fn += len(missing)
+        false_link_events += bool(extra)
+        status = ("no_prediction" if key not in predictions else
+                  "ambiguous_multiple_pairs" if len(predicted) > 1 else "single_pair")
+        status_counts = per_prediction_status[status]
+        status_counts["events"] += 1
+        status_counts["tp"] += len(correct)
+        status_counts["fp"] += len(extra)
+        status_counts["fn"] += len(missing)
+        status_counts["false_link_events"] += bool(extra)
+        missed_events += bool(expected and not predicted)
+        negative_events += not expected
+        positive_events += bool(expected)
+        contaminated_positive_events += bool(expected and extra)
+        contaminated_negative_events += bool(not expected and predicted)
+        counts = per_window.setdefault(key[0], {"events": 0, "tp": 0, "fp": 0, "fn": 0,
+                                                 "negative_events": 0, "negative_false_link_events": 0, "false_link_events": 0,
+                                                 "positive_events": 0, "positive_false_link_events": 0})
+        counts["events"] += 1
+        counts["tp"] += len(correct)
+        counts["fp"] += len(extra)
+        counts["fn"] += len(missing)
+        counts["false_link_events"] += bool(extra)
+        counts["positive_events"] += bool(expected)
+        counts["positive_false_link_events"] += bool(expected and extra)
+        counts["negative_events"] += not expected
+        counts["negative_false_link_events"] += bool(not expected and predicted)
+        if extra or missing:
+            disagreements.append({
+                "window": key[0], "event_id": key[1],
+                "false_positive_resource_pairs": [json.loads(p) for p in sorted(extra)],
+                "false_negative_resource_pairs": [json.loads(p) for p in sorted(missing)],
+                "explicit_negative_event": not expected,
+                "prediction_missing": key not in predictions,
+            })
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    per_window_metrics = {}
+    for window, counts in sorted(per_window.items()):
+        wp = counts["tp"] / (counts["tp"] + counts["fp"]) if counts["tp"] + counts["fp"] else 0.0
+        wr = counts["tp"] / (counts["tp"] + counts["fn"]) if counts["tp"] + counts["fn"] else 0.0
+        per_window_metrics[window] = {
+            **counts,
+            "precision": wp, "recall": wr,
+            "f1": 2 * wp * wr / (wp + wr) if wp + wr else 0.0,
+            "source_event_false_link_rate": counts["false_link_events"] / counts["events"],
+            "positive_false_link_rate": (
+                counts["positive_false_link_events"] / counts["positive_events"]
+                if counts["positive_events"] else None
+            ),
+            "negative_false_link_rate": (
+                counts["negative_false_link_events"] / counts["negative_events"]
+                if counts["negative_events"] else None
+            ),
+        }
+    return {
+        "source_events_labeled": len(truth),
+        "source_events_without_surfaced_predictions": len(set(truth) - set(predictions)),
+        "positive_source_events_without_predictions": missed_events,
+        "true_positive_pairs": tp, "false_positive_pairs": fp, "false_negative_pairs": fn,
+        "precision": precision, "recall": recall,
+        "f1": 2 * precision * recall / (precision + recall) if precision + recall else 0.0,
+        "per_window_counts": per_window,
+        "per_window_metrics": per_window_metrics,
+        "per_prediction_status_metrics": {
+            name: {
+                **counts,
+                "precision": counts["tp"] / (counts["tp"] + counts["fp"])
+                if counts["tp"] + counts["fp"] else 0.0,
+                "recall": counts["tp"] / (counts["tp"] + counts["fn"])
+                if counts["tp"] + counts["fn"] else 0.0,
+                "false_link_event_rate": (
+                    counts["false_link_events"] / counts["events"] if counts["events"] else None
+                ),
+            }
+            for name, counts in per_prediction_status.items()
+        },
+        "event_disagreements": disagreements,
+        "event_disagreements_are_label_comparisons_not_confirmed_cases": True,
+        "source_events_with_false_links": false_link_events,
+        "source_event_false_link_rate": false_link_events / len(truth),
+        "positive_source_events": positive_events,
+        "positive_source_events_with_false_links": contaminated_positive_events,
+        "positive_false_link_rate": (
+            contaminated_positive_events / positive_events if positive_events else None
+        ),
+        "negative_source_events": negative_events,
+        "negative_source_events_with_false_links": contaminated_negative_events,
+        "negative_false_link_rate": (
+            contaminated_negative_events / negative_events if negative_events else None
+        ),
+        "source_event_inventory_exhaustiveness_verified": False,
+        "independent_labels_verified": False,
+        "held_out_verified": False,
+        "real_work_accuracy_claim": False,
+        "evaluation_scope": "caller_supplied_source_event_inventory",
+        "evidence_sha256": queue["evidence_sha256"],
+    }
 
 
 if __name__ == "__main__":
