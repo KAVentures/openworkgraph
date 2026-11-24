@@ -234,6 +234,23 @@ with TestClient(app) as client:
     again = client.post("/v1/process-catalog/clarify" + q,
                         json={"documents": docs}, headers=owner).json()
     assert question["question_id"] not in {x["question_id"] for x in again["questions"]}
+    incomplete_docs = [{**docs[0], "text": docs[0]["text"] * 6}, *docs[1:]]
+    incomplete = client.post("/v1/process-catalog/clarify" + q,
+                             json={"documents": incomplete_docs}, headers=owner).json()
+    blocked = next(x for x in incomplete["questions"]
+                   if x["kind"] == "contradiction" and x["target_id"] == "big")
+    assert blocked["coverage_blocked"] and "confirm" not in blocked["allowed_decisions"]
+    decision = {"question_id": blocked["question_id"], "decision": "confirm",
+                "answer": "Try to bypass UI", "cited_statement_ids": [blocked["citations"][0]["statement_id"]],
+                "expected_documents_sha256": incomplete["documents_sha256"]}
+    assert client.post("/v1/process-catalog/clarify/decide" + q, headers=owner,
+        json={"documents": incomplete_docs, "decision": decision}).status_code == 422
+    decision.update(decision="defer", cited_statement_ids=[])
+    assert client.post("/v1/process-catalog/clarify/decide" + q, headers=owner,
+        json={"documents": incomplete_docs, "decision": decision}).status_code == 200
+    after_defer = client.post("/v1/process-catalog/clarify" + q, headers=owner,
+        json={"documents": incomplete_docs}).json()
+    assert next(x for x in after_defer["questions"] if x["question_id"] == blocked["question_id"])["previous_decision"] == "defer"
     assert catalog.get(wid)["revision"] == rev
 '''
     env = os.environ.copy()
