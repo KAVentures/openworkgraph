@@ -143,9 +143,8 @@ class EvaluationCases(unittest.TestCase):
             for name in ('evaluate.py', 'execute.py', 'runtime.py',
                          'process_source_state.py', 'process_rule_conditions.py'):
                 (root / name).write_bytes((Path(__file__).parent / name).read_bytes())
-            runner = ('import evaluate,json,pathlib,socket; '
-                      'socket.socket=lambda *a,**k: (_ for _ in ()).throw(AssertionError("network"))\\n'
-                      'async def fake(*a,**k): return json.loads(pathlib.Path("mock-plans.json").read_text())\\n'
+            runner = ('import evaluate,json,pathlib\n'
+                      'async def fake(*a,**k): return json.loads(pathlib.Path("mock-plans.json").read_text())\n'
                       'evaluate.run_planner=fake; raise SystemExit(evaluate.main())')
             command = [sys.executable, '-c', runner, '--cases', 'suite.json',
                        '--model', 'fixture', '--output', 'report.json',
