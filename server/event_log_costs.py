@@ -25,6 +25,9 @@ from . import event_log_workspace as workspace
 from .event_log_variant_coverage import VARIANT_KEY_SQL
 
 FORMAT = "openworkgraph.event-log-costs.v1"
+MODEL_FILE_FORMAT = "openworkgraph.event-log-cost-model.v1"
+# Room for 500 escaped 200-character labels and the surrounding JSON.
+MAX_REQUEST_BYTES = 768 * 1024
 MAX_ACTIVITIES = 500
 MAX_PRICE = 1e9
 
@@ -55,6 +58,10 @@ class CostSpec(BaseModel):
         for name, price in value.items():
             if not name or len(name) > 200:
                 raise ValueError("activity names must be 1 to 200 characters")
+            try:
+                name.encode("utf-8")
+            except UnicodeEncodeError:
+                raise ValueError("activity names must be valid Unicode") from None
             out[name] = _price(price)
         return out
 
@@ -221,7 +228,7 @@ def _model_only(spec: Any) -> dict[str, Any]:
         raise workspace.EventLogWorkspaceError("a cost model is a JSON object")
     extra = set(spec) - set(MODEL_KEYS)
     if extra:
-        raise workspace.EventLogWorkspaceError("a saved cost model holds only " + ", ".join(MODEL_KEYS))
+        raise workspace.EventLogWorkspaceError("a cost model holds only " + ", ".join(MODEL_KEYS))
     parsed = _parse(spec)
     return {"currency": parsed.currency, "activity_costs": parsed.activity_costs,
             "default_activity_cost": parsed.default_activity_cost, "hourly_open_case_cost": parsed.hourly_open_case_cost}
@@ -235,6 +242,13 @@ def _with_conn(log_id: str, fn):
             return fn(conn)
         finally:
             conn.close()
+
+
+def preview_model(log_id: str, spec: Any) -> dict[str, Any]:
+    if not isinstance(spec, dict) or set(spec) != {"format", "model"} or spec["format"] != MODEL_FILE_FORMAT:
+        raise workspace.EventLogWorkspaceError("choose an OWG cost model file")
+    model = _model_only(spec["model"])
+    return _with_conn(log_id, lambda conn: {"format": MODEL_FILE_FORMAT, "model": model})
 
 
 def save_model(log_id: str, spec: Any) -> dict[str, Any]:

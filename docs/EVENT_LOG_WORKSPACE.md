@@ -678,9 +678,14 @@ The response gives:
 of cases can be compared with the rest. Repeated executions are not verified
 rework.
 
+Open **Price another activity** to search for an activity outside the suggested
+list or enter an exact label. The editor keeps prices for labels that have yet
+to appear in the log. Use **Show priced activities only** to review overrides
+without scrolling through the suggestions.
+
 **Saved prices.** **Save prices** keeps the model (currency, activity prices,
 default price and hourly cost) with the log. Next time, the dashboard fills the
-prices in. The HTML report, and its saved and scheduled copies, then include a
+prices in. **Load saved prices** restores the saved model to the editor. The HTML report, and its saved and scheduled copies, then include a
 **Process cost** section, which shows:
 
 * the total cost;
@@ -699,6 +704,16 @@ The section uses the report's case filter. API:
 
 A log keeps one model. It is deleted with the log and not copied when matching
 cases are saved as a new log.
+
+**Reuse a model.** Open **Transfer cost model** and download the editor's
+prices as JSON. In the destination log, choose the JSON file to validate its
+currency and prices, then select **Load previewed prices** to fill the editor.
+Select **Calculate cost** to try the model and **Save prices** to keep it with
+the destination log. The file contains only the currency, activity labels,
+and prices. Its envelope is
+`{"format":"openworkgraph.event-log-cost-model.v1","model":{...}}`.
+`POST /v1/event-logs/{log_id}/cost-model/preview` validates the file and
+returns the normalized model without changing saved prices.
 
 ### Cohort benchmark
 

@@ -1400,49 +1400,136 @@
     const controls=el('div',null,'row');controls.style.alignItems='end';
     controls.append(field('Currency (ISO code)',currency),field('Cost per hour a case is open',hourly),field('Cost of activities left blank',fallback));
     const shown=activityNames.slice(0,200);
-    const prices=shown.map((name,i)=>{const node=input('owgCostActivity'+i,'number');node.min='0';node.step='any';node.setAttribute('aria-label','Cost of one '+name);node.dataset.activity=name;node.style.width='8em';return node;});
-    const priceTable=table(['Activity','Cost per execution'],shown.map((name,i)=>[name,prices[i]]));
+    const suggested=new Set(shown),prices=new Map();let priceId=0;
+    const priceTable=table(['Activity','Cost per execution'],[]),priceBody=priceTable.querySelector('tbody');
+    const extraActivity=input('owgCostExactActivity','text');extraActivity.maxLength=400;
+    const lookup=activityLabelLookup(extraActivity,{id:part=>'owgCostExactActivity'+part,subject:'priced activity'});
+    const addActivity=button('Add activity price','secondary');addActivity.id='owgCostAddActivity';
+    const pricedOnly=input('owgCostPricedOnly','checkbox');
+    const exactPrice=document.createElement('details');
+    exactPrice.append(el('summary','Price another activity'),field('Exact activity label',extraActivity),lookup.wrap,addActivity);
+    extraActivity.addEventListener('input',lookup.reset);
     const run=button('Calculate cost','secondary');run.id='owgCostRun';
     const out=el('div');out.id='owgCostResults';out.setAttribute('role','status');
-    box.append(controls,priceTable);
-    if(activityNames.length>shown.length)box.appendChild(el('div','Only the first '+shown.length+' activities are listed; give the rest a cost with “Cost of activities left blank”.','muted'));
+    box.append(controls,exactPrice,field('Show priced activities only',pricedOnly),priceTable);
+    if(activityNames.length>shown.length)box.appendChild(el('div','The first '+shown.length+' activities are suggested. Search for any other activity or enter its exact label.','muted'));
     const saveModel=button('Save prices','secondary');saveModel.id='owgCostSaveModel';saveModel.title='Keep these prices with the log; the HTML report then includes a cost section';
     const forget=button('Forget saved prices','secondary');forget.id='owgCostForgetModel';forget.disabled=true;
+    const restore=button('Load saved prices','secondary');restore.id='owgCostRestoreModel';restore.disabled=true;
     const modelStatus=el('div',null,'muted');modelStatus.id='owgCostModelStatus';modelStatus.setAttribute('role','status');
-    const actions=el('div',null,'row');actions.append(run,saveModel,forget);
+    const actions=el('div',null,'row');actions.append(run,saveModel,restore,forget);
+    const modelFormat='openworkgraph.event-log-cost-model.v1',modelFileLimit=768*1024;
+    const file=input('owgCostModelFile','file');file.accept='.json,application/json';
+    const loadFile=button('Load previewed prices','secondary');loadFile.id='owgCostLoadFile';loadFile.disabled=true;
+    const downloadFile=button('Download cost model JSON','secondary');downloadFile.id='owgCostDownloadModel';
+    const transfer=document.createElement('details');transfer.id='owgCostTransfer';
+    const transferStatus=el('div',null,'muted');transferStatus.setAttribute('role','status');
+    transfer.append(el('summary','Transfer cost model'),field('Preview cost model JSON',file),loadFile,downloadFile,transferStatus);
     const evidence=el('div');evidence.id='owgCostCaseReview';
-    box.append(actions,modelStatus,out,evidence);
+    box.append(actions,modelStatus,transfer,out,evidence);
     const generation=state.generation;
     const modelPath=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/cost-model';
     const readModel=()=>{
       const activity_costs=Object.create(null);
-      for(const node of prices){if(node.value.trim()==='')continue;const v=Number(node.value);if(!(v>=0))throw new Error('Costs must be zero or more ('+node.dataset.activity+').');activity_costs[node.dataset.activity]=v;}
-      const model={currency:currency.value.trim().toUpperCase(),activity_costs,hourly_open_case_cost:Number(hourly.value||0)};
-      if(fallback.value.trim()!=='')model.default_activity_cost=Number(fallback.value);
+      const price=(value,label)=>{
+        const number=Number(value);
+        if(!(number>=0&&number<=1e9))throw new Error('Enter a cost from 0 to 1 billion for '+label+'.');
+        return number;
+      };
+      for(const [name,{node}] of prices)if(node.value!=='')activity_costs[name]=price(node.value,name);
+      const code=currency.value.trim().toUpperCase();
+      if(!/^[A-Z]{3}$/.test(code))throw new Error('Enter a three-letter currency code.');
+      const model={currency:code,activity_costs,hourly_open_case_cost:price(hourly.value||0,'each open hour')};
+      if(fallback.value!=='')model.default_activity_cost=price(fallback.value,'unpriced activities');
+      const priced=Object.keys(activity_costs).length;
+      if(priced>500)throw new Error('Price at most 500 individual activities.');
+      if(!priced&&model.default_activity_cost===undefined&&!model.hourly_open_case_cost)throw new Error('Enter an activity cost, a default cost, or an hourly cost.');
       return model;
     };
-    getJSON(modelPath()).then(r=>{
-      if(generation!==state.generation||!r.saved)return;
-      const m=r.saved.model;currency.value=m.currency;hourly.value=String(m.hourly_open_case_cost||0);
-      fallback.value=m.default_activity_cost===null||m.default_activity_cost===undefined?'':String(m.default_activity_cost);
-      for(const node of prices){const v=m.activity_costs[node.dataset.activity];node.value=v===undefined?'':String(v);}
-      forget.disabled=false;modelStatus.textContent='Prices saved '+String(r.saved.saved_at).slice(0,16).replace('T',' ')+' UTC are filled in. The HTML report includes a cost section.';
-    }).catch(()=>{});
-    saveModel.onclick=async()=>{
-      saveModel.disabled=true;
-      try{const r=await (await api(modelPath(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(readModel())})).json();
-        forget.disabled=false;modelStatus.textContent='Prices saved. The HTML report and its saved copies now include a cost section.';}
-      catch(error){modelStatus.textContent=error.message;}finally{saveModel.disabled=false;}
-    };
-    forget.onclick=async()=>{
-      try{await api(modelPath()+'/delete',{method:'POST'});forget.disabled=true;modelStatus.textContent='Saved prices forgotten. The report no longer includes a cost section.';}
-      catch(error){modelStatus.textContent=error.message;}
-    };
-    let revision=0;
+    let revision=0,formRevision=0,savedVersion=0,saved=null,previewTurn=0,candidate=null,saving=false;
+    const syncSaved=()=>{saveModel.disabled=saving;forget.disabled=restore.disabled=saving||!saved;};
     function invalidate(){
       revision++;run.disabled=false;out.replaceChildren();evidence.replaceChildren();
     }
-    for(const control of [currency,hourly,fallback,...prices])control.addEventListener('input',invalidate);
+    function editPrices(){formRevision++;invalidate();}
+    function updatePriceVisibility(){
+      for(const {node,row} of prices.values())row.hidden=pricedOnly.checked&&node.value==='';
+    }
+    function ensurePrice(name){
+      if(prices.has(name))return prices.get(name).node;
+      const node=input('owgCostActivity'+priceId++,'number');node.min='0';node.step='any';node.style.width='8em';
+      node.setAttribute('aria-label','Cost of one '+name);
+      const row=el('tr'),cell=el('td');cell.append(node);row.append(el('td',name),cell);priceBody.append(row);
+      prices.set(name,{node,row});
+      node.addEventListener('input',()=>{editPrices();if(node.value!=='')updatePriceVisibility();});
+      node.addEventListener('blur',updatePriceVisibility);
+      return node;
+    }
+    shown.forEach(ensurePrice);
+    pricedOnly.onchange=updatePriceVisibility;
+    for(const control of [currency,hourly,fallback])control.addEventListener('input',editPrices);
+    addActivity.onclick=()=>{
+      const name=extraActivity.value;
+      if(!name||Array.from(name).length>200){modelStatus.textContent='Enter an exact activity label of 1 to 200 characters.';return;}
+      if(!prices.has(name)&&prices.size-suggested.size>=500){modelStatus.textContent='Clear unused activity rows by loading a saved or portable model.';return;}
+      pricedOnly.checked=false;
+      const node=ensurePrice(name);editPrices();updatePriceVisibility();node.focus();
+    };
+    function applyModel(model){
+      currency.value=model.currency;hourly.value=String(model.hourly_open_case_cost);
+      fallback.value=model.default_activity_cost==null?'':String(model.default_activity_cost);
+      for(const [name,{node,row}] of prices){
+        if(!suggested.has(name)&&!Object.hasOwn(model.activity_costs,name)){row.remove();prices.delete(name);}
+        else node.value='';
+      }
+      for(const [name,value] of Object.entries(model.activity_costs))ensurePrice(name).value=String(value);
+      editPrices();updatePriceVisibility();
+    }
+    restore.onclick=()=>{if(saved){applyModel(saved);modelStatus.textContent='Loaded saved prices into the editor.';}};
+    getJSON(modelPath()).then(r=>{
+      if(generation!==state.generation||savedVersion||!r.saved)return;
+      saved=r.saved.model;syncSaved();
+      if(formRevision){modelStatus.textContent='Saved prices are available. Load them to replace your edits.';return;}
+      applyModel(saved);
+      modelStatus.textContent='Prices saved '+String(r.saved.saved_at).slice(0,16).replace('T',' ')+' UTC are filled in. The HTML report includes a cost section.';
+    }).catch(()=>{});
+    saveModel.onclick=async()=>{
+      saving=true;syncSaved();
+      try{const r=await (await api(modelPath(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(readModel())})).json();
+        savedVersion++;saved=r.model;modelStatus.textContent='Prices saved. The HTML report and its saved copies now include a cost section.';}
+      catch(error){modelStatus.textContent=error.message;}finally{saving=false;syncSaved();}
+    };
+    forget.onclick=async()=>{
+      saving=true;syncSaved();
+      try{await api(modelPath()+'/delete',{method:'POST'});savedVersion++;saved=null;modelStatus.textContent='Saved prices forgotten. The report no longer includes a cost section.';}
+      catch(error){modelStatus.textContent=error.message;}finally{saving=false;syncSaved();}
+    };
+    file.onchange=async()=>{
+      const turn=++previewTurn,selected=file.files[0];
+      candidate=null;loadFile.disabled=true;transferStatus.textContent='';
+      if(!selected)return;
+      if(selected.size>modelFileLimit){transferStatus.textContent='Choose an OWG cost model file of at most 768 KiB.';return;}
+      const current=()=>turn===previewTurn&&generation===state.generation&&box.isConnected;
+      try{
+        const result=await (await api(modelPath()+'/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:selected})).json();
+        if(!current())return;
+        candidate=result.model;loadFile.disabled=false;
+        transferStatus.textContent=candidate.currency+' · '+Object.keys(candidate.activity_costs).length+' activity prices. Load them into the editor to review.';
+      }catch(error){if(current())transferStatus.textContent=error.message;}
+    };
+    loadFile.onclick=()=>{
+      if(!candidate)return;
+      applyModel(candidate);candidate=null;file.value='';loadFile.disabled=true;
+      transferStatus.textContent='Loaded into the editor. Use Save prices to keep this model with the log.';
+    };
+    downloadFile.onclick=()=>{
+      try{
+        const packet={format:modelFormat,model:readModel()};
+        const formatted=JSON.stringify(packet,null,2);
+        const text=new TextEncoder().encode(formatted).length<=modelFileLimit?formatted:JSON.stringify(packet);
+        download('owg-cost-model.json',text,'application/json');
+      }catch(error){transferStatus.textContent=error.message;}
+    };
     run.onclick=async()=>{
       invalidate();
       const ticket=revision;
