@@ -273,7 +273,7 @@ def ingest(channel_id: str, timestamp: str, sequence_header: str, signature: str
             version = channel["versions"][key] = {"version_label": label, "workflow_spec_sha256": parsed["spec_hash"],
                                                   "first_seen": _now(), "reports": 0, "runs": 0}
         if version is not None:
-            version.update(last_seen=_now(), reports=version["reports"] + 1, runs=version["runs"] + result["runs_imported"])
+            version.update(last_seen=_now(), reports=version["reports"] + 1, runs=version["runs"] + len(parsed["runs"]))
         _outcome(channel, sequence, digest, "imported", 200, "")
         channel["accepted_reports"] = channel.get("accepted_reports", 0) + 1
         _write(data)
