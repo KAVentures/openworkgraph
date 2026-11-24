@@ -2231,12 +2231,14 @@
                   el('p','Exact retained export bytes match · exported '+value.exported_at),
                   el('p','Historical source operation: '+(value.historical_source_operation_reported_verified?'reported verified':'not established')+
                     ' · '+(value.historical_source_availability||'unknown')),
-                  el('p','Saved expectation: '+value.process_expectation_status.replaceAll('_',' ')+
+                  el('p','Saved design: '+value.current_process_reference_status.replaceAll('_',' ')+
+                    (value.latest_process_revision!==null?' · latest revision '+value.latest_process_revision:'')),
+                  el('p','Historical expectation: '+value.process_expectation_status.replaceAll('_',' ')+
                     ' · Run association: '+value.run_attribution_status.replaceAll('_',' ')),
                   el('p','Idea revision at export '+value.idea_revision_at_export+'; current '+value.current_idea_revision+
                     '. No fresh source read, agent causality or business outcome verified.','muted'));
               }catch(e){if(generation===detailGeneration&&view===sourceView&&version===reviewVersion)reviewResult.textContent=e.message;}
-              finally{reviewButton.disabled=false;reviewFile.value='';}
+              finally{reviewButton.disabled=false;if(version===reviewVersion)reviewFile.value='';}
             };
             let entries=[],formVersion=0,optionsVersion=0,pending=false;
             const ready=()=>{run.disabled=pending||!entries.length||!confirmed.checked||!/^owg:r:[0-9a-f]{32}$/.test(sourceRef.value.trim());confirmed.disabled=pending||!entries.length;};
