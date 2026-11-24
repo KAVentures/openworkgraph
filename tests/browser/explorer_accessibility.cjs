@@ -1113,7 +1113,100 @@ const path=require('node:path');
    await page.unroute('**/v1/workflow-evidence/families?*');
    await page.setViewportSize({width:390,height:844});
    assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false);
-   assert.equal(writes,0);assert.deepEqual(errors,[]);
+   assert.equal(writes,0);
+   // Separate synthetic snapshot acceptance: storage is explicit and
+   // the exact retained log opens without retargeting another dataset.
+   const snapshots=await browser.newPage();
+   snapshots.on('pageerror',error=>errors.push(error.message));
+   const execution='execution:aaaaaaaaaaaaaaaa',logId='log_bbbbbbbbbbbbbbbb',digest='a'.repeat(64);
+   const originalScope={execution_ids:[execution],since:'2026-11-01T00:00:00Z'};
+   let previewCalls=0,saveCalls=0,sourceCalls=0,recheckCalls=0,lastPreview=null;
+   const metadata={manifest_available:true,snapshot_sha256:digest,original_case_count:1,original_event_count:2,
+     timestamp_tie_groups:0,business_case_identity_verified:false,capture_complete:false,independent_retention:true};
+   const log={log_id:logId,name:'Observed executions - Workflow selection',events:2,objects:1,observed_execution_snapshot:metadata};
+   const asJSON=(route,body)=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(body)});
+   const report=scope=>({format:'openworkgraph.observed-execution-log.v1',snapshot_sha256:digest,
+     scope,case_count:1,event_count:2,timestamp_tie_groups:0,
+     cases:[{execution_id:execution,actor_kind:'human',events:2,timestamp_tie_groups:0,membership_basis:'inferred_time_session'}],
+     business_case_identity_verified:false,business_outcomes_verified:false,capture_complete:false,
+     sensor_observations_not_deduplicated_actions:true,source_limit_reached:false});
+   try{
+     await snapshots.route('**/v1/workflow-evidence?*',route=>{
+       const q=new URL(route.request().url()).searchParams;
+       assert.equal(q.get('execution_ids'),execution);
+       assert.equal(q.get('since'),originalScope.since);
+       return asJSON(route,{selector:{execution_ids:[execution],selected_execution_count:1},
+         structural_alignment:{high_support_steps:[]},executions:[{execution_id:execution,actor_kind:'human',
+           duration_seconds:12,steps:['surface:gmail','action:click','action:submit'],outcome_status:'unknown'}],
+         provenance:{source_limit_reached:false}});
+     });
+     await snapshots.route('**/v1/workflow-evidence/event-log/preview',route=>{
+       previewCalls++;const scope=route.request().postDataJSON();
+       assert.deepEqual(scope.execution_ids,[execution]);assert.equal(scope.since,originalScope.since);
+       lastPreview=report(scope);return asJSON(route,lastPreview);
+     });
+     await snapshots.route('**/v1/workflow-evidence/event-log/create',route=>{
+       saveCalls++;const body=route.request().postDataJSON();
+       assert.equal(route.request().headers()['x-owg-local-storage-confirmed'],'true');
+       assert.deepEqual(body.selection,lastPreview.scope);assert.equal(body.expected_sha256,digest);
+       return asJSON(route,{...lastPreview,log_id:logId,name:log.name,stored_independent_snapshot:true,existing_snapshot_reused:false});
+     });
+     await snapshots.route('**/v1/event-logs',route=>asJSON(route,{logs:[log],limit:50}));
+     await snapshots.route('**/v1/event-logs/'+logId+'/object-types',route=>asJSON(route,{object_types:[{object_type:'case',objects:1}]}));
+     await snapshots.route('**/v1/workflow-evidence/event-log/source?*',route=>{
+       sourceCalls++;assert.equal(new URL(route.request().url()).searchParams.get('log_id'),logId);
+       return asJSON(route,{...lastPreview,log_id:logId,name:log.name,stored_event_count:2,
+         stored_independent_snapshot:true,source_history_rechecked:false});
+     });
+     await snapshots.route('**/v1/workflow-evidence/event-log/recheck',route=>{
+       recheckCalls++;assert.deepEqual(route.request().postDataJSON(),{log_id:logId});
+       return asJSON(route,{format:'openworkgraph.observed-execution-log-recheck.v1',log_id:logId,
+         original_snapshot_sha256:digest,current_projection_sha256:null,checked_at:'2026-11-24T06:00:00Z',
+         status:'source_unavailable',stored_log_changed:false,capture_complete:false,
+         business_case_identity_verified:false,business_outcomes_verified:false});
+     });
+     await snapshots.goto(base+'/#session='+session);
+     await snapshots.locator('[role=tab][data-tab=overview]').click();
+     await snapshots.evaluate(({execution,since})=>window.owgWorkflowExplorer.inspectSnapshotExecution({executionId:execution,window:{since}}),
+       {execution,since:originalScope.since});
+     const section=snapshots.locator('#owgExplorerExecutionLog');
+     await section.waitFor();
+     const create=section.getByRole('button',{name:'Create saved event log'});
+     const preview=section.getByRole('button',{name:'Preview execution event log'});
+     const consent=section.getByRole('checkbox',{name:/Store this reviewed independent copy/});
+     assert.equal(await create.isDisabled(),true);assert.equal(saveCalls,0);
+     await preview.click();await section.getByText('Preview ready.',{exact:false}).waitFor();
+     await consent.check();assert.equal(await create.isEnabled(),true);
+     await section.getByLabel('Structural observations').selectOption('actions_and_navigation');
+     assert.equal(await create.isDisabled(),true);
+     await preview.click();await section.getByText('Preview ready.',{exact:false}).waitFor();
+     assert.equal(previewCalls,2);assert.equal(lastPreview.scope.projection,'actions_and_navigation');
+     await consent.check();await create.click();
+     await section.getByRole('button',{name:'Open created event log'}).waitFor();
+     assert.equal(saveCalls,1);
+     await audit(snapshots,'#owgExplorerExecutionLog','Reviewed execution snapshot');
+     await section.getByRole('button',{name:'Open created event log'}).click();
+     await snapshots.locator('#owgEventLogStatus').filter({hasText:'Opened saved workflow snapshot'}).waitFor();
+     assert.equal(await snapshots.locator('#owgEventLogPick').inputValue(),logId);
+     await snapshots.evaluate(log=>{
+       const parent=document.createElement('div');parent.id='owgSourceFixture';document.getElementById('owgEventLogCard').appendChild(parent);
+       window.owgObservedExecutionLog.renderSource(parent,log,()=>true);
+     },log);
+     const origin=snapshots.locator('#owgObservedSnapshotSource');
+     assert.equal(sourceCalls,0);assert.equal(recheckCalls,0);
+     await origin.getByRole('button',{name:'Show original execution references'}).click();
+     await origin.getByText('Original manifest loaded.',{exact:false}).waitFor();
+     assert.equal(sourceCalls,1);assert.equal(recheckCalls,0);
+     await origin.getByRole('button',{name:'Recheck retained source'}).click();
+     await origin.getByText('Original source is unavailable',{exact:false}).waitFor();
+     assert.equal(recheckCalls,1);
+     await audit(snapshots,'#owgObservedSnapshotSource','Original snapshot provenance');
+     await origin.getByRole('button',{name:'Inspect retained source execution'}).click();
+     await snapshots.locator('#owgExplorerEvidence h4').waitFor();
+     assert.match(await snapshots.locator('#owgExplorerStatus').textContent(),/Original saved snapshot scope/);
+     assert.equal(saveCalls,1);
+   }finally{await snapshots.close();}
+   assert.deepEqual(errors,[]);
    console.log('Explorer accessibility acceptance passed: WCAG 2.1 A/AA axe audit of candidates and selected step, keyboard-only open/select/inspect, named and tabbable controls, mobile width, no writes.');
  }finally{
    if(browser)await browser.close();server.kill('SIGTERM');
