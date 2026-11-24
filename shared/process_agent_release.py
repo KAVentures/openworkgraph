@@ -258,10 +258,17 @@ def _structural_changes(before: dict, after: dict) -> dict:
                 for k in sorted(a.keys() & b.keys()) if a[k] != b[k]],
             "retained_identity_order_changed": ([k for k in a if k in b] != [k for k in b if k in a]),
         }
+    def terminals(model):
+        values = model.get("terminal_activity_ids", [])
+        if (not isinstance(values, list) or len(values) > 40
+                or any(not isinstance(value, str) or not value or len(value) > 200 for value in values)
+                or len(set(values)) != len(values)):
+            raise ReleaseIntegrityError("Invalid terminal activity inventory")
+        return set(values)
     return {
         "keyed_model_changes": changes,
         "entry_activity_changed": old.get("entry_activity_id") != new.get("entry_activity_id"),
-        "terminal_activity_ids_changed": set(old.get("terminal_activity_ids", [])) != set(new.get("terminal_activity_ids", [])),
+        "terminal_activity_ids_changed": terminals(old) != terminals(new),
         "other_changed_model_fields": sorted(
             k for k in old.keys() | new.keys() if k not in groups
             and (k not in old or k not in new or old[k] != new[k])),
