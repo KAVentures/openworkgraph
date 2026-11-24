@@ -150,18 +150,19 @@ review current full schemas, permissions, result predicates, fresh preconditions
 conditional writes, idempotency and independent outcome checks separately.'''
 
 
-def validate_catalog(spec, catalog):
+def validate_catalog(spec, catalog, *, require_fresh=True):
     validate_spec(spec)
-    if (catalog.get('format') != 'openworkgraph.customer-tool-catalog.v1'
+    if (not isinstance(catalog,dict) or catalog.get('format') != 'openworkgraph.customer-tool-catalog.v1'
             or digest(catalog.get('process_reference')) != digest(reference(spec))
             or catalog.get('spec_sha256') != digest(spec)
-            or not isinstance(catalog.get('tools'), list) or len(catalog['tools']) > 100):
+            or not isinstance(catalog.get('tools'), list) or len(catalog['tools']) > 100
+            or type(catalog.get('omitted_tool_count')) is not int or catalog['omitted_tool_count'] < 0):
         raise ImplementationError('Re-inspect the tool catalog for this exact specification')
     endpoint(catalog.get('tool_server_url'))
     try:
         when = datetime.fromisoformat(str(catalog.get('inspected_at') or '').replace('Z','+00:00'))
         age = (datetime.now(timezone.utc)-when).total_seconds()
-        if when.tzinfo is None or not -300 <= age <= 86400:
+        if when.tzinfo is None or age < -300 or (require_fresh and age > 86400):
             raise ValueError('stale')
     except (ValueError,TypeError,OverflowError):
         raise ImplementationError('Inspect a fresh tool catalog before requesting mappings') from None
@@ -296,7 +297,61 @@ def _contract_finding(code, activity=None):
     return {'code': code, 'activity_id': activity}
 
 
-def audit_bindings(spec, catalog, suite, bindings):
+def _mapped_catalog_changes(spec, previous, current, mapping):
+    """Compare only tools referenced by mappings, including write preconditions.
+
+    A missing tool in a bounded catalog is not proof of provider deletion.
+    Descriptions, defaults, argument values, tool names and endpoint URLs are
+    deliberately excluded from this output.
+    """
+    validate_catalog(spec, previous, require_fresh=False)
+    if endpoint(previous['tool_server_url']) != endpoint(current['tool_server_url']):
+        raise ImplementationError('Previous and current catalogs must identify the same tool endpoint')
+    old_time = datetime.fromisoformat(previous['inspected_at'].replace('Z', '+00:00'))
+    new_time = datetime.fromisoformat(current['inspected_at'].replace('Z', '+00:00'))
+    if old_time > new_time:
+        raise ImplementationError('Previous catalog must not be newer than the current catalog')
+    old = {row['name']: row for row in previous['tools']}
+    new = {row['name']: row for row in current['tools']}
+    rows = []
+    for identifier, binding in sorted(mapping.items()):
+        for role, contract in (('action', binding), ('precondition', binding.get('precondition'))):
+            if not isinstance(contract, dict) or not tool_name(contract.get('tool_name')):
+                continue
+            name = contract['tool_name']
+            before, after = old.get(name), new.get(name)
+            if before is None or after is None:
+                status = ('not_in_either_projection' if before is None and after is None else
+                          'not_in_previous_projection' if before is None else 'not_in_current_projection')
+                changes = None
+            else:
+                a = {f['name']: (f['type'], f['required']) for f in before['input_fields']}
+                b = {f['name']: (f['type'], f['required']) for f in after['input_fields']}
+                status = ('schema_pin_changed' if before['input_schema_sha256'] != after['input_schema_sha256']
+                          else 'projection_inconsistent' if a != b else 'schema_pin_unchanged')
+                changes = {
+                    'added_field_count': len(b.keys() - a.keys()),
+                    'removed_field_count': len(a.keys() - b.keys()),
+                    'changed_type_count': sum(a[k][0] != b[k][0] for k in a.keys() & b.keys()),
+                    'changed_required_count': sum(a[k][1] != b[k][1] for k in a.keys() & b.keys()),
+                    'new_required_field_count': sum(b[k][1] for k in b.keys() - a.keys()) +
+                                                sum(not a[k][1] and b[k][1] for k in a.keys() & b.keys()),
+                }
+            rows.append({'activity_id': identifier, 'role': role, 'status': status,
+                         'field_changes': changes,
+                         'schema_pin_review_required': status != 'schema_pin_unchanged'})
+    return {'previous_catalog_sha256': digest(previous),
+            'current_catalog_sha256': digest(current),
+            'previous_inspected_at': previous['inspected_at'],
+            'current_inspected_at': current['inspected_at'],
+            'previous_omitted_tool_count': previous['omitted_tool_count'],
+            'current_omitted_tool_count': current['omitted_tool_count'],
+            'mapped_contracts': rows,
+            'mapped_contracts_requiring_review': sum(r['schema_pin_review_required'] for r in rows),
+            'provider_tool_removal_verified': False}
+
+
+def audit_bindings(spec, catalog, suite, bindings, *, previous_catalog=None):
     """Offline review of exact reviewed route alternatives against current mapping.
 
     A reviewed route is an expectation, not a captured execution or a model
@@ -322,6 +377,8 @@ def audit_bindings(spec, catalog, suite, bindings):
             or len(set(identifiers)) != len(identifiers)):
         raise ImplementationError('Bindings require unique existing activity IDs')
     mapping = dict(zip(identifiers, mapped))
+    catalog_changes = (_mapped_catalog_changes(spec, previous_catalog, catalog, mapping)
+                       if previous_catalog is not None else None)
     # Reject duplicate or over-budget inputs instead of inflating coverage or silently dropping alternatives.
     if any(len({digest(route) for route in case['expected']['accepted_routes']}) != len(case['expected']['accepted_routes']) for case in cases):
         raise ImplementationError('Reviewed route alternatives must be distinct within each case')
@@ -419,7 +476,8 @@ def audit_bindings(spec, catalog, suite, bindings):
             'process_reference': reference(spec), 'spec_sha256': digest(spec),
             'catalog_sha256': digest(catalog), 'suite_sha256': digest(suite),
             'bindings_sha256': digest(bindings), 'catalog_inspected_at': catalog['inspected_at'],
-            'catalog_omitted_tool_count': catalog.get('omitted_tool_count'),
+            'catalog_omitted_tool_count': catalog['omitted_tool_count'],
+            'mapped_catalog_changes': catalog_changes,
             'case_count': len(cases), 'reviewed_route_count': route_count,
             'routes_with_clear_static_checks': clear,
             'routes_with_findings': route_count - clear,
@@ -429,7 +487,9 @@ def audit_bindings(spec, catalog, suite, bindings):
             'missing_categories': [category for category, n in category_counts.items() if not n],
             'uncovered_nonhuman_activity_ids': uncovered,
             'finding_counts': dict(sorted(counts.items())), 'cases': report_cases,
-            'review_required': not route_count or clear != route_count or bool(uncovered) or any(not n for n in category_counts.values()),
+            'review_required': (not route_count or clear != route_count or bool(uncovered)
+                                or any(not n for n in category_counts.values())
+                                or bool(catalog_changes and catalog_changes['mapped_contracts_requiring_review'])),
             'schema_constraints_fully_validated': False,
             'provider_semantics_or_permissions_verified': False,
             'live_catalog_refreshed': False, 'business_tools_called': False,
@@ -456,16 +516,20 @@ def main():
     mode.add_argument('--audit-bindings',action='store_true',help='Offline reviewed-case binding contract audit')
     parser.add_argument('--tool-server-url');parser.add_argument('--catalog');parser.add_argument('--case');parser.add_argument('--model')
     parser.add_argument('--cases');parser.add_argument('--bindings')
+    parser.add_argument('--previous-catalog',help='Optional older inspected catalog for mapped contract drift review')
     parser.add_argument('--output',required=True,help='New output JSON file; existing files are never overwritten')
     args = parser.parse_args()
     if Path(args.output).exists():
         raise ImplementationError('Choose a new output file; existing configuration is never overwritten')
     spec = load_object(Path(__file__).parent/'workflow.spec.json',limit=262144)
+    if args.previous_catalog and not args.audit_bindings:
+        parser.error('--previous-catalog requires --audit-bindings')
     if args.audit_bindings:
         if not all((args.catalog, args.cases, args.bindings)) or any((args.model, args.case, args.tool_server_url)):
             raise ImplementationError('Choose only a saved inspected catalog, reviewed case suite and bindings for offline audit')
         result = audit_bindings(spec, load_object(args.catalog, limit=262144),
-                                load_object(args.cases, limit=262144), load_object(args.bindings))
+                                load_object(args.cases, limit=262144), load_object(args.bindings),
+                                previous_catalog=load_object(args.previous_catalog,limit=262144) if args.previous_catalog else None)
         write_new(args.output, result, limit=2*1024*1024)
         return {'mode':'offline_binding_audit','output_written':True,
                 'review_required':result['review_required'],
