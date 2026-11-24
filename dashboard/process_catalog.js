@@ -518,7 +518,7 @@
         const consent=el('input');consent.type='checkbox';label.appendChild(consent);
         const prepare=button('Record refreshed source and prepare successor draft',async()=>{
           if(!current()||serial!==turn||!consent.checked||prepare.disabled)return;
-          prepare.disabled=true;previewButton.disabled=true;
+          prepare.disabled=true;previewButton.disabled=true;consent.disabled=true;
           try{
             // Never retarget an old source review onto a newer process revision.
             const latest=await request('/v1/process-catalog/revision?'+new URLSearchParams({workflow_id:basis.workflow_id}));
@@ -538,9 +538,9 @@
             changed();renderEditor();
             status('UNSAVED rediscovery successor against r'+basis.revision+'. Earlier rules and approvals were not carried. Review and explicitly save the next revision.');
           }catch(error){if(current())message.textContent=String(error.message||error);}
-          finally{if(current()){previewButton.disabled=false;prepare.disabled=!consent.checked;}}
+          finally{if(current()){previewButton.disabled=false;consent.disabled=false;prepare.disabled=!consent.checked;}}
         });
-        prepare.disabled=true;consent.addEventListener('change',()=>{prepare.disabled=!consent.checked;});
+        prepare.disabled=true;consent.addEventListener('change',()=>{prepare.disabled=consent.disabled||!consent.checked;});
         out.append(label,prepare);
       }catch(error){if(current()&&serial===turn)message.textContent=String(error.message||error);}
       finally{if(current())previewButton.disabled=false;}
