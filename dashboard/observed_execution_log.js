@@ -11,6 +11,7 @@
   const button=label=>{const node=el('button',label,'secondary');node.type='button';return node;};
   const validId=id=>typeof id==='string'&&/^execution:[a-f0-9]{16}$/.test(id);
   const integer=n=>Number.isSafeInteger(n)&&n>=0;
+  const validLogId=id=>typeof id==='string'&&/^log_[a-f0-9]{16}$/.test(id);
   const sha=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
   function matchingPreview(report,spec){
     if(!report||report.format!==FORMAT||!sha(report.snapshot_sha256)||
@@ -75,10 +76,18 @@
     confirmLabel.append(confirm,document.createTextNode(' Store this reviewed independent copy on this computer. It must be deleted separately from recorded history.'));
     const create=button('Create saved event log');
     const status=el('p');status.setAttribute('role','status');
-    const open=button('Go to saved event logs');open.hidden=true;
-    open.addEventListener('click',()=>{
-      document.querySelector('[role=tab][data-tab=evidence]')?.click();
-      document.getElementById('owgEventLogCard')?.scrollIntoView({block:'start'});
+    const open=button('Open created event log');open.hidden=true;
+    let createdLogId=null;
+    open.addEventListener('click',async()=>{
+      if(!validLogId(createdLogId))return;
+      open.disabled=true;
+      try{
+        document.querySelector('[role=tab][data-tab=evidence]')?.click();
+        if(typeof window.owgEventLogWorkspace?.openSaved!=='function')throw Error('Saved event-log workspace is unavailable. Reopen the dashboard.');
+        await window.owgEventLogWorkspace.openSaved(createdLogId);
+        document.getElementById('owgEventLogCard')?.scrollIntoView({block:'start'});
+      }catch(error){persistentNotice('Saved log exists; '+String(error.message||error));}
+      finally{open.disabled=false;}
     });
     let generation=0,busy=false,review=null;
     const spec=()=>({execution_ids:controls.filter(row=>row.check.checked).map(row=>row.id),
@@ -92,7 +101,7 @@
       confirm.disabled=busy||!fresh();
       create.disabled=busy||!current()||!fresh()||!confirm.checked||!name.value.trim();
     };
-    const invalidate=()=>{generation++;review=null;confirm.checked=false;summary.replaceChildren();status.textContent='';open.hidden=true;update();};
+    const invalidate=()=>{generation++;review=null;confirm.checked=false;summary.replaceChildren();status.textContent='';open.hidden=true;createdLogId=null;update();};
     controls.forEach(row=>row.check.addEventListener('change',invalidate));
     name.addEventListener('input',()=>{confirm.checked=false;update();});
     confirm.addEventListener('change',update);
@@ -123,11 +132,12 @@
           selection:chosen.spec,expected_sha256:chosen.report.snapshot_sha256,name:name.value.trim()
         },true);
         if(!matchingPreview(result,chosen.spec)||result.snapshot_sha256!==chosen.report.snapshot_sha256||
-          result.stored_independent_snapshot!==true||!/^log_[a-f0-9]{16}$/.test(result.log_id||''))throw Error('Save response could not be verified. Check saved logs before retrying.');
+          result.stored_independent_snapshot!==true||!validLogId(result.log_id))throw Error('Save response could not be verified. Check saved logs before retrying.');
         review=null;
         persistentNotice('Created local event log: '+result.name+'. If not listed, reopen the dashboard after preserving unsaved edits.');
         if(current()&&serial===generation){
-          status.textContent='Saved '+result.event_count+' observations as '+result.name+'. Go to the event-log workspace; reopen the dashboard if its list has not refreshed.';
+          createdLogId=result.log_id;
+          status.textContent='Saved '+result.event_count+' observations as '+result.name+'. Open the saved log to use the existing process-mining tools.';
           open.hidden=false;
         }
       }catch(error){
