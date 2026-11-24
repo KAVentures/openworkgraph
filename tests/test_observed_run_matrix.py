@@ -15,7 +15,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const scope = {window:{},document:{readyState:'loading',addEventListener(){}}};
 vm.runInNewContext(fs.readFileSync('dashboard/workflow_explorer.js','utf8'),scope);
-const {observedRunMatrix,runDifference,projectedSurfaceRoutes,projectedProcessPaths,observedPathProposal,projectedPathAgentBrief,selectedRunTrace,automationReviewSignals}=scope.window.__owgWorkflowExplorerModel;
+const {observedRunMatrix,runDifference,projectedSurfaceRoutes,projectedProcessPaths,observedPathProposal,projectedPathAgentBrief,selectedRunTrace,automationReviewSignals,foregroundCoverageRows}=scope.window.__owgWorkflowExplorerModel;
 const a='execution:aaaaaaaaaaaaaaaa',b='execution:bbbbbbbbbbbbbbbb';
 const ids=[a,b];
 const fixture=()=>({
@@ -161,6 +161,29 @@ assert(brief.includes('Do not run a workflow'));
 assert.equal(projectedPathAgentBrief(selected,model,f,{since:'invalid'},criteria),null);
 assert.equal(projectedPathAgentBrief(selected,model,f,{},{...criteria,goal:''}),null);
 assert.equal(projectedPathAgentBrief(selected,model,f,{},{...criteria,goal:'a'.repeat(321)}),null);
+f=fixture();
+model=observedRunMatrix(f,ids);
+const coverage={format:'openworkgraph.execution-foreground-coverage.v1',
+  uncovered_time_is_unknown:true,distinct_surface_overlaps_are_unattributed:true,active_labor_or_waiting_measured:false,
+  runs:[
+    {execution_id:b,actor_kind:'human',status:'no_retained_foreground_spans',observed_event_count:0,window_seconds:14,
+      foreground_union_seconds:null,uncovered_window_seconds:null},
+    {execution_id:a,actor_kind:'human',status:'observed_bounded_coverage',observed_event_count:8,
+      window_seconds:9,foreground_union_seconds:7,overlapping_distinct_surface_seconds:2,uncovered_window_seconds:2,
+      surface_rows:[{surface:'surface:gmail',exclusive_foreground_seconds:5}],surface_rows_omitted:0,
+      exclusive_other_surface_seconds:0,foreground_span_count:4,invalid_span_count:0}
+  ]};
+f.timing={per_execution_foreground_coverage:coverage};
+let coverageRows=foregroundCoverageRows(model,f);
+assert.equal(coverageRows[0].covered,7);
+assert.equal(coverageRows[1].covered,null);
+coverage.runs[1].uncovered_window_seconds=9;
+assert.equal(foregroundCoverageRows(model,f)[0],null);
+coverage.runs[1].uncovered_window_seconds=2;
+coverage.runs[1].surface_rows[0].exclusive_foreground_seconds=9;
+assert.equal(foregroundCoverageRows(model,f)[0],null);
+coverage.runs[1].execution_id=b;
+assert.equal(foregroundCoverageRows(model,f),null);
 console.log('Observed run matrix, surface routes, trace and opportunity checks passed');
 """
     result = subprocess.run(["node", "-e", script], cwd=ROOT, text=True,
