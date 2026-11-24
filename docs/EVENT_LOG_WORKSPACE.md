@@ -2625,11 +2625,6 @@ an attribute value or range both offer to become this filter in one click: "Filt
 and "Filter". They are offered only while no global filter is active, so they never silently
 replace one. They set exactly the finding's `attribute` or `attribute_range`.
 
-Use **Update from active filter** to replace a saved filter's criteria with the
-current selection. The saved filter keeps its identity and name. If another
-edit changed it since the list was loaded, OWG asks you to reload and review
-before updating.
-
 **Saved filters.** A new dashboard filter remembers the selected case notion.
 Applying it restores that notion and the filter together. Older filters saved
 without a case notion use the current selection.
@@ -2651,6 +2646,11 @@ on the destination. The JSON carries the filter name, rules and saved case
 notion. Import validates the rules and case notion against the destination log.
 Filter names are unique within each log.
 
+
+Use **Update from active filter** to replace a saved filter's criteria with the
+current selection. The saved filter keeps its identity and name. If another
+edit changed it since the list was loaded, OWG asks you to reload and review
+before updating.
 
 The case evidence drill-down also uses the active case filter, so browsing cases shows the same
 cases the filtered views count ("N matching cases (case filter applied)"). Object-type maps keep

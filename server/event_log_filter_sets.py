@@ -142,6 +142,26 @@ def save(log_id: str, body: Any) -> dict[str, Any]:
             **({"case_type": case_type} if case_type is not None else {})}
 
 
+def import_set(log_id: str, document: Any) -> dict[str, Any]:
+    if not isinstance(document, dict) or document.get("format") != FORMAT:
+        raise workspace.EventLogWorkspaceError("choose an OpenWorkGraph filter JSON file")
+    return save(log_id, {key: value for key, value in document.items() if key != "format"})
+
+
+def delete(log_id: str, set_id: str) -> dict[str, Any]:
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            if not conn.execute("SELECT count(*) FROM filter_sets WHERE log_id = ? AND set_id = ?",
+                                [log_id, str(set_id)]).fetchone()[0]:
+                raise workspace.EventLogWorkspaceError("unknown filter set")
+            conn.execute("DELETE FROM filter_sets WHERE log_id = ? AND set_id = ?", [log_id, str(set_id)])
+        finally:
+            conn.close()
+    return {"deleted": True, "set_id": set_id}
+
+
 def update(log_id: str, set_id: str, body: Any) -> dict[str, Any]:
     if not isinstance(body, dict) or set(body) != {"name", "cohort", "case_type", "expected_definition_sha256"}:
         raise workspace.EventLogWorkspaceError("provide name, cohort, case type and expected saved definition")
@@ -183,26 +203,6 @@ def update(log_id: str, set_id: str, body: Any) -> dict[str, Any]:
     return {"set_id": set_id, "name": name, "cohort": definition["cohort"],
             **({"case_type": requested} if requested is not None else {}),
             "definition_sha256": _fingerprint(encoded)}
-
-
-def import_set(log_id: str, document: Any) -> dict[str, Any]:
-    if not isinstance(document, dict) or document.get("format") != FORMAT:
-        raise workspace.EventLogWorkspaceError("choose an OpenWorkGraph filter JSON file")
-    return save(log_id, {key: value for key, value in document.items() if key != "format"})
-
-
-def delete(log_id: str, set_id: str) -> dict[str, Any]:
-    with workspace._LOCK:
-        conn = workspace._connect()
-        try:
-            workspace._check_log(conn, log_id)
-            if not conn.execute("SELECT count(*) FROM filter_sets WHERE log_id = ? AND set_id = ?",
-                                [log_id, str(set_id)]).fetchone()[0]:
-                raise workspace.EventLogWorkspaceError("unknown filter set")
-            conn.execute("DELETE FROM filter_sets WHERE log_id = ? AND set_id = ?", [log_id, str(set_id)])
-        finally:
-            conn.close()
-    return {"deleted": True, "set_id": set_id}
 
 
 __all__ = ["delete", "import_set", "list_sets", "save", "FORMAT", "MAX_SETS"]
