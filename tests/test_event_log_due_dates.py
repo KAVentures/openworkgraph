@@ -97,6 +97,26 @@ def test_all_open_cohort_uses_the_case_notions_observation_end():
     assert [row["case_id"] for row in page["cases"]] == ["d", "e"]
 
 
+def test_as_of_due_dates_and_case_pages_use_events_visible_at_the_cutoff():
+    log = _import(ROWS + [("future-terms", "Invoice", "2024-03-02T10:00:00Z", ""),
+                          ("future-terms", "Terms recorded", "2024-03-09T10:00:00Z", "2024-03-05")])
+    cutoff = "2024-03-07T02:00:00+02:00"
+    options = {"due_attribute": "due", "as_of": cutoff, "cohort": {"without_activity": "Pay"}}
+    summary = dd.due_dates(log, "Pay", **options)
+    assert summary["as_of"] == "2024-03-07T00:00:00Z"
+    assert summary["log_end"] == "2024-03-20T09:00:00Z"
+    assert summary["cases"] == 4 and summary["groups"]["no_due_date"] == 1
+    assert summary["groups"]["open_overdue"] == 1 and summary["groups"]["open_not_due"] == 2
+    assert summary["deadline_attribute_basis"] == "events_at_or_before_cutoff"
+    overdue = dd.due_cases(log, "Pay", group="open_overdue", **options)
+    assert overdue["as_of"] == summary["as_of"]
+    assert overdue["cases"] == [{"case_id": "b", "done_at": None, "due_at": "2024-03-06T00:00:00Z", "days_from_due": None}]
+    at_completion = dd.due_cases(log, "Pay", group="late", due_attribute="due", as_of="2024-03-08T12:00:00Z")
+    assert [item["case_id"] for item in at_completion["cases"]] == ["b"]
+    earlier = dd.due_dates(log, "Pay", due_days=0.1, as_of="2024-03-01T20:00:00Z")
+    assert earlier["cases"] == earlier["groups"]["open_overdue"] == 4
+
+
 def test_bad_requests():
     log = _import(ROWS)
     with pytest.raises(EventLogWorkspaceError, match="either"):
@@ -107,6 +127,9 @@ def test_bad_requests():
         dd.due_dates(log, "Ship", due_days=3)
     with pytest.raises(EventLogWorkspaceError, match="due_days"):
         dd.due_dates(log, "Pay", due_days=0)
+    for invalid in ("2024-03-10", "2024-03-10T12:00:00", "0001-01-01T00:00:00+02:00"):
+        with pytest.raises(EventLogWorkspaceError, match="timezone-qualified"):
+            dd.due_dates(log, "Pay", due_days=1, as_of=invalid)
 
 
 def test_a_joined_case_attribute_wins_over_the_event_attribute(tmp_path):
@@ -118,3 +141,5 @@ def test_a_joined_case_attribute_wins_over_the_event_attribute(tmp_path):
     r = dd.due_dates(log, "Pay", due_attribute="payment_due")
     # Only case b has the joined attribute; paid 2024-03-08 → on time. Every other case has no due date.
     assert r["groups"]["on_time"] == 1 and r["groups"]["no_due_date"] == 6
+    historical = dd.due_dates(log, "Pay", due_attribute="payment_due", as_of="2024-03-10T17:00:00Z")
+    assert historical["evaluated"] == 0 and historical["groups"]["no_due_date"] == historical["cases"]

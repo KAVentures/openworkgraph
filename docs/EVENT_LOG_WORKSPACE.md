@@ -696,9 +696,14 @@ The response gives:
 of cases can be compared with the rest. Repeated executions are not verified
 rework.
 
+Open **Price another activity** to search for an activity outside the suggested
+list or enter an exact label. The editor keeps prices for labels that have yet
+to appear in the log. Use **Show priced activities only** to review overrides
+without scrolling through the suggestions.
+
 **Saved prices.** **Save prices** keeps the model (currency, activity prices,
 default price and hourly cost) with the log. Next time, the dashboard fills the
-prices in. The HTML report, and its saved and scheduled copies, then include a
+prices in. **Load saved prices** restores the saved model to the editor. The HTML report, and its saved and scheduled copies, then include a
 **Process cost** section, which shows:
 
 * the total cost;
@@ -717,6 +722,16 @@ The section uses the report's case filter. API:
 
 A log keeps one model. It is deleted with the log and not copied when matching
 cases are saved as a new log.
+
+**Reuse a model.** Open **Transfer cost model** and download the editor's
+prices as JSON. In the destination log, choose the JSON file to validate its
+currency and prices, then select **Load previewed prices** to fill the editor.
+Select **Calculate cost** to try the model and **Save prices** to keep it with
+the destination log. The file contains only the currency, activity labels,
+and prices. Its envelope is
+`{"format":"openworkgraph.event-log-cost-model.v1","model":{...}}`.
+`POST /v1/event-logs/{log_id}/cost-model/preview` validates the file and
+returns the normalized model without changing saved prices.
 
 ### Cohort benchmark
 
@@ -895,6 +910,20 @@ log and case notion shown above the file picker. The simulator recalibrates
 from the current data. Explicit overrides stay in the submitted inputs, and
 omitted values use the current calibration. The new report identifies the log
 and case notion used for the run.
+
+Use **Compare staffing alternatives** after loading measured values to compare
+two to four proposals against the same calibration and seed. The table shows
+median and 90th percentile cycle time, completions, and the activities with
+the longest mean waits. The table withholds deltas when overloaded queues or
+incomplete runs invalidate the comparison.
+
+**Download comparison inputs** saves the submitted settings. **Download
+comparison report** also includes the results, source log and case notion,
+calibration digest, and reasons for withholding deltas. Open either file
+under **Rerun a saved staffing comparison**. Review or edit the settings
+and run the comparison explicitly. OWG recalibrates from the selected
+log and case notion, so a different log or a later revision may yield
+different results.
 
 Calibration selects complete paths of at most 100 events. It first counts case
 lengths, excludes longer cases whole, then keeps cases whose activities fit
@@ -1320,6 +1349,15 @@ The dashboard-only `POST /v1/event-logs/{log_id}/case-table/export` accepts
 
 ## Case tags
 
+**Preview tag selection** shows how many cases match, which already have the tag, and a sample
+of their current notes. A previewed assignment checks the same membership and existing notes
+before applying. Reopen the preview if they have changed. From **Show cases**, use **Edit note**
+to correct or clear a note while keeping the original assignment timestamp.
+
+`POST /v1/event-logs/{log_id}/case-tags/preview` takes the same selection as the add route.
+Pass its `selection_sha256` as `expected_selection_sha256` when applying. `POST .../case-tags/note`
+takes the tag, literal `case_id`, new `note`, `expected_note` and `expected_tagged_at` from the list.
+
 While investigating, tag cases such as "checked", "root cause: missing PO" or
 "exclude: test data", and come back to them. A tag is a label of 1–60
 characters with an optional note (up to 500 characters). Tags are stored on this
@@ -1639,6 +1677,13 @@ Saved analyses are stored with the log and deleted with it, at most 50 per log:
 The dashboard's "Build an analysis" section runs, exports (JSON and CSV), saves and re-runs
 them.
 
+For a case-level result, select **Review cases** on a result row to see its
+matching cases, their durations, event counts, and any defined metric values.
+The case list uses the original filters, dimensions, and case notion. Open a
+case to inspect its retained events. If the log, applied activity mapping,
+hidden activities, or case tags have changed, rerun the analysis before
+opening the group.
+
 ### Case metrics
 
 A case-level analysis can define up to four typed case metrics in `metrics` and measure them with
@@ -1688,9 +1733,9 @@ the selected events, their timed attributes, and supplied relationships between
 those objects. Set a case filter, a time window, or both. With a time window, the download retains events
 at or after the start and strictly before the end. Either bound can be left blank.
 
-Choose **Preview copy** to see how many cases, events and linked objects the
-current case selection and optional time window would retain. Saving a copy
-recalculates the selection against the source log.
+Choose **Preview copy** to see how many cases, events, linked objects and
+supplied object relationships the current selection would retain. Saving a
+copy recalculates the selection against the source log.
 
 **Save or export matching cases → Save as new log** (after **Analyse**), or
 `POST /v1/event-logs/{log_id}/derive` with
@@ -1703,10 +1748,10 @@ under the chosen case notion and the source's activity mapping.
   so a case keeps its full history. The objects those events are linked to are
   copied too, with their links and timed attribute values. In an
   object-centric log, an event linked to a matching case also brings its other
-  objects, which keep only the copied events.
+  objects, which keep only the copied events. A supplied object relationship is
+  copied when both endpoints are retained. It keeps its direction and qualifier.
 * **What is not copied:** activity mapping, saved filters and analyses,
-  signals, domain packs, source-identity keys, object-to-object relationships
-  and quality reports. The new log starts without them.
+  signals, domain packs, source-identity keys and quality reports.
 * **The source log:** unchanged.
 * **Time window (optional):** `events_from` and/or `events_before` (times with
   a UTC offset; the dashboard's *Only events from / before* fields) trim the
@@ -2625,6 +2670,11 @@ an attribute value or range both offer to become this filter in one click: "Filt
 and "Filter". They are offered only while no global filter is active, so they never silently
 replace one. They set exactly the finding's `attribute` or `attribute_range`.
 
+When importing a filter from another log, preview it first to check the matching
+case count, case notion, and activity labels unavailable in the destination.
+Importing then saves the reviewed definition with that log. The preview endpoint
+is `POST /v1/event-logs/{log_id}/filter-sets/import/preview`.
+
 **Saved filters.** A new dashboard filter remembers the selected case notion.
 Applying it restores that notion and the filter together. Older filters saved
 without a case notion use the current selection.
@@ -2958,6 +3008,14 @@ takes the due-date settings and case filter from the summary, plus `due_group`. 
 Case filters choose which cases appear. Open cases are evaluated at the latest event in the
 selected case notion, so filtering to cases that are still open preserves the observation cutoff.
 
+Set **As of (UTC, optional)** to reconstruct a deadline report using only events at or before that
+time. Event-based filters and completion checks use that truncated history. For attribute deadlines,
+the report uses values recorded on events by the cutoff. Joined or object-level attributes lack an
+observation timestamp and remain available in the default current report. Case tags and case-level
+filter attributes reflect the current workspace. Each case page uses the report's cutoff, and the
+linked case history shows the full retained record. JSON and CSV downloads contain aggregate scores
+and the assessment time. Pass an offset-qualified `as_of` to either dashboard due-date API.
+
 **Due dates** checks whether the step that matters, such as *Pay invoice* or *Ship order*, happened
 by the date it was due, as UiPath Process Mining's due dates and Celonis's on-time views do. The due
 date is either an attribute (a joined case attribute, or else the first value of an event attribute in
@@ -3103,6 +3161,11 @@ not say which model is right. Up to eight levels can be scored at once.
 
 `GET /v1/event-logs/{log_id}/model-quality?levels=0,0.1,0.2&activities=1` plus the case-filter
 parameters. Agents with access to a shared log use `get_process_model_quality` (aggregates only).
+
+Choose **Download PNML** on a score row to keep the exact Petri net used for that score.
+**Replay scored net** opens that net in the Petri net check against the current retained case
+selection. JSON and CSV score reports include coverage counts and PNML digests. On the dashboard
+API, `include_nets=true` adds the PNML and its SHA-256 digest per row and the case filter used.
 
 ## Footprints
 
@@ -3289,6 +3352,15 @@ far too long, or suspiciously little time, overall between two points.
 - The profile is learned from the same cases it checks, so a few extreme cases widen it; read the
   results as timings to review, not errors. The case filter applies.
 
+Set **Baseline cutoff (UTC)** to check later cases against an earlier period.
+OWG learns from cases whose last recorded event is before the cutoff, then checks
+cases whose first recorded event is at or after it. It counts cases spanning the
+cutoff separately and excludes them from both periods. The result shows how many
+later cases have a checked pair and how many later pair occurrences lack a usable
+baseline. Both periods use the active case filters and case notion. An optional
+`baseline_cutoff` query parameter accepts a timezone-qualified ISO timestamp
+on both the summary and the case review endpoints.
+
 **Browse all deviating cases** opens the complete set of flagged cases. **Inspect cases** on
 a pair limits the review to that pair. Either review can show slower or faster deviations and
 open complete event histories.
@@ -3322,8 +3394,11 @@ A numeric condition with `includes_non_numeric` also matches unusable numbers.
    - the latest non-empty value of every event attribute recorded on the case at or before the
      decision event (`event.*`).
 
-   Values recorded after the decision are never used. Case attributes carry no time, so they may
-   have been set later; the result says so.
+   Use **Timed event attributes only** to exclude untimed case attributes.
+   This setting keeps event values recorded at or before the decision. The
+   combined setting also uses case attributes, which can have been set later.
+   Pass `include_case_attributes=false` to the decision-rules endpoint for
+   the event-only mode.
 3. **Rules.** A CART decision tree (Gini impurity, depth 1–4, default 3) is learned on about 70% of
    the cases and scored on the rest.
    - The split is by a hash of the case id, so it is repeatable and keeps each case on one side.
@@ -3331,6 +3406,11 @@ A numeric condition with `includes_non_numeric` also matches unusable numbers.
      are split on their 30 most common values.
    - Each leaf is a rule. It shows its conditions, the usual next activity, its confidence and the
      number of training occurrences.
+   - **Held-out results by branch** lists recorded and predicted occurrences,
+     correct predictions, precision, and recall. Precision is undefined without
+     predictions for that branch. Recall is undefined without recorded holdout
+     occurrences. **Held-out branch mix-ups** shows which recorded branches were
+     predicted as another branch and how often.
 
 The result also gives:
 - the held-out accuracy, next to the accuracy of always predicting the most common branch;
@@ -3361,4 +3441,4 @@ Dashboard owners can download a saved log as an Excel workbook (`GET /v1/event-l
 
 ### Rework and loop case evidence
 
-The local rework report offers explicit case-evidence links for repeated activities and exact closed activity loops. Selectors respect the active case cohort and retain literal event order; timestamp ties do not establish business order.
+The local rework report shows the total number of repeated activities and recorded loop patterns, with an adjustable display limit of 20, 50 or 100. JSON and CSV downloads contain the displayed results and the JSON includes the selected cohort and analysis settings. The report offers explicit case-evidence links for repeated activities and exact closed activity loops. Selectors respect the active case cohort and retain literal event order; timestamp ties do not establish business order.

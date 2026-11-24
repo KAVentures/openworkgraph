@@ -20,7 +20,7 @@ const path=require('node:path');
      await new Promise(resolve=>setTimeout(resolve,200));
    }if(!ready)throw new Error('Server not ready: '+logs);
    browser=await chromium.launch({...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE}:{}),headless:true,args:['--no-sandbox']});
-   const context=await browser.newContext();const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
+   const context=await browser.newContext({acceptDownloads:true});const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
    const session=(await fs.readFile(path.join(scratch,'session.txt'),'utf8')).trim();
    await page.goto(base+'/#session='+session);await page.locator('[role=tab][data-tab=evidence]').click();
    // 20 invoices due 10 days after receipt: 12 paid on time, 6 paid 2.38 days late, 2 never paid (overdue).
@@ -57,6 +57,22 @@ const path=require('node:path');
    await events.getByRole('cell',{name:'Remind',exact:true}).waitFor();
    await box.getByRole('button',{name:'Inspect Late cases',exact:true}).click();
    await review.getByText('6 cases in this group. Showing 6 on this page.').waitFor();
+   const cutoff=page.locator('#owgDueAsOf');await cutoff.fill('2024-01-25T12:00');
+   assert.equal(await review.textContent(),'');
+   await page.locator('#owgDueRun').click();
+   await box.getByText(/Status as of 2024-01-25 12:00:00 UTC/).waitFor();
+   const [overdue]=await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/due-dates/cases')),
+     box.getByRole('button',{name:'Inspect Open, overdue cases',exact:true}).click()]);
+   assert.equal(overdue.status(),200,await overdue.text());
+   const historical=await overdue.json();
+   assert.equal(historical.as_of,'2024-01-25T12:00:00Z');
+   assert.deepEqual(historical.cases.map(c=>[c.case_id,c.done_at]),[['inv12',null],['inv13',null]]);
+   const [exported]=await Promise.all([page.waitForEvent('download'),page.locator('#owgDueExportJson').click()]);
+   const report=JSON.parse(await fs.readFile(await exported.path(),'utf8'));
+   assert.equal(report.as_of,historical.as_of);assert.equal(report.groups.open_overdue,2);
+   assert.equal(report.most_late_cases,undefined);
+   await cutoff.fill('');
+   assert.equal(await page.locator('#owgDueExportJson').count(),0);
    await page.locator('#owgDueMode').selectOption('days');await page.locator('#owgDueDays').fill('3');await page.locator('#owgDueRun').click();
    await page.locator('#owgDueStatus').filter({hasText:'(0 on time, 18 late)'}).waitFor();
    // Keep it as a signal: 2 open invoices are overdue, more than 1.
