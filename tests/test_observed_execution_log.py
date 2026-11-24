@@ -192,6 +192,12 @@ with TestClient(app) as client:
     assert client.get("/v1/event-logs",headers=owner).json()["logs"][0]["log_id"] == result["log_id"]
     assert client.get(base + "/source",params={"log_id":result["log_id"]},headers=bearer).status_code == 403
     assert client.post(base + "/recheck",json={"log_id":result["log_id"]},headers=bearer).status_code == 403
+    observation_request = {"log_id":result["log_id"],"execution_id":run["execution_id"],"event_ids":["e1"]}
+    assert client.post(base + "/observations",json=observation_request,headers=bearer).status_code == 403
+    checked = client.post(base + "/observations",json=observation_request,headers=owner)
+    assert checked.status_code == 200, checked.text
+    assert checked.json()["events"][0]["status"] == "observation_matches"
+
     manifest = client.get(base + "/source",params={"log_id":result["log_id"]},headers=owner)
     assert manifest.status_code == 200 and manifest.json()["source_history_rechecked"] is False, manifest.text
     rechecked = client.post(base + "/recheck",json={"log_id":result["log_id"]},headers=owner)
@@ -362,3 +368,46 @@ console.log('observed source lineage handoff checks passed');
     root = Path(__file__).resolve().parents[1]
     done = subprocess.run(["node", "-e", script], cwd=root, capture_output=True, text=True, timeout=20)
     assert done.returncode == 0, done.stderr
+
+
+def test_exact_case_event_recheck_uses_original_rows(tmp_path, monkeypatch, selection):
+    raw, spec = selection
+    monkeypatch.setattr(workspace, "DATA_DIR", tmp_path)
+    preview = snapshots.preview(spec)
+    log = snapshots.create(spec, expected_sha256=preview["snapshot_sha256"], name="event drilldown")["log_id"]
+    case_events = dict(workspace.case_events(log))
+    first, second = case_events[A]
+    request = {"log_id": log, "execution_id": A,
+               "event_ids": [second["event_id"], first["event_id"]]}
+    found = snapshots.inspect_observations(request)
+    assert [row["event_id"] for row in found["events"]] == request["event_ids"]
+    assert all(row["status"] == "observation_matches" for row in found["events"])
+    assert found["events"][0]["evidence_ref"] == second["attributes"]["evidence_ref"]
+    assert found["events"][0]["original_activity"] == second["activity"]
+    assert found["current_projection_sha256"] == preview["snapshot_sha256"]
+    assert "PRIVATE WINDOW" not in json.dumps(found)
+    assert found["business_outcomes_verified"] is False
+    for bad in ({**request, "execution_id": B},
+                {**request, "event_ids": [first["event_id"], first["event_id"]]},
+                {**request, "event_ids": ["e99999"]},
+                {**request, "event_ids": ["raw-id-1"]}):
+        with pytest.raises(snapshots.SnapshotError):
+            snapshots.inspect_observations(bad)
+    # Same reference and execution but changed timestamp.
+    raw[0]["observed_at"] = "2026-10-01T10:00:02Z"
+    changed = snapshots.inspect_observations(request)
+    assert changed["events"][1]["status"] == "observation_changed"
+    assert changed["events"][0]["status"] == "observation_matches"
+    # A removed observation must not borrow another observation.
+    raw.pop(0)
+    missing = snapshots.inspect_observations(request)
+    assert missing["events"][1]["status"] == "not_in_current_projection"
+    assert missing["events"][0]["status"] == "observation_matches"
+    raw.clear()
+    unavailable = snapshots.inspect_observations(request)
+    assert unavailable["current_projection_sha256"] is None
+    assert all(row["status"] == "source_unavailable" for row in unavailable["events"])
+    assert workspace.summary(log)["events"] == 4
+    workspace.delete_log(log)
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        snapshots.inspect_observations(request)
