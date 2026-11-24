@@ -143,6 +143,7 @@ def verify_directory(root: Path | str, expected_manifest_sha256: str | None = No
     if (not isinstance(hashes, dict) or not 1 <= len(hashes) <= MAX_FILES
         or not REQUIRED_GENERATED_FILES.issubset(hashes)):
         raise ReleaseIntegrityError("Invalid release file inventory")
+    verified_spec_bytes = None
     for name, digest in hashes.items():
         if not _safe_name(name) or not isinstance(digest, str) or not _HEX.fullmatch(digest):
             raise ReleaseIntegrityError("Invalid or unsafe inventory path/digest")
@@ -157,8 +158,10 @@ def verify_directory(root: Path | str, expected_manifest_sha256: str | None = No
             data = source.read(MAX_FILE_BYTES + 1)
         if len(data) > MAX_FILE_BYTES or _hash(data) != digest:
             raise ReleaseIntegrityError("Generated file missing or changed: " + name)
+        if name == "workflow.spec.json":
+            verified_spec_bytes = data
     try:
-        spec = json.loads((root / "workflow.spec.json").read_bytes(), object_pairs_hook=_unique)
+        spec = json.loads(verified_spec_bytes, object_pairs_hook=_unique)
     except ReleaseIntegrityError:
         raise
     except (ValueError, UnicodeError):
@@ -206,6 +209,71 @@ def _pinned_inventory(root: Path | str, pin: str) -> dict:
     return json.loads(raw, object_pairs_hook=_unique)
 
 
+def _pinned_spec(root: Path | str, manifest: dict) -> dict:
+    """Read bounded spec bytes and verify the digest again before using them."""
+    path = Path(root) / "workflow.spec.json"
+    if path.is_symlink() or not path.is_file():
+        raise ReleaseIntegrityError("Runtime specification changed during comparison")
+    with path.open("rb") as source:
+        raw = source.read(MAX_FILE_BYTES + 1)
+    if len(raw) > MAX_FILE_BYTES or _hash(raw) != manifest["workflow_spec_sha256"]:
+        raise ReleaseIntegrityError("Runtime specification changed during comparison")
+    return json.loads(raw, object_pairs_hook=_unique)
+
+
+def _structural_changes(before: dict, after: dict) -> dict:
+    """Describe exact saved model changes by stable IDs, never disclose values."""
+    old, new = before["process_model"], after["process_model"]
+    groups = {
+        "activities": ("id",),
+        "transitions": ("source", "target"),
+        "business_rules": ("id",),
+        "decision_tables": ("id",),
+        "outcome_expectations": ("terminal_activity_id", "operation"),
+    }
+    changes = {}
+    for name, keys in groups.items():
+        def index(model):
+            rows = model.get(name, [])
+            if not isinstance(rows, list) or len(rows) > 100:
+                raise ReleaseIntegrityError("Invalid bounded model inventory")
+            result = {}
+            for row in rows:
+                if not isinstance(row, dict):
+                    raise ReleaseIntegrityError("Invalid model inventory row")
+                identity = tuple(row.get(key) for key in keys)
+                if any(not isinstance(value, str) or not value or len(value) > 200 for value in identity) or identity in result:
+                    raise ReleaseIntegrityError("Invalid or duplicate model inventory identity")
+                result[identity] = row
+            return result
+        a, b = index(old), index(new)
+        def identity(k):
+            return dict(zip(keys, k))
+        changes[name] = {
+            "added": [identity(k) for k in sorted(b.keys() - a.keys())],
+            "removed": [identity(k) for k in sorted(a.keys() - b.keys())],
+            "changed": [{**identity(k), "changed_fields": sorted(
+                field for field in a[k].keys() | b[k].keys()
+                if field not in a[k] or field not in b[k] or a[k][field] != b[k][field])}
+                for k in sorted(a.keys() & b.keys()) if a[k] != b[k]],
+            "retained_identity_order_changed": ([k for k in a if k in b] != [k for k in b if k in a]),
+        }
+    return {
+        "keyed_model_changes": changes,
+        "entry_activity_changed": old.get("entry_activity_id") != new.get("entry_activity_id"),
+        "terminal_activity_ids_changed": set(old.get("terminal_activity_ids", [])) != set(new.get("terminal_activity_ids", [])),
+        "other_changed_model_fields": sorted(
+            k for k in old.keys() | new.keys() if k not in groups
+            and (k not in old or k not in new or old[k] != new[k])),
+        "changed_runtime_contract_fields": sorted(
+            k for k in before.keys() | after.keys()
+            if k not in {"workflow_id", "revision", "content_sha256", "process_model", "process_model_sha256"}
+            and (k not in before or k not in after or before[k] != after[k])),
+        "model_field_values_returned": False,
+        "structural_changes_establish_compatibility": False,
+    }
+
+
 def compare_directories(baseline_root: Path | str, candidate_root: Path | str,
                         baseline_manifest_sha256: str, candidate_manifest_sha256: str) -> dict:
     """Review a proposed runtime upgrade without executing either release.
@@ -238,6 +306,7 @@ def compare_directories(baseline_root: Path | str, candidate_root: Path | str,
                  else "same_revision_different_content")
     spec_changed = before["workflow_spec_sha256"] != after["workflow_spec_sha256"]
     model_changed = before["process_model_sha256"] != after["process_model_sha256"]
+    model_delta = _structural_changes(_pinned_spec(baseline_root, before), _pinned_spec(candidate_root, after))
     return {
         "format": "openworkgraph.customer-runtime-release-comparison.v1",
         "baseline": {"manifest_sha256": baseline_manifest_sha256, "workflow_reference": old_ref,
@@ -249,6 +318,7 @@ def compare_directories(baseline_root: Path | str, candidate_root: Path | str,
         "revision_direction": direction,
         "specification_bytes_changed": spec_changed,
         "process_model_changed": model_changed,
+        "design_changes": model_delta,
         "generated_file_changes": {
             "added": [{"path": n, "candidate_sha256": new[n]} for n in added],
             "removed": [{"path": n, "baseline_sha256": old[n]} for n in removed],
