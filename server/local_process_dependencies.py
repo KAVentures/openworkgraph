@@ -112,7 +112,11 @@ def _describe(conn, root, items):
             consumer = items[row["workflow_id"]]
             pinned = consumer["dependencies"]["root_process"]
             resolved = _resolution(conn, pinned)
-            consumers.append({**row, "process": pinned, **resolved})
+            direct = next((link["prerequisite"] for link in consumer["dependencies"]["links"]
+                           if link["prerequisite"]["workflow_id"] == workflow_id), None)
+            consumers.append({**row, "process": pinned, **resolved,
+                              "direct_prerequisite_revision": direct["revision"] if direct else None,
+                              "direct_prerequisite_current": direct == _pin(root) if direct else None})
     return {
         "format": "openworkgraph.local-process-prerequisites.v1",
         "root": root, "declaration": item, "links": links, "potential_consumers": consumers,

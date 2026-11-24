@@ -755,7 +755,9 @@
       for(const item of data.potential_consumers){
         const title=item.pinned?.title||item.latest?.title||item.process.workflow_id;
         consumers.append(el('li',title+' · r'+item.process.revision+
-          (item.distance===1?' · Direct':' · Through '+item.distance+' links')+' · '+stateLabel[item.state]));
+          (item.distance===1?' · Pins this design at r'+item.direct_prerequisite_revision+
+            (item.direct_prerequisite_current?'':' · Prerequisite needs review'):
+            ' · Through '+item.distance+' links')+' · '+stateLabel[item.state]));
       }
       output.append(el('h5','Potential consumers'),data.potential_consumers.length?consumers:
         el('p','No saved declarations identify a consumer.'));
