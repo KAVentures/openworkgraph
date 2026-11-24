@@ -194,7 +194,7 @@ def import_csv(log_id: str, text: Any, *, preview: bool = False, expected_finger
     for number, row in enumerate(reader, start=2):
         if len(notes) >= MAX_NOTES_PER_LOG:
             raise EventLogWorkspaceError(f"a glossary has at most {MAX_NOTES_PER_LOG} entries")
-        activity = _uncell((row.get("activity") or "").strip())
+        activity = row.get("activity") or ""
         if not activity:
             continue
         word = (row.get("automation") or "").strip().lower()
@@ -210,8 +210,21 @@ def import_csv(log_id: str, text: Any, *, preview: bool = False, expected_finger
 
     def run(conn):
         known = {a for (a,) in conn.execute("SELECT DISTINCT activity FROM events WHERE log_id = ?", [log_id]).fetchall()}
-        chosen = [n for a, n in notes.items() if a in known]
-        unknown = sorted(a for a in notes if a not in known)
+        resolved: dict[str, Note] = {}
+        unknown = []
+        for source, note in notes.items():
+            unguarded = _uncell(source)
+            if source != unguarded and source in known and unguarded in known:
+                raise EventLogWorkspaceError("a spreadsheet-guarded activity label is ambiguous in this log")
+            activity = source if source in known else unguarded
+            if activity not in known:
+                unknown.append(activity)
+                continue
+            if activity in resolved:
+                raise EventLogWorkspaceError("the CSV contains more than one row for an activity")
+            resolved[activity] = note.model_copy(update={"activity": activity})
+        chosen = list(resolved.values())
+        unknown.sort()
         existing = {a for (a,) in conn.execute("SELECT activity FROM activity_notes WHERE log_id = ?", [log_id]).fetchall()}
         if len(existing | {n.activity for n in chosen}) > MAX_NOTES_PER_LOG:
             raise EventLogWorkspaceError(f"a log keeps at most {MAX_NOTES_PER_LOG} glossary entries")
