@@ -245,7 +245,16 @@ def ingest(channel_id: str, timestamp: str, sequence_header: str, signature: str
             _write(data)
             raise ChannelError(f"the body must be a valid {ENVELOPE} envelope") from None
         try:
-            result = monitoring.import_report(envelope["report"], deployment_id)
+            result = monitoring.import_report(envelope["report"], deployment_id, protect_signed_revisions=True)
+        except monitoring.RunRevisionConflict as exc:
+            incidents.record(deployment_id, "run_revision_conflict", f"channel:{channel_id}",
+                             count=sum(exc.counts.values()),
+                             detail={"channel_id": channel_id, "conflict_counts": exc.counts})
+            _outcome(channel, sequence, digest, "refused_run_revision_conflict", 409, str(exc))
+            channel["refused_reports"] = channel.get("refused_reports", 0) + 1
+            _track_sequence(channel, sequence)
+            _write(data)
+            raise ChannelError(str(exc), 409) from None
         except monitoring.MonitoringError as exc:
             drift = "different workflow spec" in str(exc)
             if drift:
@@ -264,7 +273,7 @@ def ingest(channel_id: str, timestamp: str, sequence_header: str, signature: str
             version = channel["versions"][key] = {"version_label": label, "workflow_spec_sha256": parsed["spec_hash"],
                                                   "first_seen": _now(), "reports": 0, "runs": 0}
         if version is not None:
-            version.update(last_seen=_now(), reports=version["reports"] + 1, runs=version["runs"] + len(parsed["runs"]))
+            version.update(last_seen=_now(), reports=version["reports"] + 1, runs=version["runs"] + result["runs_imported"])
         _outcome(channel, sequence, digest, "imported", 200, "")
         channel["accepted_reports"] = channel.get("accepted_reports", 0) + 1
         _write(data)
@@ -273,6 +282,7 @@ def ingest(channel_id: str, timestamp: str, sequence_header: str, signature: str
                          detail={"channel_id": channel_id})
     touched = incidents.reconcile_deployment(deployment_id)
     return {"duplicate": False, "sequence": sequence, "outcome": "imported", "runs_imported": result["runs_imported"],
+            "revision_counts": result["revision_counts"],
             "new_missing_sequences": gaps, "incidents_updated": touched, **incidents.CLAIMS}
 
 
