@@ -38,9 +38,12 @@ MAX_AUDIT = 20
 MAX_STATES_PER_ALERT = 50
 MAX_FAILURES = 5
 MAX_BACKOFF_SECONDS = 3600
+MAX_LEDGER_BYTES = 32 * 1024 * 1024
+PREFLIGHT_RETRY_SECONDS = 60
 _LOCK = threading.RLock()
 _LOG = re.compile(r"^log_[0-9a-f]{16}$")
 _FP = re.compile(r"^[0-9a-f]{64}$")
+_RULE = re.compile(r"^sig_[0-9a-f]{16}$")
 
 
 class DeliveryError(ValueError):
@@ -65,6 +68,8 @@ def _save(data: dict) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as out:
             json.dump(data, out, separators=(",", ":"), sort_keys=True, ensure_ascii=True)
+            if out.tell() > MAX_LEDGER_BYTES:
+                raise DeliveryError("notification ledger capacity reached; review locally")
             out.flush()
             os.fsync(out.fileno())
         if os.name == "posix":
@@ -80,7 +85,7 @@ def _save(data: dict) -> None:
 def _read() -> dict:
     path = _path()
     try:
-        if path.is_symlink() or path.stat().st_size > 512 * 1024:
+        if path.is_symlink() or path.stat().st_size > MAX_LEDGER_BYTES:
             raise DeliveryError("signal delivery configuration is unsafe or oversized")
         with path.open("r", encoding="utf-8") as f:
             data = json.load(f)
@@ -259,7 +264,7 @@ def queue_current(log_id: str) -> dict:
         for state in rows:
             rid, fp = state.get("rule_id"), state.get("state_fingerprint")
             if (state.get("status") != "unreviewed" or not state.get("requires_review") or
-                    not isinstance(rid, str) or not isinstance(fp, str) or not _FP.fullmatch(fp)):
+                    not isinstance(rid, str) or not _RULE.fullmatch(rid) or not isinstance(fp, str) or not _FP.fullmatch(fp)):
                 continue
             key = hashlib.sha256((channel_id + rid + fp).encode("ascii")).hexdigest()
             if key not in known:
@@ -267,29 +272,42 @@ def queue_current(log_id: str) -> dict:
                 known.add(key)
         if not selected:
             return {"queued": 0, "delivery_enabled": True}
-        if len(item["pending"]) >= MAX_PENDING or len(selected) > MAX_STATES_PER_ALERT:
+        groups = (len(selected) + MAX_STATES_PER_ALERT - 1) // MAX_STATES_PER_ALERT
+        if len(item["pending"]) + groups > MAX_PENDING:
             raise DeliveryError("notification queue capacity reached; review locally")
-        item["pending"].append({
-            "notification_id": "ntf_" + secrets.token_hex(12),
-            "states": selected, "created_at": _now(),
-            "next_attempt_epoch": time.time(), "attempts": 0,
-        })
+        epoch = time.time()
+        for offset in range(0, len(selected), MAX_STATES_PER_ALERT):
+            item["pending"].append(_message(selected[offset:offset + MAX_STATES_PER_ALERT], epoch))
         _save(data)
     return {"queued": len(selected), "delivery_enabled": True}
 
 
-def _valid_states(log_id: str, entry: dict) -> bool:
+def _message(states, epoch):
+    return {"notification_id": "ntf_" + secrets.token_hex(12), "states": states,
+            "created_at": _now(epoch), "next_attempt_epoch": epoch, "attempts": 0}
+
+
+def _current_states(log_id: str, entry: dict):
+    """None means unavailable (not evidence of stale state); [] means suppressed."""
     from . import event_log_signal_inbox as inbox, local_scheduler
-    if not local_scheduler.scheduled("event_log_signals", log_id):
-        return False
     try:
+        if not local_scheduler.scheduled("event_log_signals", log_id):
+            return []
         rows = inbox.list_inbox(log_id)["items"]
+        current = {(r["rule_id"], r["state_fingerprint"]) for r in rows
+                   if r.get("status") == "unreviewed" and r.get("requires_review") is True}
+        return [state for state in entry["states"]
+                if (state["rule_id"], state["state_fingerprint"]) in current]
     except Exception:
-        return False
-    current = {(r["rule_id"], r["state_fingerprint"]) for r in rows
-               if r.get("status") == "unreviewed" and r.get("requires_review") is True}
-    return bool(entry["states"]) and all(
-        (state["rule_id"], state["state_fingerprint"]) in current for state in entry["states"])
+        return None
+
+
+def _same_head(data, log_id, channel_id, entry):
+    channel = data["channels"].get(log_id)
+    if (not channel or not channel["enabled"] or channel["channel_id"] != channel_id
+            or not channel["pending"] or channel["pending"][0] != entry):
+        return None
+    return channel
 
 
 class _PinnedHTTPS(http.client.HTTPSConnection):
@@ -359,19 +377,50 @@ def deliver_due(*, now: float | None = None, transport=None) -> dict:
                       if entry["next_attempt_epoch"] <= current]
     if not candidates:
         return {"attempted": 0, "sent": 0}
-    log_id, entry, channel_id = sorted(candidates, key=lambda row: row[1]["next_attempt_epoch"])[0]
-    if _delivery_quiet(log_id, current):
-        return {"attempted": 0, "sent": 0, "deferred_quiet_hours": True}
-    if not _valid_states(log_id, entry):
-        with _LOCK:
-            data = _read()
-            channel = data["channels"].get(log_id)
-            if channel and channel["channel_id"] == channel_id:
-                channel["pending"] = [row for row in channel["pending"]
-                                      if row["notification_id"] != entry["notification_id"]]
-                _audit(channel, entry["notification_id"], "suppressed_stale_or_reviewed", current)
+    quiet_count = 0
+    unavailable_count = 0
+    # Do not let a quiet or temporarily unreadable source block another log.
+    # At most one outbound request and one stale-group reconciliation per tick.
+    for log_id, entry, channel_id in sorted(candidates, key=lambda row: (row[1]["next_attempt_epoch"], row[0])):
+        if _delivery_quiet(log_id, current):
+            quiet_count += 1
+            continue
+        survivors = _current_states(log_id, entry)
+        if survivors is None:
+            with _LOCK:
+                data = _read()
+                channel = _same_head(data, log_id, channel_id, entry)
+                if channel is not None:
+                    channel["pending"][0]["next_attempt_epoch"] = current + PREFLIGHT_RETRY_SECONDS
+                    _audit(channel, entry["notification_id"], "preflight_unavailable_deferred", current)
+                    _save(data)
+            unavailable_count += 1
+            continue
+        if survivors != entry["states"]:
+            with _LOCK:
+                data = _read()
+                channel = _same_head(data, log_id, channel_id, entry)
+                if channel is None:
+                    continue
+                channel["pending"].pop(0)
+                if survivors:
+                    # A different body MUST have a different notification ID,
+                    # including after an ambiguous previous transport attempt.
+                    # Keep the live subset pending without resending stale states.
+                    replacement = _message(survivors, current)
+                    channel["pending"].insert(0, replacement)
+                    _audit(channel, entry["notification_id"], "superseded_partial_state_change", current)
+                else:
+                    _audit(channel, entry["notification_id"], "suppressed_stale_or_reviewed", current)
                 _save(data)
-        return {"attempted": 0, "sent": 0, "suppressed_stale_or_reviewed": True}
+            return {"attempted": 0, "sent": 0, "suppressed_stale_or_reviewed": True,
+                    "surviving_states_requeued": len(survivors),
+                    "previous_delivery_may_have_arrived": bool(entry["attempts"])}
+        break
+    else:
+        return {"attempted": 0, "sent": 0,
+                **({"deferred_quiet_hours": True} if quiet_count else {}),
+                **({"deferred_preflight_unavailable": True} if unavailable_count else {})}
     payload = {
         "format": PAYLOAD_FORMAT,
         "notification_id": entry["notification_id"],
@@ -388,9 +437,8 @@ def deliver_due(*, now: float | None = None, transport=None) -> dict:
     body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     with _LOCK:
         data = _read()
-        channel = data["channels"].get(log_id)
-        if (not channel or not channel["enabled"] or channel["channel_id"] != channel_id or
-                not channel["pending"] or channel["pending"][0] != entry):
+        channel = _same_head(data, log_id, channel_id, entry)
+        if channel is None:
             return {"attempted": 0, "sent": 0, "suppressed_configuration_change": True}
         signature = "v1=" + hmac.new(bytes.fromhex(channel["signing_secret"]), body, hashlib.sha256).hexdigest()
         headers = {"X-OWG-Notification-ID": entry["notification_id"],
