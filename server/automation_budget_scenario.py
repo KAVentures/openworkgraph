@@ -124,7 +124,9 @@ def _solve(value):
             reasons.append({"code":"missing_budget"})
         elif budget["currency"] != spec.currency or budget["basis"] != spec.budget_basis:
             reasons.append({"code":"different_currency_or_basis"})
-        cost = _money(budget["amount"]) if budget is not None else Decimal(0)
+        cost = (_money(budget["amount"]) if budget is not None and
+                budget["currency"] == spec.currency and budget["basis"] == spec.budget_basis
+                else Decimal(0))
         costs.append(cost)
         mask = 0
         for dep in idea["depends_on"]:
@@ -165,7 +167,7 @@ def _solve(value):
                 "selected_count":mask.bit_count(), "priority_points":points,
                 "budget_used":_decimal(total), "budget_remaining":_decimal(cap-total)}
 
-    # Enumerate each subset exactly once, using least-significant-bit recurrence.
+    # Enumerate each subset exactly once, using include/exclude recursion.
     # Only bounded top candidates and count-level optima are retained.
     feasible = 0
     best = []
