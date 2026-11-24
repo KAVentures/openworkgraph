@@ -170,10 +170,74 @@ with TestClient(app) as c:
  assert result.json()['receipt']['availability']=='unknown' and result.json()['receipt']['operation_verified'] is False
  listing=c.get(url+'/source-check-exports',headers=h).json()
  assert len(listing['exports'])==1 and body['resource_ref'] not in str(listing)
+ review_path=url+'/source-check-review'
+ assert c.post(review_path,content=result.content,headers={**bearer,'Content-Type':'application/json'}).status_code in (401,403)
+ reviewed=c.post(review_path,content=result.content,headers={**h,'Content-Type':'application/json'})
+ assert reviewed.status_code==200,reviewed.text
+ assert reviewed.headers['cache-control']=='no-store'
+ assert reviewed.json()['exact_retained_export_bytes_match'] is True
+ assert reviewed.json()['historical_source_operation_reported_verified'] is False
+ assert reviewed.json()['source_read_performed'] is False
+ assert body['resource_ref'] not in reviewed.text
+ assert c.post(review_path,content=result.content+b' ',headers={**h,'Content-Type':'application/json'}).status_code==422
+ assert c.post(review_path,content=b'x'*65537,headers={**h,'Content-Type':'application/json'}).status_code==413
+ assert c.post(review_path,content=result.content,headers=h).status_code==415
+ assert c.get(url+'/source-check-exports',headers=h).json()==listing
 '''
     env=os.environ.copy();env.update(WORKFLOW_OBSERVER_DATA=str(tmp_path/'data'),WORKFLOW_OBSERVER_AUTH_DIR=str(tmp_path/'auth'),WORKFLOW_OBSERVER_CONFIG=str(tmp_path/'config.json'))
     result=subprocess.run([sys.executable,'-c',code],cwd=Path(__file__).resolve().parents[1],env=env,capture_output=True,text=True,timeout=120)
     assert result.returncode==0,result.stdout+result.stderr
+
+
+def test_review_exact_export_bytes_without_provider_or_persistence(prepared):
+    catalog,_,idea,project,calls=prepared
+    iid,pid=idea['idea_id'],project['project_id']
+    content,meta=checks.export_check(iid,pid,request(idea))
+    with pipeline._connect() as conn:
+        before='\n'.join(conn.iterdump())
+    review=checks.review_export(iid,pid,content)
+    assert review['exact_retained_export_bytes_match'] is True
+    assert review['document_sha256']==meta['document_sha256']
+    assert review['historical_source_operation_reported_verified'] is True
+    assert review['process_expectation_status']=='retained_expectation_matches'
+    assert review['run_attribution_status']=='no_run_selected_at_export'
+    assert review['idea_revision_matches_export'] is True
+    assert not review['source_read_performed'] and not review['current_source_state_verified']
+    assert not review['receipt_body_returned'] and not review['review_persisted']
+    assert RESOURCE not in json.dumps(review)
+    assert all(review[k] is False for k in checks.FALSE_CLAIMS)
+    assert len(calls)==1
+    with pipeline._connect() as conn:
+        assert '\n'.join(conn.iterdump())==before
+    with pytest.raises(pipeline.PipelineError,match='does not match'):
+        checks.review_export(iid,pid,content+b' ')
+    with pytest.raises(pipeline.PipelineError,match='64 KiB'):
+        checks.review_export(iid,pid,b'x'*(checks.MAX_REVIEW_BYTES+1))
+    other=pipeline.create({'title':'Another idea'})
+    with pytest.raises(pipeline.PipelineError):
+        checks.review_export(other['idea_id'],pid,content)
+    pipeline.transition(iid,{'to':'on_hold','expected_revision':idea['revision']})
+    assert not checks.review_export(iid,pid,content)['idea_revision_matches_export']
+    catalog.store.forget('local','review')
+    assert checks.review_export(iid,pid,content)['process_expectation_status']=='retained_expectation_unavailable_or_changed'
+    assert len(calls)==1
+
+
+def test_review_discloses_changed_or_removed_run_association(prepared,monkeypatch):
+    _,_,idea,project,calls=prepared
+    iid,pid=idea['idea_id'],project['project_id']
+    reference={'deployment_id':'dep_'+'a'*16,'run_id':'synthetic-run'}
+    current={**reference,'run_status':'succeeded','attribution':'run_report_declared_exact_project_specification'}
+    monkeypatch.setattr(checks,'_run',lambda *args:dict(current))
+    content,_=checks.export_check(iid,pid,request(idea,run_reference=reference))
+    assert checks.review_export(iid,pid,content)['run_attribution_status']=='retained_run_snapshot_matches'
+    current['run_status']='failed'
+    assert checks.review_export(iid,pid,content)['run_attribution_status']=='retained_run_snapshot_changed'
+    def unavailable(*args):
+        raise pipeline.PipelineError('unavailable')
+    monkeypatch.setattr(checks,'_run',unavailable)
+    assert checks.review_export(iid,pid,content)['run_attribution_status']=='run_attribution_unavailable_or_changed'
+    assert len(calls)==1
 
 
 def test_identical_document_bytes_reuse_metadata_without_unique_key_errors(prepared,monkeypatch):
