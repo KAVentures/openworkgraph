@@ -318,6 +318,15 @@ with TestClient(app) as client:
     assert unsigned.status_code == 401, unsigned.text
     signed = client.post(path, content=body, headers={**bearer, **signing.headers(channel["secret"], 1, body)})
     assert signed.status_code == 200 and signed.json()["outcome"] == "imported", signed.text
+    assert signed.json()["revision_counts"]["identical"] == 1
+    changed = json.loads(body)
+    changed["report"]["runs"][0]["status"] = "running"
+    changed["report"]["runs"][0]["finished_at"] = None
+    late_body = json.dumps(changed).encode()
+    late = client.post(path, content=late_body, headers={**bearer, **signing.headers(channel["secret"], 2, late_body)})
+    assert late.status_code == 409, late.text
+    assert "retained run evidence" in late.text
+    assert client.post(path, content=late_body, headers={**bearer, **signing.headers(channel["secret"], 2, late_body)}).json()["outcome"] == "refused_run_revision_conflict"
     assert "CLIENT_ASSERTION" not in client.get("/v1/automation-monitoring/channels", headers=owner).text
     assert client.get("/v1/automation-monitoring/incidents", headers=bearer).status_code == 403
     listed = client.get("/v1/automation-monitoring/incidents", headers=owner).json()
