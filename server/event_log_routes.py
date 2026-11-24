@@ -2812,6 +2812,15 @@ async def event_log_import_filter_set(request: Request, log_id: str):
     return await run_in_threadpool(_respond, filters.import_set, log_id, spec)
 
 
+@router.post("/v1/event-logs/{log_id}/filter-sets/{set_id}/update")
+async def event_log_update_filter_set(request: Request, log_id: str, set_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "saved filter update", strict=True, limit=65536)
+    response = await run_in_threadpool(_respond, filter_sets.update, log_id, set_id, spec)
+    _require_dashboard(request)
+    return response
+
+
 @router.post("/v1/event-logs/{log_id}/filter-sets/{set_id}/delete")
 def event_log_delete_filter_set(request: Request, log_id: str, set_id: str):
     _require_dashboard(request)
