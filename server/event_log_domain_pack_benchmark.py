@@ -77,7 +77,7 @@ def _prepare(log_id,other,pack_id):
         if provenance.source_rows(conn,log_id)+provenance.source_rows(conn,other)>MAX_SOURCE_ROWS:
             _fail("Combined logs exceed the complete benchmark source-row budget")
         left,definition,a=_basis(conn,log_id,pack_id)
-        right,other_definition,b=_basis(conn,other,pack_id)
+        right,_,b=_basis(conn,other,pack_id)
     finally:
         conn.close()
     same_version=left["version"]==right["version"]
@@ -103,9 +103,14 @@ def _prepare(log_id,other,pack_id):
 
 def preflight(log_id,pack_id,spec):
     other=_parse(spec)
-    with workspace._LOCK:
-        snapshot,_,_,_=_prepare(log_id,other,pack_id)
-    return snapshot
+    if not _GUARD.acquire(blocking=False):
+        _fail("Another domain benchmark is running")
+    try:
+        with workspace._LOCK:
+            snapshot,_,_,_=_prepare(log_id,other,pack_id)
+        return snapshot
+    finally:
+        _GUARD.release()
 
 
 def _slots(definition,resolved,section):
@@ -203,7 +208,7 @@ def _compare_slots(definition,section,a,b):
     return result
 
 
-def _model_summary(definition,resolved,report):
+def _model_summary(report):
     # Object lifecycle model comparability needs the same mapped optional
     # activities and object types, not merely the same pack version.
     model=report["object_model"]
@@ -233,7 +238,7 @@ def compare(log_id,pack_id,spec):
             rules=_compare_slots(definition,"compliance",_compliance_slots(definition,ar,a),_compliance_slots(definition,br,b))
             objects=_compare_slots(definition,"object_rules",_object_slots(definition,ar,a),_object_slots(definition,br,b))
             same_roles=all(r["mapped_on_both"] for r in snapshot["role_alignment"])
-            model={"baseline":_model_summary(definition,ar,a),"comparison":_model_summary(definition,br,b),
+            model={"baseline":_model_summary(a),"comparison":_model_summary(b),
                    "same_mapped_roles":same_roles,"pooled_fitting_share_reported":False}
             # Report per-side lifecycle counts, not a difference of differently
             # covered or differently scoped case populations.

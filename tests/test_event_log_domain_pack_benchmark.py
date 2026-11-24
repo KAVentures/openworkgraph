@@ -127,3 +127,73 @@ def test_case_unknown_bounds_use_activated_not_total():
     result=benchmark._compare_slots(definition,"compliance",slots,slots)[0]
     assert result["changes"]["violation_rate_change"]==0
     assert result["changes"]["activated_violation_share_change_bounds"]=={"lower":.2-.5,"upper":.5-.2}
+
+
+def test_object_rules_align_across_renamed_ocel_types():
+    from order_to_cash_fixture import order_to_cash,MAPPING as mapping
+    pack_id="order_to_cash"
+    a=workspace.import_log(BytesIO(json.dumps(order_to_cash()).encode()),name="left",
+                           source_format="ocel")["log_id"]
+    packs.install(a,pack_id,{"version":"1.0.0","mapping":mapping})
+    doc=order_to_cash()
+    for row in doc["objectTypes"]:row["name"]="New "+row["name"]
+    for row in doc["objects"]:row["type"]="New "+row["type"]
+    for row in doc["eventTypes"]:row["name"]="New "+row["name"]
+    for row in doc["events"]:row["type"]="New "+row["type"]
+    b=workspace.import_log(BytesIO(json.dumps(doc).encode()),name="right",
+                           source_format="ocel")["log_id"]
+    renamed={kind:{role:"New "+label for role,label in values.items()} for kind,values in mapping.items()}
+    packs.install(b,pack_id,{"version":"1.0.0","mapping":renamed})
+    pin=benchmark.preflight(a,pack_id,{"other_log_id":b})
+    result=benchmark.compare(a,pack_id,{"other_log_id":b,"expected_preflight_sha256":pin["preflight_sha256"]})
+    assert len(result["object_rules"])==4
+    assert all(r["comparable"] and r["changes"]["violation_rate_change"] in (None,0)
+               for r in result["object_rules"])
+    assert result["object_models"]["baseline"]==result["object_models"]["comparison"]
+    assert "so3" not in json.dumps(result)
+
+
+def test_dashboard_only_http_contract(tmp_path):
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    code=r'''
+from io import BytesIO
+from fastapi.testclient import TestClient
+from server.secure_app import app
+from server import local_auth, event_log_workspace as ws
+from server import event_log_domain_packs as packs
+from service_management_fixture import incidents,MAPPING,CSV_MAPPING
+a=ws.import_log(BytesIO(incidents().encode()),name="baseline",source_format="csv",mapping=CSV_MAPPING)["log_id"]
+b=ws.import_log(BytesIO(incidents().encode()),name="comparison",source_format="csv",mapping=CSV_MAPPING)["log_id"]
+for log in (a,b):
+    packs.install(log,"service_management",{"version":"1.0.0","mapping":MAPPING})
+path=f"/v1/event-logs/{a}/domain-packs/service_management/benchmark"
+body={"other_log_id":b}
+with TestClient(app) as client:
+    assert client.post(path+"/preview",json=body).status_code in (401,403)
+    bearer={"Authorization":"Bearer "+local_auth.ensure_api_token()}
+    assert client.post(path+"/preview",json=body,headers=bearer).status_code in (401,403)
+    auth={"Authorization":"OWG-Session "+local_auth.create_dashboard_session()}
+    pre=client.post(path+"/preview",json=body,headers=auth)
+    assert pre.status_code==200,pre.text
+    pin=pre.json()
+    spec={**body,"expected_preflight_sha256":pin["preflight_sha256"]}
+    response=client.post(path,json=spec,headers=auth)
+    assert response.status_code==200,response.text
+    assert response.headers["cache-control"]=="no-store"
+    assert not response.json()["raw_case_identifiers_returned"]
+    assert client.post(path,json=spec,headers=bearer).status_code in (401,403)
+    assert client.post(path,json={**spec,"expected_preflight_sha256":"0"*64},headers=auth).status_code==422
+    assert client.post(path,json={**spec,"extra":True},headers=auth).status_code==422
+    assert client.post(path,headers={**auth,"Content-Type":"application/json"},content=b"{}"+b" "*5000).status_code==413
+'''
+    root=Path(__file__).resolve().parents[1]
+    env={**os.environ,"WORKFLOW_OBSERVER_DATA":str(tmp_path/"data"),
+         "WORKFLOW_OBSERVER_AUTH_DIR":str(tmp_path/"auth"),
+         "WORKFLOW_OBSERVER_CONFIG":str(tmp_path/"config.json"),
+         "PYTHONPATH":str(root/"tests")+os.pathsep+str(root)}
+    done=subprocess.run([sys.executable,"-c",code],cwd=root,
+                        env=env,text=True,capture_output=True,timeout=120)
+    assert done.returncode==0,done.stdout+done.stderr
