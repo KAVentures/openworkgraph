@@ -1489,6 +1489,26 @@ async def event_log_tag_non_fitting_cases(request: Request, log_id: str,
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/model-quality/temporal")
+async def event_log_temporal_model_quality(request: Request, log_id: str):
+    from . import event_log_temporal_model_quality as temporal
+    _require_dashboard(request)
+    spec = await _json_body(request, "temporal model quality", strict=True, limit=32768)
+    response = await run_in_threadpool(_respond, temporal.review, log_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/model-quality/temporal/evidence")
+async def event_log_temporal_model_quality_evidence(request: Request, log_id: str):
+    from . import event_log_temporal_model_quality as temporal
+    _require_dashboard(request)
+    spec = await _json_body(request, "temporal model evidence", strict=True, limit=32768)
+    response = await run_in_threadpool(_respond, temporal.evidence, log_id, spec)
+    _require_dashboard(request)
+    return response
+
+
 @router.get("/v1/event-logs/{log_id}/model-quality")
 def event_log_model_quality(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                             levels: str | None = Query(default=None, max_length=100),
