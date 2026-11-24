@@ -1491,9 +1491,28 @@
           const stages=el('ol');
           if(data.dataset_origins?.length){
             data.dataset_origins.forEach(item=>{
-              const labels={current:'source data unchanged',source_advanced:'source data changed since snapshot',unavailable:'snapshot unavailable',check_failed:'source could not be checked',reference_mismatch:'snapshot metadata no longer matches its reference',not_checked_work_budget:'source not checked: fingerprint work budget exceeded'};
+              const labels={current:'source data unchanged',source_advanced:'source data changed since snapshot',unavailable:'snapshot unavailable',check_failed:'source could not be checked',reference_mismatch:'snapshot metadata no longer matches its reference',not_checked_work_budget:'source not checked: fingerprint work budget exceeded',projection_changed:'effective discovery input changed',projection_not_checked:'effective discovery input not checked'};
               stages.appendChild(el('li','Dataset and cohort → process: '+(labels[item.status]||'unknown status')+
                 (item.source_content_sha256?' · source SHA-256 '+item.source_content_sha256+' · selection SHA-256 '+item.selection_sha256:'')+'. User-selected reference; derivation and business rules are not independently verified.'));
+              const pinnedProcess=data.process_status?.process_reference;
+              if(item.effective_input){
+                const line=el('li','Effective discovery input: '+item.effective_input.cases+' cases · '+item.effective_input.events+' case-event rows · '+String(item.effective_input_status||'unknown')+'.');
+                stages.appendChild(line);
+              }
+              if(pinnedProcess&&/^urn:openworkgraph:local-log-discovery:[a-f0-9]{64}$/.test(item.reference||'')&&/^log_[a-f0-9]{16}$/.test(item.log_id||'')){
+                const line=el('li','Reopen the original saved process selection. ');
+                const openSelection=button('Inspect exact discovery cohort','secondary');
+                openSelection.onclick=async()=>{
+                  if(generation!==detailGeneration)return;
+                  openSelection.disabled=true;
+                  try{
+                    if(typeof window.owgEventLogWorkspace?.openDiscoverySelection!=='function')throw Error('Event-log workspace unavailable.');
+                    await window.owgEventLogWorkspace.openDiscoverySelection({...pinnedProcess,reference:item.reference,log_id:item.log_id});
+                  }catch(error){if(generation===detailGeneration)line.appendChild(el('p',String(error.message||error),'muted'));}
+                  finally{openSelection.disabled=false;}
+                };
+                line.appendChild(openSelection);stages.appendChild(line);
+              }
               const observed=minimizedObservedOrigin(item);
               if(observed){
                 const line=el('li','Original observed execution snapshot · manifest '+(observed.retained_manifest_status==='matches'?'matches':'unavailable or changed')+'. Original history not rechecked. No business outcome verified.');
