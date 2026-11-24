@@ -4772,12 +4772,23 @@
     const run=button('Show work in progress','secondary');run.id='owgWipRun';
     const out=el('div');out.id='owgWipResults';out.setAttribute('role','status');
     const review=el('div');review.id='owgWipCaseReview';
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities that end a case',ends),field('Buckets',bucket),run);
-    box.append(row,out,review);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities that end a case (comma-separated or JSON array)',ends),field('Buckets',bucket),run);
+    let last=null,reportTurn=0;
+    const exports=exportButtons('owgWipReport',()=>last,r=>[
+      ['bucket_start_utc','arrivals','completions','open_at_end'],
+      ...r.report.buckets.map(item=>[item.start,item.arrivals,item.completions,item.open_at_end])
+    ]);
+    box.append(row,out,review,exports.node);
     const generation=state.generation,endpoint='/v1/event-logs/'+encodeURIComponent(state.logId)+'/work-in-progress';
     const groups={arrivals:'Arrivals',completions:'Completions',open_at_end:'Open at end'};
     const number=n=>Number(n).toLocaleString();
     let reviewTurn=0;
+    const invalidate=()=>{
+      reportTurn++;reviewTurn++;last=null;exports.enable(false);
+      run.disabled=false;out.replaceChildren();review.replaceChildren();
+    };
+    ends.addEventListener('input',invalidate);
+    bucket.addEventListener('change',invalidate);
     function inspect(settings,bucketStart,group){
       const turn=++reviewTurn,current=()=>generation===state.generation&&turn===reviewTurn;
       const title=el('h4',groups[group]+' for '+(settings.bucket==='week'?'week of ':'')+bucketStart);title.tabIndex=-1;
@@ -4817,14 +4828,23 @@
       return details;
     }
     run.onclick=async()=>{
-      ++reviewTurn;review.replaceChildren();run.disabled=true;
+      const ticket=++reportTurn,notion=state.caseType;
+      const current=()=>box.isConnected&&generation===state.generation&&ticket===reportTurn&&notion===state.caseType;
+      ++reviewTurn;review.replaceChildren();run.disabled=true;last=null;exports.enable(false);
       out.replaceChildren(el('div','Calculating work in progress…','muted'));
       try{
-        const spec={bucket:bucket.value,end_activities:ends.value.split(',').map(x=>x.trim()).filter(Boolean)};
-        if(state.caseType)spec.case_type=state.caseType;
+        const raw=ends.value.trim();
+        let activities=raw.split(',').map(x=>x.trim()).filter(Boolean);
+        if(raw.startsWith('[')){
+          activities=JSON.parse(raw);
+          if(!Array.isArray(activities)||!activities.every(value=>typeof value==='string'))
+            throw new Error('End activities JSON must be an array of strings.');
+        }
+        const spec={bucket:bucket.value,end_activities:activities};
+        if(notion)spec.case_type=notion;
         if(filterOn())spec.cohort=globalCohort();
         const r=await (await api(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
-        if(generation!==state.generation)return;
+        if(!current())return;
         const b=r.buckets;
         if(!b.length){out.replaceChildren(el('div','No cases match this selection.','muted'));return;}
         const ns='http://www.w3.org/2000/svg',W=600,H=160,max=Math.max(1,...b.map(x=>Math.max(x.open_at_end,x.arrivals,x.completions)));
@@ -4835,6 +4855,8 @@
         [['open_at_end','#2563eb'],['arrivals','#16a34a'],['completions','#9333ea']].forEach(([k,c])=>{const p=document.createElementNS(ns,'polyline');
           p.setAttribute('points',b.map((v,i)=>x(i).toFixed(1)+','+y(v[k]).toFixed(1)).join(' '));p.setAttribute('fill','none');p.setAttribute('stroke',c);p.setAttribute('stroke-width',k==='open_at_end'?'2.5':'1.5');svg.appendChild(p);});
         const legend=el('div','Blue: open at the end of each '+spec.bucket+' · green: arrivals · purple: completions.','muted');
+        last={format:'openworkgraph.work-in-progress-report.v1',settings:spec,report:r};
+        exports.enable(true);
         const law=r.littles_law;
         out.replaceChildren(svg,legend,
           el('div',Number(r.cases).toLocaleString()+' cases; '+Number(r.never_completed_cases).toLocaleString()+' never reached an end activity. Average open: '+law.average_open_cases+'; arrival rate × mean cycle time: '+(law.arrival_rate_times_cycle_time===null?'—':law.arrival_rate_times_cycle_time)+(law.ratio===null?'':' (ratio '+law.ratio+')')+'. '+law.note,'muted'),
@@ -4843,8 +4865,8 @@
             return [start,...Object.keys(groups).map(group=>countCell(spec,start,group,v[group]))];
           })),
           el('div',r.interpretation,'muted'));
-      }catch(error){if(generation===state.generation)out.replaceChildren(el('div',error.message,'muted'));}
-      finally{run.disabled=false;}
+      }catch(error){if(current())out.replaceChildren(el('div',error.message,'muted'));}
+      finally{if(current())run.disabled=false;}
     };
     return box;
   }

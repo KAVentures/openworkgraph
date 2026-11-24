@@ -20,7 +20,7 @@ const path=require('node:path');
      await new Promise(resolve=>setTimeout(resolve,200));
    }if(!ready)throw new Error('Server not ready: '+logs);
    browser=await chromium.launch({...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE}:{}),headless:true,args:['--no-sandbox']});
-   const page=await browser.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
+   const page=await browser.newPage({acceptDownloads:true}),errors=[];page.on('pageerror',error=>errors.push(error.message));
    const session=(await fs.readFile(path.join(scratch,'session.txt'),'utf8')).trim();
    await page.goto(base+'/#session='+session);await page.locator('[role=tab][data-tab=evidence]').click();
    const rows=['case,activity,time'];
@@ -52,6 +52,21 @@ const path=require('node:path');
    await page.locator('#owgWipBucket').selectOption('week');await page.locator('#owgWipRun').click();
    await out.locator('svg[aria-label^="Open cases per week"]').waitFor();
    assert.equal(await review.getByRole('status').count(),0);
+   const [download]=await Promise.all([page.waitForEvent('download'),page.locator('#owgWipReportJson').click()]);
+   const report=JSON.parse(await fs.readFile(await download.path(),'utf8'));
+   assert.equal(report.format,'openworkgraph.work-in-progress-report.v1');
+   assert.equal(report.settings.bucket,'week');
+   assert.deepEqual(report.settings.end_activities,['Close']);
+   assert.equal(report.report.buckets.length,2);
+   await page.locator('#owgWipEnds').fill('["Close, disputed"]');
+   assert.equal(await page.locator('#owgWipReportJson').isDisabled(),true);
+   const [response]=await Promise.all([
+     page.waitForResponse(r=>r.url().endsWith('/work-in-progress')&&r.request().method()==='POST'),
+     page.locator('#owgWipRun').click()
+   ]);
+   assert.deepEqual(response.request().postDataJSON().end_activities,['Close, disputed']);
+   assert.equal(response.status(),200);
+   await out.getByText(/20 cases; 20 never reached an end activity/).waitFor();
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgEventLogWip'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
