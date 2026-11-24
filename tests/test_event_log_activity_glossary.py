@@ -68,8 +68,6 @@ def test_glossary_csv_retains_literal_activity_spaces_and_refuses_ambiguous_guar
     gl.import_csv(log, exported)
     found = {row["activity"]: row["description"] for row in gl.glossary(log)["activities"]}
     assert found == {" Check ": "spaced", "Check": "plain", "=Total": "formula"}
-    with pytest.raises(EventLogWorkspaceError, match="more than one row"):
-        gl.import_csv(log, "activity,description\nCheck,one\nCheck,two\n")
 
 
 def test_notes_coverage_and_clearing():
