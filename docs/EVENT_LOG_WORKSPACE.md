@@ -3451,3 +3451,8 @@ Stop applying a mapping before editing it; saving never applies it. A change
 made elsewhere since the draft was loaded is refused, so reload before saving.
 The update endpoint accepts the reviewed `expected_sha256` and a `mapping`
 definition at `POST /v1/event-logs/{log_id}/activity-mappings/{id}/update`.
+
+The grouping editor initially lists up to 2,000 frequent original activities.
+Search original labels to add further choices, paging through up to 100 matches
+at a time. Search uses the stored event labels even when an activity mapping is
+applied; it does not change the current selection or apply any grouping.

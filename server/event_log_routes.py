@@ -3324,6 +3324,16 @@ async def event_log_create_activity_mapping(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/activity-mappings/activities/search")
+async def event_log_mapping_original_activity_search(request: Request, log_id: str):
+    from . import event_log_activity_mappings as activity_mappings
+    _require_dashboard(request)
+    spec = await _json_body(request, "original activity search", strict=True, limit=4096)
+    response = await run_in_threadpool(_respond, activity_mappings.search_original_activities, log_id, spec)
+    _require_dashboard(request)
+    return response
+
+
 @router.post("/v1/event-logs/{log_id}/activity-mappings/{mapping_id}/update")
 async def event_log_update_activity_mapping(request: Request, log_id: str, mapping_id: str):
     from . import event_log_activity_mappings as activity_mappings

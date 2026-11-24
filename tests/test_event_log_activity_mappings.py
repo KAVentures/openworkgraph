@@ -93,6 +93,29 @@ def test_validation_one_applied_at_a_time_delete_and_erase():
         mappings.listing(log)
 
 
+def test_find_original_labels_beyond_initial_choices_even_when_mapping_is_applied():
+    out = StringIO()
+    writer = csv.writer(out)
+    writer.writerow(["case", "activity", "time"])
+    for i in range(2050):
+        writer.writerow([f"case{i}", f"Label {i:04}", START.isoformat()])
+    log = workspace.import_log(BytesIO(out.getvalue().encode()), name="large label set", source_format="csv", mapping=MAPPING)["log_id"]
+    initial = mappings.listing(log)["original_activities"]
+    assert len(initial) == 2000
+    assert "Label 2049" not in {row["activity"] for row in initial}
+    made = mappings.create(log, {"name": "Group", "groups": [{"label": "Grouped", "activities": ["Label 2049"]}]})
+    mappings.apply_mapping(log, made["mapping_id"])
+    result = mappings.search_original_activities(log, {"search": "Label 2049"})
+    assert result["activities"] == [{"activity": "Label 2049", "events": 1}]
+    page = mappings.search_original_activities(log, {"search": "Label"})
+    assert len(page["activities"]) == 100 and page["next_after"] == "Label 0099"
+    following = mappings.search_original_activities(log, {"search": "Label", "after": page["next_after"]})
+    assert following["activities"][0]["activity"] == "Label 0100"
+    for bad in ({"search": ""}, {"search": "Label", "extra": True}, {"search": "Label", "after": None}):
+        with pytest.raises(workspace.EventLogWorkspaceError):
+            mappings.search_original_activities(log, bad)
+
+
 def test_edit_requires_reviewed_revision_and_inactive_mapping():
     log = _log()
     made = mappings.create(log, ENTER)
@@ -134,6 +157,10 @@ with TestClient(app) as client:
     base = f"/v1/event-logs/{log}/activity-mappings"
     body = {"name": "B steps", "groups": [{"label": "B", "activities": ["B1", "B2"]}], "collapse_repeats": True}
     assert client.post(base, json=body, headers=bearer).status_code == 403
+    assert client.post(base + "/activities/search", json={"search": "B"}, headers=bearer).status_code == 403
+    found = client.post(base + "/activities/search", json={"search": "B"}, headers=owner)
+    assert found.status_code == 200 and len(found.json()["activities"]) == 2
+    assert found.headers["cache-control"] == "no-store"
     made = client.post(base, json=body, headers=owner)
     assert made.status_code == 200, made.text
     mid = made.json()["mapping_id"]

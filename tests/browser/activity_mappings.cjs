@@ -30,9 +30,21 @@ const path=require('node:path');
    await page.waitForFunction(()=>document.querySelector('#owgEventLogCase').options.length===3);
    await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Imported 13 events'}).waitFor();
+   // Simulate a label outside the initial bounded list; search must add it without losing selection.
+   await page.route('**/activity-mappings',async route=>{
+     const response=await route.fetch(),body=await response.json();
+     body.original_activities=body.original_activities.filter(item=>item.activity!=='Type address');
+     await route.fulfill({response,json:body});
+   },{times:1});
    await page.locator('#owgEventLogAnalyze').click();
    const box=page.locator('#owgActivityMappings');await box.waitFor();
    await box.getByText('No saved mappings.').waitFor();
+   assert.equal(await page.locator('#owgActivityGroupPick option[value="Type address"]').count(),0);
+   await page.locator('#owgActivityGroupPick').selectOption('Type name');
+   await page.locator('#owgActivityMappingSearch').fill('Type');
+   await page.locator('#owgActivityMappingFind').click();
+   await page.locator('#owgActivityMappingSearchStatus').filter({hasText:'2 matching labels found; 1 added'}).waitFor();
+   assert.deepEqual(await page.locator('#owgActivityGroupPick').evaluate(el=>[...el.selectedOptions].map(o=>o.value)),['Type name']);
    await page.locator('#owgActivityMappingName').fill('Data entry');
    await page.locator('#owgActivityGroupLabel').fill('Enter data');
    await page.locator('#owgActivityGroupPick').selectOption(['Type name','Type address']);

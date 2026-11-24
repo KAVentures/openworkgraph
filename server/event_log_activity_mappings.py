@@ -97,6 +97,25 @@ def listing(log_id: str) -> dict[str, Any]:
     return _with_conn(log_id, run)
 
 
+def search_original_activities(log_id: str, payload: Any) -> dict[str, Any]:
+    """Look up original event labels, independently of case filters and applied mappings."""
+    from .event_log_activity_lookup import _literal
+    if (not isinstance(payload, dict) or set(payload) - {"search", "after"}
+            or not _literal(payload.get("search"), allow_empty=False)
+            or not _literal(payload.get("after", ""), allow_empty=True)):
+        raise workspace.EventLogWorkspaceError("enter valid activity search text and cursor")
+    search, after = payload["search"], payload.get("after", "")
+
+    def run(conn):
+        rows = conn.execute("""SELECT activity, count(*) FROM events
+            WHERE log_id = ? AND contains(activity, ?) AND activity > ?
+            GROUP BY activity ORDER BY activity LIMIT 101""", [log_id, search, after]).fetchall()
+        return {"activities": [{"activity": label, "events": count} for label, count in rows[:100]],
+                "next_after": rows[99][0] if len(rows) > 100 else None,
+                "limit": 100, "stable_snapshot": False}
+    return _with_conn(log_id, run)
+
+
 def create(log_id: str, payload: Any) -> dict[str, Any]:
     mapping = _parse(payload)
 

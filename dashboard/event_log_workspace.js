@@ -1178,6 +1178,10 @@
     const name=input('owgActivityMappingName','text','For example: Data entry steps');name.maxLength=200;
     const label=input('owgActivityGroupLabel','text','Higher-level name');label.maxLength=200;
     const pick=document.createElement('select');pick.id='owgActivityGroupPick';pick.multiple=true;pick.size=6;
+    const search=input('owgActivityMappingSearch','search','Search original activities');search.maxLength=200;
+    const find=button('Find activities','secondary');find.id='owgActivityMappingFind';
+    const more=button('More activities','secondary');more.id='owgActivityMappingMore';more.disabled=true;
+    const searchStatus=el('div',null,'muted');searchStatus.id='owgActivityMappingSearchStatus';searchStatus.setAttribute('role','status');
     const collapse=input('owgActivityMappingCollapse','checkbox');
     const addGroup=button('Add group','secondary');addGroup.id='owgActivityGroupAdd';
     const save=button('Save mapping','secondary');save.id='owgActivityMappingSave';
@@ -1224,6 +1228,29 @@
       catch(e){msg.textContent=e.message;}
     };
     cancel.onclick=()=>{editing=null;groups.length=0;drawDraft();name.value='';collapse.checked=false;save.textContent='Save mapping';cancel.hidden=true;msg.textContent='Editing cancelled.';};
+    const searchRow=el('div',null,'row');searchRow.style.alignItems='end';searchRow.append(field('Find original activity labels',search),find,more);
+    let lookupTurn=0,lookupQuery='',nextAfter=null;
+    const searchPage=async(after)=>{
+      const ticket=++lookupTurn,query=lookupQuery;
+      const current=()=>ticket===lookupTurn&&generation===state.generation&&box.isConnected;
+      find.disabled=more.disabled=true;searchStatus.textContent='Searching original activities…';
+      try{
+        const result=await post(base()+'/activities/search',{search:query,...(after?{after}:{})});
+        if(!current())return;
+        const present=new Set([...pick.options].map(o=>o.value));let added=0;
+        for(const activity of result.activities){
+          if(present.has(activity.activity))continue;
+          const option=el('option',activity.activity+' ('+Number(activity.events).toLocaleString()+')');
+          option.value=activity.activity;pick.appendChild(option);present.add(option.value);added++;
+        }
+        nextAfter=result.next_after;
+        searchStatus.textContent=result.activities.length+' matching labels found; '+added+' added to the activity choices.'+(nextAfter?' More matches are available.':'');
+      }catch(error){if(current()){nextAfter=null;searchStatus.textContent=error.message;}}
+      finally{if(current()){find.disabled=false;more.disabled=nextAfter===null;}}
+    };
+    search.addEventListener('input',()=>{++lookupTurn;nextAfter=null;more.disabled=true;find.disabled=false;searchStatus.textContent='';});
+    find.onclick=()=>{lookupQuery=search.value;nextAfter=null;if(!lookupQuery){searchStatus.textContent='Enter activity search text.';return;}searchPage(null);};
+    more.onclick=()=>{if(nextAfter!==null)searchPage(nextAfter);};
     const row=el('div',null,'row');row.style.alignItems='end';
     const collapseWrap=el('div');const collapseLabel=el('label',' Collapse consecutive repeats into the first');collapseLabel.htmlFor=collapse.id;collapseWrap.append(collapse,collapseLabel);
     row.append(field('Mapping name',name),field('Group name',label),field('Activities in the group',pick),addGroup);
@@ -1250,7 +1277,7 @@
         suggestions.replaceChildren(el('div',r.groups.length+' groups of names that may be the same activity'+(r.groups_total>r.groups.length?' (showing '+r.groups.length+' of '+r.groups_total+')':'')+'. '+r.caveat,'muted'),list,use);
       }catch(e){suggestions.replaceChildren(el('div',e.message,'muted'));}
       finally{suggest.disabled=false;}};
-    box.append(host,row,suggest,suggestions,draft,collapseWrap,save,cancel,msg);
+    box.append(host,el('div','Activity choices begin with up to 2,000 frequent original labels. Search to add others.','muted'),searchRow,searchStatus,row,suggest,suggestions,draft,collapseWrap,save,cancel,msg);
     api(base()).then(r=>r.json()).then(render).catch(e=>{msg.textContent=e.message;});
     return box;
   }
