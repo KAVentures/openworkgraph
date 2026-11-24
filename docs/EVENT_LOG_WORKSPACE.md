@@ -2212,6 +2212,16 @@ in that state, it backs off to a shorter history and finally to all
 transitions. Each prediction says which history it used and how many steps
 support it.
 
+Use **Inspect training observations** next to an estimate to see the completed-case steps
+that matched its history and what happened next. A completed case can contribute several
+steps. A terminal step records a case ending. Open any listed case to review its event history.
+
+The dashboard prediction response includes `matched_history` per case and an
+`evidence_snapshot`. To use `POST /v1/event-logs/{log_id}/next-activity/training-evidence`,
+send the original `settings` without `case_id`, the predicted `case_id`, and the response
+digest as `expected_snapshot`. The optional page `limit` is 1–100, default 50. Pass
+`next_after` as `after` to continue. Run the prediction again if the selected histories change.
+
 Optional settings:
 
 * `top`: the number of next steps returned per case (1–10, default 3);
