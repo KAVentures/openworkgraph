@@ -5,6 +5,7 @@ from io import BytesIO
 
 import pytest
 
+from server import event_log_cases as case_pages
 from server import event_log_model_change as mc
 from server import event_log_workspace as workspace
 from server.event_log_workspace import EventLogWorkspaceError
@@ -43,6 +44,26 @@ def test_orderings_activities_and_cross_fit_change():
     assert cross["after_cases_on_after_model"]["fitness"] == 1.0
     assert cross["after_cases_on_before_model"]["fitness"] < 1.0
     assert r["fitness_drop_on_earlier_model"] > 0
+
+
+def test_dashboard_cross_fit_variants_match_exact_scoped_cases():
+    log = _log()
+    scope = {"activity": "Order"}
+    aggregate = mc.model_change(log, split="2024-02-15", noise=0, cohort=scope)
+    assert "case_selections" not in aggregate
+    assert "non_fitting_variants" not in aggregate["cross_fit"]["after_cases_on_before_model"]
+    report = mc.model_change(log, split="2024-02-15", noise=0, cohort=scope, include_case_evidence=True)
+    fit = report["cross_fit"]["after_cases_on_before_model"]
+    assert fit["cases"] == fit["cases_total"] == 20
+    assert fit["cases_excluded"] == fit["cases_unaligned"] == 0
+    assert fit["non_fitting_variants_total"] == 1
+    variant, = fit["non_fitting_variants"]
+    assert variant["path"] == ["Order", "Approve", "Check", "Ship", "Notify"]
+    assert variant["fitness"] < 1 and variant["cost"] > 0
+    assert report["case_selections"]["after"] == {**scope, "started_from": "2024-02-15T00:00:00Z"}
+    evidence = case_pages.cases(log, {"cohort": report["case_selections"]["after"], "path": variant["path"]})
+    assert evidence["selected_cases"] == variant["cases"]
+    assert {case["case_id"] for case in evidence["cases"]} == {f"b{i}" for i in range(20)}
 
 
 def test_median_split_and_refusals():
