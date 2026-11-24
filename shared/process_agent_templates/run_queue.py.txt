@@ -95,7 +95,7 @@ def load_queue(spec, root, pinned_digest):
             and type(manifest.get('case_count')) is int and manifest['case_count'] == len(rows),
             'Queue case population is invalid')
     packets = {}
-    identities = {}
+    identities, case_hashes = {}, set()
     for row in rows:
         require(isinstance(row, dict) and isinstance(row.get('case_id'), str)
                 and CASE.fullmatch(row['case_id']) and row['case_id'] not in packets,
@@ -125,6 +125,8 @@ def load_queue(spec, root, pinned_digest):
                 and review.get('offline_requirements_clear') is True
                 and review.get('execution_authorized') is False,
                 'Preparation receipt is inconsistent with the queue')
+        require(digest(case) not in case_hashes, 'Queue contains duplicate case inputs')
+        case_hashes.add(digest(case))
         prepared = prepare(spec, plan, case, bindings)
         require(not prepared['requirements'] and digest(disabled) == digest(
             review_template(spec, prepared, case, bindings)), 'Prepared case no longer satisfies the runtime contract')
@@ -161,7 +163,7 @@ def successful_journal(spec, packet, path, execution_id):
                  if row.get('phase') == 'attempt_pending']
     require(attempted == [(action['activity_id'], digest(action['arguments'])) for action in actions],
             'Journal does not match the exact prepared action arguments')
-    checked = [(row.get('terminal_activity_id'), row.get('expected_operation'), row.get('operation_verified') is True)
+    checked = [(row.get('terminal_activity_id'), row.get('expected_operation'), row.get('operation_verified') is True and row.get('source_request_attempted') is True)
                for row in records if row.get('phase') == 'source_checked']
     require(checked == [(item['terminal_activity_id'], item['expected_operation'], True) for item in outcomes]
             and (not outcomes or records[-1].get('all_declared_operations_verified') is True),
@@ -181,7 +183,7 @@ def inspect_state(spec, root, packets, pin):
             require(not any(state.iterdir()), 'Queue state anchor is missing; review the directory')
         if exists(journals):
             directory(journals)
-    rows, preceding_complete = [], True
+    rows, preceding_complete, claimed_journals = [], True, set()
     for identifier, packet in packets.items():
         claim, done = state / (identifier + '.claim.json'), state / (identifier + '.complete.json')
         status, execution_id = 'waiting', None
@@ -192,6 +194,8 @@ def inspect_state(spec, root, packets, pin):
                 execution_id = value.get('execution_id')
                 require(is_hex(execution_id) and value == {'queue_sha256': pin, 'case_id': identifier,
                         'execution_id': execution_id}, 'Invalid queue claim')
+                require(execution_id not in claimed_journals, 'Execution identity is claimed twice')
+                claimed_journals.add(execution_id)
                 if exists(done):
                     receipt = read_object(done)
                     expected = {**value, 'journal_sha256': successful_journal(
@@ -203,10 +207,19 @@ def inspect_state(spec, root, packets, pin):
         rows.append({'case_id': identifier, 'status': status,
                      'execution_id': execution_id if is_hex(execution_id) else None})
         preceding_complete = preceding_complete and status == 'reported_complete'
+    unexpected = 0
+    if exists(journals):
+        for item in journals.iterdir():
+            if item.name == '.owg-stop':
+                continue
+            if item.name not in {key + '.jsonl' for key in claimed_journals}:
+                unexpected += 1
+            require(unexpected <= 100, 'Unexpected queue journal inventory exceeds its limit')
     return {'format': 'openworkgraph.execution-queue-status.v1', 'queue_sha256': pin,
             'case_count': len(rows), 'cases': rows,
             'reported_complete_count': sum(row['status'] == 'reported_complete' for row in rows),
-            'reconciliation_required': any(row['status'] == 'reconciliation_required' for row in rows),
+            'reconciliation_required': bool(unexpected) or any(row['status'] == 'reconciliation_required' for row in rows),
+            'unclaimed_journal_entry_count': unexpected,
             'operator_stop_active': exists(journals / '.owg-stop'),
             'runner_lock_present': exists(state / 'runner.lock'),
             'automatic_retries': False, 'business_outcomes_verified': False,
@@ -239,6 +252,7 @@ async def run_approved_queue(spec, root, pin, authorizations, *, max_cases=1, ru
             and not initial['runner_lock_present'], 'Queue stopped or requires reconciliation')
     state.mkdir(mode=0o700, exist_ok=True)
     directory(state)
+    sync_directory(root)
     # Exclusive local lock; a crash leaves a visible lock for manual review.
     lock = state / 'runner.lock'
     write_once(lock, {'queue_sha256': pin})
@@ -250,6 +264,7 @@ async def run_approved_queue(spec, root, pin, authorizations, *, max_cases=1, ru
         journals = state / 'journals'
         journals.mkdir(mode=0o700, exist_ok=True)
         directory(journals)
+        sync_directory(state)
         snapshot = inspect_state(spec, root, packets, pin)
         require(not snapshot['reconciliation_required'] and not snapshot['operator_stop_active'],
                 'Queue stopped or requires reconciliation')
