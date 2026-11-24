@@ -1056,25 +1056,6 @@ def list_process_catalog(after: str = Query(default='', max_length=80), limit: i
     return JSONResponse({'processes': summaries, 'has_more': page['has_more'], 'next_after': page['next_after']}, headers={'Cache-Control': 'no-store'})
 
 
-@app.post('/v1/process-catalog')
-async def save_process_catalog(request: Request) -> Response:
-    value = await _process_json(request)
-    try:
-        record = CatalogWrite.model_validate(value)
-        result = _catalog.save(record)
-    except ValidationError as exc:
-        messages = '; '.join(str(error['msg'])[:200] for error in exc.errors(include_input=False)[:5])
-        raise HTTPException(status_code=422, detail='Invalid process graph: ' + messages) from None
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from None
-    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
-
-
-@app.get('/v1/process-catalog/revision')
-def get_process_catalog_revision(workflow_id: str = Query(pattern=_PROCESS_ID), revision: int | None = Query(default=None, ge=1)) -> Response:
-    return JSONResponse(_catalog_record(workflow_id, revision), headers={'Cache-Control': 'no-store'})
-
-
 @app.post('/v1/process-catalog/policy-regression')
 async def process_policy_regression(request: Request,
         workflow_id: str = Query(pattern=_PROCESS_ID),
@@ -1104,6 +1085,25 @@ async def process_policy_regression(request: Request,
     pinned(after_revision, after_sha256)
     _require_dashboard(request)
     return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
+@app.post('/v1/process-catalog')
+async def save_process_catalog(request: Request) -> Response:
+    value = await _process_json(request)
+    try:
+        record = CatalogWrite.model_validate(value)
+        result = _catalog.save(record)
+    except ValidationError as exc:
+        messages = '; '.join(str(error['msg'])[:200] for error in exc.errors(include_input=False)[:5])
+        raise HTTPException(status_code=422, detail='Invalid process graph: ' + messages) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
+@app.get('/v1/process-catalog/revision')
+def get_process_catalog_revision(workflow_id: str = Query(pattern=_PROCESS_ID), revision: int | None = Query(default=None, ge=1)) -> Response:
+    return JSONResponse(_catalog_record(workflow_id, revision), headers={'Cache-Control': 'no-store'})
 
 
 @app.get('/v1/process-catalog/history')
