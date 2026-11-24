@@ -23,7 +23,7 @@ relationships, audit evidence or legal compliance.
 """
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Any, Literal, TypeVar, Union
 
 import duckdb
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, field_validator
@@ -99,6 +99,10 @@ class RuleSet(_Strict):
     rules: list[Rule] = Field(min_length=1, max_length=MAX_RULES)
 
 
+class _ComparisonSpec(RuleSet):
+    other_log_id: Label
+
+
 class _GraphPin(_Strict):
     relationships_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     object_index_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -123,9 +127,12 @@ def _validate_rule(rule) -> None:
         raise workspace.EventLogWorkspaceError("a synchronization needs a different activity or object type")
 
 
-def parse(spec: Any) -> RuleSet:
+_RuleSetType = TypeVar('_RuleSetType', bound=RuleSet)
+
+
+def _parse(spec: Any, model: type[_RuleSetType]) -> _RuleSetType:
     try:
-        parsed = RuleSet.model_validate(spec)
+        parsed = model.model_validate(spec)
     except ValidationError as exc:
         first = exc.errors()[0]
         raise workspace.EventLogWorkspaceError(
@@ -133,6 +140,10 @@ def parse(spec: Any) -> RuleSet:
     for rule in parsed.rules:
         _validate_rule(rule)
     return parsed
+
+
+def parse(spec: Any) -> RuleSet:
+    return _parse(spec, RuleSet)
 
 
 def _bounds(rule) -> str:
@@ -319,20 +330,12 @@ def _snapshot(conn, log_id: str) -> dict[str, Any]:
             "The supplied graph snapshot exceeds available analysis memory. No partial result was returned.") from None
 
 
-def check(log_id: str, spec: Any) -> dict[str, Any]:
-    rules = parse(spec)
+def _check_report(conn, info: dict[str, Any], rules: RuleSet) -> dict[str, Any]:
+    log_id = info['log_id']
     supplied=any(isinstance(rule,SuppliedObjectCardinality) for rule in rules.rules)
-    basis={}
-    with workspace._LOCK:
-        conn = workspace._connect()
-        try:
-            info = workspace._check_log(conn, log_id)
-            revision = supplied_relationships._revision(conn, log_id)
-            if supplied:
-                basis = _snapshot(conn, log_id)
-            results = [evaluate(conn, log_id, rule) for rule in rules.rules]
-        finally:
-            conn.close()
+    revision = supplied_relationships._revision(conn, log_id)
+    basis = _snapshot(conn, log_id) if supplied else None
+    results = [evaluate(conn, log_id, rule) for rule in rules.rules]
     response = {
         "log": info, "log_revision": revision, "results": results,
         "rules_with_violations": sum(1 for r in results if r.get("violating")),
@@ -354,6 +357,38 @@ def check(log_id: str, spec: Any) -> dict[str, Any]:
         if all(isinstance(rule,SuppliedObjectCardinality) for rule in rules.rules):
             response['ordering_basis']='not_used_for_supplied_graph_shape'
     return response
+
+
+def check(log_id: str, spec: Any) -> dict[str, Any]:
+    rules = parse(spec)
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            return _check_report(conn, workspace._check_log(conn, log_id), rules)
+        finally:
+            conn.close()
+
+
+def compare(log_id: str, spec: Any) -> dict[str, Any]:
+    settings = _parse(spec, _ComparisonSpec)
+    if log_id == settings.other_log_id:
+        raise workspace.EventLogWorkspaceError("choose a different retained event log")
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            baseline_log = workspace._check_log(conn, log_id)
+            comparison_log = workspace._check_log(conn, settings.other_log_id)
+            baseline = _check_report(conn, baseline_log, settings)
+            comparison = _check_report(conn, comparison_log, settings)
+        finally:
+            conn.close()
+
+    changes = []
+    for before, after in zip(baseline['results'], comparison['results'], strict=True):
+        left, right = before.get('violation_rate'), after.get('violation_rate')
+        changes.append(right - left if left is not None and right is not None else None)
+    return {"baseline": baseline, "comparison": comparison, "violation_rate_changes": changes,
+            **workspace.DESCRIPTIVE_ONLY}
 
 
 def violations(log_id: str, spec: Any) -> dict[str, Any]:
@@ -405,4 +440,4 @@ def violations(log_id: str, spec: Any) -> dict[str, Any]:
             "next_after": list(rows[settings.limit - 1][4:]) if len(rows) > settings.limit else None}
 
 
-__all__ = ["check", "violations", "describe", "parse"]
+__all__ = ["check", "compare", "violations", "describe", "parse"]

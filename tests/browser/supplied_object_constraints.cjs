@@ -32,8 +32,8 @@ const path=require('node:path');
    {id:'item1',type:'item',attributes:[],relationships:[{objectId:'order1',qualifier:'reverse'}]},
    {id:'item2',type:'item',attributes:[],relationships:[]}],
    events:[{id:'e1',type:'Open',time:'2026-01-01T00:00:00Z',attributes:[],relationships:[{objectId:'order1',qualifier:''}]}]};
-  async function load(doc){
-   await page.locator('#owgEventLogFile').setInputFiles({name:'constraints.jsonocel',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(doc))});
+  async function load(doc,name='constraints.jsonocel'){
+   await page.locator('#owgEventLogFile').setInputFiles({name,mimeType:'application/json',buffer:Buffer.from(JSON.stringify(doc))});
    await status('File mapping ready.');await page.locator('#owgEventLogConsent').check();
   }
   await load(payload);await page.locator('#owgEventLogImport').click();await status('Retained 4 supplied object relationships');
@@ -135,9 +135,33 @@ const path=require('node:path');
   await page.locator('#owgObjectRuleAdd').click();data=await check();
   assert.equal(data.results[0].violating,2);assert.equal(data.supplied_relationship_basis.retained_relationships,0);
   assert.equal(data.supplied_relationship_basis.retained_objects,5);
-  page.once('dialog',d=>d.accept());await Promise.all([page.waitForResponse(r=>r.url().endsWith('/delete')),page.locator('#owgEventLogDelete').click()]);
-  await page.locator('#owgEventLogManage').waitFor({state:'hidden'});assert.deepEqual(errors,[]);
-  console.log('Supplied graph constraints browser passed: unobserved types, explicit direction/qualifiers, distinct degrees, digest/revision-pinned JSON/CSV, no event joins, stale edit guard, escaping, WCAG/mobile, keyboard, assertion-only append, empty declared graph and deletion.');
+  const emptyLog=data.log.log_id;
+  const second=JSON.parse(JSON.stringify(empty));
+  second.objects[0].relationships=[{objectId:'item1',qualifier:'contains'}];
+  second.events[0].id='second-open';
+  await load(second,'second-graph.jsonocel');await page.locator('#owgEventLogImport').click();await status('Retained 1 supplied object relationship');
+  await page.locator('#owgEventLogCaseType').selectOption('order');await page.locator('#owgEventLogAnalyze').click();
+  await page.locator('#owgObjectRuleRelated').selectOption('item');await page.locator('#owgObjectRuleMin').fill('1');await page.locator('#owgObjectRuleMax').fill('1');
+  await page.locator('#owgObjectRuleAdd').click();
+  await page.locator('#owgObjectRuleCompareLog').selectOption(emptyLog);
+  await page.locator('#owgObjectRuleCompare').click();
+  const results=page.locator('#owgObjectRuleResults');
+  await results.getByRole('cell',{name:'+50.0 pp',exact:true}).waitFor();
+  await results.getByText('1 of 2 activated objects violate (50.0%)',{exact:true}).waitFor();
+  await results.getByText('2 of 2 activated objects violate (100.0%)',{exact:true}).waitFor();
+  await results.getByRole('button',{name:/^Inspect comparison violations/}).click();
+  await violations.getByRole('button',{name:'Open event history for order1',exact:true}).click();
+  await page.locator('#owgObjectRuleObjectHistory').getByRole('cell',{name:'e1',exact:true}).waitFor();
+  assert.equal(await page.locator('#owgObjectRuleObjectHistory').getByRole('cell',{name:'second-open',exact:true}).count(),0);
+  const comparison=JSON.parse(await downloaded('#owgObjectRuleComparisonJson','json'));
+  assert.equal(comparison.comparison.log.log_id,emptyLog);
+  assert.notEqual(comparison.baseline.supplied_relationship_basis.relationships_sha256,comparison.comparison.supplied_relationship_basis.relationships_sha256);
+  assert.match(await downloaded('#owgObjectRuleComparisonCsv','csv'),new RegExp(emptyLog));
+  await page.locator('#owgObjectRuleCompareLog').selectOption('');
+  assert.equal(await results.textContent(),'');assert.equal(await violations.textContent(),'');
+  assert.equal(await page.locator('#owgObjectRuleComparisonJson').isHidden(),true);
+  assert.deepEqual(errors,[]);
+  console.log('Supplied graph constraints browser passed, including comparison, per-log evidence and downloads, and target change invalidation.');
  }finally{
   if(browser)await browser.close();server.kill('SIGTERM');
   await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);

@@ -108,6 +108,29 @@ def test_rules_disclose_absent_names_and_the_work_budget(monkeypatch):
     assert exact["complete"] and result["rules_unknown"] == 1 and result["execution_authorized"] is False
 
 
+def test_comparison_matches_single_reports_and_omits_unavailable_changes(monkeypatch):
+    original = _order_to_cash()
+    baseline = _ocel(original)
+    for event in original['events']:
+        if event['id'] == 'o2-place':
+            event['type'] = 'New order'
+    comparison = _ocel(original)
+    monkeypatch.setattr(constraints, "MAX_RELATION_PAIRS", 1)
+    rules = [
+        {"template": "event_cardinality", "activity": "Place order", "object_type": "item", "min": 2},
+        {"template": "event_cardinality", "activity": "New order", "object_type": "item", "min": 2},
+        {"template": "object_cardinality", "object_type": "order", "related_type": "item", "min": 1},
+    ]
+    result = constraints.compare(baseline, {"other_log_id": comparison, "rules": rules})
+    assert result["baseline"] == constraints.check(baseline, {"rules": rules})
+    assert result["comparison"] == constraints.check(comparison, {"rules": rules})
+    assert result["violation_rate_changes"] == [-0.5, None, None]
+    assert result["execution_authorized"] is False
+    for other_log_id, message in [(baseline, "different retained event log"), ("missing", "unknown event log")]:
+        with pytest.raises(workspace.EventLogWorkspaceError, match=message):
+            constraints.compare(baseline, {"other_log_id": other_log_id, "rules": rules})
+
+
 @pytest.mark.parametrize("rule, message", [
     ({"template": "event_cardinality", "activity": "A", "object_type": "t", "min": 3, "max": 1}, "below its min"),
     ({"template": "object_cardinality", "object_type": "t", "related_type": "u"}, "min above 0 or a max"),
@@ -190,6 +213,16 @@ with TestClient(app) as client:
     assert found.status_code == 200 and found.headers["cache-control"] == "no-store", found.text
     assert found.json()["violations"] == [{"event_id": "p", "object_id": None,
                                            "detail": "1 linked", "timestamp": "2024-01-01T08:00:00Z"}]
+    doc["events"][0]["id"] = "comparison-p"
+    other = client.post("/v1/event-logs/import?format=ocel&name=other", content=json.dumps(doc).encode(),
+                        headers={**headers, "x-owg-local-storage-confirmed": "true"}).json()["log_id"]
+    settings = {**rule, "other_log_id": other}
+    assert client.post(path+"/compare", json=settings, headers=bearer).status_code in (401, 403)
+    compared = client.post(path+"/compare", json=settings, headers=headers)
+    assert compared.status_code == 200 and compared.headers["cache-control"] == "no-store", compared.text
+    assert compared.json()["comparison"]["results"][0]["violating_examples"][0]["unit"] == "comparison-p"
+    assert compared.json()["violation_rate_changes"] == [0]
+    assert client.post(path+"/compare", json={**settings, "case_type": "order"}, headers=headers).status_code == 422
     assert client.post(path, json={"rules": []}, headers=headers).status_code == 422
     assert client.post("/v1/event-logs/log_0000000000000000/object-constraints", json=rule,
                        headers=headers).status_code in (404, 422)

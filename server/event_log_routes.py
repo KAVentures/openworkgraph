@@ -2120,6 +2120,13 @@ async def event_log_object_constraints(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/object-constraints/compare")
+async def event_log_compare_object_constraints(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "object rule comparison", strict=True)
+    return await run_in_threadpool(_respond, object_constraints.compare, log_id, spec)
+
+
 @router.post("/v1/event-logs/{log_id}/object-constraints/violations")
 async def event_log_object_constraint_violations(request: Request, log_id: str):
     _require_dashboard(request)
