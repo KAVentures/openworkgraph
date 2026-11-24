@@ -67,3 +67,37 @@ Regression fixtures cover changed thresholds, stable and intentional
 changes, expired and unknown inputs, removed tables, invalid expectations,
 immutable revision pins, authorization and strict JSON. Full execution
 and browser acceptance must pass before release.
+
+
+## Integrated change review
+
+The dashboard requests `include_change_review=true` on the regression
+endpoint. The response adds a `change_review` object containing bounded
+structural marking summaries for both revisions, declared policy impact
+with downstream/dependency witnesses, and coverage of every potentially
+affected table by the supplied reviewed cases. Affected tables include
+tables attached to reachable downstream activities as well as explicit
+decision dependencies. Added and removed tables are included on their
+respective sides.
+
+The report separates known findings (after expectation mismatch, observed
+structural completion problems, or unreviewed changed behavior) from
+unknowns (incomplete structural exploration, incomplete affected-table
+case review, unreferenced rules and changed manual/outcome expectations).
+A structural completion witness does not evaluate predicates. Complete
+case coverage refers only to the finite submitted cases and their
+explicit expectations; it is not representative or exhaustive coverage.
+A review with no listed findings does not approve a release, authorize
+execution or establish actual policy compliance or business outcomes.
+
+The original regression response remains available without the optional
+query parameter. All checks reuse the same two pinned revisions, and no
+case facts are returned or retained. The combined report adds bounded
+structural witnesses and declared policy metadata; review the download
+before sharing.
+
+This release consolidates the previously separate structural assurance,
+finite decision-domain coverage, policy impact and paired regression
+features into one integration PR. The cross-feature HTTP acceptance test
+opens two exact saved revisions and exercises all four endpoint families
+in the same local app process.
