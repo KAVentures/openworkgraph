@@ -580,6 +580,7 @@ def compare_binding_configurations(spec, catalog, suite, baseline, candidate):
     changed = {'added_activity_ids': sorted(new.keys() - old.keys()),
                'removed_activity_ids': sorted(old.keys() - new.keys()),
                'changed_activity_ids': sorted(k for k in old.keys() & new.keys() if old[k] != new[k]),
+               'retained_binding_order_changed': [k for k in old if k in new] != [k for k in new if k in old],
                'other_binding_fields_changed': digest({k: v for k, v in baseline.items() if k != 'bindings'}) !=
                                                digest({k: v for k, v in candidate.items() if k != 'bindings'})}
     different = before['bindings_sha256'] != after['bindings_sha256']
