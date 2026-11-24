@@ -1320,6 +1320,15 @@ The dashboard-only `POST /v1/event-logs/{log_id}/case-table/export` accepts
 
 ## Case tags
 
+**Preview tag selection** shows how many cases match, which already have the tag, and a sample
+of their current notes. A previewed assignment checks the same membership and existing notes
+before applying. Reopen the preview if they have changed. From **Show cases**, use **Edit note**
+to correct or clear a note while keeping the original assignment timestamp.
+
+`POST /v1/event-logs/{log_id}/case-tags/preview` takes the same selection as the add route.
+Pass its `selection_sha256` as `expected_selection_sha256` when applying. `POST .../case-tags/note`
+takes the tag, literal `case_id`, new `note`, `expected_note` and `expected_tagged_at` from the list.
+
 While investigating, tag cases such as "checked", "root cause: missing PO" or
 "exclude: test data", and come back to them. A tag is a label of 1–60
 characters with an optional note (up to 500 characters). Tags are stored on this

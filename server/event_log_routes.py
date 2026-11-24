@@ -1004,6 +1004,22 @@ async def event_log_add_case_tags(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/case-tags/preview")
+async def event_log_preview_case_tags(request: Request, log_id: str):
+    from . import event_log_case_tags as case_tags
+    _require_dashboard(request)
+    spec = await _json_body(request, "case tag preview", strict=True, limit=262144)
+    return await run_in_threadpool(_respond, case_tags.preview, log_id, spec)
+
+
+@router.post("/v1/event-logs/{log_id}/case-tags/note")
+async def event_log_edit_case_tag_note(request: Request, log_id: str):
+    from . import event_log_case_tags as case_tags
+    _require_dashboard(request)
+    spec = await _json_body(request, "case tag note", strict=True, limit=16384)
+    return await run_in_threadpool(_respond, case_tags.edit_note, log_id, spec)
+
+
 @router.post("/v1/event-logs/{log_id}/case-tags/remove")
 async def event_log_remove_case_tags(request: Request, log_id: str):
     from . import event_log_case_tags as case_tags
