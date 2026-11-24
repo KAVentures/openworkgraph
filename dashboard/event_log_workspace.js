@@ -6671,19 +6671,28 @@
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activity',pick),field('Exact activity',exact),lookup.wrap,run);
     const statusLine=el('div',null,'muted');statusLine.id='owgActivityProfileStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgActivityProfileResults';
-    box.append(row,statusLine,out);
+    // Neighbours before and after, then the weekday and hour profile, one row each.
+    let lastProfile=null;
+    const exports=exportButtons('owgActivityProfileReport',()=>lastProfile,r=>[
+      ['section','value','times','share','median_hours'],
+      ...r.comes_after.map(n=>['comes_after',n.boundary?'(start of case)':n.activity,n.times,n.share,n.median_hours]),
+      ...r.comes_before.map(n=>['comes_before',n.boundary?'(end of case)':n.activity,n.times,n.share,n.median_hours]),
+      ...r.by_weekday.map(d=>['weekday',d.day,d.times,'','']),
+      ...r.by_hour.map(h=>['hour_utc',String(h.hour).padStart(2,'0')+':00',h.times,'',''])]);
+    box.append(row,statusLine,out,exports.node);
     const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
     const hrs=x=>x===null||x===undefined?'—':(x<48?(Math.round(x*10)/10)+' h':(Math.round(x/24*10)/10)+' d');
     const generation=state.generation;
     let revision=0;
     const reset=()=>{
       ++revision;run.disabled=false;lookup.reset();out.replaceChildren();statusLine.textContent='Show the profile for this activity.';
+      lastProfile=null;exports.enable(false);
     };
     exact.oninput=reset;pick.onchange=()=>{exact.value='';reset();};
     run.onclick=async()=>{
       const ticket=++revision,cohort=globalCohort();
       const current=()=>generation===state.generation&&ticket===revision;
-      run.disabled=true;statusLine.textContent='Profiling…';out.replaceChildren();
+      run.disabled=true;statusLine.textContent='Profiling…';out.replaceChildren();lastProfile=null;exports.enable(false);
       try{
         const activity=exact.value||pick.value;
         if(!activity||Array.from(activity).length>200)throw new Error('Choose an activity label of 1 to 200 characters.');
@@ -6722,6 +6731,7 @@
         const busy=r.by_hour.filter(h=>h.times).sort((a,b)=>b.times-a.times).slice(0,3).map(h=>String(h.hour).padStart(2,'0')+':00 ('+h.times+')');
         if(busy.length)out.appendChild(el('div','Busiest hours (UTC): '+busy.join(', ')+'.'));
         out.appendChild(el('div',r.caveat,'muted'));
+        lastProfile=r;exports.enable(true);
       }catch(error){if(current())statusLine.textContent=error.message;}
       finally{if(current())run.disabled=false;}};
     return box;

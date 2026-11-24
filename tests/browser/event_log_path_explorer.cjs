@@ -43,6 +43,13 @@ const path=require('node:path');
    await page.locator('#owgActivityProfileStatus').filter({hasText:'Check happens in 11 of 12 cases'}).waitFor();
    const profile=page.locator('#owgActivityProfileResults');
    assert.match(await profile.textContent(),/Comes afterActivityTimesShareMedian gapEvidenceOpen11/);
+   // The profile downloads with neighbours, weekdays and hours as rows.
+   const [profileCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgActivityProfileReportCsv').click()]);
+   const profileLines=(await fs.readFile(await profileCsv.path(),'utf8')).trim().split(/\r?\n/);
+   assert.equal(profileLines[0],'section,value,times,share,median_hours');
+   assert(profileLines.some(l=>/^comes_after,Open,11,1(\.0)?,/.test(l)),profileLines.join('|'));
+   assert.equal(profileLines.filter(l=>l.startsWith('weekday,')).length,7);
+   assert.equal(profileLines.filter(l=>l.startsWith('hour_utc,')).length,24);
    await profile.getByRole('button',{name:'Cases without Check',exact:true}).click();
    await page.locator('#owgEventLogCasesStatus').getByText('1 matching cases. Showing 1 on this page.').waitFor();
    await profile.getByRole('button',{name:'Cases with Open → Check',exact:true}).click();
@@ -95,6 +102,6 @@ const path=require('node:path');
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgPaths'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Path explorer browser acceptance passed: start, branches and event history, case endings, back, anywhere anchor, plain-words summary, WCAG audit.');
+   console.log('Path explorer browser acceptance passed: start, branches and event history, case endings, back, anywhere anchor, plain-words summary, activity profile CSV, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});

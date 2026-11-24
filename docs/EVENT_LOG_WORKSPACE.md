@@ -2961,6 +2961,10 @@ from activities literally named `(start)` or `(end)`. The profile API marks boun
 `GET /v1/event-logs/{log_id}/activity-profile?profile_activity=Check` plus the case-filter
 parameters (`activity` there is the case filter). Agents use `get_process_activity_profile`.
 
+**Download JSON** and **Download CSV** save the profile shown. The CSV has one row per neighbour
+(`comes_after` and `comes_before`, with times, share and median gap in hours, and the case start
+or end as `(start of case)` or `(end of case)`), per weekday and per UTC hour.
+
 ## Activities that happen together
 
 **Activities that happen together** compares the most common activities (8, 12 or 20) by the
