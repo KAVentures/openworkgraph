@@ -13,13 +13,23 @@
 
   // A portable review artifact, never an execution grant or independently verified outcome.
   // Deliberately omit activity labels, raw cases, record refs, receipts and credentials.
+  function minimizedObservedOrigin(item){
+    const origin=item?.observed_execution_origin;
+    if(!origin)return undefined;
+    const digest=typeof origin.snapshot_sha256==='string'&&/^[a-f0-9]{64}$/.test(origin.snapshot_sha256)?origin.snapshot_sha256:null;
+    return {snapshot_sha256:digest,
+      retained_manifest_status:digest&&origin.retained_manifest_status==='matches'?'matches':'unavailable_or_changed',
+      original_history_rechecked:false,business_case_identity_verified:false,business_outcomes_verified:false};
+  }
+
   function handoffReviewPacket(journey,projectId,ideaId,createdAt){
     const project=(journey.projects||[]).find(item=>item.project_id===projectId);
     if(!project)throw new Error('Select a recorded project before preparing its review packet.');
     const process=journey.process_status||{},ref=process.process_reference||null;
     const origins=(journey.dataset_origins||[]).slice(0,64).map(item=>({
       status:item.status||'unknown',source_content_sha256:item.source_content_sha256||null,
-      selection_sha256:item.selection_sha256||null
+      selection_sha256:item.selection_sha256||null,
+      ...(item.observed_execution_origin?{observed_execution_origin:minimizedObservedOrigin(item)}:{})
     }));
     const originsTruncated=(journey.dataset_origins||[]).length>64;
     const reportsTruncated=(project.reported_specifications||[]).length>64;
@@ -33,6 +43,10 @@
     if(reportsTruncated)blockers.push('reported_specification_list_truncated');
     if(!origins.length)blockers.push('dataset_origin_not_linked');
     else if(origins.some(item=>item.status!=='current'))blockers.push('dataset_origin_not_current');
+    if(origins.some(item=>item.observed_execution_origin?.retained_manifest_status==='unavailable_or_changed'))
+      blockers.push('original_observation_manifest_unavailable');
+    if(origins.some(item=>item.observed_execution_origin))
+      blockers.push('original_observation_history_not_rechecked');
     if(!['approved','implemented'].includes(journey.idea?.state))blockers.push('idea_not_approved');
     if(!project.idea_revision_is_current)blockers.push('project_uses_historical_idea_revision');
     if(!reported.length)blockers.push('no_imported_report');
@@ -157,7 +171,8 @@
       throw new Error('Project dependency evidence is incomplete or invalid. Refresh the journey.');
     const originCount=packet.dataset_origins.length;
     const originCurrent=originCount>0&&!packet.dataset_origins_truncated&&
-      packet.dataset_origins.every(origin=>origin.status==='current');
+      packet.dataset_origins.every(origin=>origin.status==='current'&&
+        (!origin.observed_execution_origin||origin.observed_execution_origin.retained_manifest_status==='matches'));
     const processCurrent=process.status==='current'&&!!process.workflow_id&&
       Number.isSafeInteger(process.revision)&&process.revision>0&&sha(process.content_sha256);
     const ideaCurrent=['approved','implemented'].includes(packet.idea.state)&&
@@ -224,7 +239,8 @@
         dataset_origins:packet.dataset_origins.map(origin=>({
           status:origin.status==='current'?'current':'needs_review',
           source_content_sha256:sha(origin.source_content_sha256)?origin.source_content_sha256:null,
-          selection_sha256:sha(origin.selection_sha256)?origin.selection_sha256:null
+          selection_sha256:sha(origin.selection_sha256)?origin.selection_sha256:null,
+          ...(origin.observed_execution_origin?{observed_execution_origin:origin.observed_execution_origin}:{})
         })),
         dataset_origins_truncated:packet.dataset_origins_truncated,
         reports_truncated:packet.reported_specifications_truncated},
@@ -436,7 +452,14 @@
         !Number.isSafeInteger(packet.source_check_exports.count)||packet.source_check_exports.count<0||
         !sha(packet.source_check_exports.last_document_sha256)||
         packet.readiness.blockers.some(b=>!status(b))||
-        packet.dataset_origins.some(o=>!object(o)||!status(o.status)||!sha(o.source_content_sha256)||!sha(o.selection_sha256))||
+        packet.dataset_origins.some(o=>!object(o)||!status(o.status)||!sha(o.source_content_sha256)||!sha(o.selection_sha256)||
+          (o.observed_execution_origin!==undefined&&(!object(o.observed_execution_origin)||
+            !sha(o.observed_execution_origin.snapshot_sha256)||
+            !['matches','unavailable_or_changed'].includes(o.observed_execution_origin.retained_manifest_status)||
+            (o.observed_execution_origin.retained_manifest_status==='matches'&&o.observed_execution_origin.snapshot_sha256===null)||
+            o.observed_execution_origin.original_history_rechecked!==false||
+            o.observed_execution_origin.business_case_identity_verified!==false||
+            o.observed_execution_origin.business_outcomes_verified!==false)))||
         packet.reported_specifications.some(o=>!object(o)||!status(o.status)||
           (o.reported_run_count!==null&&(!Number.isSafeInteger(o.reported_run_count)||o.reported_run_count<0))))fail();
     };
@@ -1420,6 +1443,27 @@
               const labels={current:'source data unchanged',source_advanced:'source data changed since snapshot',unavailable:'snapshot unavailable',check_failed:'source could not be checked',reference_mismatch:'snapshot metadata no longer matches its reference',not_checked_work_budget:'source not checked: fingerprint work budget exceeded'};
               stages.appendChild(el('li','Dataset and cohort → process: '+(labels[item.status]||'unknown status')+
                 (item.source_content_sha256?' · source SHA-256 '+item.source_content_sha256+' · selection SHA-256 '+item.selection_sha256:'')+'. User-selected reference; derivation and business rules are not independently verified.'));
+              const observed=minimizedObservedOrigin(item);
+              if(observed){
+                const line=el('li','Original observed execution snapshot · manifest '+(observed.retained_manifest_status==='matches'?'matches':'unavailable or changed')+'. Original history not rechecked. No business outcome verified.');
+                if(observed.retained_manifest_status==='matches'&&/^log_[a-f0-9]{16}$/.test(item.log_id||'')){
+                  const openOriginal=button('Open exact observed execution log','secondary');
+                  openOriginal.onclick=async()=>{
+                    if(generation!==detailGeneration)return;
+                    openOriginal.disabled=true;
+                    try{
+                      if(typeof window.owgEventLogWorkspace?.openSaved!=='function')throw Error('Local event-log workspace unavailable.');
+                      await window.owgEventLogWorkspace.openSaved(item.log_id);
+                      if(generation!==detailGeneration)return;
+                      document.querySelector('[role=tab][data-tab=evidence]')?.click();
+                      document.getElementById('owgEventLogCard')?.scrollIntoView({block:'start'});
+                    }catch(error){if(generation===detailGeneration)line.appendChild(el('p',String(error.message||error),'muted'));}
+                    finally{openOriginal.disabled=false;}
+                  };
+                  line.appendChild(openOriginal);
+                }
+                stages.appendChild(line);
+              }
             });
           }else stages.appendChild(el('li',data.dataset_origin_check_available===false?'Dataset and cohort → process: source references could not be checked.':'Dataset and cohort → process: origin is not linked.'));
           const process=data.process_status,ref=process.process_reference;
