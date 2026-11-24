@@ -271,6 +271,7 @@
         section.appendChild(button('Open compared revision r'+revision,
           ()=>load(selected.workflow_id,revision,previous.content_sha256)));
         host.replaceChildren(section);
+        renderPolicyRegression(previous,selected,host,generation);
       }catch(error){
         if(generation===revisionCompareGeneration&&record===selected)
           host.replaceChildren(el('p','Comparison unavailable: '+error.message));
@@ -278,6 +279,69 @@
       }
     });
   }
+  function renderPolicyRegression(previous,selected,host,generation){
+    if(previous.revision>=selected.revision)return;
+    const panel=el('details');panel.appendChild(el('summary','Test behavioral regression between saved revisions'));
+    panel.appendChild(el('p','Use synthetic or explicitly authorized local facts, with separately reviewed expectations for each revision. Both versions see the exact same dated case. No agent runs or source calls.'));
+    const input=el('textarea');input.rows=14;input.style.cssText='width:100%;box-sizing:border-box;font-family:monospace';
+    input.setAttribute('aria-label','Reviewed decision regression cases JSON');
+    input.placeholder='{"cases":[{"case_id":"case_1","as_of_date":"2026-01-01","facts":{},"expectations":[{"table_id":"decision_id","before":{"status":"unknown"},"after":{"status":"unknown"}}]}]}';
+    const confirm=el('input');confirm.type='checkbox';const label=el('label',' I authorize local analysis of these facts and confirm the expectations were reviewed.');label.prepend(confirm);
+    const out=el('div');out.setAttribute('role','status');
+    let turn=0,report=null;
+    const active=()=>panel.isConnected&&host.isConnected&&generation===revisionCompareGeneration&&record===selected;
+    const download=button('Download minimized regression report',()=>{
+      if(!report||!active())return;
+      const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));
+      const a=el('a');a.href=url;a.download='owg-policy-regression-r'+previous.revision+'-r'+selected.revision+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    });download.disabled=true;
+    const run=button('Evaluate both revisions',async()=>{
+      if(!active()||!confirm.checked)return;
+      const n=++turn;report=null;download.disabled=true;run.disabled=true;out.replaceChildren(el('p','Evaluating reviewed cases locally…'));
+      try{
+        const raw=JSON.parse(input.value);
+        if(!raw||typeof raw!=='object'||Array.isArray(raw)||Object.keys(raw).some(k=>k!=='cases'))
+          throw Error('Supply a JSON object containing only the cases array.');
+        // Send the original JSON object text rather than parsed/reserialized
+        // facts, so duplicate keys and nonfinite values reach the strict parser.
+        const rawText=input.value.trim();
+        const body='{"reviewed_by_user":true,'+rawText.slice(1);
+        await window.__owgAuthReady;
+        const params=new URLSearchParams({workflow_id:selected.workflow_id,before_revision:String(previous.revision),
+          after_revision:String(selected.revision),before_sha256:previous.content_sha256,after_sha256:selected.content_sha256});
+        const response=await fetch('/v1/process-catalog/policy-regression?'+params,{method:'POST',cache:'no-store',
+          headers:{'Content-Type':'application/json','X-OWG-Case-Facts-Authorized':'true'},body});
+        if(!response.ok){const error=await response.json().catch(()=>({}));throw Error(error.detail||'Regression request failed.');}
+        const data=await response.json();
+        if(!active()||n!==turn)return;
+        if(data.before.workflow_id!==previous.workflow_id||data.before.revision!==previous.revision||
+          data.before.content_sha256!==previous.content_sha256||data.after.workflow_id!==selected.workflow_id||
+          data.after.revision!==selected.revision||data.after.content_sha256!==selected.content_sha256)
+          throw Error('Unexpected revision references.');
+        report=data;download.disabled=false;
+        const parts=[el('h4','Paired regression results'),el('p',data.after_matches+' / '+data.reviewed_expectations+
+          ' after expectations matched; '+data.before_matches+' before. '+data.cases_all_after_match+' / '+data.case_count+' cases matched every reviewed after expectation.'),
+          el('p',data.unreviewed_table_case_pairs+' unreviewed table/case pairs, '+data.unreviewed_changed_table_case_pairs+' with observed changes.'),
+          el('p',Object.entries(data.classification_counts).map(([k,v])=>k.replaceAll('_',' ')+': '+v).join(' · '))];
+        const wrap=el('div');wrap.className='table-wrap';wrap.tabIndex=0;wrap.setAttribute('role','region');wrap.setAttribute('aria-label','Paired case expectations');
+        const t=el('table'),thead=el('thead'),tr=el('tr');for(const h of ['Case','Date','Table','Before actual / expected','After actual / expected','Classification'])tr.appendChild(el('th',h));
+        thead.appendChild(tr);t.appendChild(thead);const tbody=el('tbody');
+        const desc=v=>v.status+(v.target_activity_id?' → '+v.target_activity_id:'');
+        for(const c of data.cases)for(const x of c.checks){
+          const row=el('tr');for(const value of [c.case_id,c.as_of_date,x.table_id,desc(x.before)+' / '+desc(x.before_expected),
+            desc(x.after)+' / '+desc(x.after_expected),x.classification+(x.table_identity_discontinuous?' (table identity changed)':'')])row.appendChild(el('td',value));
+          tbody.appendChild(row);
+        }
+        t.appendChild(tbody);wrap.appendChild(t);parts.push(wrap,el('p',data.interpretation),el('p','Suite SHA-256: '+data.suite_sha256));
+        out.replaceChildren(...parts);
+      }catch(error){if(active()&&n===turn)out.replaceChildren(el('p',error instanceof SyntaxError?'Invalid JSON case suite.':error.message));}
+      finally{if(active()&&n===turn)run.disabled=!confirm.checked;}
+    });run.disabled=true;
+    const invalidate=()=>{turn++;report=null;download.disabled=true;out.replaceChildren();run.disabled=!confirm.checked;};
+    input.oninput=()=>{confirm.checked=false;invalidate();};confirm.onchange=invalidate;
+    panel.append(input,label,run,download,out);host.appendChild(panel);
+  }
+
   async function history(before){
     if(!record)return;
     return locked(async()=>{
