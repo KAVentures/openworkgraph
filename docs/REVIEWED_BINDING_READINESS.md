@@ -296,3 +296,81 @@ randomized collision comparisons against a pairwise oracle, 30 real
 filesystem round trips, 30 overwrite refusals, 16 injected file-open
 failures and three invalid package refusals passed. Full generated-runtime
 preparation and CLI regression tests are committed but not run locally.
+
+
+## Execute an explicitly authorized prepared queue (R17/R18)
+
+The generated runtime now includes `run_queue.py`. Preparation prints the
+canonical SHA-256 of queue-review.json; record it independently in the
+trusted local release record. The original prepared inputs and disabled
+intents must remain unchanged.
+
+    python run_queue.py --queue prepared-queue --queue-sha256 PINNED_DIGEST --inspect
+
+Inspection is offline and read-only. It recomputes preparation for every
+selected case, checks exact case/plan/binding/review/disabled-intent digests,
+and rejects duplicate inputs, shared declared write keys and shared outcome
+targets. It also checks retained state and journals. The digest is not a
+signature or proof of who prepared or approved the queue.
+
+For execution, an authorized operator separately reviews the existing
+customer intent for each case using the normal executor contract, including
+case/plan/binding pins, source reads, human/manual confirmations and expiry.
+Place those separately reviewed intents in a new private local authorization
+document, not the original disabled files. The document has format
+`openworkgraph.queue-authorizations.v1`, queue_sha256 equal to the recorded
+queue digest, and intents: [{case_id, intent}]. No intent is created or
+approved by the runner.
+
+    python run_queue.py --queue prepared-queue --queue-sha256 PINNED_DIGEST --run-approved --confirm-network --authorizations reviewed-intents.json --max-cases 1
+
+The explicit command uses the existing customer MCP executor. The default
+is one case, and at most 20 cases may be selected. All proposed starts are
+preflighted before the first provider call; each is rechecked before its
+durable case claim. Missing credentials or invalid authorization refuse
+before a case claim. Only the next waiting prefix of the queue is eligible.
+The runner uses exclusive local state files, a single-runner lock, per-case
+claims and completion receipts under queue-state. It verifies the exact
+execution identity, ordered completed activity IDs, argument digests,
+source-check report matches and terminal journal evidence before advancing.
+Uncertain, failed, missing, altered, unexpected or incomplete evidence
+blocks subsequent starts. The runner never automatically retries a claimed
+case, even after a different intent expiry is supplied. A separately
+invoked executor or copied/deleted state can bypass these local protections;
+use a trusted local directory, retain all state, and rely on provider-side
+authorization, conditional writes and idempotency. This is not a distributed
+scheduler, transaction, remote cancellation mechanism or proof of a business
+outcome.
+
+To stop future attempts after queue state is initialized:
+
+    python stop.py --stop --confirm-stop --journal-directory prepared-queue/queue-state/journals
+
+An active/crash lock or incomplete claim requires operator reconciliation;
+do not remove a live lock or delete execution evidence. If an already
+successful journal exists but its completion receipt was not written,
+investigate and preserve any retained crash lock, establish that no runner
+is active, review the full journal and record its raw-byte SHA-256. Only
+then, when the runner lock is absent, use:
+
+    python run_queue.py --queue prepared-queue --queue-sha256 PINNED_DIGEST --reconcile-completed --case-id case_1 --journal-sha256 REVIEWED_JOURNAL_DIGEST --confirm-runner-stopped-and-journal-reviewed
+
+Recovery is offline, writes only a new completion receipt for the first
+incomplete claimed case and verifies the exact successful journal again.
+It never retries work, overwrites a receipt, resolves an uncertain effect,
+or establishes provider truth. A recovered completion is separately
+identified in status output. Real-world effects and source association
+still require independent customer review.
+
+### Validation boundary
+
+Targeted local tests exercised exact extracted committed queue functions
+on real temporary filesystem directories with simulated preparation,
+intent validation, provider execution and/or journal projection. Passed:
+120 randomized orchestration scenarios, 15 explicit guard checks
+(including missing tool/source/catalog credentials), 10 recovery scenarios
+(one valid, nine refusals), 100 valid queue loads, 600 altered-input or
+digest-pin refusals and three collision refusals. These are not end-to-end
+provider or full generated-runtime acceptance. New generated-runtime
+synthetic executor, queue CLI handoff and export integration tests are
+committed and pending exact-head CI. No real provider was contacted.
