@@ -304,7 +304,7 @@ def audit_bindings(spec, catalog, suite, bindings):
     an execution intent, a permission check or a live provider/schema test.
     """
     from evaluate import validate_suite
-    from execute import prepare
+    from execute import prepare, arguments_for, schema_reference
     validate_catalog(spec, catalog)
     cases = validate_suite(spec, suite, allow_current_source_rules=True)
     if (not isinstance(bindings, dict)
@@ -321,7 +321,10 @@ def audit_bindings(spec, catalog, suite, bindings):
     if (any(not isinstance(i, str) or i not in activities for i in identifiers)
             or len(set(identifiers)) != len(identifiers)):
         raise ImplementationError('Bindings require unique existing activity IDs')
-    # Reject over-budget inputs instead of silently dropping alternatives.
+    mapping = dict(zip(identifiers, mapped))
+    # Reject duplicate or over-budget inputs instead of inflating coverage or silently dropping alternatives.
+    if any(len({digest(route) for route in case['expected']['accepted_routes']}) != len(case['expected']['accepted_routes']) for case in cases):
+        raise ImplementationError('Reviewed route alternatives must be distinct within each case')
     route_count = sum(len(case['expected']['accepted_routes']) for case in cases)
     if route_count > MAX_REVIEW_ROUTES:
         raise ImplementationError('Select at most 80 reviewed route alternatives per binding audit')
@@ -336,6 +339,29 @@ def audit_bindings(spec, catalog, suite, bindings):
             plan = {'revision': spec['revision'], 'content_sha256': spec['content_sha256'],
                     'status': 'proposal', 'activity_ids': route, 'missing_business_inputs': []}
             findings = []
+            # Inspect candidate mappings even when deliberately disabled. This
+            # gives operators actionable schema/pointer feedback before they
+            # authorize anything, including when prepare() refuses a route.
+            for identifier in sorted(set(route) & set(activities)):
+                if activities[identifier]['implementation'] == 'human':
+                    continue
+                binding = mapping.get(identifier)
+                if not binding or not tool_name(binding.get('tool_name')):
+                    findings.append(_contract_finding('action:tool_mapping_missing', identifier))
+                    continue
+                for role, contract in (('action', binding), ('precondition', binding.get('precondition'))):
+                    if role == 'precondition' and contract is None:
+                        continue
+                    try:
+                        if not isinstance(contract, dict) or not tool_name(contract.get('tool_name')):
+                            raise ImplementationError('Invalid tool contract')
+                        inspected = {'tool_name': contract['tool_name'],
+                                     'tool_schema_sha256': schema_reference(contract.get('tool_schema_sha256')),
+                                     'arguments': arguments_for(contract, case['input'])}
+                        for code in sorted(_metadata_findings(inspected, tools, role=role)):
+                            findings.append(_contract_finding(code, identifier))
+                    except (ImplementationError, ValueError, TypeError, RecursionError):
+                        findings.append(_contract_finding(role + ':argument_or_schema_reference_invalid', identifier))
             counts = {'actions': 0, 'human_activities': 0, 'manual_conditions': 0,
                       'source_outcomes': 0, 'source_rules': 0, 'decision_tables': 0}
             try:
@@ -354,13 +380,6 @@ def audit_bindings(spec, catalog, suite, bindings):
                           'source_outcomes': len(prepared['outcomes']),
                           'source_rules': len(prepared['source_rules']),
                           'decision_tables': len(prepared.get('decision_tables', []))}
-                for action in prepared['actions']:
-                    identifier = action['activity_id']
-                    for code in sorted(_metadata_findings(action, tools, role='action')):
-                        findings.append(_contract_finding(code, identifier))
-                    if action['precondition'] is not None:
-                        for code in sorted(_metadata_findings(action['precondition'], tools, role='precondition')):
-                            findings.append(_contract_finding(code, identifier))
                 if counts['source_outcomes'] or counts['source_rules'] or counts['decision_tables']:
                     try:
                         endpoint(bindings.get('source_api_url'), source=True)
@@ -410,7 +429,7 @@ def audit_bindings(spec, catalog, suite, bindings):
             'missing_categories': [category for category, n in category_counts.items() if not n],
             'uncovered_nonhuman_activity_ids': uncovered,
             'finding_counts': dict(sorted(counts.items())), 'cases': report_cases,
-            'review_required': not route_count or clear != route_count or bool(uncovered),
+            'review_required': not route_count or clear != route_count or bool(uncovered) or any(not n for n in category_counts.values()),
             'schema_constraints_fully_validated': False,
             'provider_semantics_or_permissions_verified': False,
             'live_catalog_refreshed': False, 'business_tools_called': False,
