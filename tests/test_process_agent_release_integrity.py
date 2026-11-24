@@ -236,6 +236,8 @@ def test_comparison_classifies_revision_upgrade_rollback_and_reused_revision(tmp
     result = compare_directories(old, new, old_pin, new_pin)
     assert result["revision_direction"] == "newer_revision"
     assert result["specification_bytes_changed"] and result["process_model_changed"]
+    assert result["design_changes"]["other_changed_model_fields"] == ["goal"]
+    assert not result["design_changes"]["model_field_values_returned"]
     assert compare_directories(new, old, new_pin, old_pin)["revision_direction"] == "older_revision"
     reused = _reinventory(new, lambda spec: spec.update(revision=3))
     assert compare_directories(old, new, old_pin, reused)["revision_direction"] == "same_revision_different_content"
@@ -274,3 +276,52 @@ def test_generated_standalone_compare_cli_outputs_json_and_requires_pins(tmp_pat
     refused = subprocess.run(command[:-2], capture_output=True, text=True, timeout=20)
     assert refused.returncode == 2
     assert not refused.stdout
+
+
+def test_structural_comparison_exact_ids_order_and_changed_fields(tmp_path):
+    old, new = tmp_path/"old", tmp_path/"new"
+    _extract(old)
+    _extract(new)
+    old_pin = _pin(old)
+    def change(spec):
+        model = spec["process_model"]
+        model["activities"][0]["label"] = "PRIVATE_NEW_LABEL"
+        model["activities"].append({"id":"escalate","label":"PRIVATE_NEW_ACTIVITY"})
+        model["transitions"] = [{"source":"receive","target":"escalate"},
+                                {"source":"escalate","target":"approve"}]
+        model["business_rules"] = [{"id":"rule1","text":"PRIVATE_RULE"}]
+        model["outcome_expectations"] = [{"terminal_activity_id":"approve","operation":"updated"}]
+        spec["control_flow_contract"] = "synthetic_candidate_contract"
+        spec["process_model_sha256"] = hashlib.sha256(
+            json.dumps(model,sort_keys=True,allow_nan=False).encode()).hexdigest()
+    pin = _reinventory(new, change)
+    report = compare_directories(old,new,old_pin,pin)["design_changes"]
+    groups = report["keyed_model_changes"]
+    assert groups["activities"]["added"] == [{"id":"escalate"}]
+    assert groups["activities"]["changed"] == [{"id":"receive","changed_fields":["label"]}]
+    assert groups["transitions"]["removed"] == [{"source":"receive","target":"approve"}]
+    assert groups["transitions"]["added"] == [{"source":"escalate","target":"approve"},
+                                             {"source":"receive","target":"escalate"}]
+    assert groups["business_rules"]["added"] == [{"id":"rule1"}]
+    assert groups["outcome_expectations"]["added"] == [{"terminal_activity_id":"approve","operation":"updated"}]
+    assert report["changed_runtime_contract_fields"] == ["control_flow_contract"]
+    assert "PRIVATE_" not in json.dumps(report)
+    assert not report["structural_changes_establish_compatibility"]
+    def reorder(spec):
+        spec["process_model"]["activities"].reverse()
+        spec["process_model_sha256"] = hashlib.sha256(
+            json.dumps(spec["process_model"],sort_keys=True,allow_nan=False).encode()).hexdigest()
+    reordered = _reinventory(new,reorder)
+    assert compare_directories(old,new,old_pin,reordered)["design_changes"]["keyed_model_changes"]["activities"]["retained_identity_order_changed"]
+
+
+def test_structural_inventory_refuses_duplicate_identity(tmp_path):
+    old,new=tmp_path/"old",tmp_path/"new"
+    _extract(old)
+    _extract(new)
+    def duplicate(spec):
+        model=spec["process_model"]
+        model["activities"].append(dict(model["activities"][0]))
+        spec["process_model_sha256"]=hashlib.sha256(json.dumps(model,sort_keys=True,allow_nan=False).encode()).hexdigest()
+    with pytest.raises(ReleaseIntegrityError,match="duplicate model inventory identity"):
+        compare_directories(old,new,_pin(old),_reinventory(new,duplicate))
