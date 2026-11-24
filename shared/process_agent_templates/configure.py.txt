@@ -692,6 +692,67 @@ def shortlist_reviewed_routes(spec, suite, bindings, case):
             'model_called': False, 'business_tools_called': False, 'execution_authorized': False}
 
 
+def shortlist_case_batch(spec, suite, bindings, batch):
+    """Triage a bounded queue of explicitly selected local cases offline."""
+    from evaluate import validate_suite
+    cases = validate_suite(spec, suite, allow_current_source_rules=True)
+    if (not isinstance(batch, dict) or set(batch) != {'format', 'case_inputs_authorized', 'cases'}
+            or batch['format'] != 'openworkgraph.selected-route-cases.v1'
+            or batch['case_inputs_authorized'] is not True):
+        raise ImplementationError('Select an explicitly authorized local case batch')
+    selected = batch['cases']
+    if not isinstance(selected, list) or not 1 <= len(selected) <= 20:
+        raise ImplementationError('Select 1 to 20 local cases')
+    seen = set()
+    for row in selected:
+        if (not isinstance(row, dict) or set(row) != {'id', 'input'}
+                or not isinstance(row['id'], str) or not re.fullmatch(r'case_[0-9]{1,4}', row['id'])
+                or row['id'] in seen or not isinstance(row['input'], dict)
+                or len(json.dumps(row['input'], allow_nan=False).encode('utf-8')) > 65536):
+            raise ImplementationError('Selected cases require unique opaque IDs and bounded JSON inputs')
+        seen.add(row['id'])
+    if len(json.dumps(batch, allow_nan=False).encode('utf-8')) > 262144:
+        raise ImplementationError('Selected case batch exceeds its size limit')
+    alternatives = sum(len(row['expected']['accepted_routes']) for row in cases)
+    distinct = len({tuple(route) for row in cases for route in row['expected']['accepted_routes']})
+    if alternatives > MAX_REVIEW_ROUTES or distinct * len(selected) > 400:
+        raise ImplementationError('Narrow the selected cases or reviewed routes to at most 400 distinct case-route checks')
+    rows, statuses, input_counts = [], {}, {}
+    for row in selected:
+        result = shortlist_reviewed_routes(spec, suite, bindings, row['input'])
+        status, case_hash = result['status'], result['case_sha256']
+        statuses[status] = statuses.get(status, 0) + 1
+        input_counts[case_hash] = input_counts.get(case_hash, 0) + 1
+        options = []
+        for route in result['routes']:
+            options.append({
+                'route_sha256': route['route_sha256'],
+                'reviewed_reference': (route['exact_input_references'] or route['reviewed_references'])[0],
+                'supported_by_all_exact_reviews': route['supported_by_all_exact_reviews'],
+                'offline_requirements_clear': route['offline_requirements_clear'],
+                'requirements': route['requirements'],
+                'separate_human_resolution_needed': route['separate_human_resolution_needed'],
+                'source_checks_needed': route['source_checks_needed'],
+                'mapped_action_count': route['mapped_action_count']})
+        rows.append({'case_id': row['id'], 'case_sha256': case_hash, 'status': status,
+                     'exact_input_review_count': result['exact_input_review_count'],
+                     'routes_with_clear_offline_requirements': result['routes_with_clear_offline_requirements'],
+                     'routes': options})
+    for row in rows:
+        row['duplicate_selected_input'] = input_counts[row['case_sha256']] > 1
+    return {'format': 'openworkgraph.reviewed-route-batch.v1',
+            'process_reference': reference(spec), 'spec_sha256': digest(spec),
+            'suite_sha256': digest(suite), 'bindings_sha256': digest(bindings),
+            'selected_batch_sha256': digest(batch), 'selected_case_count': len(rows),
+            'distinct_selected_input_count': len(input_counts),
+            'case_route_check_count': len(rows) * distinct,
+            'status_counts': dict(sorted(statuses.items())), 'cases': rows,
+            'review_required': True, 'automatic_route_selected': False,
+            'duplicate_business_records_independently_identified': False,
+            'case_values_and_tool_arguments_included': False,
+            'model_called': False, 'business_tools_called': False, 'execution_authorized': False}
+
+
 def prepare_reviewed_case(spec, suite, bindings, case_id, alternative, *, new_case=None):
     """Materialize one explicitly selected human-reviewed route for execute.py.
 
@@ -792,11 +853,13 @@ def main():
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--inspect-tools',action='store_true')
     mode.add_argument('--propose-bindings',action='store_true')
+    mode.add_argument('--shortlist-case-batch',action='store_true',help='Triage selected local cases against reviewed routes offline')
     mode.add_argument('--shortlist-reviewed-routes',action='store_true',help='Compare reviewed route alternatives for a selected new case offline')
     mode.add_argument('--prepare-reviewed-case',action='store_true',help='Materialize one reviewed route as local executor inputs and disabled intent')
     mode.add_argument('--audit-bindings',action='store_true',help='Offline reviewed-case binding contract audit')
     parser.add_argument('--tool-server-url');parser.add_argument('--catalog');parser.add_argument('--case');parser.add_argument('--model')
     parser.add_argument('--cases');parser.add_argument('--bindings')
+    parser.add_argument('--case-batch',help='Explicitly authorized local case batch for offline triage')
     parser.add_argument('--case-id');parser.add_argument('--alternative',type=int)
     parser.add_argument('--new-case',help='Optional new authorized local case to prepare using the explicitly selected reviewed route; requires separate case-specific review')
     parser.add_argument('--confirm-retain-case-inputs',action='store_true',help='Explicitly retain selected case values and bindings in a new local directory')
@@ -813,6 +876,17 @@ def main():
         parser.error('--baseline-bindings requires --audit-bindings without --previous-catalog')
     if not args.prepare_reviewed_case and (args.case_id is not None or args.alternative is not None or args.new_case is not None or args.confirm_retain_case_inputs):
         parser.error('Case selection and retention confirmation require --prepare-reviewed-case')
+    if args.case_batch and not args.shortlist_case_batch:
+        parser.error('--case-batch requires --shortlist-case-batch')
+    if args.shortlist_case_batch:
+        if not all((args.cases,args.bindings,args.case_batch)) or any((args.catalog,args.case,args.model,args.tool_server_url)):
+            parser.error('Choose a reviewed suite, bindings and a selected local case batch')
+        report = shortlist_case_batch(spec,load_object(args.cases,limit=262144),
+                    load_object(args.bindings),load_object(args.case_batch,limit=262144))
+        write_new(args.output,report,limit=2*1024*1024)
+        return {'mode':'offline_reviewed_route_batch','output_written':True,
+                'selected_case_count':report['selected_case_count'],'status_counts':report['status_counts'],
+                'review_required':True,'execution_authorized':False,'business_tools_called':False}
     if args.shortlist_reviewed_routes:
         if not all((args.cases,args.bindings,args.case)) or any((args.catalog,args.model,args.tool_server_url)):
             parser.error('Choose a reviewed suite, bindings and a selected local case for route shortlisting')
