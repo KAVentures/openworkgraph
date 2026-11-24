@@ -277,8 +277,12 @@ def _unsupported(decision: ET.Element) -> str | None:
         return "Only UNIQUE and FIRST hit policies map onto OWG decision tables"
     if table.get("aggregation") or table.get("preferredOrientation") not in (None, "Rule-as-Row"):
         return "Aggregations and non-row table orientations are unsupported"
-    if len(_child(table, "output")) != 1:
+    outputs = _child(table, "output")
+    if len(outputs) != 1:
         return "A decision table needs exactly one output naming the next step"
+    if (_child(outputs[0], "defaultOutputEntry") or _child(outputs[0], "outputValues") or
+            any(_child(column, "inputValues") for column in _child(table, "input"))):
+        return "Default outputs and separately declared input or output domains are unsupported"
     return None
 
 
@@ -384,6 +388,8 @@ def _propose(model_value: dict[str, Any], decision: ET.Element, decision_activit
             validate_date(effective_until)
     except ValueError:
         raise DMNError("Enter effective dates as YYYY-MM-DD") from None
+    if effective_until is not None and effective_until <= effective_from:
+        raise DMNError("The exclusive effective end must follow the start")
     proposed = model.model_dump()
     by_target = {row["target_activity_id"]: row["rule_id"] for row in rows}
     replaced = {e["rule_id"] for e in proposed["transitions"] if e["source"] == decision_activity_id and e.get("rule_id")}

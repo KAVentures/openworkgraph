@@ -211,6 +211,11 @@ def test_import_refuses_dependencies_and_preserves_downstream_reference_ids():
     assert "dependencies" in inspect_dmn(dependent)["decisions"][0]["unsupported_reason"]
     with pytest.raises(DMNError, match="dependencies"):
         import_dmn(dependent, graph(), "choose", effective_from="2026-01-01")
+    defaulted = raw.replace(
+        b'<output id="o0" typeRef="string"/>',
+        b'<output id="o0" typeRef="string"><defaultOutputEntry><text>"Reject"</text></defaultOutputEntry></output>', 1)
+    with pytest.raises(DMNError, match="Default outputs"):
+        import_dmn(defaulted, graph(), "choose", effective_from="2026-01-01")
     value = _two_decisions()
     value["decision_tables"][1]["required_decisions"] = [{"table_id": "purchase", "fact_path": "/upstream"}]
     replacement = import_dmn(raw, value, "choose", effective_from="2026-01-01")

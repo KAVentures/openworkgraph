@@ -68,8 +68,10 @@ const path=require('node:path');
   const multi={...model,
     baseline_path:['Review','Accept','Audit','Close'],
     activities:[...model.activities,{id:'audit',label:'Audit',kind:'decision'},{id:'close',label:'Close'},{id:'hold',label:'Hold'}],
-    transitions:[...model.transitions,{source:'accept',target:'audit'},{source:'audit',target:'close'},{source:'audit',target:'hold'}],
-    terminal_activity_ids:['escalate','close','hold']
+    transitions:[...model.transitions,{source:'accept',target:'audit'},
+      {source:'audit',target:'close',rule_id:'audit_ready'},{source:'audit',target:'hold',rule_id:'audit_wait'}],
+    terminal_activity_ids:['escalate','close','hold'],
+    business_rules:[...model.business_rules,{id:'audit_ready',text:'Audit ready'},{id:'audit_wait',text:'Audit pending'}]
   };
   const designed=await page.evaluate(async process_model=>{
     const response=await fetch('/v1/process-catalog',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -77,10 +79,10 @@ const path=require('node:path');
     if(!response.ok)throw new Error(await response.text());
     return response.json();
   },multi);
-  page.once('dialog',dialog=>dialog.accept());
   await page.getByRole('button',{name:'Load saved designs',exact:true}).click();
   page.once('dialog',dialog=>dialog.accept());
   await page.getByRole('button',{name:'Two purchase decisions · r1',exact:true}).click();
+  await page.locator('#owgCatalogStatus').filter({hasText:'Opened immutable revision 1.'}).waitFor();
   const table=(name,path,rows)=>`<decision id="${name}" name="${name}"><decisionTable>
     <input><inputExpression><text>${path}</text></inputExpression></input><output/>
     ${rows.map(([test,next])=>`<rule><inputEntry><text>${test}</text></inputEntry>
