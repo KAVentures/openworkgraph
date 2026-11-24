@@ -36,7 +36,13 @@ const path=require('node:path');
    // Tag every escalated case through the filter.
    await page.locator('#owgCaseTagName').fill('escalated');
    await page.locator('#owgCaseTagCohortActivity').selectOption('Escalate');
-   await page.locator('#owgCaseTagAdd').click();
+   await page.locator('#owgCaseTagPreview').click();
+   await page.locator('#owgCaseTagResult').getByText('4 matching cases. 0 already have this tag.').waitFor();
+   assert.equal(await page.locator('#owgCaseTagPreviewResult tbody tr').count(),4);
+   assert.equal(await page.getByRole('button',{name:'Show cases tagged escalated'}).count(),0);
+   const [applied]=await Promise.all([page.waitForRequest(r=>r.url().endsWith('/case-tags')&&r.method()==='POST'),
+     page.locator('#owgCaseTagAdd').click()]);
+   assert.match(applied.postDataJSON().expected_selection_sha256,/^[0-9a-f]{64}$/);
    await page.locator('#owgCaseTagResult').filter({hasText:'Tagged 4 cases “escalated”.'}).waitFor();
    // Tag two cases by ID with a note; one ID is not in the log.
    await page.locator('#owgCaseTagName').fill('checked');await page.locator('#owgCaseTagNote').fill('looked fine');
@@ -48,6 +54,11 @@ const path=require('node:path');
    await page.getByRole('button',{name:'Show cases tagged checked'}).click();
    const review=page.locator('#owgCaseTagReview');
    await review.filter({hasText:'looked fine'}).waitFor();
+   await review.getByRole('button',{name:'Edit tag note for c1',exact:true}).click();
+   await review.getByRole('textbox',{name:'Tag note for c1',exact:true}).fill('revised after review');
+   await review.getByRole('button',{name:'Save tag note',exact:true}).click();
+   await review.getByText('revised after review',{exact:true}).waitFor();
+   assert.equal(await review.getByText('looked fine',{exact:true}).count(),1);
    await page.locator('#owgCaseTagName').fill('paid');
    await page.locator('#owgCaseTagNote').fill('');
    await page.locator('#owgCaseTagIds').fill('');

@@ -3069,16 +3069,21 @@
     const ids=document.createElement('textarea');ids.id='owgCaseTagIds';ids.rows=2;ids.placeholder='case IDs, one per line or comma-separated (leave empty to tag the cases matching the filter below)';
     const filter=cohortFields('owgCaseTagCohort','Or tag every case that matches',activityNames);
     const add=button('Tag cases','secondary');add.id='owgCaseTagAdd';
+    const preview=button('Preview tag selection','secondary');preview.id='owgCaseTagPreview';
+    const previewPanel=el('div');previewPanel.id='owgCaseTagPreviewResult';
     const out=el('div');out.id='owgCaseTagResult';out.setAttribute('role','status');
     const review=el('div');review.id='owgCaseTagReview';
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Tag',tag),field('Note',note));
-    box.append(list,row,field('Cases',ids),filter.node,add,out,review);
+    const form=el('div');form.append(row,field('Cases',ids),filter.node);
+    const actions=el('div',null,'row');actions.append(preview,add);
+    box.append(list,form,actions,previewPanel,out,review);
     const generation=state.generation;
     const pageSize=100;
     let openTag=null,openOffset=0,reviewRequest=0;
-    const removeTag=spec=>api(base+'/remove',{
+    const postTag=(suffix,spec)=>api(base+suffix,{
       method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)
     }).then(response=>response.json());
+    const removeTag=spec=>postTag('/remove',spec);
     const loadCases=async(tagName,offset,focus=false)=>{
       openTag=tagName;
       openOffset=offset;
@@ -3100,7 +3105,8 @@
         status.textContent='Showing '+(offset+1).toLocaleString()+'–'+(offset+result.cases.length).toLocaleString()+' of '+total.toLocaleString()+' cases.';
         const selected=new Set();
         const remove=button('Remove tag from selected cases','secondary');remove.disabled=true;
-        const cases=table(['Select','Case','Note','Tagged'],result.cases.map(item=>{
+        const editor=el('div');
+        const cases=table(['Select','Case','Note','Tagged','Edit'],result.cases.map(item=>{
           const checkbox=document.createElement('input');checkbox.type='checkbox';
           checkbox.setAttribute('aria-label','Select case '+item.case_id);
           checkbox.onchange=()=>{
@@ -3108,7 +3114,30 @@
             else selected.delete(item.case_id);
             remove.disabled=!selected.size;
           };
-          return [checkbox,item.case_id,item.note||'—',String(item.tagged_at).slice(0,16).replace('T',' ')];
+          const edit=button('Edit note','secondary');edit.setAttribute('aria-label','Edit tag note for '+item.case_id);
+          const noteCell=el('span',item.note||'—');
+          edit.onclick=()=>{
+            const entry=input('owgCaseTagEditNote','text');entry.value=item.note;entry.maxLength=500;
+            const save=button('Save tag note','secondary'),cancel=button('Cancel','secondary');
+            const message=el('div',null,'muted');message.setAttribute('role','status');
+            editor.replaceChildren(field('Tag note for '+item.case_id,entry),save,cancel,message);entry.focus();
+            cancel.onclick=()=>{editor.replaceChildren();edit.focus();};
+            save.onclick=async()=>{
+              save.disabled=cancel.disabled=true;
+              try{
+                const updated=await postTag('/note',{tag:tagName,case_id:item.case_id,note:entry.value,
+                  expected_note:item.note,expected_tagged_at:item.tagged_at});
+                if(generation!==state.generation)return;
+                render(updated);out.textContent='Saved the tag note for '+item.case_id+'.';
+                if(current()){
+                  item.note=updated.note;noteCell.textContent=item.note||'—';
+                  if(entry.isConnected){editor.replaceChildren();edit.focus();}
+                }
+              }catch(error){if(current())message.textContent=error.message;}
+              finally{save.disabled=cancel.disabled=false;}
+            };
+          };
+          return [checkbox,item.case_id,noteCell,String(item.tagged_at).slice(0,16).replace('T',' '),edit];
         }));
         const previous=button('Previous page','secondary');previous.disabled=offset===0;
         const next=button('Next page','secondary');next.disabled=nextOffset===null;
@@ -3132,7 +3161,7 @@
           }
         };
         const controls=el('div',null,'row');controls.append(previous,next,remove);
-        review.append(cases,controls);
+        review.append(cases,controls,editor);
       }catch(error){if(current())status.textContent=error.message;}
     };
     const refreshReview=(focus=false)=>{if(openTag!==null)loadCases(openTag,openOffset,focus);};
@@ -3163,21 +3192,53 @@
     getJSON(base).then(r=>{if(generation===state.generation)render(r);}).catch(error=>list.replaceChildren(el('div',error.message,'muted')));
     // Cases tagged from other sections (for example unusual cases) appear here without a reload.
     box.addEventListener('owg-tags-changed',()=>{getJSON(base).then(r=>{if(generation===state.generation){render(r);refreshReview();}}).catch(()=>{});});
-    add.onclick=async()=>{
-      add.disabled=true;
+    let selection=null,previewRequest=0,previewPending=false,applying=false;
+    const readSpec=()=>{
+      if(!tag.value.trim())throw new Error('Enter a tag.');
+      const spec={tag:tag.value.trim(),note:note.value.trim()};if(state.caseType)spec.case_type=state.caseType;
+      const keys=ids.value.split(/[\n,]/).map(x=>x.trim()).filter(Boolean);
+      if(keys.length>1000)throw new Error('Enter at most 1,000 case IDs.');
+      if(keys.length)spec.case_ids=keys;
+      else{const cohort=filter.read();delete cohort.label;if(!Object.keys(cohort).length)throw new Error('Enter case IDs or choose which cases match.');spec.cohort=cohort;}
+      return spec;
+    };
+    const syncActions=()=>{preview.disabled=add.disabled=previewPending||applying;};
+    const clearPreview=()=>{
+      ++previewRequest;
+      if(selection||previewPending)out.textContent='';
+      selection=null;previewPending=false;previewPanel.replaceChildren();syncActions();
+    };
+    form.addEventListener('input',clearPreview);form.addEventListener('change',clearPreview);
+    preview.onclick=async()=>{
+      const t=++previewRequest;
+      const current=()=>generation===state.generation&&box.isConnected&&t===previewRequest;
+      previewPending=true;syncActions();out.textContent='Previewing tag selection…';
       try{
-        if(!tag.value.trim())throw new Error('Enter a tag.');
-        const spec={tag:tag.value.trim(),note:note.value.trim()};if(state.caseType)spec.case_type=state.caseType;
-        const list2=ids.value.split(/[\n,]/).map(x=>x.trim()).filter(Boolean);
-        if(list2.length)spec.case_ids=list2.slice(0,1000);
-        else{const cohort=filter.read();delete cohort.label;if(!Object.keys(cohort).length)throw new Error('Enter case IDs or choose which cases match.');spec.cohort=cohort;}
-        const r=await (await api(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        const spec=readSpec(),r=await postTag('/preview',spec);
+        if(!current())return;
+        selection={spec:JSON.stringify(spec),digest:r.selection_sha256};
+        out.textContent=r.matched_cases.toLocaleString()+' matching cases. '+r.already_tagged.toLocaleString()+' already have this tag.'+
+          (r.already_tagged?' Applying it will replace their tag note.':'')+
+          (r.unknown_case_ids?' '+r.unknown_case_ids.toLocaleString()+' case IDs did not match.':'');
+        previewPanel.replaceChildren(r.examples.length?table(['Sample case','Current tag','Current note'],r.examples.map(item=>[
+          item.case_id,item.already_tagged?'Already tagged':'New assignment',item.note||'—'
+        ])):el('div','No matching cases.','muted'));
+      }catch(error){if(current())out.textContent=error.message;}
+      finally{if(current()){previewPending=false;syncActions();}}
+    };
+    add.onclick=async()=>{
+      applying=true;syncActions();
+      try{
+        const spec=readSpec();
+        if(selection?.spec===JSON.stringify(spec))spec.expected_selection_sha256=selection.digest;
+        const r=await postTag('',spec);
         if(generation!==state.generation)return;
+        clearPreview();
         render(r);
         if(openTag===r.tag)refreshReview();
         out.replaceChildren(el('div','Tagged '+Number(r.tagged).toLocaleString()+' cases “'+r.tag+'”'+(r.already_tagged?' ('+r.already_tagged+' already had it; their note was replaced)':'')+(r.unknown_case_ids?'; '+r.unknown_case_ids+' IDs are not cases of this log':'')+'.'));
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
-      finally{add.disabled=false;}
+      finally{applying=false;syncActions();}
     };
     return box;
   }
