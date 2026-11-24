@@ -7376,12 +7376,12 @@
     const box=section('Check against a Petri net');box.id='owgPetri';
     const netsBase=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/reference-nets';
     box.appendChild(el('div','Replay the recorded cases on a Petri net from ProM, PM4Py, Apromore or another tool (a .pnml file), or on the net discovered here. Tokens that are missing or left behind show where the cases and the net disagree. The file is read for this check and not stored.','muted'));
-    const file=input('owgPetriFile','file');file.accept='.pnml,application/xml,text/xml';
+    const file=input('owgPetriFile','file');file.accept='.pnml,.ptml,application/xml,text/xml';
     const run=button('Replay on this net','secondary');run.id='owgPetriRun';
     const own=button('Replay on the discovered net','secondary');own.id='owgPetriDiscovered';
     const happy=button('Check against the most common path','secondary');happy.id='owgPetriHappy';
     const align=button('Explain each case step by step','secondary');align.id='owgPetriAlign';align.disabled=true;
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Petri net (.pnml)',file),run,own,happy,align);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Petri net (.pnml) or process tree (.ptml)',file),run,own,happy,align);
     const statusLine=el('div',null,'muted');statusLine.id='owgPetriStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgPetriResults';
     const aligned=el('div');aligned.id='owgPetriAlignResults';
@@ -7541,6 +7541,15 @@
       finally{run.disabled=own.disabled=false;align.disabled=!lastNet;}};
     run.onclick=async()=>{const chosen=file.files&&file.files[0];if(!chosen){statusLine.textContent='Choose a .pnml file first.';return;}
       if(chosen.size>2*1024*1024){statusLine.textContent='The Petri net file is larger than 2 MB.';return;}
+      // A process tree from PM4Py or ProM is converted to its workflow net first, then replayed as usual.
+      if(/\.ptml$/i.test(chosen.name)){
+        try{
+          statusLine.textContent='Converting the process tree…';
+          const converted=await (await api('/v1/event-logs/ptml-to-pnml',{method:'POST',headers:{'Content-Type':'application/xml'},body:await chosen.arrayBuffer()})).json();
+          await replay(converted.pnml,chosen.name+' (process tree)');
+        }catch(error){statusLine.textContent=error.message;}
+        return;
+      }
       await replay(await chosen.text(),chosen.name);};
     happy.onclick=async()=>{
       try{statusLine.textContent='Building the most common path…';const response=await api(logPath('variant.pnml',{rank:'1'}));

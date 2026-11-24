@@ -3336,6 +3336,26 @@ tagged. Tagging again with the same tag does not duplicate it.
 body, plus the case-filter parameters (`tag` there is the filter for cases already tagged, so the
 new tag is `new_tag`). A tag is the analyst's label, not a finding.
 
+### Process trees (PTML) from PM4Py and ProM
+
+The file picker also accepts a **process tree** in PTML, as `pm4py.write_ptml` and ProM's Inductive
+Miner save it. The tree is converted to its workflow net with the same block construction as the
+discovered-model PNML export, then replayed, aligned or saved as a reference net like any PNML
+file. `POST /v1/event-logs/ptml-to-pnml` takes the PTML file as the body (dashboard session only,
+at most 2 MB, nothing stored). It returns the `pnml`, the tree's `name`, place and transition
+counts and the activity labels.
+
+Supported nodes:
+
+- `manualTask` (an activity) and `automaticTask` (a silent step);
+- `sequence`, `xor` and `and`;
+- `xorLoop` with two children (PM4Py: do, redo) or three (ProM: do, redo, exit). The exit runs
+  once after the loop.
+
+Other operators (`or`, `interleaved`, …), a node with two parents, cycles, unconnected nodes,
+unknown references and XML with a DOCTYPE or entity declaration are refused with a message.
+Nothing is approximated.
+
 ## Temporal profile
 
 **Temporal profile** (as in PM4Py and ProM) learns the usual time between every ordered pair of
