@@ -55,6 +55,9 @@ are allowed. A graph revision request is bounded to 128 KiB.
 
 ## Compare immutable saved revisions before handoff
 
+Use [policy revision impact review](PROCESS_POLICY_IMPACT.md) within a saved revision comparison to identify changed declarations, affected decision dependencies and potential downstream graph paths. The review does not establish actual execution or policy equivalence.
+
+
 Open a saved process in **Process catalog**, select **Load revision history**,
 then **Compare rN with opened rM** for a different saved revision. This explicitly
 reads the selected historical revision through the existing authenticated local
