@@ -527,6 +527,78 @@ def audit_bindings(spec, catalog, suite, bindings, *, previous_catalog=None):
             'expectations_are_customer_declarations': True}
 
 
+def _paired_audit_delta(before, after):
+    """Compare the same reviewed alternatives, including findings that change
+    without changing the binary clear/not-clear status."""
+    for key in ('process_reference', 'spec_sha256', 'catalog_sha256', 'suite_sha256'):
+        if before[key] != after[key]:
+            raise ImplementationError('Paired binding audit requires an identical review basis')
+    def index(report):
+        return {(case['case_id'], route['alternative'], route['route_sha256']): route
+                for case in report['cases'] for route in case['routes']}
+    old, new = index(before), index(after)
+    if old.keys() != new.keys():
+        raise ImplementationError('Paired binding audit requires identical reviewed alternatives')
+    rows = []
+    counts = {key: 0 for key in ('improved', 'regressed', 'unchanged_clear', 'unchanged_findings')}
+    for key in sorted(old):
+        a, b = old[key], new[key]
+        clear_before, clear_after = a['static_contract_checks_clear'], b['static_contract_checks_clear']
+        disposition = ('unchanged_clear' if clear_before else 'unchanged_findings') if clear_before == clear_after else (
+            'improved' if clear_after else 'regressed')
+        counts[disposition] += 1
+        def findings(route):
+            return {(f['code'], f['activity_id'] or '') for f in route['findings']}
+        previous, current = findings(a), findings(b)
+        def public(items):
+            return [{'code': code, 'activity_id': identifier or None} for code, identifier in sorted(items)]
+        rows.append({'case_id': key[0], 'alternative': key[1], 'route_sha256': key[2],
+                     'disposition': disposition, 'findings_added': public(current - previous),
+                     'findings_removed': public(previous - current),
+                     'retained_finding_count': len(previous & current),
+                     'human_resolution_requirement_changed': a['requires_separate_human_resolution'] != b['requires_separate_human_resolution'],
+                     'contract_counts_changed': sorted(k for k in a['counts'] if a['counts'][k] != b['counts'][k])})
+    return {'disposition_counts': counts, 'routes': rows,
+            'routes_with_new_findings': sum(bool(r['findings_added']) for r in rows),
+            'routes_with_removed_findings': sum(bool(r['findings_removed']) for r in rows),
+            'routes_with_changed_human_resolution_requirement': sum(r['human_resolution_requirement_changed'] for r in rows),
+            'routes_with_changed_contract_counts': sum(bool(r['contract_counts_changed']) for r in rows)}
+
+
+def compare_binding_configurations(spec, catalog, suite, baseline, candidate):
+    """Run both offline audits on one frozen catalog and case suite.
+
+    A changed binding is a review requirement even when both static audits
+    are clear: the same type projection can conceal different write semantics.
+    """
+    before = audit_bindings(spec, catalog, suite, baseline)
+    after = audit_bindings(spec, catalog, suite, candidate)
+    delta = _paired_audit_delta(before, after)
+    def index(bindings):
+        return {row['activity_id']: digest(row) for row in bindings['bindings']}
+    old, new = index(baseline), index(candidate)
+    changed = {'added_activity_ids': sorted(new.keys() - old.keys()),
+               'removed_activity_ids': sorted(old.keys() - new.keys()),
+               'changed_activity_ids': sorted(k for k in old.keys() & new.keys() if old[k] != new[k]),
+               'other_binding_fields_changed': digest({k: v for k, v in baseline.items() if k != 'bindings'}) !=
+                                               digest({k: v for k, v in candidate.items() if k != 'bindings'})}
+    different = before['bindings_sha256'] != after['bindings_sha256']
+    return {'format': 'openworkgraph.paired-binding-readiness.v1',
+            'process_reference': before['process_reference'], 'spec_sha256': before['spec_sha256'],
+            'catalog_sha256': before['catalog_sha256'], 'suite_sha256': before['suite_sha256'],
+            'baseline_bindings_sha256': before['bindings_sha256'],
+            'candidate_bindings_sha256': after['bindings_sha256'],
+            'binding_configuration_changed': different, 'binding_changes': changed,
+            'baseline_review_required': before['review_required'],
+            'candidate_static_review_required': after['review_required'],
+            'review_required': different or after['review_required'],
+            'reviewed_route_count': after['reviewed_route_count'], **delta,
+            'business_tools_called': False, 'execution_authorized': False,
+            'provider_semantics_or_permissions_verified': False,
+            'runtime_behavior_compatibility_verified': False,
+            'case_values_and_tool_arguments_included': False}
+
+
 def write_new(path, value, *, limit=262144):
     payload=json.dumps(value,indent=2,allow_nan=False).encode('utf-8')
     if len(payload)>limit:
@@ -545,6 +617,7 @@ def main():
     mode.add_argument('--audit-bindings',action='store_true',help='Offline reviewed-case binding contract audit')
     parser.add_argument('--tool-server-url');parser.add_argument('--catalog');parser.add_argument('--case');parser.add_argument('--model')
     parser.add_argument('--cases');parser.add_argument('--bindings')
+    parser.add_argument('--baseline-bindings',help='Compare an earlier binding configuration against --bindings on the same reviewed suite')
     parser.add_argument('--previous-catalog',help='Optional older inspected catalog for mapped contract drift review')
     parser.add_argument('--output',required=True,help='New output JSON file; existing files are never overwritten')
     args = parser.parse_args()
@@ -553,9 +626,18 @@ def main():
     spec = load_object(Path(__file__).parent/'workflow.spec.json',limit=262144)
     if args.previous_catalog and not args.audit_bindings:
         parser.error('--previous-catalog requires --audit-bindings')
+    if args.baseline_bindings and (not args.audit_bindings or args.previous_catalog):
+        parser.error('--baseline-bindings requires --audit-bindings without --previous-catalog')
     if args.audit_bindings:
         if not all((args.catalog, args.cases, args.bindings)) or any((args.model, args.case, args.tool_server_url)):
             raise ImplementationError('Choose only a saved inspected catalog, reviewed case suite and bindings for offline audit')
+        if args.baseline_bindings:
+            result = compare_binding_configurations(spec, load_object(args.catalog,limit=262144),
+                load_object(args.cases,limit=262144), load_object(args.baseline_bindings,limit=262144),
+                load_object(args.bindings,limit=262144))
+            write_new(args.output,result,limit=2*1024*1024)
+            return {'mode':'offline_binding_audit','output_written':True,'review_required':result['review_required'],
+                    'business_tools_called':False,'execution_authorized':False}
         result = audit_bindings(spec, load_object(args.catalog, limit=262144),
                                 load_object(args.cases, limit=262144), load_object(args.bindings),
                                 previous_catalog=load_object(args.previous_catalog,limit=262144) if args.previous_catalog else None)
