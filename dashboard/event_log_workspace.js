@@ -10641,7 +10641,19 @@
     const cases=el('div');cases.id='owgBatchCases';
     const resWrap=el('div');const resLabel=el('label',' Separate by resource');resLabel.htmlFor=byResource.id;resWrap.append(byResource,resLabel);
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Gap within a batch (seconds)',gap),field('Smallest batch',size),resWrap,run);
-    box.append(row,out,batches,cases);
+    // One row per activity: how much of it is batched, batch sizes, waits and the simulation proposal.
+    let lastBatching=null;
+    const exports=exportButtons('owgBatchReport',()=>lastBatching,r=>[
+      ['activity','events','batched_share','batches','simultaneous_batches','median_batch_size','p90_batch_size','max_batch_size',
+        'median_wait_before_batched_seconds','median_wait_before_unbatched_seconds','proposed_batch_size','proposed_max_wait_minutes'],
+      ...r.activities.map(a=>[a.activity,a.events,a.batched_share,a.batches,a.simultaneous_batches||0,
+        a.batch_size?a.batch_size.median:'',a.batch_size?a.batch_size.p90:'',a.batch_size?a.batch_size.max:'',
+        a.median_wait_before_batched_seconds,a.median_wait_before_unbatched_seconds,
+        a.simulation_batch_proposal?a.simulation_batch_proposal.size:'',a.simulation_batch_proposal?a.simulation_batch_proposal.max_wait_minutes:''])]);
+    box.append(row,out,batches,cases,exports.node);
+    // Other settings find other batches; the old summary is no longer downloadable.
+    const staleBatching=()=>{lastBatching=null;exports.enable(false);};
+    row.addEventListener('change',staleBatching);row.addEventListener('input',staleBatching);
     const generation=state.generation,endpoint='/v1/event-logs/'+encodeURIComponent(state.logId)+'/batching';
     const number=n=>Number(n).toLocaleString();
     const utc=value=>value.replace('T',' ').replace('Z',' UTC');
@@ -10696,7 +10708,7 @@
       }),clearCases);
     }
     run.onclick=async()=>{
-      ++batchTurn;batches.replaceChildren();clearCases();run.disabled=true;
+      ++batchTurn;batches.replaceChildren();clearCases();run.disabled=true;staleBatching();
       out.replaceChildren(el('div','Finding batches…','muted'));
       try{
         const spec={gap_seconds:Number(gap.value),min_batch_size:Number(size.value),by_resource:byResource.checked};
@@ -10717,6 +10729,7 @@
           el('div',Number(r.batched_events).toLocaleString()+' of '+Number(r.events).toLocaleString()+' events were in batches ('+r.grouping+(r.resources_recorded?'':'; no resources are recorded in this log')+').','muted'),
           shown.length?table(['Activity','Events in batches','Batches','Batch size (median)','Wait before: batched vs not','Simulation proposal','Evidence'],rows):el('div','No batches with these settings.','muted'),
           el('div',r.interpretation,'muted'));
+        lastBatching=r;exports.enable(true);
       }catch(error){if(generation===state.generation)out.replaceChildren(el('div',error.message,'muted'));}
       finally{run.disabled=false;}
     };
