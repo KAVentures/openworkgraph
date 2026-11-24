@@ -2615,38 +2615,24 @@ async def event_log_run_analysis(request: Request, log_id: str):
 
 @router.post("/v1/event-logs/{log_id}/analysis-source-bound")
 async def event_log_run_analysis_source_bound(request: Request, log_id: str):
-    """Return full local analysis with complete source lineage, atomically.
-
-    Ordinary downloads must compare this digest, not merely aggregate values.
-    Fail closed if a complete fingerprint exceeds its bounded source budget.
-    """
+    """Return full local analysis and source lineage under one workspace lock."""
+    from . import event_log_analysis_review as review
     _require_dashboard(request)
-    from . import process_discovery_provenance as provenance
     spec = await _json_body(request, "source-bound analysis")
-    try:
-        def compute():
-            with workspace._LOCK:
-                # Refuse oversized sources before running potentially expensive
-                # analysis. Keep the preflight, analysis, and digest under one
-                # workspace lock so a concurrent import cannot change lineage.
-                conn = workspace._connect()
-                try:
-                    if provenance.source_rows(conn, log_id) > provenance.MAX_SOURCE_ROWS:
-                        raise workspace.EventLogWorkspaceError(
-                            "Source exceeds complete fingerprint budget; source-bound export unavailable")
-                finally:
-                    conn.close()
-                result = analysis.run(log_id, spec)
-                conn = workspace._connect()
-                try:
-                    result["source_content_sha256"] = provenance.source_digest(conn, log_id)
-                finally:
-                    conn.close()
-                return result
-        result = await run_in_threadpool(compute)
-    except workspace.EventLogWorkspaceError as exc:
-        raise HTTPException(422, str(exc)) from None
-    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+    response = await run_in_threadpool(_respond, review.source_bound, log_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/analysis/groups/cases")
+async def event_log_analysis_group_cases(request: Request, log_id: str):
+    """Return one page of cases in a previously reviewed analysis group."""
+    from . import event_log_analysis_review as review
+    _require_dashboard(request)
+    body = await _json_body(request, "analysis group case review", strict=True, limit=131072)
+    response = await run_in_threadpool(_respond, review.group_cases, log_id, body)
+    _require_dashboard(request)
+    return response
 
 
 @router.post("/v1/event-logs/{log_id}/case-sharing-preview")

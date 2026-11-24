@@ -1677,6 +1677,13 @@ Saved analyses are stored with the log and deleted with it, at most 50 per log:
 The dashboard's "Build an analysis" section runs, exports (JSON and CSV), saves and re-runs
 them.
 
+For a case-level result, select **Review cases** on a result row to see its
+matching cases, their durations, event counts, and any defined metric values.
+The case list uses the original filters, dimensions, and case notion. Open a
+case to inspect its retained events. If the log, applied activity mapping,
+hidden activities, or case tags have changed, rerun the analysis before
+opening the group.
+
 ### Case metrics
 
 A case-level analysis can define up to four typed case metrics in `metrics` and measure them with
