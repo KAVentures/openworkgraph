@@ -600,6 +600,82 @@ def compare_binding_configurations(spec, catalog, suite, baseline, candidate):
             'case_values_and_tool_arguments_included': False}
 
 
+def prepare_reviewed_case(spec, suite, bindings, case_id, alternative):
+    """Materialize one explicitly selected human-reviewed route for execute.py.
+
+    No model is needed to reproduce an already reviewed route. The selected
+    input remains local; the generated execution intent is always disabled.
+    """
+    from evaluate import validate_suite
+    from execute import prepare, review_template
+    cases = validate_suite(spec, suite, allow_current_source_rules=True)
+    matches = [case for case in cases if case['id'] == case_id]
+    if len(matches) != 1:
+        raise ImplementationError('Choose one exact reviewed case ID')
+    case = matches[0]
+    routes = case['expected']['accepted_routes']
+    if case['expected']['status'] != 'proposal' or type(alternative) is not int or not 1 <= alternative <= len(routes):
+        raise ImplementationError('Choose an explicit reviewed route alternative; clarification cases cannot be prepared')
+    plan = {'revision': spec['revision'], 'content_sha256': spec['content_sha256'],
+            'status': 'proposal', 'activity_ids': routes[alternative - 1],
+            'missing_business_inputs': []}
+    prepared = prepare(spec, plan, case['input'], bindings)
+    intent = review_template(spec, prepared, case['input'], bindings)
+    review = {'format': 'openworkgraph.prepared-reviewed-case.v1',
+              'process_reference': reference(spec), 'spec_sha256': digest(spec),
+              'suite_sha256': digest(suite), 'case_id': case_id, 'alternative': alternative,
+              'case_sha256': digest(case['input']), 'plan_sha256': digest(plan),
+              'bindings_sha256': digest(bindings), 'disabled_intent_sha256': digest(intent),
+              'requirements': prepared['requirements'],
+              'human_activity_ids': prepared['human_activity_ids'],
+              'manual_condition_ids': prepared['manual_condition_ids'],
+              'mapped_action_count': len(prepared['actions']),
+              'source_outcome_count': len(prepared['outcomes']),
+              'source_rule_count': len(prepared['source_rules']),
+              'decision_table_count': len(prepared.get('decision_tables', [])),
+              'offline_requirements_clear': not prepared['requirements'],
+              'review_required': True, 'execution_authorized': False,
+              'business_tools_called': False, 'model_called': False,
+              'provider_permissions_verified': False, 'business_outcomes_verified': False}
+    return {'case.json': case['input'], 'plan.json': plan, 'bindings.json': bindings,
+            'customer-intent.json': intent, 'preparation-review.json': review}
+
+
+def write_reviewed_case_directory(path, documents):
+    """Create only a new private directory with executor-loadable JSON files."""
+    names = {'case.json', 'plan.json', 'bindings.json', 'customer-intent.json', 'preparation-review.json'}
+    if set(documents) != names:
+        raise ImplementationError('Invalid reviewed-case package')
+    # Serialize before creating anything. The executor loads each input with
+    # a 64 KiB limit, so compact encoding prevents avoidable whitespace growth.
+    payloads = {name: json.dumps(value, separators=(',', ':'), allow_nan=False).encode('utf-8')
+                for name, value in documents.items()}
+    if any(len(value) > 65536 for value in payloads.values()):
+        raise ImplementationError('Prepared case or configuration exceeds the executor input limit')
+    root = Path(path)
+    root.mkdir(mode=0o700)
+    written = []
+    try:
+        # Review last: an incomplete package never contains its review receipt.
+        for name in ('case.json', 'plan.json', 'bindings.json', 'customer-intent.json', 'preparation-review.json'):
+            target = root / name
+            descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            written.append(target)
+            with os.fdopen(descriptor, 'wb') as stream:
+                stream.write(payloads[name])
+    except BaseException:
+        for target in reversed(written):
+            try:
+                target.unlink()
+            except OSError:
+                pass
+        try:
+            root.rmdir()
+        except OSError:
+            pass
+        raise
+
+
 def write_new(path, value, *, limit=262144):
     payload=json.dumps(value,indent=2,allow_nan=False).encode('utf-8')
     if len(payload)>limit:
@@ -615,12 +691,15 @@ def main():
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--inspect-tools',action='store_true')
     mode.add_argument('--propose-bindings',action='store_true')
+    mode.add_argument('--prepare-reviewed-case',action='store_true',help='Materialize one reviewed route as local executor inputs and disabled intent')
     mode.add_argument('--audit-bindings',action='store_true',help='Offline reviewed-case binding contract audit')
     parser.add_argument('--tool-server-url');parser.add_argument('--catalog');parser.add_argument('--case');parser.add_argument('--model')
     parser.add_argument('--cases');parser.add_argument('--bindings')
+    parser.add_argument('--case-id');parser.add_argument('--alternative',type=int)
+    parser.add_argument('--confirm-retain-case-inputs',action='store_true',help='Explicitly retain selected case values and bindings in a new local directory')
     parser.add_argument('--baseline-bindings',help='Compare an earlier binding configuration against --bindings on the same reviewed suite')
     parser.add_argument('--previous-catalog',help='Optional older inspected catalog for mapped contract drift review')
-    parser.add_argument('--output',required=True,help='New output JSON file; existing files are never overwritten')
+    parser.add_argument('--output',required=True,help='New output JSON file, or new directory for --prepare-reviewed-case; existing paths are never overwritten')
     args = parser.parse_args()
     if Path(args.output).exists():
         raise ImplementationError('Choose a new output file; existing configuration is never overwritten')
@@ -629,6 +708,19 @@ def main():
         parser.error('--previous-catalog requires --audit-bindings')
     if args.baseline_bindings and (not args.audit_bindings or args.previous_catalog):
         parser.error('--baseline-bindings requires --audit-bindings without --previous-catalog')
+    if not args.prepare_reviewed_case and (args.case_id is not None or args.alternative is not None or args.confirm_retain_case_inputs):
+        parser.error('Case selection and retention confirmation require --prepare-reviewed-case')
+    if args.prepare_reviewed_case:
+        if (not all((args.cases, args.bindings, args.case_id, args.confirm_retain_case_inputs))
+                or args.alternative is None or any((args.catalog, args.case, args.model, args.tool_server_url))):
+            parser.error('Choose reviewed cases, bindings, case ID, route alternative and explicit local input retention')
+        documents = prepare_reviewed_case(spec, load_object(args.cases,limit=262144),
+                    load_object(args.bindings), args.case_id, args.alternative)
+        write_reviewed_case_directory(args.output, documents)
+        review = documents['preparation-review.json']
+        return {'mode':'offline_reviewed_case_preparation','output_written':True,
+                'offline_requirements_clear':review['offline_requirements_clear'],
+                'review_required':True,'execution_authorized':False,'business_tools_called':False}
     if args.audit_bindings:
         if not all((args.catalog, args.cases, args.bindings)) or any((args.model, args.case, args.tool_server_url)):
             raise ImplementationError('Choose only a saved inspected catalog, reviewed case suite and bindings for offline audit')
