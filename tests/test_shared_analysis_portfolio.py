@@ -121,3 +121,15 @@ def test_http_authentication_authorization_and_strict_body(tmp_path):
         assert client.post(path,headers=h("alice"),json={**request,"extra":True}).status_code==422
         assert client.post(path,headers={**h("alice"),"Content-Type":"application/json"},
                            content=b"{}"+b" "*9000).status_code==413
+
+
+def test_expired_member_fails_entire_portfolio(store):
+    from datetime import datetime,timedelta,timezone
+    now=datetime(2026,1,1,tzinfo=timezone.utc)
+    store.now=lambda:now
+    a=store.publish(person(),published(4))
+    b=store.publish(person(),published(8,source="c").model_copy(update={"expires_in_days":1}))
+    now+=timedelta(days=1)
+    with pytest.raises(PublicationError) as exc:review(store,person(),select(a,b))
+    assert exc.value.status==404
+    assert not any(x["action"]=="analysis.portfolio_compared" for x in store.db.audit_rows("acme",50))
