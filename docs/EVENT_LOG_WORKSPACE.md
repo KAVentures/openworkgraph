@@ -813,9 +813,12 @@ case-key order. When more cases remain, download subsequent files using the next
 page control; the dashboard reports progress. A continuation cursor is bound to
 the log, cluster and settings. Formula-like text is escaped for spreadsheet review.
 The cluster key detects a
-change in the cluster's variant composition and counts; it is not a frozen
-case-membership snapshot, so later changes can alter the exported cases even if
-those counts stay the same, including between pages. This download requires a dashboard session.
+change in the cluster's variant composition and counts since the report, but it
+does not freeze case membership before the first download. For a multi-file
+export, a streaming digest of all exported case rows is checked on every later
+page; changed membership or exported values require starting again. Pages are
+recomputed from the current log, and no case list is retained by this check.
+This download requires a dashboard session.
 
 Clusters describe the structure of the imported log. They are not process types,
 causes, or a judgement of how any case was handled.

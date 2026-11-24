@@ -13,6 +13,7 @@ import pytest
 
 from server import event_log_analytics as analytics
 from server import event_log_cohorts as cohorts
+from server import event_log_case_tags as tags
 from server import event_log_trace_clusters as trace_clusters
 from server import event_log_workspace as workspace
 
@@ -192,6 +193,43 @@ def test_cluster_case_csv_respects_scope_limits_and_spreadsheet_safety(monkeypat
         trace_clusters.cluster_cases_csv(log, {**spec, "cluster_key": "0" * 64})
     with pytest.raises(workspace.EventLogWorkspaceError):
         trace_clusters.cluster_cases_csv(log, {**spec, "after": "normal"})
+
+
+def test_export_cursor_detects_changed_membership_even_with_identical_variants(monkeypatch):
+    log = _log({"a": (["Open", "Close"], 1), "b": (["Open", "Close"], 1),
+                "c": (["Open", "Close"], 1)})
+    tags.add(log, {"tag": "review", "case_ids": ["a", "b"]})
+    settings = {"cohort": {"tag": "review"}}
+    original = trace_clusters.clusters(log, settings)["clusters"][0]
+    spec = {**settings, "cluster_key": original["cluster_key"]}
+    monkeypatch.setattr(trace_clusters, "MAX_EXPORT_CASES", 1)
+    _, first = trace_clusters.cluster_cases_csv(log, spec)
+    assert first["next_after"]
+    # Changing an exported duration without changing membership or variant counts also invalidates the next page.
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            conn.execute("""UPDATE events SET ts=ts+INTERVAL '1 minute' WHERE log_id=? AND activity='Close'
+                AND event_id IN (SELECT event_id FROM event_objects WHERE log_id=? AND object_id='a')""", [log, log])
+        finally:
+            conn.close()
+    with pytest.raises(workspace.EventLogWorkspaceError, match="changed between pages"):
+        trace_clusters.cluster_cases_csv(log, {**spec, "after": first["next_after"]})
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            conn.execute("""UPDATE events SET ts=ts-INTERVAL '1 minute' WHERE log_id=? AND activity='Close'
+                AND event_id IN (SELECT event_id FROM event_objects WHERE log_id=? AND object_id='a')""", [log, log])
+        finally:
+            conn.close()
+    tags.remove(log, {"tag": "review", "case_ids": ["b"]})
+    tags.add(log, {"tag": "review", "case_ids": ["c"]})
+    changed = trace_clusters.clusters(log, settings)["clusters"][0]
+    assert changed["cluster_key"] == original["cluster_key"], "variant composition and counts are unchanged"
+    with pytest.raises(workspace.EventLogWorkspaceError, match="changed between pages"):
+        trace_clusters.cluster_cases_csv(log, {**spec, "after": first["next_after"]})
+    restarted, info = trace_clusters.cluster_cases_csv(log, spec)
+    assert next(csv.DictReader(StringIO(restarted)))["case_id"] == "a" and info["total"] == 2
 
 
 def test_route_requires_the_dashboard(tmp_path):
