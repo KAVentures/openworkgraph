@@ -448,16 +448,16 @@ def build_runtime_project(packet: dict) -> bytes:
         "are not in this generated-file manifest and require separate review.\n"
     )
     files['README.md'] += (
-        "\\n## Portable synthetic runtime acceptance\\n\\n"
-        "After verifying the export with a separately recorded manifest SHA-256,\\n"
-        "install requirements.txt in an isolated environment without business credentials.\\n"
-        "Run the following only for a trusted export:\\n\\n"
-        "```sh\\npython check_runtime.py --manifest-sha256 PINNED_HEX_DIGEST --confirm-trusted-synthetic-tests\\n```\\n\\n"
-        "The checker stages only inventoried files, strips inherited customer credentials,\\n"
-        "runs the generated synthetic suites, and emits minimized JSON counts tied to the manifest.\\n"
-        "Exit 0 means all suites ran without failures or skips; 3 means incomplete,\\n"
-        "1 means failed, and 2 means verification refused. This is not an OS sandbox,\\n"
-        "independent business-case validation, remote deployment attestation or execution approval.\\n"
+        "\n## Portable synthetic runtime acceptance\n\n"
+        "After verifying the export with a separately recorded manifest SHA-256,\n"
+        "install requirements.txt in an isolated environment without business credentials.\n"
+        "Run the following only for a trusted export:\n\n"
+        "```sh\npython check_runtime.py --manifest-sha256 PINNED_HEX_DIGEST --confirm-trusted-synthetic-tests\n```\n\n"
+        "The checker stages only inventoried files, strips inherited customer credentials,\n"
+        "runs the generated synthetic suites, and emits minimized JSON counts tied to the manifest.\n"
+        "Exit 0 means all suites ran without failures or skips; 3 means incomplete,\n"
+        "1 means failed, and 2 means verification refused. This is not an OS sandbox,\n"
+        "independent business-case validation, remote deployment attestation or execution approval.\n"
     )
     files['verify_release.py'] = Path(release_integrity.__file__).read_text(encoding='utf-8')
     files['release-manifest.json'] = create_manifest(files, spec)
