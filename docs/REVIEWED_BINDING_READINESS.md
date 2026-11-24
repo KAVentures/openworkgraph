@@ -236,3 +236,29 @@ simulated case-route checks and nine invalid-input/work-budget refusals.
 The suite validator and single-case shortlist were simulated in that
 test; generated-runtime and CLI integration regressions are committed
 but require CI.
+
+
+## Prepare an exact selected case from a batch review
+
+    python configure.py --prepare-batch-selection --cases reviewed-cases.json --bindings bindings.json --case-batch selected-cases.json --batch-review batch-review.json --case-id case_1 --route-sha256 SELECTED_ROUTE_DIGEST --confirm-retain-case-inputs --output prepared-case
+
+The command recomputes the entire bounded triage report and compares its
+canonical digest with the supplied report before preparing any files.
+Changed inputs, bindings, suite, specification or report contents require
+a fresh review. The case ID and route digest must explicitly identify a
+current option. Clarification, conflicting exact reviews, duplicate selected
+inputs, offline implementation blockers and routes contradicted by exact
+input reviews are refused. The selected route is prepared using the
+original selected batch input, not a manually transcribed case.
+
+The preparation receipt pins the batch, recomputed report, selected case
+ID and route digest in addition to existing case/plan/spec/binding pins.
+No authorization or route applicability is established. The resulting
+intent remains disabled. Canonical digest comparison establishes consistency
+with the recomputed report, not the identity of its reviewer or authenticity.
+
+Local isolated validation: the exact extracted selection function
+(2,636 characters, FNV-1a 2981341425) passed all 128 exhaustive combinations
+of conflict, duplicate, static clearance, exact review, route support,
+report alteration and missing-route flags, with simulated preparation
+dependencies. Full generated-runtime and CLI tests remain pending CI.
