@@ -281,6 +281,27 @@ const path=require('node:path');
    await page.locator('#owgCatalogOriginResult').getByText('Source data unchanged',{exact:true}).waitFor();
    assert.match(await page.locator('#owgCatalogOriginResult').textContent(),/User-selected reference to an edited graph/);
    assert.match(await page.locator('#owgCatalogOriginResult').textContent(),/"noise": 0/);
+   assert.equal(sourceSnapshot.effective_input.cases,60);
+   assert.equal(sourceSnapshot.effective_input.events,274);
+   assert.match(sourceSnapshot.effective_input.sha256,/^[a-f0-9]{64}$/);
+   await page.locator('#owgCatalogOriginResult').getByRole('button',{name:'Inspect exact discovery cohort',exact:true}).click();
+   const pinnedSource=page.locator('#owgDiscoverySourceInspection');
+   await pinnedSource.getByText('The effective input matches the recorded projection.',{exact:true}).waitFor();
+   await pinnedSource.getByText('Current selected cases: 60. Showing 30 on this page.',{exact:true}).waitFor();
+   await pinnedSource.getByRole('button',{name:'Inspect exact selected case C0',exact:true}).click();
+   await pinnedSource.getByRole('heading',{name:'Selected case C0',exact:true}).waitFor();
+   assert.match(await pinnedSource.textContent(),/Showing 5 of 5 effective events/);
+   await pinnedSource.getByRole('button',{name:'Next selected case page',exact:true}).click();
+   await pinnedSource.getByRole('button',{name:'First selected case page',exact:true}).waitFor();
+   await pinnedSource.getByRole('button',{name:'First selected case page',exact:true}).click();
+   await pinnedSource.getByRole('button',{name:'Inspect exact selected case C0',exact:true}).waitFor();
+   await page.addScriptTag({content:axeSource});
+   const pinnedAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgDiscoverySourceInspection'),{
+     runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
+   assert.deepEqual(pinnedAudit.violations.map(v=>v.id),[]);
+   await pinnedSource.getByRole('button',{name:'Close source inspection',exact:true}).click();
+   await pinnedSource.waitFor({state:'detached'});
+
    let heldOrigin,signalOrigin;const originHeld=new Promise(resolve=>{signalOrigin=resolve;});
    await page.route('**/event-log-discovery/process-origin?*',route=>{heldOrigin=route;signalOrigin();});
    await page.getByRole('button',{name:'Inspect discovery source snapshots',exact:true}).click();await originHeld;
@@ -297,6 +318,10 @@ const path=require('node:path');
    await page.locator('#owgPipelineJourney').click();
    await page.locator('#owgPipelineJourneyResult').getByText(/Dataset and cohort → process: source data unchanged/).waitFor();
    assert((await page.locator('#owgPipelineJourneyResult').textContent()).includes(sourceSnapshot.source_content_sha256));
+   await page.locator('#owgPipelineJourneyResult').getByRole('button',{name:'Inspect exact discovery cohort',exact:true}).click();
+   await page.locator('#owgDiscoverySourceInspection').getByText('The effective input matches the recorded projection.',{exact:true}).waitFor();
+   await page.locator('#owgDiscoverySourceInspection').getByRole('button',{name:'Close source inspection',exact:true}).click();
+
    await page.addScriptTag({content:axeSource});
    const discoveryAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgCatalogEditor'),{
      runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
