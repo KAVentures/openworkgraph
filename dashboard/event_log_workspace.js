@@ -5089,6 +5089,9 @@
     const zone=input('owgPatternZone','text');zone.maxLength=64;
     try{zone.value=Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC';}catch(_){zone.value='UTC';}
     const act=select('owgPatternActivity',[['','All activities'],...activityNames.slice(0,500).map(a=>[a,a])]);
+    const exact=input('owgPatternActivityExact','text','Exact activity label (optional)');exact.maxLength=400;
+    const lookup=activityLabelLookup(exact,{id:part=>'owgPatternActivity'+part,subject:'time pattern activity'});
+    exact.addEventListener('input',lookup.reset);act.addEventListener('change',()=>{exact.value='';lookup.reset();});
     const startH=input('owgPatternStart','number');startH.min='0';startH.max='23';startH.value='8';
     const endH=input('owgPatternEnd','number');endH.min='1';endH.max='24';endH.value='18';
     const workingDays=document.createElement('fieldset');
@@ -5106,15 +5109,19 @@
     const grid=el('div');grid.id='owgPatternDisplay';
     const review=el('div');review.id='owgPatternCaseReview';
     const row=el('div',null,'row');row.style.alignItems='end';
-    row.append(field('Time zone',zone),field('Activity',act),field('Working hours from',startH),field('to',endH),run);
+    row.append(field('Time zone',zone),field('Activity',act),field('Exact activity',exact),lookup.wrap,field('Working hours from',startH),field('to',endH),run);
     const gridControl=field('Show in the grid',mode);gridControl.hidden=true;
     box.append(row,workingDays,out,gridControl,grid,review);
     const generation=state.generation,endpoint='/v1/event-logs/'+encodeURIComponent(state.logId)+'/time-patterns';
     const number=n=>Number(n).toLocaleString();
     const hourText=h=>String(h).padStart(2,'0')+':00';
     const dateTime=value=>value.replace('T',' ').replace('Z',' UTC');
-    let reviewTurn=0,report=null;
+    let reviewTurn=0,reportTurn=0,report=null;
     const clearReview=()=>{++reviewTurn;review.replaceChildren();};
+    for(const control of [zone,act,exact,startH,endH,...dayChecks])control.addEventListener('input',()=>{
+      ++reportTurn;run.disabled=false;report=null;grid.replaceChildren();gridControl.hidden=true;clearReview();
+      out.replaceChildren(el('div','Settings changed. Show the time pattern again.','muted'));
+    });
     const request=async(suffix,spec)=>(await api(endpoint+suffix,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
     function inspect(spec,group,label,cell={}){
       const turn=++reviewTurn,current=()=>generation===state.generation&&turn===reviewTurn;
@@ -5180,21 +5187,24 @@
     }
     mode.onchange=drawGrid;
     run.onclick=async()=>{
+      const ticket=++reportTurn,current=()=>generation===state.generation&&box.isConnected&&ticket===reportTurn;
       run.disabled=true;report=null;grid.replaceChildren();gridControl.hidden=true;clearReview();
       out.replaceChildren(el('div','Calculating time patterns…','muted'));
       try{
         const spec={time_zone:zone.value.trim()||'UTC',work_start_hour:Number(startH.value),work_end_hour:Number(endH.value),
           work_days:dayChecks.flatMap((check,i)=>check.checked?[i+1]:[])};
-        if(act.value)spec.activity=act.value;if(state.caseType)spec.case_type=state.caseType;
+        const chosen=exact.value||act.value;
+        if(Array.from(chosen).length>200)throw new Error('Choose an activity label of at most 200 characters.');
+        if(chosen)spec.activity=chosen;if(state.caseType)spec.case_type=state.caseType;
         if(filterOn())spec.cohort=globalCohort();
         const r=await request('',spec);
-        if(generation!==state.generation)return;
+        if(!current())return;
         report={r,spec};gridControl.hidden=false;drawGrid();
         const outside=button('Inspect outside-hours events','secondary');outside.onclick=()=>inspect(spec,'outside_working_hours','Outside-hours events');
         out.replaceChildren(el('div',number(r.total_events)+' events and '+number(r.total_case_arrivals)+' new cases in '+r.settings.time_zone+'. '+(r.outside_working_hours_share===null?'':pct(r.outside_working_hours_share)+' of events fell outside '+hourText(r.settings.work_start_hour)+'–'+hourText(r.settings.work_end_hour)+' on working days.')),
           ...(r.outside_working_hours_events?[outside]:[]),el('div',r.interpretation,'muted'));
-      }catch(error){if(generation===state.generation)out.replaceChildren(el('div',error.message,'muted'));}
-      finally{run.disabled=false;}
+      }catch(error){if(current())out.replaceChildren(el('div',error.message,'muted'));}
+      finally{if(current())run.disabled=false;}
     };
     return box;
   }
