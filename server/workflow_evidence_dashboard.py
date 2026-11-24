@@ -19,6 +19,11 @@ def workflow_explorer_script() -> Response:
     return Response(path.read_text(encoding="utf-8"), media_type="application/javascript")
 
 
+def observed_execution_log_script() -> Response:
+    path = ROOT / "dashboard" / "observed_execution_log.js"
+    return Response(path.read_text(encoding="utf-8"), media_type="application/javascript")
+
+
 async def _inject_workflow_evidence_script(request: Request, call_next):
     response = await call_next(request)
     if request.method.upper() != "GET" or request.url.path != "/" or response.status_code != 200:
@@ -37,6 +42,7 @@ async def _inject_workflow_evidence_script(request: Request, call_next):
     for marker in (
         '<script src="/workflow-evidence.js"></script>',
         '<script src="/workflow-explorer.js"></script>',
+        '<script src="/observed-execution-log.js"></script>',
     ):
         if marker not in text:
             text = text.replace("</body>", marker + "\n</body>")
@@ -48,6 +54,7 @@ async def _inject_workflow_evidence_script(request: Request, call_next):
 if not getattr(app.state, "owg_workflow_evidence_dashboard_installed", False):
     app.add_api_route("/workflow-evidence.js", workflow_evidence_script, methods=["GET"])
     app.add_api_route("/workflow-explorer.js", workflow_explorer_script, methods=["GET"])
+    app.add_api_route("/observed-execution-log.js", observed_execution_log_script, methods=["GET"])
     app.middleware("http")(_inject_workflow_evidence_script)
     app.state.owg_workflow_evidence_dashboard_installed = True
 
