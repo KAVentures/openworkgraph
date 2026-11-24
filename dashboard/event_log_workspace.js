@@ -5562,7 +5562,7 @@
       const generation=state.generation;
       try{
         run.disabled=true;out.replaceChildren();statusLine.textContent='Discovering…';
-        const r=await getJSON(logPath('model-discovery',{noise:String(Number(noise.value)/100),activities:String(Number(acts.value)/100)}));
+        const r=await getJSON(logPath('model-discovery',{noise:String(Number(noise.value)/100),activities:String(Number(acts.value)/100),pin_projection:'true'}));
         if(generation!==state.generation)return;
         const q=r.quality,kinds=r.process_model.activities.map(a=>a.kind);
         const count=kind=>kinds.filter(k=>k===kind).length;
@@ -5573,21 +5573,26 @@
         if(r.simplifications.length){const list=el('ul');r.simplifications.forEach(n=>list.appendChild(el('li',n)));out.appendChild(list);}
         const excluded=q.cases_excluded_trace_length+q.cases_excluded_variant_limit;
         out.appendChild(el('div',r.interpretation+(excluded?' '+Number(excluded).toLocaleString()+' cases with very long or rare paths were left out of discovery.':''),'muted'));
+        const pin=r.effective_input;
+        const pinned=pin?.format==='openworkgraph.discovery-projection.v1'&&/^[a-f0-9]{64}$/.test(pin.sha256||'')&&
+          Number.isSafeInteger(pin.events)&&pin.events>=0&&pin.cases===q.cases_total;
+        out.appendChild(el('div',pinned?'Pinned effective discovery input: '+pin.cases+' cases, '+pin.events+' case-event rows. SHA-256 '+pin.sha256+'. Recording will refuse changes to this exact projection.':'Exact effective input fingerprint unavailable; rediscover before recording.','muted'));
         out.appendChild(el('div','Recording a source snapshot keeps its digests, selected filters, settings and coverage counts with this imported log; no graph or case copies. The snapshot is deleted with the log. Review and save the graph separately.','muted'));
-        const draft=button('Record source snapshot and review draft');draft.id='owgDiscoveryDraft';
+        const draft=button('Record source snapshot and review draft');draft.id='owgDiscoveryDraft';draft.disabled=!pinned;
         draft.onclick=async()=>{
           try{
+            if(!pinned)throw new Error('Discover again before recording an exact source.');
             if(!window.owgProcessCatalog?.draftDiscovered)throw new Error('Process catalog unavailable. Reopen the local dashboard.');
             draft.disabled=true;statusLine.textContent='Recording current discovery source metadata…';
             const saved=await (await api('/v1/event-logs/'+encodeURIComponent(r.log.log_id)+'/model-discovery-draft',{
               method:'POST',headers:{'Content-Type':'application/json','X-OWG-Local-Storage-Confirmed':'true'},
-              body:JSON.stringify({expected_model_sha256:r.process_model_sha256,case_type:r.case_notion,
+              body:JSON.stringify({expected_model_sha256:r.process_model_sha256,expected_projection_sha256:pin.sha256,case_type:r.case_notion,
                 noise:r.settings.noise,activities:r.settings.activities,cohort:r.cohort})})).json();
             if(generation!==state.generation)return;
             if(window.owgProcessCatalog.draftDiscovered({model:saved.process_model,logName:(saved.log&&saved.log.name)||'',sourceReference:saved.source_snapshot.reference}))statusLine.textContent='Source snapshot recorded. Opened in the process catalog as an unsaved draft.';
             else statusLine.textContent='Source snapshot recorded; existing catalog draft kept.';
           }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
-          finally{draft.disabled=false;}
+          finally{draft.disabled=!pinned;}
         };
         out.appendChild(draft);
         const petri=button('Download Petri net (PNML)','secondary');petri.id='owgDiscoveryPnml';
