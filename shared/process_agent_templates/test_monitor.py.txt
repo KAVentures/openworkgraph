@@ -205,6 +205,53 @@ class MonitoringCases(unittest.TestCase):
                 with self.assertRaises(ImplementationError):
                     batch_report(self.spec,paths,'Run')
 
+    def test_actual_executor_stop_journals_project_before_and_between_tool_attempts(self):
+        import asyncio
+        from unittest.mock import patch
+        from execute import execute_approved
+        from test_execution import FakeTools, receipt
+        from stop import stop
+
+        async def exercise(folder, early):
+            data = fixture()
+            tools = FakeTools()
+            original = tools.call_tool
+            async def call_tool(name, arguments):
+                value = await original(name, arguments)
+                if name == 'resolve_case':
+                    stop(folder)
+                return value
+            tools.call_tool = call_tool
+            async def read_source(base, token, request):
+                if early:
+                    stop(folder)
+                    return None
+                value = receipt(request)
+                if not tools.resolved:
+                    value.update(operation_verified=False,availability='unknown',
+                                 reason='provider_state_not_expected_operation')
+                return value
+            with patch.dict('os.environ',{'OWG_EXECUTION_MCP_TOKEN':'SYNTHETIC_TOKEN',
+                                          'OWG_EXECUTION_SOURCE_READ_TOKEN':'SYNTHETIC_SOURCE'}):
+                result = await execute_approved(*data,journal_directory=folder,
+                    client_factory=lambda *args:tools,receipt_reader=read_source)
+            self.assertTrue(result['operator_stopped'])
+            paths = list(folder.glob('*.jsonl'))
+            self.assertEqual(len(paths),1)
+            document, review = batch_report(data[0],paths,'Run')
+            self.assertEqual(document['runs'][0]['status'],'handed_to_human')
+            self.assertTrue(review['journals'][0]['operator_stop_reported'])
+            self.assertIsNone(document['runs'][0]['outcome']['verified'])
+            if early:
+                self.assertEqual(tools.calls,[])
+                self.assertEqual(document['runs'][0]['steps'],[])
+            else:
+                self.assertEqual([name for name,_ in tools.calls],['read_case','resolve_case'])
+                self.assertEqual([s['step_id'] for s in document['runs'][0]['steps']],['resolve'])
+        with TemporaryDirectory() as directory:
+            asyncio.run(exercise(Path(directory)/'early',True))
+            asyncio.run(exercise(Path(directory)/'later',False))
+
     def test_batch_cli_review_and_import_report_are_distinct_and_offline(self):
         import subprocess
         import sys
