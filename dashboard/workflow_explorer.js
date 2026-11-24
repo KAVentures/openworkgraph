@@ -11,6 +11,9 @@
   let latestRequest = 0;
   let latestEvidenceRequest = 0;
   let chosenPeriod = '7';
+  let discoveryMode = 'specificity';
+  let discoveryMinRuns = '2';
+  let discoveryMultiApp = false;
   let selectedExample = null;
   let activeBundle = null;
   let currentWindow = {};
@@ -135,7 +138,32 @@
     search.placeholder = 'Filter observed steps';
     search.setAttribute('aria-label', 'Filter workflow candidates');
     search.addEventListener('input', renderCandidates);
-    append(controls, selectLabel, refreshButton, search);
+    const modeLabel=element('label','Discovery ranking ');
+    const mode=element('select');mode.id='owgExplorerRanking';
+    for(const [value,label] of [['specificity','Structural specificity'],['navigation','Cross-app evidence']]){
+      const option=element('option',label);option.value=value;mode.appendChild(option);
+    }
+    mode.value=discoveryMode;modeLabel.appendChild(mode);
+    const runsLabel=element('label','Minimum repeated runs ');
+    const runs=element('select');runs.id='owgExplorerMinRuns';
+    for(const n of [2,3,5,10]){
+      const option=element('option',String(n));option.value=String(n);runs.appendChild(option);
+    }
+    runs.value=discoveryMinRuns;runsLabel.appendChild(runs);
+    const multiLabel=element('label','Require multiple observed surfaces ');
+    const multi=element('input');multi.type='checkbox';multi.id='owgExplorerMultiApp';
+    multi.checked=discoveryMultiApp;multiLabel.appendChild(multi);
+    const changeDiscovery=()=>{
+      discoveryMode=mode.value;discoveryMinRuns=runs.value;discoveryMultiApp=multi.checked;
+      ++latestRequest;invalidateEvidence();candidates=[];selectedId='';selectedExample=null;currentWindow={};
+      refreshButton.disabled=false;renderCandidates();
+      clearDetail('Discovery settings changed. Select Explore workflows to load new candidates.');
+      status('Discovery settings changed. Previous candidates and evidence cleared.');
+    };
+    mode.addEventListener('change',changeDiscovery);
+    runs.addEventListener('change',changeDiscovery);
+    multi.addEventListener('change',changeDiscovery);
+    append(controls, selectLabel, modeLabel, runsLabel, multiLabel, refreshButton, search);
     const notice = element('div', 'Select a period and explore. This reads existing local workflow evidence; it does not send data to an AI.', 'muted');
     notice.id = 'owgExplorerStatus';
     notice.setAttribute('role', 'status');
@@ -209,7 +237,10 @@
       if (requestId !== latestRequest) return;
       currentWindow = sinceWindow(chosenPeriod);
       const params = new URLSearchParams({
-        min_runs: '2', limit: String(LIMIT), rank_by_quality: 'true',
+        min_runs: discoveryMinRuns, limit: String(LIMIT),
+        rank_by_quality: String(discoveryMode==='specificity'),
+        rank_by_navigation: String(discoveryMode==='navigation'),
+        require_multi_surface: String(discoveryMultiApp),
         source_event_limit: '25000', include_transition_maps:'true', ...currentWindow
       });
       const response = await fetch('/v1/workflow-evidence/families?' + params, {cache: 'no-store'});
@@ -221,7 +252,7 @@
         candidates.length + ' candidate groups shown' +
         (count(payload.total) > candidates.length ? ' of ' + count(payload.total) + ' returned groups.' : '.') +
         (payload.source_limit_reached ? ' Source event limit reached: earlier work may be missing. Narrow the period.' : '') +
-        ' Group quality reflects structure, not task identity.'
+        ' Group quality and ranking reflect observed structure, not task identity.'
       );
       renderCandidates();
       if (candidates.length) choose(candidates[0].candidate_cluster_id);
@@ -756,6 +787,38 @@
         bundle?.provenance?.truncated === true};
   }
 
+  function projectedSurfaceRoutes(matrix) {
+    if (!matrix?.completeProjection) return null;
+    const groups=new Map(), edges=new Map();
+    const generic=new Set(['surface:browser','surface:chrome','surface:safari','surface:firefox','surface:edge']);
+    for (const row of matrix.rows) {
+      const sequence=[];
+      // Do not bridge a generic or redacted surface: it may conceal a real intervening app.
+      for (const step of row.steps) {
+        if (!step.startsWith('surface:')) continue;
+        const unknown=generic.has(step)||step==='surface:unknown'||step==='surface:other';
+        const token=unknown?null:step;
+        if (!sequence.length||sequence[sequence.length-1]!==token) sequence.push(token);
+      }
+      const seen=new Set();
+      for (const token of sequence) if(token) {
+        if(!groups.has(token))groups.set(token,new Set());
+        groups.get(token).add(row.id);
+      }
+      for(let i=1;i<sequence.length;i++){
+        const from=sequence[i-1],to=sequence[i];
+        if(!from||!to||from===to)continue;
+        const key=JSON.stringify([from,to]);
+        if(!edges.has(key))edges.set(key,{from,to,occurrences:0,ids:new Set()});
+        const edge=edges.get(key);edge.occurrences++;edge.ids.add(row.id);seen.add(key);
+      }
+    }
+    const all=[...edges.values()].map(e=>({from:e.from,to:e.to,occurrences:e.occurrences,
+      support:e.ids.size,executionIds:[...e.ids]})).sort((a,b)=>b.support-a.support||b.occurrences-a.occurrences||
+        a.from.localeCompare(b.from)||a.to.localeCompare(b.to));
+    return {edges:all.slice(0,40),omitted:Math.max(0,all.length-40),surfaceCount:groups.size};
+  }
+
   function runDifference(matrix, baseline, target) {
     if (!matrix?.completeProjection || baseline === target) return null;
     const a = matrix.rows.find(row=>row.id===baseline), b = matrix.rows.find(row=>row.id===target);
@@ -834,7 +897,55 @@
         append(panel,controls,result);
       }
     }
+    renderSurfaceRoutes(panel, matrix, bundle);
     host.appendChild(panel);
+  }
+
+  function renderSurfaceRoutes(panel, matrix, bundle) {
+    const routes=projectedSurfaceRoutes(matrix);
+    if(!routes)return;
+    const labels=bundle?.structural_alignment?.surface_labels||{};
+    const section=element('section');section.id='owgExplorerSurfaceRoutes';
+    section.appendChild(element('h5','Cross-application workflow map'));
+    section.appendChild(element('p',routes.surfaceCount+' distinct identifiable surface tokens in the selected projections. Transitions are ordered surface changes, not proof of data transfer or a handoff. Unknown browser surfaces break the route.','muted'));
+    if(!routes.edges.length){
+      section.appendChild(element('p','No identifiable cross-surface transitions in the selected projections.','muted'));
+    }else{
+      const table=element('table');table.setAttribute('aria-label','Projected cross-application transitions');
+      const head=element('thead'),header=element('tr');
+      for(const label of ['From','To','Runs with transition','Occurrences','Supporting runs']){
+        const th=element('th',label);th.scope='col';header.appendChild(th);
+      }
+      head.appendChild(header);table.appendChild(head);
+      const body=element('tbody');
+      for(const edge of routes.edges){
+        const tr=element('tr');
+        append(tr,element('td',readable(edge.from,labels)),element('td',readable(edge.to,labels)),
+          element('td',edge.support+'/'+matrix.rows.length),element('td',edge.occurrences),
+          element('td',edge.executionIds.map(id=>'Run '+(matrix.rows.findIndex(row=>row.id===id)+1)).join(', ')));
+        body.appendChild(tr);
+      }
+      table.appendChild(body);const scroll=element('div',null,'owg-map-scroll');scroll.appendChild(table);section.appendChild(scroll);
+      if(routes.omitted)section.appendChild(element('p',routes.omitted+' additional transitions not displayed.','muted'));
+    }
+    // Use the existing linked-transfer summaries, not the route edges as proof of transfer.
+    const transfers=safeArray(bundle?.data_movement?.clipboard_transfers).filter(row=>
+      row?.cross_surface===true&&row.clipboard_contents_observed===false&&
+      typeof row.source_surface==='string'&&typeof row.destination_surface==='string'&&
+      Number.isSafeInteger(row.support_runs)&&row.support_runs>0&&row.support_runs<=matrix.rows.length&&
+      Number.isSafeInteger(row.observed_transfer_count)&&row.observed_transfer_count>=row.support_runs);
+    if(transfers.length){
+      section.appendChild(element('h5','Observed linked clipboard transfers'));
+      const list=element('ul');
+      for(const row of transfers.slice(0,20)){
+        list.appendChild(element('li',row.source_surface.slice(0,100)+' → '+row.destination_surface.slice(0,100)+
+          ' · '+row.support_runs+'/'+matrix.rows.length+' runs · '+row.observed_transfer_count+' occurrences'));
+      }
+      section.appendChild(list);
+      if(transfers.length>20)section.appendChild(element('p','Additional transfer summaries not displayed.','muted'));
+    }
+    section.appendChild(element('p','Clipboard values are not included. Review the underlying evidence before proposing direct connector integration.','muted'));
+    panel.appendChild(section);
   }
 
   async function inspect(candidate, lane, preserveComparison = false) {
@@ -2070,7 +2181,7 @@
   }
 
   // Read-only model exposed for pure Node regression tests; no sensor or server changes.
-  window.__owgWorkflowExplorerModel = {buildLanes, titleFor, readable, observedRunMatrix, runDifference};
+  window.__owgWorkflowExplorerModel = {buildLanes, titleFor, readable, observedRunMatrix, runDifference, projectedSurfaceRoutes};
   window.owgWorkflowExplorer=Object.freeze({
     showReviewedGroup({bundle,label,workflow_id,revision,window:filter={}}){
       const clusters=safeArray(bundle.structural_alignment?.structural_sequence_variants);
