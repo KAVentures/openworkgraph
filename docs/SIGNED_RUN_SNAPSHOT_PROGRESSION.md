@@ -61,3 +61,12 @@ step and identity regressions, legacy hash enrichment, manual correction and
 the signed HTTP route.
 
 Roadmap: [#370 R18](https://github.com/KAVentures/openworkgraph/issues/370).
+
+The channel inventory and monitoring dashboard also show the highest 50
+retained signed sequence dispositions, including original HTTP status and
+receipt time. Sequence IDs are decimal strings to avoid browser integer
+rounding. The view omits bodies, digests, raw error details and secrets;
+it is not an exhaustive history beyond the bounded replay ledger. A revision
+conflict refusal is persisted before attempting secondary incident recording.
+If the incident ledger is full or unavailable, the original refusal remains
+reviewable in the channel inventory and an exact resend cannot import it.
