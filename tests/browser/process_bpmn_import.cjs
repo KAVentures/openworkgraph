@@ -211,6 +211,30 @@ assert c.execute('SELECT COUNT(*) FROM events').fetchone()[0]==0
   await page.getByRole('button',{name:/^Open revision 1 ·/}).waitFor();
   for(const revision of [1,2,3,4])
     assert.equal(await page.getByRole('button',{name:new RegExp('^Open revision '+revision+' ·')}).count(),1);
+  const multi=`<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL">
+    <process id="review" name="Invoice review"><task id="aa" name="Review invoice"/></process>
+    <process id="approval" name="Order approval"><task id="bb" name="Approve order"/></process>
+  </definitions>`;
+  await page.getByLabel('Choose BPMN process design',{exact:true}).setInputFiles({
+    name:'multiple.bpmn',mimeType:'application/bpmn+xml',buffer:Buffer.from(multi)
+  });
+  await page.getByRole('button',{name:'Inspect BPMN file',exact:true}).click();
+  const importer=page.locator('#owgBPMNImport');
+  await importer.getByText('2 processes found.',{exact:true}).waitFor();
+  assert.equal(await page.locator('#owgBPMNPreview').isDisabled(),true);
+  const pick=importer.getByLabel('BPMN process',{exact:true});
+  await pick.selectOption('review');
+  await page.locator('#owgBPMNPreview').click();
+  await preview.getByText('Selected process: Invoice review',{exact:true}).waitFor();
+  await pick.selectOption('approval');
+  assert.equal(await preview.getByRole('button',{name:'Open imported draft in editor',exact:true}).count(),0);
+  await page.locator('#owgBPMNPreview').click();
+  await preview.getByText('Selected process: Order approval',{exact:true}).waitFor();
+  page.once('dialog',dialog=>dialog.accept());
+  await preview.getByRole('button',{name:'Open imported draft in editor',exact:true}).click();
+  assert.equal(await editor.getByLabel('Activity import_step_1',{exact:true}).inputValue(),'Approve order');
+  assert.equal(await page.locator('#owgCatalogReviewed').isChecked(),false);
+  assert.equal(saves,4);
   assert.deepEqual(errors,[]);
   console.log('BPMN import browser acceptance passed: explicit preview, unreviewed branch/merge draft, inert annotations, no source IDs/notes in saved model, reviewed save, nonexecuting export, unsupported-semantics rejection and mobile.');
  }finally{
