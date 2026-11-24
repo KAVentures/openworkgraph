@@ -2371,9 +2371,12 @@
     const transfer=document.createElement('details');
     const file=input('owgFilterSetFile','file');file.accept='.json,application/json';
     const importButton=button('Import filter','secondary');importButton.disabled=true;
+    const inspect=button('Preview filter file','secondary');inspect.disabled=true;
+    const importPreview=el('div');importPreview.id='owgFilterImportPreview';importPreview.setAttribute('role','status');
+    let selectedDocument=null,importTurn=0;
     const importRow=el('div',null,'row');importRow.style.alignItems='end';
-    importRow.append(field('OpenWorkGraph filter JSON',file),importButton);
-    transfer.append(el('summary','Import a filter from another log'),importRow);
+    importRow.append(field('OpenWorkGraph filter JSON',file),inspect,importButton);
+    transfer.append(el('summary','Import a filter from another log'),importRow,importPreview);
     wrap.append(el('h4','Saved filters'),row,transfer,message,list,preview);
     const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/filter-sets';
     const generation=state.generation;
@@ -2437,20 +2440,40 @@
         return [set.name,set.case_type||'Current selection',[...follows.map(followText),...(activity?['contains activity '+JSON.stringify(activity)]:[]),attr.attribute||'',attr.attribute_range?rangeText(attr.attribute_range):'',attr.starts_with?'starts with '+JSON.stringify(attr.starts_with):'',attr.ends_with?'ends with '+JSON.stringify(attr.ends_with):'',attr.duration?durationText(attr.duration):'',moreFilterText(attr)].filter(Boolean).join('; ')||'—',notes.join('. ')||'—',actions];
       })):el('div','No saved filters yet.','muted'));
     }
-    file.onchange=()=>{importButton.disabled=!file.files.length;};
-    importButton.onclick=async()=>{
-      const selected=file.files[0];
+    file.onchange=()=>{
+      importTurn++;selectedDocument=null;importPreview.replaceChildren();
+      importButton.disabled=true;inspect.disabled=!file.files.length;
+    };
+    inspect.onclick=async()=>{
+      const selected=file.files[0],turn=++importTurn;
+      selectedDocument=null;importButton.disabled=true;importPreview.replaceChildren();
       if(!selected)return;
-      if(selected.size>65536){message.textContent='Choose a filter file up to 64 KB.';return;}
-      importButton.disabled=file.disabled=true;
+      if(selected.size>65536){importPreview.textContent='Choose a filter file up to 64 KB.';return;}
+      const current=()=>generation===state.generation&&wrap.isConnected&&turn===importTurn;
+      inspect.disabled=true;importPreview.textContent='Checking this filter…';
       try{
-        const body=await selected.text();
-        if(generation!==state.generation)return;
-        const imported=await (await api(base()+'/import',{method:'POST',headers:{'Content-Type':'application/json'},body})).json();
-        if(generation!==state.generation)return;
-        file.value='';message.textContent='Imported "'+imported.name+'".';await refresh();
-      }catch(error){if(generation===state.generation)message.textContent=error.message;}
-      finally{file.disabled=false;importButton.disabled=!file.files.length;}
+        const result=await(await api(base()+'/import/preview',{
+          method:'POST',headers:{'Content-Type':'application/json'},body:selected
+        })).json();
+        if(!current())return;
+        selectedDocument=result.definition;importButton.disabled=false;
+        importPreview.textContent=result.definition.name+' · '+Number(result.matching_cases).toLocaleString()+
+          ' of '+Number(result.cases_before_filter).toLocaleString()+' cases match in '+result.case_notion+'. '+
+          (result.activities_not_in_log.length?'Unavailable activities: '+result.activities_not_in_log.map(JSON.stringify).join(', ')+'.':'All named activities are present.');
+      }catch(error){if(current())importPreview.textContent=error.message;}
+      finally{if(current())inspect.disabled=false;}
+    };
+    importButton.onclick=async()=>{
+      const definition=selectedDocument,turn=++importTurn;
+      if(!definition)return;
+      selectedDocument=null;importButton.disabled=inspect.disabled=file.disabled=true;
+      try{
+        const imported=await(await api(base()+'/import',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify(definition)})).json();
+        if(generation!==state.generation||turn!==importTurn)return;
+        file.value='';importPreview.replaceChildren();message.textContent='Imported "'+imported.name+'".';await refresh();
+      }catch(error){if(generation===state.generation&&turn===importTurn)message.textContent=error.message;}
+      finally{if(generation===state.generation&&turn===importTurn){file.disabled=false;inspect.disabled=!file.files.length;}}
     };
     save.onclick=async()=>{
       try{
