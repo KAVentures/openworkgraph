@@ -31,6 +31,7 @@ from .event_log_analytics import _wilson
 MAX_STEP = 10            # event counts above this share one comparison bucket
 MAX_OPEN_CASES = 200
 Label = Annotated[str, Field(min_length=1, max_length=200)]
+PredictionOrder = Literal["automatic", "age", "idle", "remaining", "outcome"]
 
 
 class _Strict(BaseModel):
@@ -102,8 +103,22 @@ def _prepare(conn, settings: PredictionSpec, log_id: str):
     return as_of
 
 
-def predict(log_id: str, spec: Any, *, case_id: str | None = None) -> dict[str, Any]:
+def predict(log_id: str, spec: Any, *, case_id: str | None = None,
+            rank_by: PredictionOrder = "automatic") -> dict[str, Any]:
     settings = parse(spec)
+    has_outcome = settings.outcome is not None
+    if rank_by not in ("automatic", "age", "idle", "remaining", "outcome"):
+        raise workspace.EventLogWorkspaceError("choose a supported prediction ranking")
+    if rank_by == "outcome" and not has_outcome:
+        raise workspace.EventLogWorkspaceError("choose an outcome to rank by its estimated likelihood")
+    ranking = ("outcome" if has_outcome else "remaining") if rank_by == "automatic" else rank_by
+    censored = settings.estimator == "survival"
+    # Keep censored medians ahead of known values in the remaining-time order.
+    # Only these fixed expressions are interpolated into the query.
+    remaining = "(v.q50 IS NULL) DESC, v.q50 DESC" if censored else "v.q50 DESC"
+    outcome = f"{'e' if censored else 'v'}.rate DESC NULLS LAST"
+    order = {"age": "v.age DESC", "idle": "v.idle DESC", "remaining": remaining,
+             "outcome": f"{outcome}, {remaining}" if censored else outcome}[ranking]
 
     def run(conn):
         as_of = _prepare(conn, settings, log_id)
@@ -114,12 +129,12 @@ def predict(log_id: str, spec: Any, *, case_id: str | None = None) -> dict[str, 
             FROM pc WHERE NOT complete""", [MAX_STEP, as_of, as_of])
         _train(conn, "TRUE", [])
         _choose(conn, "po", settings.min_support)
-        has_outcome = settings.outcome is not None
-        if settings.estimator == "survival":
-            return _survival_result(conn, settings, as_of, completed, open_total, has_outcome, case_id)
-        rows = conn.execute("""SELECT case_id, activity, step, age, idle, basis, cases, q50, q10, q90, rate, hits, n
-            FROM po_est WHERE basis IS NOT NULL AND (? IS NULL OR case_id = ?) ORDER BY """
-                            + ("rate DESC" if has_outcome else "q50 DESC") + ", case_id LIMIT ?",
+        if censored:
+            return {**_survival_result(conn, settings, as_of, completed, open_total, has_outcome, case_id, order),
+                    "ranked_by": ranking}
+        rows = conn.execute(f"""SELECT case_id, activity, step, age, idle, basis, cases, q50, q10, q90, rate, hits, n
+            FROM po_est v WHERE basis IS NOT NULL AND (? IS NULL OR case_id = ?)
+            ORDER BY {order}, v.case_id LIMIT ?""",
                             [case_id, case_id, settings.limit]).fetchall()
         predicted = conn.execute("SELECT count(*) FROM po_est WHERE basis IS NOT NULL").fetchone()[0]
         predictions = []
@@ -136,6 +151,7 @@ def predict(log_id: str, spec: Any, *, case_id: str | None = None) -> dict[str, 
             "completed_cases": completed, "open_cases": open_total,
             "predicted_open_cases": predicted, "unsupported_open_cases": open_total - predicted,
             "predictions": predictions, "predictions_truncated": case_id is None and predicted > len(predictions),
+            "ranked_by": ranking,
             **_case_selection(conn, case_id, predictions),
             "backtest": _backtest(conn, settings),
             "settings": settings.model_dump(),
@@ -159,18 +175,16 @@ def _case_selection(conn, case_id: str | None, predictions: list[dict[str, Any]]
 
 
 def _survival_result(conn, settings: PredictionSpec, as_of, completed: int, open_total: int,
-                     has_outcome: bool, case_id: str | None) -> dict[str, Any]:
+                     has_outcome: bool, case_id: str | None, order: str) -> dict[str, Any]:
     survival.observations(conn)
     survival.fit(conn)
     survival.estimate(conn, "po", settings.min_support)
     censored_training = conn.execute("SELECT count(DISTINCT case_id) FROM so WHERE NOT observed").fetchone()[0]
-    # Withheld estimates (more than the history shows) are the longest, so they come first.
-    order = "e.rate DESC NULLS LAST, " if has_outcome else ""
     rows = conn.execute(f"""SELECT v.case_id, v.activity, v.step, v.age, v.idle, v.basis, v.cases, v.censored_cases,
           v.q50, v.q10, v.q90, v.at_least, e.rate, e.hits, e.n
         FROM po_sv v JOIN po_est e USING (case_id) WHERE v.basis IS NOT NULL
           AND (? IS NULL OR v.case_id = ?)
-        ORDER BY {order}(v.q50 IS NULL) DESC, v.q50 DESC, v.case_id LIMIT ?""",
+        ORDER BY {order}, v.case_id LIMIT ?""",
                         [case_id, case_id, settings.limit]).fetchall()
     predicted, withheld = conn.execute("""SELECT count(*) FILTER (WHERE basis IS NOT NULL),
           count(*) FILTER (WHERE basis IS NOT NULL AND q50 IS NULL) FROM po_sv""").fetchone()

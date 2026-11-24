@@ -56,6 +56,33 @@ const path=require('node:path');
    await page.locator('#owgTemporalZeta').selectOption('6');await page.locator('#owgTemporalRun').click();
    assert.equal(await review.textContent(),'');
    await page.locator('#owgTemporalStatus').filter({hasText:'0 of 20 cases'}).waitFor();
+   const heldOut=['case,activity,time,who'];
+   for(let i=0;i<6;i++)heldOut.push(
+     `baseline${i},Order,2024-01-01T09:00:00Z,ana`,
+     `baseline${i},Invoice,2024-01-01T09:${String(8+i).padStart(2,'0')}:00Z,bob`);
+   heldOut.push(
+     'cross,Order,2024-01-01T23:59:00Z,ana','cross,Invoice,2024-01-02T00:00:00Z,bob',
+     'held-out-late,Order,2024-01-02T00:00:00Z,ana','held-out-late,Invoice,2024-01-02T01:00:00Z,bob',
+     'unknown,Order,2024-01-02T09:00:00Z,ana','unknown,Escalate,2024-01-02T09:40:00Z,bob'
+   );
+   await page.locator('#owgEventLogFile').setInputFiles({
+     name:'cutoff.csv',mimeType:'text/csv',buffer:Buffer.from(heldOut.join('\n'))
+   });
+   await page.waitForFunction(()=>document.querySelector('#owgEventLogCase').options.length===4);
+   await page.locator('#owgEventLogConsent').check();
+   await page.locator('#owgEventLogImport').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Imported 18 events'}).waitFor();
+   await page.locator('#owgEventLogAnalyze').click();
+   const cutoff=page.locator('#owgTemporalBaselineCutoff');
+   await cutoff.fill('2024-01-02T00:00');
+   await page.locator('#owgTemporalRun').click();
+   await page.locator('#owgTemporalStatus').getByText('1 of 1 later cases with checked pairs have unusual timings.').waitFor();
+   const coverage=await out.locator('table').first().locator('tbody td').allTextContents();
+   assert.deepEqual(coverage,['2024-01-02T00:00:00Z','6','2','1','1','1']);
+   await out.getByRole('button',{name:'Inspect timings from Order to Invoice',exact:true}).click();
+   await review.getByText('1 matching case with 1 deviation. Showing 1.').waitFor();
+   await review.getByRole('button',{name:'Open case held-out-late',exact:true}).click();
+   await page.locator('#owgEventLogCaseEvents').getByRole('cell',{name:'Invoice',exact:true}).waitFor();
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgTemporal'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);

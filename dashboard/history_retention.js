@@ -161,15 +161,19 @@
   let reconstructionRequestEpoch=0;
   let reconstructionScoring=false;
   let reconstructionLabelEpoch=0;
+  let reconstructionScoredEnvelope=null;
   function reconstructionWorkbench(){
     const panel=document.querySelector('#panel-history');
     if(!panel||document.querySelector('#reconstructionWorkbench'))return;
     const card=document.createElement('div');
     card.className='card';card.id='reconstructionWorkbench';
-    card.innerHTML='<h2>Reconstruction evidence review</h2><p class="muted">Requires an explicit all-saved AI history grant. Candidate pairs are observations, not confirmed cases. Labels stay in this browser tab and are never saved. Scores cover only surfaced candidate pairs. Reviewers can add missed true pairs for surfaced events, but unseen events cannot be labeled here; complete case recall, case accuracy and held-out performance are not measured.</p><button type="button" id="reconstructionLoad">Load current evidence</button><div id="reconstructionStatus" role="status" aria-live="polite"></div><div id="reconstructionEvents"></div><button type="button" id="reconstructionScore" disabled>Score explicitly reviewed events</button><pre id="reconstructionMetrics" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>';
+    card.innerHTML='<h2>Reconstruction evidence review</h2><p class="muted">Requires an explicit all-saved AI history grant. Candidate pairs are observations, not confirmed cases. Labels remain in this tab unless explicitly saved locally for one hour under the current evidence and history grant. Scores cover only surfaced candidate pairs. Reviewers can add missed true pairs for surfaced events, but unseen events cannot be labeled here; complete case recall, case accuracy and held-out performance are not measured.</p><button type="button" id="reconstructionLoad">Load current evidence</button><div id="reconstructionStatus" role="status" aria-live="polite"></div><div id="reconstructionEvents"></div><button type="button" id="reconstructionScore" disabled>Score explicitly reviewed events</button><button type="button" id="reconstructionSave" disabled>Save reviewed labels locally (1 hour)</button><button type="button" id="reconstructionForget">Delete saved labels</button><pre id="reconstructionMetrics" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre><details><summary>Score a complete source-event cohort (advanced)</summary><p class="muted">Paste an externally labeled JSON array of source events, including negative and missed events. This does not certify independent labels, complete source coverage or held-out accuracy. Labels are sent only to the local authenticated scorer and are not saved.</p><label for="reconstructionCohortLabels">Source-event labels (JSON array)</label><textarea id="reconstructionCohortLabels" rows="5" spellcheck="false" autocomplete="off"></textarea><button type="button" id="reconstructionCohortScore" disabled>Score source-event cohort</button><pre id="reconstructionCohortMetrics" role="status" aria-live="polite" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>';
     panel.appendChild(card);
     card.querySelector('#reconstructionLoad').addEventListener('click',loadReconstructionEvidence);
     card.querySelector('#reconstructionScore').addEventListener('click',scoreReconstructionEvidence);
+    card.querySelector('#reconstructionCohortScore').addEventListener('click',scoreReconstructionSourceCohort);
+    card.querySelector('#reconstructionSave').addEventListener('click',saveReconstructionLabels);
+    card.querySelector('#reconstructionForget').addEventListener('click',deleteReconstructionLabels);
   }
   function clearReconstructionEvidence(message){
     reconstructionRequestEpoch++;
@@ -177,12 +181,16 @@
     // request must not lock a freshly loaded review after revocation/reload.
     reconstructionScoring=false;
     reconstructionLabelEpoch++;
-    reconstructionEvidence=null;reconstructionChoices=[];
+    reconstructionEvidence=null;reconstructionChoices=[];reconstructionScoredEnvelope=null;
     const root=document.querySelector('#reconstructionWorkbench');if(!root)return;
     root.querySelector('#reconstructionEvents').replaceChildren();
     root.querySelector('#reconstructionMetrics').textContent='';
+    root.querySelector('#reconstructionCohortMetrics').textContent='';
+    root.querySelector('#reconstructionCohortLabels').value='';
+    root.querySelector('#reconstructionCohortScore').disabled=true;
     root.querySelector('#reconstructionProvenance')?.remove();
     root.querySelector('#reconstructionScore').disabled=true;
+    root.querySelector('#reconstructionSave').disabled=true;
     root.querySelector('#reconstructionStatus').textContent=message||'';
   }
   async function loadReconstructionEvidence(){
@@ -200,6 +208,8 @@
       if(!review||!Array.isArray(review.event_reviews)||!review.evidence_sha256)
         throw new Error('Invalid reconstruction evidence');
       reconstructionEvidence=review;
+      root.querySelector('#reconstructionCohortScore').disabled=false;
+      root.querySelector('#reconstructionCohortMetrics').textContent='';
       // Display actual scan boundaries and interruption timelines as inert text.
       // This is observed provenance, not evidence of a confirmed case.
       const provenance=document.createElement('details');
@@ -212,14 +222,19 @@
       evidence.textContent=JSON.stringify({
         coverage:data.coverage||{},
         identity_timelines:Array.isArray(data.identity_timelines)?data.identity_timelines:[],
+        identity_timelines_truncated:data.identity_timelines_truncated===true,
+        identity_timelines_returned_count:Number.isInteger(data.identity_timelines_returned_count)?data.identity_timelines_returned_count:null,
         // Direct event-level support and interruption/continuity context are
         // observed provenance only; never infer transitive case membership.
         observed_pair_event_assignments:Array.isArray(data.observed_pair_event_assignments)?data.observed_pair_event_assignments:[],
         observed_group_continuity:Array.isArray(data.observed_group_continuity)?data.observed_group_continuity:[],
         observed_case_groups:Array.isArray(data.observed_case_groups)?data.observed_case_groups:[],
         observed_case_groups_truncated:data.observed_case_groups_truncated===true,
+        observed_case_groups_returned_count:Number.isInteger(data.observed_case_groups_returned_count)?data.observed_case_groups_returned_count:null,
         observed_pair_event_assignments_truncated:data.observed_pair_event_assignments_truncated===true,
+        observed_pair_event_assignments_returned_count:Number.isInteger(data.observed_pair_event_assignments_returned_count)?data.observed_pair_event_assignments_returned_count:null,
         observed_group_continuity_truncated:data.observed_group_continuity_truncated===true,
+        observed_group_continuity_returned_count:Number.isInteger(data.observed_group_continuity_returned_count)?data.observed_group_continuity_returned_count:null,
         notice:data.notice||null,
         derived:data.derived,
         authoritative:data.authoritative
@@ -237,7 +252,7 @@
         pairs.forEach((pair,pairIndex)=>{
           const label=document.createElement('label');
           const check=document.createElement('input');check.type='checkbox';
-          check.addEventListener('change',()=>{if(check.checked)selected.add(pairIndex);else selected.delete(pairIndex);reconstructionLabelEpoch++;root.querySelector('#reconstructionMetrics').textContent='';});
+          check.addEventListener('change',()=>{if(check.checked)selected.add(pairIndex);else selected.delete(pairIndex);reconstructionLabelEpoch++;reconstructionScoredEnvelope=null;root.querySelector('#reconstructionSave').disabled=true;root.querySelector('#reconstructionMetrics').textContent='';});
           label.append(check,document.createTextNode(' True pair: '+JSON.stringify(pair)));
           item.appendChild(label);item.appendChild(document.createElement('div'));
         });
@@ -246,20 +261,67 @@
         const missed=document.createElement('textarea');
         missed.rows=2;missed.placeholder='Optional missed true pairs as JSON: [[[provider, kind, ref], [provider, kind, ref]]]';
         missed.setAttribute('aria-label','Additional true resource pairs missed by reconstruction for this event (JSON)');
-        missed.addEventListener('input',()=>{reconstructionLabelEpoch++;root.querySelector('#reconstructionMetrics').textContent='';});
+        missed.addEventListener('input',()=>{reconstructionLabelEpoch++;reconstructionScoredEnvelope=null;root.querySelector('#reconstructionSave').disabled=true;root.querySelector('#reconstructionMetrics').textContent='';});
         item.appendChild(missed);
         const acknowledge=document.createElement('label');
         const done=document.createElement('input');done.type='checkbox';
-        done.addEventListener('change',()=>{reconstructionLabelEpoch++;root.querySelector('#reconstructionMetrics').textContent='';});
+        done.addEventListener('change',()=>{reconstructionLabelEpoch++;reconstructionScoredEnvelope=null;root.querySelector('#reconstructionSave').disabled=true;root.querySelector('#reconstructionMetrics').textContent='';});
         acknowledge.append(done,document.createTextNode(' I reviewed this event (unchecked pairs are negatives)'));
         item.appendChild(acknowledge);host.appendChild(item);
         reconstructionChoices[index]={row,pairs,selected,done,missed};
       });
+      const savedResponse=await fetch('/v1/history/reconstruction-review/saved',{cache:'no-store'});
+      if(epoch!==reconstructionRequestEpoch)return;
+      if(savedResponse.ok){
+        const saved=(await savedResponse.json()).saved;
+        if(saved&&saved.evidence_sha256===review.evidence_sha256&&Array.isArray(saved.annotations)){
+          const labels=new Map(saved.annotations.map(a=>[JSON.stringify([a.window,a.event_id]),a]));
+          reconstructionChoices.forEach(c=>{
+            const label=labels.get(JSON.stringify([c.row.window,c.row.event_id]));
+            if(!label||!Array.isArray(label.true_resource_pairs))return;
+            const extra=[];
+            label.true_resource_pairs.forEach(pair=>{
+              const i=c.pairs.findIndex(candidate=>JSON.stringify(candidate)===JSON.stringify(pair));
+              if(i>=0){c.selected.add(i);c.done.closest('fieldset').querySelectorAll('input[type="checkbox"]')[i].checked=true;}
+              else extra.push(pair);
+            });
+            c.missed.value=extra.length?JSON.stringify(extra):'';
+            c.done.checked=true;
+          });
+        }
+      }
       root.querySelector('#reconstructionScore').disabled=!!review.coverage_incomplete||!reconstructionChoices.length||reconstructionChoices.length>192;
       root.querySelector('#reconstructionStatus').textContent=review.coverage_incomplete
         ?'Source coverage is incomplete; scoring is disabled.'
         :reconstructionChoices.length>192?'More than 192 surfaced events; scoring is unavailable for this bounded review. Narrow the evidence window.':review.event_reviews_count+' surfaced events ('+(review.ambiguous_event_reviews_count||0)+' ambiguous multi-pair events). Review candidate and missed true pairs explicitly; absent events are not evaluated.';
     }catch(error){if(epoch===reconstructionRequestEpoch)clearReconstructionEvidence(String(error.message||error));}
+  }
+  async function scoreReconstructionSourceCohort(){
+    const root=document.querySelector('#reconstructionWorkbench');
+    if(!root||!reconstructionEvidence)return;
+    const button=root.querySelector('#reconstructionCohortScore');
+    const output=root.querySelector('#reconstructionCohortMetrics');
+    const epoch=reconstructionRequestEpoch;
+    const submittedLabels=root.querySelector('#reconstructionCohortLabels').value;
+    button.disabled=true;
+    output.textContent='Scoring source-event inventory…';
+    try{
+      const labels=JSON.parse(root.querySelector('#reconstructionCohortLabels').value);
+      if(!Array.isArray(labels)||labels.length<1||labels.length>4096)throw new Error('Provide 1–4096 labeled source events.');
+      await window.__owgAuthReady;
+      const response=await fetch('/v1/history/reconstruction-review/source-cohort-score',{
+        method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({evidence_sha256:reconstructionEvidence.evidence_sha256,source_labels:labels})});
+      const result=await response.json().catch(()=>({}));
+      if(epoch!==reconstructionRequestEpoch)return;
+      if(root.querySelector('#reconstructionCohortLabels').value!==submittedLabels){
+        output.textContent='Source labels changed while scoring. Submit the current inventory again.';
+        return;
+      }
+      if(!response.ok)throw new Error('Cohort scoring rejected (HTTP '+response.status+'). Reload evidence and check inventory.');
+      output.textContent=JSON.stringify(result,null,2)+'\\nIndependent labeling and exhaustive source coverage are NOT verified.';
+    }catch(error){if(epoch===reconstructionRequestEpoch)output.textContent=String(error.message||error);}
+    finally{if(epoch===reconstructionRequestEpoch)button.disabled=false;}
   }
   async function scoreReconstructionEvidence(){
     const root=document.querySelector('#reconstructionWorkbench');
@@ -304,6 +366,8 @@
         return;
       }
       if(!response.ok)throw new Error(result.detail||'Review scoring refused');
+      reconstructionScoredEnvelope=envelope;
+      root.querySelector('#reconstructionSave').disabled=false;
       const metrics=root.querySelector('#reconstructionMetrics');
       metrics.textContent=JSON.stringify({
         candidate_pair_precision:result.precision,candidate_pair_recall:result.recall,candidate_pair_f1:result.f1,
@@ -350,6 +414,37 @@
         if(reconstructionEvidence)root.querySelector('#reconstructionScore').disabled=false;
       }
     }
+  }
+
+  async function saveReconstructionLabels(){
+    const root=document.querySelector('#reconstructionWorkbench');
+    if(!root||!reconstructionScoredEnvelope)return;
+    const envelope=reconstructionScoredEnvelope;
+    const epoch=reconstructionRequestEpoch,labelEpoch=reconstructionLabelEpoch;
+    root.querySelector('#reconstructionSave').disabled=true;
+    try{
+      await window.__owgAuthReady;
+      const response=await fetch('/v1/history/reconstruction-review/save',{
+        method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(envelope)});
+      const data=await response.json().catch(()=>({}));
+      if(epoch!==reconstructionRequestEpoch)return;
+      if(labelEpoch!==reconstructionLabelEpoch)throw new Error('Labels changed during save; reload evidence.');
+      if(!response.ok)throw new Error(data.detail||'Save refused');
+      root.querySelector('#reconstructionStatus').textContent='Labels saved privately until '+data.expires_at+'. These are not confirmed cases.';
+    }catch(error){
+      if(epoch===reconstructionRequestEpoch)root.querySelector('#reconstructionStatus').textContent=String(error.message||error);
+    }
+  }
+  async function deleteReconstructionLabels(){
+    const root=document.querySelector('#reconstructionWorkbench');
+    clearReconstructionEvidence('Deleting saved labels…');
+    try{
+      await window.__owgAuthReady;
+      const response=await fetch('/v1/history/reconstruction-review/saved',{method:'DELETE',cache:'no-store'});
+      if(!response.ok)throw new Error('Deletion refused');
+      if(root)root.querySelector('#reconstructionStatus').textContent='Saved reviewer labels deleted. Reload evidence to review again.';
+    }catch(error){if(root)root.querySelector('#reconstructionStatus').textContent=String(error.message||error);}
   }
   document.addEventListener('DOMContentLoaded',reconstructionWorkbench);
 })();

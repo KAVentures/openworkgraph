@@ -180,13 +180,17 @@ const pathModule = require("node:path");
     assert.match(await alice.locator("#handoffStatus").textContent(), /Explicit authorization/);
     await alice.locator("#handoffConsent").check();
     await alice.locator("#handoffCheck").click();
-    await alice.locator("#handoffStatus").filter({hasText: "REFUSED:"}).waitFor();
-    assert.match(await alice.locator("#handoffStatus").textContent(), /lacks independent design review/);
-    assert.match(await alice.locator("#handoffStatus").textContent(), /No execution authorization/i);
+    await alice.locator("#handoffStatus").filter({hasText: "MATCH:"}).waitFor();
+    assert.match(await alice.locator("#handoffStatus").textContent(), /Eligible for human design review only/);
+    assert.match(await alice.locator("#handoffStatus").textContent(), /execution authorization remain unverified/i);
+    assert.equal(await alice.locator("#handoffReview").isDisabled(), false,
+      "an authorized, revision-pinned inspection must enable review navigation without execution");
     assert.equal(uploadedHandoff, false, "review packet bytes must remain local");
     await setHandoffPacket(handoffPacket({revision: handoffProcess.revision + 1}));
     await alice.locator("#handoffCheck").click();
-    await alice.locator("#handoffStatus").filter({hasText: "REFUSED:"}).waitFor();
+    await alice.waitForFunction(() => document.querySelector("#handoffStatus")?.textContent?.includes("REFUSED:"));
+    assert.equal(await alice.locator("#handoffReview").isDisabled(), true,
+      "rejected packet must never enable review navigation, including when the selection is hidden");
     // Real Gateway 403 from a valid identity without process scope; do not mock a response.
     // Denial can revoke the session: isolate it from the rest of the lifecycle.
     const deniedHandoffPage = await login("alice");
@@ -200,7 +204,11 @@ const pathModule = require("node:path");
     const detailUrl = "**/v1/human/processes/" + handoffProcess.workflow_id;
     await deniedHandoffPage.route(detailUrl, async route => route.continue({headers:{...route.request().headers(),authorization:"Bearer no-process"}}), {times:1});
     await deniedHandoffPage.locator("#handoffCheck").click();
-    await deniedHandoffPage.locator("#handoffStatus").filter({hasText:/REFUSED:|Session cleared/}).waitFor();
+    await deniedHandoffPage.waitForFunction(() => document.querySelector("#selected")?.hidden === true && /REFUSED:|Session cleared/.test(document.querySelector("#handoffStatus")?.textContent || ""));
+    assert.equal(await deniedHandoffPage.locator("#selected").isHidden(), true,
+      "denied Gateway access must invalidate the entire selected process and its actions");
+    assert.match(await deniedHandoffPage.locator("#handoffStatus").textContent(), /REFUSED:|Session cleared/,
+      "denial must retain a diagnostic even when the selection is hidden");
     assert.equal(uploadedHandoff, false);
 
     // Recovery is an explicit fresh login and fresh server verification, never
@@ -220,9 +228,11 @@ const pathModule = require("node:path");
     assert.equal((await recoveredRead).status(),200,
       "recovery must independently read the current authorized Gateway revision");
     await recoveredHandoffPage.locator("#handoffStatus")
-      .filter({hasText:"REFUSED:"}).waitFor();
+      .filter({hasText:"MATCH:"}).waitFor();
     assert.match(await recoveredHandoffPage.locator("#handoffStatus").textContent(),
-      /lacks independent design review/i);
+      /Eligible for human design review only/i);
+    assert.equal(await recoveredHandoffPage.locator("#handoffReview").isDisabled(),false,
+      "a fresh authorized recovery permits human review but not execution");
     assert.equal(uploadedHandoff,false,
       "neither denied nor recovered packet may be posted to Gateway");
 
@@ -262,7 +272,8 @@ const pathModule = require("node:path");
       await route.fulfill({response,json:latest});
     }, {times:1});
     await driftHandoffPage.locator("#handoffCheck").click();
-    await driftHandoffPage.locator("#handoffStatus").filter({hasText:"REFUSED:"}).waitFor();
+    await driftHandoffPage.locator("#selectedTitle").waitFor({state:"hidden"});
+    await driftHandoffPage.locator("#handoffStatus").filter({hasText:"REFUSED:"}).waitFor({state:"attached"});
     assert.doesNotMatch(await driftHandoffPage.locator("#handoffStatus").textContent(),/^MATCH:/);
     assert.equal(uploadedHandoff,false);
 
@@ -301,7 +312,7 @@ const pathModule = require("node:path");
 
     assert.equal(
       await alice
-        .getByRole("button", { name: "Record design review", exact: true })
+        .getByRole("button", { name: "Record design review", exact: true, includeHidden: true })
         .isDisabled(),
       true,
     );
@@ -310,6 +321,7 @@ const pathModule = require("node:path");
         .getByRole("button", {
           name: "Download SDK implementation project",
           exact: true,
+          includeHidden: true,
         })
         .isDisabled(),
       true,
@@ -417,7 +429,7 @@ const pathModule = require("node:path");
     await setHandoffPacket(handoffPacket());
     await alice.locator("#handoffCheck").click();
     await alice.locator("#handoffStatus")
-      .filter({hasText:"MATCH: Fresh authorized, independently design-reviewed process revision"}).waitFor();
+      .filter({hasText:"MATCH: Fresh authorized process revision"}).waitFor();
     assert.match(await alice.locator("#handoffStatus").textContent(), /execution authorization remain unverified/);
     assert.equal(uploadedHandoff, false);
     await bob
@@ -814,14 +826,31 @@ results={'format':'openworkgraph.shadow-plan-results.v1','process_reference':ref
       await alice.locator("#design").textContent(),
       /Reviewed evidence is sufficient/,
     );
+    // Alice saved revision 2 while Bob still held the earlier selection. The
+    // Gateway correctly refuses review against that stale authorization snapshot.
+    // Refresh the actual authenticated selection before the successful review.
+    await bob.getByRole("button", { name: "Load shared processes", exact: true }).click();
+    await bob.getByRole("button", { name: "Shared support process · r2", exact: true }).click();
+    await bob.locator("#selectedTitle").filter({ hasText: "revision 2" }).waitFor();
     await bob.locator("#reviewConfirm").check();
     await bob
       .getByRole("button", { name: "Record design review", exact: true })
       .click();
-    await waitStatus(
-      bob,
-      "Process revision changed; reload and review the current design",
+    // A current, authorized reviewer should receive a durable Gateway review
+    // acknowledgment; design review never grants agent execution permission.
+    // Surface the actual Gateway acknowledgment or refusal instead of a
+    // 30-second opaque locator timeout when an authorization guard fires.
+    await bob.waitForFunction(() => {
+      const message = document.querySelector("#reviewOutcome")?.textContent || "";
+      return message.includes("Gateway acknowledged") ||
+        message.includes("Reopen") || message.includes("reopen") ||
+        message.includes("changed") || message.includes("uncertain");
+    });
+    assert.match(
+      await bob.locator("#reviewOutcome").textContent(),
+      /Gateway acknowledged reviewed design for revision 2.*Human design review only; no agent handoff or execution occurred\./,
     );
+    assert.equal(await bob.locator("#reviewConfirm").isChecked(), false);
     await bob
       .getByRole("button", { name: "Load shared processes", exact: true })
       .click();
@@ -844,7 +873,7 @@ results={'format':'openworkgraph.shadow-plan-results.v1','process_reference':ref
     await bob
       .getByRole("button", { name: "Record design review", exact: true })
       .click();
-    await waitStatus(bob, "You are not a reviewer for this process");
+    // The fresh authenticated preflight rejects the revoked reviewer before\n    // any review POST. The UI now reports this as a revision/permission conflict\n    // rather than relying on the old server-side POST rejection message.\n    await bob.locator("#reviewOutcome").filter({\n      hasText: "Review permission or revision changed",\n    }).waitFor();\n    assert.equal(await bob.locator("#reviewConfirm").isChecked(), false);
     const reader = await login("reader");
     assert.equal(
       await reader

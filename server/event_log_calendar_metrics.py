@@ -20,6 +20,15 @@ class WaitingCalendarRequest(BaseModel):
     working_calendar:dict[str,Any] | None=None
 
 
+class CalendarHotspotRequest(WaitingCalendarRequest):
+    working_calendar: dict[str, Any]
+    source: str = Field(min_length=1, max_length=200)
+    destination: str = Field(min_length=1, max_length=200)
+    expected_evidence_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    after: str | None = Field(default=None, min_length=1, max_length=200)
+    limit: int = Field(default=50, ge=1, le=100)
+
+
 def digest(value):
     return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
 
@@ -31,7 +40,7 @@ def parse(spec):
     return parse_calendar(spec)
 
 
-def measure(conn,calendar):
+def prepare(conn, calendar):
     """seq2 is the existing case-projected interval table; it is never modified."""
     description=calendar.describe()
     config={k:description[k] for k in ('timezone','hours','holidays')}
@@ -87,6 +96,22 @@ def measure(conn,calendar):
         CASE WHEN prev_end IS NULL THEN NULL ELSE least(wait,greatest(0,clock_start-clock_previous)) END AS working_wait,
         CASE WHEN proc IS NULL THEN 0 ELSE least(busy,greatest(0,clock_end-clock_busy_start)) END AS working_busy
         FROM working_clock''')
+    return {**base, 'available': True, 'utc_opening_windows_sha256': digest(utc), 'utc_opening_windows': len(utc),
+            'observed_from_utc': lo.isoformat(), 'observed_until_utc': hi.isoformat()}
+
+
+def evidence_digest(conn, *, log_id, case_notion, clock):
+    # The multiset signature includes exact case keys and interval boundaries without
+    # returning raw case data or sorting the full interval table into memory.
+    total, parity = conn.execute('''SELECT sum(h::HUGEINT), bit_xor(h) FROM (
+        SELECT hash(case_id, activity, prev_activity, st, en, prev_end, proc, kind) AS h FROM seq2)''').fetchone()
+    return digest([log_id, case_notion, clock['calendar_sha256'], clock['utc_opening_windows_sha256'],
+                   clock['source_instances'], clock['case_filter_sha256'], clock['instance_settings_sha256'], total, parity])
+
+
+def summarize(conn, clock):
+    if not clock['available']:
+        return clock
     total,outside,excluded=conn.execute('''SELECT coalesce(sum(working_wait),0),
         count(*) FILTER(WHERE proc>working_proc+0.0000005),coalesce(sum(proc-working_proc),0) FROM working_seq''').fetchone()
     acts=conn.execute('''SELECT activity,count(*),count(working_proc),
@@ -103,8 +128,7 @@ def measure(conn,calendar):
     zero=conn.execute('''SELECT count(*) FROM (SELECT case_id FROM working_seq GROUP BY case_id
         HAVING count(proc)>0 AND max(clock_end)=min(clock_start))''').fetchone()[0]
     def stats(median,p90,mean):return {'median_seconds':median,'p90_seconds':p90,'mean_seconds':mean}
-    return {**base,'available':True,'utc_opening_windows_sha256':digest(utc),'utc_opening_windows':len(utc),
-        'observed_from_utc':lo.isoformat(),'observed_until_utc':hi.isoformat(),
+    return {**clock,
         'instances_crossing_closed_time':outside,'summed_instance_seconds_outside_calendar':excluded,
         'activities':[{'activity':a,'instances':n,'instances_with_processing_time':known,
             'processing':stats(p50,p90,mean),'waiting_before':{**stats(w50,w90,wmean),'instances':waited,'total_seconds':wsum},

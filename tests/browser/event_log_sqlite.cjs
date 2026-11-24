@@ -29,10 +29,53 @@ c.execute('CREATE TABLE customers (id INTEGER, name TEXT)');c.execute("INSERT IN
 c.execute('CREATE TABLE events (case_id TEXT, activity TEXT, at TEXT)')
 c.executemany('INSERT INTO events VALUES (?,?,?)',[(f'o{i}',a,f'2024-03-0{1+i}T0{8+j}:00:00Z') for i in range(5) for j,a in enumerate(['Create','Ship'])])
 c.commit()`,dbPath]);
-   await page.locator('#owgEventLogFile').setInputFiles({name:'shop.db',mimeType:'application/octet-stream',buffer:await fs.readFile(dbPath)});
+   const file=page.locator('#owgEventLogFile'),sheet=page.locator('#owgEventLogSheet');
+   const loadDatabase=async()=>file.setInputFiles({name:'shop.db',mimeType:'application/octet-stream',buffer:await fs.readFile(dbPath)});
+   const sqliteRoute=/\/sqlite-to-csv(?:\?|$)/;
+   async function delayConversion(pattern,action){
+     let release;
+     const gate=new Promise(resolve=>{release=resolve;});
+     await page.route(pattern,async route=>{
+       await gate;
+       await route.continue();
+     },{times:1});
+     const requested=page.waitForRequest(request=>pattern.test(request.url()));
+     await action();
+     const request=await requested;
+     return async()=>{
+       const response=page.waitForResponse(value=>value.url()===request.url());
+       release();await (await response).finished();
+       await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+     };
+   }
+   const finishOldFile=await delayConversion(sqliteRoute,loadDatabase);
+   await file.setInputFiles({name:'current.csv',mimeType:'text/csv',
+     buffer:Buffer.from('case,activity,time\nrecent,Current,2024-03-01T08:00:00Z\n')});
+   await page.locator('#owgEventLogStatus').filter({hasText:'File mapping ready.'}).waitFor();
+   await finishOldFile();
+   assert.equal(await file.evaluate(input=>input.files[0].name),'current.csv');
+   assert.equal(await sheet.isVisible(),false);
+   assert.equal(await page.locator('#owgEventLogTime').inputValue(),'time');
+
+   await loadDatabase();
    await page.locator('#owgEventLogStatus').filter({hasText:'Read table “customers” (1 of 2; choose another under Worksheet): 1 row.'}).waitFor();
-   await page.locator('#owgEventLogSheet').selectOption('events');
+   const finishOldTable=await delayConversion(/\/sqlite-to-csv\?table=events$/,()=>sheet.selectOption('events'));
+   await sheet.selectOption('customers');
+   await page.locator('#owgEventLogStatus').filter({hasText:'Read table “customers”'}).waitFor();
+   await finishOldTable();
+   assert.equal(await sheet.inputValue(),'customers');
+   assert.equal(await file.evaluate(input=>input.files[0].name),'shop-customers.csv');
+
+   await sheet.selectOption('events');
    await page.locator('#owgEventLogStatus').filter({hasText:'Read table “events” (2 of 2'}).waitFor();
+   await page.route(/\/sqlite-to-csv\?table=customers$/,route=>route.fulfill({
+     status:422,contentType:'application/json',body:JSON.stringify({detail:'Could not read this table.'})
+   }),{times:1});
+   await sheet.selectOption('customers');
+   await page.locator('#owgEventLogStatus').filter({hasText:'Still using “events”.'}).waitFor();
+   assert.equal(await sheet.inputValue(),'events');
+   assert.equal(await file.evaluate(input=>input.files[0].name),'shop-events.csv');
+   assert.equal(await page.locator('#owgEventLogConsent').isChecked(),false);
    await page.waitForFunction(()=>document.querySelector('#owgEventLogCase').options.length===3);
    await page.locator('#owgEventLogCase').selectOption('case_id');await page.locator('#owgEventLogActivity').selectOption('activity');
    await page.locator('#owgEventLogTime').selectOption('at');

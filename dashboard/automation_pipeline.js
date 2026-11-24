@@ -4,6 +4,7 @@
   const QUESTIONS=[['rules_based','Decisions follow clear rules'],['structured_inputs','Inputs are structured'],['process_stability','The process rarely changes'],['digital_inputs','Inputs arrive digitally'],['low_exception_rate','Exceptions are rare']];
   const STATE_LABELS={idea:'Idea',assessing:'Assessing',approved:'Approved',rejected:'Rejected',on_hold:'On hold',implemented:'Implemented'};
   const QUADRANTS={quick_win:'Quick win',major_project:'Major project',fill_in:'Fill-in',deprioritize:'Deprioritize'};
+  const PLANNING_FILTERS=[['owner','Owner','No owner'],['team','Team','No team'],['target_quarter','Target quarter','No target quarter']];
   const el=(tag,text,cls)=>{const node=document.createElement(tag);if(text!==undefined&&text!==null)node.textContent=String(text);if(cls)node.className=cls;return node;};
   const input=(id,type,placeholder)=>{const node=document.createElement('input');node.id=id;node.type=type||'text';if(placeholder)node.placeholder=placeholder;return node;};
   const field=(labelText,control)=>{const wrap=el('div');const label=el('label',labelText);label.htmlFor=control.id;wrap.append(label,control);return wrap;};
@@ -568,11 +569,13 @@
   }
 
   // View-only triage: never changes assessments, review state or stored order.
-  function portfolioView(ideas,{query='',quadrant='',sort='priority'}={}){
+  function portfolioView(ideas,{query='',quadrant='',sort='priority',planning={}}={}){
     const terms=query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
     const view=ideas.filter(idea=>{
       if(quadrant==='unassessed'?!!idea.score:quadrant&&idea.score?.quadrant!==quadrant)return false;
-      const text=[idea.title,idea.description,idea.source?.reference,idea.source?.kind].filter(Boolean).join(' ').toLocaleLowerCase();
+      if(PLANNING_FILTERS.some(([key])=>Object.hasOwn(planning,key)&&planning[key]!== (idea.planning?.[key]||'')))return false;
+      const text=[idea.title,idea.description,idea.source?.reference,idea.source?.kind,idea.planning?.owner,idea.planning?.team,idea.planning?.target_quarter]
+        .filter(Boolean).join(' ').toLocaleLowerCase();
       return terms.every(term=>text.includes(term));
     });
     const cmp=(a,b)=>a<b?-1:a>b?1:0;
@@ -586,6 +589,25 @@
       return result||cmp(a.idea_id,b.idea_id);
     });
     return view;
+  }
+
+  function shortlistRecord(ideas,scope,total,createdAt){
+    return {format:'openworkgraph.automation-portfolio-shortlist.v1',created_at:createdAt,scope,
+      selected_state_ideas:total,shortlist_ideas:ideas.length,
+      ideas:ideas.map(i=>({idea_id:i.idea_id,revision:i.revision,title:i.title,state:i.state,updated_at:i.updated_at,
+        owner:i.planning?.owner||null,team:i.planning?.team||null,target_quarter:i.planning?.target_quarter||null,
+        ease_score:i.score?.ease_score??null,modeled_hours_per_month:i.score?.modeled_hours_per_month??null,quadrant:i.score?.quadrant??null})),
+      execution_authorized:false,savings_claimed:false};
+  }
+
+  function shortlistCsv(record){
+    const columns=['idea_id','revision','title','state','owner','team','target_quarter','ease_score','modeled_hours_per_month','quadrant','updated_at'];
+    const cell=value=>{
+      const content=String(value??'');
+      const safe=typeof value==='string'&&/^(?:[\t\r\n]|[\s\ufeff]*[=+\-@])/.test(content)?"'"+content:content;
+      return /[",\r\n]/.test(safe)?'"'+safe.replace(/"/g,'""')+'"':safe;
+    };
+    return [columns,...record.ideas.map(row=>columns.map(key=>row[key]))].map(row=>row.map(cell).join(',')).join('\r\n')+'\r\n';
   }
 
   function comparisonRows(ideas){
@@ -627,13 +649,20 @@
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Idea',title),field('Details',description),field('Found in',source),field('Reference',reference),add);
     const filter=select('owgPipelineFilter',[['','All states'],...Object.entries(STATE_LABELS)]);
     const exportLink=button('Download state CSV','secondary');exportLink.id='owgPipelineCsv';
-    const tools=el('div',null,'row');tools.style.alignItems='end';const search=input('owgPipelineSearch','search','Title, details or source reference');search.maxLength=200;
+    const shortlistLink=button('Download shortlist CSV','secondary');shortlistLink.id='owgPipelineShortlistCsv';shortlistLink.disabled=true;
+    const shortlistJson=button('Download shortlist JSON','secondary');shortlistJson.id='owgPipelineShortlistJson';shortlistJson.disabled=true;
+    const tools=el('div',null,'row');tools.style.alignItems='end';const search=input('owgPipelineSearch','search','Title, source or planning labels');search.maxLength=200;
     const quadrant=select('owgPipelineQuadrant',[['','All priorities'],...Object.entries(QUADRANTS),['unassessed','Not assessed']]);
     const sort=select('owgPipelineSort',[['priority','Priority (default)'],['impact','Modeled hours: highest first'],['ease','Ease: highest first'],['recent','Recently updated'],['title','Title A–Z']]);
     const reset=button('Reset view','secondary');reset.id='owgPipelineReset';
     const reload=button('Refresh opportunities','secondary');reload.id='owgPipelineRefresh';
-    tools.append(field('Show',filter),field('Search ideas',search),field('Priority',quadrant),field('Sort',sort),reset,reload,exportLink);
-    exportLink.title='Exports every idea in the selected state; search and priority filters apply only to the table.';
+    tools.append(field('Show',filter),field('Search ideas',search),field('Priority',quadrant),field('Sort',sort),reset,reload,shortlistLink,shortlistJson,exportLink);
+    exportLink.title='Exports every idea in the selected state.';
+    const planningFilters=document.createElement('details');planningFilters.id='owgPipelinePlanningFilters';
+    const planningFields=el('div',null,'row');planningFilters.append(el('summary','Planning filters'),planningFields);
+    const planning=Object.fromEntries(PLANNING_FILTERS.map(([key,label])=>{
+      const control=select('owgPipelineView_'+key,[['','Any']]);planningFields.append(field(label,control));return [key,control];
+    }));
     const status=el('div',null,'muted');status.id='owgPipelineStatus';status.setAttribute('role','status');status.setAttribute('aria-live','polite');
     const counts=el('div',null,'muted');counts.id='owgPipelineCounts';
     const list=el('div');list.id='owgPipelineList';
@@ -842,10 +871,11 @@
       }catch(e){dependencyScheduleHost.replaceChildren(el('p',e.message,'muted'));}
       finally{dependencyScheduleButton.disabled=false;}
     };
-    card.append(row,resumeSection,auditSection,tools,status,counts,portfolioButton,portfolioHost,benefitOverlapButton,benefitOverlapHost,benefitReadinessButton,benefitReadinessHost,dependencyScheduleButton,dependencyScheduleHost,viewCount,list,comparison,detail);
+    card.append(row,resumeSection,auditSection,tools,planningFilters,status,counts,portfolioButton,portfolioHost,benefitOverlapButton,benefitOverlapHost,benefitReadinessButton,benefitReadinessHost,dependencyScheduleButton,dependencyScheduleHost,viewCount,list,comparison,detail);
     panel.appendChild(card);
 
     let latestIdeas=[],refreshGeneration=0,resumeGeneration=0,auditGeneration=0,auditPageIndex=0,auditAbort=null;
+    let loadedState=null,currentView=null;
     const compared=new Set();
     const auditPages=new Map();let auditBasis=null,triageGeneration=0;
     const pilotInspected=new Set(); // Ephemeral local inspection only; never approval or execution.
@@ -1193,11 +1223,27 @@
       if((auditPageIndex+1)*12>=auditEligible().length)return;
       auditPageIndex++;auditButton.onclick();
     };
+    function setPlanningOptions(){
+      for(const [key,,missing] of PLANNING_FILTERS){
+        const control=planning[key],selected=control.value;
+        const values=new Set(latestIdeas.map(i=>i.planning?.[key]||''));
+        const choices=[['','Any'],[JSON.stringify(''),missing],...[...values].filter(Boolean).sort((a,b)=>a.localeCompare(b)).map(value=>[JSON.stringify(value),value])];
+        if(selected&&!choices.some(([key])=>key===selected))choices.push([selected,JSON.parse(selected)+' (none in this state)']);
+        control.replaceChildren(...choices.map(([key,text])=>{const option=el('option',text);option.value=key;return option;}));
+        control.value=selected;
+      }
+    }
     function render(){
-      const ideas=portfolioView(latestIdeas,{query:search.value,quadrant:quadrant.value,sort:sort.value});
-      viewCount.textContent=ideas.length+' shown of '+latestIdeas.length+' in selected state. CSV includes the entire selected state.';
+      const selectedPlanning=Object.fromEntries(Object.entries(planning).filter(([,control])=>control.value!=='')
+        .map(([key,control])=>[key,JSON.parse(control.value)]));
+      const options={query:search.value.trim(),quadrant:quadrant.value,sort:sort.value,planning:selectedPlanning};
+      const ideas=portfolioView(latestIdeas,options);
+      currentView=loadedState===filter.value?{ideas,scope:{state:loadedState||null,...options},total:latestIdeas.length}:null;
+      shortlistLink.disabled=shortlistJson.disabled=!currentView||!ideas.length;
+      viewCount.textContent=currentView?ideas.length+' shown of '+latestIdeas.length+' in selected state. Shortlist downloads follow the current filters and sort.':
+        'Shortlist downloads are available after the selected state loads.';
       const wrap=el('div',null,'table-wrap');const t=el('table');const head=el('tr');
-      ['Compare','Idea','State','Ease','Modeled hours / month','Priority',''].forEach(h=>head.appendChild(el('th',h)));
+      ['Compare','Idea','State','Ease','Modeled hours / month','Priority','Planning',''].forEach(h=>head.appendChild(el('th',h)));
       const thead=el('thead');thead.appendChild(head);const body=el('tbody');
       ideas.forEach(idea=>{
         const tr=el('tr');const open=button('Open','secondary');open.setAttribute('aria-label','Open idea '+idea.title);open.onclick=()=>show(idea.idea_id).catch(e=>{status.textContent=e.message;});
@@ -1209,6 +1255,8 @@
         };
         const choiceCell=el('td');choiceCell.appendChild(choose);tr.appendChild(choiceCell);
         [idea.title,STATE_LABELS[idea.state],idea.score?idea.score.ease_score:'—',idea.score?idea.score.modeled_hours_per_month:'—',idea.score?QUADRANTS[idea.score.quadrant]:'Not assessed'].forEach(v=>tr.appendChild(el('td',v)));
+        const planningLabels=PLANNING_FILTERS.filter(([key])=>idea.planning?.[key]).map(([key,label])=>label+' · '+idea.planning[key]);
+        tr.appendChild(el('td',planningLabels.join(' / ')||'—'));
         const cell=el('td');cell.appendChild(open);tr.appendChild(cell);body.appendChild(tr);
       });
       t.append(thead,body);wrap.appendChild(t);list.replaceChildren(ideas.length?wrap:el('div','No ideas in this view.','muted'));
@@ -1216,7 +1264,7 @@
       const clear=button('Clear comparison','secondary');clear.id='owgPipelineCompareClear';clear.disabled=!selected.length;
       clear.onclick=()=>{compared.clear();render();};
       comparison.replaceChildren(el('h4','Compare opportunities'),
-        el('div',selected.length+' of 4 selected. Choose ideas in the table; search and priority filters may hide selected rows. Changing state clears ideas unavailable in that state. Values are from the last list refresh.','muted'),clear);
+        el('div',selected.length+' of 4 selected. View filters may hide selected rows. Changing state clears ideas unavailable in that state. Values are from the last list refresh.','muted'),clear);
       if(selected.length<2){comparison.appendChild(el('div','Select at least two ideas to compare their saved assessments.','muted'));return;}
       const compareWrap=el('div',null,'table-wrap'),compareTable=el('table');compareTable.id='owgPipelineComparisonTable';
       const compareHead=el('thead'),compareHeader=el('tr');
@@ -1233,11 +1281,14 @@
     async function refresh(){
       clearCumulative('Portfolio review cleared; explicitly check again after the list refresh.');
       const generation=++refreshGeneration;
-      const q=filter.value?'?state='+encodeURIComponent(filter.value):'';
+      const requested=filter.value;
+      loadedState=currentView=null;shortlistLink.disabled=shortlistJson.disabled=true;
+      viewCount.textContent='Shortlist downloads are available after the selected state loads.';
+      const q=requested?'?state='+encodeURIComponent(requested):'';
       const r=await (await api('/v1/automation-pipeline'+q)).json();
       if(generation!==refreshGeneration)return false;
       counts.textContent=Object.entries(r.counts).filter(([,n])=>n).map(([s,n])=>STATE_LABELS[s]+': '+n).join(' · ')||'No ideas yet.';
-      latestIdeas=r.ideas;
+      latestIdeas=r.ideas;loadedState=requested;setPlanningOptions();
       for(const id of compared)if(!latestIdeas.some(i=>i.idea_id===id))compared.delete(id);
       syncAuditPages();updateCumulative();render();return true;
     }
@@ -2400,16 +2451,33 @@
     search.oninput=()=>{clearCumulative('Search changed; review pages again.');render();};
     quadrant.onchange=()=>{clearCumulative('Priority filter changed; review pages again.');render();};
     sort.onchange=()=>{clearCumulative('Sort changed; review pages again.');render();};
-    reset.onclick=()=>{search.value='';quadrant.value='';sort.value='priority';filter.value='';refresh().catch(e=>{status.textContent=e.message;});};
-    reload.onclick=()=>refresh().then(current=>{if(current)status.textContent='Opportunities refreshed.';}).catch(e=>{status.textContent=e.message;});
+    for(const control of Object.values(planning))control.onchange=render;
+    reset.onclick=()=>{search.value='';quadrant.value='';sort.value='priority';filter.value='';
+      for(const control of Object.values(planning))control.value='';
+      refresh().catch(e=>{status.textContent=e.message;});};
+    reload.onclick=()=>{
+      status.textContent='Refreshing opportunities…';
+      refresh().then(current=>{if(current)status.textContent='Opportunities refreshed.';}).catch(e=>{status.textContent=e.message;});
+    };
     filter.onchange=()=>refresh().catch(e=>{status.textContent=e.message;});
+    function saveBlob(blob,name){
+      const url=URL.createObjectURL(blob);const link=el('a');link.href=url;link.download=name;
+      document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    }
+    function saveShortlist(format){
+      if(!currentView||currentView.scope.state!==(filter.value||null)||!currentView.ideas.length)return;
+      const record=shortlistRecord(currentView.ideas,currentView.scope,currentView.total,new Date().toISOString());
+      const json=format==='json';
+      saveBlob(new Blob([json?JSON.stringify(record,null,2):shortlistCsv(record)],{type:json?'application/json':'text/csv'}),'automation-shortlist.'+format);
+    }
+    shortlistLink.onclick=()=>saveShortlist('csv');shortlistJson.onclick=()=>saveShortlist('json');
     exportLink.onclick=async()=>{try{
       const blob=await (await api('/v1/automation-pipeline/export.csv'+(filter.value?'?state='+encodeURIComponent(filter.value):''))).blob();
-      const url=URL.createObjectURL(blob);const link=el('a');link.href=url;link.download='automation-pipeline.csv';document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+      saveBlob(blob,'automation-pipeline.csv');
     }catch(e){status.textContent=e.message;}};
     refresh().catch(e=>{status.textContent=e.message;});
   }
 
-  window.__owgPipelineModel={assessmentBody,portfolioView,comparisonRows,handoffReviewPacket,handoffDependencyReview,compareHandoffReviewPackets,compareRecordedProjects,compareProjectHandoffReadiness,portfolioHandoffRow,combinedPortfolioHandoffReview,portfolioReviewTriage,handoffInspectionWorklist,handoffInspectionSnapshotDigest,restoreHandoffInspectionKeys,pilotDispositionWorklist};
+  window.__owgPipelineModel={assessmentBody,portfolioView,shortlistRecord,shortlistCsv,comparisonRows,handoffReviewPacket,handoffDependencyReview,compareHandoffReviewPackets,compareRecordedProjects,compareProjectHandoffReadiness,portfolioHandoffRow,combinedPortfolioHandoffReview,portfolioReviewTriage,handoffInspectionWorklist,handoffInspectionSnapshotDigest,restoreHandoffInspectionKeys,pilotDispositionWorklist};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();

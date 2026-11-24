@@ -29,6 +29,7 @@ from . import event_log_workspace as workspace
 
 MAX_ROWS = 500
 MAX_SAVED = 50
+ANALYSIS_TEMPLATE_FORMAT = "openworkgraph.saved-analysis.v1"
 MAX_VARIANT_PATH_BYTES = 1024 * 1024
 MAX_VARIANT_TOTAL_BYTES = 64 * 1024 * 1024
 Name = Annotated[str, Field(min_length=1, max_length=200)]
@@ -571,8 +572,49 @@ def _unit(measure: Measure, coverage: list[dict[str, Any]], level: str) -> str |
     return {"duration_seconds": "seconds", "events": "events", "distinct_activities": "activities"}[measure.of]
 
 
-def run(log_id: str, spec: Any, *, control=None) -> dict[str, Any]:
+def case_group_digest(values: list[Any]) -> str:
+    """Identify exact dimension values, including nulls and complete variants."""
+    encoded = json.dumps(values, ensure_ascii=False, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _group_cases(conn, group: tuple[str, int], display_rows: list, columns: list[str],
+                 dimensions: list[str], dimension_params: list, where_sql: str,
+                 where_params: list, metric_columns: dict[str, str]) -> dict[str, Any]:
+    group_digest, offset = group
+    values = next((list(row[:len(dimensions)]) for row in display_rows
+                   if case_group_digest(list(row[:len(dimensions)])) == group_digest), None)
+    if values is None:
+        raise workspace.EventLogWorkspaceError("That group was not present in the reviewed result.")
+    aliases = [f"d{i}" for i in range(len(dimensions))]
+    dimension_select = [f"{sql} AS {alias}" for sql, alias in zip(dimensions, aliases)]
+    metrics = list(metric_columns.values())
+    projected = ["case_id", "duration", "events", "distinct_activities", *metrics, *dimension_select]
+    selection = f"WITH candidates AS (SELECT {', '.join(projected)} FROM qc{where_sql})"
+    predicates = "WHERE " + " AND ".join(f"{alias} IS NOT DISTINCT FROM ?" for alias in aliases) if aliases else ""
+    params = dimension_params + where_params + values
+    total = conn.execute(f"{selection} SELECT count(*) FROM candidates {predicates}", params).fetchone()[0]
+    page_size = 25
+    output = "case_id, duration, events, distinct_activities" + "".join(f", {metric}" for metric in metrics)
+    rows = conn.execute(
+        f"{selection} SELECT {output} FROM candidates {predicates} ORDER BY case_id LIMIT ? OFFSET ?",
+        params + [page_size, offset],
+    ).fetchall()
+    return {
+        "group": dict(zip(columns, values)),
+        "matching_cases": total,
+        "offset": offset,
+        "next_offset": offset + page_size if offset + page_size < total else None,
+        "cases": [{"case_id": case_id, "duration_seconds": duration, "event_count": events,
+                   "distinct_activities": distinct, "metrics": dict(zip(metric_columns, metric_values))}
+                  for case_id, duration, events, distinct, *metric_values in rows],
+    }
+
+
+def run(log_id: str, spec: Any, *, control=None, group_page: tuple[str, int] | None = None) -> dict[str, Any]:
     parsed = parse(spec)
+    if group_page is not None and parsed.level != "cases":
+        raise workspace.EventLogWorkspaceError("Review cases is available for case-level analyses.")
     try:
         import duckdb
     except ImportError:
@@ -664,6 +706,9 @@ def run(log_id: str, spec: Any, *, control=None) -> dict[str, Any]:
         tiebreak = "".join(f", d{i} NULLS LAST" for i in range(len(dimension_sql)))
         sql = f"SELECT {', '.join(select)} FROM {source}{where_sql}{group} ORDER BY {order}{tiebreak} LIMIT ?"
         rows = conn.execute(sql, dimension_params + params + [parsed.limit + 1]).fetchall()
+        if group_page is not None:
+            return _group_cases(conn, group_page, rows[:parsed.limit], list(parsed.dimensions),
+                                dimension_sql, dimension_params, where_sql, params, metric_columns)
         total = conn.execute(f"SELECT count(*), count(DISTINCT case_id) FROM {source}{where_sql}", params).fetchone()
         columns = list(parsed.dimensions) + [label for label, _ in measures]
         return {
@@ -702,28 +747,87 @@ def list_saved(log_id: str) -> dict[str, Any]:
             "max_saved": MAX_SAVED}
 
 
-def save(log_id: str, body: Any) -> dict[str, Any]:
+def _parse_saved(body: Any) -> SavedAnalysis:
     if not isinstance(body, dict):
         raise workspace.EventLogWorkspaceError("saved analysis must be an object with name and spec")
-    try:
-        saved = SavedAnalysis(name=body.get("name", ""), spec=parse(body.get("spec")))
-    except ValidationError:
-        raise workspace.EventLogWorkspaceError("saved analysis needs a name of 1–120 characters") from None
     if set(body) - {"name", "spec"}:
         raise workspace.EventLogWorkspaceError("saved analysis accepts only name and spec")
+    try:
+        return SavedAnalysis(name=body.get("name", ""), spec=parse(body.get("spec")))
+    except ValidationError:
+        raise workspace.EventLogWorkspaceError("saved analysis needs a name of 1–120 characters") from None
+
+
+def _store_saved(conn, log_id: str, saved: SavedAnalysis, count: int) -> dict[str, Any]:
+    if count >= MAX_SAVED:
+        raise workspace.EventLogWorkspaceError(f"a log can hold at most {MAX_SAVED} saved analyses")
+    analysis_id = "ana_" + secrets.token_hex(8)
+    created = datetime.now(timezone.utc).replace(tzinfo=None)
+    conn.execute("INSERT INTO saved_analyses VALUES (?, ?, ?, ?)",
+                 [log_id, analysis_id, created, saved.model_dump_json()])
+    return {"analysis_id": analysis_id, "created_at": created.isoformat() + "Z", **saved.model_dump()}
+
+
+def save(log_id: str, body: Any) -> dict[str, Any]:
+    saved = _parse_saved(body)
     with workspace._LOCK:
         conn = workspace._connect()
         try:
             workspace._check_log(conn, log_id)
-            if conn.execute("SELECT count(*) FROM saved_analyses WHERE log_id = ?", [log_id]).fetchone()[0] >= MAX_SAVED:
-                raise workspace.EventLogWorkspaceError(f"a log can hold at most {MAX_SAVED} saved analyses")
-            analysis_id = "ana_" + secrets.token_hex(8)
-            created = datetime.now(timezone.utc).replace(tzinfo=None)
-            conn.execute("INSERT INTO saved_analyses VALUES (?, ?, ?, ?)",
-                         [log_id, analysis_id, created, saved.model_dump_json()])
+            count = conn.execute("SELECT count(*) FROM saved_analyses WHERE log_id = ?", [log_id]).fetchone()[0]
+            return _store_saved(conn, log_id, saved, count)
         finally:
             conn.close()
-    return {"analysis_id": analysis_id, "created_at": created.isoformat() + "Z", **saved.model_dump()}
+
+
+def _pin_case_type(saved: SavedAnalysis, notion: str) -> SavedAnalysis:
+    return saved.model_copy(update={"spec": saved.spec.model_copy(update={"case_type": notion})})
+
+
+def export_template(log_id: str, analysis_id: str) -> dict[str, Any]:
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            row = conn.execute("SELECT definition FROM saved_analyses WHERE log_id = ? AND analysis_id = ?",
+                               [log_id, analysis_id]).fetchone()
+            if row is None:
+                raise workspace.EventLogWorkspaceError("unknown saved analysis")
+            saved = SavedAnalysis.model_validate_json(row[0])
+            notion = workspace._case_type(conn, log_id, saved.spec.case_type)
+            return {"format": ANALYSIS_TEMPLATE_FORMAT, "analysis": _pin_case_type(saved, notion).model_dump()}
+        finally:
+            conn.close()
+
+
+def use_template(log_id: str, document: Any, *, preview: bool) -> dict[str, Any]:
+    if (not isinstance(document, dict) or set(document) != {"format", "analysis"}
+            or document["format"] != ANALYSIS_TEMPLATE_FORMAT):
+        raise workspace.EventLogWorkspaceError("expected an OpenWorkGraph saved analysis file")
+    saved = _parse_saved(document["analysis"])
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            notion = workspace._case_type(conn, log_id, saved.spec.case_type)
+            saved = _pin_case_type(saved, notion)
+            prior = conn.execute("SELECT analysis_id, definition FROM saved_analyses WHERE log_id = ?",
+                                 [log_id]).fetchall()
+            default = workspace._case_type(conn, log_id, None) if prior else notion
+            duplicate = None
+            for analysis_id, definition in prior:
+                existing = SavedAnalysis.model_validate_json(definition)
+                if _pin_case_type(existing, existing.spec.case_type or default) == saved:
+                    duplicate = analysis_id
+                    break
+            if preview:
+                return {"analysis": saved.model_dump(), "duplicate": duplicate is not None,
+                        "available_slots": max(0, MAX_SAVED - len(prior))}
+            if duplicate is not None:
+                return {"added": False, "analysis_id": duplicate}
+            return {"added": True, **_store_saved(conn, log_id, saved, len(prior))}
+        finally:
+            conn.close()
 
 
 def delete_saved(log_id: str, analysis_id: str) -> dict[str, Any]:
@@ -806,4 +910,5 @@ def delete_metric(log_id: str, metric_id: str) -> dict[str, Any]:
     return {"deleted": True, "metric_id": metric_id}
 
 
-__all__ = ["delete_metric", "delete_saved", "list_metrics", "list_saved", "parse", "run", "save", "save_metric"]
+__all__ = ["delete_metric", "delete_saved", "export_template", "list_metrics", "list_saved", "parse", "run", "save",
+           "save_metric", "use_template"]

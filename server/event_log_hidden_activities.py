@@ -105,11 +105,15 @@ def set_hidden(log_id: str, spec: Any) -> dict[str, Any]:
     return _with_conn(log_id, run)
 
 
+def hidden_names(conn, log_id: str) -> list[str]:
+    _ensure(conn)
+    return [name for (name,) in conn.execute(
+        "SELECT activity FROM hidden_activities WHERE log_id = ? ORDER BY 1", [log_id]).fetchall()]
+
+
 def apply_to_case_events(conn, log_id: str) -> dict[str, Any] | None:
     """Remove hidden activities from the request's ``ce`` table, if any; describe what was done."""
-    _ensure(conn)
-    names = [a for (a,) in conn.execute("SELECT activity FROM hidden_activities WHERE log_id = ? ORDER BY 1",
-                                        [log_id]).fetchall()]
+    names = hidden_names(conn, log_id)
     if not names:
         return None
     events, cases = conn.execute("SELECT count(*), count(DISTINCT case_id) FROM ce").fetchone()

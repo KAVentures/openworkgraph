@@ -122,7 +122,24 @@ header, optional `other_headers` with columns for up to three other delimiters,
 and optional `preferred_log_id`. Each match includes its
 `missing_attribute_columns`.
 
+### Preview a CSV mapping
+
+Use **Preview CSV mapping** before confirming storage. OWG shows the accepted
+and rejected rows in the sample, a few normalized events, and any timestamp
+offset assumptions. The preview uses the import parser in isolation and
+checks up to 512 KiB and 2,000 complete records. Source-ID checks apply within
+that sample. The full import validates the entire file and checks existing
+identities when appending.
+
+An import or append runs one at a time. You can prepare another file while a
+save is running. The completed save keeps newer file and mapping choices in
+the form.
+
 ### SQLite database files
+
+When switching files or tables, the import form keeps the latest selection.
+If a table cannot be read, the last successfully converted table stays in the
+form for review.
 
 A `.sqlite`, `.sqlite3` or `.db` file chosen for import is read like an Excel workbook (below): its tables
 take the place of worksheets (the first table by name is read first; pick another under
@@ -350,7 +367,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `POST /v1/event-logs/xlsx-to-csv?sheet=...` | Convert one worksheet of the `.xlsx` request body to CSV (`csv`, `sheet`, `sheets`, `rows`, `columns`, `date_columns`, `dates_have_no_offset`). Nothing is stored. |
 | `POST /v1/event-logs/{log_id}/delete` | Delete the log and every row that belongs to it. |
 | `GET`/`POST /v1/event-logs/{log_id}/expiry` (`{"delete_after": ISO time \| null}`) | Read, set or clear the date after which the log is deleted automatically (below). |
-| `POST /v1/event-logs/{log_id}/export/matching-cases` | Download complete matching cases. Body contains `cohort` and optional `case_type`. Query `format` is `csv` (default), `csv-review`, `xes`, or `xes-attributes`. |
+| `POST /v1/event-logs/{log_id}/export/matching-cases` | Download matching cases. Body contains `cohort` and optional `case_id`, `include_unfiltered`, `case_type`, `events_from` and `events_before`. Query `format` is `csv` (default), `csv-review`, `xes`, `xes-attributes`, `ocel`, `ocelxml`, `sourcecsv`, or `sourcecsv-review`. Source-ID formats require the `source_case` notion. |
 | `POST /v1/event-logs/{log_id}/derive` | Save the cases matching a filter as a new log (below). |
 | `POST /v1/event-logs/combine` | Combine 2 to 10 saved logs into a new log (below). |
 | `GET /v1/event-logs/{log_id}/quality` | Stored quality and mapping reports per import and append, plus current whole-log diagnostics (below). |
@@ -363,6 +380,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs/{log_id}/object-flattening` | Per object type, what analysing it as the case leaves out (deficiency), copies (convergence) and turns into apparent repetition (divergence), plus qualifiers. |
 | `POST /v1/event-logs/{log_id}/object-constraints` | Rules across object types: objects per event, related objects per object, and an activity only after a required activity of every related object. |
 | `POST /v1/event-logs/{log_id}/object-process-model/discovery`, `…/conformance` | Object-centric process model: a lifecycle model per object type and single or variable arcs, discovered from the log or edited, with each object's lifecycle replayed and each event checked against its arcs. See [OBJECT_CENTRIC_PROCESS_MODELS.md](OBJECT_CENTRIC_PROCESS_MODELS.md). |
+| `POST /v1/event-logs/{log_id}/object-process-model/preview` | Validate a model JSON definition and its object types against a destination log before using it for conformance. |
 | `GET /v1/event-log-domain-packs`, `GET/POST/DELETE /v1/event-logs/{log_id}/domain-packs/…` | Versioned domain packs (order to cash): map the pack's roles to the log's names, install with version and parameters, run its metrics, rules and reference model as one report. See [DOMAIN_PACKS.md](DOMAIN_PACKS.md). |
 | `GET /v1/event-logs/{log_id}/object-attributes` | Per object type and attribute, how timed values change and how many event links happened while another value than the stored one held; `object_id` adds one object's timeline. |
 | `GET /v1/event-logs/{log_id}/variants` | Most frequent variants with share and median duration. |
@@ -678,9 +696,14 @@ The response gives:
 of cases can be compared with the rest. Repeated executions are not verified
 rework.
 
+Open **Price another activity** to search for an activity outside the suggested
+list or enter an exact label. The editor keeps prices for labels that have yet
+to appear in the log. Use **Show priced activities only** to review overrides
+without scrolling through the suggestions.
+
 **Saved prices.** **Save prices** keeps the model (currency, activity prices,
 default price and hourly cost) with the log. Next time, the dashboard fills the
-prices in. The HTML report, and its saved and scheduled copies, then include a
+prices in. **Load saved prices** restores the saved model to the editor. The HTML report, and its saved and scheduled copies, then include a
 **Process cost** section, which shows:
 
 * the total cost;
@@ -700,7 +723,22 @@ The section uses the report's case filter. API:
 A log keeps one model. It is deleted with the log and not copied when matching
 cases are saved as a new log.
 
+**Reuse a model.** Open **Transfer cost model** and download the editor's
+prices as JSON. In the destination log, choose the JSON file to validate its
+currency and prices, then select **Load previewed prices** to fill the editor.
+Select **Calculate cost** to try the model and **Save prices** to keep it with
+the destination log. The file contains only the currency, activity labels,
+and prices. Its envelope is
+`{"format":"openworkgraph.event-log-cost-model.v1","model":{...}}`.
+`POST /v1/event-logs/{log_id}/cost-model/preview` validates the file and
+returns the normalized model without changing saved prices.
+
 ### Cohort benchmark
+
+Select a count to open the cases behind either cohort's totals, rework, SLA breaches,
+activities, or exact variants. The side-by-side process maps offer the same review for
+adjacent paths. A case breaches the SLA when its recorded elapsed time is strictly
+greater than the configured threshold.
 
 ```json
 {"cohorts": [{"label": "Q1", "started_from": "2024-01-01T00:00:00Z", "started_before": "2024-04-01T00:00:00Z"},
@@ -872,6 +910,20 @@ log and case notion shown above the file picker. The simulator recalibrates
 from the current data. Explicit overrides stay in the submitted inputs, and
 omitted values use the current calibration. The new report identifies the log
 and case notion used for the run.
+
+Use **Compare staffing alternatives** after loading measured values to compare
+two to four proposals against the same calibration and seed. The table shows
+median and 90th percentile cycle time, completions, and the activities with
+the longest mean waits. The table withholds deltas when overloaded queues or
+incomplete runs invalidate the comparison.
+
+**Download comparison inputs** saves the submitted settings. **Download
+comparison report** also includes the results, source log and case notion,
+calibration digest, and reasons for withholding deltas. Open either file
+under **Rerun a saved staffing comparison**. Review or edit the settings
+and run the comparison explicitly. OWG recalibrates from the selected
+log and case notion, so a different log or a later revision may yield
+different results.
 
 Calibration selects complete paths of at most 100 events. It first counts case
 lengths, excludes longer cases whole, then keeps cases whose activities fit
@@ -1297,6 +1349,15 @@ The dashboard-only `POST /v1/event-logs/{log_id}/case-table/export` accepts
 
 ## Case tags
 
+**Preview tag selection** shows how many cases match, which already have the tag, and a sample
+of their current notes. A previewed assignment checks the same membership and existing notes
+before applying. Reopen the preview if they have changed. From **Show cases**, use **Edit note**
+to correct or clear a note while keeping the original assignment timestamp.
+
+`POST /v1/event-logs/{log_id}/case-tags/preview` takes the same selection as the add route.
+Pass its `selection_sha256` as `expected_selection_sha256` when applying. `POST .../case-tags/note`
+takes the tag, literal `case_id`, new `note`, `expected_note` and `expected_tagged_at` from the list.
+
 While investigating, tag cases such as "checked", "root cause: missing PO" or
 "exclude: test data", and come back to them. A tag is a label of 1–60
 characters with an optional note (up to 500 characters). Tags are stored on this
@@ -1573,6 +1634,12 @@ captures the case notion and filter. Running it later uses that saved scope,
 and loading it for editing keeps the saved filter available in **Cases to
 analyse**.
 
+Use **Download definition** beside a saved analysis to export its specification,
+including inline metrics and the case notion. In another log, select the JSON
+file under **Import an analysis definition**, review the scope, and save it.
+The destination must have the same case notion. Import skips an identical
+saved definition and leaves the analysis ready to run.
+
 `POST /v1/event-logs/{log_id}/analysis` runs a typed analysis: a bounded, no-SQL counterpart
 to Celonis PQL-style custom analyses. You choose the parts from fixed lists; nothing you type
 is executed as a query. Attribute names and values are passed as parameters.
@@ -1615,6 +1682,13 @@ Saved analyses are stored with the log and deleted with it, at most 50 per log:
 `GET|POST /v1/event-logs/{log_id}/analyses` and `POST …/analyses/{analysis_id}/delete`.
 The dashboard's "Build an analysis" section runs, exports (JSON and CSV), saves and re-runs
 them.
+
+For a case-level result, select **Review cases** on a result row to see its
+matching cases, their durations, event counts, and any defined metric values.
+The case list uses the original filters, dimensions, and case notion. Open a
+case to inspect its retained events. If the log, applied activity mapping,
+hidden activities, or case tags have changed, rerun the analysis before
+opening the group.
 
 ### Case metrics
 
@@ -1660,12 +1734,14 @@ retains original activity names and includes events collapsed by the mapping.
 Choose exact CSV for interchange, spreadsheet review CSV for formula-like cells,
 or XES for one trace per selected case. **XES with retained attributes** includes
 static trace and event values. The XES projection follows the chosen case notion.
-Use OCEL when you need timed object attributes or relationships. An empty filter
-or a filter with no matches produces an error.
+Choose **OCEL 2.0 JSON** or **OCEL 2.0 XML** to include the objects linked to
+the selected events, their timed attributes, and supplied relationships between
+those objects. Set a case filter, a time window, or both. With a time window, the download retains events
+at or after the start and strictly before the end. Either bound can be left blank.
 
-Choose **Preview copy** to see how many cases, events and linked objects the
-current case selection and optional time window would retain. Saving a copy
-recalculates the selection against the source log.
+Choose **Preview copy** to see how many cases, events, linked objects and
+supplied object relationships the current selection would retain. Saving a
+copy recalculates the selection against the source log.
 
 **Save or export matching cases → Save as new log** (after **Analyse**), or
 `POST /v1/event-logs/{log_id}/derive` with
@@ -1678,10 +1754,10 @@ under the chosen case notion and the source's activity mapping.
   so a case keeps its full history. The objects those events are linked to are
   copied too, with their links and timed attribute values. In an
   object-centric log, an event linked to a matching case also brings its other
-  objects, which keep only the copied events.
+  objects, which keep only the copied events. A supplied object relationship is
+  copied when both endpoints are retained. It keeps its direction and qualifier.
 * **What is not copied:** activity mapping, saved filters and analyses,
-  signals, domain packs, source-identity keys, object-to-object relationships
-  and quality reports. The new log starts without them.
+  signals, domain packs, source-identity keys and quality reports.
 * **The source log:** unchanged.
 * **Time window (optional):** `events_from` and/or `events_before` (times with
   a UTC offset; the dashboard's *Only events from / before* fields) trim the
@@ -1799,8 +1875,12 @@ hand.
   literally; wildcard characters in the pattern retain their usual meaning.
   Path separators and control characters are not permitted in the pattern,
   and subfolders are not read.
-- The mapping is copied when the feed is created. A changed mapping needs a
-  new feed.
+- The feed starts with a copy of the CSV mapping. Use **Review mapping** to
+  compare it with the latest manual CSV import or append, then **Use latest
+  mapping** to update the existing feed. The new settings apply to future
+  manual and scheduled runs. A run in progress stops before its next append
+  if the mapping changes. Existing file history and events stay with the feed.
+  Mappings with supplied source-event IDs are ineligible for this update.
 - A file is appended once, identified by the SHA-256 of its content. A renamed
   copy is not appended again; an edited file counts as new.
 - Files modified in the last minute are left for the next run, in case the
@@ -1847,6 +1927,8 @@ hand.
 | `POST /v1/event-logs/feeds/{feed_id}/retry-failed` | Retry only previously failed, unchanged settled content; owner session and local-storage confirmation required. |
 | `GET /v1/event-logs/feeds/{feed_id}/failures?after=...` | Page up to 50 outstanding failed content hashes. |
 | `POST /v1/event-logs/feeds/{feed_id}/retry-failed/{sha256}` | Retry one outstanding hash; owner session and local-storage confirmation required. |
+| `GET /v1/event-logs/feeds/{feed_id}/mapping` | Review the current feed mapping and the latest manual CSV mapping. |
+| `POST /v1/event-logs/feeds/{feed_id}/mapping` | Apply the reviewed mapping by its `mapping_revision` and `mapping_sha256`. Requires local-storage confirmation. |
 | `GET /v1/event-logs/feeds/{feed_id}/preview` | Inspect matching files and return the content hash for each eligible new file. |
 | `POST /v1/event-logs/feeds/{feed_id}/append-file` | Append one verified file by `name` and `sha256`. Requires `X-OWG-Local-Storage-Confirmed: true`. |
 | `POST /v1/event-logs/feeds/{feed_id}/run` | Append new files now. Requires `X-OWG-Local-Storage-Confirmed: true`. |
@@ -2116,6 +2198,16 @@ body. It restricts the returned prediction rows while keeping the comparison pop
 backtest based on the selected cohort. Lookups report `case_selection` as `predicted`, `completed`,
 `unsupported`, or `not_in_selection`.
 
+Use **Rank estimates by** to prioritize open time, time since the latest recorded event, estimated
+remaining time or estimated likelihood of the selected outcome. **Maximum estimates shown** controls
+the dashboard shortlist (25–200). JSON and CSV download the displayed estimates and their coverage.
+The JSON also includes the selected case filter, estimator settings and backtest.
+
+The optional `rank_by` query parameter accepts `automatic`, `age`, `idle`, `remaining` or `outcome`.
+Automatic ranks by estimated outcome likelihood when an outcome is supplied and estimated remaining
+time otherwise. `ranked_by` reports the effective choice. Ranking does not change the compared cases,
+their estimates or the backtest. `outcome` requires an outcome in the request body.
+
 ```json
 {"end_activities": ["Close", "Cancel"],
  "outcome": {"kind": "duration_over", "seconds": 172800},
@@ -2195,6 +2287,16 @@ default 2). When fewer than `min_support` completed-case steps (default 5) were
 in that state, it backs off to a shorter history and finally to all
 transitions. Each prediction says which history it used and how many steps
 support it.
+
+Use **Inspect training observations** next to an estimate to see the completed-case steps
+that matched its history and what happened next. A completed case can contribute several
+steps. A terminal step records a case ending. Open any listed case to review its event history.
+
+The dashboard prediction response includes `matched_history` per case and an
+`evidence_snapshot`. To use `POST /v1/event-logs/{log_id}/next-activity/training-evidence`,
+send the original `settings` without `case_id`, the predicted `case_id`, and the response
+digest as `expected_snapshot`. The optional page `limit` is 1–100, default 50. Pass
+`next_after` as `after` to continue. Run the prediction again if the selected histories change.
 
 Optional settings:
 
@@ -2585,6 +2687,11 @@ applies follower rules, case-attribute values, numeric ranges, endpoints and cas
 when newer exports were appended after it was saved and names any activities it uses that the log
 does not contain. Saved filters are deleted with the log and never change events.
 
+Use **Preview** to check the current match count and see up to five case keys
+before applying a saved filter. The preview uses the saved case notion, or the
+current case notion for an older filter. Activity availability reflects hidden
+activities and the active mapping.
+
 Use **Export JSON** on a saved filter and **Import a filter from another log**
 on the destination. The JSON carries the filter name, rules and saved case
 notion. Import validates the rules and case notion against the destination log.
@@ -2902,6 +3009,14 @@ takes the due-date settings and case filter from the summary, plus `due_group`. 
 Case filters choose which cases appear. Open cases are evaluated at the latest event in the
 selected case notion, so filtering to cases that are still open preserves the observation cutoff.
 
+Set **As of (UTC, optional)** to reconstruct a deadline report using only events at or before that
+time. Event-based filters and completion checks use that truncated history. For attribute deadlines,
+the report uses values recorded on events by the cutoff. Joined or object-level attributes lack an
+observation timestamp and remain available in the default current report. Case tags and case-level
+filter attributes reflect the current workspace. Each case page uses the report's cutoff, and the
+linked case history shows the full retained record. JSON and CSV downloads contain aggregate scores
+and the assessment time. Pass an offset-qualified `as_of` to either dashboard due-date API.
+
 **Due dates** checks whether the step that matters, such as *Pay invoice* or *Ship order*, happened
 by the date it was due, as UiPath Process Mining's due dates and Celonis's on-time views do. The due
 date is either an attribute (a joined case attribute, or else the first value of an event attribute in
@@ -3047,6 +3162,11 @@ not say which model is right. Up to eight levels can be scored at once.
 
 `GET /v1/event-logs/{log_id}/model-quality?levels=0,0.1,0.2&activities=1` plus the case-filter
 parameters. Agents with access to a shared log use `get_process_model_quality` (aggregates only).
+
+Choose **Download PNML** on a score row to keep the exact Petri net used for that score.
+**Replay scored net** opens that net in the Petri net check against the current retained case
+selection. JSON and CSV score reports include coverage counts and PNML digests. On the dashboard
+API, `include_nets=true` adds the PNML and its SHA-256 digest per row and the case filter used.
 
 ## Footprints
 
@@ -3233,6 +3353,15 @@ far too long, or suspiciously little time, overall between two points.
 - The profile is learned from the same cases it checks, so a few extreme cases widen it; read the
   results as timings to review, not errors. The case filter applies.
 
+Set **Baseline cutoff (UTC)** to check later cases against an earlier period.
+OWG learns from cases whose last recorded event is before the cutoff, then checks
+cases whose first recorded event is at or after it. It counts cases spanning the
+cutoff separately and excludes them from both periods. The result shows how many
+later cases have a checked pair and how many later pair occurrences lack a usable
+baseline. Both periods use the active case filters and case notion. An optional
+`baseline_cutoff` query parameter accepts a timezone-qualified ISO timestamp
+on both the summary and the case review endpoints.
+
 **Browse all deviating cases** opens the complete set of flagged cases. **Inspect cases** on
 a pair limits the review to that pair. Either review can show slower or faster deviations and
 open complete event histories.
@@ -3266,8 +3395,11 @@ A numeric condition with `includes_non_numeric` also matches unusable numbers.
    - the latest non-empty value of every event attribute recorded on the case at or before the
      decision event (`event.*`).
 
-   Values recorded after the decision are never used. Case attributes carry no time, so they may
-   have been set later; the result says so.
+   Use **Timed event attributes only** to exclude untimed case attributes.
+   This setting keeps event values recorded at or before the decision. The
+   combined setting also uses case attributes, which can have been set later.
+   Pass `include_case_attributes=false` to the decision-rules endpoint for
+   the event-only mode.
 3. **Rules.** A CART decision tree (Gini impurity, depth 1–4, default 3) is learned on about 70% of
    the cases and scored on the rest.
    - The split is by a hash of the case id, so it is repeatable and keeps each case on one side.
@@ -3275,6 +3407,11 @@ A numeric condition with `includes_non_numeric` also matches unusable numbers.
      are split on their 30 most common values.
    - Each leaf is a rule. It shows its conditions, the usual next activity, its confidence and the
      number of training occurrences.
+   - **Held-out results by branch** lists recorded and predicted occurrences,
+     correct predictions, precision, and recall. Precision is undefined without
+     predictions for that branch. Recall is undefined without recorded holdout
+     occurrences. **Held-out branch mix-ups** shows which recorded branches were
+     predicted as another branch and how often.
 
 The result also gives:
 - the held-out accuracy, next to the accuracy of always predicting the most common branch;
@@ -3298,6 +3435,10 @@ global case filter applies.
 
 These routes need a dashboard session. Agents can read the aggregates
 through `get_process_decision_rules` (see PROCESS_INTELLIGENCE_FOR_AGENTS.md).
+
+### Excel event-log export
+
+Dashboard owners can download a saved log as an Excel workbook (`GET /v1/event-logs/{log_id}/events.xlsx`). The workbook preserves case IDs, activities, timestamps, and resources as literal text cells, with a frozen header and filter. It is a CSV-equivalent view rather than an OCEL relationship export.
 
 ### Rework and loop case evidence
 

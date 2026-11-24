@@ -3287,7 +3287,10 @@ async def read_local_bound_provider_review(request: Request, response: Response)
         async def receive():
             return {"type": "http.request", "body": raw, "more_body": False}
         replay_scope = dict(request.scope)
-        replay_scope["headers"] = list(request.scope.get("headers", []))
+        replay_scope["headers"] = [
+            (key, value) for key, value in request.scope.get("headers", [])
+            if key.lower() != b"content-type"
+        ] + [(b"content-type", b"application/json")]
         return await route(Request(replay_scope, receive=receive), Response())
 
     review_fields = {key: payload[key] for key in (
@@ -3351,4 +3354,278 @@ async def read_local_bound_provider_review(request: Request, response: Response)
         "customer_outcome": "unknown",
         "agent_execution_authorized": False,
         "cross_store_atomic_snapshot": False,
+    }
+
+
+@router.post("/v1/open-work/declarations/human-outcomes/bound-provider-event")
+async def read_local_bound_provider_event(request: Request, response: Response):
+    """Operator-approved exact provider event read; no agent causality assertion.
+
+    The event and correlation are operator-supplied identifiers, NOT proof that
+    the retained run generated the event. No receipt is persisted or agent
+    execution granted until a separate trusted run-to-event binding exists.
+    """
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_historical_review", "confirm_run_comparison",
+        "confirm_source_verification", "max_cases", "deployment_id",
+        "run_id", "provider_object_id", "provider_operation",
+        "provider_correlation_id", "provider_event_id",
+    })
+    if any(payload[k] is not True for k in (
+        "confirm_historical_review", "confirm_run_comparison",
+        "confirm_source_verification",
+    )):
+        raise HTTPException(403, "explicit run review and provider read approval required")
+
+    async def review():
+        raw = json.dumps({key: payload[key] for key in (
+            "work_item_ref", "expected_revision", "expected_edit_token",
+            "confirm_historical_review", "confirm_run_comparison", "max_cases",
+            "deployment_id", "run_id",
+        )}, separators=(",", ":")).encode("utf-8")
+        async def receive():
+            return {"type": "http.request", "body": raw, "more_body": False}
+        return await read_local_combined_case_review(
+            Request({**request.scope, "headers": [
+                (key, value) for key, value in request.scope.get("headers", [])
+                if key.lower() != b"content-type"
+            ] + [(b"content-type", b"application/json")]}, receive=receive), Response(),
+        )
+
+    # Full actor-scoped retained run, reviewed declaration and dependency
+    # admission precedes any network access.
+    before = await review()
+    # Show retained attempt evidence alongside the independent provider observation.
+    # This is a separate fully admitted actor/tenant-scoped read, never a
+    # correlation assertion: journal rows remain untrusted until an independent
+    # run-to-event provenance binding is established.
+    async def retained_attempt_review():
+        raw = json.dumps({key: payload[key] for key in (
+            "work_item_ref", "expected_revision", "expected_edit_token",
+            "confirm_historical_review", "confirm_run_comparison", "max_cases",
+            "deployment_id", "run_id",
+        )}, separators=(",", ":")).encode("utf-8")
+        async def receive():
+            return {"type": "http.request", "body": raw, "more_body": False}
+        return await read_local_bound_attempt_receipts(
+            Request({**request.scope, "headers": [
+                (key, value) for key, value in request.scope.get("headers", [])
+                if key.lower() != b"content-type"
+            ] + [(b"content-type", b"application/json")]}, receive=receive), Response(),
+        )
+
+    # Require an actor-scoped retained journal before contacting the provider.
+    retained = await retained_attempt_review()
+    # A run-scoped journal with zero attempts is not an attempt binding.
+    # Deny provider network I/O before verifying any operator-supplied event.
+    # A retained journal is still untrusted. Bound its size and require
+    # structurally valid rows before any network I/O or disclosure; a single
+    # placeholder, scalar, or oversized projection is not an attempt record.
+    entries = retained.get("entries") if isinstance(retained, dict) else None
+    if (not isinstance(entries, list) or not 0 < len(entries) <= 200
+            or any(not isinstance(row, dict) or not row for row in entries)):
+        raise HTTPException(409, "no valid bounded retained attempts for provider review")
+    # A bounded row count alone is insufficient: retained untrusted journals
+    # can contain very large values. Refuse provider network access and avoid
+    # echoing oversized evidence back to the operator.
+    try:
+        journal_size = len(json.dumps(entries, ensure_ascii=False, separators=(",", ":"))
+                           .encode("utf-8"))
+    except (TypeError, ValueError, OverflowError):
+        raise HTTPException(409, "retained attempt journal cannot be bounded") from None
+    if journal_size > 64_000:
+        raise HTTPException(409, "retained attempt journal exceeds review limit")
+    admitted_run_ref = (before.get("receipts", {}).get("run_ref")
+                        if isinstance(before, dict) and isinstance(before.get("receipts"), dict)
+                        else None)
+    retained_run_ref = retained.get("run_ref") if isinstance(retained, dict) else None
+    # Equality of two absent identities is NOT an authenticated run binding.
+    # Require a concrete, bounded identity before any provider network I/O.
+    if (not isinstance(admitted_run_ref, str) or not admitted_run_ref
+            or len(admitted_run_ref) > 256
+            or not isinstance(retained_run_ref, str)
+            or retained_run_ref != admitted_run_ref):
+        raise HTTPException(409, "retained receipt run does not match admitted run")
+    await _recheck_source(scope)
+    _dashboard_only(request)
+    # Source admission can yield while the actor loses access to the retained
+    # attempt journal. Re-admit that journal and the case immediately before
+    # any provider I/O; stale retained evidence must never authorize a read.
+    preflight_retained = await retained_attempt_review()
+    if preflight_retained != retained:
+        raise HTTPException(409, "retained receipt journal changed before provider read")
+    preflight_review = await review()
+    if preflight_review != before:
+        raise HTTPException(409, "run/case admission changed before provider read")
+    await _recheck_source(scope)
+    _dashboard_only(request)
+    from .local_source_credentials import _metadata_path, _read_metadata
+    from .open_work_provider_attempt_verification import verify_provider_attempt
+    from .open_work_stripe_attempt_event_reader import read_exact_stripe_attempt_event
+
+    metadata = await asyncio.to_thread(_read_metadata, _metadata_path())
+    if not isinstance(metadata, dict) or not isinstance(metadata.get("account"), str):
+        raise HTTPException(403, "current verified source account required")
+    account = metadata["account"]
+
+    # The synchronous verifier checks authorization before and after provider
+    # I/O; the async route then repeats full admission before disclosure.
+    # No caller-controlled provider URL, credential, tenant or actor.
+    def provider_read():
+        return read_exact_stripe_attempt_event(
+            account=account, object_id=payload["provider_object_id"],
+            operation=payload["provider_operation"],
+            correlation_id=payload["provider_correlation_id"],
+            expected_event_id=payload["provider_event_id"],
+            recheck_authorization=provider_read_still_authorized,
+        )
+    # Check the same local grant immediately before AND after the synchronous
+    # provider reader. Async case admission is repeated below before disclosure.
+    # This closes the gap where a revoked session/source could still initiate
+    # a provider read after the route's earlier asynchronous admission.
+    def provider_read_still_authorized():
+        from .local_source_credentials import _metadata_path, _read_metadata
+        current = _read_metadata(_metadata_path())
+        try:
+            _dashboard_only(request)
+            return (
+                _source_scope() == scope
+                and isinstance(current, dict)
+                and current.get("account") == account
+            )
+        except Exception:
+            return False
+
+    # A revoked source must deny the request before invoking any provider
+    # adapter, even an adapter that incorrectly ignores its guard. The
+    # synchronous guard remains mandatory across each provider network step.
+    if provider_read_still_authorized() is not True:
+        raise HTTPException(403, "provider source authorization revoked")
+    verdict = await asyncio.to_thread(
+        verify_provider_attempt,
+        account=account, object_id=payload["provider_object_id"],
+        operation=payload["provider_operation"],
+        correlation_id=payload["provider_correlation_id"],
+        expected_event_id=payload["provider_event_id"],
+        read_events=provider_read,
+        recheck_authorization=provider_read_still_authorized,
+    )
+    await _recheck_source(scope)
+    _dashboard_only(request)
+    # Source credentials and account metadata may be replaced during provider
+    # I/O without changing the retained case. Never disclose a verdict from
+    # the former account under a newly authorized source identity.
+    async def require_same_provider_account():
+        current = await asyncio.to_thread(_read_metadata, _metadata_path())
+        if (not isinstance(current, dict)
+                or current.get("account") != account):
+            raise HTTPException(409, "provider source account changed during verification")
+
+    await require_same_provider_account()
+    after = await review()
+    if before != after:
+        raise HTTPException(409, "run/case admission changed during provider read")
+    await _recheck_source(scope)
+    _dashboard_only(request)
+    final = await review()
+    if final != after:
+        raise HTTPException(409, "run/case admission changed during final review")
+    await _recheck_source(scope)
+    _dashboard_only(request)
+    await require_same_provider_account()
+    _dashboard_only(request)
+    current_retained = await retained_attempt_review()
+    if current_retained != retained:
+        raise HTTPException(409, "retained receipt journal changed during provider read")
+    await _recheck_source(scope)
+    _dashboard_only(request)
+    await require_same_provider_account()
+    final_admission = await review()
+    if final_admission != final:
+        raise HTTPException(409, "run/case admission changed during receipt review")
+    if retained.get("run_ref") != final["receipts"]["run_ref"]:
+        raise HTTPException(409, "retained receipt run does not match admitted run")
+    # The final review can yield while consent, source identity or the retained
+    # journal changes. Re-admit both projections after that await. Never return
+    # an earlier journal snapshot under a newer authorization decision.
+    repeated_retained = await retained_attempt_review()
+    if repeated_retained != retained:
+        raise HTTPException(409, "retained receipt journal changed during review")
+    await _recheck_source(scope)
+    _dashboard_only(request)
+    await require_same_provider_account()
+    last_admission = await review()
+    if last_admission != final:
+        raise HTTPException(409, "run/case admission changed during final disclosure")
+    # The last case admission is asynchronous. A journal can be revoked while
+    # that admission yields, even when the earlier journal checks all passed.
+    # Re-read the retained attempt under its own actor/tenant permissions before
+    # disclosing provider evidence; equality is not an atomic snapshot.
+    last_retained = await retained_attempt_review()
+    if last_retained != retained:
+        raise HTTPException(409, "retained receipt journal changed during final disclosure")
+    await _recheck_source(scope)
+    _dashboard_only(request)
+    await require_same_provider_account()
+    # Adapter output is evidence, never permission to assert customer success.
+    # Fail closed on malformed or contradictory verdicts before disclosure.
+    if (not isinstance(verdict, dict)
+            or verdict.get("status") not in ("unknown", "verified_provider_event", "verified_provider_operation")
+            or verdict.get("customer_outcome") != "unknown"
+            or (verdict.get("status") == "verified_provider_operation"
+                and verdict.get("provider_operation") not in ("succeeded", "failed"))
+            or (verdict.get("status") != "verified_provider_operation"
+                and verdict.get("provider_operation") != "unknown")
+            or (verdict.get("status") != "unknown" and
+                verdict.get("event_id") != payload["provider_event_id"])
+            or (verdict.get("status") == "unknown" and verdict.get("event_id") is not None)):
+        raise HTTPException(409, "provider verification verdict unavailable or contradictory")
+    # Compare independently returned provider identity with the retained journal
+    # without treating an operator-authored journal as host-attested provenance.
+    # Only exact, unique, bounded references are surfaced; duplicates or
+    # contradictory rows remain ambiguous rather than manufacturing causality.
+    correlation_candidates = []
+    for row in entries:
+        if (row.get("provider_object_id") == payload["provider_object_id"]
+                and row.get("provider_operation") == payload["provider_operation"]
+                and row.get("provider_correlation_id") == payload["provider_correlation_id"]
+                # A retained event ID, when present, must not contradict the
+                # independently retrieved event. An absent ID cannot establish exact event identity.
+                and row.get("provider_event_id") == payload["provider_event_id"]):
+            ref = row.get("attempt_ref")
+            if isinstance(ref, str) and 0 < len(ref) <= 160:
+                correlation_candidates.append(ref)
+    # An operator-supplied event ID is not independent provider evidence.
+    # Do not surface an exact attempt reference as an event correlation when
+    # the provider read failed, was revoked, or returned an unknown verdict.
+    independently_verified = verdict["status"] in (
+        "verified_provider_event", "verified_provider_operation",
+    )
+    unique_correlation = independently_verified and len(correlation_candidates) == 1
+    journal_correlation = {
+        "status": ("provider_event_unverified" if not independently_verified
+                   else "untrusted_exact_match" if unique_correlation
+                   else "ambiguous" if correlation_candidates else "not_recorded"),
+        "attempt_ref": correlation_candidates[0] if unique_correlation else None,
+        "host_attested": False,
+        "provider_event_attributed_to_agent_run": False,
+    }
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "format": "openworkgraph.bound-provider-event.v1",
+        "case_ref": final["case_ref"], "run_ref": final["receipts"]["run_ref"],
+        "provider_event_verdict": verdict,
+        "retained_journal_correlation": journal_correlation,
+        "retained_attempt_receipts": retained,
+        "retained_attempt_receipts_are_untrusted": True,
+        "provider_event_to_attempt_causality_verified": False,
+        "provider_event_independently_rechecked_on_this_read":
+            verdict["status"] in ("verified_provider_event", "verified_provider_operation"),
+        "provider_event_attributed_to_agent_run": False,
+        "provider_operation_not_agent_causality": True,
+        "customer_outcome": "unknown", "customer_outcome_verified": False,
+        "receipt_persisted": False, "agent_execution_authorized": False,
     }
