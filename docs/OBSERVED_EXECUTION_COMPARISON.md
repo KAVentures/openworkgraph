@@ -54,3 +54,28 @@ are candidate investigations, not estimated savings, causal findings or
 execution authorization. Continue using the existing process design or safe
 agent handoff workflows to review the business goal, decision rules, live
 tool mappings and independent outcome verification.
+
+## Selected-run process paths and reviewed design handoff
+
+The workbench groups selected executions by actor type and identical returned
+structural sequence. It shows direct-follow transition occurrences and
+supporting run IDs, as well as tokens with multiple observed immediate
+successors. These are descriptive observations, not verified branching rules
+or parallel-process semantics. Select one path and explicitly review it to
+open an unsaved AS-IS process catalog proposal with only that path's retained
+execution references. Limited source coverage, unknown actor type and paths
+over the existing 40-step catalog limit block this handoff. Reaching the
+48-step structural projection cap is disclosed; later steps may be missing.
+The catalog's existing review and save requirements remain unchanged.
+
+## Directional clipboard linkage
+
+The evidence summary and navigation ranking now use the same directional
+clipboard pairing logic. A paste requires a strictly earlier copy or cut of
+the same transfer token in the same capture session, device and actor scope.
+A reused token is associated with the latest unambiguous preceding source,
+not a future copy. Simultaneous source/paste observations do not establish
+ordering; tied multiple sources leave the origin ambiguous. Missing capture
+scope or missing source events may reduce support. Clipboard payloads are
+never inspected and a linked occurrence does not establish business-case
+membership or prove completion.
