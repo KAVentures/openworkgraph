@@ -9578,13 +9578,30 @@
     const message=el('div',null,'muted');message.id='owgClusterStatus';message.setAttribute('role','status');
     const out=el('div');out.id='owgClusterResults';
     const review=el('div');review.id='owgClusterCaseReview';
+    let lastReport=null;
+    const exports=exportButtons('owgClusterReport',()=>lastReport,value=>{
+      const report=value.report,scope=JSON.stringify(value.request.cohort||{});
+      const headers=['log_id','case_notion','case_scope_json','cluster','cluster_key','cluster_cases','cluster_share',
+        'cluster_variants','median_throughput_seconds','mean_throughput_seconds','mean_events_per_case',
+        'top_variants_json','more_common_activities_json','less_common_activities_json',
+        'cases_in_scope','variants_in_scope','variants_clustered','variants_assigned_to_nearest',
+        'activities_in_log','activities_in_features','cluster_method','choice','silhouette'];
+      const rows=report.clusters.map(cluster=>[report.log.log_id,report.case_notion,scope,cluster.cluster,cluster.cluster_key,
+        cluster.cases,cluster.share,cluster.variants,cluster.median_throughput_seconds,cluster.mean_throughput_seconds,
+        cluster.mean_events_per_case,JSON.stringify(cluster.top_variants),JSON.stringify(cluster.more_common_activities),
+        JSON.stringify(cluster.less_common_activities),report.cases,report.variants,report.variants_clustered,
+        report.variants_assigned_to_nearest,report.activities_in_log,report.activities_in_features,report.method,report.k_chosen_by,report.silhouette]);
+      return [headers,...rows];
+    });
+    exports.node.querySelector('#owgClusterReportJson').setAttribute('aria-label','Download cluster report JSON');
+    exports.node.querySelector('#owgClusterReportCsv').setAttribute('aria-label','Download cluster report CSV');
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Number of clusters',k),run);
-    box.append(row,message,out,review);
+    box.append(row,message,out,exports.node,review);
     const generation=state.generation,endpoint='/v1/event-logs/'+encodeURIComponent(state.logId)+'/trace-clusters';
     const number=n=>Number(n).toLocaleString();
     let reviewTurn=0,reportTurn=0;
     k.addEventListener('input',()=>{
-      ++reportTurn;++reviewTurn;run.disabled=false;out.replaceChildren();review.replaceChildren();
+      ++reportTurn;++reviewTurn;lastReport=null;exports.enable(false);run.disabled=false;out.replaceChildren();review.replaceChildren();
       message.textContent='Settings changed. Find clusters again.';
     });
     const request=async(suffix,spec)=>(await api(endpoint+suffix,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
@@ -9636,7 +9653,7 @@
     const shares=list=>list.map(a=>a.activity+' ('+pct(a.case_share_in_cluster)+' vs '+pct(a.case_share_in_log)+')').join('; ')||'—';
     run.onclick=async()=>{
       const ticket=++reportTurn,current=()=>generation===state.generation&&box.isConnected&&ticket===reportTurn;
-      ++reviewTurn;review.replaceChildren();out.replaceChildren();
+      ++reviewTurn;lastReport=null;exports.enable(false);review.replaceChildren();out.replaceChildren();
       try{
         message.textContent='Clustering…';run.disabled=true;
         const body={};if(k.value)body.k=Number(k.value);if(state.caseType)body.case_type=state.caseType;
@@ -9644,6 +9661,7 @@
         const r=await request('',body);
         if(!current())return;
         if(!r.cases){message.textContent='No cases match this selection.';return;}
+        lastReport={format:'openworkgraph.trace-cluster-report.v1',request:body,report:r};exports.enable(true);
         const rows=r.clusters.map(c=>{
           const open=button('Inspect cases','secondary');open.setAttribute('aria-label','Inspect cases in cluster '+c.cluster);
           open.onclick=()=>{if(current())inspect(body,c);};
@@ -9654,6 +9672,7 @@
         const how=r.k_chosen_by==='silhouette'?r.k+' clusters chosen by silhouette ('+(r.silhouette===null?'—':r.silhouette.toFixed(2))+')':r.k+' clusters as requested';
         out.replaceChildren(el('div',Number(r.cases).toLocaleString()+' cases, '+Number(r.variants).toLocaleString()+' variants; '+how+'.'+(r.variants_assigned_to_nearest?' '+Number(r.variants_assigned_to_nearest).toLocaleString()+' rare variants joined their nearest cluster.':''),'muted'),
           table(['Cluster','Cases','Variants','Median throughput','Events per case','Most common variant','More common than in the log','Less common than in the log','Evidence'],rows),
+          el('div','Features use '+number(r.activities_in_features)+' of '+number(r.activities_in_log)+' activities. '+number(r.variants_clustered)+' variants were clustered; '+number(r.variants_assigned_to_nearest)+' were assigned to their nearest cluster. The report lists up to five top variants and six contrasting activities per side.','muted'),
           el('div',r.interpretation,'muted'));
         message.textContent='';
       }catch(error){if(current())message.textContent=error.message;}finally{if(current())run.disabled=false;}

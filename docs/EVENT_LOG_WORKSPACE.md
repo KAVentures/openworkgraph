@@ -798,6 +798,14 @@ by literal case key, with an optional `limit` of 1–100 (default 50). Send the 
 `next_after` as `after` to continue. If the cluster changes, rerun the report to get
 its current key. This route requires a dashboard session.
 
+**Download cluster report JSON** includes the original request, the complete
+returned cluster summary, settings and case notion. The CSV gives one row per
+cluster with the same coverage counts and the displayed top variants and
+contrasting activities. These are the returned top five variants and up to six
+contrasting activities per side, not a list of every variant or activity. Both
+report downloads reflect the last completed analysis and are cleared when its
+settings change. CSV text is escaped for spreadsheet review.
+
 From **Inspect cases**, **Download cluster cases (CSV)** recomputes the selected
 cluster with its original settings and scope, then downloads case keys, duration,
 event count and first/last activity. The file contains up to 50,000 cases in
