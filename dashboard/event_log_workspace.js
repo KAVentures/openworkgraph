@@ -4253,7 +4253,15 @@
     const markerRow=el('div',null,'row');markerRow.style.alignItems='end';
     markerRow.append(field('Saved changes',markerPick),markerRemove,field('Label for this date',markerLabel),markerSave);
     const evidence=el('div');evidence.id='owgImpactCaseReview';
-    box.append(markerRow,markerStatus,row,out,evidence);
+    let lastReport=null;
+    const exports=exportButtons('owgImpactReport',()=>lastReport,packet=>[
+      ['group','period','cases','mean','median','unit'],
+      ...Object.entries(packet.report.groups).flatMap(([group,values])=>
+        ['baseline','follow_up'].map(period=>[
+          group,period,values[period].cases,values[period].mean,values[period].median,packet.report.unit
+        ]))
+    ]);
+    box.append(markerRow,markerStatus,row,out,evidence,exports.node);
     const markersBase='/v1/event-logs/'+encodeURIComponent(state.logId)+'/change-markers';let markerList=[];
     const showMarkers=r=>{markerList=r.markers;
       setOptions(markerPick,[['',r.markers.length?'Pick a saved change':'No saved changes yet'],...r.markers.map(m=>[m.marker_id,m.marked_at.slice(0,10)+' — '+m.label+(m.within_log?'':' (outside this log)')])]);
@@ -4274,14 +4282,14 @@
     const markersGeneration=state.generation;
     getJSON(markersBase).then(r=>{if(markersGeneration===state.generation)showMarkers(r);}).catch(error=>{markerStatus.textContent=error.message;});
     const generation=state.generation,logId=state.logId;let turn=0;
-    const invalidate=()=>{turn++;run.disabled=false;out.replaceChildren();evidence.replaceChildren();};
+    const invalidate=()=>{turn++;lastReport=null;exports.enable(false);run.disabled=false;out.replaceChildren();evidence.replaceChildren();};
     for(const control of [date,metric,sla,activity,windowDays,recent,treatedActivity,treatedResource]){
       control.addEventListener('input',invalidate);control.addEventListener('change',invalidate);
     }
     markerPick.addEventListener('change',invalidate);
     run.onclick=async()=>{
       const t=++turn;
-      evidence.replaceChildren();
+      lastReport=null;exports.enable(false);evidence.replaceChildren();
       let spec;try{spec=impactSpec({date:date.value,metric:metric.value,slaHours:sla.value,activity:activity.value,window:windowDays.value,recent:recent.value,treatedActivity:treatedActivity.value,treatedResource:treatedResource.value.trim()});}
       catch(error){out.replaceChildren(el('div',error.message,'muted'));return;}
       if(state.caseType)spec.case_type=state.caseType;
@@ -4289,6 +4297,8 @@
       try{
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(logId)+'/impact',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
         if(generation!==state.generation||!box.isConnected||t!==turn)return;
+        lastReport={format:'openworkgraph.intervention-impact-report.v1',settings:spec,report:r};
+        exports.enable(true);
         const v=impactRows(r);
         const rows=Object.entries(r.groups).map(([group,values],index)=>{
           const open=(period,count)=>{
