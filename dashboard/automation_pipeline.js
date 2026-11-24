@@ -2151,7 +2151,36 @@
           }catch(e){if(generation===detailGeneration)message.textContent=e.message;}
           finally{download.disabled=!['approved','implemented'].includes(idea.state);}
         };
-        projects.append(download,message,exports);
+        const archiveFile=input('owgPipelineArchiveReviewFile','file');
+        archiveFile.accept='.zip,application/zip';
+        const archiveReview=button('Verify original project ZIP','secondary');
+        const archiveStatus=el('div');archiveStatus.setAttribute('role','status');
+        let archiveVersion=0;
+        archiveFile.onchange=()=>{archiveVersion++;archiveStatus.replaceChildren();};
+        archiveReview.onclick=async()=>{
+          const file=archiveFile.files?.[0],version=++archiveVersion;
+          if(!file||!file.size||file.size>16*1024*1024){
+            archiveStatus.textContent='Choose the original project ZIP of at most 16 MiB.';return;
+          }
+          archiveReview.disabled=true;
+          try{
+            const result=await (await api('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/project-archive-review',{
+              method:'POST',headers:{'Content-Type':'application/zip'},body:file})).json();
+            if(generation!==detailGeneration||version!==archiveVersion)return;
+            archiveStatus.replaceChildren(
+              el('p','Exact retained project ZIP matches · '+result.exported_at),
+              el('p',result.generated_file_inventory_status==='complete_generated_file_inventory_matches'?
+                result.verified_generated_file_count+' generated files match the complete release inventory.':
+                'Historical ZIP without a generated-file manifest; original archive digest matches.'),
+              el('p','Idea revision '+result.idea_revision_at_export+' (current '+result.current_idea_revision+
+                ') · saved design '+result.process_reference_status.replaceAll('_',' ')+'.'),
+              el('p','No extraction, execution, remote deployment or business outcome was verified.','muted'));
+          }catch(e){if(generation===detailGeneration&&version===archiveVersion)archiveStatus.textContent=e.message;}
+          finally{archiveReview.disabled=false;if(version===archiveVersion)archiveFile.value='';}
+        };
+        projects.append(download,message,exports,el('h5','Verify a previous project export'),
+          el('p','Select the unchanged original ZIP. OWG compares the retained archive hash and complete generated-file inventory without extracting or running its contents.','muted'),
+          field('Original tracked project ZIP',archiveFile),archiveReview,archiveStatus);
         const reviewReports=button('Review imported run reports','secondary');reviewReports.id='owgPipelineReviewReports';
         const reports=el('div');reports.id='owgPipelineReportLinks';let reportVersion=0;
         const renderReports=async()=>{
