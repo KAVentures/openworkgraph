@@ -1756,6 +1756,12 @@
           shown+=result.events.length;offset=result.next_offset;
           progress.textContent='Showing '+shown+' of '+result.total_events+' events. '+result.timestamp_ties+' equal-timestamp events. '+result.ordering;
           rows.appendChild(table(['Activity','Timestamp (UTC)','Resource label','Event ID'],result.events.map(e=>[e.activity,e.timestamp,e.resource||'(missing)',e.event_id])));
+          const sourceLog=state.logs.find(log=>log.log_id===state.logId);
+          if(sourceLog?.observed_execution_snapshot&&result.case_notion==='case'&&window.owgObservedExecutionLog?.renderObservationCheck){
+            const sourceId=state.logId;
+            window.owgObservedExecutionLog.renderObservationCheck(rows,sourceLog,caseId,result.events,
+              ()=>current()&&ticket===opening&&state.logId===sourceId);
+          }
           more.disabled=offset===null;show(more,offset!==null);
         }catch(error){if(current()&&ticket===opening)progress.textContent=error.message;}
       }
