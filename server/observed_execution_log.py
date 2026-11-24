@@ -18,8 +18,7 @@ from typing import Any
 
 from . import workflow_evidence as evidence
 from .procedural_memory import _surface_key, _coarse_human_action
-
-FORMAT = "openworkgraph.observed-execution-log.v1"
+from .observed_execution_log_sources import FORMAT, SCHEMA, read_manifest
 MAX_RUNS = 12
 MAX_EVENTS = 10_000
 SOURCE_LIMIT = 25_000
@@ -41,34 +40,6 @@ _MAPPING = {
     "timestamp_column": "observed_at", "resource_column": "",
     "attribute_columns": ["evidence_ref", "actor_kind", "membership_basis"],
 }
-
-
-SCHEMA = """CREATE TABLE IF NOT EXISTS observed_execution_log_sources (
-    log_id VARCHAR PRIMARY KEY,
-    snapshot_sha256 VARCHAR NOT NULL,
-    source_report VARCHAR NOT NULL
-);"""
-
-
-def source_metadata(conn, log_id: str) -> dict[str, Any]:
-    row = conn.execute(
-        "SELECT snapshot_sha256, source_report FROM observed_execution_log_sources WHERE log_id = ?",
-        [log_id],
-    ).fetchone()
-    if not row:
-        return {}
-    report = json.loads(row[1])
-    # Source counts identify the original imported snapshot, not any later
-    # append, manual annotation or transformed copy of its event log.
-    return {"observed_execution_snapshot": {
-        "snapshot_sha256": row[0],
-        "original_case_count": report["case_count"],
-        "original_event_count": report["event_count"],
-        "timestamp_tie_groups": report["timestamp_tie_groups"],
-        "business_case_identity_verified": False,
-        "capture_complete": False,
-        "independent_retention": True,
-    }}
 
 
 class SnapshotError(ValueError):
@@ -216,14 +187,10 @@ def source(log_id: str) -> dict[str, Any]:
         conn = workspace._connect()
         try:
             log = workspace._check_log(conn, log_id)
-            row = conn.execute(
-                "SELECT snapshot_sha256, source_report FROM observed_execution_log_sources WHERE log_id = ?",
-                [log_id],
-            ).fetchone()
-            if row is None:
+            exists, report = read_manifest(conn, log_id)
+            if not exists:
                 raise SnapshotError("This log is not an observed execution snapshot")
-            report = json.loads(row[1])
-            if report.get("format") != FORMAT or report.get("snapshot_sha256") != row[0]:
+            if report is None:
                 raise SnapshotError("The original snapshot manifest is unavailable")
             return {
                 **report, "log_id": log_id, "name": log["name"],
@@ -328,6 +295,9 @@ def create(spec: Any, *, expected_sha256: str, name: str) -> dict[str, Any]:
         finally:
             conn.close()
         if existing:
+            saved = source(existing[0])
+            if saved["stored_event_count"] != report["event_count"]:
+                raise SnapshotError("The existing snapshot no longer matches its original event count")
             return {**report, "log_id": existing[0], "name": existing[1],
                     "stored_independent_snapshot": True, "existing_snapshot_reused": True}
         stored = workspace.import_log(BytesIO(buffer.getvalue().encode("utf-8")),
