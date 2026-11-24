@@ -154,14 +154,18 @@ def erase(conn, log_id: str) -> None:
     erase_hidden(conn, log_id)
 
 
-def apply_to_case_events(conn, log_id: str) -> dict[str, Any] | None:
-    """Relabel the request's ``ce`` table with the applied mapping, if any; describe what was done."""
+def applied_mapping(conn, log_id: str) -> dict[str, Any] | None:
     _ensure(conn)
     row = conn.execute("SELECT mapping_id, created_at, definition, applied FROM activity_mappings "
                        "WHERE log_id = ? AND applied", [log_id]).fetchone()
-    if row is None:
+    return _describe(*row) if row is not None else None
+
+
+def apply_to_case_events(conn, log_id: str) -> dict[str, Any] | None:
+    """Relabel the request's ``ce`` table with the applied mapping, if any; describe what was done."""
+    described = applied_mapping(conn, log_id)
+    if described is None:
         return None
-    described = _describe(*row)
     pairs = [(a, g["label"]) for g in described["groups"] for a in g["activities"]]
     before = conn.execute("SELECT count(*) FROM ce").fetchone()[0]
     conn.execute("CREATE OR REPLACE TEMP TABLE ce_map AS SELECT unnest(?) AS original, unnest(?) AS label",
