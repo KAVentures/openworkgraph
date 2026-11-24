@@ -15,7 +15,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const scope = {window:{},document:{readyState:'loading',addEventListener(){}}};
 vm.runInNewContext(fs.readFileSync('dashboard/workflow_explorer.js','utf8'),scope);
-const {observedRunMatrix,runDifference,projectedSurfaceRoutes,projectedProcessPaths,observedPathProposal,projectedPathAgentBrief,selectedRunTrace,automationReviewSignals,foregroundCoverageRows}=scope.window.__owgWorkflowExplorerModel;
+const {observedRunMatrix,runDifference,projectedSurfaceRoutes,projectedProcessPaths,observedPathProposal,projectedPathAgentBrief,selectedRunTrace,automationReviewSignals,foregroundCoverageRows,referenceOccurrenceAlignment,observedReferenceReview}=scope.window.__owgWorkflowExplorerModel;
 const a='execution:aaaaaaaaaaaaaaaa',b='execution:bbbbbbbbbbbbbbbb';
 const ids=[a,b];
 const fixture=()=>({
@@ -184,6 +184,55 @@ coverage.runs[1].surface_rows[0].exclusive_foreground_seconds=9;
 assert.equal(foregroundCoverageRows(model,f)[0],null);
 coverage.runs[1].execution_id=b;
 assert.equal(foregroundCoverageRows(model,f),null);
+// Brute-force every ordered match for short binary sequences. Verify all
+// occurrence classifications against the entire set of optimal alignments.
+const sequences=[];
+for(let length=1;length<=4;length++)for(let code=0;code<2**length;code++)
+  sequences.push(Array.from({length},(_,i)=>((code>>i)&1)?'A':'B'));
+for(const left of sequences)for(const right of sequences){
+  let best=-1,optimal=[];
+  const visit=(i,j,pairs)=>{
+    if(pairs.length>best){best=pairs.length;optimal=[pairs];}
+    else if(pairs.length===best)optimal.push(pairs);
+    for(let x=i;x<left.length;x++)for(let y=j;y<right.length;y++)
+      if(left[x]===right[y])visit(x+1,y+1,[...pairs,[x+1,y+1]]);
+  };
+  visit(0,0,[]);
+  const actual=referenceOccurrenceAlignment(left,right);
+  assert.equal(actual.shared,best);
+  for(const [key,index] of [['reference',0],['comparison',1]]){
+    const sequence=index===0?left:right;
+    assert.equal(actual[key].length,sequence.length);
+    actual[key].forEach((row,offset)=>{
+      const matches=optimal.map(pairs=>pairs.find(pair=>pair[index]===offset+1));
+      const positions=[...new Set(matches.filter(Boolean).map(pair=>pair[1-index]))].sort((a,b)=>a-b);
+      const status=!positions.length?'not_aligned':matches.every(Boolean)?'aligned':'ambiguous';
+      assert.equal(row.status,status);
+      assert.deepEqual(Array.from(row.positions),positions);
+    });
+  }
+}
+assert.equal(referenceOccurrenceAlignment([],['A']),null);
+assert.equal(referenceOccurrenceAlignment(Array(48).fill('A'),['A']),null);
+f=fixture();model=observedRunMatrix(f,ids);
+let reference=observedReferenceReview(model,a);
+assert.equal(reference.comparable,1);
+assert.equal(reference.exact,0);
+assert.equal(reference.occurrenceSupport[0].ambiguous,1);
+assert.equal(reference.occurrenceSupport[1].not_aligned,1);
+assert.equal(reference.occurrenceSupport[2].ambiguous,1);
+assert.equal(reference.occurrenceSupport[3].aligned,1);
+assert.equal(reference.rows[0].id,b);
+f.executions[0].actor_kind='agent';
+reference=observedReferenceReview(observedRunMatrix(f,ids),a);
+assert.equal(reference.comparable,0);
+assert.equal(reference.rows[0].status,'unlike_actor');
+f.executions[0].actor_kind='human';
+f.executions[0].steps=Array(48).fill('action:open');
+reference=observedReferenceReview(observedRunMatrix(f,ids),a);
+assert.equal(reference.rows[0].status,'projection_unavailable');
+f.provenance.source_limit_reached=true;
+assert.equal(observedReferenceReview(observedRunMatrix(f,ids),a),null);
 console.log('Observed run matrix, surface routes, trace and opportunity checks passed');
 """
     result = subprocess.run(["node", "-e", script], cwd=ROOT, text=True,
