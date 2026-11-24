@@ -22,6 +22,14 @@ from .observed_execution_log_sources import FORMAT, SCHEMA, read_manifest
 MAX_RUNS = 12
 MAX_EVENTS = 10_000
 SOURCE_LIMIT = 25_000
+PROJECTIONS = {"actions", "actions_and_navigation"}
+_NAVIGATION_ACTIVITIES = {
+    "focus_change": "Foreground changed",
+    "browser_page_view": "Page viewed",
+    "browser_navigation": "Navigation observed",
+    "browser_tab_activated": "Tab activated",
+    "browser_pageshow": "Page shown",
+}
 _ID = re.compile(r"execution:[a-f0-9]{16}")
 _AGENT_ACTIVITIES = {
     "run_started": "Run started", "run_finished": "Run finished",
@@ -58,8 +66,8 @@ def _iso(value: Any) -> str:
         raise SnapshotError("A timezone-qualified timestamp is required") from None
 
 
-def _spec(spec: Any) -> tuple[list[str], str | None, str | None]:
-    if not isinstance(spec, dict) or set(spec) - {"execution_ids", "since", "until"}:
+def _spec(spec: Any) -> tuple[list[str], str | None, str | None, str]:
+    if not isinstance(spec, dict) or set(spec) - {"execution_ids", "since", "until", "projection"}:
         raise SnapshotError("Send exact execution IDs and optional evidence window")
     ids = spec.get("execution_ids")
     if (not isinstance(ids, list) or not 1 <= len(ids) <= MAX_RUNS
@@ -70,10 +78,13 @@ def _spec(spec: Any) -> tuple[list[str], str | None, str | None]:
     until = _iso(spec["until"]) if spec.get("until") is not None else None
     if since and until and since >= until:
         raise SnapshotError("The end of the evidence window must follow the start")
-    return ids, since, until
+    projection = spec.get("projection", "actions")
+    if not isinstance(projection, str) or projection not in PROJECTIONS:
+        raise SnapshotError("Choose actions or actions_and_navigation")
+    return ids, since, until, projection
 
 
-def _activity(event: dict[str, Any], actor: str) -> str | None:
+def _activity(event: dict[str, Any], actor: str, projection: str = "actions") -> str | None:
     kind = str(event.get("event_type") or "")
     is_agent = event.get("source") == "agent" or kind.startswith("agent_")
     if actor == "agent":
@@ -89,6 +100,8 @@ def _activity(event: dict[str, Any], actor: str) -> str | None:
         action = {"clipboard_copy": "Copy", "clipboard_cut": "Cut", "clipboard_paste": "Paste"}[kind]
     else:
         action = _HUMAN_ACTIVITIES.get(_coarse_human_action(event))
+    if not action and projection == "actions_and_navigation":
+        action = _NAVIGATION_ACTIVITIES.get(kind)
     if not action:
         return None
     # Known surfaces are fixed tokens; unknown names stay opaque. Never use
@@ -99,6 +112,9 @@ def _activity(event: dict[str, Any], actor: str) -> str | None:
 
 def project(selected: list[dict[str, Any]], per_run_events: dict[str, list[dict[str, Any]]],
             scope: dict[str, Any]) -> tuple[list[list[str]], dict[str, Any]]:
+    projection = scope.get("projection", "actions")
+    if projection not in PROJECTIONS:
+        raise SnapshotError("Unknown structural projection")
     rows: list[list[str]] = []
     seen: set[str] = set()
     cases = []
@@ -116,7 +132,7 @@ def project(selected: list[dict[str, Any]], per_run_events: dict[str, list[dict[
         membership = "inferred_time_session" if actor == "human" else "native_agent_run"
         case_rows = []
         for event in per_run_events.get(identifier, []):
-            activity = _activity(event, actor)
+            activity = _activity(event, actor, projection)
             if not activity:
                 continue
             raw_id = event.get("event_id")
@@ -164,7 +180,7 @@ def project(selected: list[dict[str, Any]], per_run_events: dict[str, list[dict[
 
 
 def prepare(spec: Any) -> tuple[list[list[str]], dict[str, Any]]:
-    ids, since, until = _spec(spec)
+    ids, since, until, projection = _spec(spec)
     raw = evidence._load(limit=SOURCE_LIMIT, since=since, until=until)
     if len(raw) >= SOURCE_LIMIT:
         raise SnapshotError("Source limit reached; narrow the evidence window before creating a snapshot")
@@ -172,7 +188,12 @@ def prepare(spec: Any) -> tuple[list[list[str]], dict[str, Any]]:
         evidence.derive_executions(raw), family_key="", execution_ids=ids, max_runs=len(ids)
     )
     scoped = {run["execution_id"]: evidence._events_for_execution(raw, run) for run in selected}
-    return project(selected, scoped, {"execution_ids": ids, "since": since, "until": until})
+    scope = {"execution_ids": ids, "since": since, "until": until}
+    # Keep exact default-mode digests backward compatible; the richer mode
+    # has its own explicit identity and therefore its own reviewed snapshot.
+    if projection != "actions":
+        scope["projection"] = projection
+    return project(selected, scoped, scope)
 
 
 def preview(spec: Any) -> dict[str, Any]:
@@ -273,6 +294,7 @@ def create(spec: Any, *, expected_sha256: str, name: str) -> dict[str, Any]:
             "one event per retained structural sensor observation. Not verified business cases, "
             "outcomes or distinct human actions. Repeated sensor observations and timestamp ties "
             "may affect process metrics. Captured text and clipboard values are excluded. "
+            f"Structural projection: {report['scope'].get('projection', 'actions')}. "
             "Independent saved copy; delete this event log separately. "
             f"Snapshot SHA-256: {report['snapshot_sha256']}."
         )
