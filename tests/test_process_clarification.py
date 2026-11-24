@@ -59,7 +59,7 @@ def test_statements_carry_exact_offsets():
     assert statement["modality"] == "requires"
 
 
-def test_threshold_and_requirement_contradictions_are_cited_once():
+def test_threshold_and_requirement_contradictions_are_cited_once_per_subject():
     result = clarify(RECORD, _docs(
         "A refund amount above 500 EUR must get manager approval.",
         "A refund amount above 1000 EUR requires manager approval.",
@@ -68,10 +68,92 @@ def test_threshold_and_requirement_contradictions_are_cited_once():
     assert ("contradiction", "big") in kinds
     big = next(q for q in result["questions"] if q["target_id"] == "big" and q["kind"] == "contradiction")
     assert {c["kind"] for c in big["contradictions"]} >= {"threshold_conflict", "requirement_conflict"}
-    pairs = [frozenset(s["statement_id"] for s in c["statements"])
-             for q in result["questions"] for c in q["contradictions"]]
-    assert len(pairs) == len(set(pairs))
+    for question in result["questions"]:
+        pairs = [frozenset(s["statement_id"] for s in c["statements"])
+                 for c in question["contradictions"]]
+        assert len(pairs) == len(set(pairs))
+    # Distinct rules need separate decisions even if they cite the same pair.
+    assert any(q["kind"] == "contradiction" and q["target_id"] == "small"
+               for q in result["questions"])
     assert result["model_changed"] is False and result["permissions_changed"] is False
+
+
+def test_decimal_thresholds_and_grouped_numbers_have_exact_offsets_and_units():
+    from shared.process_clarification import _numbers
+    text = "A refund amount above 500.25 EUR must get manager approval. A second limit is 1,000.00 EUR."
+    pool = statements(_docs(text).documents)
+    assert len(pool) == 2
+    for s in pool:
+        assert text[s["start"]:s["end"]] == s["text"]
+    assert pool[0]["numbers"] == [("500.25", "eur")]
+    assert pool[1]["numbers"] == [("1000", "eur")]
+    assert _numbers("Threshold 1 000.50 EUR, 10.0 percent and 2 hours.") == [
+        ("1000.5", "eur"), ("10", "%"), ("2", "hour")]
+    different = clarify(RECORD, _docs(
+        "A refund amount above 500.25 EUR must get manager approval.",
+        "A refund amount above 500.75 EUR must get manager approval."))
+    q = next(q for q in different["questions"] if q["kind"] == "contradiction" and q["target_id"] == "big")
+    assert any(c["kind"] == "threshold_conflict" and c["unit"] == "eur" for c in q["contradictions"])
+    equivalent = clarify(RECORD, _docs(
+        "A refund amount above 1,000.00 EUR must get manager approval.",
+        "A refund amount above 1000 EUR must get manager approval."))
+    assert not any(q["kind"] == "contradiction" and q["target_id"] == "big" for q in equivalent["questions"])
+
+
+def test_late_conflicting_source_is_visible_beyond_first_five_matches():
+    from shared.process_clarification import validate_decision_evidence
+    import pytest
+    docs = _docs("A refund amount above 500 EUR must get manager approval. " * 6,
+                 "A refund amount above 500 EUR must not get manager approval.")
+    result = clarify(RECORD, docs)
+    q = next(q for q in result["questions"] if q["kind"] == "contradiction" and q["target_id"] == "big")
+    assert q["source_coverage"]["matching_statements"] == 7
+    assert q["source_coverage"]["conflict_candidates_checked"] == 7
+    assert q["source_coverage"]["possible_conflict_count"] == 6
+    assert q["source_coverage"]["displayed_conflict_count"] < 6
+    assert any(s["document_index"] == 1 for s in q["citations"])
+    assert q["coverage_blocked"]
+    assert q["allowed_decisions"] == ["reject", "defer"]
+    decision = Decision(question_id=q["question_id"], decision="confirm", answer="Reviewed",
+                        cited_statement_ids=[q["citations"][0]["statement_id"]])
+    with pytest.raises(ValueError, match="source review is incomplete"):
+        validate_decision_evidence(q, decision)
+    for choice in ("defer", "reject"):
+        review = clarify(RECORD, docs, {q["question_id"]: {"decision": choice}})
+        still_open = next(row for row in review["questions"] if row["question_id"] == q["question_id"])
+        assert still_open["previous_decision"] == choice
+        assert still_open["coverage_blocked"]
+
+
+def test_source_budget_and_overlong_statement_disclosure_are_not_silent():
+    from shared.process_clarification import MAX_STATEMENTS, MAX_CONFLICT_CANDIDATES
+    docs = _docs("Unrelated policy statement. " * (MAX_STATEMENTS + 1),
+                 "A refund amount above 500 EUR must get manager approval. " + "x" * 601)
+    result = clarify(RECORD, docs)
+    coverage = result["source_coverage"]
+    assert not coverage["document_scan_complete"]
+    assert not coverage["all_subject_conflict_reviews_complete"]
+    assert coverage["documents"][0]["indexed_statements"] == MAX_STATEMENTS
+    assert coverage["documents"][0]["omitted_by_budget"] == 1
+    assert coverage["documents"][1]["omitted_by_budget"] == 1
+    assert coverage["documents"][1]["overlong_statements"] == 1
+    assert all(q["coverage_blocked"] for q in result["questions"])
+    many = _docs("A refund amount above 500 EUR must get manager approval. " * (MAX_CONFLICT_CANDIDATES + 1))
+    result = clarify(RECORD, many)
+    q = next(q for q in result["questions"] if q["target_id"] == "big")
+    assert q["kind"] == "source_coverage"
+    assert q["source_coverage"]["conflict_candidates_checked"] == MAX_CONFLICT_CANDIDATES
+    assert q["source_coverage"]["possible_conflict_count"] == 0
+    assert q["coverage_blocked"]
+
+
+def test_identical_document_titles_and_text_have_distinct_source_identity():
+    docs = ClarificationRequest.model_validate({"documents": [
+        {"title":"SOP", "text":"Refund amount above 500 EUR must get manager approval."},
+        {"title":"SOP", "text":"Refund amount above 500 EUR must get manager approval."}]})
+    pool = statements(docs.documents)
+    assert len({s["statement_id"] for s in pool}) == 2
+    assert [s["document_index"] for s in pool] == [0, 1]
 
 
 def test_multiway_conflict_requires_one_explicit_governing_statement():
