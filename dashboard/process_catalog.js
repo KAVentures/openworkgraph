@@ -432,7 +432,7 @@
       const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));
       const a=el('a');a.href=url;a.download='owg-policy-regression-r'+previous.revision+'-r'+selected.revision+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
     });download.disabled=true;
-    const run=button('Evaluate both revisions',async()=>{
+    const run=button('Evaluate both revisions and review change impact',async()=>{
       if(!active()||!confirm.checked)return;
       const n=++turn;report=null;download.disabled=true;run.disabled=true;out.replaceChildren(el('p','Evaluating reviewed cases locally…'));
       try{
@@ -446,7 +446,7 @@
         await window.__owgAuthReady;
         if(!active()||n!==turn||!confirm.checked)return;
         const params=new URLSearchParams({workflow_id:selected.workflow_id,before_revision:String(previous.revision),
-          after_revision:String(selected.revision),before_sha256:previous.content_sha256,after_sha256:selected.content_sha256});
+          after_revision:String(selected.revision),before_sha256:previous.content_sha256,after_sha256:selected.content_sha256,include_change_review:'true'});
         const response=await fetch('/v1/process-catalog/policy-regression?'+params,{method:'POST',cache:'no-store',
           headers:{'Content-Type':'application/json','X-OWG-Case-Facts-Authorized':'true'},body});
         if(!response.ok){const error=await response.json().catch(()=>({}));throw Error(error.detail||'Regression request failed.');}
@@ -461,6 +461,23 @@
           ' after expectations matched; '+data.before_matches+' before. '+data.cases_all_after_match+' / '+data.case_count+' cases matched every reviewed after expectation.'),
           el('p',data.unreviewed_table_case_pairs+' unreviewed table/case pairs, '+data.unreviewed_changed_table_case_pairs+' with observed changes.'),
           el('p',Object.entries(data.classification_counts).map(([k,v])=>k.replaceAll('_',' ')+': '+v).join(' · '))];
+        const review=data.change_review;
+        if(review){
+          const st=review.structural_after;
+          parts.push(el('h4','Integrated change review'),el('p',review.assessment.replaceAll('_',' ')),
+            el('p','Structural markings: '+st.states_discovered+' · '+(st.complete?'complete bounded exploration':'incomplete exploration')+
+              ' · '+st.known_deadlock_count+' known deadlocks.'),
+            el('p',review.unreviewed_affected_table_case_pairs+' potentially affected table/case pairs lack reviewed expectations.'));
+          const findings=el('ul');for(const item of review.findings)findings.appendChild(el('li',item.status.replaceAll('_',' ')+': '+item.detail));parts.push(findings);
+          if(review.affected_decision_coverage.length){
+            const coverageWrap=el('div');coverageWrap.className='table-wrap';coverageWrap.tabIndex=0;coverageWrap.setAttribute('role','region');coverageWrap.setAttribute('aria-label','Affected decision coverage');
+            const ct=el('table'),head=el('thead'),hr=el('tr');for(const h of ['Affected table','Reviewed cases','Unreviewed cases','After matches','After mismatches'])hr.appendChild(el('th',h));
+            head.appendChild(hr);ct.appendChild(head);const cb=el('tbody');
+            for(const c of review.affected_decision_coverage){const cr=el('tr');for(const value of [c.table_id,c.reviewed_case_count,c.unreviewed_case_count,c.after_matches,c.after_mismatches])cr.appendChild(el('td',String(value)));cb.appendChild(cr);}
+            ct.appendChild(cb);coverageWrap.appendChild(ct);parts.push(coverageWrap);
+          }
+          parts.push(el('p',review.interpretation,'muted'));
+        }
         const wrap=el('div');wrap.className='table-wrap';wrap.tabIndex=0;wrap.setAttribute('role','region');wrap.setAttribute('aria-label','Paired case expectations');
         const t=el('table'),thead=el('thead'),tr=el('tr');for(const h of ['Case','Date','Table','Before actual / expected','After actual / expected','Classification'])tr.appendChild(el('th',h));
         thead.appendChild(tr);t.appendChild(thead);const tbody=el('tbody');
