@@ -91,7 +91,12 @@ const path=require('node:path');
      comparedEvidenceIds=new URL(route.request().url()).searchParams.get('execution_ids');
      return route.fulfill({status:200,contentType:'application/json',
        body:JSON.stringify({selector:{execution_ids:['execution:compare_right'],selected_execution_count:1},
-         structural_alignment:{high_support_steps:[]},executions:[{execution_id:'execution:compare_right',actor_kind:'human',duration_seconds:12,steps:['action:open','action:review','action:open'],outcome_status:'unknown'}],provenance:{source_limit_reached:false}})});
+         structural_alignment:{high_support_steps:[]},executions:[{execution_id:'execution:compare_right',actor_kind:'human',duration_seconds:12,steps:['action:open','action:review','action:open'],outcome_status:'unknown'}],timing:{per_execution_foreground_coverage:{format:'openworkgraph.execution-foreground-coverage.v1',
+           uncovered_time_is_unknown:true,distinct_surface_overlaps_are_unattributed:true,active_labor_or_waiting_measured:false,
+           runs:[{execution_id:'execution:compare_right',actor_kind:'human',status:'observed_bounded_coverage',
+             observed_event_count:4,window_seconds:12,foreground_union_seconds:8,uncovered_window_seconds:4,
+             overlapping_distinct_surface_seconds:1,surface_rows:[{surface:'surface:gmail',exclusive_foreground_seconds:7}],
+             surface_rows_omitted:0,exclusive_other_surface_seconds:0,foreground_span_count:2,invalid_span_count:0}]}},provenance:{source_limit_reached:false}})});
    });
    const inspectB=page.getByRole('button',{name:'Inspect variant B evidence',exact:true});
    await inspectB.focus();await page.keyboard.press('Enter');
@@ -102,6 +107,9 @@ const path=require('node:path');
    assert.match(await runMatrix.textContent(),/Run 1 · execution:compare_right/);
    const occurrences=runMatrix.getByRole('table',{name:'Projected step occurrence matrix'});
    assert.deepEqual(await occurrences.locator('tbody tr').first().locator('td').allTextContents(),['1/1','2']);
+   const coverage=runMatrix.getByRole('table',{name:'Foreground time coverage'});
+   assert.deepEqual(await coverage.locator('tbody tr').first().locator('td').allTextContents(),['Run 1','4','12','8','4','1']);
+   assert.match(await runMatrix.locator('#owgExplorerForegroundCoverage').textContent(),/7 s exclusively attributed/);
    assert.equal(await runMatrix.locator('#owgExplorerSurfaceRoutes').count(),1);
    assert.equal(await runMatrix.locator('#owgExplorerAutomationReview').count(),1);
    const projectedPaths=runMatrix.locator('#owgExplorerProjectedPaths');
