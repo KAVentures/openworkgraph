@@ -2901,6 +2901,20 @@ async def event_log_discovery_draft(request: Request, log_id: str):
                                    await _json_body(request, 'discovery snapshot'))
 
 
+@router.post("/v1/event-log-discovery/inspect-selection")
+async def inspect_discovery_selection(request: Request,
+                                      workflow_id: str = Query(pattern=r"^[a-zA-Z0-9_-]{1,80}$"),
+                                      revision: int = Query(ge=1)):
+    _require_dashboard(request)
+    from .local_process_catalog import catalog
+    try:
+        record = catalog.get(workflow_id, revision)
+    except LookupError:
+        raise HTTPException(404, "Process revision unavailable") from None
+    payload = await _json_body(request, "exact discovery selection", strict=True, limit=8192)
+    return await run_in_threadpool(_respond, discovery_provenance.inspect_selection, record, payload)
+
+
 @router.get('/v1/event-log-discovery/process-origin')
 def process_discovery_origin(request: Request, workflow_id: str = Query(pattern=r'^[a-zA-Z0-9_-]{1,80}$'),
                              revision: int = Query(ge=1)):
