@@ -406,6 +406,9 @@ def build_runtime_project(packet: dict) -> bytes:
         'Retain queue-state and its journals. Stop future attempts with stop.py --stop\n'
         ' --confirm-stop --journal-directory prepared-queue/queue-state/journals.\n'
         'A crash lock or incomplete claim requires manual reconciliation, not deleting state.\n'
+        'For an already complete journal with a missing completion receipt only, inspect its\n'
+        'exact bytes and use --reconcile-completed --case-id ID --journal-sha256 DIGEST\n'
+        ' --confirm-runner-stopped-and-journal-reviewed. No execution occurs in recovery.\n'
         'Never run a copied queue or manually invoke its executor to bypass retained claims.\n'
         'Reported route completion and source checks do not prove a business outcome.\n')
     if spec.get('control_flow_contract') or model.decision_tables:
