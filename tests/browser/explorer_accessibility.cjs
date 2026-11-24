@@ -104,6 +104,27 @@ const path=require('node:path');
    assert.deepEqual(await occurrences.locator('tbody tr').first().locator('td').allTextContents(),['1/1','2']);
    assert.equal(await runMatrix.locator('#owgExplorerSurfaceRoutes').count(),1);
    assert.equal(await runMatrix.locator('#owgExplorerAutomationReview').count(),1);
+   const projectedPaths=runMatrix.locator('#owgExplorerProjectedPaths');
+   await projectedPaths.waitFor();
+   assert.match(await projectedPaths.textContent(),/1 supporting selected execution references/);
+   const draftSelected=projectedPaths.getByRole('button',{name:'Draft selected path in process catalog'});
+   assert.equal(await draftSelected.isDisabled(),true);
+   await page.evaluate(()=>{
+     window.__owgOriginalDraftObserved=window.owgProcessCatalog.draftObserved;
+     window.owgProcessCatalog.draftObserved=source=>{window.__owgCapturedProjectedDraft=source;return true;};
+   });
+   await projectedPaths.getByRole('checkbox').check();
+   await draftSelected.click();
+   const captured=await page.evaluate(()=>{
+     const result=window.__owgCapturedProjectedDraft;
+     window.owgProcessCatalog.draftObserved=window.__owgOriginalDraftObserved;
+     delete window.__owgOriginalDraftObserved;
+     delete window.__owgCapturedProjectedDraft;
+     return result;
+   });
+   assert.deepEqual(captured,{path:['open','review','open'],count:1,
+     basis:'selected_observed_variant',evidenceRefs:['execution:compare_right']});
+   assert.equal(await draftSelected.isDisabled(),true);
    await audit(page,'#owgWorkflowExplorer','Selected execution workbench');
    await page.unroute('**/v1/workflow-evidence?*');
    await page.route('**/v1/workflow-evidence?*',route=>{
