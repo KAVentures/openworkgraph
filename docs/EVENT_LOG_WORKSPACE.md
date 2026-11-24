@@ -445,7 +445,9 @@ saves the whole log using its default case notion.
 
 To save copies regularly, for example to compare this week's report with last
 week's, add an **Event log report copy** job under *Scheduled jobs* with the
-log's ID. Scheduled copies use the full log and its default case notion. The
+log's ID. Choose **Schedule the current case selection** in **Saved copies** to
+retain the active case notion and filter for each run. Jobs created directly
+from **Scheduled jobs** use the full log and its default case notion. Each
 job is local and runs at least every 15 minutes, at most every 7
 days. The newest 10 copies per log are kept in the data folder under
 `event_log_reports/<log_id>/`. Deleting the log deletes its copies and its

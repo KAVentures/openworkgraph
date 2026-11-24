@@ -86,6 +86,14 @@ const path=require('node:path');
    const scoped=page.locator('#owgEventLogSavedChanges');
    await scoped.getByText('These copies use different case notions or case filters.').waitFor();
    assert.match(await scoped.innerText(),/Cases\t8\t4\t−4/);
+   await page.getByText('Schedule the current case selection',{exact:true}).click();
+   const [schedule]=await Promise.all([
+     page.waitForResponse(response=>new URL(response.url()).pathname==='/v1/schedules'&&response.request().method()==='POST'),
+     page.getByRole('button',{name:'Start report schedule'}).click()
+   ]);
+   assert.equal(schedule.status(),200,await schedule.text());
+   assert.deepEqual((await schedule.json()).report_scope,{case_type:'case',cohort:{activity:'Ship'}});
+   await page.getByText('Report schedule started.',{exact:true}).waitFor();
    await page.addScriptTag({content:axeSource});
    const savedAudit=await page.evaluate(async()=>window.axe.run({include:[['#owgEventLogManage'],['#owgEventLogSavedList']]},{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(savedAudit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);

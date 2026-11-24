@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from datetime import datetime, timedelta, timezone
 from io import BytesIO, StringIO
 
@@ -80,6 +81,26 @@ def test_scheduled_job_saves_a_copy_and_reports_a_missing_log():
     assert scheduler._run_job("event_log_report", "log_" + "0" * 16) == ("failed:event_log_unavailable", 0.0)
     with pytest.raises(scheduler.ScheduleError):
         scheduler.create("event_log_report", "log_" + "0" * 16, interval_minutes=60, confirm_scheduled_runs=True)
+
+
+def test_scheduled_report_reuses_the_original_case_selection():
+    log = _log()
+    picked = {"started_from": "2024-03-06T00:00:00Z"}
+    item = scheduler.create("event_log_report", log, interval_minutes=60, confirm_scheduled_runs=True,
+                            report_scope={"cohort": picked})
+    assert item["report_scope"] == {"case_type": "case", "cohort": picked}
+    picked["started_from"] = "2024-03-08T00:00:00Z"
+    with scheduler._LOCK:
+        due = scheduler._read()["schedules"][item["schedule_id"]]["next_run_epoch"]
+    runs = scheduler.run_due(now=due + 1)
+    assert runs == [{"schedule_id": item["schedule_id"], "outcome": "succeeded:report_saved"}]
+    report = saved.listing(log)["reports"][0]
+    figures = json.loads(saved._sidecar(saved.path(log, report["name"])).read_text(encoding="utf-8"))
+    assert figures["scope"]["cohort"] == {"started_from": "2024-03-06T00:00:00Z"}
+    assert figures["cases"] == 3
+    assert scheduler._run_scoped_report({**item, "report_scope": {"case_type": "case", "cohort": None}}) == (
+        "failed:invalid_report_scope", 0.0)
+    assert len(saved.listing(log)["reports"]) == 1
 
 
 def test_routes_require_the_dashboard(tmp_path):
