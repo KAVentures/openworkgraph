@@ -1079,23 +1079,73 @@
       (result.catalog_scan_truncated||result.ranked_results_truncated?'This ranked view is bounded; additional records are omitted.':'All local reviewed-knowledge pages were considered.')));
   }
   function installBPMNImport(parent){
-    const section=el('details');section.id='owgBPMNImport';section.appendChild(el('summary','Import a BPMN design as an unreviewed draft'));
-    section.appendChild(el('p','Select an authorized UTF-8 BPMN 2.0 file (128 KiB maximum). Preview supports tasks, plain start/end events, exclusive choices/merges and paired parallel gateways with disjoint unconditional branches and complete nested paired blocks. Plain embedded subprocesses (one start and end, no loops, boundary or event triggers) are inlined and their grouping is shown. Paired inclusive gateways, interrupting error/timer/escalation boundary events, sequential task loops, call activities, black-box pools with message flows, and lanes are supported. Conditional parallel regions, unpaired inclusive gateways, other subprocesses, call activities, event triggers, multi-process collaborations and executable extensions are rejected. XML never executes. No process is saved until separate graph review and Save.'));
+    const section=el('details');section.id='owgBPMNImport';
+    section.append(el('summary','Import a BPMN design as an unreviewed draft'),
+      el('p','Choose a UTF-8 BPMN 2.0 file of at most 128 KiB. Preview a single-process file directly, or inspect the file and choose an independent process. Review and save the draft separately.'));
     const file=el('input');file.type='file';file.accept='.bpmn,.xml,application/xml,application/bpmn+xml';
     file.setAttribute('aria-label','Choose BPMN process design');
-    const preview=button('Preview selected BPMN',()=>previewBPMN(file));preview.id='owgBPMNPreview';preview.disabled=true;
-    file.addEventListener('change',()=>{importGeneration++;importDraft=null;preview.disabled=!file.files?.length;
-      document.getElementById('owgBPMNImportResult').replaceChildren();});
-    const output=el('div');output.id='owgBPMNImportResult';section.append(file,preview,output);parent.appendChild(section);
+    const manifest=el('div'),message=el('p');message.setAttribute('role','status');
+    const options=el('select');options.setAttribute('aria-label','BPMN process');
+    const choice=el('label','Process to preview ');choice.append(options);choice.hidden=true;
+    const output=el('div');output.id='owgBPMNImportResult';
+    let sourceDigest=null;
+    const preview=button('Preview selected BPMN',()=>previewBPMN(file,choice.hidden?null:{
+      process_id:options.value,expected_source_sha256:sourceDigest
+    }));preview.id='owgBPMNPreview';preview.disabled=true;
+    const inspect=button('Inspect BPMN file',async()=>{
+      const source=file.files?.[0];
+      if(!source)return;
+      if(source.size>128*1024){message.textContent='BPMN exceeds the 128 KiB limit.';return;}
+      const attempt=++importGeneration;
+      importDraft=null;sourceDigest=null;output.replaceChildren();manifest.replaceChildren();choice.hidden=true;
+      preview.disabled=inspect.disabled=true;
+      message.textContent='Reading the process list…';
+      try{
+        await window.__owgAuthReady;
+        const response=await fetch('/v1/process-catalog/import-bpmn/inspect',{
+          method:'POST',headers:{'Content-Type':'application/bpmn+xml'},body:source,cache:'no-store'
+        });
+        const result=await response.json().catch(()=>({}));
+        if(attempt!==importGeneration)return;
+        if(!response.ok)throw new Error(typeof result.detail==='string'?result.detail:'BPMN inspection failed');
+        sourceDigest=result.source_sha256;
+        const placeholder=el('option','Choose a process');placeholder.value='';options.replaceChildren(placeholder);
+        let eligible=0;
+        result.processes.forEach((item,index)=>{
+          const label=item.name||'Process '+(index+1);
+          if(item.blocking_reason){manifest.append(el('p',label+' · '+item.blocking_reason));return;}
+          if(!item.id)return;
+          const option=el('option',label+' · '+item.id);option.value=item.id;options.append(option);eligible++;
+        });
+        choice.hidden=eligible===0;
+        message.textContent=result.processes.length+' '+(result.processes.length===1?'process':'processes')+' found.';
+        if(result.processes.length===1){
+          if(eligible===1)options.selectedIndex=1;
+          preview.disabled=false;
+        }
+      }catch(error){if(attempt===importGeneration)message.textContent=error.message;}
+      finally{if(attempt===importGeneration)inspect.disabled=false;}
+    });inspect.disabled=true;
+    options.addEventListener('change',()=>{
+      importGeneration++;importDraft=null;output.replaceChildren();preview.disabled=!options.value;inspect.disabled=false;
+    });
+    file.addEventListener('change',()=>{
+      importGeneration++;importDraft=null;sourceDigest=null;choice.hidden=true;options.replaceChildren();
+      preview.disabled=inspect.disabled=!file.files?.length;
+      output.replaceChildren();manifest.replaceChildren();message.textContent='';
+    });
+    section.append(file,inspect,message,manifest,choice,preview,output);
+    parent.appendChild(section);
   }
-  async function previewBPMN(input){
+  async function previewBPMN(input,selection){
     const file=input.files?.[0];if(!file)return;
     if(file.size>128*1024)throw new Error('BPMN exceeds the 128 KiB limit.');
     const attempt=++importGeneration,control=document.getElementById('owgBPMNPreview');control.disabled=true;
     importDraft=null;const host=document.getElementById('owgBPMNImportResult');host.replaceChildren(el('p','Inspecting BPMN as data; nothing is saved…'));
     try{
       await window.__owgAuthReady;
-      const response=await fetch('/v1/process-catalog/import-bpmn',{
+      const query=selection?'?'+new URLSearchParams(selection):'';
+      const response=await fetch('/v1/process-catalog/import-bpmn'+query,{
         method:'POST',headers:{'Content-Type':'application/bpmn+xml'},body:file,cache:'no-store'});
       const value=await response.json().catch(()=>({}));
       if(attempt!==importGeneration)return;
@@ -1104,6 +1154,7 @@
       importDraft=value;
       host.replaceChildren(el('h4','Unreviewed BPMN draft'),el('p',value.process_model.activities.length+' nodes · '+value.process_model.transitions.length+
         ' transitions · '+value.process_model.business_rules.length+' unconfirmed rules. Source SHA256 '+value.source_sha256));
+      if(value.selected_process)host.appendChild(el('p','Selected process: '+(value.selected_process.name||value.selected_process.id)));
       host.appendChild(el('p','This is declared design structure, with no observed executions, source outcomes, approved policy or execution rights. Typed tasks have no imported tool mappings. All rule text is untrusted and unevaluated.'));
       const warnings=el('ul');value.warnings.forEach(text=>warnings.appendChild(el('li',text.replaceAll('_',' '))));host.appendChild(warnings);
       if(value.label_corrections.length){
@@ -1139,7 +1190,7 @@
     if(busy)throw new Error('Wait for the current process request.');
     if(value!==importDraft)throw new Error('Preview the selected BPMN again before opening its draft.');
     if(!replaceDraft())return;
-    restorationDraft=null;record={workflow_id:null,revision:0,title:'Imported BPMN design',evidence_refs:[]};
+    restorationDraft=null;record={workflow_id:null,revision:0,title:value.selected_process?.name||'Imported BPMN design',evidence_refs:[]};
     model=copy(value.process_model);record.process_model=copy(model);reviewed=false;renderEditor();
     status('Opened an unsaved declared BPMN design. Review its goal, labels, branch rules and source documentation before saving. No observations, permissions or executable implementations were imported.');
     document.getElementById('owgCatalogEditor')?.scrollIntoView({block:'start'});
