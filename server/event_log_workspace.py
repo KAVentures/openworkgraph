@@ -41,6 +41,7 @@ from . import event_log_source_identity as source_identity
 from . import event_log_object_relationships as object_relationships
 from . import event_log_timestamp_formats as timestamp_formats
 from . import event_log_same_source as same_source
+from . import observed_execution_log_sources as observed_sources
 
 MAX_LOGS = 50
 MAX_IMPORT_BYTES = 4 * 1024 * 1024 * 1024
@@ -169,11 +170,7 @@ CREATE TABLE IF NOT EXISTS log_expiry (
 
 _SCHEMA += source_identity.SCHEMA + object_relationships.SCHEMA
 # Stored structural snapshots keep independent source provenance.
-_SCHEMA += """CREATE TABLE IF NOT EXISTS observed_execution_log_sources (
-    log_id VARCHAR PRIMARY KEY,
-    snapshot_sha256 VARCHAR NOT NULL,
-    source_report VARCHAR NOT NULL
-);"""
+_SCHEMA += observed_sources.SCHEMA
 
 # Dated notes on a log's timeline (event_log_change_markers), such as "Automation went live".
 _SCHEMA += """
@@ -255,8 +252,7 @@ def _check_log(conn: duckdb.DuckDBPyConnection, log_id: str) -> dict[str, Any]:
     identity=source_identity.description(conn,log_id)
     if identity:result['source_identity']=identity
     result.update(object_relationships.metadata(conn,log_id))
-    from .observed_execution_log import source_metadata
-    result.update(source_metadata(conn, log_id))
+    result.update(observed_sources.metadata(conn, log_id))
     return result
 
 
