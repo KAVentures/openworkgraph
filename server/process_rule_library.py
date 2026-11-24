@@ -163,6 +163,144 @@ def link(model_value: dict[str, Any], rule_id: str, rule_set_id: str, library_ru
         raise RuleLibraryError("The library rule does not fit this design (for example its decision table)") from None
 
 
+def _find_rule(revision, rule_id):
+    return next((r for r in revision["rules"] if r["id"] == rule_id), None) if revision else None
+
+
+def _linked_state(sets, rule):
+    ref = rule["library_ref"]
+    history = sets.get(ref["rule_set_id"])
+    if not history:
+        return "rule_set_missing", None, None
+    pinned = next((r for r in history if r["revision"] == ref["revision"]), None)
+    original = _find_rule(pinned, ref["rule_id"])
+    latest = history[-1]
+    current = _find_rule(latest, ref["rule_id"])
+    if pinned is None or original is None:
+        return "pinned_rule_missing", latest, current
+    if (original["content_sha256"] != ref["content_sha256"]
+            or rule_digest(original) != ref["content_sha256"]):
+        return "pinned_digest_mismatch", latest, current
+    if rule_digest(rule) != ref["content_sha256"]:
+        return "edited_in_design", latest, current
+    if current is None:
+        return "removed_from_library", latest, current
+    if rule_digest(current) != current["content_sha256"]:
+        return "latest_digest_mismatch", latest, current
+    if current["content_sha256"] != ref["content_sha256"]:
+        return "library_rule_changed", latest, current
+    if latest["revision"] != ref["revision"]:
+        return "newer_revision_same_content", latest, current
+    return "current", latest, current
+
+
+def _table_impact(model, rule_ids):
+    direct = {t["id"] for t in model.get("decision_tables", [])
+              if any(row["rule_id"] in rule_ids for row in t["rows"])}
+    affected = set(direct)
+    while True:
+        dependents = {t["id"] for t in model.get("decision_tables", [])
+                      if any(r["table_id"] in affected for r in t.get("required_decisions", []))}
+        if dependents <= affected:
+            break
+        affected.update(dependents)
+    return direct, affected
+
+
+def _relink_rule(rule, revision, source):
+    rule.update(text=source["text"], user_confirmed=False,
+                library_ref={"rule_set_id": revision["rule_set_id"],
+                             "revision": revision["revision"], "rule_id": source["id"],
+                             "content_sha256": source["content_sha256"]})
+    if source.get("predicate") is None:
+        rule.pop("predicate", None)
+    else:
+        rule["predicate"] = source["predicate"]
+
+
+def upgrade_review(record, selections=None):
+    """Review linked-rule changes and optionally construct one unsaved model.
+
+    Selection requires the exact previewed library revision and digest for
+    every rule, and the caller separately pins the saved process. All selected
+    updates succeed together or no model is proposed.
+    """
+    model = ProcessModel.model_validate(record["process_model"]).model_dump()
+    with _LOCK:
+        sets = _read()["sets"]
+    rows = []
+    candidates = {}
+    for rule in model["business_rules"]:
+        ref = rule.get("library_ref")
+        if not ref:
+            continue
+        state, latest, current = _linked_state(sets, rule)
+        direct, affected = _table_impact(model, {rule["id"]})
+        row = {"rule_id": rule["id"], "rule_set_id": ref["rule_set_id"],
+               "library_rule_id": ref["rule_id"], "linked_revision": ref["revision"],
+               "linked_content_sha256": ref["content_sha256"], "status": state,
+               "latest_revision": latest["revision"] if latest else None,
+               "latest_content_sha256": current["content_sha256"] if current else None,
+               "design_confirmed": rule["user_confirmed"],
+               "direct_decision_table_ids": sorted(direct),
+               "affected_decision_table_ids": sorted(affected),
+               "text_changed": current is not None and rule["text"] != current["text"],
+               "predicate_changed": current is not None and rule.get("predicate") != current.get("predicate"),
+               "current_text": rule["text"], "latest_text": current["text"] if current else None,
+               "current_predicate": rule.get("predicate"),
+               "latest_predicate": current.get("predicate") if current else None,
+               "selectable": state in {"library_rule_changed", "newer_revision_same_content"}}
+        rows.append(row)
+        if row["selectable"]:
+            candidates[rule["id"]] = (row, rule, latest, current)
+    result = {"format": "openworkgraph.rule-library-upgrade-review.v1",
+              "based_on": {k: record[k] for k in ("workflow_id", "revision", "content_sha256")},
+              "linked_rules": rows, "selectable_rule_count": len(candidates),
+              "selected_rule_ids": [], "cleared_rule_confirmations": [],
+              "affected_decision_table_ids": [], "cleared_decision_table_confirmations": [],
+              "proposed_process_model": None, "process_model_saved": False,
+              "evaluates_rules": False, "execution_authorized": False}
+    if selections is None:
+        return result
+    if not isinstance(selections, list) or not 1 <= len(selections) <= 40:
+        raise RuleLibraryError("Select 1–40 linked rules from the current preview")
+    ids = set()
+    chosen = []
+    for selection in selections:
+        if (not isinstance(selection, dict)
+                or set(selection) != {"rule_id", "library_revision", "content_sha256"}
+                or not isinstance(selection["rule_id"], str)
+                or type(selection["library_revision"]) is not int
+                or not isinstance(selection["content_sha256"], str)):
+            raise RuleLibraryError("Select exact rule revisions and content digests")
+        rule_id = selection["rule_id"]
+        if rule_id in ids or rule_id not in candidates:
+            raise RuleLibraryError("A selected rule is duplicated or no longer eligible; reload the preview")
+        row, rule, latest, current = candidates[rule_id]
+        if (selection["library_revision"] != row["latest_revision"]
+                or selection["content_sha256"] != row["latest_content_sha256"]):
+            raise RuleLibraryError("A selected library revision changed; reload the preview")
+        ids.add(rule_id)
+        chosen.append((rule, latest, current))
+    direct, affected = _table_impact(model, ids)
+    result["selected_rule_ids"] = sorted(ids)
+    result["cleared_rule_confirmations"] = sorted(rule["id"] for rule, _, _ in chosen if rule["user_confirmed"])
+    for rule, latest, current in chosen:
+        _relink_rule(rule, latest, current)
+    result["affected_decision_table_ids"] = sorted(affected)
+    for table in model.get("decision_tables", []):
+        if table["id"] in affected:
+            if table["user_confirmed"]:
+                result["cleared_decision_table_confirmations"].append(table["id"])
+            table["user_confirmed"] = False
+    result["cleared_decision_table_confirmations"].sort()
+    try:
+        result["proposed_process_model"] = ProcessModel.model_validate(model).model_dump()
+    except ValidationError:
+        raise RuleLibraryError("Selected rules do not fit the current process model; review its decision tables") from None
+    return result
+
+
 def drift(records: list[dict[str, Any]]) -> dict[str, Any]:
     """Saved designs whose linked rules are behind the library or edited away from it."""
     with _LOCK:
@@ -173,23 +311,16 @@ def drift(records: list[dict[str, Any]]) -> dict[str, Any]:
             ref = rule.get("library_ref")
             if not ref:
                 continue
-            history = sets.get(ref["rule_set_id"])
-            base = {"workflow_id": record["workflow_id"], "revision": record["revision"], "rule_id": rule["id"],
-                    "rule_set_id": ref["rule_set_id"], "linked_revision": ref["revision"]}
-            if not history:
-                findings.append({**base, "status": "rule_set_missing"})
-                continue
-            latest = history[-1]
-            latest_rule = next((r for r in latest["rules"] if r["id"] == ref["rule_id"]), None)
-            local = rule_digest(rule)
-            if local != ref["content_sha256"]:
-                findings.append({**base, "status": "edited_in_design", "latest_revision": latest["revision"]})
-            elif latest_rule is None:
-                findings.append({**base, "status": "removed_from_library", "latest_revision": latest["revision"]})
-            elif latest_rule["content_sha256"] != ref["content_sha256"]:
-                findings.append({**base, "status": "library_rule_changed", "latest_revision": latest["revision"]})
+            state, latest, _ = _linked_state(sets, rule)
+            if state not in {"current", "newer_revision_same_content"}:
+                base = {"workflow_id": record["workflow_id"], "revision": record["revision"],
+                        "rule_id": rule["id"], "rule_set_id": ref["rule_set_id"],
+                        "linked_revision": ref["revision"]}
+                if latest:
+                    base["latest_revision"] = latest["revision"]
+                findings.append({**base, "status": state})
     return {"format": "openworkgraph.rule-library-drift.v1", "findings": findings,
             "designs_checked": len(records), "evaluates_rules": False}
 
 
-__all__ = ["RuleLibraryError", "drift", "get", "link", "listing", "rule_digest", "save"]
+__all__ = ["RuleLibraryError", "drift", "get", "link", "listing", "rule_digest", "save", "upgrade_review"]
