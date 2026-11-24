@@ -81,3 +81,30 @@ suite: case swaps at equal aggregate scores, newly introduced review bypasses,
 missing categories, exact digest binding, offline CLI and failure exit status.
 
 Related: [#370 R17](https://github.com/KAVentures/openworkgraph/issues/370).
+
+
+## Review repeated captures on an identical case suite
+
+    python evaluate.py --cases reviewed-cases.json --results run1.json --repeat-results run2.json --repeat-results run3.json --output repeated-review.json
+
+Select 2–10 offline captured result documents from the exact same spec and
+reviewed suite. Every selected document is rescored; precomputed scores are
+not trusted. The report identifies cases that always match, intermittently
+match or never match, and counts critical review failures per case. It
+includes category-level counts, each capture's score, worst and best
+matching-case counts, and the descriptive mean matching fraction. Any
+mismatch requires review (exit 2). No raw question text or case input is
+copied. This mode cannot be combined with a baseline comparison or live
+model execution.
+
+Identical document digests are counted explicitly: repeated selection of
+one file is not evidence of independent repeated model execution. The
+same model/configuration, independence, representativeness and business
+ground truth are not established. No statistical confidence interval or
+deployment authorization is claimed.
+
+The exact extracted summary function (3,592 characters, FNV-1a 1853026731)
+passed 1,000 randomized matrices covering 150,403 case-capture observations,
+four mismatched-input refusal checks and one duplicate-document check in
+local testing. Additional generated-runtime and CLI regressions are
+included; full CI remains required.
