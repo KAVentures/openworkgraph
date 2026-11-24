@@ -146,6 +146,114 @@ def record_draft(log_id, payload):
                               _expected_projection_sha256=request.expected_projection_sha256)
 
 
+class SelectionInspection(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    reference: str = Field(pattern=r"^urn:openworkgraph:local-log-discovery:[a-f0-9]{64}$")
+    expected_process_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    expected_projection_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    after: str | None = Field(default=None, max_length=512)
+    case_id: str | None = Field(default=None, min_length=1, max_length=512)
+    offset: int = Field(default=0, ge=0, le=MAX_PROJECTION_ROWS)
+    limit: int = Field(default=30, ge=1, le=100)
+
+
+def inspect_selection(record, payload):
+    """Reopen precisely the source selection bound to a saved process revision.
+
+    Pages are pinned to a fresh effective-input digest. Historical row copies
+    were never retained, so changed projections are explicitly current data.
+    Only local authenticated dashboard callers may inspect case identities.
+    """
+    try:
+        request = SelectionInspection.model_validate(payload)
+    except ValidationError:
+        raise workspace.EventLogWorkspaceError("invalid exact source inspection request") from None
+    if (record.get("content_sha256") != request.expected_process_sha256
+            or request.reference not in record.get("evidence_refs", [])):
+        raise workspace.EventLogWorkspaceError("Source reference does not belong to the exact saved process revision")
+    if (request.case_id is not None and request.after is not None
+            or request.case_id is None and request.offset != 0):
+        raise workspace.EventLogWorkspaceError("Choose either a case page or an event page")
+    if (request.after is not None or request.case_id is not None) and not request.expected_projection_sha256:
+        raise workspace.EventLogWorkspaceError("Open the original selection before paging through it")
+    if not workspace.database_path().exists():
+        raise workspace.EventLogWorkspaceError("Original discovery source is unavailable")
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            row = conn.execute(
+                "SELECT log_id, payload FROM discovery_snapshots WHERE reference = ?",
+                [request.reference]).fetchone()
+            if row is None:
+                raise workspace.EventLogWorkspaceError("Original discovery source is unavailable")
+            log_id, raw = row
+            try:
+                saved = json.loads(raw)
+                if (saved["log_id"] != log_id or PREFIX + digest(saved) != request.reference
+                        or digest(saved["selection"]) != saved["selection_sha256"]):
+                    raise ValueError
+            except (KeyError, TypeError, ValueError, RecursionError):
+                raise workspace.EventLogWorkspaceError("Discovery source metadata does not match its reference") from None
+            workspace._check_log(conn, log_id)
+            if source_rows(conn, log_id) > MAX_SOURCE_ROWS:
+                raise workspace.EventLogWorkspaceError("Original source exceeds the inspection work budget")
+            materialize_selection(conn, log_id, saved["selection"])
+            current = projected_input(conn)
+            if request.expected_projection_sha256 and current["sha256"] != request.expected_projection_sha256:
+                raise workspace.EventLogWorkspaceError("Effective discovery input changed since inspection; reopen the original selection")
+            original = saved.get("effective_input")
+            result = {
+                "format": "openworkgraph.discovery-selection-inspection.v1",
+                "reference": request.reference,
+                "workflow_id": record["workflow_id"], "revision": record["revision"],
+                "process_sha256": record["content_sha256"],
+                "log_id": log_id, "selection": saved["selection"],
+                "selection_sha256": saved["selection_sha256"],
+                "original_effective_input": original,
+                "current_effective_input": current,
+                "effective_input_status": "not_recorded" if original is None else
+                    "matches" if original == current else "changed",
+                "historical_rows_retained": False,
+                "raw_source_fingerprint_rechecked": False,
+                "business_case_identity_verified": False,
+                "business_outcomes_verified": False,
+                "execution_authorized": False,
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if request.case_id is None:
+                # Keyset pagination across exact currently selected complete cases.
+                where = "WHERE case_id > ?" if request.after is not None else ""
+                params = [request.after] if request.after is not None else []
+                rows = conn.execute(f"""
+                    SELECT case_id, count(*), epoch(max(ts)-min(ts)),
+                           count(*) - count(DISTINCT ts)
+                    FROM ce {where}
+                    GROUP BY case_id ORDER BY case_id LIMIT ?
+                """, [*params, request.limit + 1]).fetchall()
+                result.update(mode="cases",
+                              cases=[{"case_id": key, "events": n, "elapsed_seconds": elapsed,
+                                      "timestamp_ties": ties}
+                                     for key, n, elapsed, ties in rows[:request.limit]],
+                              next_after=rows[request.limit - 1][0] if len(rows) > request.limit else None)
+            else:
+                total = conn.execute("SELECT count(*) FROM ce WHERE case_id=?", [request.case_id]).fetchone()[0]
+                if not total:
+                    raise workspace.EventLogWorkspaceError("Case is not in the exact discovery selection")
+                rows = conn.execute("""
+                    SELECT event_id, activity, ts FROM ce WHERE case_id=?
+                    ORDER BY ts, event_id LIMIT ? OFFSET ?
+                """, [request.case_id, request.limit, request.offset]).fetchall()
+                result.update(mode="events", case_id=request.case_id, total_events=total,
+                              offset=request.offset,
+                              events=[{"event_id": key, "activity": activity,
+                                       "timestamp": stamp.isoformat() + "Z"}
+                                      for key, activity, stamp in rows],
+                              next_offset=request.offset + len(rows) if request.offset + len(rows) < total else None)
+            return result
+        finally:
+            conn.close()
+
+
 def origins(record, *, include_selection=False):
     refs = list(dict.fromkeys(r for r in record.get('evidence_refs', []) if r.startswith(PREFIX)))
     if not refs:
