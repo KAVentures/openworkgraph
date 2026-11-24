@@ -4,6 +4,64 @@ const fs=require('node:fs/promises');
 const {spawn}=require('node:child_process');
 const {tmpdir}=require('node:os');
 const path=require('node:path');
+async function reviewPrerequisites(browser,base,session,bearer){
+ const page=await browser.newPage();
+ try{
+  await page.goto(base+'/#session='+session);await page.locator('[role=tab][data-tab=evidence]').click();
+  const saveDesign=(title,prior=null)=>page.evaluate(async ({title,prior})=>{
+    await window.__owgAuthReady;
+    const body={title,user_confirmed:true,process_model:{
+      goal:'Review the authorized case',baseline_source:'user_declared',baseline_path:['Review'],
+      activities:[{id:'review',label:'Review'}],entry_activity_id:'review',terminal_activity_ids:['review']
+    }};
+    if(prior)Object.assign(body,{workflow_id:prior.workflow_id,expected_revision:prior.revision});
+    const response=await fetch('/v1/process-catalog',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(!response.ok)throw new Error(await response.text());
+    return response.json();
+  },{title,prior});
+  const output=await saveDesign('Purchase evidence');
+  const consumer=await saveDesign('Finalize purchase');
+  const authPath=base+'/v1/process-catalog/prerequisites?'+new URLSearchParams({workflow_id:consumer.workflow_id});
+  const denied=await fetch(authPath,{headers:{Authorization:'Bearer '+bearer}});
+  assert.equal(denied.status,403);
+  await page.getByRole('button',{name:'Load saved designs',exact:true}).click();
+  await page.getByRole('button',{name:'Finalize purchase · r1',exact:true}).click();
+  const panel=page.locator('#owgCatalogPrerequisites');
+  const review=panel.getByRole('button',{name:'Review prerequisites',exact:true});
+  await review.click();
+  await panel.getByRole('button',{name:'Load saved designs for prerequisites',exact:true}).click();
+  await panel.getByLabel('Prerequisite design',{exact:true}).selectOption(output.workflow_id);
+  await panel.getByRole('button',{name:'Add prerequisite',exact:true}).click();
+  await panel.getByLabel('Reason for Purchase evidence',{exact:true}).fill('Uses the recorded output');
+  const save=panel.getByRole('button',{name:'Save prerequisites',exact:true});
+  assert.ok(await save.isDisabled());
+  await panel.getByLabel('I reviewed these exact prerequisite revisions',{exact:true}).check();
+  await save.click();
+  await panel.getByText('Saved prerequisite revision 1.',{exact:true}).waitFor();
+  await saveDesign('Purchase evidence',output);
+  await review.click();
+  await panel.getByText('Newer revision available',{exact:true}).waitFor();
+  await panel.getByRole('button',{name:'Use latest Purchase evidence · r2',exact:true}).click();
+  assert.ok(await save.isDisabled());
+  await panel.getByLabel('I reviewed these exact prerequisite revisions',{exact:true}).check();
+  await save.click();
+  await panel.getByText('Saved prerequisite revision 2.',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'Load saved designs',exact:true}).click();
+  page.once('dialog',dialog=>dialog.accept());
+  await page.getByRole('button',{name:'Purchase evidence · r2',exact:true}).click();
+  await page.locator('#owgCatalogStatus').filter({hasText:'Opened immutable revision 2.'}).waitFor();
+  await review.click();
+  await panel.getByText('Finalize purchase · r1 · Pins this design at r2 · Current',{exact:true}).waitFor();
+  const axe=await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8');
+  await page.addScriptTag({content:axe});
+  const violations=await page.evaluate(async()=>(
+    await axe.run(document.querySelector('#owgCatalogPrerequisites'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}})
+  ).violations.map(item=>item.id));
+  assert.deepEqual(violations,[]);
+  await page.setViewportSize({width:390,height:844});
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2));
+ }finally{await page.close();}
+}
 (async()=>{
  const scratch=await fs.mkdtemp(path.join(tmpdir(),'owg-local-decisions-')),base='http://127.0.0.1:8787';
  const server=spawn(process.env.OWG_BROWSER_PYTHON||'python',['-m','uvicorn','process_logs_app:app','--app-dir','tests/browser','--host','127.0.0.1','--port','8787'],{env:{...process.env,OWG_BROWSER_TEST_DIR:scratch},stdio:['ignore','pipe','pipe']});
@@ -13,6 +71,7 @@ const path=require('node:path');
   browser=await chromium.launch({headless:true,args:['--no-sandbox'],...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE}:{})});
   const page=await browser.newPage({acceptDownloads:true}),errors=[];page.on('pageerror',e=>errors.push(e.message));
   const session=(await fs.readFile(path.join(scratch,'session.txt'),'utf8')).trim();
+  await reviewPrerequisites(browser,base,session,(await fs.readFile(path.join(scratch,'token.txt'),'utf8')).trim());
   await page.goto(base+'/#session='+session);await page.locator('[role=tab][data-tab=evidence]').click();
   const model={goal:'Review a purchase',baseline_source:'user_declared',baseline_path:['Review','Accept'],activities:[{id:'choose',label:'Review',kind:'decision'},{id:'accept',label:'Accept'},{id:'escalate',label:'Escalate'}],transitions:[{source:'choose',target:'accept',rule_id:'small'},{source:'choose',target:'escalate',rule_id:'large'}],entry_activity_id:'choose',terminal_activity_ids:['accept','escalate'],business_rules:[{id:'small',text:'Small purchase',user_confirmed:true,predicate:{conditions:[{path:'/amount',operator:'lt',expected:100}]}},{id:'large',text:'Large purchase',user_confirmed:true,predicate:{conditions:[{path:'/amount',operator:'gte',expected:100}]}}]};
   const saved=await page.evaluate(async model=>{await window.__owgAuthReady;const r=await fetch('/v1/process-catalog',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:'Local purchase',process_model:model,user_confirmed:true})});if(!r.ok)throw new Error(await r.text());return r.json();},model);
