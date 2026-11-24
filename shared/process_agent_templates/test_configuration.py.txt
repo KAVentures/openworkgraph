@@ -276,6 +276,81 @@ class ConfigurationCases(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ImplementationError):
                 prepare_reviewed_case(spec,suite,bindings,ident,alt)
 
+    async def test_reuse_reviewed_route_for_new_case_rebinds_every_action_and_source_check(self):
+        from configure import prepare_reviewed_case, write_reviewed_case_directory
+        from execute import prepare, execute_approved
+        from test_execution import FakeTools, receipt
+        from datetime import timedelta
+        spec,catalog,suite,_=self.reviewed_audit_fixture()
+        # Existing fake transport has no pinned metadata schemas. Use the
+        # original synthetic executor fixture bindings for this integration.
+        bindings=fixture()[3]
+        original=deepcopy(suite)
+        new_case={'issue':'SYNTHETIC_NEW_CASE','version':3,
+                  'request_id':'synthetic-new-key','record_ref':'owg:r:'+'d'*32}
+        documents=prepare_reviewed_case(spec,suite,bindings,'case_1',1,new_case=new_case)
+        review=documents['preparation-review.json']
+        self.assertEqual(suite,original)
+        self.assertTrue(review['route_reused_for_new_case'])
+        self.assertFalse(review['selected_input_is_reviewed_reference_case'])
+        self.assertFalse(review['new_case_route_applicability_established'])
+        self.assertEqual(review['reviewed_reference_case_sha256'],digest(suite['cases'][0]['input']))
+        self.assertEqual(review['case_sha256'],digest(new_case))
+        self.assertNotEqual(review['case_sha256'],review['reviewed_reference_case_sha256'])
+        self.assertEqual(documents['case.json'],new_case)
+        self.assertNotIn('SYNTHETIC_PRIVATE_RECORD',json.dumps(documents))
+        self.assertNotIn('SYNTHETIC_NEW_CASE',json.dumps(review))
+        plan=documents['plan.json']
+        prepared=prepare(spec,plan,new_case,bindings)
+        self.assertEqual(prepared['requirements'],[])
+        self.assertEqual(prepared['actions'][0]['arguments']['issue'],new_case['issue'])
+        self.assertEqual(prepared['outcomes'][0]['resource_ref'],new_case['record_ref'])
+        intent=documents['customer-intent.json']
+        self.assertEqual(intent['case_sha256'],digest(new_case))
+        tools=FakeTools()
+        requests=[]
+        async def reader(base,token,request):
+            requests.append(deepcopy(request))
+            value=receipt(request)
+            if not tools.resolved:
+                value.update(operation_verified=False,availability='unknown',
+                             reason='provider_state_not_expected_operation')
+            return value
+        with TemporaryDirectory() as directory:
+            root=Path(directory)
+            write_reviewed_case_directory(root/'packet',documents)
+            with patch.dict('os.environ',{'OWG_EXECUTION_MCP_TOKEN':'SYNTHETIC_TOKEN',
+                                          'OWG_EXECUTION_SOURCE_READ_TOKEN':'SYNTHETIC_SOURCE'}):
+                with self.assertRaises(ImplementationError):
+                    await execute_approved(spec,plan,new_case,bindings,intent,
+                        journal_directory=root/'journal',client_factory=lambda *args:tools,receipt_reader=reader)
+                self.assertEqual(tools.calls,[])
+                self.assertEqual(requests,[])
+                self.assertFalse((root/'journal').exists())
+                # Synthetic operator review only; production preparation
+                # never sets these fields or manufactures an expiry.
+                reviewed={**intent,'customer_authorization_confirmed':True,'source_reads_confirmed':True,
+                          'expires_at':(datetime.now(timezone.utc)+timedelta(minutes=10)).isoformat()}
+                result=await execute_approved(spec,plan,new_case,bindings,reviewed,
+                    journal_directory=root/'journal',client_factory=lambda *args:tools,receipt_reader=reader)
+                self.assertTrue(result['all_tool_results_matched'])
+                self.assertTrue(result['all_declared_operations_verified'])
+                self.assertFalse(result['business_objective_verified'])
+                self.assertEqual([name for name,_ in tools.calls],['read_case','resolve_case','read_case'])
+                self.assertTrue(all(args['issue']==new_case['issue'] for _,args in tools.calls))
+                self.assertEqual(tools.calls[1][1]['request_id'],new_case['request_id'])
+                self.assertTrue(requests)
+                self.assertTrue(all(row['resource_ref']==new_case['record_ref'] for row in requests))
+                with self.assertRaises(ImplementationError):
+                    await execute_approved(spec,plan,suite['cases'][0]['input'],bindings,reviewed,
+                        journal_directory=root/'journal',client_factory=lambda *args:tools,receipt_reader=reader)
+                self.assertEqual(len(tools.calls),3)
+        for invalid in ({}, {'issue':'missing facts'}, {**new_case,'record_ref':'invalid'}, [], {'text':'x'*65536}):
+            with self.assertRaises(ImplementationError):
+                prepare_reviewed_case(spec,suite,bindings,'case_1',1,new_case=invalid)
+        with self.assertRaises(ImplementationError):
+            prepare_reviewed_case(spec,suite,bindings,'case_3',1,new_case=new_case)
+
     async def test_prepare_reviewed_case_cli_reuses_executor_without_network(self):
         import subprocess
         import sys
@@ -306,6 +381,18 @@ class ConfigurationCases(unittest.IsolatedAsyncioTestCase):
                                   cwd=root,capture_output=True,text=True,timeout=20)
             self.assertNotEqual(result.returncode,0)
             self.assertFalse((root/'execution-journal').exists())
+            new_case={**suite['cases'][0]['input'],'issue':'SYNTHETIC_NEW_CASE',
+                      'request_id':'new-case-idempotency-key','record_ref':'owg:r:'+'e'*32}
+            (root/'new-case.json').write_text(json.dumps(new_case),encoding='utf-8')
+            command[-1]='new-prepared'
+            result=subprocess.run(command+['--new-case','new-case.json','--confirm-retain-case-inputs'],
+                                  cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            self.assertTrue(json.loads(result.stdout)['route_reused_for_new_case'])
+            self.assertEqual(load_object(root/'new-prepared'/'case.json'),new_case)
+            review=load_object(root/'new-prepared'/'preparation-review.json')
+            self.assertFalse(review['new_case_route_applicability_established'])
+            self.assertEqual(review['reviewed_reference_case_sha256'],digest(suite['cases'][0]['input']))
 
     async def test_paired_binding_review_detects_regressions_and_clear_but_changed_contracts(self):
         from configure import compare_binding_configurations
