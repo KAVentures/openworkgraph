@@ -205,6 +205,48 @@ class QueueCases(unittest.IsolatedAsyncioTestCase):
             await self.run_queue()
         self.assertEqual(len(self.calls),1)
 
+    async def test_offline_recovery_of_complete_journal_never_replays_actions(self):
+        from run_queue import reconcile_completed_case
+        import hashlib
+        from unittest.mock import patch
+        # Simulate a durable journal but a crash at completion-receipt write.
+        from run_queue import write_once as actual_write
+        def fail_receipt(path,value):
+            if path.name.endswith('.complete.json'):
+                raise OSError('SYNTHETIC_RECEIPT_FAILURE')
+            return actual_write(path,value)
+        with patch('run_queue.write_once',side_effect=fail_receipt):
+            result=await self.run_queue(limit=3)
+        self.assertTrue(result['reconciliation_required'])
+        self.assertEqual(self.calls,['PRIVATE_CASE_0'])
+        state=self.root/'queue-state'
+        journal=next((state/'journals').glob('*.jsonl'))
+        pin=hashlib.sha256(journal.read_bytes()).hexdigest()
+        for case_id,sha in [('case_1','f'*64),('case_2',pin)]:
+            with self.assertRaises(ImplementationError):
+                reconcile_completed_case(self.spec,self.root,self.pin,case_id,sha)
+        self.assertFalse((state/'case_1.complete.json').exists())
+        recovered=reconcile_completed_case(self.spec,self.root,self.pin,'case_1',pin)
+        self.assertFalse(recovered['reconciliation_required'])
+        self.assertEqual(recovered['recovered_completion_count'],1)
+        self.assertTrue(recovered['cases'][0]['completion_recovered_from_journal'])
+        self.assertEqual(self.calls,['PRIVATE_CASE_0'])
+        with self.assertRaises(ImplementationError):
+            reconcile_completed_case(self.spec,self.root,self.pin,'case_1',pin)
+        self.assertEqual((await self.run_queue(limit=2))['reported_complete_count'],3)
+        self.assertEqual(self.calls,['PRIVATE_CASE_0','PRIVATE_CASE_1','PRIVATE_CASE_2'])
+
+    async def test_recovery_refuses_uncertain_journal_even_with_matching_digest(self):
+        from run_queue import reconcile_completed_case
+        import hashlib
+        self.fail_case='PRIVATE_CASE_0'
+        await self.run_queue(limit=3)
+        journal=next((self.root/'queue-state'/'journals').glob('*.jsonl'))
+        with self.assertRaises(ImplementationError):
+            reconcile_completed_case(self.spec,self.root,self.pin,'case_1',hashlib.sha256(journal.read_bytes()).hexdigest())
+        self.assertTrue(self.status()['reconciliation_required'])
+        self.assertEqual(self.calls,['PRIVATE_CASE_0'])
+
     async def test_journal_identity_argument_and_source_checks_are_required(self):
         await self.run_queue()
         state=self.root/'queue-state'
