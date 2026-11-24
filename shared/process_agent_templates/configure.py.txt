@@ -358,6 +358,18 @@ def _mapped_catalog_changes(spec, previous, current, mapping):
             'provider_tool_removal_verified': False}
 
 
+def _reviewed_edge_indices(spec, route):
+    model = spec['process_model']
+    if spec.get('control_flow_contract') == 'openworkgraph.parallel-node-firing-plan.v1':
+        # A firing sequence can interleave independent branch nodes. Adjacent
+        # nodes are not necessarily edges: use the actual token replay indices.
+        from owg_model.process_model import ProcessModel
+        from owg_model.process_parallel import replay_node_ids
+        return set(replay_node_ids(route, ProcessModel.model_validate(model))['transition_indices'])
+    edges = {(edge['source'], edge['target']): index for index, edge in enumerate(model['transitions'])}
+    return {edges[pair] for pair in zip(route, route[1:])}
+
+
 def audit_bindings(spec, catalog, suite, bindings, *, previous_catalog=None):
     """Offline review of exact reviewed route alternatives against current mapping.
 
@@ -395,12 +407,14 @@ def audit_bindings(spec, catalog, suite, bindings, *, previous_catalog=None):
         raise ImplementationError('Select at most 80 reviewed route alternatives per binding audit')
     tools = {tool['name']: tool for tool in catalog['tools']}
     covered = set()
+    covered_edges = set()
     report_cases = []
     all_route_rows = []
     for case in cases:
         route_rows = []
         for index, route in enumerate(case['expected']['accepted_routes']):
             covered.update(i for i in route if i in activities)
+            covered_edges.update(_reviewed_edge_indices(spec, route))
             plan = {'revision': spec['revision'], 'content_sha256': spec['content_sha256'],
                     'status': 'proposal', 'activity_ids': route, 'missing_business_inputs': []}
             findings = []
@@ -479,6 +493,10 @@ def audit_bindings(spec, catalog, suite, bindings, *, previous_catalog=None):
         for f in row['findings']:
             counts[f['code']] = counts.get(f['code'], 0) + 1
     uncovered = sorted(i for i, a in activities.items() if a['implementation'] != 'human' and i not in covered)
+    model_edges = spec['process_model']['transitions']
+    uncovered_edges = [{'source': edge['source'], 'target': edge['target'],
+                        'rule_id': edge.get('rule_id')} for index, edge in enumerate(model_edges)
+                       if index not in covered_edges]
     clear = sum(r['static_contract_checks_clear'] for r in all_route_rows)
     return {'format': 'openworkgraph.customer-binding-readiness.v1',
             'process_reference': reference(spec), 'spec_sha256': digest(spec),
@@ -494,9 +512,12 @@ def audit_bindings(spec, catalog, suite, bindings, *, previous_catalog=None):
             'category_counts': category_counts,
             'missing_categories': [category for category, n in category_counts.items() if not n],
             'uncovered_nonhuman_activity_ids': uncovered,
+            'structural_transition_coverage': {'total': len(model_edges), 'covered': len(covered_edges),
+                                               'uncovered': uncovered_edges,
+                                               'basis': 'reviewed_route_alternatives_not_observed_execution'},
             'finding_counts': dict(sorted(counts.items())), 'cases': report_cases,
             'review_required': (not route_count or clear != route_count or bool(uncovered)
-                                or any(not n for n in category_counts.values())
+                                or bool(uncovered_edges) or any(not n for n in category_counts.values())
                                 or bool(catalog_changes and catalog_changes['mapped_contracts_requiring_review'])),
             'schema_constraints_fully_validated': False,
             'provider_semantics_or_permissions_verified': False,
