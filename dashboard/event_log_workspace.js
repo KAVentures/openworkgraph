@@ -9605,7 +9605,7 @@
       message.textContent='Settings changed. Find clusters again.';
     });
     const request=async(suffix,spec)=>(await api(endpoint+suffix,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
-    function inspect(settings,cluster){
+    function inspect(settings,cluster,caseNotion){
       const turn=++reviewTurn,current=()=>generation===state.generation&&turn===reviewTurn;
       const title=el('h4','Cases in cluster '+cluster.cluster);title.tabIndex=-1;
       const status=el('div');status.setAttribute('role','status');
@@ -9616,7 +9616,58 @@
       const downloadNext=button('Download next case file','secondary');downloadNext.disabled=true;
       downloadNext.setAttribute('aria-label','Download next cases in cluster '+cluster.cluster+' as CSV');
       const exportStatus=el('div',null,'muted');exportStatus.setAttribute('role','status');
-      nav.append(previous,next,download,downloadNext);review.replaceChildren(title,status,rows,nav,exportStatus);title.focus();
+      nav.append(previous,next,download,downloadNext);
+      const tagging=document.createElement('details');tagging.id='owgClusterTagging';tagging.appendChild(el('summary','Tag cases matching this cluster'));
+      if(!cluster.cohort){
+        tagging.appendChild(el('p','This cluster has too many or too-long variant paths for a case-tag filter. Use the case list instead.','muted'));
+      }else{
+        const tag=input('owgClusterTagName','text','Tag name');tag.maxLength=60;
+        const note=input('owgClusterTagNote','text','Optional tag note');note.maxLength=500;
+        const preview=button('Preview cluster tag','secondary'),apply=button('Apply cluster tag','secondary');apply.disabled=true;
+        const tagStatus=el('div',null,'muted');tagStatus.id='owgClusterTagStatus';tagStatus.setAttribute('role','status');
+        const examples=el('div');examples.id='owgClusterTagPreview';
+        const tagRow=el('div',null,'row');tagRow.style.alignItems='end';tagRow.append(field('Tag',tag),field('Tag note',note),preview,apply);
+        tagging.append(el('p','These paths are re-evaluated in the original case scope; cases may have changed since clustering. Preview the selection. Applying an existing tag replaces its notes for matching cases.','muted'),tagRow,tagStatus,examples);
+        let selection=null,tagTurn=0;
+        const reset=()=>{++tagTurn;selection=null;apply.disabled=true;preview.disabled=false;tagStatus.textContent='';examples.replaceChildren();};
+        tag.addEventListener('input',reset);note.addEventListener('input',reset);
+        const postTag=async(suffix,spec)=>(await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/case-tags'+suffix,
+          {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        preview.onclick=async()=>{
+          const ticket=++tagTurn,active=()=>current()&&ticket===tagTurn;
+          selection=null;apply.disabled=true;examples.replaceChildren();
+          const name=tag.value.trim();if(!name){tagStatus.textContent='Enter a tag.';return;}
+          const paths={variants:cluster.cohort.variants};
+          const cohort=settings.cohort&&Object.keys(settings.cohort).length?{all_of:[settings.cohort,paths]}:paths;
+          const spec={tag:name,note:note.value.trim(),case_type:caseNotion,cohort};
+          if(new TextEncoder().encode(JSON.stringify(spec)).length>262000){tagStatus.textContent='The cluster paths exceed the case-tag request limit. Use the case list instead.';return;}
+          preview.disabled=true;tagStatus.textContent='Checking matching cases…';
+          try{
+            const result=await postTag('/preview',spec);if(!active())return;
+            selection={spec,digest:result.selection_sha256};apply.disabled=!result.matched_cases;
+            tagStatus.textContent=number(result.matched_cases)+' matching cases. '+number(result.already_tagged)+' already have this tag.'+
+              (result.already_tagged?' Applying it will replace their tag notes.':'');
+            examples.replaceChildren(result.examples.length?table(['Sample case','Current tag','Current note'],result.examples.map(item=>[
+              item.case_id,item.already_tagged?'Already tagged':'New assignment',item.note||'—'
+            ])):el('div','No matching cases.','muted'));
+          }catch(error){if(active())tagStatus.textContent=error.message;}
+          finally{if(active())preview.disabled=false;}
+        };
+        apply.onclick=async()=>{
+          if(!selection||!current())return;
+          const chosen=selection,ticket=++tagTurn,active=()=>current()&&ticket===tagTurn;
+          selection=null;preview.disabled=apply.disabled=true;tagStatus.textContent='Applying tag…';
+          try{
+            const result=await postTag('',{...chosen.spec,expected_selection_sha256:chosen.digest});
+            if(!active())return;
+            document.querySelectorAll('#owgCaseTags').forEach(node=>node.dispatchEvent(new CustomEvent('owg-tags-changed')));
+            ++reportTurn;++reviewTurn;lastReport=null;exports.enable(false);out.replaceChildren();review.replaceChildren();run.disabled=false;
+            message.textContent='Tagged '+number(result.tagged)+' cases “'+result.tag+'”. Find clusters again; reanalyse other views if their filters use this tag.';
+          }catch(error){if(active())tagStatus.textContent=error.message;}
+          finally{if(active())preview.disabled=false;}
+        };
+      }
+      review.replaceChildren(title,status,rows,nav,exportStatus,tagging);title.focus();
       let exportAfter=null,exportPage=0,exportWritten=0;
       async function downloadPage(cursor){
         if(!current())return;download.disabled=downloadNext.disabled=true;exportStatus.textContent='Preparing cluster cases…';
@@ -9672,7 +9723,7 @@
         lastReport={format:'openworkgraph.trace-cluster-report.v1',request:body,report:r};exports.enable(true);
         const rows=r.clusters.map(c=>{
           const open=button('Inspect cases','secondary');open.setAttribute('aria-label','Inspect cases in cluster '+c.cluster);
-          open.onclick=()=>{if(current())inspect(body,c);};
+          open.onclick=()=>{if(current())inspect(body,c,r.case_notion);};
           return ['Cluster '+c.cluster,number(c.cases)+' ('+pct(c.share)+')',number(c.variants),
           c.median_throughput_seconds===null?'—':duration(c.median_throughput_seconds),c.mean_events_per_case===null?'—':c.mean_events_per_case.toFixed(1),
           (c.top_variants[0]||{activities:[]}).activities.join(' → '),shares(c.more_common_activities),shares(c.less_common_activities),open];

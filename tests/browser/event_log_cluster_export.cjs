@@ -53,6 +53,51 @@ const path=require('node:path');
   assert.deepEqual([...lines.slice(1),...nextLines.slice(1)].map(line=>line.split(',')[0]),selected.cases.map(item=>item.case_id));
   await review.getByRole('status').filter({hasText:'Downloaded 4 of 4 cases.'}).waitFor();
   assert(await review.getByRole('button',{name:'Download next cases in cluster 1 as CSV'}).isDisabled());
+  // Restrict the source scope, then preview and apply the matching paths as a tag.
+  await page.locator('#owgCaseFilterContainsActivity').fill('Open');
+  await page.locator('#owgCaseFilterApply').click();
+  await page.locator('#owgCaseFilterCount').filter({hasText:'Filtered: 8 of 8 cases'}).waitFor();
+  await page.locator('#owgClusterK').selectOption('2');await page.locator('#owgClusterRun').click();
+  const [scopedCases]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/trace-clusters/cases')),
+    out.getByRole('button',{name:'Inspect cases in cluster 1'}).click()]);
+  const scoped=await scopedCases.json();assert.equal(scoped.total,4);
+  const tags=review.locator('#owgClusterTagging');await tags.locator('summary').click();
+  await tags.locator('#owgClusterTagName').fill('cluster review');
+  await tags.locator('#owgClusterTagNote').fill('reviewed path');
+  const [preview]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/case-tags/preview')),
+    tags.getByRole('button',{name:'Preview cluster tag'}).click()]);
+  const previewRequest=preview.request().postDataJSON();
+  assert.equal(previewRequest.cohort.all_of[0].activity,'Open');
+  assert.ok(previewRequest.cohort.all_of[1].variants.length>0);
+  await tags.locator('#owgClusterTagStatus').filter({hasText:'4 matching cases. 0 already have this tag.'}).waitFor();
+  // A concurrent tag change invalidates the reviewed selection instead of overwriting its note.
+  await page.evaluate(async caseId=>{
+    const id=(await (await fetch('/v1/event-logs')).json()).logs[0].log_id;
+    const response=await fetch('/v1/event-logs/'+id+'/case-tags',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({tag:'cluster review',note:'other review',case_ids:[caseId]})});
+    if(!response.ok)throw Error('Could not create concurrent tag');
+  },scoped.cases[0].case_id);
+  await tags.getByRole('button',{name:'Apply cluster tag'}).click();
+  await tags.locator('#owgClusterTagStatus').filter({hasText:'changed; preview again'}).waitFor();
+  await tags.getByRole('button',{name:'Preview cluster tag'}).click();
+  await tags.locator('#owgClusterTagStatus').filter({hasText:'1 already have this tag.'}).waitFor();
+  await tags.getByText('other review',{exact:true}).waitFor();
+  await tags.getByRole('button',{name:'Apply cluster tag'}).click();
+  await page.locator('#owgClusterStatus').filter({hasText:'Tagged 4 cases “cluster review”.'}).waitFor();
+  assert.equal(await out.textContent(),'');assert.equal(await review.textContent(),'');
+  const tagged=await page.evaluate(async()=>{
+    const id=(await (await fetch('/v1/event-logs')).json()).logs[0].log_id;
+    return (await (await fetch('/v1/event-logs/'+id+'/case-tags?tag=cluster%20review')).json()).cases;
+  });
+  assert.deepEqual(tagged.map(item=>item.case_id).sort(),scoped.cases.map(item=>item.case_id).sort());
+  assert(tagged.every(item=>item.note==='reviewed path'));
+  // If a cluster is too large to represent as a bounded variant cohort, do not offer partial tagging.
+  await page.route('**/trace-clusters',async route=>{const response=await route.fetch(),body=await response.json();
+    body.clusters[0].cohort=null;await route.fulfill({response,json:body});},{times:1});
+  await page.locator('#owgClusterRun').click();await out.getByRole('button',{name:'Inspect cases in cluster 1'}).click();
+  await review.locator('#owgClusterTagging summary').click();
+  await review.getByText(/too many or too-long variant paths/).waitFor();
+  assert.equal(await review.getByRole('button',{name:'Apply cluster tag'}).count(),0);
   await page.locator('#owgClusterK').selectOption('3');assert.equal(await out.textContent(),'');assert.equal(await review.textContent(),'');
   assert(await box.getByRole('button',{name:'Download cluster report JSON'}).isDisabled());
   assert(await box.getByRole('button',{name:'Download cluster report CSV'}).isDisabled());
