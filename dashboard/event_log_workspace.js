@@ -3947,27 +3947,35 @@
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities that end a case (comma-separated or JSON array)',ends),field('Stuck when idle',pctInput),run);
     box.append(row,out);
     const generation=state.generation;
+    let revision=0;
+    const invalidate=()=>{revision++;run.disabled=false;out.replaceChildren();};
+    ends.addEventListener('input',invalidate);
+    pctInput.addEventListener('change',invalidate);
     run.onclick=async()=>{
+      const ticket=++revision,logId=state.logId,caseType=state.caseType;
+      const current=()=>box.isConnected&&generation===state.generation&&ticket===revision&&
+        logId===state.logId&&caseType===state.caseType;
+      out.replaceChildren();
       run.disabled=true;
       try{
         const raw=ends.value.trim();
         const endActivities=/^\[\s*(?:"|\])/.test(raw)?JSON.parse(raw):raw.split(',').map(x=>x.trim()).filter(Boolean);
         const spec={end_activities:endActivities,percentile:Number(pctInput.value),cohort:globalCohort()};
-        if(state.caseType)spec.case_type=state.caseType;
-        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/stuck-cases',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
-        if(generation!==state.generation)return;
+        if(caseType)spec.case_type=caseType;
+        const r=await (await api('/v1/event-logs/'+encodeURIComponent(logId)+'/stuck-cases',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(!current())return;
         const parts=[el('div',Number(r.stuck_cases).toLocaleString()+' of '+Number(r.judged_open_cases).toLocaleString()+' judged open cases look stuck'+(r.not_judged_open_cases?'; '+Number(r.not_judged_open_cases).toLocaleString()+' open cases sit at activities with too little history to judge':'')+'.')];
         if(r.cases.length)parts.push(table(['Case','Latest activity','Idle for','Usually waits','Stuck after','Events so far','Evidence'],r.cases.map(c=>{
           const open=button('Open case','secondary');open.setAttribute('aria-label','Open case '+c.case_id);
-          open.onclick=()=>inspection.open(c.case_id);
+          open.onclick=()=>{if(current())inspection.open(c.case_id,caseType);};
           return [c.case_id,c.latest_activity,duration(c.idle_seconds),duration(c.usual_wait_seconds),duration(c.threshold_seconds),c.events_so_far,open];
         })));
         if(r.cases_truncated)parts.push(el('div','Showing '+r.cases.length+' of '+Number(r.stuck_cases).toLocaleString()+' stuck cases.','muted'));
         const acts=r.by_activity.filter(a=>a.stuck_cases);
         if(acts.length)parts.push(el('h4','Where they wait'),table(['Latest activity','Open cases','Stuck'],acts.map(a=>[a.activity,a.open_cases,a.stuck_cases])));
         parts.push(el('div',r.interpretation,'muted'));out.replaceChildren(...parts);
-      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
-      finally{run.disabled=false;}
+      }catch(error){if(current())out.replaceChildren(el('div',error.message,'muted'));}
+      finally{if(current())run.disabled=false;}
     };
     return box;
   }
