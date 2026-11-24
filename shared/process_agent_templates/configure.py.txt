@@ -633,6 +633,10 @@ def shortlist_reviewed_routes(spec, suite, bindings, case):
         raise ImplementationError('Select a bounded JSON object for the execution case')
     if sum(len(row['expected']['accepted_routes']) for row in cases) > MAX_REVIEW_ROUTES:
         raise ImplementationError('Select at most 80 reviewed route alternatives')
+    if (not isinstance(bindings, dict)
+            or bindings.get('format') != 'openworkgraph.customer-mcp-bindings.v1'
+            or digest(bindings.get('process_reference')) != digest(reference(spec))):
+        raise ImplementationError('Bindings must identify this exact process revision')
     case_hash = digest(case)
     inventory, exact, common = _reviewed_route_inventory(cases, case_hash)
     clarification = any(row['expected']['status'] == 'needs_clarification' for row in exact)
