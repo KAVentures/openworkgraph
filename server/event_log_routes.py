@@ -1960,6 +1960,22 @@ def event_log_process_map(request: Request, log_id: str, case_type: str | None =
     return _respond(process_maps.process_map, log_id, case_type, activities=activities, paths=paths, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/process-map.dot")
+def event_log_process_map_dot(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                              activities: float = Query(default=1.0, gt=0, le=1), paths: float = Query(default=1.0, gt=0, le=1),
+                              cohort: dict[str, Any] = Depends(_case_filter)):
+    """The simplified map at the same slider settings as a Graphviz DOT graph."""
+    from . import event_log_map_dot as map_dot
+    _require_dashboard(request)
+    try:
+        dot, meta = map_dot.map_dot(log_id, case_type, activities=activities, paths=paths, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(dot, media_type="text/vnd.graphviz", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-map.dot"',
+        "X-OWG-Map": f"activities={meta['activities']}; transitions={meta['transitions']}"})
+
+
 @router.get("/v1/event-logs/{log_id}/playback")
 def event_log_playback(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                        activities: float = Query(default=1.0, gt=0, le=1),
