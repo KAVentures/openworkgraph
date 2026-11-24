@@ -1070,11 +1070,6 @@ async def save_process_catalog(request: Request) -> Response:
     return JSONResponse(result, headers={'Cache-Control': 'no-store'})
 
 
-@app.get('/v1/process-catalog/revision')
-def get_process_catalog_revision(workflow_id: str = Query(pattern=_PROCESS_ID), revision: int | None = Query(default=None, ge=1)) -> Response:
-    return JSONResponse(_catalog_record(workflow_id, revision), headers={'Cache-Control': 'no-store'})
-
-
 def _domain_assurance_packet(workflow_id: str, revision: int, digest: str):
     packet = _catalog_export(workflow_id, revision)
     if packet['content_sha256'] != digest:
@@ -1117,6 +1112,11 @@ async def decision_domain_coverage(request: Request, workflow_id: str = Query(pa
     _domain_assurance_packet(workflow_id, revision, content_sha256)
     _require_dashboard(request)
     return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
+@app.get('/v1/process-catalog/revision')
+def get_process_catalog_revision(workflow_id: str = Query(pattern=_PROCESS_ID), revision: int | None = Query(default=None, ge=1)) -> Response:
+    return JSONResponse(_catalog_record(workflow_id, revision), headers={'Cache-Control': 'no-store'})
 
 
 @app.get('/v1/process-catalog/history')
