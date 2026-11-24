@@ -116,3 +116,56 @@ def test_budget_refuses_complete_review(log,monkeypatch):
     monkeypatch.setattr(lm,"MAX_EVENTS",1)
     with pytest.raises(workspace.EventLogWorkspaceError,match="budget"):
         lm.review(log,packet())
+
+
+def test_synthetic_end_is_not_a_possible_recorded_next_event():
+    r={"model":[{"activity":None,"probability":1.0}],"actual_next_activity":None,
+       "outcome_reason":"no_event_by_observation_end"}
+    score=lm._score([r],"model",1)
+    assert score["whole_population_hit_share_bounds"]=={"lower":0,"upper":0}
+    assert lm._calibration([r])["bins"][0]["observed_hit_share_bounds"]=={"lower":0,"upper":0}
+
+
+def test_http_landmark_scope_and_stale_evidence(tmp_path):
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+    code=r'''
+from io import BytesIO
+from fastapi.testclient import TestClient
+from server.secure_app import app
+from server import local_auth, event_log_workspace as ws
+from server.event_log_next_activity_landmarks import FORMAT
+log=ws.import_log(BytesIO(b"case,activity,time\ntrain,A,2026-01-01T00:00:00Z\ntrain,Done,2026-01-02T00:00:00Z\nopen,A,2026-01-02T00:00:00Z\nopen,Done,2026-01-04T00:00:00Z\n"),
+    name="landmark",source_format="csv",mapping={"case_column":"case","activity_column":"activity","timestamp_column":"time"})["log_id"]
+body={"format":FORMAT,"cutoffs":["2026-01-03T00:00:00Z"],"horizon_days":3,"end_activities":["Done"],
+      "minimum_training_cases":1,"min_support":1}
+path=f"/v1/event-logs/{log}/next-activity/landmarks"
+with TestClient(app) as client:
+    assert client.post(path,json=body).status_code in (401,403)
+    bearer={"Authorization":"Bearer "+local_auth.ensure_api_token()}
+    assert client.post(path,json=body,headers=bearer).status_code in (401,403)
+    auth={"Authorization":"OWG-Session "+local_auth.create_dashboard_session()}
+    good=client.post(path,json=body,headers=auth)
+    assert good.status_code==200,good.text
+    assert good.headers["cache-control"]=="no-store"
+    report=good.json()
+    assert report["landmarks"][0]["top1"]["hits"]==1
+    assert report["landmarks"][0]["observation_window_shortened_by_log_end"]
+    evidence={"settings":body,"expected_review_sha256":report["review_sha256"],"cutoff":body["cutoffs"][0],
+              "status":"all","offset":0,"limit":50}
+    page=client.post(path+"/evidence",json=evidence,headers=auth)
+    assert page.status_code==200,page.text
+    assert page.json()["cases"][0]["case_id"]=="open"
+    assert client.post(path+"/evidence",json=evidence,headers=bearer).status_code in (401,403)
+    assert client.post(path+"/evidence",json={**evidence,"expected_review_sha256":"0"*64},headers=auth).status_code==422
+    assert client.post(path,json={**body,"cohort":{}},headers=auth).status_code==422
+    assert client.post(path,headers={**auth,"Content-Type":"application/json"},content=b"{}"+b" "*40000).status_code==413
+'''
+    env={**os.environ,"WORKFLOW_OBSERVER_DATA":str(tmp_path/"data"),
+         "WORKFLOW_OBSERVER_AUTH_DIR":str(tmp_path/"auth"),
+         "WORKFLOW_OBSERVER_CONFIG":str(tmp_path/"config.json")}
+    done=subprocess.run([sys.executable,"-c",code],cwd=Path(__file__).resolve().parents[1],
+                        env=env,text=True,capture_output=True,timeout=60)
+    assert done.returncode==0,done.stdout+done.stderr

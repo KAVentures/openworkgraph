@@ -11,7 +11,6 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import json
-import math
 from threading import BoundedSemaphore
 from typing import Any
 
@@ -131,7 +130,7 @@ def _probabilities(counter,top):
 
 
 def _score(rows,key,top):
-    offered=resolved=hits=0
+    offered=resolved=hits=possible_unresolved_hits=0
     for row in rows:
         values=row[key][:top]
         if not values:
@@ -140,15 +139,17 @@ def _score(rows,key,top):
         if row["outcome_reason"] is None:
             resolved+=1
             hits+=any(v["activity"]==row["actual_next_activity"] for v in values)
+        elif any(v["activity"] is not None for v in values):
+            possible_unresolved_hits+=1
     total=len(rows)
     return {"population":total,"predicted":offered,"resolved_predictions":resolved,
             "hits":hits,"unresolved_predictions":offered-resolved,"abstained":total-offered,
             "prediction_coverage":offered/total if total else None,
             "resolved_accuracy":hits/resolved if resolved else None,
             "whole_population_hit_share_bounds":{"lower":hits/total if total else None,
-                "upper":(hits+offered-resolved)/total if total else None},
+                "upper":(hits+possible_unresolved_hits)/total if total else None},
             "predicted_population_accuracy_bounds":{"lower":hits/offered if offered else None,
-                "upper":(hits+offered-resolved)/offered if offered else None}}
+                "upper":(hits+possible_unresolved_hits)/offered if offered else None}}
 
 
 def _paired(rows,key):
@@ -174,7 +175,7 @@ def _paired(rows,key):
 
 def _calibration(rows):
     bins=[{"lower":i/10,"upper":(i+1)/10,"predicted":0,"resolved":0,
-           "hits":0,"probability_sum":0.0} for i in range(10)]
+           "hits":0,"possible_unresolved_hits":0,"probability_sum":0.0} for i in range(10)]
     brier=0.0
     for row in rows:
         if not row["model"]:
@@ -187,14 +188,16 @@ def _calibration(rows):
             hit=int(row["model"][0]["activity"]==row["actual_next_activity"])
             bucket["hits"]+=hit
             brier+=(p-hit)**2
+        elif row["model"][0]["activity"] is not None:
+            bucket["possible_unresolved_hits"]+=1
     result=[]
     for b in bins:
         if not b["predicted"]:
             continue
-        n=b["predicted"];s=b["resolved"];hits=b["hits"]
+        n=b["predicted"];hits=b["hits"]
         result.append({k:v for k,v in b.items() if k!="probability_sum"} |
                       {"mean_top1_probability":b["probability_sum"]/n,
-                       "observed_hit_share_bounds":{"lower":hits/n,"upper":(hits+n-s)/n}})
+                       "observed_hit_share_bounds":{"lower":hits/n,"upper":(hits+b["possible_unresolved_hits"])/n}})
     scored=sum(b["resolved"] for b in bins)
     return {"bins":result,"top1_correctness_brier_resolved_only":brier/scored if scored else None,
             "resolved_predictions":scored,"not_a_multiclass_brier_score":True}
