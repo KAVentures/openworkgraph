@@ -771,7 +771,7 @@
         Number.isFinite(run.duration_seconds) && run.duration_seconds >= 0 ? run.duration_seconds : null;
       return {id, actor: ['human','agent'].includes(run.actor_kind) ? run.actor_kind : 'unknown',
         outcome: typeof run.outcome_status === 'string' ? run.outcome_status.slice(0,80) : 'unknown',
-        duration, steps: valid ? raw.slice() : null};
+        duration, steps: valid ? raw.slice() : null, projectionMayBeCapped: valid && raw.length >= 48};
     });
     const completeProjection = rows.every(r => r.steps !== null);
     const counts = new Map();
@@ -783,7 +783,7 @@
       occurrences:rows.map(row=>row.steps.filter(step=>step===token).length)
     }));
     return {rows, steps, omitted:Math.max(0,ordered.length-steps.length),
-      completeProjection, sourceLimited:bundle?.provenance?.source_limit_reached !== false ||
+      completeProjection, projectionMayBeCapped: rows.some(row=>row.projectionMayBeCapped), sourceLimited:bundle?.provenance?.source_limit_reached !== false ||
         bundle?.provenance?.truncated === true};
   }
 
@@ -840,6 +840,7 @@
     panel.appendChild(element('h4','Compare selected executions'));
     panel.appendChild(element('p','These are bounded, inferred execution projections, not verified business cases or employee performance. Elapsed duration includes unobserved time; outcome labels are observations only.','muted'));
     if(matrix.sourceLimited) panel.appendChild(element('p','Source coverage is limited or unknown. Missing steps may reflect missing capture.','muted'));
+    if(matrix.projectionMayBeCapped) panel.appendChild(element('p','At least one run reaches the structural projection cap; its later steps may not be represented.','muted'));
     const table = element('table');
     table.setAttribute('aria-label','Selected execution inventory');
     const head = element('thead'), header = element('tr');
@@ -897,6 +898,7 @@
       }
     }
     renderSurfaceRoutes(panel, matrix, bundle);
+    renderProjectedPaths(panel, matrix, bundle);
     renderRunTrace(panel, matrix, bundle);
     renderAutomationReview(panel, matrix, bundle);
     host.appendChild(panel);
@@ -946,6 +948,110 @@
       if(transfers.length>20)section.appendChild(element('p','Additional transfer summaries not displayed.','muted'));
     }
     section.appendChild(element('p','Clipboard values are not included. Review the underlying evidence before proposing direct connector integration.','muted'));
+    panel.appendChild(section);
+  }
+
+  function projectedProcessPaths(matrix) {
+    if(!matrix?.completeProjection)return null;
+    const paths=new Map(),edges=new Map(),outgoing=new Map();
+    for(const row of matrix.rows){
+      const signature=JSON.stringify([row.actor,row.steps]);
+      if(!paths.has(signature))paths.set(signature,{actor:row.actor,steps:row.steps.slice(),ids:[],capped:false});
+      const path=paths.get(signature);path.ids.push(row.id);
+      path.capped=path.capped||row.projectionMayBeCapped;
+      for(let i=1;i<row.steps.length;i++){
+        const from=row.steps[i-1],to=row.steps[i],key=JSON.stringify([from,to]);
+        if(!edges.has(key))edges.set(key,{from,to,occurrences:0,ids:new Set()});
+        const edge=edges.get(key);edge.occurrences++;edge.ids.add(row.id);
+        if(!outgoing.has(from))outgoing.set(from,new Set());
+        outgoing.get(from).add(to);
+      }
+    }
+    const ordered=[...edges.values()].map(e=>({from:e.from,to:e.to,occurrences:e.occurrences,ids:[...e.ids]}))
+      .sort((a,b)=>b.ids.length-a.ids.length||b.occurrences-a.occurrences||a.from.localeCompare(b.from)||a.to.localeCompare(b.to));
+    return {paths:[...paths.values()].sort((a,b)=>b.ids.length-a.ids.length),
+      edges:ordered.slice(0,60),omittedEdges:Math.max(0,ordered.length-60),
+      branchingTokens:[...outgoing].filter(([,targets])=>targets.size>1).map(([token,targets])=>({token,targets:targets.size}))
+        .sort((a,b)=>b.targets-a.targets||a.token.localeCompare(b.token)).slice(0,20)};
+  }
+
+  function observedPathProposal(path,matrix,bundle) {
+    if(!path||matrix.sourceLimited||path.capped||path.actor==='unknown'||!path.ids.length||
+      path.steps.length<1||path.steps.length>40)return null;
+    const labels=bundle?.structural_alignment?.surface_labels||{};
+    const steps=path.steps.map(step=>readable(step,labels));
+    if(steps.some(step=>typeof step!=='string'||!step.trim()||step.length>240))return null;
+    return {path:steps,count:path.ids.length,basis:'selected_observed_variant',evidenceRefs:path.ids.slice()};
+  }
+
+  function renderProjectedPaths(panel,matrix,bundle){
+    const model=projectedProcessPaths(matrix);
+    if(!model)return;
+    const section=element('section');section.id='owgExplorerProjectedPaths';
+    section.appendChild(element('h5','Observed process paths and branching'));
+    section.appendChild(element('p','Grouped by exact returned structural projection and actor type. These are selected examples, not verified business variants. Repeated transitions and alternate successors are observations, not rules or parallelism.','muted'));
+    const labels=bundle?.structural_alignment?.surface_labels||{};
+    const label=element('label','Projected path ');
+    const select=element('select');
+    model.paths.forEach((path,i)=>{
+      const opt=element('option','Path '+(i+1)+' · '+path.actor+' · '+path.ids.length+' selected runs');
+      opt.value=String(i);select.appendChild(opt);
+    });
+    label.appendChild(select);
+    const detail=element('div'),note=element('p');note.setAttribute('role','status');
+    const confirmLabel=element('label'),confirm=element('input');confirm.type='checkbox';
+    confirmLabel.append(confirm,document.createTextNode(' I reviewed this selected projected path and accept an unsaved AS-IS proposal.'));
+    const draft=button('Draft selected path in process catalog',()=>{
+      const chosen=model.paths[Number(select.value)],proposal=observedPathProposal(chosen,matrix,bundle);
+      if(!section.isConnected||activeBundle!==bundle||!confirm.checked||!proposal){
+        note.textContent='Selection or review changed; inspect the selected examples again.';draft.disabled=true;return;
+      }
+      try{
+        if(!window.owgProcessCatalog?.draftObserved)throw Error('Process catalog unavailable.');
+        const opened=window.owgProcessCatalog.draftObserved(proposal);
+        confirm.checked=false;draft.disabled=true;
+        note.textContent=opened?'Unsaved catalog proposal opened. Review the business goal, labels and rules before saving.':'Existing unsaved draft retained.';
+      }catch(error){note.textContent=String(error.message||error);}
+    },true);
+    const refresh=()=>{
+      confirm.checked=false;
+      const chosen=model.paths[Number(select.value)];
+      const proposal=observedPathProposal(chosen,matrix,bundle);
+      confirm.disabled=!proposal;draft.disabled=true;
+      detail.replaceChildren();
+      if(!chosen)return;
+      detail.appendChild(element('p',chosen.ids.length+' supporting selected execution references: '+chosen.ids.join(', '),'muted'));
+      const steps=element('ol');
+      chosen.steps.forEach(step=>steps.appendChild(element('li',readable(step,labels))));
+      detail.appendChild(steps);
+      note.textContent=proposal?'This is an editable local draft, not an approved procedure. Only this path’s supporting runs are attached.':
+        'Draft unavailable: source coverage is limited, actor is unknown, or the path exceeds the catalog limit.';
+    };
+    select.addEventListener('change',refresh);
+    confirm.addEventListener('change',()=>{draft.disabled=!confirm.checked||!observedPathProposal(model.paths[Number(select.value)],matrix,bundle);});
+    refresh();append(section,label,detail,confirmLabel,draft,note);
+    if(model.edges.length){
+      const details=element('details');details.appendChild(element('summary','Inspect direct-follow transitions and alternate successors'));
+      const table=element('table');table.setAttribute('aria-label','Projected direct-follow transitions');
+      const head=element('thead'),header=element('tr');
+      for(const name of ['From','To','Supporting runs','Occurrences']){
+        const th=element('th',name);th.scope='col';header.appendChild(th);
+      }
+      head.appendChild(header);table.appendChild(head);
+      const body=element('tbody');
+      for(const edge of model.edges){
+        const tr=element('tr');append(tr,element('td',readable(edge.from,labels)),element('td',readable(edge.to,labels)),
+          element('td',edge.ids.map(id=>'Run '+(matrix.rows.findIndex(r=>r.id===id)+1)).join(', ')),element('td',edge.occurrences));body.appendChild(tr);
+      }
+      table.appendChild(body);const scroll=element('div',null,'owg-map-scroll');scroll.appendChild(table);details.appendChild(scroll);
+      if(model.omittedEdges)details.appendChild(element('p',model.omittedEdges+' further transitions not displayed.','muted'));
+      if(model.branchingTokens.length){
+        const branches=element('ul');
+        for(const row of model.branchingTokens)branches.appendChild(element('li',readable(row.token,labels)+': '+row.targets+' distinct observed immediate successors'));
+        details.appendChild(branches);
+      }
+      section.appendChild(details);
+    }
     panel.appendChild(section);
   }
 
@@ -2303,7 +2409,7 @@
   }
 
   // Read-only model exposed for pure Node regression tests; no sensor or server changes.
-  window.__owgWorkflowExplorerModel = {buildLanes, titleFor, readable, observedRunMatrix, runDifference, projectedSurfaceRoutes, selectedRunTrace, automationReviewSignals};
+  window.__owgWorkflowExplorerModel = {buildLanes, titleFor, readable, observedRunMatrix, runDifference, projectedSurfaceRoutes, projectedProcessPaths, observedPathProposal, selectedRunTrace, automationReviewSignals};
   window.owgWorkflowExplorer=Object.freeze({
     showReviewedGroup({bundle,label,workflow_id,revision,window:filter={}}){
       const clusters=safeArray(bundle.structural_alignment?.structural_sequence_variants);
