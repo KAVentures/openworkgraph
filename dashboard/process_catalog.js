@@ -655,8 +655,122 @@
     })));
     }
     host.appendChild(actions);
-    if(record.revision){renderRuleChecks(host);renderSourceRuleChecks(host);renderShadowReview(host);renderClarification(host);renderDMNImport(host);renderRuleLibrary(host);}
+    if(record.revision){renderRuleChecks(host);renderSourceRuleChecks(host);renderShadowReview(host);renderClarification(host);renderDMNImport(host);renderRuleLibrary(host);renderPrerequisites(host);}
     const historyHost=el('div');historyHost.id='owgCatalogHistory';host.appendChild(historyHost);
+  }
+  function renderPrerequisites(host){
+    const selected=record,section=el('section');section.id='owgCatalogPrerequisites';
+    const output=el('div'),message=el('p');message.setAttribute('role','status');
+    const endpoint='/v1/process-catalog/prerequisites?'+new URLSearchParams({workflow_id:selected.workflow_id});
+    const current=()=>record===selected&&section.isConnected;
+    const pin=item=>({workflow_id:item.workflow_id,revision:item.revision,content_sha256:item.content_sha256});
+    const stateLabel={current:'Current',superseded:'Newer revision available',unavailable:'Pinned revision unavailable'};
+    const labelled=(label,control)=>{
+      control.setAttribute('aria-label',label);
+      const field=el('label',label+' ');field.append(control);return field;
+    };
+    function render(data){
+      const sameRevision=selected.revision===data.root.revision&&selected.content_sha256===data.root.content_sha256;
+      let links=data.links.map(link=>copy(link)),after='';
+      const rows=el('div'),candidates=el('select');candidates.append(new Option('Choose a saved design',''));
+      const choices=new Map();
+      const confirm=el('input');confirm.type='checkbox';
+      const saveLinks=button('Save prerequisites',()=>locked(async()=>{
+        if(!confirm.checked)return;
+        try{
+          const result=await request(endpoint,{expected_revision:data.declaration?.revision||0,root_process:pin(selected),
+            links:links.map(({id,prerequisite,relationship,reason})=>({id,prerequisite,relationship,reason})),
+            user_confirmed:true});
+          if(!current())return;
+          render(result);message.textContent='Saved prerequisite revision '+result.declaration.revision+'.';
+        }catch(error){if(current())message.textContent=error.message;}
+      }));
+      function updateSave(){
+        saveLinks.disabled=!sameRevision||!confirm.checked||links.some(link=>!link.reason.trim());
+      }
+      function changedLinks(){
+        confirm.checked=false;updateSave();
+      }
+      confirm.onchange=updateSave;
+      function drawLinks(){
+        rows.replaceChildren();
+        for(const link of links){
+          const id=link.prerequisite.workflow_id,resolution=link.resolution;
+          const title=resolution.pinned?.title||resolution.latest?.title||id;
+          const item=el('fieldset'),relation=el('select'),reason=el('input');
+          item.append(el('legend',title+' · r'+link.prerequisite.revision));
+          relation.append(new Option('Uses an output','uses_output'),new Option('Uses a policy','uses_policy'));
+          relation.value=link.relationship;reason.maxLength=500;reason.value=link.reason;
+          relation.disabled=reason.disabled=!sameRevision;
+          relation.onchange=()=>{link.relationship=relation.value;changedLinks();};
+          reason.oninput=()=>{link.reason=reason.value;changedLinks();};
+          item.append(el('p',stateLabel[resolution.state]),labelled('Relationship for '+title,relation),labelled('Reason for '+title,reason));
+          const latest=resolution.latest;
+          if(sameRevision&&latest&&resolution.state!=='current'){
+            item.append(button('Use latest '+title+' · r'+latest.revision,()=>{
+              link.prerequisite=pin(latest);link.resolution={state:'current',pinned:latest,latest};
+              changedLinks();drawLinks();
+            }));
+          }
+          if(sameRevision)item.append(button('Remove '+title,()=>{
+            links=links.filter(candidate=>candidate!==link);changedLinks();drawLinks();
+          }));
+          rows.append(item);
+        }
+        if(!links.length)rows.append(el('p','No prerequisites in this declaration.'));
+      }
+      const more=button('Load saved designs for prerequisites',()=>locked(async()=>{
+        try{
+          const page=await request('/v1/process-catalog?'+new URLSearchParams({after,limit:'50'}));
+          if(!current()||!output.contains(candidates))return;
+          for(const item of page.processes){
+            if(item.workflow_id===selected.workflow_id||choices.has(item.workflow_id))continue;
+            choices.set(item.workflow_id,item);
+            candidates.append(new Option(item.title+' · r'+item.revision,item.workflow_id));
+          }
+          after=page.next_after||'';
+          more.disabled=!page.has_more;more.textContent=page.has_more?'Load more saved designs':'Saved designs loaded';
+        }catch(error){if(current())message.textContent=error.message;}
+      }));
+      const add=button('Add prerequisite',()=>{
+        const item=choices.get(candidates.value);
+        if(!item)return;
+        if(links.some(link=>link.prerequisite.workflow_id===item.workflow_id)){
+          message.textContent='This design is already a prerequisite.';return;
+        }
+        if(links.length>=20){message.textContent='A design can have up to 20 prerequisites.';return;}
+        let number=1;
+        while(links.some(link=>link.id==='local_'+number))number++;
+        links.push({id:'local_'+number,prerequisite:pin(item),reason:'',relationship:'uses_output',
+          resolution:{state:'current',pinned:item,latest:item}});
+        candidates.value='';changedLinks();drawLinks();
+      });
+      output.replaceChildren(el('h5','Direct prerequisites'),
+        el('p',data.declaration?'Declaration r'+data.declaration.revision+' · '+stateLabel[data.root_resolution.state]+' root basis.':
+          'No prerequisite declaration has been saved for this design.'),rows);
+      if(sameRevision)output.append(more,labelled('Prerequisite design',candidates),add,
+        labelled('I reviewed these exact prerequisite revisions',confirm),saveLinks);
+      else output.append(el('p','Open the latest saved revision to edit this design’s prerequisites.'));
+      const consumers=el('ul');
+      for(const item of data.potential_consumers){
+        const title=item.pinned?.title||item.latest?.title||item.process.workflow_id;
+        consumers.append(el('li',title+' · r'+item.process.revision+
+          (item.distance===1?' · Direct':' · Through '+item.distance+' links')+' · '+stateLabel[item.state]));
+      }
+      output.append(el('h5','Potential consumers'),data.potential_consumers.length?consumers:
+        el('p','No saved declarations identify a consumer.'));
+      drawLinks();updateSave();
+    }
+    const refresh=button('Review prerequisites',()=>locked(async()=>{
+      message.textContent='Loading prerequisite declarations…';
+      try{
+        const data=await request(endpoint);
+        if(current()){render(data);message.textContent='';}
+      }catch(error){if(current())message.textContent=error.message;}
+    }));
+    section.append(el('h4','Process prerequisites'),
+      el('p','Pin the saved designs whose outputs or policies this process uses.'),refresh,message,output);
+    host.append(section);
   }
   function renderRuleChecks(host){
     const section=el('section');section.append(el('h4','Check declared conditions against case facts'),

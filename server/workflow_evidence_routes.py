@@ -1017,6 +1017,40 @@ def export_process_catalog(workflow_id: str = Query(pattern=_PROCESS_ID), revisi
                     media_type='application/xml' if format == 'bpmn' else 'text/plain', headers=headers)
 
 
+def _local_dependency_response(request, operation, *args):
+    from .local_source_routes import _require_dashboard
+    _require_dashboard(request)
+    try:
+        result = operation(*args)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from None
+    except ValidationError:
+        raise HTTPException(422, 'Invalid prerequisite declaration') from None
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+    _require_dashboard(request)
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
+@app.get('/v1/process-catalog/prerequisites')
+def local_process_prerequisites(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID)):
+    from . import local_process_dependencies as prerequisites
+    return _local_dependency_response(request, prerequisites.detail, workflow_id)
+
+
+@app.post('/v1/process-catalog/prerequisites')
+async def save_local_process_prerequisites(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID)):
+    from . import local_process_dependencies as prerequisites
+    from .local_source_routes import _require_dashboard
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    try:
+        body = prerequisites.SaveDependencies.model_validate(await _process_json(request, maximum=32 * 1024))
+    except ValidationError:
+        raise HTTPException(422, 'Invalid prerequisite declaration') from None
+    return await run_in_threadpool(_local_dependency_response, request, prerequisites.save, workflow_id, body)
+
+
 @app.post('/v1/process-catalog/forget')
 async def forget_process_catalog(request: Request) -> Response:
     value = await _process_json(request)
@@ -1028,7 +1062,12 @@ async def forget_process_catalog(request: Request) -> Response:
     _catalog_record(workflow_id)
     from . import process_clarification_store
     process_clarification_store.forget(workflow_id)
-    return JSONResponse(_knowledge.forget('local', workflow_id), headers={'Cache-Control': 'no-store'})
+    from .local_process_dependencies import forget_process
+    try:
+        deleted = forget_process(workflow_id)
+    except LookupError:
+        raise HTTPException(404, 'Process revision not found') from None
+    return JSONResponse(deleted, headers={'Cache-Control': 'no-store'})
 
 
 @app.get('/v1/process-catalog/agent-project')
