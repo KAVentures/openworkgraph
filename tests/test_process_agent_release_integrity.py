@@ -338,3 +338,24 @@ def test_structural_comparison_distinguishes_boolean_and_numeric_json_values():
         {"id":"a","changed_fields":["value"]}]
     assert delta["other_changed_model_fields"] == ["extra"]
     assert delta["changed_runtime_contract_fields"] == ["runtime_extra"]
+
+
+def test_randomized_structural_delta_against_set_oracle():
+    import random
+    from shared.process_agent_release import _structural_changes
+    rng = random.Random(20261124)
+    values = [True, 1, 1.0, False, 0, None, "x", {"x":True}, {"x":1}]
+    for _ in range(1000):
+        a = rng.sample(list("abcdefghijk"), rng.randrange(12))
+        b = rng.sample(list("abcdefghijk"), rng.randrange(12))
+        av = {key:rng.choice(values) for key in a}
+        bv = {key:rng.choice(values) for key in b}
+        old = {"process_model":{"activities":[{"id":k,"value":av[k]} for k in a]}}
+        new = {"process_model":{"activities":[{"id":k,"value":bv[k]} for k in b]}}
+        delta = _structural_changes(old,new)["keyed_model_changes"]["activities"]
+        assert {v["id"] for v in delta["added"]} == set(b)-set(a)
+        assert {v["id"] for v in delta["removed"]} == set(a)-set(b)
+        assert {v["id"] for v in delta["changed"]} == {
+            k for k in set(a)&set(b) if json.dumps(av[k],sort_keys=True)!=json.dumps(bv[k],sort_keys=True)}
+        assert delta["retained_identity_order_changed"] == (
+            [k for k in a if k in b]!=[k for k in b if k in a])
