@@ -1244,6 +1244,22 @@ async def event_log_stuck_cases(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/stuck-cases.csv")
+async def event_log_stuck_cases_csv(request: Request, log_id: str):
+    """Every stuck case, not only the first ``limit``, as a CSV worklist."""
+    from . import event_log_stuck as stuck
+    _require_dashboard(request)
+    spec = await _json_body(request, "stuck-case settings", strict=True, limit=16384)
+    try:
+        text, meta = await run_in_threadpool(stuck.stuck_cases_csv, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(text, media_type="text/csv; charset=utf-8", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-stuck-cases.csv"',
+        "X-OWG-Stuck-Cases": f"stuck={meta['stuck_cases']}; judged={meta['judged_open_cases']}; "
+                             f"not_judged={meta['not_judged_open_cases']}"})
+
+
 @router.get("/v1/event-logs/{log_id}/automation-candidates")
 def event_log_automation_candidates(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                                     limit: int = Query(default=15, ge=1, le=50),
