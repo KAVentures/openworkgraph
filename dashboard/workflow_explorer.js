@@ -796,7 +796,7 @@
       // Do not bridge a generic or redacted surface: it may conceal a real intervening app.
       for (const step of row.steps) {
         if (!step.startsWith('surface:')) continue;
-        const unknown=generic.has(step)||step==='surface:unknown'||step==='surface:other';
+        const unknown=generic.has(step)||step==='surface:unknown'||step==='surface:other'||/^surface:[a-f0-9]{12}$/.test(step);
         const token=unknown?null:step;
         if (!sequence.length||sequence[sequence.length-1]!==token) sequence.push(token);
       }
