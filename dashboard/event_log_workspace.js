@@ -4460,9 +4460,10 @@
           const remove=button('Uninstall','secondary');remove.id='owgDomainPackUninstall';remove.disabled=!installed;
           const paramRow=el('div',null,'row');paramRow.style.alignItems='end';paramRow.append(...params);
           let reportSnapshot=null,reportTurn=null;
+          let previewSnapshot=null;const previewButton=button('Preview and test mapping','secondary');previewButton.id='owgDomainPackPreflight';
           const exportReport=button('Download report JSON','secondary');exportReport.id='owgDomainPackDownload';exportReport.disabled=true;
-          const invalidate=()=>{turn++;reportSnapshot=null;reportTurn=null;exportReport.disabled=true;out.replaceChildren();};
-          const edited=()=>{invalidate();run.disabled=true;status.textContent='Inputs changed. Install the pack to apply them before running a new report.';};
+          const invalidate=()=>{turn++;reportSnapshot=null;reportTurn=null;previewSnapshot=null;exportReport.disabled=true;out.replaceChildren();};
+          const edited=()=>{invalidate();install.disabled=false;run.disabled=true;status.textContent='Inputs changed. Preview or install the new mapping.';};
           exportReport.onclick=()=>{
             if(!reportSnapshot||!current(reportTurn))return;
             download('owg-domain-pack-'+pack.pack_id+'-'+reportSnapshot.report.pack.version+'.json',
@@ -4491,17 +4492,64 @@
             }catch(error){if(current(t2)&&h===historyTurn)historyOut.replaceChildren(el('div',error.message,'muted'));}
             finally{if(reviewHistory.isConnected)reviewHistory.disabled=!installs.installs.some(i=>i.pack_id===pack.pack_id);}
           };
-          const actions=el('div',null,'row');actions.append(install,run,remove,exportReport,reviewHistory);
+          const actions=el('div',null,'row');actions.append(previewButton,install,run,remove,exportReport,reviewHistory);
           const assumptions=el('ul');assumptions.className='muted';pack.assumptions.forEach(a=>assumptions.appendChild(el('li',a)));
           form.replaceChildren(field('Domain pack',chooser),el('h4',pack.title+' '+pack.latest_version),el('div',pack.description,'muted'),table(['Kind','Role','Name in this log'],rows),paramRow,actions,el('div','Report downloads include supplied case/object examples and mapped labels. Save and share them only where authorized.','muted'),el('h4','Assumptions'),assumptions);
           status.textContent=(installed?'Installed: '+installed.version+' on '+String(installed.installed_at).slice(0,10)+'.':'Not installed on this log.')+(installs.names_truncated?' Suggestions show the 1,000 most frequent labels; enter an exact label for others.':'');
-          install.onclick=async()=>{
-            invalidate();const t2=++turn;install.disabled=true;run.disabled=true;historyTurn++;historyOut.replaceChildren();
+          const proposedSetup=()=>{
+            const parameters={};for(const [k,i] of Object.entries(inputs)){
+              if(i.value===''||!i.checkValidity())throw new Error('Enter valid parameters before previewing or installing.');
+              parameters[k]=Number(i.value);
+            }
+            const basis=installs.installs.find(i=>i.pack_id===pack.pack_id);
+            if(basis&&!/^[a-f0-9]{64}$/.test(basis.installation_token||''))throw new Error('Installation review is unavailable. Reload setup.');
+            return {version:pack.latest_version,mapping:packMapping(pack,choices),parameters,expected_installation:basis?basis.installation_token:null};
+          };
+          previewButton.onclick=async()=>{
+            invalidate();const t2=++turn;previewButton.disabled=true;install.disabled=true;run.disabled=true;
+            out.replaceChildren(el('p','Testing unsaved mapping on the retained log…','muted'));
             try{
-              const parameters={};for(const [k,i] of Object.entries(inputs))parameters[k]=Number(i.value);
-              const basis=installs.installs.find(i=>i.pack_id===pack.pack_id);
-              if(basis&&!/^[a-f0-9]{64}$/.test(basis.installation_token||''))throw new Error('Installation review is unavailable. Reload setup before saving.');
-              const r=await (await post(base+'/'+pack.pack_id,{version:pack.latest_version,mapping:packMapping(pack,choices),parameters,expected_installation:basis?basis.installation_token:null})).json();
+              const proposed=proposedSetup();
+              const response=await (await post(base+'/'+pack.pack_id+'/preflight',proposed)).json();
+              if(!current(t2))return;
+              if(response.log_id!==logId||response.pack.pack_id!==pack.pack_id||response.pack.version!==pack.latest_version||
+                 !/^[a-f0-9]{64}$/.test(response.preview_token||''))throw new Error('Unexpected preview reference.');
+              previewSnapshot={response,proposed};
+              const parts=[el('h4','Read-only mapping trial'),el('p','Retained revision '+response.log_revision+' · '+response.retained_events+' events · '+response.retained_objects+' objects. Nothing installed.'),
+                table(['Role kind','Role','Exact mapped name','Recorded rows'],Object.entries(response.role_counts).flatMap(([kind,roles])=>roles.map(x=>[kind,x.role,x.name,x.recorded_count]))),
+                el('p','Projected metric library: '+response.projected_metric_library_size+' / '+response.metric_library_limit+
+                  ' · '+(response.installable?'No detected installation blockers.':'Installation blocked: '+response.installation_blockers.join(', ')+'.')),
+                ...(response.metric_name_collisions.length?[el('p','Existing unowned metric names: '+response.metric_name_collisions.join(', '),'note')]:[])];
+              if(response.definition_changes){
+                const changes=response.definition_changes;
+                parts.push(el('h4','Exact definition changes'),table(['Section','Unchanged','Added','Removed'],
+                  Object.entries(changes).filter(([k])=>k!=='reference_model').map(([k,v])=>[k,v.unchanged,v.added,v.removed])),
+                  el('p','Reference model: '+(changes.reference_model.changed?'changed':'unchanged')));
+              }else parts.push(el('p','Previous definitions are unavailable for exact comparison.','note'));
+              if(response.trial){
+                const v=packReportRows(response.trial);
+                parts.push(el('h4','Trial case metrics'),table(['Metric','Object type','Cases','Median','90th percentile','With a value'],v.metrics),
+                  el('h4','Trial compliance rules'),table(['Object type','Rule','Applies to','Violating','Unknown'],v.compliance),
+                  ...(v.objectRules.length?[el('h4','Trial object rules'),table(['Rule','Applies to','Violating'],v.objectRules)]:[]),
+                  el('h4','Trial reference model'),el('div',v.model,'note'));
+              }else parts.push(el('p','Trial analytics unavailable within the population bound. Setup checks only.','note'));
+              parts.push(el('p',response.interpretation,'muted'));
+              const savePreview=button('Download preview JSON','secondary');
+              savePreview.onclick=()=>{if(current(t2)&&previewSnapshot)download('owg-domain-pack-preflight-'+pack.pack_id+'.json',JSON.stringify(response,null,2),'application/json');};
+              parts.push(savePreview);out.replaceChildren(...parts);
+              status.textContent=response.installable?'Preview ready. Install will recheck this exact setup and retained revision.':'Preview found installation blockers; correct the setup.';
+            }catch(error){if(current(t2)){out.replaceChildren(el('p',error.message,'note'));status.textContent='Preview unavailable.';}}
+            finally{if(previewButton.isConnected){previewButton.disabled=false;install.disabled=!!previewSnapshot&&!previewSnapshot.response.installable;}}
+          };
+          install.onclick=async()=>{
+            const preview=previewSnapshot;invalidate();const t2=++turn;install.disabled=true;run.disabled=true;historyTurn++;historyOut.replaceChildren();
+            try{
+              const proposed=proposedSetup();
+              if(preview){
+                if(JSON.stringify(proposed)!==JSON.stringify(preview.proposed))throw new Error('Setup changed; rerun preview.');
+                proposed.expected_preview=preview.response.preview_token;
+              }
+              const r=await (await post(base+'/'+pack.pack_id,proposed)).json();
               // Keep the completed save's basis even if later inputs invalidated its display.
               installs.installs=[...installs.installs.filter(i=>i.pack_id!==pack.pack_id),r];
               if(!current(t2))return;
