@@ -176,6 +176,21 @@ def idea_journey(request: Request, idea_id: str):
     return _respond(opportunity_journey.journey, idea_id)
 
 
+@router.post("/v1/automation-pipeline/{idea_id}/project-archive-review")
+async def review_project_archive(request: Request, idea_id: str):
+    _require_dashboard(request)
+    from . import project_archive_review
+    if str(request.headers.get("content-type", "")).split(";")[0].strip().lower() != "application/zip":
+        raise HTTPException(415, "select the original tracked project ZIP")
+    content = bytearray()
+    async for chunk in request.stream():
+        if len(content) + len(chunk) > project_archive_review.MAX_ARCHIVE_BYTES:
+            raise HTTPException(413, "project ZIP exceeds 16 MiB")
+        content.extend(chunk)
+    return await run_in_threadpool(_respond, project_archive_review.review_archive,
+                                   idea_id, bytes(content))
+
+
 @router.get("/v1/automation-pipeline/{idea_id}/projects")
 def list_idea_projects(request: Request, idea_id: str):
     _require_dashboard(request)
