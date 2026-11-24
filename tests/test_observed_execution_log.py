@@ -322,6 +322,20 @@ assert(m.recheckMatches({...check,status:'projection_changed',current_projection
 assert(m.recheckMatches({...check,status:'source_unavailable',current_projection_sha256:null},logId,digest));
 assert(!m.recheckMatches({...check,status:'source_unavailable'},logId,digest));
 assert(!m.recheckMatches({...check,business_outcomes_verified:true},logId,digest));
+const eventCheck={format:'openworkgraph.observed-execution-event-recheck.v1',log_id:logId,
+  execution_id:id,snapshot_sha256:digest,current_projection_sha256:digest,
+  checked_at:'2026-11-24T06:00:00Z',capture_complete:false,stored_log_changed:false,
+  business_case_identity_verified:false,business_outcomes_verified:false,
+  events:[{event_id:'e1',evidence_ref:'event:aaaaaaaaaaaaaaaa',original_activity:'Click',
+    original_observed_at:'2026-11-24T05:00:00Z',status:'observation_matches',membership_basis:'inferred_time_session'}]};
+const log={log_id:logId,observed_execution_snapshot:{snapshot_sha256:digest}};
+assert(m.observationResultMatches(eventCheck,log,id,['e1']));
+assert(!m.observationResultMatches(eventCheck,log,id,['e2']));
+assert(!m.observationResultMatches(eventCheck,log,'execution:bbbbbbbbbbbbbbbb',['e1']));
+assert(!m.observationResultMatches({...eventCheck,current_projection_sha256:null},log,id,['e1']));
+assert(m.observationResultMatches({...eventCheck,current_projection_sha256:null,
+  events:[{...eventCheck.events[0],status:'source_unavailable'}]},log,id,['e1']));
+assert(!m.observationResultMatches({...eventCheck,business_outcomes_verified:true},log,id,['e1']));
 console.log('snapshot model checks passed');
 """
     root = Path(__file__).resolve().parents[1]
