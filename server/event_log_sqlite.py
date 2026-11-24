@@ -31,7 +31,7 @@ import sqlite3
 import tempfile
 import time
 from pathlib import Path
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from typing import IO, Any, Iterator
 
 FORMAT = "openworkgraph.event-log-sqlite-conversion.v1"
@@ -184,11 +184,12 @@ def _time(value: Any, naive: list[int]) -> str:
 
 
 def _rows(conn: sqlite3.Connection, sql: str, budget: list[int]):
-    for row in conn.execute(sql):
-        budget[0] += 1
-        if budget[0] > MAX_OCEL_ROWS:
-            raise SqliteError(f"the OCEL database has more than {MAX_OCEL_ROWS:,} rows")
-        yield row
+    with closing(conn.execute(sql)) as cursor:
+        for row in cursor:
+            budget[0] += 1
+            if budget[0] > MAX_OCEL_ROWS:
+                raise SqliteError(f"the OCEL database has more than {MAX_OCEL_ROWS:,} rows")
+            yield row
 
 
 def to_ocel_json(source: IO[bytes], *, folder: Path) -> dict[str, Any]:
@@ -210,20 +211,21 @@ def to_ocel_json(source: IO[bytes], *, folder: Path) -> dict[str, Any]:
                 table = f"event_{suffix}"
                 if table not in tables:
                     continue
-                cursor = conn.execute(f"SELECT * FROM {q(table)}")
-                names = [d[0] for d in cursor.description]
-                for row in cursor:
-                    budget[0] += 1
-                    if budget[0] > MAX_OCEL_ROWS:
-                        raise SqliteError(f"the OCEL database has more than {MAX_OCEL_ROWS:,} rows")
-                    record = dict(zip(names, row))
-                    event = events.get(str(record.get("ocel_id")))
-                    if event is None:
-                        continue
-                    if record.get("ocel_time") is not None:
-                        event["time"] = _time(record["ocel_time"], naive)
-                    event["attributes"] = [{"name": n, "value": str(v)} for n, v in record.items()
-                                           if n not in ("ocel_id", "ocel_time") and v is not None]
+                # Finalize SQLite statements before temporary-file cleanup, even on row-limit errors.
+                with closing(conn.execute(f"SELECT * FROM {q(table)}")) as cursor:
+                    names = [d[0] for d in cursor.description]
+                    for row in cursor:
+                        budget[0] += 1
+                        if budget[0] > MAX_OCEL_ROWS:
+                            raise SqliteError(f"the OCEL database has more than {MAX_OCEL_ROWS:,} rows")
+                        record = dict(zip(names, row))
+                        event = events.get(str(record.get("ocel_id")))
+                        if event is None:
+                            continue
+                        if record.get("ocel_time") is not None:
+                            event["time"] = _time(record["ocel_time"], naive)
+                        event["attributes"] = [{"name": n, "value": str(v)} for n, v in record.items()
+                                               if n not in ("ocel_id", "ocel_time") and v is not None]
             objects: dict[str, dict[str, Any]] = {}
             for ocel_id, ocel_type in _rows(conn, "SELECT ocel_id, ocel_type FROM object", budget):
                 objects[str(ocel_id)] = {"id": str(ocel_id), "type": str(ocel_type), "attributes": [], "relationships": []}
@@ -231,22 +233,23 @@ def to_ocel_json(source: IO[bytes], *, folder: Path) -> dict[str, Any]:
                 table = f"object_{suffix}"
                 if table not in tables:
                     continue
-                cursor = conn.execute(f"SELECT * FROM {q(table)}")
-                names = [d[0] for d in cursor.description]
-                for row in cursor:
-                    budget[0] += 1
-                    if budget[0] > MAX_OCEL_ROWS:
-                        raise SqliteError(f"the OCEL database has more than {MAX_OCEL_ROWS:,} rows")
-                    record = dict(zip(names, row))
-                    obj = objects.get(str(record.get("ocel_id")))
-                    if obj is None:
-                        continue
-                    at = _time(record.get("ocel_time") or "1970-01-01T00:00:00Z", naive)
-                    changed = record.get("ocel_changed_field")
-                    for n, v in record.items():
-                        if n in ("ocel_id", "ocel_time", "ocel_changed_field") or v is None or (changed and n != changed):
+                # Finalize SQLite statements before temporary-file cleanup, even on row-limit errors.
+                with closing(conn.execute(f"SELECT * FROM {q(table)}")) as cursor:
+                    names = [d[0] for d in cursor.description]
+                    for row in cursor:
+                        budget[0] += 1
+                        if budget[0] > MAX_OCEL_ROWS:
+                            raise SqliteError(f"the OCEL database has more than {MAX_OCEL_ROWS:,} rows")
+                        record = dict(zip(names, row))
+                        obj = objects.get(str(record.get("ocel_id")))
+                        if obj is None:
                             continue
-                        obj["attributes"].append({"name": n, "time": at, "value": str(v)})
+                        at = _time(record.get("ocel_time") or "1970-01-01T00:00:00Z", naive)
+                        changed = record.get("ocel_changed_field")
+                        for n, v in record.items():
+                            if n in ("ocel_id", "ocel_time", "ocel_changed_field") or v is None or (changed and n != changed):
+                                continue
+                            obj["attributes"].append({"name": n, "time": at, "value": str(v)})
             for event_id, object_id, qualifier in _rows(conn, "SELECT ocel_event_id, ocel_object_id, ocel_qualifier FROM event_object", budget):
                 if str(event_id) in events:
                     events[str(event_id)]["relationships"].append({"objectId": str(object_id), "qualifier": str(qualifier or "")})
