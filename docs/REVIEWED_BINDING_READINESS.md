@@ -50,7 +50,7 @@ from a bounded catalog does not establish removal from a provider.
   exception text. Unknown types and absent projection entries require review.
 - Clarification-only cases are counted separately: they have no accepted route
   to test. Missing normal/exception/missing-facts categories and uncovered
-  nonhuman activities require review; neither establishes a population sample.
+  nonhuman activities or structural transitions require review; neither establishes a population sample. Parallel route coverage uses token replay rather than adjacent node pairs, so interleavings do not invent edges.
 - Exit 0 means selected static checks and stated coverage checks are clear.
   Exit 2 means review is required. Invalid inputs refuse without a report.
   Human resolutions, source checks, and separate execution intent remain
