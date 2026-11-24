@@ -274,6 +274,20 @@ class RunRevisionConflict(MonitoringError):
         super().__init__("signed report conflicts with retained run evidence; review before manual correction")
 
 
+def _snapshot_time_conflict(run):
+    """Validate the reported chronology without reordering any evidence."""
+    previous = run["started_at"]
+    for _, _, _, at in run["steps"]:
+        if at < run["started_at"]:
+            return "step_precedes_run_start"
+        if at < previous:
+            return "step_history_time_regressed"
+        if run["finished_at"] is not None and at > run["finished_at"]:
+            return "finish_precedes_retained_step"
+        previous = at
+    return None
+
+
 def _revision_relation(previous, incoming, spec_hash):
     """Classify snapshots, without relying on delivery order as execution order.
 
@@ -306,6 +320,7 @@ def _revision_relation(previous, incoming, spec_hash):
         # attempt in a running snapshot. The same final pending step can
         # acquire a later completed/failed disposition, not a new identity.
         if (index == len(old_steps) - 1 and old[:2] == new[:2]
+                and previous["source"] == incoming["source"] == "customer_execution_journal"
                 and old[2] == "handed_to_human"
                 and new[2] in {"completed", "failed", "handed_to_human"}
                 and new[3] >= old[3]):
@@ -313,10 +328,7 @@ def _revision_relation(previous, incoming, spec_hash):
         return "retained_step_changed"
     if old_steps and any(step[3] < old_steps[-1][3] for step in new_steps[len(old_steps):]):
         return "step_history_time_regressed"
-    if incoming["finished_at"] is not None and new_steps and any(
-            step[3] > incoming["finished_at"] for step in new_steps):
-        return "finish_precedes_retained_step"
-    return "advanced"
+    return _snapshot_time_conflict(incoming) or "advanced"
 
 
 def _guard_signed_revisions(conn, deployment_id, incoming, spec_hash):
@@ -347,7 +359,8 @@ def _guard_signed_revisions(conn, deployment_id, incoming, spec_hash):
     replacements = []
     for run in incoming:
         old = previous.get(run["run_id"])
-        relation = _revision_relation(old, run, spec_hash) if old is not None else "new"
+        relation = (_revision_relation(old, run, spec_hash) if old is not None
+                    else _snapshot_time_conflict(run) or "new")
         if relation in counts:
             counts[relation] += 1
             if relation != "identical":
