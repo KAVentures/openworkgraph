@@ -79,3 +79,15 @@ ordering; tied multiple sources leave the origin ambiguous. Missing capture
 scope or missing source events may reduce support. Clipboard payloads are
 never inspected and a linked occurrence does not establish business-case
 membership or prove completion.
+
+## Selected-path agent planning
+
+The selected-path panel also accepts the user's intended business goal,
+authoritative source, proposed decision rules/exceptions and independent
+outcome check. After reviewing these inputs, copy a read-only planning
+request for an external AI. It carries only the selected path's execution
+references, evidence window and user-proposed criteria, not captured labels
+or event contents. Editing criteria or changing paths clears sharing
+confirmation. This is not a grant, an execution request, or a verified
+outcome; use the existing agent implementation and authorization workflow
+for any subsequent action.
