@@ -16,7 +16,7 @@ from .open_work_stripe_attempt_events import read_stripe_attempt_events
 
 def verify_explicit_attempt(*, account: str, object_id: str, operation: str,
                             correlation_id: str, event_id: str, token: str,
-                            transport=None) -> dict:
+                            transport=None, recheck_authorization=None) -> dict:
     """Fetch independent provider evidence, then correlate exact identities."""
     if not all(_valid(v) for v in (account, object_id, operation, correlation_id, event_id)):
         return {"status": "unknown", "provider_operation": "unknown",
@@ -31,6 +31,7 @@ def verify_explicit_attempt(*, account: str, object_id: str, operation: str,
             token=token, expected_account=account, object_id=object_id,
             event_type=operation, correlation_id=correlation_id,
             transport=transport),
+        recheck_authorization=recheck_authorization,
     )
 
 
@@ -64,7 +65,8 @@ def main(argv=None) -> int:
         result = verify_explicit_attempt(
             account=args.account, object_id=args.object_id,
             operation=args.event_type, correlation_id=args.idempotency_key,
-            event_id=args.event_id, token=os.environ.get("OWG_STRIPE_ATTEMPT_READ_KEY", ""))
+            event_id=args.event_id, token=os.environ.get("OWG_STRIPE_ATTEMPT_READ_KEY", ""),
+            recheck_authorization=lambda: args.confirm_provider_read is True)
     if args.journal_path and args.confirm_provider_read:
         from .open_work_attempt_receipts import append_receipt
         append_receipt(args.journal_path, tenant=args.tenant, actor=args.actor,

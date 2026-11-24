@@ -40,7 +40,7 @@ def _verify(**overrides):
     args = dict(account="acct_123", object_id="in_123",
                 operation="invoice.payment_succeeded",
                 correlation_id="attempt_123", event_id="evt_123",
-                token="rk_test_dummy", transport=_transport)
+                token="rk_test_dummy", transport=_transport, recheck_authorization=lambda: True)
     args.update(overrides)
     return verify_explicit_attempt(**args)
 
@@ -92,3 +92,10 @@ def test_cli_missing_key_never_calls_provider():
                           "--confirm-provider-read"])
     assert exit_code == 3
     assert json.loads(output.getvalue())["reason"] == "missing_provider_credential"
+
+
+def test_explicit_attempt_requires_grant_before_network():
+    def forbidden(*args, **kwargs):
+        raise AssertionError("network attempted")
+    assert _verify(transport=forbidden, recheck_authorization=None)["reason"] == "authorization_required"
+    assert _verify(transport=forbidden, recheck_authorization=lambda: False)["reason"] == "authorization_revoked"

@@ -39,7 +39,7 @@ def test_exact_authenticated_event_from_read_only_source():
     receipt = verify_provider_attempt(
         account="acct_1", object_id="in_1", operation="invoice.updated",
         correlation_id="attempt_1", expected_event_id="evt_1",
-        read_events=lambda: p)
+        read_events=lambda: p, recheck_authorization=lambda: True)
     assert receipt["status"] == "verified_provider_event"
     assert receipt["provider_operation"] == "unknown"
     assert receipt["customer_outcome"] == "unknown"

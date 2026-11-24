@@ -295,3 +295,82 @@ def test_bound_provider_persistence_forwards_write_approval(monkeypatch):
     result = asyncio.run(routes.read_local_bound_provider_review(request(), Response()))
     assert result["provider_check_persisted"] is True
     assert calls == ["bound"]
+
+
+def test_bound_provider_replay_uses_json_parser_and_preserves_auth(monkeypatch):
+    """Both nested admission and provider routes must receive valid JSON headers."""
+    data = payload()
+    historical = {"case_ref": "case-1", "receipts": {"run_ref": "run-1"}}
+    calls = []
+
+    async def strict_review(request, response):
+        assert request.headers.get("content-type") == "application/json"
+        assert request.headers.get("authorization") == "Bearer operator"
+        assert (await request.json())["work_item_ref"] == "case-1"
+        calls.append("review")
+        return historical
+
+    async def strict_provider(request, response):
+        assert request.headers.get("content-type") == "application/json"
+        assert request.headers.get("authorization") == "Bearer operator"
+        assert (await request.json())["confirm_source_verification"] is True
+        calls.append("provider")
+        return {"provider_operation": "unknown"}
+
+    install(monkeypatch, data, strict_review, strict_provider)
+    result = asyncio.run(routes.read_local_bound_provider_review(request(), Response()))
+    assert calls == ["review", "provider", "review", "review"]
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_execution_authorized"] is False
+
+
+def test_event_review_rechecks_journal_after_last_async_case_admission(monkeypatch):
+    """Revocation during the last case read must deny provider evidence disclosure."""
+    from server import local_source_credentials as credentials
+    from server import open_work_provider_attempt_verification as verifier
+    data = payload()
+    data.update(provider_object_id="in_12345678", provider_operation="invoice.finalized",
+                provider_correlation_id="correlation-1", provider_event_id="evt_12345678")
+    reviews = []
+    journals = []
+    revoked = [False]
+
+    async def review(request, response):
+        reviews.append("review")
+        if len(reviews) == 5:
+            revoked[0] = True  # Revoked while the last admission yielded.
+        return {"case_ref": "case-1", "receipts": {"run_ref": "run-1"}}
+
+    async def journal(request, response):
+        journals.append("journal")
+        if revoked[0]:
+            raise HTTPException(403, "retained journal permission revoked")
+        return {"run_ref": "run-1", "entries": [{"attempt_ref": "attempt-1"}]}
+
+    async def scope():
+        return "tenant-1"
+
+    async def recheck(scope):
+        assert scope == "tenant-1"
+
+    async def body(request, required, optional=None):
+        return data
+
+    monkeypatch.setattr(routes, "_dashboard_only", lambda request: None)
+    monkeypatch.setattr(routes, "_require_scope", scope)
+    monkeypatch.setattr(routes, "_recheck_source", recheck)
+    monkeypatch.setattr(routes, "_body", body)
+    monkeypatch.setattr(routes, "_source_scope", lambda: "tenant-1")
+    monkeypatch.setattr(routes, "read_local_combined_case_review", review)
+    monkeypatch.setattr(routes, "read_local_bound_attempt_receipts", journal)
+    monkeypatch.setattr(credentials, "_metadata_path", lambda: "unused")
+    monkeypatch.setattr(credentials, "_read_metadata", lambda path: {"account": "acct_12345678"})
+    monkeypatch.setattr(verifier, "verify_provider_attempt", lambda **kwargs: {
+        "status": "unknown", "provider_operation": "unknown", "customer_outcome": "unknown"
+    })
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.read_local_bound_provider_event(request(), Response()))
+    assert exc.value.status_code == 403
+    assert len(reviews) == 5
+    assert len(journals) == 4
