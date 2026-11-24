@@ -600,6 +600,94 @@ def compare_binding_configurations(spec, catalog, suite, baseline, candidate):
             'case_values_and_tool_arguments_included': False}
 
 
+def _reviewed_route_inventory(cases, case_hash):
+    """Group identical reviewed routes; exact case matches are not inferred."""
+    routes, exact = {}, []
+    for case in cases:
+        same_input = digest(case['input']) == case_hash
+        if same_input:
+            exact.append(case)
+        for index, route in enumerate(case['expected']['accepted_routes'], 1):
+            key = tuple(route)
+            row = routes.setdefault(key, {'route': route, 'references': [], 'exact_references': []})
+            reference_row = {'case_id': case['id'], 'alternative': index}
+            row['references'].append(reference_row)
+            if same_input:
+                row['exact_references'].append(reference_row)
+    exact_sets = [{tuple(route) for route in case['expected']['accepted_routes']} for case in exact]
+    common = set.intersection(*exact_sets) if exact_sets else set()
+    return routes, exact, common
+
+
+def shortlist_reviewed_routes(spec, suite, bindings, case):
+    """Prepare each distinct reviewed route against a newly selected case.
+
+    Exact duplicate inputs support only the intersection of their reviewed
+    alternatives. Other reference cases are examples, never applicability
+    evidence. No plan or intent is created for execution by this command.
+    """
+    from evaluate import validate_suite
+    from execute import prepare
+    cases = validate_suite(spec, suite, allow_current_source_rules=True)
+    if not isinstance(case, dict) or len(json.dumps(case, allow_nan=False).encode('utf-8')) > 65536:
+        raise ImplementationError('Select a bounded JSON object for the execution case')
+    if sum(len(row['expected']['accepted_routes']) for row in cases) > MAX_REVIEW_ROUTES:
+        raise ImplementationError('Select at most 80 reviewed route alternatives')
+    case_hash = digest(case)
+    inventory, exact, common = _reviewed_route_inventory(cases, case_hash)
+    clarification = any(row['expected']['status'] == 'needs_clarification' for row in exact)
+    conflicting = bool(exact and not common and not all(
+        row['expected']['status'] == 'needs_clarification' for row in exact))
+    rows = []
+    for key, item in sorted(inventory.items()):
+        route = item['route']
+        plan = {'revision': spec['revision'], 'content_sha256': spec['content_sha256'],
+                'status': 'proposal', 'activity_ids': route, 'missing_business_inputs': []}
+        try:
+            prepared = prepare(spec, plan, case, bindings)
+        except (ImplementationError, ValueError, TypeError, KeyError, OverflowError, RecursionError):
+            requirements, human, source, actions = ['offline_preparation_refused'], None, None, None
+        else:
+            requirements = prepared['requirements']
+            human = bool(prepared['human_activity_ids'] or prepared['manual_condition_ids'])
+            source = bool(prepared['outcomes'] or prepared['source_rules'] or prepared.get('decision_tables'))
+            actions = len(prepared['actions'])
+        rows.append({'route_sha256': digest(route), 'activity_ids': route,
+                     'reviewed_references': item['references'],
+                     'exact_input_references': item['exact_references'],
+                     'supported_by_all_exact_reviews': key in common,
+                     'offline_requirements_clear': not requirements,
+                     'requirements': requirements, 'separate_human_resolution_needed': human,
+                     'source_checks_needed': source, 'mapped_action_count': actions})
+    rows.sort(key=lambda r: (not r['supported_by_all_exact_reviews'], not r['offline_requirements_clear'],
+                             r['route_sha256']))
+    matches = [row for row in rows if row['supported_by_all_exact_reviews']]
+    if conflicting:
+        status = 'conflicting_exact_input_reviews'
+    elif clarification:
+        status = 'exact_input_requires_clarification'
+    elif not exact:
+        status = 'new_input_requires_route_review'
+    elif len(matches) != 1:
+        status = 'multiple_reviewed_alternatives'
+    elif not matches[0]['offline_requirements_clear']:
+        status = 'reviewed_route_has_implementation_blockers'
+    else:
+        status = 'one_exact_reviewed_route_static_checks_clear'
+    return {'format': 'openworkgraph.reviewed-route-shortlist.v1',
+            'process_reference': reference(spec), 'spec_sha256': digest(spec),
+            'suite_sha256': digest(suite), 'case_sha256': case_hash, 'bindings_sha256': digest(bindings),
+            'status': status, 'exact_input_review_count': len(exact),
+            'exact_input_clarification_count': sum(r['expected']['status'] == 'needs_clarification' for r in exact),
+            'exact_input_reviewed_route_intersection_count': len(common),
+            'distinct_reviewed_route_count': len(rows),
+            'routes_with_clear_offline_requirements': sum(r['offline_requirements_clear'] for r in rows),
+            'routes': rows, 'review_required': True, 'automatic_route_selected': False,
+            'route_applicability_independently_verified': False,
+            'case_values_and_tool_arguments_included': False,
+            'model_called': False, 'business_tools_called': False, 'execution_authorized': False}
+
+
 def prepare_reviewed_case(spec, suite, bindings, case_id, alternative, *, new_case=None):
     """Materialize one explicitly selected human-reviewed route for execute.py.
 
@@ -700,6 +788,7 @@ def main():
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--inspect-tools',action='store_true')
     mode.add_argument('--propose-bindings',action='store_true')
+    mode.add_argument('--shortlist-reviewed-routes',action='store_true',help='Compare reviewed route alternatives for a selected new case offline')
     mode.add_argument('--prepare-reviewed-case',action='store_true',help='Materialize one reviewed route as local executor inputs and disabled intent')
     mode.add_argument('--audit-bindings',action='store_true',help='Offline reviewed-case binding contract audit')
     parser.add_argument('--tool-server-url');parser.add_argument('--catalog');parser.add_argument('--case');parser.add_argument('--model')
@@ -720,6 +809,15 @@ def main():
         parser.error('--baseline-bindings requires --audit-bindings without --previous-catalog')
     if not args.prepare_reviewed_case and (args.case_id is not None or args.alternative is not None or args.new_case is not None or args.confirm_retain_case_inputs):
         parser.error('Case selection and retention confirmation require --prepare-reviewed-case')
+    if args.shortlist_reviewed_routes:
+        if not all((args.cases,args.bindings,args.case)) or any((args.catalog,args.model,args.tool_server_url)):
+            parser.error('Choose a reviewed suite, bindings and a selected local case for route shortlisting')
+        report = shortlist_reviewed_routes(spec, load_object(args.cases,limit=262144),
+                     load_object(args.bindings), load_object(args.case))
+        write_new(args.output,report,limit=2*1024*1024)
+        return {'mode':'offline_reviewed_route_shortlist','output_written':True,
+                'status':report['status'],'review_required':True,
+                'execution_authorized':False,'business_tools_called':False}
     if args.prepare_reviewed_case:
         if (not all((args.cases, args.bindings, args.case_id, args.confirm_retain_case_inputs))
                 or args.alternative is None or any((args.catalog, args.case, args.model, args.tool_server_url))):
