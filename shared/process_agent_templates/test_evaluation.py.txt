@@ -101,6 +101,73 @@ class EvaluationCases(unittest.TestCase):
             with self.subTest(candidate=mutation), self.assertRaises(ImplementationError):
                 compare_candidates(self.spec, self.suite, baseline, altered)
 
+    def test_repeated_review_exposes_intermittent_critical_failures_and_duplicate_captures(self):
+        from evaluate import compare_repeated_results
+        wrong = deepcopy(self.results)
+        wrong['results'][1]['plan'] = deepcopy(wrong['results'][0]['plan'])
+        report = compare_repeated_results(self.spec, self.suite, [self.results, wrong, self.results])
+        self.assertEqual(report['capture_count'], 3)
+        self.assertEqual(report['distinct_result_document_count'], 2)
+        self.assertEqual(report['duplicate_result_document_occurrences'], 1)
+        self.assertEqual(report['minimum_matching_case_count'], 1)
+        self.assertEqual(report['maximum_matching_case_count'], 2)
+        self.assertEqual(report['mean_matching_case_fraction'], round(5/6, 6))
+        self.assertEqual(report['case_summary'], {'case_count':2,'always_matches':1,
+                         'intermittent_match':1,'never_matches':0,'cases_with_any_critical_failure':1})
+        case = report['cases'][1]
+        self.assertEqual(case['status'], 'intermittent_match')
+        self.assertEqual(case['critical_review_failure_captures'], 1)
+        self.assertEqual(case['reason_counts'], {'expected_clarification':1,'matches_reviewed_expectation':2})
+        self.assertEqual(report['missing_categories'], ['exception'])
+        self.assertTrue(report['review_required'])
+        for key in ('capture_independence_verified','same_model_or_configuration_verified',
+                    'statistical_confidence_interval','execution_authorized','business_tools_called'):
+            self.assertIs(report[key],False)
+        self.assertNotIn('PRIVATE_',json.dumps(report))
+        clean = compare_repeated_results(self.spec,self.suite,[self.results,self.results])
+        self.assertFalse(clean['review_required'])
+        self.assertEqual(clean['distinct_result_document_count'],1)
+        never = compare_repeated_results(self.spec,self.suite,[wrong,wrong])
+        self.assertEqual(never['case_summary']['never_matches'],1)
+        for captures in ([self.results], [self.results]*11,
+                         [self.results,{**self.results,'suite_sha256':'f'*64}]):
+            with self.assertRaises(ImplementationError):
+                compare_repeated_results(self.spec,self.suite,captures)
+
+    def test_repeatability_summary_randomized_oracle_and_basis_refusals(self):
+        from evaluate import _repeatability_summary
+        from random import Random
+        rng=Random(20261124)
+        reasons=['matches_reviewed_expectation','expected_clarification','unresolved_review_bypassed','invalid_route']
+        categories=['normal','exception','missing_facts']
+        for _ in range(100):
+            n,k=rng.randint(1,50),rng.randint(2,10)
+            cats=[rng.choice(categories) for i in range(n)]
+            matrix=[[rng.choice(reasons) for i in range(n)] for j in range(k)]
+            reports=[]
+            for j,line in enumerate(matrix):
+                cases=[dict(case_id=str(i),case_sha256=str(i),category=cats[i],reason=reason,
+                            matches_reviewed_expectation=reason==reasons[0]) for i,reason in enumerate(line)]
+                rng.shuffle(cases)
+                reports.append(dict(process_reference='p',spec_sha256='s',suite_sha256='t',results_sha256=str(j),cases=cases))
+            result=_repeatability_summary(reports)
+            totals=[line.count(reasons[0]) for line in matrix]
+            self.assertEqual(result['minimum_matching_case_count'],min(totals))
+            self.assertEqual(result['maximum_matching_case_count'],max(totals))
+            self.assertEqual(result['review_required'],sum(totals)!=n*k)
+            for row in result['cases']:
+                col=[line[int(row['case_id'])] for line in matrix]
+                matches=col.count(reasons[0])
+                self.assertEqual(row['matching_captures'],matches)
+                self.assertEqual(row['critical_review_failure_captures'],col.count(reasons[1])+col.count(reasons[2]))
+                self.assertEqual(row['status'],'always_matches' if matches==k else 'never_matches' if not matches else 'intermittent_match')
+        first=reports[0]
+        for changed in ({**first,'suite_sha256':'bad'}, {**first,'cases':[]},
+                        {**first,'cases':first['cases']+first['cases'][:1]},
+                        {**first,'cases':[{**row,'category':'different'} for row in first['cases']]}):
+            with self.assertRaises(ImplementationError):
+                _repeatability_summary([first,changed])
+
     def test_paired_cli_is_offline_and_returns_review_required_for_regression(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -131,6 +198,17 @@ class EvaluationCases(unittest.TestCase):
             run = subprocess.run(command, cwd=root, capture_output=True, text=True, timeout=20)
             self.assertNotEqual(run.returncode, 0)
             self.assertFalse((root / 'invalid.json').exists())
+            repeat = [sys.executable,'evaluate.py','--cases','suite.json','--results','baseline.json',
+                      '--repeat-results','candidate.json','--repeat-results','baseline.json','--output','repeat.json']
+            run=subprocess.run(repeat,cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(run.returncode,2,run.stdout+run.stderr)
+            repeated=json.loads((root/'repeat.json').read_text())
+            self.assertEqual(repeated['case_summary']['intermittent_match'],1)
+            self.assertEqual(json.loads(run.stdout)['capture_count'],3)
+            repeat[-1]='ambiguous.json'
+            run=subprocess.run(repeat+['--baseline-results','baseline.json'],cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertNotEqual(run.returncode,0)
+            self.assertFalse((root/'ambiguous.json').exists())
 
     def test_live_capture_is_explicit_private_bounded_and_reusable_offline(self):
         with TemporaryDirectory() as directory:
