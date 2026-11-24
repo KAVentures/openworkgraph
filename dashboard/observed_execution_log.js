@@ -257,6 +257,69 @@
     parent.appendChild(section);update();
   }
 
-  window.owgObservedExecutionLog=Object.freeze({render,renderSource});
-  window.__owgObservedExecutionLogModel={matchingPreview,sourceManifestMatches,recheckMatches};
+  function observationResultMatches(result,log,executionId,ids){
+    if(!result||result.format!=='openworkgraph.observed-execution-event-recheck.v1'||
+      result.log_id!==log.log_id||result.execution_id!==executionId||
+      result.snapshot_sha256!==log.observed_execution_snapshot?.snapshot_sha256||
+      !Number.isFinite(Date.parse(result.checked_at))||
+      result.capture_complete!==false||result.stored_log_changed!==false||
+      result.business_case_identity_verified!==false||result.business_outcomes_verified!==false||
+      !(result.current_projection_sha256===null||sha(result.current_projection_sha256))||
+      !Array.isArray(result.events)||result.events.length!==ids.length)return false;
+    const refs=new Set();
+    return result.events.every((row,index)=>{
+      if(row?.event_id!==ids[index]||!/^event:[a-f0-9]{16}$/.test(row.evidence_ref||'')||
+        refs.has(row.evidence_ref)||typeof row.original_activity!=='string'||row.original_activity.length>240||
+        !Number.isFinite(Date.parse(row.original_observed_at))||
+        !['native_agent_run','inferred_time_session'].includes(row.membership_basis)||
+        !(result.current_projection_sha256===null?row.status==='source_unavailable':
+          ['not_in_current_projection','observation_matches','observation_changed'].includes(row.status)))return false;
+      refs.add(row.evidence_ref);return true;
+    });
+  }
+
+  function renderObservationCheck(parent,log,executionId,events,isCurrent){
+    if(!validLogId(log?.log_id)||log.observed_execution_snapshot?.manifest_available!==true||
+      !sha(log.observed_execution_snapshot.snapshot_sha256)||!validId(executionId)||!Array.isArray(events))return;
+    const ids=events.map(row=>row.event_id);
+    if(!ids.length||ids.length>100||new Set(ids).size!==ids.length||
+      !ids.every(id=>typeof id==='string'&&/^e[1-9][0-9]{0,4}$/.test(id)))return;
+    const section=el('section');
+    const check=button('Recheck '+ids.length+' displayed observations');
+    const status=el('p');status.setAttribute('role','status');
+    const detail=el('div');
+    const current=()=>section.isConnected&&isCurrent();
+    check.addEventListener('click',async()=>{
+      if(!current()||check.disabled)return;
+      check.disabled=true;detail.replaceChildren();status.textContent='Checking exact original events against retained history…';
+      try{
+        const result=await request('/v1/workflow-evidence/event-log/observations',{
+          log_id:log.log_id,execution_id:executionId,event_ids:ids});
+        if(!current())return;
+        if(!observationResultMatches(result,log,executionId,ids))throw Error('Observation recheck response did not match this page.');
+        const table=el('table');table.setAttribute('aria-label','Original observation source recheck');
+        const header=el('tr');
+        for(const title of ['Saved event','Original activity','Original timestamp','Evidence reference','Current projection']){
+          const cell=el('th',title);cell.scope='col';header.appendChild(cell);
+        }
+        const head=el('thead');head.appendChild(header);table.appendChild(head);
+        const body=el('tbody');
+        const labels={observation_matches:'Matches',observation_changed:'Changed',
+          not_in_current_projection:'Absent from current projection',source_unavailable:'Source unavailable'};
+        result.events.forEach(row=>{
+          const tr=el('tr');
+          for(const value of [row.event_id,row.original_activity,row.original_observed_at,row.evidence_ref,labels[row.status]])
+            tr.appendChild(el('td',value));
+          body.appendChild(tr);
+        });
+        table.appendChild(body);const scroll=el('div',null,'owg-map-scroll');scroll.style.overflowX='auto';scroll.appendChild(table);detail.appendChild(scroll);
+        status.textContent='Checked '+result.checked_at+'. Original rows are shown before any analysis activity mapping. A match is not verification of business identity or outcomes.';
+      }catch(error){if(current())status.textContent=String(error.message||error);}
+      finally{check.disabled=false;}
+    });
+    section.append(check,status,detail);parent.appendChild(section);
+  }
+
+  window.owgObservedExecutionLog=Object.freeze({render,renderSource,renderObservationCheck});
+  window.__owgObservedExecutionLogModel={matchingPreview,sourceManifestMatches,recheckMatches,observationResultMatches};
 })();
