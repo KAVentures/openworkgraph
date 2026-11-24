@@ -43,6 +43,34 @@ _MAPPING = {
 }
 
 
+SCHEMA = """CREATE TABLE IF NOT EXISTS observed_execution_log_sources (
+    log_id VARCHAR PRIMARY KEY,
+    snapshot_sha256 VARCHAR NOT NULL,
+    source_report VARCHAR NOT NULL
+);"""
+
+
+def source_metadata(conn, log_id: str) -> dict[str, Any]:
+    row = conn.execute(
+        "SELECT snapshot_sha256, source_report FROM observed_execution_log_sources WHERE log_id = ?",
+        [log_id],
+    ).fetchone()
+    if not row:
+        return {}
+    report = json.loads(row[1])
+    # Source counts identify the original imported snapshot, not any later
+    # append, manual annotation or transformed copy of its event log.
+    return {"observed_execution_snapshot": {
+        "snapshot_sha256": row[0],
+        "original_case_count": report["case_count"],
+        "original_event_count": report["event_count"],
+        "timestamp_tie_groups": report["timestamp_tie_groups"],
+        "business_case_identity_verified": False,
+        "capture_complete": False,
+        "independent_retention": True,
+    }}
+
+
 class SnapshotError(ValueError):
     pass
 
@@ -197,6 +225,9 @@ def create(spec: Any, *, expected_sha256: str, name: str) -> dict[str, Any]:
     from . import event_log_description as descriptions
 
     def remember(conn, log_id):
+        conn.execute(SCHEMA)
+        conn.execute("INSERT INTO observed_execution_log_sources VALUES (?, ?, ?)",
+                     [log_id, report["snapshot_sha256"], json.dumps(report, separators=(",", ":"))])
         conn.execute(descriptions._TABLE)
         text = (
             "Observed execution snapshot: one case per selected inferred execution, "
@@ -209,11 +240,29 @@ def create(spec: Any, *, expected_sha256: str, name: str) -> dict[str, Any]:
         conn.execute("INSERT INTO log_descriptions VALUES (?, ?, ?)",
                      [log_id, text, datetime.now(timezone.utc).replace(tzinfo=None)])
 
-    stored = workspace.import_log(BytesIO(buffer.getvalue().encode("utf-8")),
-                                  name="Observed executions - " + name.strip(), source_format="csv",
-                                  mapping=_MAPPING, _transaction_hook=remember)
+    # Serialize exact duplicate requests under the same workspace lock used
+    # by import and deletion. Repeated clicks/retries return the original
+    # retained log rather than silently creating another copy.
+    full_name = "Observed executions - " + name.strip()
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            existing = conn.execute("""
+                SELECT l.log_id, l.name FROM logs l
+                JOIN observed_execution_log_sources s ON s.log_id = l.log_id
+                WHERE s.snapshot_sha256 = ? AND l.name = ?
+                ORDER BY l.imported_at, l.log_id LIMIT 1
+            """, [expected_sha256, full_name]).fetchone()
+        finally:
+            conn.close()
+        if existing:
+            return {**report, "log_id": existing[0], "name": existing[1],
+                    "stored_independent_snapshot": True, "existing_snapshot_reused": True}
+        stored = workspace.import_log(BytesIO(buffer.getvalue().encode("utf-8")),
+                                      name=full_name, source_format="csv",
+                                      mapping=_MAPPING, _transaction_hook=remember)
     return {**report, "log_id": stored["log_id"], "name": stored["name"],
-            "stored_independent_snapshot": True}
+            "stored_independent_snapshot": True, "existing_snapshot_reused": False}
 
 
 __all__ = ["preview", "create", "project", "SnapshotError"]
