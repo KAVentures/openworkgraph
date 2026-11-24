@@ -5444,7 +5444,7 @@
   function validationBlock(){
     const wrap=el('div');
     const share=select('owgEventLogSimHoldout',[['0.3','Latest 30% of cases'],['0.2','Latest 20% of cases'],['0.4','Latest 40% of cases']]);
-    const dist=select('owgEventLogSimHoldoutDistribution',[['exponential','Variable (exponential)'],['fixed','Fixed']]);
+    const dist=select('owgEventLogSimHoldoutDistribution',[['exponential','Variable (exponential)'],['fixed','Fixed'],['measured_gamma','Measured gap variability (Gamma)']]);
     const basis=select('owgEventLogSimHoldoutBasis',TIME_BASES);
     const holdoutRouting=select('owgEventLogSimHoldoutRouting',ROUTINGS);
     const run=button('Check against later cases','secondary');run.id='owgEventLogSimValidate';
@@ -5686,7 +5686,7 @@
         if(!cal.paths?.length){form.replaceChildren(el('div',coverage+' No complete paths fit the simulation limits.','muted'));return;}
         const arrivals=input('owgEventLogSimArrivals','number');arrivals.min='0';arrivals.step='any';arrivals.value=cal.arrivals_per_hour===null?'':String(cal.arrivals_per_hour);
         const cases=input('owgEventLogSimCases','number');cases.min='10';cases.max='20000';cases.value='2000';
-        const dist=select('owgEventLogSimDistribution',[['exponential','Variable (exponential)'],['fixed','Fixed']]);
+        const dist=select('owgEventLogSimDistribution',[['exponential','Variable (exponential)'],['fixed','Fixed'],['measured_gamma','Measured gap variability (Gamma)']]);
         const label=input('owgEventLogSimLabel','text','e.g. Two reviewers');label.maxLength=80;
         const top=el('div',null,'row');top.style.alignItems='end';
         const timeBasis=select('owgEventLogSimTimeBasis',TIME_BASES);
@@ -5847,6 +5847,7 @@
             if(calendar){scenario.calendar=calendar;if(scenarioDays.value&&scenarioDays.value!==days.value)scenario.scenario_calendar=simCalendar({...calValues,days:scenarioDays.value});}
             const uncertainty=simUncertainty(spread.value);
             if(uncertainty){
+              if(dist.value==='measured_gamma')throw Error('Turn off uncertainty replications for measured gap variability.');
               scenario.uncertainty=uncertainty;
               // Values still as measured are left to the server, which draws them from what the log supports.
               if(paths.value===measuredRouting)delete scenario.paths;
