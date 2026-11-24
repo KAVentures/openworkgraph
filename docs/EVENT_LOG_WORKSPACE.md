@@ -2462,6 +2462,12 @@ cohort they are `starts_with`, `ends_with` and `duration: {"min": s, "max": s}`.
 every other condition and apply to the same views. Saved filters keep them. A saved filter whose
 first or last activity is no longer in the log is flagged, like its follower rules.
 
+**Resource and event attributes.** Keep cases that contain an event with the
+exact resource label or an event whose retained attribute matches `name=value`.
+Use **Find labels** to select an exact resource label in the current case notion.
+When both fields are set, they can match different events within the same
+case. The workspace keeps the full sequence for every matching case.
+
 **Case start dates.** Select UTC dates to keep cases whose first recorded event
 falls on or after the lower date and before the upper date. The selection keeps
 each matching case's full event sequence and can be saved as a filter. When a log
