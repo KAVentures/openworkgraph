@@ -866,7 +866,15 @@
         if(w){
           wavesHost.append(el('p',w.layered_idea_count+' ideas assigned to '+w.wave_count+
             ' precedence waves · '+w.blocked_idea_count+' blocked · '+w.cycle_or_downstream_idea_count+
-            ' in or downstream of a dependency cycle. These are not durations, dates or execution approvals.','muted'));
+            ' unresolved solely by cycle precedence. These are not durations, dates or execution approvals.','muted'));
+          if(w.cycle_groups?.length){
+            const cycles=el('details');cycles.append(el('summary','Exact dependency cycles ('+w.cycle_groups.length+' groups)'));
+            cycles.append(el('p',w.exact_cycle_member_count+' cycle members and '+w.exact_cycle_downstream_count+
+              ' additional ideas depending on cycles, including ideas with separate state blockers.','muted'));
+            const cycleList=el('ul');
+            for(const group of w.cycle_groups)cycleList.append(el('li','Cycle group '+group.group+': '+group.idea_ids.map(name).join(', ')));
+            cycles.append(cycleList);wavesHost.append(cycles);
+          }
           const choose=el('select');choose.setAttribute('aria-label','Dependency planning wave');
           for(const group of w.waves){
             const option=el('option','Wave '+group.wave+' ('+group.idea_ids.length+' ideas)');
@@ -884,6 +892,8 @@
                 ' · '+idea.status.replaceAll('_',' ')+'. Target '+(idea.target_quarter||'not set')+
                 '; latest declared target in unfinished chain '+(idea.latest_declared_target_in_unfinished_chain||'unknown')+'.');
               if(idea.unfinished_prerequisite_ids.length)item.append(el('p','Unfinished prerequisites: '+idea.unfinished_prerequisite_ids.map(name).join(', '),'muted'));
+              if(idea.cycle_group!==null)item.append(el('p','Member of exact cycle group '+idea.cycle_group+'.','muted'));
+              if(idea.depends_on_cycle)item.append(el('p','Depends on a cyclic prerequisite.','muted'));
               if(idea.direct_blockers.length)item.append(el('p','Direct blockers: '+idea.direct_blockers.map(b=>name(b.idea_id)+' ('+b.state.replaceAll('_',' ')+')').join(', '),'muted'));
               waveRows.append(item);
             }
@@ -893,7 +903,7 @@
           wavesHost.append(el('p','Snapshot basis: '+w.portfolio_basis_sha256.slice(0,12)+'… · implementation states are reviewer declarations.','muted'));
         }
         const caveat=r.risk_candidates_truncated||!r.review_complete?
-          'The review was truncated or reached a depth boundary: unlisted issues remain unknown.':
+          'The review has unresolved integrity findings or bounded risk paths; unlisted issues may remain unknown.':
           'No live source was queried. These are plan consistency candidates, not forecast delivery dates.';
         dependencyScheduleHost.replaceChildren(el('h4','Dependency schedule review'),
           el('p',r.active_ideas+' active ideas; '+r.active_ideas_with_dependencies+
