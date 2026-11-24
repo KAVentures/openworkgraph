@@ -911,6 +911,20 @@ from the current data. Explicit overrides stay in the submitted inputs, and
 omitted values use the current calibration. The new report identifies the log
 and case notion used for the run.
 
+Use **Compare staffing alternatives** after loading measured values to compare
+two to four proposals against the same calibration and seed. The table shows
+median and 90th percentile cycle time, completions, and the activities with
+the longest mean waits. The table withholds deltas when overloaded queues or
+incomplete runs invalidate the comparison.
+
+**Download comparison inputs** saves the submitted settings. **Download
+comparison report** also includes the results, source log and case notion,
+calibration digest, and reasons for withholding deltas. Open either file
+under **Rerun a saved staffing comparison**. Review or edit the settings
+and run the comparison explicitly. OWG recalibrates from the selected
+log and case notion, so a different log or a later revision may yield
+different results.
+
 Calibration selects complete paths of at most 100 events. It first counts case
 lengths, excludes longer cases whole, then keeps cases whose activities fit
 the 100 most frequent activities among the remaining complete cases. The most
