@@ -37,6 +37,7 @@
   FILTERED.add('funnel');
   FILTERED.add('variants.csv');
   FILTERED.add('unusual-cases');
+  FILTERED.add('unusual-cases.csv');
   FILTERED.add('due-dates');
   FILTERED.add('story');
   FILTERED.add('co-occurrence');
@@ -7033,10 +7034,21 @@
     const signal=select('owgUnusualSignal',[['','Any reason'],...Object.entries(label)]);
     const limit=select('owgUnusualLimit',[['25','25'],['50','50'],['100','100']]);
     const run=button('Find unusual cases','secondary');run.id='owgUnusualRun';
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Reason',signal),field('Cases per page',limit),run);
+    const csvRun=button('Download all unusual cases (CSV)','secondary');csvRun.id='owgUnusualCsv';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Reason',signal),field('Cases per page',limit),run,csvRun);
     const statusLine=el('div',null,'muted');statusLine.id='owgUnusualStatus';statusLine.setAttribute('role','status');
     const out=el('div');out.id='owgUnusualResults';
     box.append(row,statusLine,out);
+    // Every matching case, not only this page, with its reasons, for a review queue or spreadsheet.
+    csvRun.onclick=async()=>{
+      try{
+        csvRun.disabled=true;
+        const response=await api(logPath('unusual-cases.csv',signal.value?{signal:signal.value}:{}));
+        download(state.logId+'-unusual-cases.csv',await response.text(),'text/csv');
+        statusLine.textContent='Downloaded every matching unusual case ('+(response.headers.get('X-OWG-Unusual-Cases')||'').replace(/; /g,', ')+'), highest score first.';
+      }catch(error){statusLine.textContent=error.message;}
+      finally{csvRun.disabled=false;}
+    };
     const generation=state.generation,logId=state.logId,caseType=state.caseType;
     const number=n=>Number(n).toLocaleString();
     let turn=0;

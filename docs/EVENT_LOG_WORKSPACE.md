@@ -3083,6 +3083,20 @@ log. Agents use
 `get_unusual_process_cases`; case IDs and paths are included only for logs shared at the cases
 level.
 
+**Download all unusual cases (CSV)** saves every matching case, not only the page shown, highest
+score first. It uses the chosen reason and the case filter
+(`GET /v1/event-logs/{log_id}/unusual-cases.csv`, with the same parameters as `unusual-cases`
+without paging; dashboard session only). Columns:
+
+- `case_id` and `score`;
+- `signals`, separated by semicolons;
+- `reasons`, the readable details separated by ` | `;
+- `events`, `hours` and `path`, with up to 50 activities joined by ` → `;
+- `path_truncated`.
+
+Cells that a spreadsheet would read as formulas start with `'`. The `X-OWG-Unusual-Cases` header
+counts rows, unusual cases and cases.
+
 ## Milestone funnel
 
 **Milestone funnel** follows cases through 2 to 8 activities you choose, in order, as Celonis's
