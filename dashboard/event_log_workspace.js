@@ -268,7 +268,7 @@
     let readingColumns=false,columnsReady=false,columnReadSequence=0;
     const refreshImport=()=>{const csv=format.value==='csv',active=csv&&useIdentity.checked;
       const valid=!active||(eventId.value&&!!sourceNamespace.value!==!!sourceColumn.value&&!(caseNamespace.value&&caseColumn.value)&&!keep.checked);
-      const ready=!readingColumns&&(!csv||columnsReady)&&file.files&&file.files[0]&&consent.checked&&valid;importButton.disabled=!(ready&&name.value.trim());appendButton.disabled=!(ready&&state.logId);show(mapping,csv);show(identity,csv);show(identityFields,active);};
+      const ready=!readingColumns&&(!csv||columnsReady)&&file.files&&file.files[0]&&consent.checked&&valid;importButton.disabled=!(ready&&name.value.trim());appendButton.disabled=!(ready&&state.logId&&!state.logs.find(log=>log.log_id===state.logId)?.observed_execution_snapshot);show(mapping,csv);show(identity,csv);show(identityFields,active);};
     for(const control of [useIdentity,eventId,sourceNamespace,sourceColumn,caseNamespace,caseColumn,jsonColumn]){
       control.addEventListener('change',()=>{consent.checked=false;refreshImport();});
       if(control.tagName==='INPUT'&&control.type==='text')control.addEventListener('input',()=>{consent.checked=false;refreshImport();});
@@ -471,7 +471,8 @@
         status('Added '+Number(r.added_events).toLocaleString()+' new events to '+target.name+'; skipped '+Number(r.duplicate_events_skipped).toLocaleString()+' already in the log'+(r.rejected_events?' and rejected '+Number(r.rejected_events).toLocaleString()+' ('+reasonText(r.quality&&r.quality.rejected_by_reason)+')':'')+'.'+relationshipText(r.log&&r.log.object_relationships)+identityText(r.source_identity)+tieText(r.quality)+keptText(r.quality)+sameSourceText(r.same_source_as));keep.checked=false;
       }catch(error){status(error.message);}finally{refreshImport();}
     };
-    pick.onchange=()=>{selectLog(pick.value);refreshImport();};
+    pick.onchange=()=>{++state.refresh;selectLog(pick.value);refreshImport();};
+    pick.addEventListener('owg-saved-log-selected',refreshImport);
     caseType.onchange=()=>{state.generation++;state.caseType=caseType.value;state.follows=[];state.attr={};state.caseActivity='';results.replaceChildren();};
     analyze.onclick=()=>analyse().catch(error=>status(error.message));
     const relationshipExportNote=()=>{const log=state.logs.find(l=>l.log_id===state.logId);return log&&log.object_relationships&&!['ocel','ocelxml','ocelsqlite'].includes(exportFormat.value)?' This format omits supplied object relationships; OCEL JSON/XML preserve the retained assertions.':'';};
@@ -1167,6 +1168,13 @@
     if(summary.activity_mapping){const m=summary.activity_mapping;const note=el('div','Activities are grouped by the mapping “'+m.name+'”: '+Number(m.events_relabeled).toLocaleString()+' events relabelled'+(m.repeats_collapsed?', '+Number(m.repeats_collapsed).toLocaleString()+' consecutive repeats collapsed':'')+'. The stored events are unchanged; remove the mapping under Group activities to see the original activities.','note');note.id='owgActivityMappingNotice';overview.appendChild(note);}
     if(summary.hidden_activities){const h=summary.hidden_activities;const note=el('div','Hidden activities left out: '+h.activities.join(', ')+' ('+Number(h.events_hidden).toLocaleString()+' events'+(h.cases_with_only_hidden_events?'; '+Number(h.cases_with_only_hidden_events).toLocaleString()+' cases had only hidden events and are not shown':'')+'). The stored events are unchanged; use Show all activities under Hide activities to include them.','note');note.id='owgHiddenActivitiesNotice';overview.appendChild(note);}
     results.appendChild(overview);
+    // Original source provenance is independent of active case filters and
+    // analysis mappings. Source rechecks are explicit, never automatic.
+    if(summary.log?.observed_execution_snapshot&&window.owgObservedExecutionLog?.renderSource){
+      const logId=state.logId;
+      window.owgObservedExecutionLog.renderSource(overview,summary.log,
+        ()=>generation===state.generation&&state.logId===logId);
+    }
     results.appendChild(insightSection(inspection));
     results.appendChild(activityMappingSection());
     results.appendChild(hiddenActivitiesSection());
@@ -10137,17 +10145,19 @@
       if(typeof logId!=='string'||!/^log_[a-f0-9]{16}$/.test(logId))throw Error('Invalid event-log reference.');
       const pick=document.getElementById('owgEventLogPick');
       if(!pick)throw Error('Event-log workspace not available.');
-      const request=++state.refresh;
+      const generation=state.generation,request=++state.refresh;
       const data=await getJSON('/v1/event-logs');
-      if(request!==state.refresh)throw Error('Event-log selection changed.');
+      if(request!==state.refresh||generation!==state.generation)throw Error('Event-log selection changed.');
       const logs=Array.isArray(data.logs)?data.logs:[];
       if(!logs.some(log=>log.log_id===logId))throw Error('The requested event log is no longer retained.');
       state.logs=logs;
       setOptions(pick,logs.map(log=>[log.log_id,log.name+' · '+Number(log.events).toLocaleString()+' events']));
       show(document.getElementById('owgEventLogManage'),true);
       pick.value=logId;
-      await selectLog(logId);
-      if(state.logId!==logId||pick.value!==logId)throw Error('Event-log selection changed.');
+      const pending=selectLog(logId),selectedGeneration=state.generation;
+      pick.dispatchEvent(new Event('owg-saved-log-selected'));
+      await pending;
+      if(request!==state.refresh||selectedGeneration!==state.generation||state.logId!==logId||pick.value!==logId)throw Error('Event-log selection changed.');
       status('Opened saved workflow snapshot. Select Analyse to explore the retained observations.');
       return true;
     }
