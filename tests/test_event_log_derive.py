@@ -155,6 +155,10 @@ with TestClient(app) as client:
     assert client.post(export, json=explicit, headers=bearer).status_code == 403
     all_cases = client.post(export, json=explicit, headers=owner)
     assert all_cases.status_code == 200 and len(all_cases.text.splitlines()) == 4
+    single = client.post(export, json={"cohort": {}, "case_id": "c1", "case_type": "case"}, headers=owner)
+    assert single.status_code == 200 and [row.split(",")[0] for row in single.text.splitlines()[1:]] == ["c1"]
+    mismatch = client.post(export, json={"cohort": {"activity": "B"}, "case_id": "c1"}, headers=owner)
+    assert mismatch.status_code == 422
     assert client.post(export, json={**explicit, "include_unfiltered": "true"}, headers=owner).status_code == 422
     assert client.post(export + "?format=ocel", json=cohort, headers=owner).status_code == 422
 

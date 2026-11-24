@@ -40,6 +40,11 @@ const path=require('node:path');
   await variants.locator('#owgVariantCoverageCasesStatus').getByText('1 matching cases. Showing 1 on this page.').waitFor();
   await variants.getByRole('button',{name:'Open case one',exact:true}).click();
   await variants.getByText('Showing 100 of 502 events.',{exact:false}).waitFor();
+  const [trace]=await Promise.all([page.waitForEvent('download'),
+    variants.getByRole('button',{name:'Download case events (CSV)',exact:true}).click()]);
+  const exportedRows=(await fs.readFile(await trace.path(),'utf8')).trim().split(/\r?\n/).slice(1);
+  assert.equal(exportedRows.length,502);
+  assert.deepEqual([...new Set(exportedRows.map(line=>line.split(',')[0]))],['one']);
   await coverage.getByRole('button',{name:'Inspect variant 2 cases',exact:true}).click();
   await variants.getByRole('button',{name:'Open case two',exact:true}).click();
   await variants.getByText('Showing 100 of 501 events.',{exact:false}).waitFor();
