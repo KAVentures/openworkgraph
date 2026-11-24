@@ -110,3 +110,70 @@ the retained event scope can be missing. At most 30 surface rows are
 displayed; the remaining exclusive seconds are preserved separately.
 The evidence response adds an optional versioned timing projection without
 changing existing timing fields or requiring additional source queries.
+
+## Observed execution → saved process-mining log → reviewed model (#264/#326/#370 R5)
+
+After inspecting explicit executions, select up to 12 opaque execution IDs,
+a snapshot name and an observation projection. **Interactions only** retains
+coarse human actions and structural agent operations; **Interactions +
+navigation context** also retains allowlisted human foreground changes, page
+views, navigation, tab activation and page-show observations. Both use actual
+retained event timestamps, opaque evidence references, fixed activity
+categories and privacy-safe surface tokens. Neither copies captured text,
+clipboard payloads, URLs, window titles or native tool inputs. Observations
+are not deduplicated physical actions; tied timestamps do not prove order.
+
+The authenticated local dashboard previews the exact scope, case/event
+counts and content digest. Explicit local-storage confirmation repeats the
+projection and refuses a changed digest. Source cap (25,000 rows), event cap
+(10,000 projected observations), missing execution references, ambiguous
+overlapping activity evidence or empty cases block creation rather than
+silently importing a partial selection. Default-mode digests remain
+compatible; the richer projection has a distinct identity. Same-name exact
+duplicate creates reuse the retained dataset. Original event rows cannot
+be appended to; create a separate new dataset for additional observations.
+
+The resulting independent log is stored in the existing DuckDB workspace
+and opens by exact log ID. It supports existing process-mining analytics,
+model discovery and review. It does not represent verified business-case
+identity, complete capture or independently confirmed outcomes. Ordinary
+log analytics do not load raw observation history. If the source manifest
+is unavailable, the log remains analysable with that status disclosed.
+
+**Original observed execution snapshot** in the saved-log overview can
+retrieve the bounded original manifest without reading observation history.
+A separate action compares the original projection digest to the currently
+retained evidence, reporting matches, changed or unavailable. This checks
+the structural projection at a point in time, not business truth or
+continuous monitoring. An explicit per-execution link opens the original
+retained evidence window in the explorer; unavailable history is never
+silently replaced by another run. Independent snapshots survive source
+retention changes until deleted separately. Deleting a log removes its
+manifest in the existing deletion transaction.
+
+The existing model-discovery source snapshot additionally pins the original
+observed-execution digest and counts when present. The reviewed catalog and
+automation pipeline can reopen that exact retained log. Handoff review
+packets carry only minimized original-observation digest and status, never
+raw execution IDs or source content. Original-history revalidation is
+separate from the local log fingerprint and remains explicitly unverified
+in those packets. A missing/changed manifest adds an outstanding review
+blocker, not an automatic rejection or approval of business actions.
+
+Endpoints:
+- POST /v1/workflow-evidence/event-log/preview
+- POST /v1/workflow-evidence/event-log/create (explicit storage header)
+- GET /v1/workflow-evidence/event-log/source?log_id=…
+- POST /v1/workflow-evidence/event-log/recheck
+
+All four require an authenticated local dashboard session; connected AI
+bearer tokens cannot use them. No new collector, outbound sharing or
+execution grants are introduced. The original event-log workspace, process
+catalog, opportunity pipeline and agent project artifacts remain the
+existing implementation paths.
+
+Regression coverage includes exact snapshot selection, real timestamps,
+mode changes, overlap refusal, stale preview, duplicate save, malformed
+metadata, source drift/unavailability, local authorization, deletion,
+model-discovery lineage and minimized project review. Full cross-platform
+CI and real consenting pilot acceptance remain separate gates.
