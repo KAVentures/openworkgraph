@@ -34,7 +34,7 @@ MAX_CITATIONS = 5
 # A dot between digits is a decimal separator, not a sentence break.
 _BOUNDARY = re.compile(r"(?<!\d)\.|\.(?!\d)|[!?]+|\n")
 _WORD = re.compile(r"[^\W\d_][\w-]{2,}", re.UNICODE)
-_NUMBER = re.compile(r"(?<![\w.,])(\d{1,3}(?:[ ,]\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\s*(%|percent\b|days?\b|hours?\b|eur\b|usd\b|sek\b|gbp\b|kr\b)?(?![\d.,])", re.I)
+_NUMBER = re.compile(r"(?<![\w.,])(\d{1,3}(?:[ ,]\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(?!\d|[.,]\d)\s*(%|percent\b|days?\b|hours?\b|eur\b|usd\b|sek\b|gbp\b|kr\b)?", re.I)
 MAX_STATEMENT_CHARS = 600
 MAX_CONFLICT_CANDIDATES = 80
 ANALYSIS_VERSION = "clarification-coverage-v2"
@@ -114,7 +114,10 @@ def _numbers(text: str):
             continue
         unit = (match.group(2) or "").lower()
         unit = {"percent": "%", "days": "day", "hours": "hour", "kr": "kr"}.get(unit, unit)
-        out.append((value, unit))
+        normalized = format(value, "f")
+        if "." in normalized:
+            normalized = normalized.rstrip("0").rstrip(".")
+        out.append((normalized, unit))
     return out
 
 
@@ -289,6 +292,10 @@ def clarify(record: dict[str, Any], request: ClarificationRequest,
     for terminal in model.terminal_activity_ids:
         if terminal not in confirmed:
             cited, conflicts, coverage, complete = evidence("outcome", terminal, labels.get(terminal, ""))
+            if conflicts:
+                add("contradiction", terminal,
+                    f"The documents disagree about outcome {labels.get(terminal, terminal)!r}. Which statement applies?",
+                    cited, conflicts, "outcome", coverage, complete)
             add("outcome", terminal,
                 f"What source-verifiable outcome confirms the process ended at {labels.get(terminal, terminal)!r}?",
                 cited, [], "outcome", coverage, complete)
