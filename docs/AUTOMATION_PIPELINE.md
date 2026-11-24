@@ -75,6 +75,10 @@ budgets totalled per currency and basis (rejected ideas excluded), modeled hours
 ideas waiting on a dependency, open ideas per target quarter and how many ideas have no
 planning yet. The CSV export includes the planning columns.
 
+## Budget-constrained portfolio scenarios
+
+The [budget scenario planner](AUTOMATION_BUDGET_SCENARIO.md) evaluates selected opportunity combinations against a single budget currency/basis, explicit reviewer priorities and prerequisite closure. It does not sum benefits or approve implementation.
+
 ## API (dashboard session only)
 
 `GET /v1/automation-pipeline[?state=]`, `POST /v1/automation-pipeline`,
