@@ -129,6 +129,15 @@ class QueueCases(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(list((self.root/'queue-state').glob('*.claim.json')))
         self.assertEqual((await self.run_queue(limit=2))['reported_complete_count'],2)
 
+    async def test_missing_execution_credentials_do_not_claim_any_case(self):
+        for token in ('OWG_EXECUTION_MCP_TOKEN','OWG_EXECUTION_SOURCE_READ_TOKEN'):
+            with patch.dict('os.environ',{token:''}):
+                with self.assertRaises(ImplementationError):
+                    await self.run_queue(limit=2)
+            self.assertEqual(self.calls,[])
+            self.assertFalse(list((self.root/'queue-state').glob('*.claim.json')))
+        self.assertEqual((await self.run_queue(limit=2))['reported_complete_count'],2)
+
     async def test_uncertain_result_stops_queue_and_changed_expiry_cannot_retry(self):
         self.fail_case='PRIVATE_CASE_1'
         result=await self.run_queue(limit=3)
