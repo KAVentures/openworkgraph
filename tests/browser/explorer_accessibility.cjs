@@ -102,7 +102,31 @@ const path=require('node:path');
    assert.match(await runMatrix.textContent(),/Run 1 · execution:compare_right/);
    const occurrences=runMatrix.getByRole('table',{name:'Projected step occurrence matrix'});
    assert.deepEqual(await occurrences.locator('tbody tr').first().locator('td').allTextContents(),['1/1','2']);
+   assert.equal(await runMatrix.locator('#owgExplorerSurfaceRoutes').count(),1);
+   assert.equal(await runMatrix.locator('#owgExplorerAutomationReview').count(),1);
    await audit(page,'#owgWorkflowExplorer','Selected execution workbench');
+   await page.unroute('**/v1/workflow-evidence?*');
+   await page.route('**/v1/workflow-evidence?*',route=>{
+     const params=new URL(route.request().url()).searchParams;
+     assert.equal(params.get('execution_ids'),'execution:compare_right');
+     assert.equal(params.get('include_canonical_evidence'),'true');
+     assert.equal(params.get('max_runs'),'1');
+     return route.fulfill({status:200,contentType:'application/json',
+       body:JSON.stringify({selector:{execution_ids:['execution:compare_right'],selected_execution_count:1},
+         provenance:{source_limit_reached:false},canonical_evidence_included:true,
+         canonical_evidence:[{execution_id:'execution:compare_right',observed_event_count:2,returned_event_count:1,
+           events_truncated:true,event_membership_basis:'inferred_time_and_session_window',nearby_events_may_be_unrelated:true,
+           events:[{event_ref:'event:aaaaaaaaaaaaaaaa',observed_at:'2026-10-01T10:00:00Z',event_type:'browser_click',
+             app:'Browser',window_title:'PRIVATE TITLE',metadata:{value:'PRIVATE CONTENT'}}]}]})});
+   });
+   await page.getByRole('button',{name:'Load selected run events',exact:true}).click();
+   const chronology=page.getByRole('table',{name:'Selected run event chronology'});
+   await chronology.waitFor();
+   assert.match(await chronology.textContent(),/browser_click/);
+   assert.doesNotMatch(await runMatrix.textContent(),/PRIVATE TITLE|PRIVATE CONTENT/);
+   assert.match(await runMatrix.textContent(),/1 of 2 retained events/);
+   await audit(page,'#owgWorkflowExplorer','Selected run chronology');
+
 
    assert.equal(await page.locator('#owgExplorerHandoffPanel').count(),0,'switching lanes revokes old handoff review');
    assert.match(await page.locator('#owgExplorerStepInfo').textContent(),/Variant 2 selected from comparison/);
@@ -129,7 +153,7 @@ const path=require('node:path');
    await compare.click();
    assert.match(await page.locator('#owgExplorerCompareResult').textContent(),/Exact structural comparison unavailable/);
    assert.equal(await page.locator('#owgExplorerCompareResult tbody tr').count(),0);
-   assert.equal(evidenceReads,readsBeforeCompare+1,'refused comparison must not request evidence');
+   assert.equal(evidenceReads,readsBeforeCompare+2,'refused comparison must not request evidence');
    assert.equal(writes,0,'comparison and evidence inspection must never write to workflow APIs');
    await audit(page,'#owgWorkflowExplorer','Clipped variant comparison refusal');
    // Every focusable control must be reachable by Tab and have a visible accessible name.
