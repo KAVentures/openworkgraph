@@ -217,6 +217,13 @@ def compare_directories(baseline_root: Path | str, candidate_root: Path | str,
     """
     before = _pinned_inventory(baseline_root, baseline_manifest_sha256)
     after = _pinned_inventory(candidate_root, candidate_manifest_sha256)
+    for inventory in (before, after):
+        ref = inventory["workflow_reference"]
+        if (not isinstance(ref, dict) or set(ref) != {"workflow_id", "revision", "content_sha256"}
+                or not isinstance(ref["workflow_id"], str) or not ref["workflow_id"]
+                or type(ref["revision"]) is not int or ref["revision"] < 1
+                or not isinstance(ref["content_sha256"], str) or not _HEX.fullmatch(ref["content_sha256"])):
+            raise ReleaseIntegrityError("Invalid versioned release identity")
     if before["workflow_reference"]["workflow_id"] != after["workflow_reference"]["workflow_id"]:
         raise ReleaseIntegrityError("Compare releases of the same saved workflow ID")
     old, new = before["files"], after["files"]
