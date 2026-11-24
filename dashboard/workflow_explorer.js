@@ -903,6 +903,12 @@
     renderRunTrace(panel, matrix, bundle);
     renderAutomationReview(panel, matrix, bundle);
     host.appendChild(panel);
+    // Explicit snapshot storage is isolated from the read-only explorer.
+    if(window.owgObservedExecutionLog?.render){
+      const requestId=latestEvidenceRequest,scope={...currentWindow};
+      window.owgObservedExecutionLog.render(panel,matrix,scope,
+        ()=>requestId===latestEvidenceRequest&&activeBundle===bundle);
+    }
   }
 
   function foregroundCoverageRows(matrix,bundle) {
