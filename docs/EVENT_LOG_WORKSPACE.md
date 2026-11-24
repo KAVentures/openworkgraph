@@ -3439,6 +3439,20 @@ through `get_process_decision_rules` (see PROCESS_INTELLIGENCE_FOR_AGENTS.md).
 
 Dashboard owners can download a saved log as an Excel workbook (`GET /v1/event-logs/{log_id}/events.xlsx`). The workbook preserves case IDs, activities, timestamps, and resources as literal text cells, with a frozen header and filter. It is a CSV-equivalent view rather than an OCEL relationship export.
 
+### Parquet event-log export
+
+**Apache Parquet (typed columns)** in the export menu downloads the same rows as a Parquet file
+(`GET /v1/event-logs/{log_id}/events.parquet`, dashboard session only), for DuckDB, pandas or
+PM4Py, Spark, Power BI and cloud warehouses. Columns:
+
+- `case_id` and `activity`: strings;
+- `timestamp`: a UTC-adjusted timestamp with microsecond precision, not text;
+- `resource`: a string, null where the event has none.
+
+The CSV export is streamed to a temporary file and converted by DuckDB, so large logs are not held
+in memory; both temporary files are removed after the download. The `X-OWG-Rows` header counts
+events. The workspace's Parquet import reads the file back to the same events.
+
 ### Rework and loop case evidence
 
 The local rework report shows the total number of repeated activities and recorded loop patterns, with an adjustable display limit of 20, 50 or 100. JSON and CSV downloads contain the displayed results and the JSON includes the selected cohort and analysis settings. The report offers explicit case-evidence links for repeated activities and exact closed activity loops. Selectors respect the active case cohort and retain literal event order; timestamp ties do not establish business order.

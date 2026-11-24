@@ -585,10 +585,11 @@
     exportFormat.onchange=()=>{const note=relationshipExportNote();const review=exportFormat.value.endsWith('-review')?'Review CSV changes formula-like text and column names; use the regular export for re-import.':'';const attributes=exportFormat.value==='xes-attributes'?'Includes retained trace and event attribute values in the download.':'';if(review||attributes||note)status((review+attributes+note).trim());};
     {const option=document.createElement('option');option.value='ocelsqlite';option.textContent='OCEL 2.0 SQLite';exportFormat.appendChild(option);}
     {const option=document.createElement('option');option.value='xlsx';option.textContent='Excel workbook (.xlsx)';exportFormat.appendChild(option);}
+    {const option=document.createElement('option');option.value='parquet';option.textContent='Apache Parquet (typed columns)';exportFormat.appendChild(option);}
     exportButton.onclick=async()=>{
       try{
         status('Preparing export…');
-        const response=await api(exportFormat.value==='ocelsqlite'?logPath('ocel.sqlite',{}):exportFormat.value==='xlsx'?logPath('events.xlsx',{}):logPath('export',{format:exportFormat.value}));
+        const response=await api(exportFormat.value==='ocelsqlite'?logPath('ocel.sqlite',{}):exportFormat.value==='xlsx'?logPath('events.xlsx',{}):exportFormat.value==='parquet'?logPath('events.parquet',{}):logPath('export',{format:exportFormat.value}));
         const url=URL.createObjectURL(await response.blob());
         const link=el('a');link.href=url;link.download=state.logId+'.'+({sourcecsv:'csv','csv-review':'review.csv','sourcecsv-review':'review.csv','xes-attributes':'xes',ocel:'jsonocel',ocelxml:'xmlocel',ocelsqlite:'ocel.sqlite'}[exportFormat.value]||exportFormat.value);
         document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
