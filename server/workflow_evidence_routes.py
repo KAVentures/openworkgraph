@@ -879,18 +879,8 @@ async def import_process_bpmn_draft(request: Request) -> Response:
     return JSONResponse(result,headers={'Cache-Control':'no-store'})
 
 
-@app.post('/v1/process-catalog/import-dmn')
-async def import_process_dmn_preview(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
-                                     revision: int = Query(ge=1),
-                                     decision_activity_id: str = Query(pattern=r'^[A-Za-z][A-Za-z0-9_-]{0,63}$'),
-                                     effective_from: str = Query(min_length=10, max_length=10),
-                                     effective_until: str | None = Query(default=None, min_length=10, max_length=10),
-                                     decision_name: str | None = Query(default=None, max_length=200)) -> Response:
-    """Preview a DMN decision table as unconfirmed rules for one decision; nothing is saved."""
-    from .local_source_routes import _require_dashboard
-    from shared.process_dmn import DMNError, MAX_BYTES, import_dmn
-    from starlette.concurrency import run_in_threadpool
-    _require_dashboard(request)
+async def _dmn_body(request: Request) -> bytes:
+    from shared.process_dmn import MAX_BYTES
     content_type=request.headers.get('content-type','').split(';',1)[0].strip().lower()
     if content_type not in {'application/xml','text/xml','application/dmn+xml'}:
         raise HTTPException(415,'DMN import requires XML content')
@@ -899,15 +889,78 @@ async def import_process_dmn_preview(request: Request, workflow_id: str = Query(
         if len(payload)+len(chunk)>MAX_BYTES:
             raise HTTPException(413,'DMN exceeds the 256 KiB limit')
         payload.extend(chunk)
-    record=_catalog_record(workflow_id,revision)
+    return bytes(payload)
+
+
+@app.post('/v1/process-catalog/import-dmn')
+async def import_process_dmn_preview(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
+                                     revision: int = Query(ge=1),
+                                     decision_activity_id: str = Query(pattern=r'^[A-Za-z][A-Za-z0-9_-]{0,63}$'),
+                                     effective_from: str = Query(min_length=10, max_length=10),
+                                     effective_until: str | None = Query(default=None, min_length=10, max_length=10),
+                                     decision_name: str | None = Query(default=None, max_length=200)) -> Response:
+    """Preview a DMN decision table as unconfirmed rules for one decision."""
+    from .local_source_routes import _require_dashboard
+    from shared.process_dmn import DMNError, import_dmn
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    payload = await _dmn_body(request)
+    record = _catalog_record(workflow_id, revision)
     try:
-        result=await run_in_threadpool(import_dmn,bytes(payload),record['process_model'],decision_activity_id,
-                                       effective_from=effective_from,effective_until=effective_until,
-                                       decision_name=decision_name)
+        result = await run_in_threadpool(import_dmn, payload, record['process_model'], decision_activity_id,
+                                        effective_from=effective_from, effective_until=effective_until,
+                                        decision_name=decision_name)
     except DMNError as exc:
-        raise HTTPException(422,str(exc)) from None
-    result['based_on']={'workflow_id':workflow_id,'revision':revision,'content_sha256':record['content_sha256']}
-    return JSONResponse(result,headers={'Cache-Control':'no-store'})
+        raise HTTPException(422, str(exc)) from None
+    _require_dashboard(request)
+    result['based_on'] = {'workflow_id': workflow_id, 'revision': revision, 'content_sha256': record['content_sha256']}
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
+@app.post('/v1/process-catalog/import-dmn/inspect')
+async def inspect_process_dmn(request: Request) -> Response:
+    """List the table choices in a local DMN file."""
+    from .local_source_routes import _require_dashboard
+    from shared.process_dmn import DMNError, inspect_dmn
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    payload = await _dmn_body(request)
+    try:
+        result = await run_in_threadpool(inspect_dmn, payload)
+    except DMNError as exc:
+        raise HTTPException(422, str(exc)) from None
+    _require_dashboard(request)
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
+@app.post('/v1/process-catalog/import-dmn/batch')
+async def import_process_dmn_batch_preview(
+    request: Request, workflow_id: str = Query(pattern=_PROCESS_ID), revision: int = Query(ge=1),
+    document_sha256: str = Query(pattern=r'^[a-f0-9]{64}$'),
+    assignments: str = Query(min_length=2, max_length=2048),
+    effective_from: str = Query(min_length=10, max_length=10),
+    effective_until: str | None = Query(default=None, min_length=10, max_length=10),
+) -> Response:
+    """Preview all chosen tables in one unconfirmed design draft."""
+    from .local_source_routes import _require_dashboard
+    from shared.process_dmn import DMNError, import_dmn_batch
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    payload = await _dmn_body(request)
+    try:
+        mapping = json.loads(assignments, object_pairs_hook=_process_object, parse_constant=_invalid_process_constant)
+    except (ValueError, RecursionError):
+        raise HTTPException(422, 'DMN assignments must be valid JSON') from None
+    record = _catalog_record(workflow_id, revision)
+    try:
+        result = await run_in_threadpool(import_dmn_batch, payload, record['process_model'], mapping,
+                                        document_sha256=document_sha256, effective_from=effective_from,
+                                        effective_until=effective_until)
+    except DMNError as exc:
+        raise HTTPException(422, str(exc)) from None
+    _require_dashboard(request)
+    result['based_on'] = {'workflow_id': workflow_id, 'revision': revision, 'content_sha256': record['content_sha256']}
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
 
 
 @app.get('/process-decision-editor.js')

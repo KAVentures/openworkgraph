@@ -1,11 +1,12 @@
 """DMN decision-table interchange limited to the exactly mappable subset (#370 R21)."""
 from copy import deepcopy
+from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
 
 import pytest
 
 from shared.process_decision_tables import evaluate_table
-from shared.process_dmn import DMN, DMNError, export_dmn, import_dmn, unary_test_to_condition
+from shared.process_dmn import DMN, DMNError, export_dmn, import_dmn, import_dmn_batch, inspect_dmn, unary_test_to_condition
 from shared.process_model import ProcessModel
 
 
@@ -146,6 +147,82 @@ def test_import_requires_a_decision_step_and_valid_dates():
         import_dmn(raw, _three_way(), 'choose', effective_from='March 1')
 
 
+def _two_decisions():
+    value = graph()
+    value["activities"] += [
+        {"id": "audit", "label": "Audit", "kind": "decision"},
+        {"id": "close", "label": "Close"}, {"id": "hold", "label": "Hold"},
+    ]
+    value["transitions"] += [
+        {"source": "accept", "target": "audit"},
+        {"source": "audit", "target": "close", "rule_id": "reviewed"},
+        {"source": "audit", "target": "hold", "rule_id": "unreviewed"},
+    ]
+    value["terminal_activity_ids"] = ["escalate", "reject", "close", "hold"]
+    value["baseline_path"] = ["Review", "Accept", "Audit", "Close"]
+    value["business_rules"] += [
+        {"id": "reviewed", "text": "Close the reviewed order", "user_confirmed": True,
+         "predicate": {"conditions": [{"path": "/reviewed", "operator": "eq", "expected": True}]}},
+        {"id": "unreviewed", "text": "Hold the unreviewed order", "user_confirmed": True,
+         "predicate": {"conditions": [{"path": "/reviewed", "operator": "eq", "expected": False}]}},
+    ]
+    value["decision_tables"].append({
+        "id": "audit_table", "decision_activity_id": "audit", "effective_from": "2026-01-01",
+        "source_basis": {"label": "Audit policy", "document_sha256": "b" * 64},
+        "rows": [{"id": "low", "rule_id": "reviewed", "target_activity_id": "close"},
+                 {"id": "high", "rule_id": "unreviewed", "target_activity_id": "hold"}],
+        "user_confirmed": True,
+    })
+    return value
+
+
+def test_batch_round_trip_preserves_distinct_tables_and_leaves_all_new_rules_unconfirmed():
+    value = _two_decisions()
+    raw = export_dmn(packet(value)).encode()
+    ids = [element.attrib["id"] for element in ET.fromstring(raw).iter() if "id" in element.attrib]
+    assert len(ids) == len(set(ids))
+    inspection = inspect_dmn(raw)
+    assert [(d["name"], d["hit_policy"], d["rule_count"]) for d in inspection["decisions"]] == [
+        ("Review", "FIRST", 3), ("Audit", "UNIQUE", 2)
+    ]
+    choices = [{"index": 0, "decision_activity_id": "choose"}, {"index": 1, "decision_activity_id": "audit"}]
+    settings = {"document_sha256": inspection["document_sha256"], "effective_from": "2026-02-01",
+                "effective_until": "2026-08-01"}
+    preview = import_dmn_batch(raw, value, choices, **settings)
+    model = ProcessModel.model_validate(preview["proposed_process_model"])
+    assert preview["process_model_saved"] is False and len(preview["proposals"]) == 2
+    assert [(t.id, t.hit_policy) for t in model.decision_tables] == [("purchase", "FIRST"), ("audit_table", "UNIQUE")]
+    assert all(t.effective_until == "2026-08-01" and t.source_basis.document_sha256 == settings["document_sha256"]
+               and not t.user_confirmed for t in model.decision_tables)
+    assert not any(rule.user_confirmed for rule in model.business_rules)
+    with pytest.raises(DMNError, match="changed"):
+        import_dmn_batch(raw + b" ", value, choices, **settings)
+    with pytest.raises(DMNError, match="mapped once"):
+        import_dmn_batch(raw, value, [choices[0], choices[0]], **settings)
+    with pytest.raises(DMNError, match="table 2"):
+        import_dmn_batch(raw, value, [choices[0], {"index": 1, "decision_activity_id": "close"}], **settings)
+    assert all(table["user_confirmed"] for table in value["decision_tables"])
+
+
+def test_import_refuses_dependencies_and_preserves_downstream_reference_ids():
+    raw = _dmn([("< 100", "Accept"), (">= 100", "Escalate"), ("null", "Reject")])
+    dependent = raw.replace(b"<decisionTable", b'<informationRequirement><requiredDecision href="#upstream"/>'
+                            b'</informationRequirement><decisionTable', 1)
+    assert "dependencies" in inspect_dmn(dependent)["decisions"][0]["unsupported_reason"]
+    with pytest.raises(DMNError, match="dependencies"):
+        import_dmn(dependent, graph(), "choose", effective_from="2026-01-01")
+    defaulted = raw.replace(
+        b'<output id="o0" typeRef="string"/>',
+        b'<output id="o0" typeRef="string"><defaultOutputEntry><text>"Reject"</text></defaultOutputEntry></output>', 1)
+    with pytest.raises(DMNError, match="Default outputs"):
+        import_dmn(defaulted, graph(), "choose", effective_from="2026-01-01")
+    value = _two_decisions()
+    value["decision_tables"][1]["required_decisions"] = [{"table_id": "purchase", "fact_path": "/upstream"}]
+    replacement = import_dmn(raw, value, "choose", effective_from="2026-01-01")
+    model = ProcessModel.model_validate(replacement["proposed_process_model"])
+    assert next(t for t in model.decision_tables if t.id == "audit_table").required_decisions[0].table_id == "purchase"
+
+
 def test_export_and_import_routes(tmp_path):
     import json
     import os
@@ -175,6 +252,20 @@ with TestClient(app) as client:
     assert body["based_on"]["revision"] == rev and body["process_model_saved"] is False
     assert client.post("/v1/process-catalog/import-dmn" + query, content=b"<x/>",
                        headers={**owner, "Content-Type": "text/plain"}).status_code == 415
+    inspect_path = "/v1/process-catalog/import-dmn/inspect"
+    xml = {**owner, "Content-Type": "application/xml"}
+    assert client.post(inspect_path, content=exported.content, headers=bearer).status_code == 403
+    inspection = client.post(inspect_path, content=exported.content, headers=xml)
+    assert inspection.status_code == 200 and inspection.headers["cache-control"] == "no-store"
+    params = {"workflow_id": wid, "revision": rev, "effective_from": "2026-05-01",
+              "document_sha256": inspection.json()["document_sha256"],
+              "assignments": json.dumps([{"index": 0, "decision_activity_id": "choose"}])}
+    path = "/v1/process-catalog/import-dmn/batch"
+    assert client.post(path, params=params, content=exported.content, headers=bearer).status_code == 403
+    batch = client.post(path, params=params, content=exported.content, headers=xml)
+    assert batch.status_code == 200, batch.text
+    assert batch.json()["based_on"]["content_sha256"] == saved["content_sha256"]
+    assert batch.json()["proposals"][0]["decision_activity_id"] == "choose"
     assert catalog.get(wid)["revision"] == rev
 '''
     env = os.environ.copy()

@@ -877,33 +877,103 @@
     host.appendChild(section);
   }
   function renderDMNImport(host){
-    const decisions=(record.process_model?.activities||[]).filter(a=>a.kind==='decision');
+    const decisions=(record.process_model?.activities||[]).filter(activity=>activity.kind==='decision');
     if(!decisions.length)return;
     const section=el('section');section.id='owgCatalogDMN';
-    section.append(el('h4','Import a DMN decision table'),el('p','Read one DMN decision table into a decision of this saved design. Only simple conditions (=, not, <, <=, >, >=, lists, null) and one output naming the next step are accepted. Imported rules and the table start unconfirmed and are opened in the editor; nothing is saved until you review and save.'));
-    const decision=el('select');decision.setAttribute('aria-label','Decision step');
-    decisions.forEach(d=>{const o=el('option',d.label);o.value=d.id;decision.appendChild(o);});
-    const from=el('input');from.type='date';from.setAttribute('aria-label','Effective from');
-    const file=el('input');file.type='file';file.accept='.dmn,.xml,application/xml';file.setAttribute('aria-label','Choose DMN file');
+    section.append(el('h4','Import DMN decision tables'),
+      el('p','Choose a DMN file, map its tables to decisions in this design, and preview them together. Imported tables and rules start unconfirmed.'));
+    const from=el('input');from.type='date';
+    const until=el('input');until.type='date';
+    const file=el('input');file.type='file';file.accept='.dmn,.xml,application/xml';
+    const labelled=(title,control)=>{
+      const label=el('label',title+' ');control.setAttribute('aria-label',title);label.append(control);return label;
+    };
+    const settings=el('div');settings.className='row';
     const output=el('div');output.setAttribute('role','status');
-    section.append(decision,from,file,button('Preview DMN table',()=>locked(async()=>{
-      const selected=record,source=file.files?.[0];
-      if(!source||source.size>256*1024)throw new Error('Choose a DMN file of at most 256 KiB.');
-      if(!from.value)throw new Error('Enter the date the table takes effect.');
+    const mappings=el('div');
+    const proposal=el('div');
+    let inspection=null, choices=[], edit=0;
+    const resetProposal=()=>{++edit;proposal.replaceChildren();output.textContent='';};
+    file.onchange=()=>{
+      inspection=null;choices=[];mappings.replaceChildren();resetProposal();
+      preview.disabled=true;
+    };
+    from.oninput=until.oninput=resetProposal;
+    async function send(suffix,parameters,source){
       await window.__owgAuthReady;
-      const response=await fetch('/v1/process-catalog/import-dmn?'+new URLSearchParams({workflow_id:selected.workflow_id,revision:String(selected.revision),
-        decision_activity_id:decision.value,effective_from:from.value}),{method:'POST',headers:{'Content-Type':'application/xml'},body:source,cache:'no-store'});
+      const query=parameters?'?'+new URLSearchParams(parameters):'';
+      const response=await fetch('/v1/process-catalog/import-dmn/'+suffix+query,
+        {method:'POST',headers:{'Content-Type':'application/xml'},body:source,cache:'no-store'});
       const value=await response.json().catch(()=>({}));
-      if(!response.ok)throw new Error(String(value.detail||'DMN import failed'));
-      if(record!==selected)return;
-      output.replaceChildren(el('p',value.proposed_rules.length+' unconfirmed rules · '+value.hit_policy+' hit policy'));
-      const list=el('ul');value.proposed_rules.forEach(r=>list.appendChild(el('li',r.text)));output.appendChild(list);
-      output.appendChild(button('Open proposal in editor',()=>{
-        if(model&&!window.confirm('Replace the editor contents with this DMN proposal?'))return;
-        model=copy(value.proposed_process_model);reviewed=false;renderEditor();
-        status('Opened the DMN proposal as unsaved edits of revision '+selected.revision+'. Review and confirm its rules, then save a new revision.');
+      if(!response.ok)throw new Error(typeof value.detail==='string'?value.detail:'DMN request failed');
+      return value;
+    }
+    const inspect=button('Inspect DMN file',()=>locked(async()=>{
+      const selected=record,source=file.files?.[0];
+      if(!source||source.size>256*1024){output.textContent='Choose a DMN file of at most 256 KiB.';return;}
+      file.onchange();
+      const current=()=>record===selected&&file.files?.[0]===source&&section.isConnected;
+      output.textContent='Inspecting the DMN file…';
+      try{
+        const result=await send('inspect',null,source);
+        if(!current())return;
+        inspection=result;choices=[];
+        for(const item of result.decisions){
+          const row=el('div');row.className='row';
+          const title='Table '+(item.index+1)+(item.name?' · '+item.name:'');
+          row.append(el('span',title+' · '+item.hit_policy+' · '+item.rule_count+' rules'));
+          if(item.unsupported_reason)row.append(el('span',item.unsupported_reason));
+          else{
+            const select=el('select');
+            select.append(new Option('Skip this table',''));
+            for(const decision of decisions)select.append(new Option(decision.label,decision.id));
+            select.onchange=resetProposal;
+            choices.push({item,select});
+            row.append(labelled('Design decision for '+title,select));
+          }
+          mappings.append(row);
+        }
+        if(choices.length===1&&decisions.length===1)choices[0].select.value=decisions[0].id;
+        preview.disabled=choices.length===0;
+        output.textContent=result.decisions.length+' tables found.';
+      }catch(error){if(current())output.textContent=error.message;}
+    }));
+    const preview=button('Preview selected DMN tables',()=>locked(async()=>{
+      if(!inspection)return;
+      const selected=record,source=file.files?.[0],ticket=++edit;
+      const current=()=>record===selected&&file.files?.[0]===source&&ticket===edit&&section.isConnected;
+      proposal.replaceChildren();
+      const assignments=choices.filter(choice=>choice.select.value).map(({item,select})=>({
+        index:item.index,decision_activity_id:select.value
       }));
-    })),output);
+      if(!from.value||assignments.length===0){output.textContent='Choose at least one design decision and enter the effective start date.';return;}
+      if(new Set(assignments.map(item=>item.decision_activity_id)).size!==assignments.length){
+        output.textContent='Choose a different design decision for each table.';return;
+      }
+      output.textContent='Checking the selected tables…';
+      try{
+        const result=await send('batch',{workflow_id:selected.workflow_id,revision:String(selected.revision),
+          document_sha256:inspection.document_sha256,assignments:JSON.stringify(assignments),effective_from:from.value,
+          ...(until.value?{effective_until:until.value}:{})},source);
+        if(!current())return;
+        output.textContent=result.proposals.length+' tables ready for review.';
+        for(const item of result.proposals){
+          const summary=el('details'),list=el('ul');
+          const decision=decisions.find(activity=>activity.id===item.decision_activity_id);
+          for(const rule of item.proposed_rules)list.append(el('li',rule.text));
+          summary.append(el('summary',decision.label+' · '+item.hit_policy+' · '+item.proposed_rules.length+' unconfirmed rules'),list);
+          proposal.append(summary);
+        }
+        proposal.append(button('Open proposal in editor',()=>{
+          if(!current()||!replaceDraft())return;
+          model=copy(result.proposed_process_model);reviewed=false;renderEditor();
+          status('Opened the DMN tables as unsaved edits of revision '+selected.revision+'. Review and confirm the tables and rules before saving.');
+        }));
+      }catch(error){if(current())output.textContent=error.message;}
+    }));
+    preview.disabled=true;
+    settings.append(labelled('Choose DMN file',file),inspect);
+    section.append(settings,mappings,labelled('DMN effective from',from),labelled('DMN effective until (optional)',until),preview,output,proposal);
     host.appendChild(section);
   }
   function renderClarification(host){
