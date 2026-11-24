@@ -147,7 +147,8 @@ def test_object_rules_align_across_renamed_ocel_types():
     pin=benchmark.preflight(a,pack_id,{"other_log_id":b})
     result=benchmark.compare(a,pack_id,{"other_log_id":b,"expected_preflight_sha256":pin["preflight_sha256"]})
     assert len(result["object_rules"])==4
-    assert all(r["comparable"] and r["changes"]["violation_rate_change"] in (None,0)
+    assert all((r["comparable"] and r["changes"]["violation_rate_change"] in (None,0))
+               or r["not_comparable_reason"]=="no_activated_units"
                for r in result["object_rules"])
     assert result["object_models"]["baseline"]==result["object_models"]["comparison"]
     assert "so3" not in json.dumps(result)
@@ -197,3 +198,28 @@ with TestClient(app) as client:
     done=subprocess.run([sys.executable,"-c",code],cwd=root,
                         env=env,text=True,capture_output=True,timeout=120)
     assert done.returncode==0,done.stdout+done.stderr
+
+
+def test_empty_and_unknown_denominators_never_look_like_comparable_zeroes():
+    def summary(activated,decided,violated):
+        return {"activated_cases":activated,"decided_cases":decided,
+                "violation_rate":violated/decided if decided else None,
+                "activated_violation_share_bounds":{
+                    "lower":violated/activated if activated else None,
+                    "upper":(violated+activated-decided)/activated if activated else None}}
+    declared={"compliance":[{"rule":{"template":"precedence"}}]}
+    empty=benchmark._compare_slots(declared,"compliance",{0:summary(0,0,0)},{0:summary(4,4,0)})[0]
+    assert not empty["comparable"] and empty["changes"] is None
+    assert empty["not_comparable_reason"]=="no_activated_cases"
+    unknown=benchmark._compare_slots(declared,"compliance",{0:summary(4,0,0)},{0:summary(4,4,1)})[0]
+    assert not unknown["comparable"]
+    assert unknown["not_comparable_reason"]=="no_decided_cases"
+    assert unknown["changes"]=={"violation_rate_change":None,
+                                "activated_violation_share_change_bounds":{"lower":-.75,"upper":.25}}
+    missing=benchmark._compare_slots({"metrics":[{}]},"metrics",
+        {0:{"unit":"seconds","median":None}},{0:{"unit":"seconds","median":5}})[0]
+    assert missing["not_comparable_reason"]=="no_observed_metric_values" and missing["changes"] is None
+    unactivated=benchmark._compare_slots({"object_rules":[{}]},"object_rules",
+        {0:{"complete":True,"unit":"events","activated":0}},
+        {0:{"complete":True,"unit":"events","activated":1}})[0]
+    assert unactivated["not_comparable_reason"]=="no_activated_units" and unactivated["changes"] is None

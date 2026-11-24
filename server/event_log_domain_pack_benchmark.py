@@ -188,10 +188,18 @@ def _compare_slots(definition,section,a,b):
             reason="unmapped_definition"
         elif section=="metrics" and left["unit"]!=right["unit"]:
             reason="different_units"
+        elif section=="metrics" and (left["median"] is None or right["median"] is None):
+            reason="no_observed_metric_values"
+        elif section=="compliance" and (not left["activated_cases"] or not right["activated_cases"]):
+            reason="no_activated_cases"
+        elif section=="compliance" and (not left["decided_cases"] or not right["decided_cases"]):
+            reason="no_decided_cases"
         elif section=="object_rules" and (not left["complete"] or not right["complete"]):
             reason="incomplete_object_rule"
         elif section=="object_rules" and left["unit"]!=right["unit"]:
             reason="different_units"
+        elif section=="object_rules" and (not left["activated"] or not right["activated"]):
+            reason="no_activated_units"
         changes=None
         if reason is None:
             if section=="metrics":
@@ -202,6 +210,14 @@ def _compare_slots(definition,section,a,b):
                     l=left["activated_violation_share_bounds"];r=right["activated_violation_share_bounds"]
                     changes["activated_violation_share_change_bounds"]={
                         "lower":_delta(l["upper"],r["lower"]),"upper":_delta(l["lower"],r["upper"])}
+        # Even when all activated case outcomes are unknown, population
+        # sensitivity bounds can remain meaningful. Keep them separate from
+        # the withheld decided-case rate comparison.
+        if reason=="no_decided_cases":
+            l=left["activated_violation_share_bounds"];r=right["activated_violation_share_bounds"]
+            changes={"violation_rate_change":None,
+                     "activated_violation_share_change_bounds":{
+                         "lower":_delta(l["upper"],r["lower"]),"upper":_delta(l["lower"],r["upper"])}}
         result.append({"definition_index":index,"canonical_definition":declared,"baseline":left,
                        "comparison":right,"comparable":reason is None,"not_comparable_reason":reason,
                        "changes":changes})
@@ -248,7 +264,7 @@ def compare(log_id,pack_id,spec):
                     "assumptions":[
                         "Canonical pack definition indices, not local activity names, align rows. Mapped role equivalence is asserted by the installer, not independently verified.",
                         "Both installations use the same pack version and parameters. Unmapped optional definitions and incomplete object-rule computations do not receive deltas.",
-                        "Case-rule rates use activated decided cases; bounds include unknown activated cases. Unactivated cases are disclosed, not counted as verified passes.",
+                        "Case-rule rates use activated decided cases; bounds include unknown activated cases. Unactivated cases are disclosed, not counted as verified passes. No observed metric values, activated units or decided cases means a numeric point comparison is withheld; all-unknown activated case populations retain sensitivity bounds.",
                         "Metric differences compare observed values and coverage, not paired cases. Logs may overlap and have different populations, observation periods or source completeness.",
                         "Object model counts are shown separately. No overall ranking, pooled savings, causal effect or verified business compliance is inferred.",
                         "The source fingerprint covers stored events, objects and event-object links. The benchmark refuses active hidden activities or relabeling. Temporal object history and supplied object relationship assertions are outside this fingerprint and benchmark scope."]}
