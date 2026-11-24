@@ -2477,9 +2477,8 @@ async def event_log_delete_activity_note(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
-@router.post("/v1/event-logs/{log_id}/activity-glossary/import")
-async def event_log_import_activity_glossary(request: Request, log_id: str):
-    """Body: the glossary as CSV text (activity, description, owner_team, system, automation)."""
+@router.post("/v1/event-logs/{log_id}/activity-glossary/import/preview")
+async def event_log_preview_glossary_import(request: Request, log_id: str):
     from . import event_log_activity_glossary as glossary
     _require_dashboard(request)
     body = await request.body()
@@ -2489,11 +2488,30 @@ async def event_log_import_activity_glossary(request: Request, log_id: str):
         text = body.decode("utf-8")
     except UnicodeDecodeError:
         raise HTTPException(422, "the glossary CSV must be UTF-8") from None
+    response = await run_in_threadpool(_respond, glossary.import_csv, log_id, text, preview=True)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/activity-glossary/import")
+async def event_log_import_activity_glossary(
+    request: Request, log_id: str,
+    expected_fingerprint: str | None = Query(default=None, pattern=r"^[a-f0-9]{64}$"),
+):
+    """Import CSV with an optional preview fingerprint."""
+    from . import event_log_activity_glossary as glossary
+    _require_dashboard(request)
+    body = await request.body()
+    if len(body) > glossary.MAX_IMPORT_BYTES:
+        raise HTTPException(413, "the glossary CSV is larger than 1 MB")
     try:
-        result = await run_in_threadpool(glossary.import_csv, log_id, text)
-    except workspace.EventLogWorkspaceError as exc:
-        raise HTTPException(422, str(exc)) from None
-    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+        text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(422, "the glossary CSV must be UTF-8") from None
+    response = await run_in_threadpool(_respond, glossary.import_csv, log_id, text,
+                                       expected_fingerprint=expected_fingerprint)
+    _require_dashboard(request)
+    return response
 
 
 @router.get("/v1/event-logs/{log_id}/activity-glossary.csv")

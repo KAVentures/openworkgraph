@@ -6444,13 +6444,41 @@
       try{const r=await getJSON(base());if(generation!==state.generation)return;statusLine.textContent=summary(r);render(r);}
       catch(error){statusLine.textContent=error.message;}
       finally{load.disabled=false;}};
-    upload.onchange=async()=>{const file=upload.files&&upload.files[0];if(!file)return;
-      const generation=state.generation;upload.disabled=true;statusLine.textContent='Importing the glossary…';
-      try{const r=await (await api(base()+'/import',{method:'POST',headers:{'Content-Type':'text/csv'},body:await file.text()})).json();
-        if(generation!==state.generation)return;
-        statusLine.textContent='Imported '+r.imported+' entries.'+(r.skipped_not_in_log_total?' Skipped '+r.skipped_not_in_log_total+' activities not in this log.':'')+' '+summary(r);render(r);}
-      catch(error){statusLine.textContent=error.message;}
-      finally{upload.disabled=false;upload.value='';}};
+    upload.onchange=async()=>{
+      const file=upload.files&&upload.files[0],ticket=++importTurn,generation=state.generation;
+      candidate=null;apply.disabled=true;review.replaceChildren();
+      if(!file)return;
+      const current=()=>generation===state.generation&&box.isConnected&&ticket===importTurn;
+      if(file.size>1000000){statusLine.textContent='Choose a CSV file of at most 1 MB.';return;}
+      upload.disabled=true;statusLine.textContent='Previewing the glossary…';
+      try{
+        const result=await(await api(base()+'/import/preview',{method:'POST',headers:{'Content-Type':'text/csv'},body:file})).json();
+        if(!current())return;
+        candidate={file,fingerprint:result.fingerprint};apply.disabled=false;
+        const changed=result.changes.filter(item=>item.action!=='unchanged');
+        review.append(el('p',changed.length+' entries would change. '+result.skipped_not_in_log_total+' activity labels are absent from this log.','muted'));
+        if(changed.length)review.append(table(['Activity','Change','Existing','Proposed'],changed.map(item=>[
+          item.activity,item.action,JSON.stringify(item.before),JSON.stringify(item.after)
+        ])));
+        if(result.skipped_not_in_log.length)review.append(el('p','Not in this log: '+result.skipped_not_in_log.join(', '),'muted'));
+        statusLine.textContent='Review the proposed changes before applying.';
+      }catch(error){if(current())statusLine.textContent=error.message;}
+      finally{if(current())upload.disabled=false;}
+    };
+    apply.onclick=async()=>{
+      const chosen=candidate,ticket=++importTurn,generation=state.generation;
+      if(!chosen)return;
+      candidate=null;apply.disabled=true;upload.disabled=true;
+      const current=()=>generation===state.generation&&box.isConnected&&ticket===importTurn;
+      try{
+        const url=base()+'/import?'+new URLSearchParams({expected_fingerprint:chosen.fingerprint});
+        const r=await(await api(url,{method:'POST',headers:{'Content-Type':'text/csv'},body:chosen.file})).json();
+        if(!current())return;
+        upload.value='';review.replaceChildren();statusLine.textContent='Imported '+r.imported+' entries.'+
+          (r.skipped_not_in_log_total?' Skipped '+r.skipped_not_in_log_total+' activities not in this log.':'')+' '+summary(r);render(r);
+      }catch(error){if(current())statusLine.textContent=error.message;}
+      finally{if(current())upload.disabled=false;}
+    };
     csv.onclick=async()=>{csv.disabled=true;
       try{const response=await api(base()+'.csv');downloadBlob(await response.blob(),(state.logId||'log')+'-activity-glossary.csv');statusLine.textContent='Glossary downloaded.';}
       catch(error){statusLine.textContent=error.message;}
