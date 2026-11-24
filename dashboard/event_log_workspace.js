@@ -72,14 +72,15 @@
   // A gzip-compressed file (log.xes.gz, events.csv.gz) is read like the file inside it: the browser
   // decompresses the first bytes for the column read and the server decompresses the upload.
   const isGzip=file=>/\.gz$/i.test(String(file&&file.name||''));
-  async function headText(file,bytes){
-    if(!isGzip(file))return file.slice(0,bytes).text();
+  async function headBlob(file,bytes){
+    if(!isGzip(file))return file.slice(0,bytes);
     const reader=file.stream().pipeThrough(new DecompressionStream('gzip')).getReader();
     const parts=[];let size=0;
     try{while(size<bytes){const {done,value}=await reader.read();if(done)break;parts.push(value);size+=value.length;}}
     finally{reader.cancel().catch(()=>{});}
-    return new Blob(parts).slice(0,bytes).text();
+    return new Blob(parts).slice(0,bytes);
   }
+  const headText=async(file,bytes)=>(await headBlob(file,bytes)).text();
   function detectFormat(name){
     const lower=String(name||'').toLowerCase().replace(/\.gz$/,'');
     if(lower.endsWith('.xes'))return 'xes';
@@ -198,12 +199,17 @@
     const keepLabel=el('label');keepLabel.style.cssText='display:flex;gap:6px;align-items:center';
     const keep=input('owgEventLogKeepRejected','checkbox');keepLabel.append(keep,document.createTextNode(' Also keep rejected CSV rows with the log so I can review, release or discard them'));
     const importButton=button('Import log');importButton.id='owgEventLogImport';importButton.disabled=true;
+    const previewImport=button('Preview CSV mapping','secondary');previewImport.id='owgEventLogPreviewImport';previewImport.disabled=true;
+    const previewMessage=el('div',null,'muted');previewMessage.id='owgEventLogImportPreviewStatus';previewMessage.setAttribute('role','status');
+    const previewExamples=el('div');previewExamples.id='owgEventLogImportPreviewExamples';
+    const previewPanel=el('div');previewPanel.append(previewImport,previewMessage,previewExamples);
     const statusLine=el('div',null,'muted');statusLine.id='owgEventLogStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const appendButton=button('Add file to selected log','secondary');appendButton.id='owgEventLogAppend';appendButton.disabled=true;
     appendButton.title='Adds events from a newer export to the stored log chosen below; events it already holds are skipped.';
     const sampleButton=button('Try with a sample log','secondary');sampleButton.id='owgEventLogSample';
     sampleButton.title='Stores a synthetic order-to-cash log (no real data) on this computer and analyses it';
     const importRow=el('div',null,'row');importRow.append(importButton,appendButton,sampleButton);
+    const saveMessage=el('div',null,'muted');saveMessage.id='owgEventLogSaveStatus';saveMessage.setAttribute('role','status');
     // Storage used by the saved logs on this computer, largest first.
     const storageButton=button('Storage used','secondary');storageButton.id='owgEventLogStorage';storageButton.setAttribute('aria-expanded','false');storageButton.setAttribute('aria-controls','owgEventLogStorageList');
     const storageList=el('div');storageList.id='owgEventLogStorageList';storageList.setAttribute('role','region');storageList.setAttribute('aria-label','Storage used by saved logs');show(storageList,false);
@@ -218,7 +224,7 @@
         storageList.replaceChildren(head,t,el('div',r.estimate,'muted'));}
       catch(error){storageList.replaceChildren(el('div',error.message));}};
     const storageRow=el('div',null,'row');storageRow.append(storageButton);
-    card.append(row,mapping,identity,consentLabel,keepLabel,importRow,statusLine,storageRow,storageList);
+    card.append(row,mapping,identity,previewPanel,consentLabel,keepLabel,importRow,statusLine,saveMessage,storageRow,storageList);
 
     const pick=select('owgEventLogPick',[]);const caseType=select('owgEventLogCaseType',[]);
     const exportFormat=select('owgEventLogExportFormat',[['csv','CSV (exact interchange)'],['csv-review','CSV for spreadsheet review'],['sourcecsv','Source-ID CSV (exact interchange)'],['sourcecsv-review','Source-ID CSV for spreadsheet review'],['xes','XES'],['xes-attributes','XES with retained attributes'],['ocel','OCEL 2.0 JSON'],['ocelxml','OCEL 2.0 XML']]);
@@ -235,7 +241,7 @@
     let salesforceStagedFile=null;
     const unstageSalesforce=()=>{
       if(salesforceStagedFile&&file.files?.[0]===salesforceStagedFile){
-        file.value='';consent.checked=false;refreshImport();
+        file.value='';consent.checked=false;clearImportPreview();refreshImport();
         status('Earlier Salesforce selection cleared from the import form.');
       }
       salesforceStagedFile=null;
@@ -243,7 +249,7 @@
     card.append(manage,savedList,results,salesforceSourceSection((csv,namespace,isCurrent)=>{
       if(!isCurrent())return;
       // Invalidate any in-flight column read for the previous import file.
-      columnReadSequence++;readingColumns=false;columnsReady=true;
+      columnReadSequence++;clearImportPreview();readingColumns=false;columnsReady=true;
       const transfer=new DataTransfer();transfer.items.add(new File([csv],'selected-salesforce-cases.csv',{type:'text/csv'}));
       file.files=transfer.files;salesforceStagedFile=file.files[0];
       name.value='Selected Salesforce cases';format.value='csv';delimiter.value=',';
@@ -265,15 +271,25 @@
     const browse=document.getElementById('owgProcessCSV');
     if(browse)browse.insertAdjacentElement('afterend',card);else panel.appendChild(card);
 
-    let readingColumns=false,columnsReady=false,columnReadSequence=0;
+    let readingColumns=false,columnsReady=false,columnReadSequence=0,savingImport=false;
+    let previewTurn=0,previewBusy=false;
+    function clearImportPreview(){
+      previewTurn++;previewBusy=false;previewMessage.textContent='';previewExamples.replaceChildren();
+    }
     const refreshImport=()=>{const csv=format.value==='csv',active=csv&&useIdentity.checked;
       const valid=!active||(eventId.value&&!!sourceNamespace.value!==!!sourceColumn.value&&!(caseNamespace.value&&caseColumn.value)&&!keep.checked);
-      const ready=!readingColumns&&(!csv||columnsReady)&&file.files&&file.files[0]&&consent.checked&&valid;importButton.disabled=!(ready&&name.value.trim());appendButton.disabled=!(ready&&state.logId);show(mapping,csv);show(identity,csv);show(identityFields,active);};
+      const ready=!readingColumns&&(!csv||columnsReady)&&file.files&&file.files[0]&&valid;
+      importButton.disabled=savingImport||!(ready&&consent.checked&&name.value.trim());
+      appendButton.disabled=savingImport||!(ready&&consent.checked&&state.logId);
+      previewImport.disabled=!(csv&&ready&&!previewBusy);show(previewPanel,csv);
+      show(mapping,csv);show(identity,csv);show(identityFields,active);};
     for(const control of [useIdentity,eventId,sourceNamespace,sourceColumn,caseNamespace,caseColumn,jsonColumn]){
       control.addEventListener('change',()=>{consent.checked=false;refreshImport();});
       if(control.tagName==='INPUT'&&control.type==='text')control.addEventListener('input',()=>{consent.checked=false;refreshImport();});
     }
-    keep.addEventListener('change',refreshImport);
+    for(const control of [mapping,identity,keep])for(const event of ['input','change']){
+      control.addEventListener(event,()=>{clearImportPreview();refreshImport();});
+    }
     function csvMapping(q){
       q.set('case_column',cols.case.value);q.set('activity_column',cols.activity.value);q.set('timestamp_column',cols.time.value);q.set('resource_column',cols.resource.value);
       if(!(useIdentity.checked&&jsonColumn.value))[...extras.selectedOptions].forEach(o=>{if(![cols.case.value,cols.activity.value,cols.time.value,cols.resource.value].includes(o.value))q.append('attribute_column',o.value);});
@@ -282,6 +298,39 @@
       if(timeFormat.value)q.set('timestamp_format',timeFormat.value);
       if(useIdentity.checked)for(const [key,value] of Object.entries({event_id_column:eventId.value,source_namespace:sourceNamespace.value,source_namespace_column:sourceColumn.value,case_namespace:caseNamespace.value,case_namespace_column:caseColumn.value,attributes_json_column:jsonColumn.value}))if(value)q.set(key,value);
     }
+    function previewMapping(){
+      const params=new URLSearchParams();csvMapping(params);return params;
+    }
+    previewImport.onclick=async()=>{
+      const chosen=file.files?.[0];
+      if(!chosen||previewImport.disabled)return;
+      const ticket=++previewTurn,params=previewMapping(),basis=params.toString();
+      const current=()=>ticket===previewTurn&&file.files?.[0]===chosen&&format.value==='csv'&&previewMapping().toString()===basis;
+      previewBusy=true;refreshImport();previewMessage.textContent='Checking CSV sample…';previewExamples.replaceChildren();
+      try{
+        const limit=512*1024,sample=await headBlob(chosen,limit+1);
+        if(!current())return;
+        params.set('partial',String(sample.size>limit));
+        const r=await (await api('/v1/event-logs/import/preview?'+params,{method:'POST',
+          headers:{'Content-Type':'application/octet-stream'},body:sample.slice(0,limit)})).json();
+        if(!current())return;
+        const count=(value,singular)=>Number(value).toLocaleString()+' '+singular+(value===1?'':'s');
+        previewMessage.textContent=count(r.sample_rows,'row')+' checked. '+count(r.accepted_events,'accepted event')+' in '+
+          count(r.distinct_cases,'case')+'. '+count(r.rejected_rows,'row')+' rejected.'+
+          (r.duplicate_source_ids_skipped?' '+count(r.duplicate_source_ids_skipped,'duplicate source ID')+' skipped.':'')+
+          (r.timestamps_with_assumed_offset?' '+count(r.timestamps_with_assumed_offset,'timestamp')+' read with the chosen offset.':'')+
+          (r.sample_limited?' The preview covers only this sample.':'');
+        if(Object.keys(r.rejected_by_reason).length)previewExamples.appendChild(el('p',reasonText(r.rejected_by_reason)+'.','muted'));
+        if(r.examples.length){
+          const includeResource=!!params.get('resource_column');
+          const headers=['Case','Activity','Timestamp (UTC)',...(includeResource?['Resource']:[])];
+          previewExamples.appendChild(table(headers,r.examples.map(event=>[
+            event.case_id,event.activity,event.timestamp,...(includeResource?[event.resource]:[])
+          ])));
+        }
+      }catch(error){if(current())previewMessage.textContent=error.message;}
+      finally{if(ticket===previewTurn){previewBusy=false;refreshImport();}}
+    };
     function setMappingColumns(columns){
       const options=columns.map(c=>[c,c]);
       setOptions(cols.case,options);setOptions(cols.activity,options);setOptions(cols.time,options);setOptions(cols.resource,[['','(none)'],...options]);
@@ -298,10 +347,11 @@
       jsonColumn.value=columns.includes('attributes')?'attributes':'';
       columnsReady=!!(cols.case.value&&cols.activity.value&&cols.time.value);
     }
+    function clearReusableMapping(){reuseRow.hidden=true;reuseRow.replaceChildren();}
     async function readColumns(){
       const sequence=++columnReadSequence;
       formatSequence++;
-      const staleOffer=document.getElementById('owgEventLogReuse');if(staleOffer){staleOffer.hidden=true;staleOffer.replaceChildren();}
+      clearImportPreview();clearReusableMapping();
       const chosen=file.files&&file.files[0];
       columnsReady=false;
       if(!chosen||format.value!=='csv'){
@@ -335,29 +385,58 @@
     const localOffset=()=>{const m=-new Date().getTimezoneOffset(),a=Math.abs(m);return (m<0?'-':'+')+String(Math.floor(a/60)).padStart(2,'0')+':'+String(a%60).padStart(2,'0');};
     // A workbook with several sheets: choose which one to import (the first by default).
     const sheetSelect=select('owgEventLogSheet',[]),sheetField=field('Worksheet',sheetSelect);sheetField.hidden=true;mapping.prepend(sheetField);
-    let workbook=null;
+    let workbook=null,stagedSheet=null;
+    const clearWorkbook=()=>{workbook=null;stagedSheet=null;sheetField.hidden=true;};
     const isDatabase=n=>/\.(sqlite3?|db)$/i.test(n),isJsonLines=n=>/\.(jsonl|ndjson)$/i.test(n),isParquet=n=>/\.parquet$/i.test(n);
     async function convertWorkbook(chosen,sheet){
       workbook=chosen;
       // A SQLite database file is read like a workbook: its tables take the place of worksheets.
       const database=isDatabase(chosen.name),unit=database?'table':'worksheet';
-      columnReadSequence++;readingColumns=true;refreshImport();status(isParquet(chosen.name)?'Reading the Parquet file '+chosen.name+'…':isJsonLines(chosen.name)?'Reading the JSON lines of '+chosen.name+'…':'Reading '+(sheet?unit+' \u201c'+sheet+'\u201d':'the first '+unit)+' of '+chosen.name+'…');
+      let sequence=++columnReadSequence,expectedFile=file.files?.[0];
+      const current=()=>sequence===columnReadSequence&&workbook===chosen&&file.files?.[0]===expectedFile;
+      formatSequence++;clearImportPreview();clearReusableMapping();readingColumns=true;consent.checked=false;refreshImport();
+      status(isParquet(chosen.name)?'Reading the Parquet file '+chosen.name+'…':isJsonLines(chosen.name)?'Reading the JSON lines of '+chosen.name+'…':'Reading '+(sheet?unit+' “'+sheet+'”':'the first '+unit)+' of '+chosen.name+'…');
       try{
         const url=isParquet(chosen.name)?'/v1/event-logs/parquet-to-csv':isJsonLines(chosen.name)?'/v1/event-logs/jsonl-to-csv':database?'/v1/event-logs/sqlite-to-csv'+(sheet?'?table='+encodeURIComponent(sheet):''):'/v1/event-logs/xlsx-to-csv'+(sheet?'?sheet='+encodeURIComponent(sheet):'');
         const r=await (await api(url,{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream'}})).json();
-        setOptions(sheetSelect,r.sheets.map(n=>[n,n]));sheetSelect.value=r.sheet;sheetField.hidden=r.sheets.length<2;
+        if(!current())return;
         const transfer=new DataTransfer();transfer.items.add(new File([r.csv],chosen.name.replace(/\.(xlsx|sqlite3?|db|jsonl|ndjson|parquet)$/i,'')+(database?'-'+r.sheet:'')+'.csv',{type:'text/csv'}));
-        file.files=transfer.files;format.value='csv';delimiter.value=',';
+        file.files=transfer.files;expectedFile=file.files[0];format.value='csv';delimiter.value=',';
+        stagedSheet=r.sheet;
+        setOptions(sheetSelect,r.sheets.map(n=>[n,n]));sheetSelect.value=stagedSheet;sheetField.hidden=r.sheets.length<2;
         if(r.dates_have_no_offset&&!naiveOffset.value.trim())naiveOffset.value=localOffset();
-        readingColumns=false;await readColumns();
+        const read=readColumns();sequence=columnReadSequence;
+        await read;
+        if(!current())return;
         if(r.kind==='parquet'){status('Read '+Number(r.rows).toLocaleString()+(r.rows===1?' row':' rows')+' with '+r.columns+' columns from '+chosen.name+'.'+(r.binary_cells_left_empty?' '+Number(r.binary_cells_left_empty).toLocaleString()+' binary values were left empty.':'')+(r.dates_have_no_offset?' Some times have no time zone; they will be read with offset '+naiveOffset.value+' (change it under Offset for times without one).':''));return;}
         if(r.kind==='lines'){status('Read '+Number(r.rows).toLocaleString()+(r.rows===1?' JSON line':' JSON lines')+' with '+r.columns+' columns from '+chosen.name+'; nested fields are named with dots (customer.id).');return;}
         status('Read '+unit+' “'+r.sheet+'”'+(r.sheets.length>1?' ('+(r.sheets.indexOf(r.sheet)+1)+' of '+r.sheets.length+'; choose another under Worksheet)':'')+': '+Number(r.rows).toLocaleString()+(r.rows===1?' row.':' rows.')+(r.binary_cells_left_empty?' '+Number(r.binary_cells_left_empty).toLocaleString()+' binary values were left empty.':'')+(r.dates_have_no_offset?' '+(database?'SQLite':'Excel')+' dates have no time zone; they will be read with offset '+naiveOffset.value+' (change it under Offset for times without one).':''));
-      }catch(error){readingColumns=false;file.value='';refreshImport();status(error.message);}
+      }catch(error){
+        if(!current())return;
+        readingColumns=false;
+        if(stagedSheet!==null&&expectedFile!==chosen){
+          sheetSelect.value=stagedSheet;
+          status(error.message+' Still using “'+stagedSheet+'”.');
+        }else{
+          file.value='';columnsReady=false;clearWorkbook();status(error.message);
+        }
+        refreshImport();
+      }
     }
-    file.onchange=()=>{const chosen=file.files&&file.files[0];if(chosen){if(!name.value)name.value=chosen.name.replace(/\.[^.]+$/,'').slice(0,120);if(chosen.name.toLowerCase().endsWith('.xlsx')||isDatabase(chosen.name)||isJsonLines(chosen.name)||isParquet(chosen.name)){consent.checked=false;convertWorkbook(chosen);return;}workbook=null;sheetField.hidden=true;format.value=detectFormat(chosen.name);if(chosen.name.toLowerCase().endsWith('.tsv'))delimiter.value='t';}consent.checked=false;readColumns();};
-    format.onchange=()=>{consent.checked=false;readColumns();};
-    sheetSelect.onchange=()=>{if(workbook){consent.checked=false;convertWorkbook(workbook,sheetSelect.value);}};
+    file.onchange=()=>{
+      const chosen=file.files?.[0];clearWorkbook();consent.checked=false;
+      if(chosen){
+        if(!name.value)name.value=chosen.name.replace(/\.[^.]+$/,'').slice(0,120);
+        if(chosen.name.toLowerCase().endsWith('.xlsx')||isDatabase(chosen.name)||isJsonLines(chosen.name)||isParquet(chosen.name)){
+          void convertWorkbook(chosen);return;
+        }
+        format.value=detectFormat(chosen.name);
+        if(chosen.name.toLowerCase().endsWith('.tsv'))delimiter.value='t';
+      }
+      void readColumns();
+    };
+    format.onchange=()=>{clearWorkbook();consent.checked=false;readColumns();};
+    sheetSelect.onchange=()=>{if(workbook)void convertWorkbook(workbook,sheetSelect.value);};
     delimiter.onchange=()=>{consent.checked=false;readColumns();};
     // Suggest a timestamp format from the first rows of the chosen time column (sent to this computer only).
     let formatSequence=0;
@@ -371,7 +450,7 @@
         if(sequence!==formatSequence||file.files?.[0]!==chosen||format.value!=='csv'||delimiter.value!==selectedDelimiter||cols.time.value!==column)return;
         setOptions(timeFormat,[['','ISO 8601 (2024-03-04T14:05:00Z)'],...r.candidates.map(c=>[c.pattern,c.pattern+' \u2014 '+c.order+': '+c.first_value+' reads as '+c.first_value_reads_as])]);
         if(r.suggested){
-          timeFormat.value=r.suggested;
+          clearImportPreview();timeFormat.value=r.suggested;refreshImport();
           const pick=r.candidates.find(c=>c.pattern===r.suggested);
           if(!pick.has_offset&&!naiveOffset.value.trim())naiveOffset.value=localOffset();
           status('Times look like '+pick.first_value+', read as '+pick.first_value_reads_as+' with format '+r.suggested+(pick.has_offset?'.':' at offset '+naiveOffset.value+'. Change the format or offset if that is wrong.'));
@@ -383,7 +462,7 @@
     // Offer the mapping recorded with an earlier import whose columns this file also has.
     const reuseRow=el('div',null,'row');reuseRow.id='owgEventLogReuse';reuseRow.hidden=true;mapping.appendChild(reuseRow);
     function applyMapping(m,header){
-      formatSequence++;
+      formatSequence++;clearImportPreview();
       if(delimiter.value!==header.delimiter){
         delimiter.value=header.delimiter;
         setMappingColumns(header.columns);
@@ -432,21 +511,57 @@
     timeFormat.onchange=()=>{const fmt=timeFormat.value;if(fmt&&!fmt.includes('%z')&&!naiveOffset.value.trim())naiveOffset.value=localOffset();};
     consent.onchange=refreshImport;name.oninput=refreshImport;
     card.appendChild(agentRunsSection());
-    importButton.onclick=async()=>{
-      const chosen=file.files&&file.files[0];if(!chosen||!consent.checked)return;
-      const q=new URLSearchParams({format:format.value,name:name.value.trim()});
+    function saveParams(target){
+      const q=new URLSearchParams({format:format.value});
+      if(!target)q.set('name',name.value.trim());
       if(format.value==='csv')csvMapping(q);
-      importButton.disabled=true;status('Importing '+chosen.name+'…');
+      return q;
+    }
+    async function saveSelectedFile(target){
+      const chosen=file.files?.[0],control=target?appendButton:importButton;
+      if(savingImport||!chosen||control.disabled)return;
+      const q=saveParams(target),generation=state.generation;
+      const formKey=()=>[columnReadSequence,name.value,saveParams(target).toString(),consent.checked].join('\n');
+      let expectedFile=chosen,expectedForm=formKey(),preserved=false;
+      const changed=()=>state.generation!==generation||file.files?.[0]!==expectedFile||formKey()!==expectedForm;
+      const report=text=>{
+        if(preserved)saveMessage.textContent=text;
+        else status(text);
+      };
+      savingImport=true;refreshImport();saveMessage.textContent='';
+      status(target?'Adding '+chosen.name+' to '+target.name+'…':'Importing '+chosen.name+'…');
       try{
-        const log=await (await api('/v1/event-logs/import?'+q,{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream','X-OWG-Local-Storage-Confirmed':'true'}})).json();
-        const done='Imported '+Number(log.events).toLocaleString()+' events'+(log.rejected_events?' ('+Number(log.rejected_events).toLocaleString()+' rejected: '+reasonText(log.quality&&log.quality.rejected_by_reason)+')':'')+'.'+relationshipText(log.object_relationships)+identityText(log.source_identity)+tieText(log.quality)+keptText(log.quality)+sameSourceText(log.same_source_as);
-        consent.checked=false;keep.checked=false;file.value='';name.value='';
-        // Report the import only once the new log is selected. Selecting it starts a new generation and
-        // clears the results, so an analysis started before that would be dropped and never shown.
-        await refreshLogs(log.log_id);
-        status(done);
-      }catch(error){status(error.message);}finally{refreshImport();}
-    };
+        const endpoint=target?'/v1/event-logs/'+encodeURIComponent(target.log_id)+'/append':'/v1/event-logs/import';
+        const result=await (await api(endpoint+'?'+q,{method:'POST',body:chosen,headers:{
+          'Content-Type':'application/octet-stream','X-OWG-Local-Storage-Confirmed':'true'}})).json();
+        const count=value=>Number(value).toLocaleString();
+        const rejected=result.rejected_events
+          ?count(result.rejected_events)+' rejected: '+reasonText(result.quality&&result.quality.rejected_by_reason):'';
+        const lead=target
+          ?'Added '+count(result.added_events)+' new events to '+target.name+'; skipped '+
+            count(result.duplicate_events_skipped)+' already in the log'+(rejected?' and '+rejected:'')
+          :'Imported '+count(result.events)+' events'+(rejected?' ('+rejected+')':'');
+        const savedLog=target?result.log:result;
+        const done=lead+'.'+relationshipText(savedLog?.object_relationships)+identityText(result.source_identity)+
+          tieText(result.quality)+keptText(result.quality)+sameSourceText(result.same_source_as);
+        preserved=changed();
+        if(!preserved){
+          consent.checked=false;keep.checked=false;file.value='';if(!target)name.value='';
+          clearImportPreview();clearReusableMapping();expectedFile=undefined;expectedForm=formKey();
+        }
+        try{
+          await refreshLogs(target?target.log_id:result.log_id,undefined,()=>{
+            preserved=preserved||changed();
+            return preserved;
+          });
+        }catch(error){
+          report(done+' Could not refresh the saved logs list. '+error.message);return;
+        }
+        report(done);
+      }catch(error){preserved=preserved||changed();report(error.message);}
+      finally{savingImport=false;refreshImport();}
+    }
+    importButton.onclick=()=>saveSelectedFile(null);
     sampleButton.onclick=async()=>{
       sampleButton.disabled=true;status('Creating the synthetic sample log…');
       try{
@@ -459,17 +574,9 @@
         status((r.already_present?'Opened the sample log you already have. ':'Created the sample log: ')+'synthetic order-to-cash data with no real customers or people, analysed by order.');
       }catch(error){status(error.message);}finally{sampleButton.disabled=false;}
     };
-    appendButton.onclick=async()=>{
-      const chosen=file.files&&file.files[0];const target=state.logs.find(l=>l.log_id===state.logId);if(!chosen||!consent.checked||!target)return;
-      const q=new URLSearchParams({format:format.value});
-      if(format.value==='csv')csvMapping(q);
-      appendButton.disabled=true;status('Adding '+chosen.name+' to '+target.name+'…');
-      try{
-        const r=await (await api('/v1/event-logs/'+encodeURIComponent(target.log_id)+'/append?'+q,{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream','X-OWG-Local-Storage-Confirmed':'true'}})).json();
-        consent.checked=false;file.value='';
-        await refreshLogs(target.log_id);
-        status('Added '+Number(r.added_events).toLocaleString()+' new events to '+target.name+'; skipped '+Number(r.duplicate_events_skipped).toLocaleString()+' already in the log'+(r.rejected_events?' and rejected '+Number(r.rejected_events).toLocaleString()+' ('+reasonText(r.quality&&r.quality.rejected_by_reason)+')':'')+'.'+relationshipText(r.log&&r.log.object_relationships)+identityText(r.source_identity)+tieText(r.quality)+keptText(r.quality)+sameSourceText(r.same_source_as));keep.checked=false;
-      }catch(error){status(error.message);}finally{refreshImport();}
+    appendButton.onclick=()=>{
+      const target=state.logs.find(log=>log.log_id===state.logId);
+      if(target)void saveSelectedFile(target);
     };
     pick.onchange=()=>{selectLog(pick.value);refreshImport();};
     caseType.onchange=()=>{state.generation++;state.caseType=caseType.value;state.follows=[];state.attr={};state.caseActivity='';results.replaceChildren();};
@@ -802,7 +909,7 @@
     return box;
   }
 
-  async function refreshLogs(selectId, preferredCaseType){
+  async function refreshLogs(selectId, preferredCaseType, preserveCurrent){
     const refresh=++state.refresh;
     const data=await getJSON('/v1/event-logs');
     if(refresh!==state.refresh)return;
@@ -810,6 +917,9 @@
     const pick=document.getElementById('owgEventLogPick');
     setOptions(pick,state.logs.map(l=>[l.log_id,l.name+' · '+Number(l.events).toLocaleString()+' events']));
     show(document.getElementById('owgEventLogManage'),state.logs.length>0);
+    if(preserveCurrent?.()&&state.logs.some(log=>log.log_id===state.logId)){
+      pick.value=state.logId;return;
+    }
     const next=state.logs.some(l=>l.log_id===selectId)?selectId:(state.logs[0]?state.logs[0].log_id:'');
     if(next){pick.value=next;await selectLog(next,next===selectId?preferredCaseType:undefined);}else{state.logId='';state.objectTypes=[];}
   }
