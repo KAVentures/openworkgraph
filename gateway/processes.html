@@ -58,12 +58,20 @@
       }
       section,
       .box {
+        box-sizing: border-box;
+        min-inline-size: 0;
+        max-inline-size: 100%;
+        overflow-wrap: anywhere;
         background: white;
         border: 1px solid #d8e0d7;
         border-radius: 10px;
         padding: 18px;
         margin: 16px 0;
       }
+      /* Keep digest-pinned handoff status and controls inside narrow viewports. */
+      #handoffPreflight { box-sizing: border-box; max-width: 100%; min-inline-size: 0; overflow-wrap: anywhere; }
+      #handoffPreflight button, #handoffPreflight input { box-sizing: border-box; max-width: 100%; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+      #handoffPreflight output { display: block; max-width: 100%; overflow-wrap: anywhere; }
       #readinessReport { overflow-wrap: anywhere; }
       #opportunityDetail, #opportunityPipeline { min-width: 0; overflow-wrap: anywhere; }
       #opportunityDetail fieldset { min-inline-size: 0; max-width: 100%; box-sizing: border-box; }
@@ -145,8 +153,18 @@
       }
       @media (max-width: 700px) {
         body {
+          box-sizing: border-box;
+          min-inline-size: 0;
+          width: 100%;
           padding: 12px;
         }
+        button, input, select, textarea, output {
+          box-sizing: border-box;
+          min-inline-size: 0;
+          max-inline-size: 100%;
+          overflow-wrap: anywhere;
+        }
+        button { white-space: normal; }
         .grid {
           grid-template-columns: 1fr;
         }
@@ -266,7 +284,7 @@
     <section id="selected" hidden>
       <h2 id="selectedTitle"></h2>
       <p id="selectedMeta"></p>
-      <fieldset id="handoffPreflight"><legend>Authenticated handoff freshness</legend><p>Local review-only packet; only its workflow ID is used for a fresh authorized Gateway read. Matching is not consent, owner approval, source permission or execution authority.</p><label>Evidence handoff packet (JSON) <input id="handoffPacket" type="file" accept=".json,application/json"></label><label><input id="handoffConsent" type="checkbox"> I explicitly authorize inspecting this local review-only packet against the latest process revision using my current Gateway access. This does not authorize execution or source reads.</label><button id="handoffCheck" type="button">Check latest authorized revision</button><button id="handoffClear" type="button">Clear check</button><output id="handoffStatus" role="status" aria-live="polite">No packet checked.</output></fieldset>
+      <fieldset id="handoffPreflight"><legend>Authenticated handoff freshness</legend><p>Local review-only packet; only its workflow ID is used for a fresh authorized Gateway read. Matching is not consent, owner approval, source permission or execution authority.</p><label>Evidence handoff packet (JSON) <input id="handoffPacket" type="file" accept=".json,application/json"></label><label><input id="handoffConsent" type="checkbox"> I explicitly authorize inspecting this local review-only packet against the latest process revision using my current Gateway access. This does not authorize execution or source reads.</label><button id="handoffCheck" type="button">Check latest authorized revision</button><button id="handoffClear" type="button">Clear check</button><button id="handoffRefresh" type="button">Reopen latest authorized revision</button><button id="handoffReview" type="button" disabled>Continue to revision review</button><output id="handoffStatus" role="status" aria-live="polite">No packet checked.</output></fieldset>
 
       <button id="revise" disabled>Edit selected design</button>
       <div id="design"></div>
@@ -308,8 +326,10 @@
       </fieldset>
       <div class="grid">
         <fieldset>
-          <legend>Revision review</legend>
+          <legend id="revisionReview">Revision review</legend>
           <p id="reviewState"></p>
+          <output id="reviewOutcome" role="status" aria-live="polite"></output>
+          <button id="reviewRecover" type="button">Reopen latest authorized revision</button>
           <div id="reviews"></div>
           <label
             >Review comment
@@ -590,6 +610,8 @@
         const implementation=window.owgImplementationPlans.create({detailHost:$("implementationDetail"),call,onDenied:()=>{clear();note("Implementation-plan access changed; sign in again to refresh permissions.");}});
         // Initialized before the OIDC callback can synchronously call clear().
         let handoffGeneration=0;
+        // The OIDC callback can synchronously reset handoff state during page initialization.
+        let inspectedHandoff=null;
         let processOpenGeneration=0;
         function clear(releaseBusy=false) {
           processOpenGeneration++;
@@ -1720,13 +1742,23 @@
         async function open(id, revision) {
           const openTicket = ++processOpenGeneration;
           const identityTicket = identityGeneration;
+          const authorizedCredential = credential;
+          // A new authorized read is a security boundary: never leave a prior
+          // process's edit, review, export or access controls usable in flight
+          // or after a denied/failed request.
+          selected = null;
+          $("selected").hidden = true;
+          $("reviewConfirm").checked = false;
+          $("handoffConsent").checked = false;
+          resetHandoff("Reopening current authorization. Previous inspection invalidated.");
           const params = revision
             ? "?" + new URLSearchParams({ revision: String(revision) })
             : "";
           const data = await call(
             "/v1/human/processes/" + encodeURIComponent(id) + params,
           );
-          if (openTicket !== processOpenGeneration || identityTicket !== identityGeneration) return;
+          if (openTicket !== processOpenGeneration || identityTicket !== identityGeneration ||
+              credential !== authorizedCredential) return;
           render(data);
           note("Opened exact saved revision " + data.process.revision + ".");
         }
@@ -1763,6 +1795,7 @@
           preview(data.process.process_model, $("design"));
           $("update").disabled = !data.permissions.edit;
           $("revise").disabled = !data.permissions.edit;
+          $("reviewOutcome").textContent = "";
           $("reviewConfirm").checked = false;
           $("comment").value = "";
           $("accessConfirm").checked = false;
@@ -2047,27 +2080,296 @@
               "Ownership and collaborator roles saved. OIDC process scopes are still required.",
             );
           });
+        // A failed current-authorization read invalidates the entire displayed
+        // selection, not just the review checkbox. Other actions (editing,
+        // access changes and exports) must not remain armed on a revoked view.
+        function invalidateDeniedReviewSelection(message) {
+          processOpenGeneration++;
+          selected = null;
+          $("selected").hidden = true;
+          $("reviewConfirm").checked = false;
+          $("handoffConsent").checked = false;
+          resetHandoff("REFUSED: Review authorization could not be verified. Reopen an authorized process.");
+          note(message);
+        }
+        let reviewMutationInFlight = false;
         async function review(decision) {
+          if (reviewMutationInFlight) throw new Error("A review submission is already in progress. Wait for its outcome or reopen the latest revision.");
+          // Lock before any asynchronous authorization read: two rapid clicks
+          // must not both pass preflight and submit competing review decisions.
+          reviewMutationInFlight = true;
+          try {
           if (!$("reviewConfirm").checked)
             throw new Error("Review this exact saved revision first.");
           const record = selected.process;
-          render(
-            await call(
-              "/v1/human/processes/" + record.workflow_id + "/reviews",
+          // Pin human confirmation and text across the async authorization read.
+          const confirmedReview = $("reviewConfirm").checked;
+          const confirmedComment = $("comment").value;
+          // A handoff-inspected revision must remain independently reviewed and
+          // authorized at submission time, not merely when review was opened.
+          if (inspectedHandoff) {
+            const ticket=handoffGeneration, identityTicket=identityGeneration;
+            const authorizedCredential=credential, chosen=selected;
+            const pinned=inspectedHandoff;
+            let current;
+            try {
+              current=await call("/v1/human/processes/"+encodeURIComponent(pinned.workflow_id));
+            } catch (error) {
+              if(ticket===handoffGeneration && identityTicket===identityGeneration &&
+                 credential===authorizedCredential && selected===chosen) {
+                invalidateDeniedReviewSelection("Review access could not be verified. Reopen the latest authorized revision before any action.");
+              }
+              throw error;
+            }
+            // An old request must never invalidate a newer identity, process,
+            // or separately inspected packet. Abort without touching new state.
+            if(ticket!==handoffGeneration||identityTicket!==identityGeneration||
+               credential!==authorizedCredential||selected!==chosen)return;
+            if(!$("reviewConfirm").checked||!confirmedReview||
+               $("comment").value!==confirmedComment||
+               !$("handoffConsent").checked||!current?.process||
+               current.archived||current.viewing_historical_revision||
+               chosen.archived||chosen.viewing_historical_revision||
+               current.process.workflow_id!==pinned.workflow_id||
+               current.latest_revision!==pinned.revision||
+               current.process.revision!==pinned.revision||
+               current.process.content_sha256!==pinned.content_sha256||
+               current.access_revision!==pinned.access_revision||
+               current.permissions?.review!==true||
+               current.your_actor_id!==chosen.your_actor_id||
+                current.your_review_number!==chosen.your_review_number||
+               record.workflow_id!==pinned.workflow_id||
+               record.revision!==pinned.revision||
+               record.content_sha256!==pinned.content_sha256) {
+              $("reviewConfirm").checked=false;
+              resetHandoff("REFUSED: Reviewed handoff is no longer current or authorized. Inspect again.");
+              throw new Error("Reviewed handoff changed; reopen latest revision and inspect again.");
+            }
+          }
+          // Direct revision reviews also need an authorization preflight. A
+          // previously rendered review permission is not a capability token:
+          // membership, revision and digest may change while the form is open.
+          if (!inspectedHandoff) {
+            const identityTicket=identityGeneration, authorizedCredential=credential;
+            const chosen=selected;
+            let current;
+            try {
+              current=await call("/v1/human/processes/"+encodeURIComponent(record.workflow_id));
+            } catch (error) {
+              // A denied or unavailable authorization read must not leave the
+              // direct-review confirmation armed for a blind retry. This is a
+              // read-only failure; no review POST has been attempted.
+              if (identityTicket===identityGeneration &&
+                  credential===authorizedCredential && selected===chosen) {
+                invalidateDeniedReviewSelection("Could not verify current review access. Reopen an authorized process before any action.");
+              }
+              throw error;
+            }
+            if (identityTicket!==identityGeneration || credential!==authorizedCredential ||
+                selected!==chosen) return;
+            if (!$("reviewConfirm").checked || $("comment").value!==confirmedComment ||
+                !current?.process || current.archived || current.viewing_historical_revision ||
+                current.process.workflow_id!==record.workflow_id ||
+                current.latest_revision!==record.revision ||
+                current.process.revision!==record.revision ||
+                current.process.content_sha256!==record.content_sha256 ||
+                current.access_revision!==chosen.access_revision ||
+                current.permissions?.review!==true ||
+                current.your_actor_id!==chosen.your_actor_id||
+                current.your_review_number!==chosen.your_review_number) {
+              $("reviewConfirm").checked=false;
+              $("reviewOutcome").textContent="Review permission or revision changed. Reopen the latest authorized revision before submitting.";
+              throw new Error("Review authorization or saved revision changed; reopen before submitting.");
+            }
+          }
+          // Do not let an old review response repopulate a different user's
+          // session or a newly selected process after the POST is in flight.
+          const reviewIdentity=identityGeneration, reviewCredential=credential;
+          const reviewSelection=selected;
+          // The server may commit the decision even if the response is lost.
+          // Consume the inspected packet BEFORE the mutation so a timeout or
+          // transport failure never leaves a reusable review authorization.
+          const submittedInspectedHandoff=Boolean(inspectedHandoff);
+          if(submittedInspectedHandoff){
+            resetHandoff("Review submitted; outcome may be unknown until the latest revision is reopened. Reinspect before another decision.");
+            $("handoffConsent").checked=false;
+          }
+          let reviewResult;
+          try {
+            reviewResult=await call(
+              "/v1/human/processes/" + encodeURIComponent(record.workflow_id) + "/reviews",
               {
                 revision: record.revision,
                 content_sha256: record.content_sha256,
-                expected_review_number: selected.your_review_number,
+                expected_review_number: reviewSelection.your_review_number,
                 decision,
-                comment: $("comment").value,
+                comment: confirmedComment,
                 user_confirmed: true,
               },
-            ),
-          );
-          note(
-            "Design review recorded against the exact revision and content hash.",
-          );
+            );
+          } catch (error) {
+            // A rejected or interrupted POST can still have been committed.
+            // Never leave a reusable confirmation that permits blind retry.
+            if (reviewIdentity===identityGeneration &&
+                reviewCredential===credential && selected===reviewSelection) {
+              $("reviewConfirm").checked=false;
+              $("reviewOutcome").textContent=
+                "Review submission outcome is uncertain. Reopen the latest authorized revision and inspect the recorded decision before submitting again.";
+            }
+            throw error;
+          }
+          if(reviewIdentity!==identityGeneration||reviewCredential!==credential||
+             selected!==reviewSelection)return;
+          // A completed decision changes the review state/number. The inspected
+          // packet is single-use: require fresh consent and inspection before
+          // another review or any downstream handoff, even after success.
+          if (submittedInspectedHandoff)
+            $("handoffStatus").textContent="Review response received; verifying acknowledgment. Reopen and reinspect before another handoff.";
+          // An HTTP 200 with another workflow's record is not safe to render.
+          // Keep the current selection and require a fresh authorized read.
+          // A matching process envelope alone does not prove that the Gateway
+          // recorded THIS review decision. Confirm the authenticated actor's
+          // latest decision in the returned review snapshot before claiming
+          // success. Truncated or malformed snapshots require a fresh read.
+          const acknowledged=reviewResult?.process?.workflow_id===record.workflow_id &&
+            reviewResult.process.revision===record.revision &&
+            reviewResult.process.content_sha256===record.content_sha256 &&
+            reviewResult.your_actor_id===reviewSelection.your_actor_id &&
+            Array.isArray(reviewResult.review?.reviews) &&
+            // Review summaries represent the latest decision per actor.
+            // Duplicate actor entries make the acknowledgment ambiguous.
+            reviewResult.review.reviews.filter((entry)=>
+              entry?.reviewer_actor_id===reviewSelection.your_actor_id).length===1 &&
+            reviewResult.review.reviews.some((entry)=>
+              entry?.reviewer_actor_id===reviewSelection.your_actor_id &&
+              entry.decision===decision);
+          if(!acknowledged){
+            $("reviewConfirm").checked=false;
+            $("reviewOutcome").textContent="Review response could not be verified. Reopen the latest authorized revision and check its review state before resubmitting.";
+            note("Review outcome unverified. Reopen the latest authorized revision before taking further action.");
+            return;
+          }
+          // The POST acknowledgment is not itself a durable read-back receipt.
+          // Verify the recorded decision through a second authenticated Gateway
+          // read before presenting it as confirmed. A lost/denied read leaves
+          // an uncertain outcome and never invites an unsafe blind retry.
+          let recordedReview;
+          try {
+            recordedReview=await call("/v1/human/processes/"+encodeURIComponent(record.workflow_id));
+          } catch (_) {
+            if(reviewIdentity===identityGeneration &&
+               reviewCredential===credential && selected===reviewSelection) {
+              $("reviewConfirm").checked=false;
+              $("reviewOutcome").textContent="Review response acknowledged, but durable Gateway read-back failed. Reopen the latest authorized revision and verify the recorded decision before retrying.";
+            }
+            return;
+          }
+          if(reviewIdentity!==identityGeneration||reviewCredential!==credential||
+             selected!==reviewSelection)return;
+          const recordedEntries=recordedReview?.review?.reviews;
+          const recorded=recordedReview?.process?.workflow_id===record.workflow_id &&
+            recordedReview.process.revision===record.revision &&
+            recordedReview.process.content_sha256===record.content_sha256 &&
+            recordedReview.your_actor_id===reviewSelection.your_actor_id &&
+            // A read-back of an archived or superseded revision cannot certify
+            // the current reviewed handoff, even if its historical decision matches.
+            !recordedReview.archived &&
+            !recordedReview.viewing_historical_revision &&
+            recordedReview.latest_revision===record.revision &&
+            // An inspected handoff must not be acknowledged after access was
+            // revoked or its membership revision changed during POST/read-back.
+            // Even reviews opened without an inspected packet must not be
+            // confirmed after reviewer membership changes during POST/read-back.
+            recordedReview.access_revision===reviewSelection.access_revision &&
+            recordedReview.permissions?.review===true &&
+            Array.isArray(recordedEntries) &&
+            recordedEntries.filter(entry=>entry?.reviewer_actor_id===reviewSelection.your_actor_id).length===1 &&
+            recordedEntries.some(entry=>entry?.reviewer_actor_id===reviewSelection.your_actor_id &&
+              entry.decision===decision);
+          if(!recorded) {
+            $("reviewConfirm").checked=false;
+            $("reviewOutcome").textContent="Gateway read-back did not verify this exact review decision. Reopen the latest authorized revision and inspect its review history before any retry.";
+            return;
+          }
+          // An acknowledged decision consumes the explicit human confirmation.
+          // A subsequent review, including the opposite decision, must be
+          // consciously reconfirmed against the freshly loaded revision.
+          $("reviewConfirm").checked=false;
+          if (submittedInspectedHandoff)
+            $("handoffStatus").textContent="Design review acknowledged. Reopen and reinspect before another handoff.";
+          // Render the independently fetched, authenticated durable state rather
+          // than the mutation response, which can be stale after concurrent review.
+          render(recordedReview);
+          // Display only the Gateway's acknowledged, revision-pinned review
+          // result. This is a human design-review acknowledgment, not an
+          // agent execution receipt or a durable external-provider outcome.
+          if (reviewResult?.process?.workflow_id===record.workflow_id &&
+              reviewResult.process.revision===record.revision &&
+              reviewResult.process.content_sha256===record.content_sha256) {
+            $("reviewOutcome").textContent =
+              "Gateway acknowledged "+words(decision)+" for revision "+
+              record.revision+" · SHA-256 "+record.content_sha256+
+              ". Human design review only; no agent handoff or execution occurred.";
+          } else {
+            $("reviewOutcome").textContent =
+              "Review response received, but the revision reference could not be verified. Reopen the latest authorized revision before relying on this outcome.";
+          }
+          // A transport-level success is not proof that the Gateway returned
+          // the submitted revision. Never announce a recorded decision when
+          // the response is malformed, stale, or refers to another process.
+          if (reviewResult?.process?.workflow_id===record.workflow_id &&
+              reviewResult.process.revision===record.revision &&
+              reviewResult.process.content_sha256===record.content_sha256) {
+            note("Design review acknowledged against the exact revision and content hash.");
+          } else {
+            note("Review outcome unverified. Reopen the latest authorized revision before taking further action.");
+          }
+          } finally {
+            // Includes failed authorization reads and lost POST responses.
+            // Never restore consumed inspection consent on uncertainty.
+            reviewMutationInFlight = false;
+          }
         }
+        // Recovery is a fresh authenticated GET, never an automatic replay of a
+        // possibly committed review POST. The existing open/render path clears
+        // packet consent and forces the reviewer to inspect and confirm again.
+        $("reviewRecover").onclick = () => run(async () => {
+          if (!selected || !credential) throw new Error("Sign in and select an authorized process.");
+          const workflowId = selected.process.workflow_id;
+          const identityTicket = identityGeneration, authorizedCredential = credential;
+          // The recovery GET may be denied or superseded by another navigation.
+          // Never leave the previous confirmation, selection, or apparent success
+          // available when a fresh authorization read cannot be completed.
+          $("reviewConfirm").checked = false;
+          $("handoffConsent").checked = false;
+          resetHandoff("Recovery requested. Reinspect the latest authorized revision before reviewing.");
+          $("reviewOutcome").textContent = "Checking the latest recorded Gateway review. Do not resubmit until its outcome is verified.";
+          const recoveryOpenTicket = processOpenGeneration + 1;
+          try {
+            await open(workflowId);
+          } catch (error) {
+            if (recoveryOpenTicket === processOpenGeneration &&
+                identityTicket === identityGeneration &&
+                credential === authorizedCredential &&
+                selected?.process?.workflow_id === workflowId) {
+              // The previously displayed process may have been revoked.
+              // Hide its actionable review controls rather than implying it
+              // remains a current authorized selection after a denied GET.
+              selected = null;
+              $("selected").hidden = true;
+              $("reviewOutcome").textContent = "REFUSED: Could not reopen an authorized review. Sign in and select a currently accessible process.";
+              note("Review recovery denied or unavailable. No decision was resubmitted.");
+            }
+            throw error;
+          }
+          if (recoveryOpenTicket !== processOpenGeneration ||
+              identityTicket !== identityGeneration ||
+              credential !== authorizedCredential ||
+              selected?.process?.workflow_id !== workflowId) return;
+          $("reviewConfirm").checked = false;
+          $("reviewOutcome").textContent = "Latest authorized review loaded. Inspect its recorded decision and reconfirm before any new submission.";
+          $("revisionReview").scrollIntoView({block:"start"});
+        });
         $("approve").onclick = () => run(() => review("reviewed_design"));
         $("changes").onclick = () => run(() => review("changes_requested"));
         $("comment").addEventListener("input", () => {
@@ -2130,36 +2432,73 @@
               "Shared revisions and reviews deleted. Private local knowledge was not changed.",
             );
           });
+        let historyGeneration = 0;
         async function history(before) {
+          if (!selected || !credential) throw new Error("Select an authorized process first.");
+          const ticket = ++historyGeneration;
+          const selection = selected;
+          const identityTicket = identityGeneration, authorizedCredential = credential;
+          const id = selection.process.workflow_id;
+          const host = $("historyList");
+          // Do not expose links from an earlier tenant/process while a new
+          // authenticated history read is pending or has failed.
+          host.replaceChildren();
           const params = new URLSearchParams({ limit: "10" });
           if (before) params.set("before_revision", String(before));
-          const id = selected.process.workflow_id;
           const result = await call(
-            "/v1/human/processes/" + id + "/history?" + params,
+            "/v1/human/processes/" + encodeURIComponent(id) + "/history?" + params,
           );
-          const host = $("historyList");
-          host.replaceChildren();
+          if (ticket !== historyGeneration || identityTicket !== identityGeneration ||
+              credential !== authorizedCredential || selected !== selection ||
+              selected?.process?.workflow_id !== id) return;
+          if (!Array.isArray(result?.workflows))
+            throw new Error("Gateway returned an invalid revision history.");
           result.workflows.forEach((record) =>
             host.appendChild(
               button(
                 "Open revision " + record.revision + " · " + record.saved_at,
-                () => open(id, record.revision),
+                () => {
+                  if (ticket !== historyGeneration || identityTicket !== identityGeneration ||
+                      credential !== authorizedCredential || selected !== selection) return;
+                  return open(id, record.revision);
+                },
               ),
             ),
           );
           if (result.has_more)
             host.appendChild(
-              button("Older revisions", () =>
-                history(result.next_before_revision),
-              ),
+              button("Older revisions", () => {
+                if (ticket !== historyGeneration || identityTicket !== identityGeneration ||
+                    credential !== authorizedCredential || selected !== selection) return;
+                return history(result.next_before_revision);
+              }),
             );
         }
         $("history").onclick = () => run(() => history());
         async function download(format) {
-          const record = selected.process;
+          if (!selected || !credential) throw new Error("Sign in and select an authorized process.");
+          const selection = selected, record = selection.process;
+          const identityTicket = identityGeneration, authorizedCredential = credential;
+          // An agent-project is executable source, not an execution grant.
+          // Never export it from a stale/archived or withdrawn design review.
+          if (format === "agent-project") {
+            const current = await call("/v1/human/processes/" + encodeURIComponent(record.workflow_id));
+            if (identityTicket !== identityGeneration || credential !== authorizedCredential ||
+                selected !== selection || !current?.process ||
+                current.archived || current.viewing_historical_revision ||
+                current.process.workflow_id !== record.workflow_id ||
+                current.process.revision !== record.revision ||
+                current.latest_revision !== record.revision ||
+                current.process.content_sha256 !== record.content_sha256 ||
+                current.review?.status !== "reviewed_design" ||
+                current.your_actor_id !== selection.your_actor_id ||
+                current.access_revision !== selection.access_revision ||
+                selection.archived || selection.viewing_historical_revision)
+              throw new Error("Executable project export refused: revision or independent review changed. Reopen the latest authorized process.");
+          }
           const response = await fetch(
             "/v1/human/processes/" +
-              record.workflow_id +
+              encodeURIComponent(record.workflow_id) +
               "/export?" +
               new URLSearchParams({
                 revision: String(record.revision),
@@ -2172,7 +2511,71 @@
           );
           if (!response.ok)
             throw new Error("Could not export the saved shared revision.");
-          const url = URL.createObjectURL(await response.blob()),
+          // A download can finish after sign-out, a credential rotation, or
+          // selection of another tenant's process. Never surface the old
+          // response as a local file after that authorization context changes.
+          const exportedBlob = await response.blob();
+          if (identityTicket !== identityGeneration ||
+              credential !== authorizedCredential || selected !== selection ||
+              selected?.process?.workflow_id !== record.workflow_id ||
+              selected?.process?.revision !== record.revision ||
+              selected?.process?.content_sha256 !== record.content_sha256)
+            throw new Error("Export canceled: session or selected revision changed while downloading. Reopen and authorize the latest process.");
+          // Review or membership can be revoked while a ZIP is streaming.
+          // Recheck the Gateway after receiving bytes and before exposing them.
+          if (format === "agent-project") {
+            const latest = await call("/v1/human/processes/" + encodeURIComponent(record.workflow_id));
+            if (identityTicket !== identityGeneration ||
+                credential !== authorizedCredential || selected !== selection ||
+                !latest?.process || latest.archived || latest.viewing_historical_revision ||
+                latest.process.workflow_id !== record.workflow_id ||
+                latest.process.revision !== record.revision ||
+                latest.latest_revision !== record.revision ||
+                latest.process.content_sha256 !== record.content_sha256 ||
+                latest.review?.status !== "reviewed_design" ||
+                latest.your_actor_id !== selection.your_actor_id ||
+                latest.access_revision !== selection.access_revision)
+              throw new Error("Executable project export canceled: authorization or independent review changed during download. Reopen the latest authorized revision.");
+          }
+          // A 200 response may be an HTML login page or a truncated archive.
+          // Require a bounded, nonempty ZIP with a complete central directory,
+          // not merely the PK prefix, before exposing executable source.
+          if (format === "agent-project") {
+            const maxArchiveBytes = 100 * 1024 * 1024;
+            if (exportedBlob.size < 22 || exportedBlob.size > maxArchiveBytes)
+              throw new Error("Executable project export canceled: empty, incomplete or oversized ZIP.");
+            const signature = new Uint8Array(await exportedBlob.slice(0, 4).arrayBuffer());
+            const zipHeader = signature.length === 4 &&
+              signature[0] === 0x50 && signature[1] === 0x4b &&
+              signature[2] === 0x03 && signature[3] === 0x04;
+            // ZIP comments are at most 65535 bytes. EOCD must terminate the
+            // archive and describe a single-disk central directory in bounds.
+            const tailStart = Math.max(0, exportedBlob.size - 65557);
+            const tail = new Uint8Array(await exportedBlob.slice(tailStart).arrayBuffer());
+            const view = new DataView(tail.buffer, tail.byteOffset, tail.byteLength);
+            let directoryValid = false;
+            for (let i = tail.length - 22; i >= 0; i--) {
+              if (view.getUint32(i, true) !== 0x06054b50) continue;
+              const commentLength = view.getUint16(i + 20, true);
+              if (i + 22 + commentLength !== tail.length) continue;
+              const disk = view.getUint16(i + 4, true);
+              const directoryDisk = view.getUint16(i + 6, true);
+              const diskEntries = view.getUint16(i + 8, true);
+              const totalEntries = view.getUint16(i + 10, true);
+              const directorySize = view.getUint32(i + 12, true);
+              const directoryOffset = view.getUint32(i + 16, true);
+              const eocdOffset = tailStart + i;
+              directoryValid = disk === 0 && directoryDisk === 0 &&
+                totalEntries > 0 && diskEntries === totalEntries &&
+                directorySize > 0 && directoryOffset + directorySize <= eocdOffset;
+              break;
+            }
+            if (!zipHeader || !directoryValid ||
+                identityTicket !== identityGeneration ||
+                credential !== authorizedCredential || selected !== selection)
+              throw new Error("Executable project export canceled: invalid ZIP or authorization context changed. Reopen and retry.");
+          }
+          const url = URL.createObjectURL(exportedBlob),
             a = el("a");
           a.href = url;
           a.download =
@@ -2195,8 +2598,103 @@
 
         function resetHandoff(message="No packet checked.") {
           handoffGeneration++;
+          inspectedHandoff=null;
           $("handoffStatus").textContent=message;
+          $("handoffReview").disabled=true;
         }
+        $("handoffReview").addEventListener("click",()=>run(async()=>{
+          if($("handoffReview").disabled||!selected||!credential||!$("handoffConsent").checked||!inspectedHandoff)return;
+          const ticket=handoffGeneration, chosen=selected, inspected=inspectedHandoff;
+          const identityTicket=identityGeneration, authorizedCredential=credential;
+          $("handoffReview").disabled=true;
+          $("handoffStatus").textContent="Rechecking current authorization and revision before review…";
+          try {
+            const current=await call("/v1/human/processes/"+encodeURIComponent(inspected.workflow_id));
+            if(ticket!==handoffGeneration||identityTicket!==identityGeneration||
+               credential!==authorizedCredential||selected!==chosen||!$("handoffConsent").checked)return;
+            if(!current?.process||current.archived||current.viewing_historical_revision||
+               current.process.workflow_id!==inspected.workflow_id||
+               current.process.revision!==inspected.revision||
+               current.latest_revision!==inspected.revision||
+               current.process.content_sha256!==inspected.content_sha256||
+               current.permissions?.review!==true||
+               current.your_actor_id!==chosen.your_actor_id||
+                current.your_review_number!==chosen.your_review_number||
+               current.access_revision!==inspected.access_revision||
+               chosen.access_revision!==inspected.access_revision||
+               chosen.viewing_historical_revision||chosen.archived||
+               chosen.process?.revision!==inspected.revision||
+               chosen.process?.content_sha256!==inspected.content_sha256){
+              invalidateDeniedReviewSelection("Review navigation rejected: process revision or review permission changed. Reopen an authorized process.");
+              return;
+            }
+            $("handoffStatus").textContent="Current authorization and revision rechecked. You may review this revision; no execution authorization.";
+            $("handoffReview").disabled=false;
+            $("revisionReview").scrollIntoView({block:"start"});
+            $("comment").focus();
+          }catch(_){
+            if(ticket===handoffGeneration&&identityTicket===identityGeneration&&
+               credential===authorizedCredential&&selected===chosen)
+              // Failed live authorization must also disarm direct review,
+              // editing and export controls, not just the handoff button.
+              invalidateDeniedReviewSelection("Review navigation revalidation failed. Reopen the latest authorized revision.");
+          }
+        }));
+        // Recovery is an authenticated read, not a shortcut around consent or review.
+        // open() renders the latest revision and clears any previous packet inspection.
+        $("handoffRefresh").addEventListener("click",()=>run(async()=>{
+          if(!selected||!credential)throw new Error("Sign in and select a shared process first.");
+          const workflowId=selected.process?.workflow_id;
+          if(!workflowId)throw new Error("Select a saved process first.");
+          $("handoffConsent").checked=false;
+          resetHandoff("Reopening latest authorized revision. A new inspection is required.");
+          const identityTicket=identityGeneration;
+          const recoveryOpenTicket=processOpenGeneration+1;
+          try {
+            await open(workflowId);
+          } catch (error) {
+            // Denial, revocation, or an unavailable Gateway must not leave the
+            // previous process looking like a successful recovery.
+            if(recoveryOpenTicket===processOpenGeneration&&
+               identityTicket===identityGeneration&&selected?.process?.workflow_id===workflowId) {
+              // A denied refresh invalidates the displayed review actions too.
+              // Never leave an old revision selectable after access revocation.
+              selected=null;
+              $("selected").hidden=true;
+              $("reviewConfirm").checked=false;
+              $("handoffStatus").textContent="REFUSED: Could not reopen an authorized revision. Sign in and select a currently accessible process before inspecting.";
+            }
+            throw error;
+          }
+          // A later open of even the same workflow supersedes this recovery.
+          // Never announce success for a stale asynchronous response.
+          if(recoveryOpenTicket!==processOpenGeneration||
+             identityTicket!==identityGeneration||!selected||
+             selected.process?.workflow_id!==workflowId)return;
+          $("handoffStatus").textContent="Latest authorized revision reopened. Select the packet, authorize inspection and check again.";
+        }));
+        // A restored back/forward-cache document must not resurrect an inspection,
+        // human confirmation, or a previously enabled review action. The Gateway
+        // must be consulted again after navigation, with fresh explicit consent.
+        window.addEventListener("pagehide",()=>{
+          $("handoffConsent").checked=false;
+          $("reviewConfirm").checked=false;
+          resetHandoff("Page left. Reopen the latest authorized revision and reinspect.");
+        });
+        window.addEventListener("pageshow",event=>{
+          if(!event.persisted)return;
+          // Browser history may restore an old tenant's process after its
+          // membership, revision or review permission has changed remotely.
+          // Clearing the packet alone is insufficient: direct design review,
+          // collaborator edits and exports also use the selected process.
+          // Invalidate pending process reads before hiding all selected actions.
+          processOpenGeneration++;
+          selected=null;
+          $("selected").hidden=true;
+          $("handoffConsent").checked=false;
+          $("reviewConfirm").checked=false;
+          resetHandoff("Restored page. Reopen an authorized process and reinspect before taking any action.");
+        });
         $("handoffPacket").addEventListener("change",()=>{ $("handoffConsent").checked=false; resetHandoff("Packet changed. Reauthorize inspection."); });
         $("handoffConsent").addEventListener("change",()=>resetHandoff("Authorization changed. Check again."));
         $("handoffClear").addEventListener("click",()=>{
@@ -2207,13 +2705,14 @@
         $("handoffCheck").addEventListener("click",()=>run(async()=>{
           resetHandoff("Checking latest authorized process…");
           const ticket=handoffGeneration, file=$("handoffPacket").files[0], chosen=selected;
-          const fail=reason=>{if(ticket===handoffGeneration)$("handoffStatus").textContent="REFUSED: "+reason+" No execution authorization.";};
+          const identityTicket=identityGeneration, authorizedCredential=credential;
+          const fail=reason=>{if(ticket===handoffGeneration&&identityTicket===identityGeneration&&credential===authorizedCredential&&selected===chosen)$("handoffStatus").textContent="REFUSED: "+reason+" No execution authorization.";};
           if(!chosen||!credential||!file){fail("Sign in, select a shared process and a packet.");return;}
           if(!$("handoffConsent").checked){fail("Explicit authorization to inspect this packet is required.");return;}
           if(file.size>262144){fail("Packet exceeds 256 KiB.");return;}
           let packet;
           try{packet=JSON.parse(await file.text());}catch(_){fail("Invalid packet JSON.");return;}
-          if(ticket!==handoffGeneration||selected!==chosen||!$("handoffConsent").checked)return;
+          if(ticket!==handoffGeneration||identityTicket!==identityGeneration||credential!==authorizedCredential||selected!==chosen||!$("handoffConsent").checked)return;
           const p=packet?.process;
           if(packet?.format!=="openworkgraph.evidence-handoff-review.v1"||
              packet.scope!=="human_review_only"||packet.execution_authorized!==false||
@@ -2226,17 +2725,38 @@
           if(p.workflow_id!==chosen.process?.workflow_id){fail("Packet workflow differs from selected process.");return;}
           try{
             const current=await call("/v1/human/processes/"+encodeURIComponent(p.workflow_id));
-            if(ticket!==handoffGeneration||selected!==chosen||!$("handoffConsent").checked)return;
+            if(ticket!==handoffGeneration||identityTicket!==identityGeneration||credential!==authorizedCredential||selected!==chosen||!$("handoffConsent").checked)return;
             if(!current?.process||current.process.workflow_id!==p.workflow_id||
                current.archived||current.viewing_historical_revision||
                current.process.revision!==p.revision||
                current.latest_revision!==p.revision||
                current.process.content_sha256!==p.content_sha256||
-               current.review?.status!=="reviewed_design"){
-              fail("Current authorized process is archived, changed, inaccessible, mismatched or lacks independent design review of this revision.");return;
+               current.permissions?.review!==true||
+               current.your_actor_id!==chosen.your_actor_id||
+                current.your_review_number!==chosen.your_review_number||
+               current.access_revision!==chosen.access_revision){
+              // A successful authenticated read that reports withdrawn review access,
+              // changed membership, or a stale selected revision invalidates every
+              // direct review/edit/export action, not only packet inspection.
+              invalidateDeniedReviewSelection("Inspection refused: current process authorization or revision changed. Reopen an authorized process.");
+              return;
             }
-            $("handoffStatus").textContent="MATCH: Fresh authorized, independently design-reviewed process revision "+p.revision+" and SHA-256 match. Eligible only for further human review. Consent, owner approval, source access, retention and execution authorization remain unverified.";
-          }catch(_){if(ticket===handoffGeneration)fail("Fresh authenticated read failed or access was withdrawn.");}
+            // Inspection may fetch the latest revision while the UI still shows
+            // an older one. Never enable navigation into a mismatched review form.
+            if(chosen.viewing_historical_revision||chosen.archived||
+               chosen.process.revision!==p.revision||
+               chosen.process.content_sha256!==p.content_sha256){
+              fail("The displayed review form is not the inspected latest revision. Open the latest revision and reauthorize inspection.");
+              return;
+            }
+            $("handoffStatus").textContent="MATCH: Fresh authorized process revision "+p.revision+" and SHA-256 match. Eligible for human design review only; independent approval and execution are not granted by inspection. Consent, owner approval, source access, retention and execution authorization remain unverified.";
+            inspectedHandoff={workflow_id:p.workflow_id,revision:p.revision,content_sha256:p.content_sha256,access_revision:current.access_revision};
+            $("handoffReview").disabled=false;
+          }catch(_){
+            if(ticket===handoffGeneration&&identityTicket===identityGeneration&&
+               credential===authorizedCredential&&selected===chosen)
+              invalidateDeniedReviewSelection("Inspection authorization could not be verified. Reopen an authorized process.");
+          }
         }));
       })();
     </script>
