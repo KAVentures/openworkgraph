@@ -7,7 +7,9 @@ prerequisites are disclosed; no plan or review state is changed.
 """
 from __future__ import annotations
 
-from collections import deque
+from collections import deque, defaultdict
+import hashlib
+import json
 from typing import Any
 
 from . import automation_pipeline as pipeline
@@ -30,6 +32,97 @@ def _planning(idea: dict[str, Any]) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def dependency_waves(ideas: list[dict[str, Any]]) -> dict[str, Any]:
+    """Exact prerequisite layers, independent of the bounded risk-path display.
+
+    One node per retained idea. Implemented prerequisites are satisfied solely
+    by declaration. Rejected, on-hold and unknown dependencies are blocked,
+    including all downstream dependents. A residual cycle or dependency on a
+    cycle is never assigned a wave. Layers are precedence, not durations.
+    """
+    by_id = {i["idea_id"]: i for i in ideas}
+    active = {k: i for k, i in by_id.items() if i["state"] not in {"implemented", "rejected"}}
+    deps = {k: sorted(set(_planning(i).get("depends_on") or [])) for k, i in by_id.items()}
+    snapshot = [[k, i["revision"], i["state"], deps[k],
+                 _planning(i).get("target_quarter") or None]
+                for k, i in sorted(by_id.items())]
+    pin = hashlib.sha256(json.dumps(snapshot, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
+    children = defaultdict(list)
+    pending = {}
+    direct_blocks = {}
+    for k, idea in active.items():
+        unmet = [d for d in deps[k] if d not in by_id or by_id[d]["state"] != "implemented"]
+        pending[k] = [d for d in unmet if d in active]
+        for d in pending[k]:
+            children[d].append(k)
+        blockers = [{"idea_id": d, "state": by_id[d]["state"] if d in by_id else "missing"}
+                    for d in unmet if d not in active or active[d]["state"] == "on_hold"]
+        if idea["state"] == "on_hold":
+            blockers.append({"idea_id": k, "state": "on_hold"})
+        if blockers:
+            direct_blocks[k] = blockers
+    blocked = set(direct_blocks)
+    queue = deque(sorted(blocked))
+    while queue:
+        k = queue.popleft()
+        for child in children[k]:
+            if child not in blocked:
+                blocked.add(child)
+                queue.append(child)
+    eligible = set(active) - blocked
+    degree = {k: len(pending[k]) for k in eligible}
+    queue = deque(sorted(k for k in eligible if degree[k] == 0))
+    wave = {}
+    earliest = {}
+    while queue:
+        k = queue.popleft()
+        wave[k] = 1 + max((wave[d] for d in pending[k]), default=0)
+        # Maximum declared target among this idea and its unfinished
+        # prerequisites, not a calculated earliest completion date.
+        labels = [_planning(active[k]).get("target_quarter") or None]
+        labels += [earliest[d] for d in pending[k]]
+        earliest[k] = max(labels) if all(_quarter(v) is not None for v in labels) else None
+        for child in children[k]:
+            if child in eligible:
+                degree[child] -= 1
+                if degree[child] == 0:
+                    queue.append(child)
+    residual = eligible - wave.keys()
+    rows = []
+    groups = defaultdict(list)
+    for k, idea in sorted(active.items()):
+        if k in blocked:
+            status = "blocked_by_declared_state" if k in direct_blocks else "depends_on_blocked_idea"
+        elif k in residual:
+            status = "cycle_or_depends_on_cycle"
+        else:
+            status = "prerequisites_declared_implemented" if wave[k] == 1 else "waiting_on_earlier_wave"
+            groups[wave[k]].append(k)
+        rows.append({
+            "idea_id": k, "revision": idea["revision"], "state": idea["state"],
+            "target_quarter": _planning(idea).get("target_quarter") or None,
+            "status": status, "wave": wave.get(k),
+            "unfinished_prerequisite_ids": sorted(d for d in deps[k]
+                if d not in by_id or by_id[d]["state"] != "implemented"),
+            "direct_blockers": direct_blocks.get(k, []),
+            "blocked_predecessor_ids": sorted(d for d in pending[k] if d in blocked),
+            "latest_declared_target_in_unfinished_chain": earliest.get(k),
+        })
+    return {
+        "format": "openworkgraph.automation-dependency-waves.v1",
+        "portfolio_basis_sha256": pin, "active_idea_count": len(active),
+        "layered_idea_count": len(wave), "blocked_idea_count": len(blocked),
+        "cycle_or_downstream_idea_count": len(residual),
+        "wave_count": len(groups), "waves": [
+            {"wave": level, "idea_ids": groups[level]} for level in sorted(groups)],
+        "ideas": rows, "all_active_ideas_classified": True,
+        "precedence_order_complete": not residual and not blocked,
+        "implemented_states_independently_verified": False,
+        "resources_or_durations_modeled": False,
+        "execution_authorized": False,
+    }
+
+
 def review() -> dict[str, Any]:
     """No provider reads, writes, inferred completion, or savings arithmetic."""
     all_ideas = pipeline.pipeline()["ideas"]
@@ -38,8 +131,8 @@ def review() -> dict[str, Any]:
                     key=lambda i: i["idea_id"])
     risks: list[dict[str, Any]] = []
     truncated = False
-    with_targets = 0
-    with_dependencies = 0
+    with_targets = sum(_quarter(_planning(i).get("target_quarter")) is not None for i in active)
+    with_dependencies = sum(bool(_planning(i).get("depends_on")) for i in active)
 
     def add(kind: str, root: dict[str, Any], dep_id: str, path: list[str],
             dep: dict[str, Any] | None) -> bool:
@@ -61,11 +154,7 @@ def review() -> dict[str, Any]:
     for root in active:
         declared = _planning(root)
         target = _quarter(declared.get("target_quarter"))
-        if target is not None:
-            with_targets += 1
         direct = declared.get("depends_on") or []
-        if direct:
-            with_dependencies += 1
         queue = deque(([dep, [root["idea_id"], dep]] for dep in sorted(set(direct))))
         visited = {root["idea_id"]}
         while queue:
@@ -108,6 +197,7 @@ def review() -> dict[str, Any]:
 
     return {
         "format": FORMAT,
+        "dependency_waves": dependency_waves(all_ideas),
         "active_ideas": len(active),
         "active_ideas_with_target_quarter": with_targets,
         "active_ideas_with_dependencies": with_dependencies,
@@ -132,4 +222,4 @@ def review() -> dict[str, Any]:
     }
 
 
-__all__ = ["review", "FORMAT", "MAX_RISKS", "MAX_PATH"]
+__all__ = ["dependency_waves", "review", "FORMAT", "MAX_RISKS", "MAX_PATH"]
