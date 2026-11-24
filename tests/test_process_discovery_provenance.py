@@ -481,3 +481,69 @@ def test_case_drift_budget_never_stores_or_presents_partial_index(monkeypatch):
     saved, basis = _inspection_basis(indexed)
     monkeypatch.setattr(provenance, "MAX_INDEXED_EVENTS", 1)
     assert provenance.inspect_selection(saved, basis)["case_drift"]["status"] == "current_work_budget_exceeded"
+
+
+def test_discovery_inspection_and_handoff_browser_models():
+    import shutil
+    import subprocess
+    from pathlib import Path
+    if not shutil.which("node"):
+        pytest.skip("Node.js unavailable")
+    script = r"""
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const scope={window:{}};
+vm.runInNewContext(fs.readFileSync('dashboard/event_log_workspace.js','utf8'),scope);
+vm.runInNewContext(fs.readFileSync('dashboard/automation_pipeline.js','utf8'),scope);
+const matches=scope.window.__owgEventLogModel.matchingDiscoveryInspection;
+const m=scope.window.__owgPipelineModel;
+const sha='a'.repeat(64),other='b'.repeat(64),ref='urn:openworkgraph:local-log-discovery:'+sha;
+const basis={workflow_id:'workflow',revision:2,content_sha256:sha,reference:ref,log_id:'log_aaaaaaaaaaaaaaaa'};
+const pin={format:'openworkgraph.discovery-projection.v1',sha256:sha,cases:2,events:4};
+const changed={...pin,sha256:other};
+const common={format:'openworkgraph.discovery-selection-inspection.v1',reference:ref,workflow_id:basis.workflow_id,
+  revision:2,process_sha256:sha,log_id:basis.log_id,selection_sha256:sha,
+  selection:{case_notion:'case',cohort:{tag:'reviewed'},settings:{noise:0,activities:1}},
+  original_effective_input:pin,current_effective_input:changed,effective_input_status:'changed',
+  historical_rows_retained:false,raw_source_fingerprint_rechecked:false,
+  business_case_identity_verified:false,business_outcomes_verified:false,execution_authorized:false,
+  checked_at:'2026-11-24T06:00:00Z',
+  case_drift:{status:'complete',added:1,removed:1,modified:1,unchanged:0,original_cases:2,current_cases:2,removed_case_ids_retained:false}};
+const caseRow={case_id:'new',events:2,elapsed_seconds:1,timestamp_ties:0,comparison_status:'added'};
+const result={...common,mode:'cases',case_status:'added',matching_cases:1,cases:[caseRow],next_after:null};
+const page={limit:30,case_status:'added',expected_projection_sha256:other};
+assert(matches(result,basis,page));
+assert(!matches(result,basis,{...page,case_status:'modified'}));
+assert(!matches(result,basis,{...page,expected_projection_sha256:sha}));
+assert(!matches({...result,revision:3},basis,page));
+assert(!matches({...result,case_drift:{...common.case_drift,removed:0}},basis,page));
+assert(!matches({...result,cases:[{...caseRow,comparison_status:'unchanged'}]},basis,page));
+assert(!matches({...result,business_outcomes_verified:true},basis,page));
+const eventPage={case_id:'new',offset:0,limit:1,expected_projection_sha256:other};
+const events={...common,mode:'events',case_id:'new',offset:0,total_events:2,next_offset:1,comparison_status:'added',
+  events:[{event_id:'e1',activity:'Open',timestamp:'2026-11-24T00:00:00Z'}]};
+assert(matches(events,basis,eventPage));
+assert(!matches({...events,next_offset:2},basis,eventPage));
+assert(!matches({...events,case_id:'wrong'},basis,eventPage));
+const journey={idea:{idea_id:'idea',revision:1,state:'approved'},
+  process_status:{status:'current',process_reference:{workflow_id:'workflow',revision:2,content_sha256:sha}},
+  projects:[{project_id:'project',idea_revision:1,idea_revision_is_current:true,spec_sha256:sha,archive_sha256:sha,
+    reported_specifications:[],source_check_exports:{count:0,last_document_sha256:null}}],
+  dataset_origins:[{status:'current',source_content_sha256:sha,selection_sha256:sha,
+    effective_input:{...pin,case_ids:['PRIVATE CASE']},current_effective_input:pin,effective_input_status:'matches'}]};
+const before=m.handoffReviewPacket(journey,'project','idea','2026-11-24T06:00:00Z');
+assert.equal(before.dataset_origins[0].effective_input.status,'matches');
+assert(!JSON.stringify(before).includes('PRIVATE CASE'));
+assert(!before.readiness.blockers.includes('effective_discovery_input_not_current'));
+journey.dataset_origins[0].current_effective_input=changed;
+journey.dataset_origins[0].effective_input_status='changed';
+journey.dataset_origins[0].status='projection_changed';
+const after=m.handoffReviewPacket(journey,'project','idea','2026-11-24T06:00:01Z');
+assert(after.readiness.blockers.includes('effective_discovery_input_not_current'));
+assert.equal(after.dataset_origins[0].effective_input.current_sha256,other);
+assert(m.compareHandoffReviewPackets(before,after).changes.includes('Dataset and cohort source checks'));
+assert.equal(m.handoffDependencyReview(journey,'project','idea','2026-11-24T06:00:01Z').stages[0].status,'needs_review');
+console.log('Exact discovery inspection and handoff model checks passed');
+"""
+    result = subprocess.run(["node", "-e", script], cwd=Path(__file__).resolve().parents[1],
+                            capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
