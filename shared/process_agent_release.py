@@ -190,12 +190,98 @@ def verify_directory(root: Path | str, expected_manifest_sha256: str | None = No
     }
 
 
+def _pinned_inventory(root: Path | str, pin: str) -> dict:
+    if not isinstance(pin, str) or not _HEX.fullmatch(pin):
+        raise ReleaseIntegrityError("Both releases require separately pinned manifest SHA-256 digests")
+    verify_directory(root, pin)
+    # Retain exactly the manifest that was verified, not an unpinned second
+    # read. This remains a local snapshot, not a live filesystem lock.
+    path = Path(root) / MANIFEST_NAME
+    if path.is_symlink() or not path.is_file():
+        raise ReleaseIntegrityError("Release manifest changed during comparison")
+    with path.open("rb") as source:
+        raw = source.read(MAX_MANIFEST_BYTES + 1)
+    if len(raw) > MAX_MANIFEST_BYTES or _hash(raw) != pin:
+        raise ReleaseIntegrityError("Release manifest changed during comparison")
+    return json.loads(raw, object_pairs_hook=_unique)
+
+
+def compare_directories(baseline_root: Path | str, candidate_root: Path | str,
+                        baseline_manifest_sha256: str, candidate_manifest_sha256: str) -> dict:
+    """Review a proposed runtime upgrade without executing either release.
+
+    Distinguish the saved design identity, specification bytes and generated
+    file changes. All comparisons are between independently pinned snapshots.
+    Customer-managed files, dependencies and provider behavior are outside
+    the generated manifest and cannot be declared compatible here.
+    """
+    before = _pinned_inventory(baseline_root, baseline_manifest_sha256)
+    after = _pinned_inventory(candidate_root, candidate_manifest_sha256)
+    if before["workflow_reference"]["workflow_id"] != after["workflow_reference"]["workflow_id"]:
+        raise ReleaseIntegrityError("Compare releases of the same saved workflow ID")
+    old, new = before["files"], after["files"]
+    added = sorted(new.keys() - old.keys())
+    removed = sorted(old.keys() - new.keys())
+    changed = sorted(name for name in old.keys() & new.keys() if old[name] != new[name])
+    unchanged = sorted(name for name in old.keys() & new.keys() if old[name] == new[name])
+    old_ref, new_ref = before["workflow_reference"], after["workflow_reference"]
+    direction = ("newer_revision" if new_ref["revision"] > old_ref["revision"]
+                 else "older_revision" if new_ref["revision"] < old_ref["revision"]
+                 else "same_revision_same_content" if new_ref == old_ref
+                 else "same_revision_different_content")
+    spec_changed = before["workflow_spec_sha256"] != after["workflow_spec_sha256"]
+    model_changed = before["process_model_sha256"] != after["process_model_sha256"]
+    return {
+        "format": "openworkgraph.customer-runtime-release-comparison.v1",
+        "baseline": {"manifest_sha256": baseline_manifest_sha256, "workflow_reference": old_ref,
+                     "workflow_spec_sha256": before["workflow_spec_sha256"],
+                     "process_model_sha256": before["process_model_sha256"]},
+        "candidate": {"manifest_sha256": candidate_manifest_sha256, "workflow_reference": new_ref,
+                      "workflow_spec_sha256": after["workflow_spec_sha256"],
+                      "process_model_sha256": after["process_model_sha256"]},
+        "revision_direction": direction,
+        "specification_bytes_changed": spec_changed,
+        "process_model_changed": model_changed,
+        "generated_file_changes": {
+            "added": [{"path": n, "candidate_sha256": new[n]} for n in added],
+            "removed": [{"path": n, "baseline_sha256": old[n]} for n in removed],
+            "changed": [{"path": n, "baseline_sha256": old[n], "candidate_sha256": new[n]} for n in changed],
+            "unchanged_count": len(unchanged),
+        },
+        "generated_files_changed": bool(added or removed or changed),
+        "requires_review_before_upgrade": bool(added or removed or changed or old_ref != new_ref),
+        "both_generated_inventories_verified_against_pins": True,
+        "customer_managed_files_compared": False,
+        "dependency_compatibility_verified": False,
+        "runtime_behavior_compatibility_verified": False,
+        "execution_authorized": False,
+        "independent_signature_verified": False,
+        "remote_deployment_verified": False,
+        "business_outcomes_verified": False,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Verify generated OWG runtime file integrity (offline, read-only)")
     parser.add_argument("--root", default=".", help="Extracted runtime project directory")
     parser.add_argument("--manifest-sha256", default=None,
                         help="SHA-256 pinned separately from this unsigned exported ZIP")
+    parser.add_argument("--compare-root", default=None, help="Candidate extracted release directory")
+    parser.add_argument("--compare-manifest-sha256", default=None,
+                        help="Separately pinned candidate manifest SHA-256")
     args = parser.parse_args(argv)
+    if args.compare_root is not None:
+        try:
+            comparison = compare_directories(args.root, args.compare_root,
+                                             args.manifest_sha256, args.compare_manifest_sha256)
+        except (ReleaseIntegrityError, OSError, ValueError, RecursionError) as exc:
+            print("Release comparison FAILED: " + (str(exc) if isinstance(exc, ReleaseIntegrityError)
+                                                   else "local release could not be checked"), file=sys.stderr)
+            return 2
+        print(json.dumps(comparison, sort_keys=True, indent=2, allow_nan=False))
+        return 0
+    if args.compare_manifest_sha256 is not None:
+        parser.error("--compare-manifest-sha256 requires --compare-root")
     try:
         result = verify_directory(args.root, args.manifest_sha256)
     except ReleaseIntegrityError as exc:
