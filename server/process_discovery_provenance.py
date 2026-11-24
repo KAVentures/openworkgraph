@@ -381,6 +381,14 @@ def rediscover_saved_selection(record, payload, *, retain_snapshot=False):
             if source_rows(conn, log_id) > MAX_SOURCE_ROWS:
                 raise workspace.EventLogWorkspaceError("Original source exceeds the rediscovery work budget")
             selection = saved["selection"]
+            from . import event_log_cohorts as cohorts
+            canonical = {"case_notion": selection["case_notion"],
+                         "cohort": cohorts.describe(cohorts.parse_cohort(selection["cohort"])),
+                         "settings": {"noise": float(selection["settings"]["noise"]),
+                                      "activities": float(selection["settings"]["activities"])}}
+            if digest(canonical) != saved["selection_sha256"]:
+                raise workspace.EventLogWorkspaceError("Original discovery selection no longer has the same definition")
+            selection = canonical
             notion = selection["case_notion"]
             if workspace._case_type(conn, log_id, notion) != notion:
                 raise workspace.EventLogWorkspaceError("Original case notion is unavailable")
