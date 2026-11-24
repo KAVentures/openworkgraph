@@ -243,6 +243,34 @@ class ConfigurationCases(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(secret,json.dumps(improved))
         self.assertFalse(self.tools.business_calls)
 
+    async def test_paired_audit_delta_rejects_mismatched_bases_and_matches_randomized_oracle(self):
+        from configure import _paired_audit_delta
+        from random import Random
+        rng=Random(20261124)
+        basis={'process_reference':{'workflow_id':'synthetic'},'spec_sha256':'s',
+               'catalog_sha256':'c','suite_sha256':'t'}
+        universe=[(code,activity) for code in ('pin','missing','type','auth') for activity in ('a','b',None)]
+        for _ in range(100):
+            old,new=(set(rng.sample(universe,rng.randrange(len(universe)+1))) for _ in range(2))
+            def make(findings):
+                return {**basis,'cases':[{'case_id':'case_1','routes':[{
+                    'alternative':1,'route_sha256':'route','static_contract_checks_clear':not findings,
+                    'requires_separate_human_resolution':False,'counts':{'actions':2},
+                    'findings':[{'code':code,'activity_id':activity} for code,activity in findings]}]}]}
+            a,b=make(old),make(new)
+            delta=_paired_audit_delta(a,b)['routes'][0]
+            self.assertEqual({(f['code'],f['activity_id']) for f in delta['findings_added']},new-old)
+            self.assertEqual({(f['code'],f['activity_id']) for f in delta['findings_removed']},old-new)
+            self.assertEqual(delta['retained_finding_count'],len(old&new))
+            self.assertEqual(delta['disposition'],{
+                (False,True):'improved',(True,False):'regressed',
+                (True,True):'unchanged_clear',(False,False):'unchanged_findings'}[not old,not new])
+        for field in basis:
+            with self.assertRaises(ImplementationError):
+                _paired_audit_delta(a,{**b,field:'different'})
+        with self.assertRaises(ImplementationError):
+            _paired_audit_delta(a,{**b,'cases':[]})
+
     async def test_paired_audit_detects_findings_replacement_without_binary_status_change(self):
         from configure import compare_binding_configurations
         spec,catalog,suite,bindings=self.reviewed_audit_fixture()
