@@ -11,6 +11,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal, localcontext
 from hashlib import sha256
 import json
+import math
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictFloat, ValidationError
@@ -103,7 +104,12 @@ def _ratio(n,d):
 
 
 def _display(value):
-    return None if value is None else round(float(value),8)
+    if value is None:
+        return None
+    number = float(value)
+    # Extremely small positive net values can imply payback outside the
+    # finite JSON float range. Keep a decimal string rather than infinity.
+    return round(number,8) if math.isfinite(number) else format(value,'.8E')
 
 
 def _period(row, entered, implemented):
