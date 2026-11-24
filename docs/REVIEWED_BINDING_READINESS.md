@@ -75,3 +75,36 @@ historical drift after repinning, disabled mappings, malformed or stale
 catalogs, missing case input, category coverage, and offline CLI replay.
 
 Related: [#370 R17](https://github.com/KAVentures/openworkgraph/issues/370).
+
+
+## Compare a baseline and candidate binding configuration
+
+Use the same explicitly reviewed suite and saved inspected catalog to isolate
+changes to customer bindings:
+
+    python configure.py --audit-bindings --catalog tool-catalog.json --cases reviewed-cases.json --baseline-bindings previous-bindings.json --bindings candidate-bindings.json --output paired-binding-review.json
+
+Both configurations are audited independently on every reviewed alternative.
+The comparison pins the exact specification, suite, catalog and two binding
+digests. It partitions alternatives into improved, regressed, unchanged-clear
+and unchanged-with-findings, and lists findings added and removed even when
+the binary static-check result is unchanged. Changes in separate human
+resolution requirements and contract counts are reported. The comparison
+identifies added, removed, modified and reordered retained activity bindings,
+as well as changes outside the binding list, without copying their values.
+
+Any binding configuration change requires review (exit 2), even if the
+candidate passes every static check. A different result predicate or argument
+mapping may change behavior without introducing a projected type error. The
+candidate's static review status is reported separately. Identical inputs
+with a clear audit may exit 0. The command cannot be combined with
+`--previous-catalog`, which is a separate catalog-drift comparison. No
+network or business-tool calls, execution authorization, automatic migration
+or runtime compatibility claim is made.
+
+The exact extracted route-delta function (2,605 characters, FNV-1a
+1907522087) passed 1,000 randomized report pairs covering 39,973 route
+comparisons and five mismatched-basis refusal checks in a local isolated
+test. This validates the delta algorithm, not end-to-end generated runtime
+integration. Additional generated-runtime and CLI regression tests are
+included; full exact-head CI is required.
