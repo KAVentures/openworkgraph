@@ -255,6 +255,18 @@ class ConfigurationCases(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ImplementationError):
                 write_reviewed_case_directory(root.parent/'oversized',oversized)
             self.assertFalse((root.parent/'oversized').exists())
+            real_open=os.open
+            for failure_index in range(1,6):
+                calls=[]
+                def fail_at(*args,**kwargs):
+                    calls.append(1)
+                    if len(calls)==failure_index:
+                        raise OSError('synthetic write failure')
+                    return real_open(*args,**kwargs)
+                failed=root.parent/('failed_'+str(failure_index))
+                with patch('os.open',side_effect=fail_at),self.assertRaises(OSError):
+                    write_reviewed_case_directory(failed,documents)
+                self.assertFalse(failed.exists())
         disabled=deepcopy(bindings)
         disabled['enabled']=False
         packet=prepare_reviewed_case(spec,suite,disabled,'case_1',1)
