@@ -7417,18 +7417,21 @@
     const box=section('Temporal profile');box.id='owgTemporal';
     box.appendChild(el('div','For every pair of activities in a case, even far apart, the usual time from the first to the second. Cases whose time is more than the chosen number of standard deviations from the usual one are listed: unusual timings to review, not errors.','muted'));
     const zeta=select('owgTemporalZeta',[['3','3 standard deviations'],['2','2 standard deviations'],['4','4 standard deviations'],['6','6 standard deviations']]);
+    const cutoff=input('owgTemporalBaselineCutoff','datetime-local');
     const run=button('Check timings','secondary');run.id='owgTemporalRun';
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Flag times beyond',zeta),run);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Flag times beyond',zeta),field('Baseline cutoff (UTC, optional)',cutoff),run);
     const statusLine=el('div',null,'muted');statusLine.id='owgTemporalStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgTemporalResults';
     const review=el('div');review.id='owgTemporalCases';
-    box.append(row,statusLine,out,review);
+    box.append(row,el('p','Set a UTC cutoff to learn from earlier cases and check later cases. Cases spanning the cutoff are excluded.','muted'),
+      statusLine,out,review);
     const generation=state.generation;
     let revision=0,selection=0;
-    zeta.onchange=()=>{
+    const reset=()=>{
       ++revision;run.disabled=false;out.replaceChildren();review.replaceChildren();
-      statusLine.textContent='Threshold changed. Check timings again.';
+      statusLine.textContent='Settings changed. Check timings again.';
     };
+    zeta.onchange=cutoff.oninput=reset;
     function reviewCases(url,pair){
       const report=revision,chosen=++selection;
       const heading=el('h4',pair?'Timing deviations from '+pair.from+' to '+pair.to:'All cases with unusual timings');heading.tabIndex=-1;
@@ -7470,17 +7473,32 @@
       const current=()=>generation===state.generation&&report===revision;
       run.disabled=true;statusLine.textContent='Checking…';out.replaceChildren();review.replaceChildren();
       try{
-        const url=logPath('temporal-profile',{zeta:zeta.value}),r=await getJSON(url);
+        const query={zeta:zeta.value};
+        if(cutoff.value)query.baseline_cutoff=cutoff.value+'Z';
+        const url=logPath('temporal-profile',query),r=await getJSON(url);
         if(!current())return;
-        if(!r.profile_pairs){statusLine.textContent='No pair of activities occurs often enough, with varying times, to check.';return;}
-        statusLine.textContent=r.deviating_cases.toLocaleString()+' of '+r.cases.toLocaleString()+' cases ('+Math.round((r.deviating_case_share||0)*100)+'%) have at least one unusual timing across '+r.profile_pairs+' checked pairs.'+(r.cases_before_filter?' Filtered from '+Number(r.cases_before_filter).toLocaleString()+' cases.':'');
+        const baseline=r.baseline;
+        if(baseline){
+          out.append(el('h4','Baseline and assessment coverage'),table(
+            ['Cutoff (UTC)','Baseline cases','Later cases','Cases spanning cutoff','Later cases with a checked pair','Later pair occurrences without a baseline'],
+            [[baseline.cutoff,baseline.baseline_cases,baseline.assessment_cases,baseline.crossing_cases,
+              baseline.assessment_cases_with_profile,baseline.assessment_pair_occurrences_without_profile]]
+          ));
+          const covered=baseline.assessment_cases_with_profile;
+          statusLine.textContent=covered?
+            r.deviating_cases.toLocaleString()+' of '+covered.toLocaleString()+' later cases with checked pairs have unusual timings.':
+            'No later cases have activity pairs with enough varied baseline timings to check.';
+        }else{
+          if(!r.profile_pairs){statusLine.textContent='No pair of activities occurs often enough, with varying times, to check.';return;}
+          statusLine.textContent=r.deviating_cases.toLocaleString()+' of '+r.cases.toLocaleString()+' cases ('+Math.round((r.deviating_case_share||0)*100)+'%) have at least one unusual timing across '+r.profile_pairs+' checked pairs.'+(r.cases_before_filter?' Filtered from '+Number(r.cases_before_filter).toLocaleString()+' cases.':'');
+        }
         const pairs=r.pairs.filter(p=>p.deviations).slice(0,15);
         if(pairs.length){out.appendChild(el('h4','Pairs most often outside their usual time'));
-          out.appendChild(table(['From','To','Usual time','Allowed range','Outside','Slower','Faster','Evidence'],pairs.map(p=>{
+          out.appendChild(table(['From','To','Usual time','Allowed range',...(baseline?['Baseline occurrences']:[]),'Outside','Slower','Faster','Evidence'],pairs.map(p=>{
             const inspect=button('Inspect cases','secondary');inspect.setAttribute('aria-label','Inspect timings from '+p.from+' to '+p.to);
             inspect.onclick=()=>reviewCases(url,p);
             return [p.from,p.to,duration(p.mean_seconds),duration(p.allowed_seconds[0])+'–'+duration(p.allowed_seconds[1]),
-              p.deviations+' of '+p.occurrences,String(p.slower),String(p.faster),inspect];
+              ...(baseline?[p.baseline_occurrences]:[]),p.deviations+' of '+p.occurrences,String(p.slower),String(p.faster),inspect];
           })));}
         if(r.top_cases.length){out.appendChild(el('h4','Cases with most unusual timings'));
           const all=button('Browse all deviating cases','secondary');all.onclick=()=>reviewCases(url);
