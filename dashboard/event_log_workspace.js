@@ -3548,6 +3548,7 @@
 
   // Discovered or edited object-centric model: arcs as Single/Variable/Removed choices.
   const ARC_CHOICES=[['single','Exactly one'],['variable','One or more'],['remove','Not involved']];
+  const OBJECT_MODEL_FILE_LIMIT=256*1024;
   function objectModelArcs(arcs,choices){
     return arcs.map((a,i)=>[a,choices[i]??(a.variable?'variable':'single')]).filter(([,c])=>c!=='remove')
       .map(([a,c])=>({activity:a.activity,object_type:a.object_type,variable:c==='variable'}));
@@ -3569,6 +3570,12 @@
     box.append(el('h4','Object process model'),el('div','Discover one lifecycle model per object type and which object types each activity involves, then check every object and event of the log against it. Edit the arcs to state what you expect. This checks lifecycles and arcs separately; use object rules to check that objects move together. Results describe recorded links, not verified business relationships.','muted'));
     const discover=button('Discover object model','secondary');discover.id='owgObjectModelDiscover';
     const check=button('Check object model');check.id='owgObjectModelCheck';check.disabled=true;
+    const save=button('Download object model','secondary');save.id='owgObjectModelDownload';save.disabled=true;
+    const file=input('owgObjectModelFile','file');file.accept='.json,application/json';
+    const use=button('Load previewed model','secondary');use.id='owgObjectModelLoad';use.disabled=true;
+    const portability=el('div',null,'row');portability.style.alignItems='end';
+    portability.append(discover,field('Preview object model JSON',file),use,save);
+    const importStatus=el('div',null,'muted');importStatus.setAttribute('role','status');
     const message=el('div',null,'muted');message.id='owgObjectModelStatus';message.setAttribute('role','status');
     const arcsOut=el('div');arcsOut.id='owgObjectModelArcs';
     const out=el('div');out.id='owgObjectModelResults';
@@ -3576,8 +3583,9 @@
     const eventList=el('div');eventList.id='owgObjectModelArcEvents';
     const objectList=el('div');objectList.id='owgObjectModelEventObjects';
     const lifecycle=el('div');lifecycle.id='owgObjectModelObjectEvents';
-    box.append(discover,arcsOut,check,message,out,eventList,objectList,lifecycle);
-    const generation=state.generation,logId=state.logId;let turn=0,model=null,selects=[];
+    box.append(portability,importStatus,arcsOut,check,message,out,eventList,objectList,lifecycle);
+    const generation=state.generation,logId=state.logId;
+    let turn=0,previewTurn=0,model=null,selects=[],candidate=null,busy=false;
     const current=t=>generation===state.generation&&box.isConnected&&t===turn;
     const base='/v1/event-logs/'+encodeURIComponent(logId);
     const path=p=>base+'/object-process-model/'+p;
@@ -3588,6 +3596,58 @@
     const clearLifecycle=()=>{++lifecycleTurn;lifecycle.replaceChildren();};
     const clearObjects=()=>{++objectTurn;objectList.replaceChildren();clearLifecycle();};
     const clearEvents=()=>{++eventTurn;eventList.replaceChildren();clearObjects();};
+    function clearCheck(){out.replaceChildren();issueList.replaceChildren();clearEvents();}
+    function syncModel(){
+      discover.disabled=busy;check.disabled=save.disabled=busy||!model;use.disabled=busy||!candidate;
+      selects.forEach(control=>{control.disabled=busy;});
+    }
+    const draft=()=>({...model,arcs:objectModelArcs(model.arcs,selects.map(s=>s.value))});
+    function drawDraft(next,measurements){
+      model=next;
+      const types=document.createElement('details');
+      types.append(el('summary','Lifecycle activities by object type'),table(['Object type','Activities'],model.types.map(t=>[
+        t.object_type,t.process_model.activities.filter(a=>a.kind===undefined||a.kind==='activity')
+          .map(a=>Object.hasOwn(t.activities,a.label)?t.activities[a.label]:a.label).join(', ')
+      ])));
+      selects=model.arcs.map((arc,i)=>{
+        const s=select('owgObjectModelArc'+i,ARC_CHOICES);s.value=arc.variable?'variable':'single';
+        s.setAttribute('aria-label',arc.activity+' involves '+arc.object_type);
+        s.onchange=()=>{++turn;clearCheck();message.textContent='Arc expectations updated.';};
+        return s;
+      });
+      arcsOut.replaceChildren(types,model.arcs.length?table(
+        ['Activity','Object type',...(measurements?['Objects per event (measured)']:[]),'Expected'],model.arcs.map((arc,i)=>{
+          const m=measurements?.find(x=>x.activity===arc.activity&&x.object_type===arc.object_type);
+          return [arc.activity,arc.object_type,...(measurements?[m?m.objects_per_event.min+'–'+m.objects_per_event.max+' in '+number(m.events_with_type)+' events':'—']:[]),selects[i]];
+        })):el('p','This model has no event–object arcs.','muted'));
+      syncModel();
+    }
+    file.onchange=async()=>{
+      const request=++previewTurn,selected=file.files[0];
+      const active=()=>generation===state.generation&&box.isConnected&&request===previewTurn;
+      candidate=null;importStatus.textContent='';syncModel();
+      if(!selected)return;
+      if(selected.size>OBJECT_MODEL_FILE_LIMIT){importStatus.textContent='Choose a model JSON file of at most 256 KiB.';return;}
+      importStatus.textContent='Checking model compatibility…';
+      try{
+        const result=await (await api(path('preview'),{method:'POST',headers:{'Content-Type':'application/json'},body:selected})).json();
+        if(!active())return;
+        candidate=result.model;
+        importStatus.textContent='Ready for '+result.log.name+' · '+candidate.types.map(t=>t.object_type).join(', ')+
+          ' · '+number(candidate.arcs.length)+' event–object arcs.';
+      }catch(error){if(active())importStatus.textContent=error.message;}
+      finally{if(active())syncModel();}
+    };
+    use.onclick=()=>{
+      ++turn;clearCheck();drawDraft(candidate);candidate=null;file.value='';syncModel();
+      importStatus.textContent='Loaded the reviewed definitions. Check the object model to run conformance.';
+      message.textContent='';
+    };
+    save.onclick=()=>{
+      const value=draft(),formatted=JSON.stringify(value,null,2);
+      const text=new TextEncoder().encode(formatted).length<=OBJECT_MODEL_FILE_LIMIT?formatted:JSON.stringify(value);
+      download('owg-object-process-model.json',text,'application/json');
+    };
     function pageReview(panel,titleText,url,spec,valid,render,reset){
       const heading=el('h4',titleText);heading.tabIndex=-1;
       const status=el('div');status.setAttribute('role','status');
@@ -3680,24 +3740,20 @@
       render();
     }
     discover.onclick=async()=>{
-      const t=++turn;discover.disabled=check.disabled=true;out.replaceChildren();issueList.replaceChildren();clearEvents();message.textContent='Discovering…';
+      const t=++turn;busy=true;syncModel();clearCheck();message.textContent='Discovering…';
       try{
         const r=await (await api(path('discovery'),{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();
         if(!current(t))return;
-        model=r.model;selects=model.arcs.map((a,i)=>{const s=select('owgObjectModelArc'+i,ARC_CHOICES);s.value=a.variable?'variable':'single';s.setAttribute('aria-label',a.activity+' involves '+a.object_type);return s;});
+        drawDraft(r.model,r.arc_measurements);
         const skipped=r.types_not_discovered.map(x=>x.object_type+': '+x.reason);
         message.textContent='Discovered '+model.types.length+' object type models with '+model.arcs.length+' arcs.'+(skipped.length?' Not discovered: '+skipped.join('; '):'');
-        arcsOut.replaceChildren(table(['Activity','Object type','Objects per event (measured)','Expected'],model.arcs.map((a,i)=>{
-          const m=r.arc_measurements.find(x=>x.activity===a.activity&&x.object_type===a.object_type);
-          return [a.activity,a.object_type,m?m.objects_per_event.min+'–'+m.objects_per_event.max+' in '+Number(m.events_with_type).toLocaleString()+' events':'—',selects[i]];})));
-        check.disabled=false;
       }catch(error){if(current(t))message.textContent=error.message;}
-      finally{if(current(t))discover.disabled=false;}
+      finally{if(current(t)){busy=false;syncModel();}}
     };
     check.onclick=async()=>{
-      const t=++turn;check.disabled=true;out.replaceChildren(el('div','Checking…','muted'));issueList.replaceChildren();clearEvents();
+      const t=++turn;busy=true;syncModel();clearCheck();out.append(el('div','Checking…','muted'));
       try{
-        const spec={model:{...model,arcs:objectModelArcs(model.arcs,selects.map(s=>s.value))}};
+        const spec={model:draft()};
         const r=await post(path('conformance'),spec);
         if(!current(t))return;
         const v=objectModelText(r);
@@ -3706,7 +3762,7 @@
           el('div',r.interpretation,'muted'),issueList);
         showIssues(t,spec,r.arcs.issues_by_arc);
       }catch(error){if(current(t))out.replaceChildren(el('div',error.message,'muted'));}
-      finally{if(current(t))check.disabled=false;}
+      finally{if(current(t)){busy=false;syncModel();}}
     };
     return box;
   }
