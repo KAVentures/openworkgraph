@@ -2670,6 +2670,11 @@ an attribute value or range both offer to become this filter in one click: "Filt
 and "Filter". They are offered only while no global filter is active, so they never silently
 replace one. They set exactly the finding's `attribute` or `attribute_range`.
 
+When importing a filter from another log, preview it first to check the matching
+case count, case notion, and activity labels unavailable in the destination.
+Importing then saves the reviewed definition with that log. The preview endpoint
+is `POST /v1/event-logs/{log_id}/filter-sets/import/preview`.
+
 **Saved filters.** A new dashboard filter remembers the selected case notion.
 Applying it restores that notion and the filter together. Older filters saved
 without a case notion use the current selection.
