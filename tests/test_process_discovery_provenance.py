@@ -398,7 +398,7 @@ def test_exact_selection_pages_reject_outside_case_and_stale_projection():
     assert changed["case_drift"]["unchanged"] == 2
     assert changed["case_drift"]["added"] == 0
     assert changed["case_drift"]["modified"] == 0
-    assert "c2" not in json.dumps(changed)
+    assert '"c2"' not in json.dumps(changed)
 
     workspace.delete_log(log)
     with pytest.raises(workspace.EventLogWorkspaceError, match="unavailable"):
@@ -450,7 +450,7 @@ def test_complete_case_drift_counts_and_filters_no_raw_removed_keys():
         "unchanged": 1, "original_cases": 3, "current_cases": 3, "removed_case_ids_retained": False}
     assert {row["case_id"]: row["comparison_status"] for row in result["cases"]} == {
         "c1": "modified", "c2": "unchanged", "c3": "added"}
-    assert "c0" not in json.dumps(result)
+    assert '"c0"' not in json.dumps(result)
     pin = result["current_effective_input"]["sha256"]
     for status, case in (("added", "c3"), ("modified", "c1"), ("unchanged", "c2")):
         filtered = provenance.inspect_selection(saved, {**basis, "case_status": status, "expected_projection_sha256": pin})
