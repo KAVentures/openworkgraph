@@ -6471,7 +6471,15 @@
     const graphHost=el('div');graphHost.id='owgHeuristicsGraph';
     const out=el('div');out.id='owgHeuristicsResults';
     const review=el('div');review.id='owgHeuristicsCaseReview';
-    box.append(row,statusLine,graphHost,out,review);
+    // Every arrow the miner kept, with its count, dependency measure and why it was kept.
+    let lastNet=null;
+    const exports=exportButtons('owgHeuristicsReport',()=>lastNet,r=>[
+      ['from','to','occurrences','dependency','kept_by'],
+      ...r.edges.map(e=>[e.from,e.to,e.transition_count,e.dependency===null?'':e.dependency,e.kept_by])]);
+    box.append(row,statusLine,graphHost,out,review,exports.node);
+    // New thresholds give a different net; the old one is no longer downloadable.
+    const staleNet=()=>{lastNet=null;exports.enable(false);};
+    row.addEventListener('change',staleNet);row.addEventListener('input',staleNet);
     const kind=k=>({and:'AND (parallel)',xor:'XOR (choice)',mixed:'Mixed'})[k]||k;
     const number=n=>Number(n).toLocaleString();
     let reviewTurn=0;
@@ -6511,7 +6519,7 @@
     }
     run.onclick=async()=>{
       const generation=state.generation;run.disabled=true;statusLine.textContent='Discovering…';graphHost.replaceChildren();out.replaceChildren();
-      ++reviewTurn;review.replaceChildren();
+      ++reviewTurn;review.replaceChildren();staleNet();
       try{
         if(!support.value||!support.validity.valid)throw new Error('Enter a whole number from 1 to 1,000,000 for minimum occurrences.');
         const settings={dependency_threshold:dep.value,and_threshold:and.value,loop_two_threshold:loop.value,
@@ -6545,6 +6553,7 @@
             evidenceButton(evidenceURL,group,activities,label)];
         })));
         out.append(more,el('div',r.note,'muted'));
+        lastNet=r;exports.enable(true);
       }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
       finally{run.disabled=false;}};
     return box;

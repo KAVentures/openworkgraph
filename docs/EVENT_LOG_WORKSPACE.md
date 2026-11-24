@@ -2944,6 +2944,12 @@ as the two literal labels for a transition or back-and-forth loop, or one for a 
 For a repeated activity, send a transition with the same label twice. Send the returned
 `next_after` as `after` to page by literal case key. The optional `limit` is 1–100 (default 50).
 
+**Download JSON** saves the net shown, including its settings, splits, joins and loops.
+**Download CSV** lists every arrow the miner kept, one per row: from, to, occurrences, dependency
+measure (empty for start and end arrows) and why it was kept (`threshold`, `best_connection`,
+`short_loop`, `start` or `end`). Changing a threshold disables the download until the net is
+discovered again.
+
 ## Activity profile
 
 **Activity profile** shows one activity from every side, like the activity views of Celonis and
