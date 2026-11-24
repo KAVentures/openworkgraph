@@ -152,7 +152,7 @@
   function sourceManifestMatches(report,logId,metadata){
     return !!report&&report.log_id===logId&&validLogId(logId)&&
       report.stored_independent_snapshot===true&&report.source_history_rechecked===false&&
-      report.snapshot_sha256===metadata?.snapshot_sha256&&
+      metadata?.manifest_available===true&&report.snapshot_sha256===metadata.snapshot_sha256&&
       report.case_count===metadata.original_case_count&&report.event_count===metadata.original_event_count&&
       report.stored_event_count===report.event_count&&matchingPreview(report,report.scope||{});
   }
@@ -173,9 +173,13 @@
   // expires and the source cannot be re-read.
   function renderSource(parent,log,isCurrent){
     const metadata=log?.observed_execution_snapshot;
-    if(!metadata||!validLogId(log.log_id)||!sha(metadata.snapshot_sha256))return;
+    if(!metadata||!validLogId(log.log_id))return;
     const section=el('section');section.id='owgObservedSnapshotSource';
     section.appendChild(el('h4','Original observed execution snapshot'));
+    if(metadata.manifest_available!==true||!sha(metadata.snapshot_sha256)){
+      section.appendChild(el('p','The original source manifest is unavailable. This independent saved dataset remains analysable; its original rows cannot be appended to. No source identity or outcome claim is available.','muted'));
+      parent.appendChild(section);return;
+    }
     section.appendChild(el('p',metadata.original_case_count+' inferred executions · '+metadata.original_event_count+
       ' original structural observations · '+metadata.timestamp_tie_groups+' timestamp tie groups. This independent saved log is not a verified business record. Its original event rows cannot be appended to.','muted'));
     const load=button('Show original execution references'),check=button('Recheck retained source');
