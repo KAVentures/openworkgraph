@@ -6417,7 +6417,10 @@
     const row=el('div',null,'row');row.style.alignItems='end';row.append(load,csv,field('Import glossary (CSV)',upload));
     const statusLine=el('div',null,'muted');statusLine.id='owgGlossaryStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgGlossaryResults';
-    box.append(row,statusLine,out);
+    const review=el('div');review.id='owgGlossaryImportReview';
+    const apply=button('Apply glossary import','secondary');apply.id='owgGlossaryApplyImport';apply.disabled=true;
+    let importTurn=0,candidate=null;
+    box.append(row,statusLine,review,apply,out);
     const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/activity-glossary';
     const levels=[['','Not set'],['manual','Manual'],['partly','Partly automated'],['automated','Automated'],['candidate','Automation candidate']];
     const summary=r=>r.coverage.described+' of '+r.coverage.activities_in_log+' activities described, covering '+Math.round(r.coverage.events_described_share*100)+'% of events.'+(r.automation.candidate?' '+r.automation.candidate+' marked as automation candidates.':'');
