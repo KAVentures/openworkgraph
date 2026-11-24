@@ -803,6 +803,45 @@ def prepare_reviewed_case(spec, suite, bindings, case_id, alternative, *, new_ca
             'customer-intent.json': intent, 'preparation-review.json': review}
 
 
+def prepare_batch_selection(spec, suite, bindings, batch, saved_review, selected_id, route_sha256):
+    """Recompute a retained triage report before materializing one selected route."""
+    if (not isinstance(selected_id, str) or not isinstance(route_sha256, str)
+            or not re.fullmatch(r'[0-9a-f]{64}', route_sha256)
+            or not isinstance(saved_review, dict)):
+        raise ImplementationError('Select an exact batch case and reviewed route digest')
+    current = shortlist_case_batch(spec, suite, bindings, batch)
+    if digest(current) != digest(saved_review):
+        raise ImplementationError('Batch review changed; regenerate the review before preparing a case')
+    matches = [row for row in current['cases'] if row['case_id'] == selected_id]
+    if len(matches) != 1:
+        raise ImplementationError('Choose one exact selected batch case')
+    row = matches[0]
+    if row['status'] in {'conflicting_exact_input_reviews', 'exact_input_requires_clarification'}:
+        raise ImplementationError('Resolve conflicting reviews or clarification before preparing a route')
+    if row['duplicate_selected_input']:
+        raise ImplementationError('Resolve duplicate selected inputs before preparing a batch case')
+    options = [option for option in row['routes'] if option['route_sha256'] == route_sha256]
+    if len(options) != 1:
+        raise ImplementationError('Choose a route from the exact selected case review')
+    option = options[0]
+    if not option['offline_requirements_clear']:
+        raise ImplementationError('Resolve offline implementation requirements before preparing a batch case')
+    if row['exact_input_review_count'] and not option['supported_by_all_exact_reviews']:
+        raise ImplementationError('Selected route conflicts with the exact input reviews')
+    selected = next(item['input'] for item in batch['cases'] if item['id'] == selected_id)
+    ref = option['reviewed_reference']
+    documents = prepare_reviewed_case(spec, suite, bindings, ref['case_id'], ref['alternative'], new_case=selected)
+    review = documents['preparation-review.json']
+    if (review['case_sha256'] != row['case_sha256']
+            or digest(documents['plan.json']['activity_ids']) != route_sha256
+            or not review['offline_requirements_clear']):
+        raise ImplementationError('Prepared case differs from the reviewed route or input')
+    review.update(batch_review_sha256=digest(current), selected_batch_sha256=digest(batch),
+                  selected_batch_case_id=selected_id, selected_route_sha256=route_sha256,
+                  batch_review_recomputed=True)
+    return documents
+
+
 def write_reviewed_case_directory(path, documents):
     """Create only a new private directory with executor-loadable JSON files."""
     names = {'case.json', 'plan.json', 'bindings.json', 'customer-intent.json', 'preparation-review.json'}
@@ -853,12 +892,15 @@ def main():
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--inspect-tools',action='store_true')
     mode.add_argument('--propose-bindings',action='store_true')
+    mode.add_argument('--prepare-batch-selection',action='store_true',help='Prepare one explicitly selected route from an exact recomputed batch review')
     mode.add_argument('--shortlist-case-batch',action='store_true',help='Triage selected local cases against reviewed routes offline')
     mode.add_argument('--shortlist-reviewed-routes',action='store_true',help='Compare reviewed route alternatives for a selected new case offline')
     mode.add_argument('--prepare-reviewed-case',action='store_true',help='Materialize one reviewed route as local executor inputs and disabled intent')
     mode.add_argument('--audit-bindings',action='store_true',help='Offline reviewed-case binding contract audit')
     parser.add_argument('--tool-server-url');parser.add_argument('--catalog');parser.add_argument('--case');parser.add_argument('--model')
     parser.add_argument('--cases');parser.add_argument('--bindings')
+    parser.add_argument('--batch-review',help='Saved batch shortlist report for exact recomputation')
+    parser.add_argument('--route-sha256',help='Exact selected route digest from the batch review')
     parser.add_argument('--case-batch',help='Explicitly authorized local case batch for offline triage')
     parser.add_argument('--case-id');parser.add_argument('--alternative',type=int)
     parser.add_argument('--new-case',help='Optional new authorized local case to prepare using the explicitly selected reviewed route; requires separate case-specific review')
@@ -874,10 +916,25 @@ def main():
         parser.error('--previous-catalog requires --audit-bindings')
     if args.baseline_bindings and (not args.audit_bindings or args.previous_catalog):
         parser.error('--baseline-bindings requires --audit-bindings without --previous-catalog')
-    if not args.prepare_reviewed_case and (args.case_id is not None or args.alternative is not None or args.new_case is not None or args.confirm_retain_case_inputs):
+    if not (args.prepare_reviewed_case or args.prepare_batch_selection) and (args.case_id is not None or args.alternative is not None or args.new_case is not None or args.confirm_retain_case_inputs):
         parser.error('Case selection and retention confirmation require --prepare-reviewed-case')
-    if args.case_batch and not args.shortlist_case_batch:
-        parser.error('--case-batch requires --shortlist-case-batch')
+    if args.case_batch and not (args.shortlist_case_batch or args.prepare_batch_selection):
+        parser.error('--case-batch requires batch triage or batch preparation')
+    if not args.prepare_batch_selection and (args.batch_review is not None or args.route_sha256 is not None):
+        parser.error('Batch review and route digest require --prepare-batch-selection')
+    if args.prepare_batch_selection:
+        if (not all((args.cases,args.bindings,args.case_batch,args.batch_review,args.case_id,
+                     args.route_sha256,args.confirm_retain_case_inputs))
+                or any((args.catalog,args.case,args.model,args.tool_server_url,args.new_case))
+                or args.alternative is not None):
+            parser.error('Choose an exact batch review, case ID, route digest and explicit local input retention')
+        documents = prepare_batch_selection(spec,load_object(args.cases,limit=262144),
+                    load_object(args.bindings),load_object(args.case_batch,limit=262144),
+                    load_object(args.batch_review,limit=2*1024*1024),args.case_id,args.route_sha256)
+        write_reviewed_case_directory(args.output,documents)
+        return {'mode':'offline_batch_case_preparation','output_written':True,
+                'batch_review_recomputed':True,'review_required':True,
+                'execution_authorized':False,'business_tools_called':False}
     if args.shortlist_case_batch:
         if not all((args.cases,args.bindings,args.case_batch)) or any((args.catalog,args.case,args.model,args.tool_server_url)):
             parser.error('Choose a reviewed suite, bindings and a selected local case batch')
