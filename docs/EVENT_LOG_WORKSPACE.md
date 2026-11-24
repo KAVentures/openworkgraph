@@ -3365,7 +3365,7 @@ The local rework report offers explicit case-evidence links for repeated activit
 
 ### Exact completion labels in next-activity estimates
 
-Under **Next activity in open cases**, add each activity that marks a completed
+Under **Next activity in open cases** and **Predict open cases**, add each activity that marks a completed
 case separately. The labels are matched exactly, so commas and leading or
 trailing spaces are part of the activity name. Remove a label to revise the
-selection; predictions are cleared until rerun with the new selection.
+selection; predictions and monitoring results are cleared until rerun with the new selection. Prediction snapshots retain the selection they were created with.
