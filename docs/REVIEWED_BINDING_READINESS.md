@@ -262,3 +262,37 @@ Local isolated validation: the exact extracted selection function
 of conflict, duplicate, static clearance, exact review, route support,
 report alteration and missing-route flags, with simulated preparation
 dependencies. Full generated-runtime and CLI tests remain pending CI.
+
+
+## Prepare a selected queue of agent implementation inputs
+
+    python configure.py --prepare-execution-queue --cases reviewed-cases.json --bindings bindings.json --case-batch selected-cases.json --batch-review batch-review.json --queue-selection selection.json --confirm-retain-case-inputs --output prepared-queue
+
+The selection document has format `openworkgraph.execution-queue-selection.v1`
+and a selections array of 1–20 objects with case_id and route_sha256.
+The command recomputes the bounded batch review once and prepares only
+the explicit selections. Every case must satisfy the single-selection
+guards. Shared declared idempotency argument keys (even across different
+tools) and identical declared outcome resource references across selected
+cases cause refusal. This is a conservative local check, not proof of
+provider collision freedom or distinct business records. Review different
+operations on the same resource separately. Provider-idempotent operations
+without argument keys have no comparable declared write key.
+
+Each selected case has a private local subdirectory with the existing
+executor inputs and disabled intent. The queue-review.json is written last
+and pins the selection, recomputed review, case digests and preparation
+receipts. No existing output is overwritten. Failed writes attempt cleanup
+of newly created files only; interrupted or externally modified directories
+without a complete receipt must not be treated as completed queues. This is
+not a transactional filesystem or a batch executor. Each intent still
+requires separate human review and authorization using the existing executor.
+No automatic execution, model call or provider contact occurs.
+
+Local validation used the exact extracted collision checker (434 characters,
+FNV-1a 612328262), queue writer (1,533 characters, FNV-1a 1895110924)
+and existing case writer (1,596 characters, FNV-1a 352013743). All 1,000
+randomized collision comparisons against a pairwise oracle, 30 real
+filesystem round trips, 30 overwrite refusals, 16 injected file-open
+failures and three invalid package refusals passed. Full generated-runtime
+preparation and CLI regression tests are committed but not run locally.
