@@ -341,7 +341,15 @@ const path=require('node:path');
    await page.locator('#owgConceptDriftRun').click();
    await page.locator('#owgConceptDriftStatus').filter({hasText:'0 change points among 2 window boundaries tested.'}).waitFor();
    assert.match(await page.locator('#owgConceptDriftResults').textContent(),/cases 1–20\s*20/);
-   await page.getByRole('button',{name:'Inspect sampled cases in cases 1–20',exact:true}).click();
+   const [driftJson]=await Promise.all([page.waitForEvent('download'),page.locator('#owgConceptDriftExportJson').click()]);
+   const driftReport=JSON.parse(await fs.readFile(await driftJson.path(),'utf8'));
+   assert.equal(driftReport.windows[0].sampled_cases_with_paths,20);
+   assert.match(driftReport.windows[0].sample_sha256,/^[a-f0-9]{64}$/);
+   const [driftCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgConceptDriftExportCsv').click()]);
+   assert.match(await fs.readFile(await driftCsv.path(),'utf8'),/Sampled cases with paths/);
+   const [pageRequest]=await Promise.all([page.waitForRequest(r=>new URL(r.url()).pathname.endsWith('/drift/cases')),
+     page.getByRole('button',{name:'Inspect sampled cases in cases 1–20',exact:true}).click()]);
+   assert.equal(pageRequest.postDataJSON().expected_sample_sha256,driftReport.windows[0].sample_sha256);
    await page.locator('#owgConceptDriftCaseReview').getByText('20 matches in 20 sampled cases (20 cases in the window). Showing 20.').waitFor();
    assert.equal(await page.locator('#owgConceptDriftCaseReview tbody tr').count(),20);
    // Save a reviewed graph through the actual catalog and pin a historical revision.

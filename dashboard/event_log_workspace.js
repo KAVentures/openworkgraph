@@ -6965,9 +6965,10 @@
     }
     windowKind.onchange=()=>{show(casesField,windowKind.value==='cases');reset();};
     perWindow.oninput=reset;
-    function reviewWindow(url,index,label,path){
+    function reviewWindow(url,index,reportedWindow,path){
       const report=revision,chosen=++selection;
       const current=()=>generation===state.generation&&report===revision&&chosen===selection;
+      const label=reportedWindow.window;
       const title=el('h4',label+(path?' · '+path.path:''));title.tabIndex=-1;
       const message=el('div');message.setAttribute('role','status');
       const rows=el('div'),nav=el('div',null,'row');
@@ -6975,16 +6976,17 @@
       nav.append(prev,next);review.replaceChildren(title,message,rows,nav);title.focus();
       const cursors=[null];let page=0,more=null;
       async function load(at){
-        prev.disabled=next.disabled=true;message.textContent='Loading the current sample…';
+        prev.disabled=next.disabled=true;rows.replaceChildren();message.textContent='Loading sampled cases…';
+        let loaded=false;
         try{
           const endpoint=new URL(url,window.location.origin);endpoint.pathname+='/cases';
-          const spec={window_index:index,expected_window:label};
+          const spec={window_index:index,expected_window:label,expected_sample_sha256:reportedWindow.sample_sha256};
           if(path){spec.source=path.from;spec.destination=path.to;}
           if(cursors[at]!==null)spec.after=cursors[at];
           const result=await (await api(endpoint.pathname+endpoint.search,{method:'POST',
             headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
           if(!current())return;
-          page=at;more=result.next_after;
+          page=at;more=result.next_after;loaded=true;
           const n=value=>Number(value).toLocaleString();
           message.textContent=n(result.matching_cases)+' matches in '+n(result.sampled_cases)+' sampled cases ('+n(result.window_cases)+' cases in the window). Showing '+result.cases.length+'.';
           rows.replaceChildren(result.cases.length?table(['Case','Observed duration','Evidence'],result.cases.map(item=>{
@@ -6993,7 +6995,7 @@
             return [item.case_id,duration(item.duration_seconds),open];
           })):el('div','No sampled cases match.','muted'));
         }catch(error){if(current())message.textContent=error.message;}
-        finally{if(current()){prev.disabled=page===0;next.disabled=more===null;}}
+        finally{if(current()){prev.disabled=!loaded||page===0;next.disabled=!loaded||more===null;}}
       }
       prev.onclick=()=>load(page-1);next.onclick=()=>{cursors[page+1]=more;load(page+1);};
       load(0);
@@ -7007,18 +7009,37 @@
         if(windowKind.value==='cases'){const n=Math.round(Number(perWindow.value));if(!(n>=20))throw new Error('Use at least 20 cases per window.');params.window_cases=String(n);params.min_cases=String(Math.max(10,Math.min(30,n)));}
         const url=logPath('drift',params),r=await getJSON(url);
         if(!current())return;
-        statusLine.textContent=r.change_points.length+' change point'+(r.change_points.length===1?'':'s')+' among '+r.boundaries_tested+' window boundaries tested'+(r.boundaries_skipped_small_windows?' ('+r.boundaries_skipped_small_windows+' skipped because a window had fewer than '+r.settings.min_cases+' cases)':'')+'.';
-        const byAfter=Object.fromEntries(r.boundaries.map(b=>[b.after,b]));
+        const omitted=r.boundaries_not_tested||[];
+        statusLine.textContent=r.change_points.length+' change point'+(r.change_points.length===1?'':'s')+' among '+r.boundaries_tested+' window boundaries tested'+(omitted.length?' ('+omitted.length+' skipped)':'')+'.';
+        const byAfter=new Map(r.boundaries.map(b=>[b.after,b]));
+        const skipped=new Map(omitted.map(b=>[b.after,b]));
+        const reason=b=>({no_directly_follows_paths:'No sampled cases with a directly-follows path',insufficient_path_support:'Too few sampled cases with paths'})[b.reason]||'Too few sampled cases';
+        const insufficient=b=>b.insufficient_side||b.missing_paths_side||b.insufficient_path_support_side||'';
+        const sideLabel={both:'both windows',before:'previous window',after:'this window'};
         const p=v=>v<0.0001?'< 0.0001':v.toFixed(4);
         const windows=new Map(r.windows.map((w,index)=>[w.window,index]));
         const inspect=(label,path)=>{
           const open=button('Inspect sampled cases','secondary');
           open.setAttribute('aria-label','Inspect sampled cases in '+label+(path?' with '+path.path:''));
-          open.onclick=()=>reviewWindow(url,windows.get(label),label,path);
+          const index=windows.get(label);
+          open.onclick=()=>reviewWindow(url,index,r.windows[index],path);
           return open;
         };
-        out.appendChild(table(['Window','Cases','Sampled cases','Median case time','Change from previous window','Evidence'],r.windows.map(w=>{const b=byAfter[w.window];
-          return [w.window,Number(w.cases).toLocaleString(),Number(w.sampled_cases).toLocaleString(),duration(w.median_case_duration_seconds),b?(b.change_point?'Change point · ':'')+'distance '+b.distance.toFixed(3)+', p '+p(b.p_value):'—',inspect(w.window)];})));
+        const exports=exportButtons('owgConceptDriftExport',()=>r,()=>[
+          ['Log ID','Case notion','Previous window','Window','Cases','Sampled cases','Sampled cases with paths','Median case duration (seconds)','Boundary status','Reason skipped','Insufficient side','Distance','p value','Sample digest'],
+          ...r.windows.map((w,i)=>{
+            const b=byAfter.get(w.window),skip=skipped.get(w.window);
+            return [r.log.log_id,r.case_notion,r.windows[i-1]?.window??'',w.window,w.cases,w.sampled_cases,w.sampled_cases_with_paths,
+              w.median_case_duration_seconds,b?(b.change_point?'Change point':'Tested'):skip?'Skipped':'',skip?reason(skip):'',skip?insufficient(skip):'',b?.distance,b?.p_value,w.sample_sha256];
+          })]);
+        exports.enable(true);
+        out.append(exports.node,el('p',r.log.name+' · '+r.case_notion+'. Boundaries require at least '+r.settings.min_cases+' sampled cases with paths on each side.','muted'),
+          table(['Window','Cases','Sampled cases','Sampled cases with paths','Median case time','Change from previous window','Evidence'],r.windows.map(w=>{
+            const b=byAfter.get(w.window),skip=skipped.get(w.window);
+            const side=skip?sideLabel[insufficient(skip)]:'';
+            const boundary=b?(b.change_point?'Change point · ':'')+'distance '+b.distance.toFixed(3)+', p '+p(b.p_value):skip?'Skipped · '+reason(skip)+(side?' ('+side+')':''):'—';
+            return [w.window,Number(w.cases).toLocaleString(),Number(w.sampled_cases).toLocaleString(),Number(w.sampled_cases_with_paths).toLocaleString(),duration(w.median_case_duration_seconds),boundary,inspect(w.window)];
+          })));
         r.change_points.forEach(c=>{
           out.appendChild(el('h4','Paths that moved most: '+c.before+' → '+c.after));
           out.appendChild(table(['Path','Sampled share before','Sampled share after','Before cases','After cases'],c.paths_that_moved.map(m=>[

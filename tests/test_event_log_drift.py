@@ -10,6 +10,8 @@ import sys
 
 import pytest
 
+from server import event_log_activity_mappings as mappings
+from server import event_log_case_tags as case_tags
 from server import event_log_drift as drift
 from server import event_log_workspace as workspace
 
@@ -60,6 +62,7 @@ def test_evidence_matches_the_sample_and_path_share(monkeypatch, window):
     assert len(report["change_points"]) == 1
     label = report["windows"][1]["window"]
     query = {"window_index": 1, "window": window, "window_size": 60, "expected_window": label,
+             "expected_sample_sha256": report["windows"][1]["sample_sha256"],
              "source": "Receive", "destination": "Approve", "limit": 7}
     page = drift.window_cases(log, **query)
     moved = next(path for path in report["change_points"][0]["paths_that_moved"] if path["path"] == "Receive → Approve")
@@ -76,6 +79,46 @@ def test_evidence_matches_the_sample_and_path_share(monkeypatch, window):
     assert all(key.startswith("m1c") and int(key.split("c")[1]) % 4 != 0 for key in keys)
     with pytest.raises(workspace.EventLogWorkspaceError, match="window changed"):
         drift.window_cases(log, **{**query, "expected_window": "stale"})
+
+
+def test_equal_window_labels_require_a_new_pin_after_append_or_mapping_change():
+    log = _log(months=1)
+    [window] = drift.drift(log)["windows"]
+    query = {"window_index": 0, "expected_window": window["window"],
+             "expected_sample_sha256": window["sample_sha256"], "limit": 1}
+    first = drift.window_cases(log, **query)
+    assert first["sample_sha256"] == window["sample_sha256"]
+    workspace.append_log(log, BytesIO(b"case,activity,time\nm0c0,Escalate,2024-01-01T01:15:00Z\n"),
+                         source_format="csv", mapping={"case_column": "case", "activity_column": "activity",
+                                                       "timestamp_column": "time"})
+    with pytest.raises(workspace.EventLogWorkspaceError, match="drift sample changed"):
+        drift.window_cases(log, **query, after=first["next_after"])
+    [appended] = drift.drift(log)["windows"]
+    assert appended["window"] == window["window"] and appended["cases"] == window["cases"]
+    query["expected_sample_sha256"] = appended["sample_sha256"]
+    assert drift.window_cases(log, **query)["sample_sha256"] == appended["sample_sha256"]
+
+    mapping = mappings.create(log, {"name": "Rename review", "groups": [{"label": "Review", "activities": ["Check"]}]})
+    mappings.apply_mapping(log, mapping["mapping_id"])
+    with pytest.raises(workspace.EventLogWorkspaceError, match="drift sample changed"):
+        drift.window_cases(log, **query)
+    assert drift.window_cases(log, window_index=0)["window"] == window["window"]
+
+
+def test_changed_tag_membership_invalidates_a_pin_even_when_window_counts_match():
+    log = _log(months=1)
+    case_tags.add(log, {"tag": "reviewed", "case_ids": ["m0c1"]})
+    cohort = {"tag": "reviewed"}
+    [before] = drift.drift(log, cohort=cohort)["windows"]
+    case_tags.remove(log, {"tag": "reviewed", "case_ids": ["m0c1"]})
+    case_tags.add(log, {"tag": "reviewed", "case_ids": ["m0c2"]})
+    [after] = drift.drift(log, cohort=cohort)["windows"]
+    assert {k: v for k, v in before.items() if k != "sample_sha256"} == {
+        k: v for k, v in after.items() if k != "sample_sha256"}
+    with pytest.raises(workspace.EventLogWorkspaceError, match="drift sample changed"):
+        drift.window_cases(log, window_index=0, cohort=cohort, expected_sample_sha256=before["sample_sha256"])
+    page = drift.window_cases(log, window_index=0, cohort=cohort, expected_sample_sha256=after["sample_sha256"])
+    assert [c["case_id"] for c in page["cases"]] == ["m0c2"]
 
 
 def test_activity_names_containing_arrow_do_not_collide_as_drift_edges():
@@ -429,11 +472,13 @@ with TestClient(app) as client:
     assert sparse.json()["boundaries_not_tested"][0]["reason"] == "insufficient_path_support"
     assert sparse.json()["boundaries_not_tested"][0]["insufficient_path_support_side"] == "before"
     assert client.get(path + "?window=year", headers=headers).status_code == 422
-    spec = {"window_index": 0, "limit": 1}
+    pin = result.json()["windows"][0]["sample_sha256"]
+    spec = {"window_index": 0, "limit": 1, "expected_sample_sha256": pin}
     assert client.post(path + "/cases", json=spec).status_code in (401, 403)
     page = client.post(path + "/cases", json=spec, headers=headers)
     assert page.status_code == 200 and page.headers["cache-control"] == "no-store", page.text
-    assert len(page.json()["cases"]) == 1
+    assert len(page.json()["cases"]) == 1 and page.json()["sample_sha256"] == pin
+    assert client.post(path + "/cases", json={**spec, "expected_sample_sha256": "bad"}, headers=headers).status_code == 422
     assert client.post(path + "/cases", json={"window_index": 0, "source": "A"}, headers=headers).status_code == 422
     assert client.post(path + "/cases", json={"window_index": True}, headers=headers).status_code == 422
 '''

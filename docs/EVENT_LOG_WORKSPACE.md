@@ -2293,7 +2293,8 @@ drift detection. It takes the case filters and:
 
 - `window`: `month` (default), `week`, or `cases` with `window_cases` (20–100,000) cases per
   window, grouped by when each case started.
-- `min_cases` (default 30): a boundary is only tested when both windows have at least this many cases.
+- `min_cases` (default 30) requires at least this many sampled cases with directly-follows paths on
+  each side of a tested boundary.
 
 Each window's behaviour is its directly-follows profile: for every path A → B, how many of the
 window's cases contain it (up to 600 sampled cases per window). Adjacent windows are compared with
@@ -2313,9 +2314,14 @@ Use **Inspect sampled cases** on a window to review its analysis sample. The bef
 actions on a changed path select cases containing that exact adjacent pair within each sample.
 Open a case to see its full event history. The dashboard-only
 `POST /v1/event-logs/{log_id}/drift/cases` reuses the window settings and case filter in the query.
-Send the zero-based `window_index` in the body and optionally `expected_window`, `source` and
-`destination` together, `after`, or `limit` (1–100, default 50). It recomputes the sample from
-the retained log. A changed window label asks for a fresh analysis.
+Send the zero-based `window_index` in the body. Pass the report's `sample_sha256` as
+`expected_sample_sha256` on every page to review the same sample, and use `next_after` as `after`
+for the next page. Other optional fields are `expected_window`, `source` and `destination`
+together, and `limit` (1–100, default 50). An append or changes to the case selection, activity
+mapping or hidden activities can require a fresh analysis even when the window label is the same.
+
+Download the full drift report as JSON or the per-window summary as CSV. The dashboard and CSV
+show sample sizes, the number of sampled cases with paths, and reasons for skipped boundaries.
 
 ## Data quality and mapping reports
 
