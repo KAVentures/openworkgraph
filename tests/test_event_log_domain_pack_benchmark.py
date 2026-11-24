@@ -56,7 +56,11 @@ def test_role_aligned_different_labels_same_data_produce_zero_changes():
         assert row["comparable"]
         assert all(x in (None,0) for x in row["changes"].values())
     for row in result["case_rules"]:
-        assert row["changes"]["violation_rate_change"] in (None,0)
+        if row["comparable"]:
+            assert row["changes"]["violation_rate_change"] == 0
+        else:
+            assert row["not_comparable_reason"] in ("no_activated_cases","no_decided_cases")
+            assert row["changes"] is None or row["changes"]["violation_rate_change"] is None
     assert "INC0003" not in json.dumps(result)
     assert not result["raw_case_identifiers_returned"]
     assert not result["causal_effect_estimated"]
@@ -68,7 +72,7 @@ def test_unmapped_optional_definition_has_no_delta():
     del spec["mapping"]["activities"]["reopen"]
     packs.install(b,PACK,spec)
     result=compare(a,b,preview(a,b))
-    omitted=[r for r in result["case_rules"]+result["metrics"] if not r["comparable"]]
+    omitted=[r for r in result["case_rules"]+result["metrics"] if r["not_comparable_reason"]=="unmapped_definition"]
     assert omitted
     assert all(r["changes"] is None and r["not_comparable_reason"]=="unmapped_definition" for r in omitted)
     assert not result["object_models"]["same_mapped_roles"]
