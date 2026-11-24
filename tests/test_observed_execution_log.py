@@ -274,3 +274,50 @@ def test_observed_snapshot_lineage_reaches_existing_model_discovery(tmp_path, mo
     assert A not in json.dumps(origins) and B not in json.dumps(origins)
     workspace.delete_log(log)
     assert provenance.origins(record)[0]["status"] == "unavailable"
+
+
+def test_snapshot_ui_identity_and_recheck_model():
+    import shutil
+    import subprocess
+    from pathlib import Path
+    if not shutil.which("node"):
+        pytest.skip("Node.js unavailable")
+    script = r"""
+const assert=require('node:assert/strict');
+const fs=require('node:fs'),vm=require('node:vm');
+const context={window:{}};
+vm.runInNewContext(fs.readFileSync('dashboard/observed_execution_log.js','utf8'),context);
+const m=context.window.__owgObservedExecutionLogModel;
+const id='execution:aaaaaaaaaaaaaaaa',logId='log_bbbbbbbbbbbbbbbb',digest='a'.repeat(64);
+const selection={execution_ids:[id],since:'2026-11-01T00:00:00Z'};
+const report={format:'openworkgraph.observed-execution-log.v1',snapshot_sha256:digest,
+  scope:{...selection,since:'2026-11-01T00:00:00.000000+00:00',until:null},
+  case_count:1,event_count:2,cases:[{execution_id:id,actor_kind:'human',events:2,timestamp_tie_groups:0}],
+  timestamp_tie_groups:0,business_case_identity_verified:false,business_outcomes_verified:false,
+  capture_complete:false,sensor_observations_not_deduplicated_actions:true,source_limit_reached:false,
+  log_id:logId,stored_independent_snapshot:true,source_history_rechecked:false,stored_event_count:2};
+const metadata={manifest_available:true,snapshot_sha256:digest,original_case_count:1,original_event_count:2};
+assert(m.matchingPreview(report,selection));
+assert(m.matchingPreview(report,{...selection,projection:'actions'}));
+assert(!m.matchingPreview(report,{...selection,projection:'actions_and_navigation'}));
+assert(m.matchingPreview({...report,scope:{...report.scope,projection:'actions_and_navigation'}},
+  {...selection,projection:'actions_and_navigation'}));
+assert(m.sourceManifestMatches(report,logId,metadata));
+assert(!m.sourceManifestMatches({...report,stored_event_count:3},logId,metadata));
+assert(!m.sourceManifestMatches(report,logId,{...metadata,manifest_available:false}));
+assert(!m.sourceManifestMatches(report,'log_cccccccccccccccc',metadata));
+const check={format:'openworkgraph.observed-execution-log-recheck.v1',log_id:logId,
+  original_snapshot_sha256:digest,current_projection_sha256:digest,checked_at:'2026-11-24T06:00:00Z',
+  status:'projection_matches',stored_log_changed:false,capture_complete:false,
+  business_case_identity_verified:false,business_outcomes_verified:false};
+assert(m.recheckMatches(check,logId,digest));
+assert(!m.recheckMatches({...check,current_projection_sha256:null},logId,digest));
+assert(m.recheckMatches({...check,status:'projection_changed',current_projection_sha256:'b'.repeat(64)},logId,digest));
+assert(m.recheckMatches({...check,status:'source_unavailable',current_projection_sha256:null},logId,digest));
+assert(!m.recheckMatches({...check,status:'source_unavailable'},logId,digest));
+assert(!m.recheckMatches({...check,business_outcomes_verified:true},logId,digest));
+console.log('snapshot model checks passed');
+"""
+    root = Path(__file__).resolve().parents[1]
+    done = subprocess.run(["node", "-e", script], cwd=root, capture_output=True, text=True, timeout=20)
+    assert done.returncode == 0, done.stderr
