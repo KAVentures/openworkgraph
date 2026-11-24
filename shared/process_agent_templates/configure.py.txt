@@ -600,11 +600,13 @@ def compare_binding_configurations(spec, catalog, suite, baseline, candidate):
             'case_values_and_tool_arguments_included': False}
 
 
-def prepare_reviewed_case(spec, suite, bindings, case_id, alternative):
+def prepare_reviewed_case(spec, suite, bindings, case_id, alternative, *, new_case=None):
     """Materialize one explicitly selected human-reviewed route for execute.py.
 
     No model is needed to reproduce an already reviewed route. The selected
     input remains local; the generated execution intent is always disabled.
+    Optionally reuse only the reviewed route with a separately selected new
+    case. The original case review does not establish applicability to it.
     """
     from evaluate import validate_suite
     from execute import prepare, review_template
@@ -619,12 +621,19 @@ def prepare_reviewed_case(spec, suite, bindings, case_id, alternative):
     plan = {'revision': spec['revision'], 'content_sha256': spec['content_sha256'],
             'status': 'proposal', 'activity_ids': routes[alternative - 1],
             'missing_business_inputs': []}
-    prepared = prepare(spec, plan, case['input'], bindings)
-    intent = review_template(spec, prepared, case['input'], bindings)
+    selected = case['input'] if new_case is None else new_case
+    if not isinstance(selected, dict) or len(json.dumps(selected, allow_nan=False).encode('utf-8')) > 65536:
+        raise ImplementationError('Select a bounded JSON object for the execution case')
+    prepared = prepare(spec, plan, selected, bindings)
+    intent = review_template(spec, prepared, selected, bindings)
     review = {'format': 'openworkgraph.prepared-reviewed-case.v1',
               'process_reference': reference(spec), 'spec_sha256': digest(spec),
               'suite_sha256': digest(suite), 'case_id': case_id, 'alternative': alternative,
-              'case_sha256': digest(case['input']), 'plan_sha256': digest(plan),
+              'case_sha256': digest(selected), 'plan_sha256': digest(plan),
+              'reviewed_reference_case_sha256': digest(case['input']),
+              'route_reused_for_new_case': new_case is not None,
+              'selected_input_is_reviewed_reference_case': new_case is None,
+              'new_case_route_applicability_established': False,
               'bindings_sha256': digest(bindings), 'disabled_intent_sha256': digest(intent),
               'requirements': prepared['requirements'],
               'human_activity_ids': prepared['human_activity_ids'],
@@ -637,7 +646,7 @@ def prepare_reviewed_case(spec, suite, bindings, case_id, alternative):
               'review_required': True, 'execution_authorized': False,
               'business_tools_called': False, 'model_called': False,
               'provider_permissions_verified': False, 'business_outcomes_verified': False}
-    return {'case.json': case['input'], 'plan.json': plan, 'bindings.json': bindings,
+    return {'case.json': selected, 'plan.json': plan, 'bindings.json': bindings,
             'customer-intent.json': intent, 'preparation-review.json': review}
 
 
@@ -696,6 +705,7 @@ def main():
     parser.add_argument('--tool-server-url');parser.add_argument('--catalog');parser.add_argument('--case');parser.add_argument('--model')
     parser.add_argument('--cases');parser.add_argument('--bindings')
     parser.add_argument('--case-id');parser.add_argument('--alternative',type=int)
+    parser.add_argument('--new-case',help='Optional new authorized local case to prepare using the explicitly selected reviewed route; requires separate case-specific review')
     parser.add_argument('--confirm-retain-case-inputs',action='store_true',help='Explicitly retain selected case values and bindings in a new local directory')
     parser.add_argument('--baseline-bindings',help='Compare an earlier binding configuration against --bindings on the same reviewed suite')
     parser.add_argument('--previous-catalog',help='Optional older inspected catalog for mapped contract drift review')
@@ -708,18 +718,20 @@ def main():
         parser.error('--previous-catalog requires --audit-bindings')
     if args.baseline_bindings and (not args.audit_bindings or args.previous_catalog):
         parser.error('--baseline-bindings requires --audit-bindings without --previous-catalog')
-    if not args.prepare_reviewed_case and (args.case_id is not None or args.alternative is not None or args.confirm_retain_case_inputs):
+    if not args.prepare_reviewed_case and (args.case_id is not None or args.alternative is not None or args.new_case is not None or args.confirm_retain_case_inputs):
         parser.error('Case selection and retention confirmation require --prepare-reviewed-case')
     if args.prepare_reviewed_case:
         if (not all((args.cases, args.bindings, args.case_id, args.confirm_retain_case_inputs))
                 or args.alternative is None or any((args.catalog, args.case, args.model, args.tool_server_url))):
             parser.error('Choose reviewed cases, bindings, case ID, route alternative and explicit local input retention')
         documents = prepare_reviewed_case(spec, load_object(args.cases,limit=262144),
-                    load_object(args.bindings), args.case_id, args.alternative)
+                    load_object(args.bindings), args.case_id, args.alternative,
+                    new_case=load_object(args.new_case) if args.new_case is not None else None)
         write_reviewed_case_directory(args.output, documents)
         review = documents['preparation-review.json']
         return {'mode':'offline_reviewed_case_preparation','output_written':True,
                 'offline_requirements_clear':review['offline_requirements_clear'],
+                'route_reused_for_new_case':review['route_reused_for_new_case'],
                 'review_required':True,'execution_authorized':False,'business_tools_called':False}
     if args.audit_bindings:
         if not all((args.catalog, args.cases, args.bindings)) or any((args.model, args.case, args.tool_server_url)):
