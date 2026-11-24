@@ -9879,7 +9879,7 @@
     // Cross-log overview is read-only. Counts cover every saved rule before
     // bounded display, and the source-log selection is refreshed before opening.
     // An old response cannot replace the current view after switching datasets.
-    let allRequestId=0,allPreviousOffset=null,allNextOffset=null;
+    let allRequestId=0,allPreviousOffset=null,allNextOffset=null,allFingerprint=null;
     async function refreshAllSignals(offset=0){
       const requestId=++allRequestId;
       allRefresh.disabled=true;allPrevious.disabled=true;allNext.disabled=true;
@@ -9887,8 +9887,10 @@
       allStatus.textContent='Inspecting saved signal states across local logs…';
       try{
         const params=new URLSearchParams({status:allFilter.value,limit:'100',offset:String(offset)});
+        if(offset&&allFingerprint)params.set('expected_fingerprint',allFingerprint);
         const r=await getJSON('/v1/event-logs/signal-overview?'+params);
         if(generation!==state.generation||requestId!==allRequestId)return;
+        allFingerprint=r.fingerprint;
         const counts=r.counts||{};
         allPreviousOffset=r.previous_offset??null;allNextOffset=r.next_offset??null;
         const returned=Number(r.returned_rules||0),matched=Number(r.matched_rules||0),start=Number(r.offset||0);
@@ -9900,7 +9902,7 @@
           ' unevaluated, '+Number(counts.unavailable||0)+' unavailable; '+
           Number(counts.snoozed||0)+' snoozed. Showing '+pageText+' of '+matched+' matching rules.'+
           (start&&!returned?' The list changed; use Previous or Refresh.':'')+
-          ' Results can change between pages. No source refresh or automatic action.';
+          ' Refresh to check current signal states.';
         const rows=(r.items||[]).map(item=>{
           const open=button('Open log','secondary');
           open.setAttribute('aria-label','Open dataset '+item.log_name+' to review signal '+item.name);
@@ -9936,8 +9938,8 @@
         if(generation===state.generation&&requestId===allRequestId){allRefresh.disabled=false;allPrevious.disabled=allPreviousOffset===null;allNext.disabled=allNextOffset===null;}
       }
     }
-    allFilter.onchange=()=>refreshAllSignals();
-    allRefresh.onclick=()=>refreshAllSignals();
+    allFilter.onchange=()=>{allFingerprint=null;refreshAllSignals();};
+    allRefresh.onclick=()=>{allFingerprint=null;refreshAllSignals();};
     allPrevious.onclick=()=>{if(allPreviousOffset!==null)refreshAllSignals(allPreviousOffset);};
     allNext.onclick=()=>{if(allNextOffset!==null)refreshAllSignals(allNextOffset);};
     // This journal describes state *changes*, not the current signal inbox.
