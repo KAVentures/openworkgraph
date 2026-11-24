@@ -2328,6 +2328,22 @@
           state.follows=follows;state.attr=attr;state.caseActivity=activity;
           analyse().catch(error=>status(error.message));
         };
+        const update=button('Update from active filter','secondary');
+        update.setAttribute('aria-label','Update saved filter '+set.name+' from active filter');
+        update.disabled=!filterOn();
+        update.onclick=async()=>{
+          if(!window.confirm('Replace the saved filter “'+set.name+'” with the current active filter?'))return;
+          update.disabled=true;
+          try{
+            const body={name:set.name,cohort:globalCohort(),case_type:state.caseType||null,
+              expected_definition_sha256:set.definition_sha256};
+            await api(base()+'/'+encodeURIComponent(set.set_id)+'/update',{
+              method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+            if(generation!==state.generation)return;
+            message.textContent='Updated "'+set.name+'" from the active filter.';await refresh();
+          }catch(error){if(generation===state.generation){message.textContent=error.message;await refresh();}}
+          finally{if(generation===state.generation&&update.isConnected)update.disabled=!filterOn();}
+        };
         const del=button('Delete','secondary');del.setAttribute('aria-label','Delete saved filter '+set.name);
         del.onclick=async()=>{try{await api(base()+'/'+encodeURIComponent(set.set_id)+'/delete',{method:'POST'});message.textContent='Saved filter deleted.';await refresh();}catch(error){message.textContent=error.message;}};
         const notes=[...(!available?['Saved case notion is unavailable']:[]),
@@ -2342,7 +2358,7 @@
         };
         const showCases=button('Preview','secondary');showCases.setAttribute('aria-label','Preview saved filter '+set.name);
         showCases.disabled=!available;showCases.onclick=()=>previewFilter(set);
-        const actions=el('span');actions.append(use,' ',showCases,' ',exportButton,' ',del);
+        const actions=el('span');actions.append(use,' ',showCases,' ',update,' ',exportButton,' ',del);
         return [set.name,set.case_type||'Current selection',[...follows.map(followText),...(activity?['contains activity '+JSON.stringify(activity)]:[]),attr.attribute||'',attr.attribute_range?rangeText(attr.attribute_range):'',attr.starts_with?'starts with '+JSON.stringify(attr.starts_with):'',attr.ends_with?'ends with '+JSON.stringify(attr.ends_with):'',attr.duration?durationText(attr.duration):'',moreFilterText(attr)].filter(Boolean).join('; ')||'—',notes.join('. ')||'—',actions];
       })):el('div','No saved filters yet.','muted'));
     }
