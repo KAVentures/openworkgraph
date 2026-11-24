@@ -34,6 +34,7 @@ from . import process_discovery_provenance as discovery_provenance
 from . import event_log_object_attributes as object_attributes
 from . import event_log_object_constraints as object_constraints
 from . import event_log_object_process_model as object_process_model
+from . import event_log_object_lifecycle_review as object_lifecycle_review
 from . import event_log_impact as impact
 from . import event_log_domain_packs as domain_packs
 from . import event_log_object_diagnostics as object_diagnostics
@@ -2259,6 +2260,17 @@ async def event_log_object_process_model_conformance(request: Request, log_id: s
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/object-process-model/conformance/lifecycle-review")
+async def event_log_object_lifecycle_review(request: Request, log_id: str):
+    """Review exact lifecycle replay populations and their retained event evidence."""
+    _require_dashboard(request)
+    spec = await _json_body(request, "object lifecycle evidence", strict=True,
+                            limit=object_process_model.MAX_REQUEST_BYTES + 4096)
+    response = await run_in_threadpool(_respond, object_lifecycle_review.review, log_id, spec)
+    _require_dashboard(request)
+    return response
 
 
 @router.post("/v1/event-logs/{log_id}/object-process-model/conformance/arc-evidence")
