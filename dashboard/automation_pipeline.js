@@ -2455,7 +2455,10 @@
     reset.onclick=()=>{search.value='';quadrant.value='';sort.value='priority';filter.value='';
       for(const control of Object.values(planning))control.value='';
       refresh().catch(e=>{status.textContent=e.message;});};
-    reload.onclick=()=>refresh().then(current=>{if(current)status.textContent='Opportunities refreshed.';}).catch(e=>{status.textContent=e.message;});
+    reload.onclick=()=>{
+      status.textContent='Refreshing opportunities…';
+      refresh().then(current=>{if(current)status.textContent='Opportunities refreshed.';}).catch(e=>{status.textContent=e.message;});
+    };
     filter.onchange=()=>refresh().catch(e=>{status.textContent=e.message;});
     function saveBlob(blob,name){
       const url=URL.createObjectURL(blob);const link=el('a');link.href=url;link.download=name;
