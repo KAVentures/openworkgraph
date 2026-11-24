@@ -87,6 +87,108 @@ def test_signed_reports_import_and_exact_resends_are_idempotent(setup):
     assert version["version_label"] == "v1.2.0" and version["workflow_spec_sha256"] == SPEC and version["runs"] == 2
 
 
+def _snapshot(run_id, *, status="running", step_status="handed_to_human",
+              at="2024-03-01T10:00:30Z", spec=SPEC):
+    doc = report([run_id], status=status, spec=spec)
+    run = doc["runs"][0]
+    run["finished_at"] = None if status == "running" else "2024-03-01T10:02:00Z"
+    run["steps"] = [{"step_id": "s1", "activity": "Synthetic step",
+                     "status": step_status, "at": at}]
+    run["outcome"] = {"verified": None, "source": "customer_execution_journal"}
+    return doc
+
+
+def test_signed_running_snapshot_can_advance_and_late_snapshot_cannot_erase_finish(setup):
+    dep, cid, secret = setup
+    running = _snapshot("progress")
+    done = _snapshot("progress", status="succeeded", step_status="completed",
+                     at="2024-03-01T10:01:00Z")
+    first = send(cid, secret, 1, envelope(running))
+    assert first["revision_counts"] == {"new": 1, "identical": 0, "advanced": 0, "attribution_enriched": 0}
+    advanced = send(cid, secret, 3, envelope(done))
+    assert advanced["revision_counts"]["advanced"] == 1
+    assert advanced["runs_imported"] == 1
+    with pytest.raises(channels.ChannelError) as exc:
+        send(cid, secret, 2, envelope(running))
+    assert exc.value.status == 409
+    assert am.attributed_run(dep, "progress", SPEC)["run_status"] == "succeeded"
+    conflict = next(i for i in incidents.listing(deployment_id=dep)["incidents"]
+                    if i["kind"] == "run_revision_conflict")
+    assert conflict["detail"]["conflict_counts"] == {"terminal_snapshot_changed": 1}
+    assert conflict["occurrences"] == 1
+    repeat = send(cid, secret, 2, envelope(running))
+    assert repeat["duplicate"] and repeat["outcome"] == "refused_run_revision_conflict"
+    assert channels.listing()[ "channels"][0]["missing_count"] == 0
+    unchanged = send(cid, secret, 4, envelope(done))
+    assert unchanged["revision_counts"]["identical"] == 1
+    assert unchanged["runs_imported"] == 0
+    assert am.attributed_run(dep, "progress", SPEC)["run_status"] == "succeeded"
+
+
+def test_signed_revision_conflict_is_batch_atomic_and_manual_correction_remains_available(setup):
+    dep, cid, secret = setup
+    done = _snapshot("fixed", status="succeeded", step_status="completed")
+    send(cid, secret, 1, envelope(done))
+    correction = _snapshot("fixed", status="failed", step_status="failed")
+    correction["runs"].extend(report(["new_in_same_batch"])["runs"])
+    with pytest.raises(channels.ChannelError) as exc:
+        send(cid, secret, 2, envelope(correction))
+    assert exc.value.status == 409
+    assert am.attributed_run(dep, "fixed", SPEC)["run_status"] == "succeeded"
+    assert am.attributed_run(dep, "new_in_same_batch", SPEC) is None
+    # Explicit local owner import still supports a human-reviewed correction.
+    result = am.import_report(correction, dep)
+    assert result["runs_imported"] == 2
+    assert am.attributed_run(dep, "fixed", SPEC)["run_status"] == "failed"
+
+
+@pytest.mark.parametrize("mutation,reason", [
+    ("start", "start_identity_changed"), ("spec", "retained_spec_attribution_changed"),
+    ("drop_step", "step_history_shortened"), ("step_identity", "retained_step_changed"),
+    ("step_time", "retained_step_changed"), ("source", "outcome_source_changed"),
+    ("finish", "finish_precedes_retained_step"),
+])
+def test_signed_running_history_refuses_nonmonotonic_changes(setup, mutation, reason):
+    dep, cid, secret = setup
+    old = _snapshot("r")
+    send(cid, secret, 1, envelope(old))
+    changed = _snapshot("r", status="succeeded", step_status="completed",
+                        at="2024-03-01T10:01:00Z")
+    row = changed["runs"][0]
+    if mutation == "start":
+        row["started_at"] = "2024-03-01T09:59:00Z"
+    elif mutation == "spec":
+        changed["deployment"].pop("workflow_spec_sha256")
+    elif mutation == "drop_step":
+        row["steps"] = []
+    elif mutation == "step_identity":
+        row["steps"][0]["step_id"] = "different"
+    elif mutation == "step_time":
+        row["steps"][0]["at"] = "2024-03-01T10:00:01Z"
+    elif mutation == "source":
+        row["outcome"]["source"] = "other"
+    else:
+        row["finished_at"] = "2024-03-01T10:00:50Z"
+    with pytest.raises(channels.ChannelError) as exc:
+        send(cid, secret, 2, envelope(changed))
+    assert exc.value.status == 409
+    conflict = next(i for i in incidents.listing(deployment_id=dep)["incidents"]
+                    if i["kind"] == "run_revision_conflict")
+    assert conflict["detail"]["conflict_counts"] == {reason: 1}
+    assert am.attributed_run(dep, "r", SPEC)["run_status"] == "running"
+
+
+def test_signed_identical_legacy_run_can_receive_exact_spec_attribution(setup):
+    dep, cid, secret = setup
+    doc = _snapshot("legacy", status="succeeded", step_status="completed", spec=None)
+    am.import_report(doc, dep)
+    assert am.attributed_run(dep, "legacy", SPEC) is None
+    doc["deployment"]["workflow_spec_sha256"] = SPEC
+    result = send(cid, secret, 1, envelope(doc))
+    assert result["revision_counts"]["attribution_enriched"] == 1
+    assert am.attributed_run(dep, "legacy", SPEC)["run_status"] == "succeeded"
+
+
 def test_tampering_replay_and_stale_requests_are_refused_and_become_incidents(setup):
     dep, cid, secret = setup
     body = envelope(report(["r1"]))
