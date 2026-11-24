@@ -10199,7 +10199,132 @@
 
   // Called only by explicit local snapshot handoff. Never load another log
   // if the requested retained ID has disappeared or a newer selection wins.
+  let discoveryInspectionGeneration=0;
+  function matchingDiscoveryInspection(result,basis,page){
+    const sha=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
+    const count=n=>Number.isSafeInteger(n)&&n>=0;
+    const input=value=>value?.format==='openworkgraph.discovery-projection.v1'&&sha(value.sha256)&&
+      count(value.events)&&count(value.cases)&&value.cases<=value.events;
+    if(!result||result.format!=='openworkgraph.discovery-selection-inspection.v1'||
+      result.reference!==basis.reference||result.workflow_id!==basis.workflow_id||result.revision!==basis.revision||
+      result.process_sha256!==basis.content_sha256||!/^log_[a-f0-9]{16}$/.test(result.log_id||'')||
+      (basis.log_id&&result.log_id!==basis.log_id)||!sha(result.selection_sha256)||
+      !result.selection||typeof result.selection.case_notion!=='string'||
+      !result.selection.cohort||!result.selection.settings||
+      !input(result.current_effective_input)||
+      !(result.original_effective_input===null||input(result.original_effective_input))||
+      result.historical_rows_retained!==false||result.raw_source_fingerprint_rechecked!==false||
+      result.business_case_identity_verified!==false||result.business_outcomes_verified!==false||
+      result.execution_authorized!==false||!Number.isFinite(Date.parse(result.checked_at)))return false;
+    const current=result.current_effective_input,original=result.original_effective_input;
+    if(page.expected_projection_sha256&&current.sha256!==page.expected_projection_sha256)return false;
+    if(result.effective_input_status!==(original===null?'not_recorded':
+      original.sha256===current.sha256&&original.events===current.events&&original.cases===current.cases?'matches':'changed'))return false;
+    if(page.case_id!==undefined){
+      return result.mode==='events'&&result.case_id===page.case_id&&result.offset===page.offset&&
+        count(result.total_events)&&result.total_events>0&&result.total_events<=current.events&&
+        Array.isArray(result.events)&&result.events.length<=page.limit&&
+        result.events.every(row=>typeof row.event_id==='string'&&typeof row.activity==='string'&&Number.isFinite(Date.parse(row.timestamp)))&&
+        (result.next_offset===null?result.offset+result.events.length>=result.total_events:
+          result.events.length>0&&result.next_offset===result.offset+result.events.length&&result.next_offset<result.total_events);
+    }
+    return result.mode==='cases'&&Array.isArray(result.cases)&&result.cases.length<=page.limit&&result.cases.length<=current.cases&&
+      new Set(result.cases.map(row=>row.case_id)).size===result.cases.length&&
+      result.cases.every(row=>typeof row.case_id==='string'&&row.case_id.length>0&&count(row.events)&&row.events>0&&
+        count(row.timestamp_ties)&&row.timestamp_ties<row.events&&typeof row.elapsed_seconds==='number'&&Number.isFinite(row.elapsed_seconds)&&row.elapsed_seconds>=0)&&
+      (result.next_after===null||(result.cases.length===page.limit&&result.next_after===result.cases.at(-1).case_id));
+  }
+
+  async function openDiscoverySelection(basis){
+    if(!basis||typeof basis.workflow_id!=='string'||!/^[-a-zA-Z0-9_]{1,80}$/.test(basis.workflow_id)||
+      !Number.isSafeInteger(basis.revision)||basis.revision<1||!(/^[a-f0-9]{64}$/).test(basis.content_sha256||'')||
+      !/^urn:openworkgraph:local-log-discovery:[a-f0-9]{64}$/.test(basis.reference||'')||
+      (basis.log_id!==undefined&&!/^log_[a-f0-9]{16}$/.test(basis.log_id)))throw Error('Invalid saved discovery source reference.');
+    basis={...basis};
+    const workspace=document.getElementById('owgEventLogCard');
+    if(!workspace)throw Error('Local event-log workspace unavailable.');
+    const generation=++discoveryInspectionGeneration;
+    let panel=document.getElementById('owgDiscoverySourceInspection');
+    if(!panel){panel=section('Exact discovery cohort inspection');panel.id='owgDiscoverySourceInspection';workspace.appendChild(panel);}
+    panel.replaceChildren(el('h3','Exact discovery cohort inspection'));
+    panel.style.overflowWrap='anywhere';
+    panel.appendChild(el('p','Saved process revision '+basis.revision+' · '+basis.workflow_id+'. This view is separate from the ordinary workspace filters and never changes the saved process or source log.','muted'));
+    const message=el('p');message.setAttribute('role','status');
+    const scope=el('div'),caseList=el('div'),eventList=el('div');
+    const refresh=button('Reopen exact selection','secondary'),close=button('Close source inspection','secondary');
+    const controls=el('div',null,'row');controls.append(refresh,close);panel.append(controls,message,scope,caseList,eventList);
+    const current=()=>generation===discoveryInspectionGeneration&&panel.isConnected;
+    let digest=null,caseTurn=0,eventTurn=0;
+    async function query(page){
+      const body={reference:basis.reference,expected_process_sha256:basis.content_sha256,...page};
+      const result=await (await api('/v1/event-log-discovery/inspect-selection?'+new URLSearchParams({workflow_id:basis.workflow_id,revision:String(basis.revision)}),
+        {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+      if(!matchingDiscoveryInspection(result,basis,page))throw Error('Source inspection response does not match the saved selection.');
+      return result;
+    }
+    const reset=error=>{++caseTurn;++eventTurn;digest=null;scope.replaceChildren();caseList.replaceChildren();eventList.replaceChildren();message.textContent=String(error.message||error)+' Reopen the selection to continue.';};
+    function showScope(result){
+      const names={matches:'The effective input matches the recorded projection.',changed:'The effective input changed. The cases below are the current result of the original filter, not reconstructed historical cases.',not_recorded:'This older snapshot did not retain an effective-input digest. Historical membership cannot be established.'};
+      const text=el('pre',JSON.stringify(result.selection,null,2));text.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere';
+      scope.replaceChildren(el('p',names[result.effective_input_status]),
+        table(['Effective input','Cases','Case-event rows','SHA-256'],[
+          ['At recording',result.original_effective_input?.cases??'Unknown',result.original_effective_input?.events??'Unknown',result.original_effective_input?.sha256??'Not recorded'],
+          ['Current',result.current_effective_input.cases,result.current_effective_input.events,result.current_effective_input.sha256]]),text,
+        el('p','Checked '+result.checked_at+'. Raw source fingerprint not rechecked here. Equal timestamps use a stable event-ID tie break, not proof of order.','muted'));
+    }
+    async function loadCases(after=null,initial=false){
+      const turn=++caseTurn;++eventTurn;eventList.replaceChildren();caseList.replaceChildren();refresh.disabled=true;
+      message.textContent='Checking exact current discovery selection…';
+      const page={limit:30,...(initial?{}:{expected_projection_sha256:digest}),...(after===null?{}:{after})};
+      try{
+        const result=await query(page);
+        if(!current()||turn!==caseTurn)return;
+        digest=result.current_effective_input.sha256;showScope(result);
+        message.textContent='Current selected cases: '+result.current_effective_input.cases+'. Showing '+result.cases.length+' on this page.';
+        const rows=result.cases.map(row=>{
+          const open=button(row.case_id,'secondary');open.style.cssText='max-width:100%;overflow-wrap:anywhere;white-space:normal';
+          open.setAttribute('aria-label','Inspect exact selected case '+row.case_id);
+          open.onclick=()=>loadEvents(row.case_id,0);
+          return [open,row.events,duration(row.elapsed_seconds),row.timestamp_ties];
+        });
+        const first=button('First selected case page','secondary'),next=button('Next selected case page','secondary');
+        first.disabled=after===null;next.disabled=result.next_after===null;
+        first.onclick=()=>loadCases();next.onclick=()=>loadCases(result.next_after);
+        caseList.replaceChildren(table(['Supplied case key','Projected events','Elapsed time','Equal-timestamp events'],rows),first,next);
+      }catch(error){if(current()&&turn===caseTurn)reset(error);}
+      finally{if(current())refresh.disabled=false;}
+    }
+    async function loadEvents(caseId,offset){
+      if(!digest)return;
+      const turn=++eventTurn,checkedDigest=digest;
+      eventList.replaceChildren(el('p','Checking selected case…','muted'));
+      try{
+        const result=await query({limit:100,case_id:caseId,offset,expected_projection_sha256:checkedDigest});
+        if(!current()||turn!==eventTurn||checkedDigest!==digest)return;
+        const first=button('First selected event page','secondary'),next=button('Next selected event page','secondary');
+        first.disabled=offset===0;next.disabled=result.next_offset===null;
+        first.onclick=()=>loadEvents(caseId,0);next.onclick=()=>loadEvents(caseId,result.next_offset);
+        eventList.replaceChildren(el('h4','Selected case '+caseId),
+          el('p','Showing '+result.events.length+' of '+result.total_events+' effective events at offset '+offset+'.'),
+          table(['Event ID','Effective activity','Timestamp (UTC)'],result.events.map(row=>[row.event_id,row.activity,row.timestamp])),first,next);
+        // Reuse the existing exact original-observation drill-down, if the
+        // selected source is an observed execution snapshot.
+        const sourceLog=state.logs.find(log=>log.log_id===result.log_id);
+        if(sourceLog?.observed_execution_snapshot&&window.owgObservedExecutionLog?.renderObservationCheck)
+          window.owgObservedExecutionLog.renderObservationCheck(eventList,sourceLog,caseId,result.events,
+            ()=>current()&&turn===eventTurn&&digest===checkedDigest);
+      }catch(error){if(current()&&turn===eventTurn)reset(error);}
+    }
+    refresh.onclick=()=>loadCases(null,true);
+    close.onclick=()=>{++discoveryInspectionGeneration;panel.remove();};
+    document.querySelector('[role=tab][data-tab=evidence]')?.click();
+    panel.scrollIntoView({block:'start'});
+    await loadCases(null,true);
+    return current()&&digest!==null;
+  }
+
   window.owgEventLogWorkspace=Object.freeze({
+    openDiscoverySelection,
     async openSaved(logId){
       if(typeof logId!=='string'||!/^log_[a-f0-9]{16}$/.test(logId))throw Error('Invalid event-log reference.');
       const pick=document.getElementById('owgEventLogPick');
@@ -10221,6 +10346,6 @@
       return true;
     }
   });
-  window.__owgEventLogModel={simBatch,simPriorities,objectModelArcs,objectModelText,visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,refactorMetricGraph,savedMetricBundle,stageComparisonMetrics,activityComparisonMetrics,activityShareMetrics,metricText,reasonText,followSpec,followText,mergeActiveCohort,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,analysisDraft,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths,packMapping,packGuess,packReportRows,monitoringRows,impactSpec,impactRows};
+  window.__owgEventLogModel={matchingDiscoveryInspection,simBatch,simPriorities,objectModelArcs,objectModelText,visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,refactorMetricGraph,savedMetricBundle,stageComparisonMetrics,activityComparisonMetrics,activityShareMetrics,metricText,reasonText,followSpec,followText,mergeActiveCohort,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,analysisDraft,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths,packMapping,packGuess,packReportRows,monitoringRows,impactSpec,impactRows};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
