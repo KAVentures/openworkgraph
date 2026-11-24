@@ -186,7 +186,7 @@ def inspect_state(spec, root, packets, pin):
     rows, preceding_complete, claimed_journals = [], True, set()
     for identifier, packet in packets.items():
         claim, done = state / (identifier + '.claim.json'), state / (identifier + '.complete.json')
-        status, execution_id = 'waiting', None
+        status, execution_id, recovered = 'waiting', None, False
         if exists(claim) or exists(done):
             status = 'reconciliation_required'
             try:
@@ -200,12 +200,14 @@ def inspect_state(spec, root, packets, pin):
                     receipt = read_object(done)
                     expected = {**value, 'journal_sha256': successful_journal(
                         spec, packet, journals / (execution_id + '.jsonl'), execution_id)}
-                    require(receipt == expected, 'Queue completion receipt changed')
+                    recovered = digest(receipt) == digest({**expected, 'recovered_from_journal': True})
+                    require(recovered or digest(receipt) == digest(expected), 'Queue completion receipt changed')
                     status = 'reported_complete' if preceding_complete else 'reconciliation_required'
             except (ImplementationError, OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
                 status = 'reconciliation_required'
         rows.append({'case_id': identifier, 'status': status,
-                     'execution_id': execution_id if is_hex(execution_id) else None})
+                     'execution_id': execution_id if is_hex(execution_id) else None,
+                     'completion_recovered_from_journal': recovered and status == 'reported_complete'})
         preceding_complete = preceding_complete and status == 'reported_complete'
     unexpected = 0
     if exists(journals):
@@ -218,6 +220,7 @@ def inspect_state(spec, root, packets, pin):
     return {'format': 'openworkgraph.execution-queue-status.v1', 'queue_sha256': pin,
             'case_count': len(rows), 'cases': rows,
             'reported_complete_count': sum(row['status'] == 'reported_complete' for row in rows),
+            'recovered_completion_count': sum(row['completion_recovered_from_journal'] for row in rows),
             'reconciliation_required': bool(unexpected) or any(row['status'] == 'reconciliation_required' for row in rows),
             'unclaimed_journal_entry_count': unexpected,
             'operator_stop_active': exists(journals / '.owg-stop'),
@@ -305,6 +308,45 @@ async def run_approved_queue(spec, root, pin, authorizations, *, max_cases=1, ru
     return inspect_state(spec, root, packets, pin)
 
 
+def reconcile_completed_case(spec, root, pin, case_id, journal_sha256):
+    """Record an already complete journal after explicit operator review.
+
+    Never repair or replay a tool attempt. An active or retained crash lock
+    must be investigated separately; this operation cannot prove a process stopped.
+    """
+    require(isinstance(case_id, str) and CASE.fullmatch(case_id) and is_hex(journal_sha256),
+            'Select the exact case and separately reviewed journal byte digest')
+    root, packets = load_queue(spec, root, pin)
+    state = directory(root / 'queue-state')
+    journals = directory(state / 'journals')
+    lock = state / 'runner.lock'
+    write_once(lock, {'queue_sha256': pin})
+    try:
+        snapshot = inspect_state(spec, root, packets, pin)
+        rows = snapshot['cases']
+        require(case_id in packets and not snapshot['unclaimed_journal_entry_count'],
+                'Resolve unclaimed journal evidence before reconciliation')
+        index = list(packets).index(case_id)
+        require(all(row['status'] == 'reported_complete' for row in rows[:index])
+                and rows[index]['status'] == 'reconciliation_required'
+                and all(row['status'] == 'waiting' for row in rows[index+1:]),
+                'Only the first incomplete claimed case can be reconciled')
+        execution_id = rows[index]['execution_id']
+        require(is_hex(execution_id), 'The retained claim is missing or invalid')
+        claim = {'queue_sha256': pin, 'case_id': case_id, 'execution_id': execution_id}
+        require(read_object(state / (case_id + '.claim.json')) == claim,
+                'The retained claim does not match the selected case')
+        target = state / (case_id + '.complete.json')
+        require(not exists(target), 'A completion receipt already exists; do not overwrite evidence')
+        checked = successful_journal(spec, packets[case_id], journals / (execution_id + '.jsonl'), execution_id)
+        require(checked == journal_sha256, 'Journal changed after the selected offline review')
+        write_once(target, {**claim, 'journal_sha256': checked, 'recovered_from_journal': True})
+    finally:
+        lock.unlink()
+        sync_directory(state)
+    return inspect_state(spec, root, packets, pin)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--queue', required=True)
@@ -312,12 +354,22 @@ def main():
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--inspect', action='store_true')
     mode.add_argument('--run-approved', action='store_true')
+    mode.add_argument('--reconcile-completed', action='store_true')
     parser.add_argument('--authorizations')
+    parser.add_argument('--case-id')
+    parser.add_argument('--journal-sha256')
+    parser.add_argument('--confirm-runner-stopped-and-journal-reviewed', action='store_true')
     parser.add_argument('--confirm-network', action='store_true')
     parser.add_argument('--max-cases', type=int, default=1)
     args = parser.parse_args()
     spec = read_object(Path(__file__).parent / 'workflow.spec.json', limit=262144)
-    if args.run_approved:
+    if not args.reconcile_completed and (args.case_id or args.journal_sha256 or args.confirm_runner_stopped_and_journal_reviewed):
+        parser.error('Recovery options require --reconcile-completed')
+    if args.reconcile_completed:
+        require(args.confirm_runner_stopped_and_journal_reviewed and not args.confirm_network and not args.authorizations,
+                'Explicit stopped-runner and journal review confirmation is required; recovery is offline')
+        result = reconcile_completed_case(spec, args.queue, args.queue_sha256, args.case_id, args.journal_sha256)
+    elif args.run_approved:
         require(args.confirm_network and args.authorizations, 'Explicit network confirmation and separate authorizations are required')
         result = asyncio.run(run_approved_queue(spec, args.queue, args.queue_sha256,
                              read_object(args.authorizations, limit=262144), max_cases=args.max_cases))
