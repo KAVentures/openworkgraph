@@ -80,7 +80,30 @@ def test_create_real_workspace_and_reject_stale_preview(tmp_path, monkeypatch, s
     assert repeated["existing_snapshot_reused"] is True
     assert repeated["log_id"] == log
     assert len(workspace.list_logs()["logs"]) == 1
+    manifest = snapshots.source(log)
+    assert manifest["source_history_rechecked"] is False
+    assert manifest["scope"]["execution_ids"] == spec["execution_ids"]
+    assert manifest["stored_event_count"] == 5
+    assert snapshots.recheck(log)["status"] == "projection_matches"
+    raw.append(event("another", "browser_click", "2026-10-01T10:00:04Z"))
+    rechecked = snapshots.recheck(log)
+    assert rechecked["status"] == "projection_changed"
+    assert rechecked["stored_log_changed"] is False
+    assert rechecked["business_outcomes_verified"] is False
+    raw.clear()
+    monkeypatch.setattr(snapshots.evidence, "derive_executions", lambda rows: [])
+    rechecked = snapshots.recheck(log)
+    assert rechecked["status"] == "source_unavailable"
+    assert rechecked["current_projection_sha256"] is None
+    assert snapshots.source(log)["stored_event_count"] == 5
+    from io import BytesIO
+    with pytest.raises(workspace.EventLogWorkspaceError, match="preserve their original rows"):
+        workspace.append_log(log, BytesIO(b"case,activity,time\\nc1,A,2026-10-01T10:00:00Z\\n"),
+                             source_format="csv",
+                             mapping={"case_column": "case", "activity_column": "activity", "timestamp_column": "time"})
     workspace.delete_log(log)
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        snapshots.source(log)
     conn = workspace._connect()
     try:
         assert conn.execute("SELECT count(*) FROM observed_execution_log_sources").fetchone()[0] == 0
@@ -167,6 +190,13 @@ with TestClient(app) as client:
     duplicate = client.post(base + "/create",json=body,headers={**owner,**consent}).json()
     assert duplicate["log_id"] == result["log_id"] and duplicate["existing_snapshot_reused"]
     assert client.get("/v1/event-logs",headers=owner).json()["logs"][0]["log_id"] == result["log_id"]
+    assert client.get(base + "/source",params={"log_id":result["log_id"]},headers=bearer).status_code == 403
+    assert client.post(base + "/recheck",json={"log_id":result["log_id"]},headers=bearer).status_code == 403
+    manifest = client.get(base + "/source",params={"log_id":result["log_id"]},headers=owner)
+    assert manifest.status_code == 200 and manifest.json()["source_history_rechecked"] is False, manifest.text
+    rechecked = client.post(base + "/recheck",json={"log_id":result["log_id"]},headers=owner)
+    assert rechecked.status_code == 200 and rechecked.json()["status"] == "projection_matches", rechecked.text
+
 print("ok")
 """
     env = os.environ.copy()
