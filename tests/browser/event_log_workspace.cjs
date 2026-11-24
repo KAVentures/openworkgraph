@@ -301,6 +301,34 @@ const path=require('node:path');
    assert.deepEqual(pinnedAudit.violations.map(v=>v.id),[]);
    await pinnedSource.getByRole('button',{name:'Close source inspection',exact:true}).click();
    await pinnedSource.waitFor({state:'detached'});
+   // Rediscover in a separate browser editor so the original reviewed editor
+   // and subsequent test flow remain unchanged.
+   const successor=await browser.newPage();
+   successor.on('pageerror',error=>errors.push(error.message));
+   try{
+     await successor.goto(base+'/#session='+session);
+     await successor.locator('[role=tab][data-tab=evidence]').click();
+     await successor.locator('#owgProcessCatalog').waitFor();
+     await successor.evaluate(saved=>window.owgProcessCatalog.openSaved({
+       workflow_id:saved.workflow_id,revision:saved.revision,content_sha256:saved.content_sha256}),savedDiscovery);
+     await successor.getByRole('button',{name:'Inspect discovery source snapshots',exact:true}).click();
+     await successor.getByRole('button',{name:'Rediscover current data for this selection',exact:true}).click();
+     const refresh=successor.getByRole('region',{name:'Rediscover original process selection'});
+     await refresh.getByText('Fresh proposal ready.',{exact:false}).waitFor();
+     const prepare=refresh.getByRole('button',{name:'Record refreshed source and prepare successor draft',exact:true});
+     assert.equal(await prepare.isDisabled(),true);
+     await refresh.getByRole('checkbox',{name:/I reviewed the fresh model/}).check();
+     successor.once('dialog',dialog=>dialog.accept());
+     await prepare.click();
+     await successor.locator('#owgCatalogRestorationDraft').filter({hasText:'UNSAVED rediscovery successor'}).waitFor();
+     assert.equal(await successor.locator('#owgCatalogEditor').getByRole('textbox',{name:'Business goal',exact:true}).inputValue(),'');
+     assert.equal(await successor.locator('#owgCatalogReviewed').isChecked(),false);
+     assert.equal(await successor.getByRole('button',{name:'Add saved revision to automation pipeline',exact:true}).count(),0);
+     const unchanged=await successor.evaluate(async id=>(await (await fetch('/v1/process-catalog/revision?'+new URLSearchParams({workflow_id:id}))).json()),savedDiscovery.workflow_id);
+     assert.equal(unchanged.revision,savedDiscovery.revision);
+     assert.equal(unchanged.content_sha256,savedDiscovery.content_sha256);
+   }finally{await successor.close();}
+
 
    let heldOrigin,signalOrigin;const originHeld=new Promise(resolve=>{signalOrigin=resolve;});
    await page.route('**/event-log-discovery/process-origin?*',route=>{heldOrigin=route;signalOrigin();});
