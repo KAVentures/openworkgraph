@@ -11,11 +11,103 @@
   const status=text=>{const n=document.getElementById('owgCatalogStatus');if(n)n.textContent=String(text);};
   const copy=value=>JSON.parse(JSON.stringify(value));
   function clearShadowReview(){shadowGeneration++;document.getElementById('owgCatalogShadowResult')?.replaceChildren();}
-  function clearRuleChecks(){ruleCheckGeneration++;document.getElementById('owgCatalogRuleCheckResult')?.replaceChildren();}
+  function renderDecisionDomainLab(host){
+    if(!record?.workflow_id||!record.revision||!record.content_sha256||!model.decision_tables?.length)return;
+    const section=el('details');section.appendChild(el('summary','Decision coverage lab'));
+    section.appendChild(el('p','Test synthetic inputs against the exact saved revision. Every combination in your finite domain is checked, but this does not prove general policy coverage. Do not enter real customer or employee facts.'));
+    const date=el('input');date.type='date';date.setAttribute('aria-label','Declared decision test date');
+    const dateLabel=el('label','Declared decision test date ');dateLabel.appendChild(date);
+    const input=el('textarea');input.rows=12;input.style.cssText='width:100%;box-sizing:border-box;font-family:monospace';
+    input.setAttribute('aria-label','Synthetic domain dimensions JSON');input.value='[]';
+    const inputLabel=el('label','Synthetic domain dimensions JSON');inputLabel.appendChild(input);
+    const info=el('p','Each dimension has a JSON pointer path and choices, each containing either a scalar value or {"missing":true}.');
+    const output=el('div');output.id='owgDecisionDomainResult';output.setAttribute('role','status');
+    let report=null, turn=0;
+    const download=button('Download minimized coverage report',()=>{
+      if(!report)return;
+      const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));
+      const a=el('a');a.href=url;a.download='owg-decision-coverage-r'+report.reference.revision+'.json';a.click();
+      setTimeout(()=>URL.revokeObjectURL(url),1000);
+    });download.disabled=true;
+    const invalidate=()=>{turn++;report=null;download.disabled=true;output.replaceChildren();};
+    const ref=()=>({workflow_id:record.workflow_id,revision:String(record.revision),content_sha256:record.content_sha256});
+    const guard=(selected,generation,attempt)=>output.isConnected&&generation===editGeneration&&attempt===turn&&
+      record?.workflow_id===selected.workflow_id&&String(record.revision)===selected.revision&&record.content_sha256===selected.content_sha256;
+    const verify=(data,selected)=>{
+      if(data.reference.workflow_id!==selected.workflow_id||String(data.reference.revision)!==selected.revision||
+         data.reference.content_sha256!==selected.content_sha256)throw new Error('Unexpected saved revision reference.');
+    };
+    const suggest=button('Suggest synthetic boundary choices',async()=>{
+      if(input.value.trim()!=='[]'&&!window.confirm('Replace the current synthetic dimensions with new suggestions?'))return;
+      invalidate();const selected=ref(),generation=editGeneration,attempt=turn;
+      suggest.disabled=true;
+      try{
+        const data=await request('/v1/process-catalog/decision-domain/suggestions?'+new URLSearchParams(selected));
+        if(!guard(selected,generation,attempt))return;verify(data,selected);
+        input.value=JSON.stringify(data.dimensions,null,2);
+        info.textContent=data.suggested_combinations+' suggested combinations; limit '+data.max_combinations+
+          '. Review and narrow the dimensions if needed. Suggestions are not an exhaustive partition.';
+        for(const item of data.omitted_paths)info.appendChild(el('span',' Omitted '+item.path+' ('+item.reason+').'));
+        if(data.clipped_paths.length)info.appendChild(el('span',' Choice limit reached for: '+data.clipped_paths.join(', ')+'.'));
+      }catch(error){if(guard(selected,generation,attempt))output.replaceChildren(el('p',error.message));}
+      finally{suggest.disabled=false;}
+    });
+    const run=button('Check finite decision domain',async()=>{
+      invalidate();const selected=ref(),generation=editGeneration,attempt=turn;
+      if(!date.value){output.textContent='Choose an explicit test date.';return;}
+      let dimensions;try{dimensions=JSON.parse(input.value);}catch{output.textContent='Enter valid JSON dimensions.';return;}
+      run.disabled=true;output.textContent='Checking synthetic combinations…';
+      try{
+        const data=await request('/v1/process-catalog/decision-domain?'+new URLSearchParams(selected),
+          {as_of_date:date.value,dimensions});
+        if(!guard(selected,generation,attempt))return;verify(data,selected);report=data;download.disabled=false;
+        output.replaceChildren(el('h4','Coverage · saved revision '+data.reference.revision),
+          el('p',data.combinations+' / '+data.enumerated_combinations+' declared combinations checked for '+data.as_of_date+'.'),
+          el('p','Domain SHA-256: '+data.domain_sha256),
+          el('p','Witness vectors use zero-based choice indices in the submitted dimension order. The report omits input values.'));
+        for(const table of data.tables){
+          const group=el('details');group.open=true;
+          group.appendChild(el('summary',table.table_id+' · '+table.hit_policy));
+          group.appendChild(el('p',Object.entries(table.status_counts).map(([status,n])=>status+': '+n).join(' · ')));
+          if(table.required_decision_table_ids.length)group.appendChild(el('p','Requires: '+table.required_decision_table_ids.join(', ')));
+          if(table.undeclared_predicate_paths.length)group.appendChild(el('p','No explicit dimension or direct injection for: '+table.undeclared_predicate_paths.join(', ')));
+          for(const [status,vectors] of Object.entries(table.status_examples)){
+            group.appendChild(el('p',status+' example indices: '+vectors.map(v=>'['+v.join(', ')+']').join(' · ')));
+          }
+          const grid=el('table'),thead=el('thead'),head=el('tr'),tbody=el('tbody');
+          for(const title of ['Row','Matched','Selected','Unknown','Not evaluated','Shadowed','Finite-domain finding']){
+            const th=el('th',title);th.scope='col';head.appendChild(th);
+          }
+          thead.appendChild(head);grid.append(thead,tbody);
+          for(const row of table.rows){
+            const tr=el('tr');
+            const finding=row.fully_shadowed_when_matched_in_domain?'Fully shadowed when matched':
+              row.known_never_matches_in_domain?'Never matches in this domain':
+              row.never_selected_in_declared_domain?'Not selected in this domain':'Selected';
+            for(const value of [row.row_id,row.matched,row.selected,row.unknown,row.not_evaluated,row.shadowed_by_earlier_selection,finding])
+              tr.appendChild(el('td',value));
+            tbody.appendChild(tr);
+          }
+          const scroll=el('div');scroll.style.cssText='overflow-x:auto;max-width:100%';scroll.appendChild(grid);group.appendChild(scroll);
+          const pairs=el('details');pairs.appendChild(el('summary','Co-matching row pairs ('+table.co_matching_pairs.length+')'));
+          for(const pair of table.co_matching_pairs)pairs.appendChild(el('p',pair.row_ids.join(' + ')+': '+pair.both_matched_cases+
+            ' cases; witness ['+pair.witness_choice_indices.join(', ')+']'));
+          group.appendChild(pairs);output.appendChild(group);
+        }
+        output.appendChild(el('p','No facts, approvals, legal compliance, case distribution or execution permissions are verified.'));
+      }catch(error){if(guard(selected,generation,attempt))output.replaceChildren(el('p',error.message));}
+      finally{run.disabled=false;}
+    });
+    date.addEventListener('change',invalidate);input.addEventListener('input',invalidate);
+    section.addEventListener('owg-decision-domain-clear',()=>{invalidate();input.value='[]';date.value='';});
+    section.append(dateLabel,suggest,inputLabel,info,run,download,output);host.appendChild(section);
+  }
+
+  function clearRuleChecks(){document.getElementById('owgDecisionDomainResult')?.closest('details')?.dispatchEvent(new Event('owg-decision-domain-clear'));ruleCheckGeneration++;document.getElementById('owgCatalogRuleCheckResult')?.replaceChildren();}
   function clearSourceRuleChecks(){sourceRuleGeneration++;document.getElementById('owgCatalogSourceRuleResult')?.replaceChildren();}
   function clearOrigins(){originGeneration++;document.getElementById('owgCatalogOriginResult')?.replaceChildren();}
   function clearRevisionComparison(){revisionCompareGeneration++;document.getElementById('owgCatalogRevisionCompare')?.replaceChildren();}
-  function changed(invalidateTables=true){editGeneration++;if(invalidateTables&&model?.decision_tables?.length){for(const t of model.decision_tables)t.user_confirmed=false;document.querySelectorAll("input[data-table-confirmation]").forEach(n=>{n.checked=false;});}clearOrigins();clearRevisionComparison();clearSourceRuleChecks();reviewed=false;const check=document.getElementById('owgCatalogReviewed');if(check)check.checked=false;clearShadowReview();clearRuleChecks();}
+  function changed(invalidateTables=true){editGeneration++;document.getElementById('owgCatalogTokenAssurance')?.closest('details')?.dispatchEvent(new Event('owg-token-assurance-clear'));if(invalidateTables&&model?.decision_tables?.length){for(const t of model.decision_tables)t.user_confirmed=false;document.querySelectorAll("input[data-table-confirmation]").forEach(n=>{n.checked=false;});}clearOrigins();clearRevisionComparison();clearSourceRuleChecks();reviewed=false;const check=document.getElementById('owgCatalogReviewed');if(check)check.checked=false;clearShadowReview();clearRuleChecks();}
   function field(parent,title,value,apply,options){
     const label=el('label',title+' '),input=el(options?'select':'input');
     if(options)options.forEach(value=>{const option=el('option',value);option.value=value;input.appendChild(option);});
@@ -263,6 +355,51 @@
           }
           table.appendChild(body);wrap.appendChild(table);section.appendChild(wrap);
         }else section.appendChild(el('p','No stored-model difference detected. Source evidence and outcomes remain unverified.'));
+        const impactHost=el('div');impactHost.setAttribute('aria-live','polite');
+        const impactButton=button('Review policy change impact',async()=>{
+          impactButton.disabled=true;impactHost.replaceChildren(el('p','Comparing the exact saved policy declarations…'));
+          const active=()=>generation===revisionCompareGeneration&&record===selected&&impactHost.isConnected;
+          try{
+            const data=await request('/v1/process-catalog/policy-impact?'+new URLSearchParams({
+              workflow_id:selected.workflow_id,before_revision:String(previous.revision),after_revision:String(selected.revision),
+              before_sha256:previous.content_sha256,after_sha256:selected.content_sha256}));
+            if(!active())return;
+            if(data.before.content_sha256!==previous.content_sha256||data.after.content_sha256!==selected.content_sha256||
+              data.before.workflow_id!==selected.workflow_id||data.after.workflow_id!==selected.workflow_id||
+              data.before.revision!==previous.revision||data.after.revision!==selected.revision)throw Error('Unexpected saved revision references.');
+            const parts=[el('h4','Policy revision impact'),
+              el('p','Potential structural impact only. Text meaning, policy equivalence, actual execution and outcomes are not verified. No source state is read.')];
+            const list=(title,rows,describe)=>{
+              const group=el('details');group.open=true;group.appendChild(el('summary',title+' ('+rows.length+')'));
+              for(const row of rows)group.appendChild(el('p',describe(row)));
+              if(!rows.length)group.appendChild(el('p','None detected.'));
+              parts.push(group);
+            };
+            list('Changed rules',data.rule_changes,r=>r.rule_id+' · '+r.changes.join(', ')+
+              ' · Previous fact paths: '+(r.old_fact_paths.join(', ')||'none')+' · Current fact paths: '+(r.new_fact_paths.join(', ')||'none'));
+            list('Changed decision tables',data.decision_table_changes,t=>t.table_id+' · '+t.changes.join(', '));
+            list('Changed transitions',data.transition_changes,e=>e.edge.join(' → ')+' · '+
+              (e.old_exists?(e.old_rule_id||'unconditional'):'absent')+' → '+(e.new_exists?(e.new_rule_id||'unconditional'):'absent'));
+            list('Changed manual review conditions',data.manual_review_changes,r=>r.identity.join(' · ')+' · '+r.change);
+            list('Changed outcome expectations',data.outcome_expectation_changes,r=>r.identity.join(' · ')+' · '+r.change);
+            for(const [side,value] of [['Compared revision',data.before_impact],['Opened revision',data.after_impact]]){
+              parts.push(el('h5',side),el('p','Potentially affected terminals: '+(value.potentially_affected_terminal_ids.join(', ')||'none')));
+              list('Direct affected edges',value.direct_guarded_edges,e=>e.join(' → '));
+              list('Decision dependency paths',value.decision_dependency_witnesses,r=>r.path.join(' → '));
+              list('Downstream activity paths',value.downstream_activity_witnesses,r=>r.path.join(' → '));
+              parts.push(el('p','Changed but unreferenced rules: '+(value.unreferenced_changed_rule_ids.join(', ')||'none')));
+            }
+            parts.push(button('Download minimized policy-impact JSON',()=>{
+              if(!active())return;
+              const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
+              const link=el('a');link.href=url;link.download='owg-policy-impact-r'+previous.revision+'-r'+selected.revision+'.json';
+              link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+            }));
+            impactHost.replaceChildren(...parts);
+          }catch(error){if(active())impactHost.replaceChildren(el('p',error.message));}
+          finally{impactButton.disabled=false;}
+        });
+        section.append(impactButton,impactHost);
         if(revision<selected.revision){
           section.appendChild(el('p','Restoration creates an UNSAVED draft from the historical model against the current latest revision. All earlier confirmations and evidence links are removed. A separate human review and new save are required.'));
           section.appendChild(button('Prepare historical r'+revision+' as unsaved restoration draft',
@@ -510,6 +647,67 @@
     }));
     host.appendChild(section);
   }
+  function renderTokenAssurance(host){
+    if(!record?.workflow_id||!record.revision||!record.content_sha256)return;
+    const section=el('details');section.appendChild(el('summary','Structural execution assurance'));
+    section.appendChild(el('p','Explore possible token schedules of the exact saved revision, excluding unsaved edits. This does not evaluate rules, verify outcomes or authorize execution.'));
+    const result=el('div');result.id='owgCatalogTokenAssurance';result.setAttribute('role','status');
+    let report=null;
+    const download=button('Download structural assurance JSON',()=>{
+      if(!report)return;
+      const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));
+      const a=el('a');a.href=url;a.download='owg-token-assurance-r'+report.reference.revision+'.json';
+      a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    });download.disabled=true;
+    const inspect=button('Analyze saved token flow',async()=>{
+      const selected={workflow_id:record.workflow_id,revision:String(record.revision),content_sha256:record.content_sha256};
+      const generation=editGeneration;
+      const current=()=>result.isConnected&&generation===editGeneration&&record?.workflow_id===selected.workflow_id&&
+        String(record.revision)===selected.revision&&record.content_sha256===selected.content_sha256;
+      report=null;download.disabled=true;inspect.disabled=true;
+      result.replaceChildren(el('p','Exploring bounded structural markings…'));
+      try{
+        const data=await request('/v1/process-catalog/token-assurance?'+new URLSearchParams(selected));
+        if(!current())return;
+        if(data.reference.workflow_id!==selected.workflow_id||String(data.reference.revision)!==selected.revision||
+          data.reference.content_sha256!==selected.content_sha256)throw new Error('Unexpected saved revision reference.');
+        report=data;download.disabled=false;
+        result.replaceChildren(el('h4','Saved revision '+data.reference.revision+' · structural token analysis'),
+          el('p','SHA-256: '+data.reference.content_sha256),
+          el('p',(data.complete?'Complete bounded marking exploration.':'Incomplete exploration ('+data.incomplete_reason+'); missing witnesses remain unknown.')+
+            ' '+data.states_discovered+' markings, '+data.firings_examined+' firings.'),
+          el('p','Completion reachable: '+(data.completion_reachable===null?'unknown':data.completion_reachable?'yes':'no')+
+            ' · Every reachable marking can complete: '+(data.every_reachable_marking_can_complete===null?'unknown':data.every_reachable_marking_can_complete?'yes':'no')),
+          el('p',data.known_deadlock_count+' known dead-end markings · '+data.known_cyclic_component_count+' known cyclic components'+
+            (data.complete?'':' (partial observations, not exact totals)')+'. A cycle permits repeated structural firings; it does not prove an actual endless execution.'),
+          el('p',data.activities_with_complete_witness+' / '+data.activities.length+' nodes and '+
+            data.transitions_with_complete_witness+' / '+data.transitions.length+' transitions have completed structural witnesses.'));
+        const pathText=w=>w?w.node_ids.join(' → ')+(w.truncated?' … [display truncated; '+w.firing_count+' firings]':''):'No completed witness established';
+        if(data.shortest_completion)result.appendChild(el('p','Shortest known completion: '+pathText(data.shortest_completion)));
+        const table=el('table'),thead=el('thead'),head=el('tr'),body=el('tbody');
+        for(const title of ['Transition','Structural coverage','Completed firing witness']){
+          const th=el('th',title);th.scope='col';head.appendChild(th);
+        }
+        thead.appendChild(head);table.append(thead,body);
+        for(const item of data.transitions){
+          const row=el('tr');
+          for(const value of [item.source+' → '+item.target+(item.rule_id?' · '+item.rule_id:''),
+            {complete_witness:'Completed witness',no_complete_witness:'No completed witness',unknown_budget:'Unknown: budget'}[item.status],pathText(item.witness)])
+            row.appendChild(el('td',value));
+          body.appendChild(row);
+        }
+        const scroll=el('div');scroll.style.cssText='overflow-x:auto;max-width:100%;overflow-wrap:anywhere';scroll.appendChild(table);result.appendChild(scroll);
+        for(const item of data.deadlock_examples)result.appendChild(el('p','Dead-end prefix: '+pathText(item.prefix)));
+        for(const item of data.cycle_examples)result.appendChild(el('p','Cycle: '+pathText(item.cycle)+' · prefix: '+pathText(item.prefix)));
+        result.appendChild(el('p','Structural witnesses include gateway firings. Rules and inclusive selections are possibilities, not facts or approved routes.'));
+      }catch(error){if(current())result.replaceChildren(el('p',error.message));}
+      finally{inspect.disabled=false;}
+    });
+    section.append(inspect,download,result);host.appendChild(section);
+    // An edit invalidates both the report and its downloadable snapshot.
+    section.addEventListener('owg-token-assurance-clear',()=>{report=null;download.disabled=true;result.replaceChildren();});
+  }
+
   function renderEditor(){
     clearRevisionComparison();
     clearOrigins();
@@ -571,7 +769,9 @@
       'Inclusive splits run one or more branches: each branch has its own rule, and the join waits for exactly the branches that started. Rules stay unconfirmed until you confirm them. Generated projects check that a plan is a valid token flow and list the rules of the branches it chose; they do not evaluate those rules.'));
     host.appendChild(button('Refresh graph preview',()=>renderEditor()));
     renderDifferenceReview(host);
+    renderTokenAssurance(host);
     const mutate=fn=>{fn();changed();renderEditor();};
+    renderDecisionDomainLab(host);
     model.activities.forEach((activity,index)=>{
       const row=el('fieldset');row.appendChild(el('legend',activity.id));
       const label=field(row,'Activity '+activity.id,activity.label,value=>activity.label=value);label.id='owgCatalogActivity'+index;
@@ -1222,12 +1422,27 @@
       output.replaceChildren(el('p',result.questions.length+' open questions · '+result.answered_question_count+
         ' answered on this process revision and exact source bundle · '+result.statement_count+
         ' source statements. Full documents are not retained; selected citations and answers are recorded.'));
+      const coverage=result.source_coverage;
+      if(coverage){
+        const omitted=coverage.documents.reduce((sum,d)=>sum+d.overlong_statements+d.omitted_by_budget,0);
+        const incomplete=coverage.subjects.filter(s=>!s.conflict_review_complete).length;
+        if(omitted||incomplete)output.append(el('p',
+          'Source review incomplete: '+omitted+' statement(s) omitted and '+incomplete+
+          ' subject(s) with incomplete conflict coverage. Narrow or split the sources before confirming affected questions.','note'));
+        else output.append(el('p','All bounded source and conflict scans completed. Lexical matches are review prompts, not proof of policy accuracy.'));
+      }
       if(result.instruction_like_statements.length)output.append(el('p',
         result.instruction_like_statements.length+' statement(s) look like instructions to the system and were excluded from evidence.'));
       for(const q of result.questions){
         const box=el('section');box.append(el('h5',q.prompt));
+        if(q.source_coverage)box.append(el('p',q.source_coverage.matching_statements+
+          ' matching statements · '+q.source_coverage.conflict_candidates_checked+
+          ' checked for possible conflicts · '+q.source_coverage.displayed_conflict_count+' of '+
+          q.source_coverage.possible_conflict_count+' possible conflicts displayed.','muted'));
+        if(q.coverage_blocked)box.append(el('p','Confirmation is unavailable until source coverage is complete. Narrow the supplied documents or defer this question.','note'));
+        if(q.previous_decision)box.append(el('p','Previous decision: '+q.previous_decision+'. This question remains unresolved.','muted'));
         const cites=el('ul');
-        const citeText=c=>'“'+c.text+'” — '+c.document_title+' (characters '+c.start+'–'+c.end+')';
+        const citeText=c=>'“'+c.text+'” — '+c.document_title+' (source '+(Number(c.document_index)+1)+', characters '+c.start+'–'+c.end+')';
         for(const c of q.citations)cites.append(el('li',citeText(c)));
         box.append(cites);
         const disputed=new Map();

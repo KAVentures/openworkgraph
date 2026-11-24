@@ -1101,15 +1101,111 @@ async def save_process_catalog(request: Request) -> Response:
     return JSONResponse(result, headers={'Cache-Control': 'no-store'})
 
 
+def _domain_assurance_packet(workflow_id: str, revision: int, digest: str):
+    packet = _catalog_export(workflow_id, revision)
+    if packet['content_sha256'] != digest:
+        raise HTTPException(409, 'Saved process reference changed; select the revision again')
+    return packet
+
+
+@app.get('/v1/process-catalog/decision-domain/suggestions')
+def decision_domain_suggestions(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
+                                revision: int = Query(ge=1),
+                                content_sha256: str = Query(pattern=r'^[a-f0-9]{64}$')) -> Response:
+    from .local_source_routes import _require_dashboard
+    from shared.process_decision_domain import suggested_domain
+    _require_dashboard(request)
+    packet = _domain_assurance_packet(workflow_id, revision, content_sha256)
+    try:
+        result = suggested_domain(ProcessModel.model_validate(packet['process_model']))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    _domain_assurance_packet(workflow_id, revision, content_sha256)
+    _require_dashboard(request)
+    return JSONResponse({**result, 'reference': {k: packet[k] for k in ('workflow_id','revision','content_sha256')}},
+                        headers={'Cache-Control': 'no-store'})
+
+
+@app.post('/v1/process-catalog/decision-domain')
+async def decision_domain_coverage(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
+                                   revision: int = Query(ge=1),
+                                   content_sha256: str = Query(pattern=r'^[a-f0-9]{64}$')) -> Response:
+    from .local_source_routes import _require_dashboard
+    from shared.process_decision_domain import analyze_saved
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    value = await _process_json(request, maximum=65536)
+    packet = _domain_assurance_packet(workflow_id, revision, content_sha256)
+    try:
+        result = await run_in_threadpool(analyze_saved, packet, value)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    _domain_assurance_packet(workflow_id, revision, content_sha256)
+    _require_dashboard(request)
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
 @app.get('/v1/process-catalog/revision')
 def get_process_catalog_revision(workflow_id: str = Query(pattern=_PROCESS_ID), revision: int | None = Query(default=None, ge=1)) -> Response:
     return JSONResponse(_catalog_record(workflow_id, revision), headers={'Cache-Control': 'no-store'})
+
+
+def _token_assurance_packet(workflow_id: str, revision: int, digest: str):
+    packet = _catalog_export(workflow_id, revision)
+    if packet['content_sha256'] != digest:
+        raise HTTPException(409, 'Saved process reference changed; select the revision again')
+    return packet
+
+
+@app.get('/v1/process-catalog/token-assurance')
+def process_token_assurance(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
+                            revision: int = Query(ge=1),
+                            content_sha256: str = Query(pattern=r'^[a-f0-9]{64}$')) -> Response:
+    from .local_source_routes import _require_dashboard
+    from shared.process_token_assurance import analyze_saved
+    _require_dashboard(request)
+    packet = _token_assurance_packet(workflow_id, revision, content_sha256)
+    try:
+        result = analyze_saved(packet)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    _token_assurance_packet(workflow_id, revision, content_sha256)
+    _require_dashboard(request)
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
 
 
 @app.get('/v1/process-catalog/history')
 def get_process_catalog_history(workflow_id: str = Query(pattern=_PROCESS_ID), before_revision: int | None = Query(default=None, ge=1), limit: int = Query(default=20, ge=1, le=100)) -> Response:
     _catalog_record(workflow_id)
     return JSONResponse(_knowledge.history('local', workflow_id, before_revision=before_revision, limit=limit), headers={'Cache-Control': 'no-store'})
+
+
+def _policy_assurance_packet(workflow_id: str, revision: int, digest: str):
+    packet = _catalog_export(workflow_id, revision)
+    if packet['content_sha256'] != digest:
+        raise HTTPException(409, 'Saved process reference changed; select the revision again')
+    return packet
+
+
+@app.get('/v1/process-catalog/policy-impact')
+def compare_process_policy_impact(request: Request,
+        workflow_id: str = Query(pattern=_PROCESS_ID),
+        before_revision: int = Query(ge=1), after_revision: int = Query(ge=1),
+        before_sha256: str = Query(pattern=r'^[a-f0-9]{64}$'),
+        after_sha256: str = Query(pattern=r'^[a-f0-9]{64}$')) -> Response:
+    from .local_source_routes import _require_dashboard
+    from shared.process_policy_impact import compare
+    _require_dashboard(request)
+    before = _policy_assurance_packet(workflow_id, before_revision, before_sha256)
+    after = _policy_assurance_packet(workflow_id, after_revision, after_sha256)
+    try:
+        result = compare(before, after)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    _policy_assurance_packet(workflow_id, before_revision, before_sha256)
+    _policy_assurance_packet(workflow_id, after_revision, after_sha256)
+    _require_dashboard(request)
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
 
 
 @app.get('/v1/process-catalog/export')
