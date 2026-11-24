@@ -2567,6 +2567,42 @@
   // Read-only model exposed for pure Node regression tests; no sensor or server changes.
   window.__owgWorkflowExplorerModel = {buildLanes, titleFor, readable, observedRunMatrix, runDifference, projectedSurfaceRoutes, projectedProcessPaths, observedPathProposal, projectedPathAgentBrief, selectedRunTrace, automationReviewSignals, foregroundCoverageRows};
   window.owgWorkflowExplorer=Object.freeze({
+    async inspectSnapshotExecution({executionId,window:scope={}}){
+      if(typeof executionId!=='string'||!/^execution:[a-f0-9]{16}$/.test(executionId)||
+          !scope||typeof scope!=='object'||Array.isArray(scope)||
+          Object.keys(scope).some(key=>!['since','until'].includes(key)))throw Error('Invalid original execution scope.');
+      const filter={};
+      for(const key of ['since','until']){
+        if(scope[key]!=null){
+          if(typeof scope[key]!=='string'||!Number.isFinite(Date.parse(scope[key])))throw Error('Invalid original evidence window.');
+          filter[key]=scope[key];
+        }
+      }
+      if(filter.since&&filter.until&&Date.parse(filter.since)>=Date.parse(filter.until))throw Error('Invalid original evidence window.');
+      const host=document.getElementById('owgExplorerDetail');
+      if(!host)throw Error('Workflow explorer unavailable.');
+      ++latestRequest;invalidateEvidence();
+      candidates=[];selectedExample=null;currentWindow=filter;
+      const candidate={candidate_cluster_id:'snapshot-source-'+executionId,execution_ids:[executionId]};
+      selectedId=candidate.candidate_cluster_id;
+      const refresh=document.getElementById('owgExplorerRefresh');
+      if(refresh)refresh.disabled=false;
+      renderCandidates();
+      status('Original saved snapshot scope · explicit retained execution inspection. The retained evidence may have changed.');
+      const heading=element('h3','Source execution from saved snapshot');
+      const output=element('div');output.id='owgExplorerEvidence';
+      host.replaceChildren(heading,element('p',executionId+' · '+(filter.since||'All retained history')+' to '+(filter.until||'present'),'muted'),output);
+      const pending=inspect(candidate,null);
+      const requestId=latestEvidenceRequest;
+      const result=await pending;
+      if(requestId!==latestEvidenceRequest||selectedId!==candidate.candidate_cluster_id)return false;
+      if(!result||!observedRunMatrix(result,[executionId])){
+        invalidateEvidence();
+        output.replaceChildren(element('p','The exact retained execution is unavailable. The independent saved log remains unchanged.','muted'));
+        return false;
+      }
+      return true;
+    },
     showReviewedGroup({bundle,label,workflow_id,revision,window:filter={}}){
       const clusters=safeArray(bundle.structural_alignment?.structural_sequence_variants);
       const variants=clusters.flatMap(cluster=>safeArray(cluster.exact_variants));
