@@ -177,6 +177,17 @@ def test_cluster_case_csv_respects_scope_limits_and_spreadsheet_safety(monkeypat
     limited, metadata = trace_clusters.cluster_cases_csv(log, spec)
     assert len(list(csv.DictReader(StringIO(limited)))) == 1
     assert metadata["total"] == 2 and metadata["written"] == 1 and metadata["truncated"] is True
+    assert metadata["next_after"]
+    next_text, last = trace_clusters.cluster_cases_csv(log, {**spec, "after": metadata["next_after"]})
+    assert [row["case_id"] for row in csv.DictReader(StringIO(next_text))] == ["normal"]
+    assert last["written"] == 1 and last["truncated"] is False and last["next_after"] is None
+    with pytest.raises(workspace.EventLogWorkspaceError, match="cursor"):
+        trace_clusters.cluster_cases_csv(log, {**spec, "after": "invalid"})
+    with pytest.raises(workspace.EventLogWorkspaceError, match="cursor"):
+        trace_clusters.cluster_cases_csv(log, {**spec, "after": metadata["next_after"], "max_activities": 3})
+    other_log = _log(cases)
+    with pytest.raises(workspace.EventLogWorkspaceError, match="cursor"):
+        trace_clusters.cluster_cases_csv(other_log, {**spec, "after": metadata["next_after"]})
     with pytest.raises(workspace.EventLogWorkspaceError, match="cluster has changed"):
         trace_clusters.cluster_cases_csv(log, {**spec, "cluster_key": "0" * 64})
     with pytest.raises(workspace.EventLogWorkspaceError):

@@ -9613,22 +9613,30 @@
       const previous=button('Previous case page','secondary'),next=button('Next case page','secondary');
       const download=button('Download cluster cases (CSV)','secondary');
       download.setAttribute('aria-label','Download cases in cluster '+cluster.cluster+' as CSV');
+      const downloadNext=button('Download next case file','secondary');downloadNext.disabled=true;
+      downloadNext.setAttribute('aria-label','Download next cases in cluster '+cluster.cluster+' as CSV');
       const exportStatus=el('div',null,'muted');exportStatus.setAttribute('role','status');
-      nav.append(previous,next,download);review.replaceChildren(title,status,rows,nav,exportStatus);title.focus();
-      download.onclick=async()=>{
-        if(!current())return;download.disabled=true;exportStatus.textContent='Preparing cluster cases…';
+      nav.append(previous,next,download,downloadNext);review.replaceChildren(title,status,rows,nav,exportStatus);title.focus();
+      let exportAfter=null,exportPage=0,exportWritten=0;
+      async function downloadPage(cursor){
+        if(!current())return;download.disabled=downloadNext.disabled=true;exportStatus.textContent='Preparing cluster cases…';
         try{
           const response=await api(endpoint+'/cases.csv',{method:'POST',headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({...settings,cluster_key:cluster.cluster_key})});
+            body:JSON.stringify({...settings,cluster_key:cluster.cluster_key,...(cursor?{after:cursor}:{})})});
           const blob=await response.blob();if(!current())return;
-          downloadBlob(blob,'cluster-'+cluster.cluster+'-cases.csv');
+          const page=cursor?exportPage+1:1;
+          downloadBlob(blob,'cluster-'+cluster.cluster+'-cases-'+page+'.csv');
           const info=response.headers.get('X-OWG-Cluster-Cases')||'';
           const written=/written=(\d+)/.exec(info),total=/total=(\d+)/.exec(info);
-          exportStatus.textContent='Downloaded '+(written?Number(written[1]).toLocaleString():'the')+' of '+(total?Number(total[1]).toLocaleString():'the matching')+' cases'+
-            (/truncated=true/.test(info)?' (limited to 50,000).':'.')+' Formula-like values are protected for spreadsheets.';
+          exportPage=page;exportWritten=(cursor?exportWritten:0)+(written?Number(written[1]):0);
+          exportAfter=response.headers.get('X-OWG-Next-Cursor');
+          exportStatus.textContent='Downloaded '+exportWritten.toLocaleString()+' of '+(total?Number(total[1]).toLocaleString():'the matching')+' cases'+
+            (exportAfter?'. Download the next file for more.':'.')+' Formula-like values are protected for spreadsheets.';
         }catch(error){if(current())exportStatus.textContent=error.message;}
-        finally{if(current())download.disabled=false;}
-      };
+        finally{if(current()){download.disabled=false;downloadNext.disabled=exportAfter===null;}}
+      }
+      download.onclick=()=>downloadPage(null);
+      downloadNext.onclick=()=>{if(exportAfter!==null)downloadPage(exportAfter);};
       const cursors=[null];let index=0,following=null;
       async function load(page){
         previous.disabled=next.disabled=true;status.textContent='Loading cases…';

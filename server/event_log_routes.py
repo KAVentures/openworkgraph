@@ -2983,9 +2983,11 @@ async def event_log_trace_cluster_cases_csv(request: Request, log_id: str):
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     _require_dashboard(request)
-    return Response(content, media_type="text/csv; charset=utf-8", headers={
-        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-cluster-cases.csv"',
-        "X-OWG-Cluster-Cases": f"total={info['total']}; written={info['written']}; truncated={str(info['truncated']).lower()}"})
+    headers = {"Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-cluster-cases.csv"',
+               "X-OWG-Cluster-Cases": f"total={info['total']}; written={info['written']}; truncated={str(info['truncated']).lower()}"}
+    if info["next_after"] is not None:
+        headers["X-OWG-Next-Cursor"] = info["next_after"]
+    return Response(content, media_type="text/csv; charset=utf-8", headers=headers)
 
 
 @router.post("/v1/event-logs/{log_id}/conformance")

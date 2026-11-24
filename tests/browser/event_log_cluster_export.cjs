@@ -7,7 +7,7 @@ const path=require('node:path');
 (async()=>{
  const scratch=await fs.mkdtemp(path.join(tmpdir(),'owg-cluster-export-'));
  const python=process.env.OWG_BROWSER_PYTHON||'python',base='http://127.0.0.1:8787';
- const server=spawn(python,['-m','uvicorn','process_logs_app:app','--app-dir','tests/browser','--host','127.0.0.1','--port','8787'],{env:{...process.env,OWG_BROWSER_TEST_DIR:scratch},stdio:['ignore','pipe','pipe']});
+ const server=spawn(python,['-m','uvicorn','cluster_export_app:app','--app-dir','tests/browser','--host','127.0.0.1','--port','8787'],{env:{...process.env,OWG_BROWSER_TEST_DIR:scratch},stdio:['ignore','pipe','pipe']});
  let logs='',browser,spawnError;server.on('error',error=>{spawnError=error;});
  for(const pipe of [server.stdout,server.stderr])pipe.on('data',chunk=>{logs=(logs+chunk).slice(-8000);});
  try{
@@ -46,8 +46,13 @@ const path=require('node:path');
   const [download]=await Promise.all([page.waitForEvent('download'),review.getByRole('button',{name:'Download cases in cluster 1 as CSV'}).click()]);
   const lines=(await fs.readFile(await download.path(),'utf8')).trim().split('\n');
   assert.equal(lines[0],'case_id,duration_seconds,events,first_activity,last_activity');
-  assert.deepEqual(lines.slice(1).map(line=>line.split(',')[0]),selected.cases.map(item=>item.case_id));
+  await review.getByRole('status').filter({hasText:'Downloaded 2 of 4 cases. Download the next file for more.'}).waitFor();
+  const [nextFile]=await Promise.all([page.waitForEvent('download'),review.getByRole('button',{name:'Download next cases in cluster 1 as CSV'}).click()]);
+  const nextLines=(await fs.readFile(await nextFile.path(),'utf8')).trim().split('\n');
+  assert.equal(nextLines[0],lines[0]);
+  assert.deepEqual([...lines.slice(1),...nextLines.slice(1)].map(line=>line.split(',')[0]),selected.cases.map(item=>item.case_id));
   await review.getByRole('status').filter({hasText:'Downloaded 4 of 4 cases.'}).waitFor();
+  assert(await review.getByRole('button',{name:'Download next cases in cluster 1 as CSV'}).isDisabled());
   await page.locator('#owgClusterK').selectOption('3');assert.equal(await out.textContent(),'');assert.equal(await review.textContent(),'');
   assert(await box.getByRole('button',{name:'Download cluster report JSON'}).isDisabled());
   assert(await box.getByRole('button',{name:'Download cluster report CSV'}).isDisabled());

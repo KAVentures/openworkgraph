@@ -808,12 +808,14 @@ settings change. CSV text is escaped for spreadsheet review.
 
 From **Inspect cases**, **Download cluster cases (CSV)** recomputes the selected
 cluster with its original settings and scope, then downloads case keys, duration,
-event count and first/last activity. The file contains up to 50,000 cases in
-case-key order; the dashboard reports the total, written count and truncation.
-Formula-like text is escaped for spreadsheet review. The cluster key detects a
+event count and first/last activity. Each file contains up to 50,000 cases in
+case-key order. When more cases remain, download subsequent files using the next
+page control; the dashboard reports progress. A continuation cursor is bound to
+the log, cluster and settings. Formula-like text is escaped for spreadsheet review.
+The cluster key detects a
 change in the cluster's variant composition and counts; it is not a frozen
 case-membership snapshot, so later changes can alter the exported cases even if
-those counts stay the same. This download requires a dashboard session.
+those counts stay the same, including between pages. This download requires a dashboard session.
 
 Clusters describe the structure of the imported log. They are not process types,
 causes, or a judgement of how any case was handled.
