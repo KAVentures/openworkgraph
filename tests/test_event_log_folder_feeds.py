@@ -142,6 +142,90 @@ def test_append_one_pins_the_selected_name_and_content(tmp_path):
     assert workspace.summary(log)["events"] == 3
 
 
+def test_mapping_review_ignores_feed_batches_and_preserves_history_and_schedule(tmp_path):
+    log = _log()
+    folder = tmp_path / "exports"
+    folder.mkdir()
+    feed_id = feeds.create(log, {"folder": str(folder), "confirm_folder_reads": True})["feed_id"]
+    schedule = scheduler.create("event_log_folder_feed", feed_id, interval_minutes=60, confirm_scheduled_runs=True)
+    initial = feeds.review_mapping(feed_id)
+    assert initial["mapping_revision"] == 0 and initial["source_batch"] == 0 and not initial["changed"]
+    _drop(folder, "first.csv", HEADER + "o2;Create;03/03/2024 10:00\n", age=600)
+    _drop(folder, "second.csv", HEADER + "o3;Create;04/03/2024 10:00\n", age=2)
+    new_mapping = {"case_column": "case", "activity_column": "activity", "timestamp_column": "time"}
+    workspace.append_log(log, BytesIO(b"case,activity,time\nm,Manual,2024-03-04T00:00:00Z\n"),
+                         source_format="csv", mapping=new_mapping)
+    assert feeds.run(feed_id)["files_appended"] == 1
+    plan = feeds.review_mapping(feed_id)
+    assert plan["changed"] and plan["source_batch"] == 1
+    assert plan["proposed_mapping"]["case_column"] == "case"
+    assert plan["current_mapping"]["delimiter"] == ";"
+    expected = {key: plan[key] for key in ("mapping_revision", "mapping_sha256")}
+    with pytest.raises(workspace.EventLogWorkspaceError, match="review the mapping again"):
+        feeds.apply_mapping(feed_id, {**expected, "mapping_sha256": initial["mapping_sha256"]})
+    records = feeds.feeds(log)["feeds"][0]["recent_files"]
+    applied = feeds.apply_mapping(feed_id, expected)
+    assert applied == {"feed_id": feed_id, "mapping_revision": 1, "changed": True}
+    assert feeds.feeds(log)["feeds"][0]["recent_files"] == records
+    assert scheduler.status()["schedules"][0]["schedule_id"] == schedule["schedule_id"]
+    assert scheduler.status()["schedules"][0]["enabled"]
+    with pytest.raises(workspace.EventLogWorkspaceError, match="review the mapping again"):
+        feeds.apply_mapping(feed_id, expected)
+    _drop(folder, "fresh.csv", "case,activity,time\nn,New,2024-03-05T00:00:00Z\n", age=300)
+    assert feeds.run_scheduled(feed_id)[0].startswith("partial:files_not_ready")
+    assert workspace.summary(log)["events"] == 5
+
+
+def test_mapping_review_refuses_to_strip_source_identity_settings(tmp_path):
+    log = _log()
+    folder = tmp_path / "exports"
+    folder.mkdir()
+    feed_id = feeds.create(log, {"folder": str(folder), "confirm_folder_reads": True})["feed_id"]
+    workspace.append_log(log, BytesIO(b"case,activity,time,id\nm,Manual,2024-03-04T00:00:00Z,e1\n"),
+                         source_format="csv",
+                         mapping={"case_column": "case", "activity_column": "activity", "timestamp_column": "time",
+                                  "event_id_column": "id", "source_namespace": "crm"})
+    with pytest.raises(workspace.EventLogWorkspaceError, match="uses source IDs"):
+        feeds.review_mapping(feed_id)
+    assert feeds.get(feed_id)["mapping_revision"] == 0
+
+
+def test_mapping_change_stops_a_run_before_its_next_append(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
+    log = _log()
+    folder = tmp_path / "exports"
+    folder.mkdir()
+    feed_id = feeds.create(log, {"folder": str(folder), "confirm_folder_reads": True})["feed_id"]
+    first = _drop(folder, "a.csv", HEADER + "o2;Create;03/03/2024 10:00\n", age=600)
+    second = _drop(folder, "b.csv", HEADER + "o3;Create;04/03/2024 10:00\n", age=300)
+    reviewed = next(row for row in feeds.preview(feed_id)["files"] if row["name"] == second.name)
+    workspace.append_log(log, BytesIO(b"case,activity,time\nm,Manual,2024-03-04T00:00:00Z\n"),
+                         source_format="csv",
+                         mapping={"case_column": "case", "activity_column": "activity", "timestamp_column": "time"})
+    plan = feeds.review_mapping(feed_id)
+    snapshot = feeds._snapshot
+
+    @contextmanager
+    def update_during_second_snapshot(path, info):
+        with snapshot(path, info) as result:
+            if path == second:
+                feeds.apply_mapping(feed_id, {key: plan[key] for key in ("mapping_revision", "mapping_sha256")})
+            yield result
+
+    monkeypatch.setattr(feeds, "_snapshot", update_during_second_snapshot)
+    result = feeds.run(feed_id)
+    assert result["mapping_changed"]
+    assert [file["name"] for file in result["files"]] == [first.name]
+    assert result["files_appended"] == 1 and result["files_failed"] == 0
+    assert workspace.summary(log)["events"] == 4
+    with pytest.raises(workspace.EventLogWorkspaceError, match="preview the folder again"):
+        feeds.append_one(feed_id, {"name": second.name, "sha256": reviewed["sha256"], "mapping_revision": 0})
+    metadata = feeds.feeds(log)["feeds"][0]
+    assert metadata["mapping_revision"] == 1
+    assert [row["name"] for row in metadata["recent_files"]] == [first.name]
+
+
 def test_preview_bounds_hashing_bytes_and_the_number_of_files(tmp_path, monkeypatch):
     log = _log()
     folder = tmp_path / "exports"
@@ -213,6 +297,12 @@ with TestClient(app) as client:
     assert r.status_code == 200, r.text
     feed_id = r.json()["feed_id"]
     assert client.post(f"/v1/event-logs/feeds/{feed_id}/run", headers=owner).status_code == 403
+    mapping_url = f"/v1/event-logs/feeds/{feed_id}/mapping"
+    assert client.get(mapping_url, headers=bearer).status_code == 403
+    plan = client.get(mapping_url, headers=owner).json()
+    spec = {key: plan[key] for key in ("mapping_revision", "mapping_sha256")}
+    assert client.post(mapping_url, json=spec, headers=owner).status_code == 403
+    assert client.post(mapping_url, json=spec, headers=store).json()["changed"] is False
     preview_url = f"/v1/event-logs/feeds/{feed_id}/preview"
     assert client.get(preview_url, headers=bearer).status_code == 403
     preview = client.get(preview_url, headers=owner)
