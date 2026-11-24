@@ -1004,6 +1004,8 @@
     for(const control of [filter.node,windowRow]){
       control.addEventListener('input',clearPreview);control.addEventListener('change',clearPreview);
     }
+    const relationshipCountText=(count,prefix)=>count?' '+prefix+Number(count).toLocaleString()+
+      (count===1?' supplied object relationship.':' supplied object relationships.'):'';
     preview.onclick=async()=>{
       const ticket=++revision;
       const current=()=>ticket===revision&&generation===state.generation&&box.isConnected;
@@ -1016,7 +1018,8 @@
         const n=value=>Number(value).toLocaleString();
         previewStatus.textContent=n(result.cases)+' of '+n(result.source_cases)+' cases match. The copy would retain '+
           n(result.events)+' events and '+n(result.objects)+' linked objects'+
-          (result.trimmed?' across '+n(result.kept_cases)+' matching cases with events in the window.':'.');
+          (result.trimmed?' across '+n(result.kept_cases)+' matching cases with events in the window.':'.')+
+          relationshipCountText(result.object_relationships,'The copy would also retain ');
       }catch(error){if(current())previewStatus.textContent=error.message;}
       finally{if(current())preview.disabled=false;}
     };
@@ -1053,7 +1056,7 @@
         const open=button('Open '+r.log.name,'secondary');open.id='owgDeriveOpen';
         open.onclick=()=>refreshLogs(r.log.log_id,r.derived_from.case_notion).then(()=>status('Opened '+r.log.name+'. Select Analyse to explore it.')).catch(error=>status(error.message));
         const trimmed=r.time_window?' Only events in the time window were kept: '+Number(r.time_window.cases_with_events_in_window).toLocaleString()+' cases have events in it; '+Number(r.time_window.events_outside_left_out).toLocaleString()+' events outside it were left out.':'';
-        out.replaceChildren(el('div','Saved '+r.log.name+': '+Number(r.derived_from.cases_matched).toLocaleString()+' of '+Number(r.derived_from.cases_in_source).toLocaleString()+' cases, '+Number(r.copied.events).toLocaleString()+' events.'+trimmed),open);
+        out.replaceChildren(el('div','Saved '+r.log.name+': '+Number(r.derived_from.cases_matched).toLocaleString()+' of '+Number(r.derived_from.cases_in_source).toLocaleString()+' cases, '+Number(r.copied.events).toLocaleString()+' events.'+trimmed+relationshipCountText(r.copied.object_relationships,'Retained ')),open);
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
       finally{run.disabled=false;}
     };
