@@ -159,6 +159,40 @@ class ConfigurationCases(unittest.IsolatedAsyncioTestCase):
             audit_bindings(spec,catalog,suite,extra)
         self.assertFalse(self.tools.business_calls)
 
+    async def test_binding_audit_reports_historical_schema_drift_even_after_repinning(self):
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        previous=deepcopy(catalog)
+        previous['inspected_at']='2020-01-01T00:00:00Z'
+        before=previous['tools'][0]
+        before['input_schema_sha256']='a'*64
+        before['input_fields'].append({'name':'legacy_optional','type':'string','required':False})
+        before['input_fields'][1]['type']='number'
+        before['input_fields'][2]['required']=False
+        report=audit_bindings(spec,catalog,suite,bindings,previous_catalog=previous)
+        self.assertEqual(report['routes_with_clear_static_checks'],2)
+        self.assertTrue(report['review_required'])
+        drift=report['mapped_catalog_changes']
+        self.assertEqual(drift['previous_catalog_sha256'],digest(previous))
+        self.assertEqual(drift['mapped_contracts_requiring_review'],1)
+        changed=next(row for row in drift['mapped_contracts'] if row['schema_pin_review_required'])
+        self.assertEqual(changed['activity_id'],'resolve')
+        self.assertEqual(changed['status'],'schema_pin_changed')
+        self.assertEqual(changed['field_changes']['removed_field_count'],1)
+        self.assertEqual(changed['field_changes']['changed_type_count'],1)
+        self.assertEqual(changed['field_changes']['new_required_field_count'],1)
+        self.assertNotIn('legacy_optional',json.dumps(report))
+        self.assertFalse(drift['provider_tool_removal_verified'])
+        previous['tools'].pop(0)
+        missing=audit_bindings(spec,catalog,suite,bindings,previous_catalog=previous)
+        self.assertEqual(missing['mapped_catalog_changes']['mapped_contracts_requiring_review'],1)
+        self.assertIn('not_in_previous_projection',
+                      [r['status'] for r in missing['mapped_catalog_changes']['mapped_contracts']])
+        with self.assertRaises(ImplementationError):
+            audit_bindings(spec,catalog,suite,bindings,
+                           previous_catalog=previous|{'tool_server_url':'https://other.example/mcp'})
+        with self.assertRaises(ImplementationError):
+            audit_bindings(spec,catalog|{'omitted_tool_count':'PRIVATE_INVALID_COUNT'},suite,bindings)
+
     async def test_binding_audit_cli_replays_exact_inputs_and_reports_failure_exit(self):
         import subprocess
         import sys
