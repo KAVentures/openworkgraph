@@ -6357,15 +6357,29 @@
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities',sizePick),run);
     const statusLine=el('div',null,'muted');statusLine.id='owgCooccurrenceStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgCooccurrenceResults';
-    box.append(row,statusLine,out);
+    let last=null,revision=0;
+    const exports=exportButtons('owgCooccurrenceReport',()=>last,r=>[
+      ['activity','activity_cases','other_activity','cases_with_both','share_of_activity','lift'],
+      ...r.matrix.flatMap(item=>item.with.map(pair=>[
+        item.activity,item.cases,pair.activity,pair.both,pair.share_of_a,pair.lift
+      ]))
+    ]);
+    box.append(row,statusLine,out,exports.node);
     const pct=x=>x===null||x===undefined?'—':Math.round(x*100)+'%';
+    sizePick.onchange=()=>{revision++;last=null;exports.enable(false);run.disabled=false;out.replaceChildren();statusLine.textContent='';};
     run.onclick=async()=>{
-      const generation=state.generation,cohort=globalCohort();
+      const generation=state.generation,cohort=globalCohort(),ticket=++revision;
+      const current=()=>box.isConnected&&generation===state.generation&&ticket===revision;
+      last=null;exports.enable(false);
       run.disabled=true;statusLine.textContent='Comparing activities…';out.replaceChildren();
       try{
         const r=await getJSON(logPath('co-occurrence',{limit:sizePick.value}));
-        if(generation!==state.generation)return;
+        if(!current())return;
+        last=r;exports.enable(true);
         statusLine.textContent=r.activities.length+' activities over '+Number(r.cases).toLocaleString()+' cases. '+(r.never_together.length?r.never_together.length+' pairs never occur in the same case.':'Every pair occurs together in some case.');
+        out.appendChild(el('div','Showing '+r.activities.length+' of '+r.activities_in_scope+
+          ' activities. Pair lists show up to '+r.pair_list_limit+' of '+r.qualifying_go_together_pairs+
+          ' qualifying positive-lift pairs and '+r.qualifying_never_together_pairs+' qualifying never-together pairs.','muted'));
         const names=r.activities.map(a=>a.activity);
         const cell=w=>{const s=el('span',pct(w.share_of_a));s.title=w.both+' cases'+(w.lift===null?'':', lift '+w.lift);return s;};
         const t=table(['When a case has … it also has',...names],r.matrix.map(m=>[m.activity+' ('+Number(m.cases).toLocaleString()+')',...m.with.map(cell)]));t.id='owgCooccurrenceMatrix';
@@ -6403,8 +6417,8 @@
         if(r.never_together.length){out.appendChild(el('h4','Never in the same case'));
           const nt=table(['Activities','Cases with each'],r.never_together.map(p=>[p.a+' / '+p.b,Number(p.cases_a).toLocaleString()+' / '+Number(p.cases_b).toLocaleString()]));nt.id='owgCooccurrenceNever';out.appendChild(nt);}
         out.appendChild(el('div',r.caveat,'muted'));
-      }catch(error){statusLine.textContent=error.message;}
-      finally{run.disabled=false;}};
+      }catch(error){if(current())statusLine.textContent=error.message;}
+      finally{if(current())run.disabled=false;}};
     return box;
   }
 
