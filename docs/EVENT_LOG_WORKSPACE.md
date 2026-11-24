@@ -3442,3 +3442,10 @@ Dashboard owners can download a saved log as an Excel workbook (`GET /v1/event-l
 ### Rework and loop case evidence
 
 The local rework report shows the total number of repeated activities and recorded loop patterns, with an adjustable display limit of 20, 50 or 100. JSON and CSV downloads contain the displayed results and the JSON includes the selected cohort and analysis settings. The report offers explicit case-evidence links for repeated activities and exact closed activity loops. Selectors respect the active case cohort and retain literal event order; timestamp ties do not establish business order.
+
+### Exact activity labels in due-date and breakdown reports
+
+Due-date checks and the activity-share breakdown can use an exact activity label
+instead of a suggestion. Use **Find labels** to search the current case notion,
+then choose a match. The due-date report, evidence and saved signal use the same
+label; the breakdown report, case evidence and CSV use the same label.
