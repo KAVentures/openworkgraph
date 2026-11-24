@@ -29,6 +29,7 @@ from . import event_log_workspace as workspace
 
 MAX_ROWS = 500
 MAX_SAVED = 50
+ANALYSIS_TEMPLATE_FORMAT = "openworkgraph.saved-analysis.v1"
 MAX_VARIANT_PATH_BYTES = 1024 * 1024
 MAX_VARIANT_TOTAL_BYTES = 64 * 1024 * 1024
 Name = Annotated[str, Field(min_length=1, max_length=200)]
@@ -702,28 +703,87 @@ def list_saved(log_id: str) -> dict[str, Any]:
             "max_saved": MAX_SAVED}
 
 
-def save(log_id: str, body: Any) -> dict[str, Any]:
+def _parse_saved(body: Any) -> SavedAnalysis:
     if not isinstance(body, dict):
         raise workspace.EventLogWorkspaceError("saved analysis must be an object with name and spec")
-    try:
-        saved = SavedAnalysis(name=body.get("name", ""), spec=parse(body.get("spec")))
-    except ValidationError:
-        raise workspace.EventLogWorkspaceError("saved analysis needs a name of 1–120 characters") from None
     if set(body) - {"name", "spec"}:
         raise workspace.EventLogWorkspaceError("saved analysis accepts only name and spec")
+    try:
+        return SavedAnalysis(name=body.get("name", ""), spec=parse(body.get("spec")))
+    except ValidationError:
+        raise workspace.EventLogWorkspaceError("saved analysis needs a name of 1–120 characters") from None
+
+
+def _store_saved(conn, log_id: str, saved: SavedAnalysis, count: int) -> dict[str, Any]:
+    if count >= MAX_SAVED:
+        raise workspace.EventLogWorkspaceError(f"a log can hold at most {MAX_SAVED} saved analyses")
+    analysis_id = "ana_" + secrets.token_hex(8)
+    created = datetime.now(timezone.utc).replace(tzinfo=None)
+    conn.execute("INSERT INTO saved_analyses VALUES (?, ?, ?, ?)",
+                 [log_id, analysis_id, created, saved.model_dump_json()])
+    return {"analysis_id": analysis_id, "created_at": created.isoformat() + "Z", **saved.model_dump()}
+
+
+def save(log_id: str, body: Any) -> dict[str, Any]:
+    saved = _parse_saved(body)
     with workspace._LOCK:
         conn = workspace._connect()
         try:
             workspace._check_log(conn, log_id)
-            if conn.execute("SELECT count(*) FROM saved_analyses WHERE log_id = ?", [log_id]).fetchone()[0] >= MAX_SAVED:
-                raise workspace.EventLogWorkspaceError(f"a log can hold at most {MAX_SAVED} saved analyses")
-            analysis_id = "ana_" + secrets.token_hex(8)
-            created = datetime.now(timezone.utc).replace(tzinfo=None)
-            conn.execute("INSERT INTO saved_analyses VALUES (?, ?, ?, ?)",
-                         [log_id, analysis_id, created, saved.model_dump_json()])
+            count = conn.execute("SELECT count(*) FROM saved_analyses WHERE log_id = ?", [log_id]).fetchone()[0]
+            return _store_saved(conn, log_id, saved, count)
         finally:
             conn.close()
-    return {"analysis_id": analysis_id, "created_at": created.isoformat() + "Z", **saved.model_dump()}
+
+
+def _pin_case_type(saved: SavedAnalysis, notion: str) -> SavedAnalysis:
+    return saved.model_copy(update={"spec": saved.spec.model_copy(update={"case_type": notion})})
+
+
+def export_template(log_id: str, analysis_id: str) -> dict[str, Any]:
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            row = conn.execute("SELECT definition FROM saved_analyses WHERE log_id = ? AND analysis_id = ?",
+                               [log_id, analysis_id]).fetchone()
+            if row is None:
+                raise workspace.EventLogWorkspaceError("unknown saved analysis")
+            saved = SavedAnalysis.model_validate_json(row[0])
+            notion = workspace._case_type(conn, log_id, saved.spec.case_type)
+            return {"format": ANALYSIS_TEMPLATE_FORMAT, "analysis": _pin_case_type(saved, notion).model_dump()}
+        finally:
+            conn.close()
+
+
+def use_template(log_id: str, document: Any, *, preview: bool) -> dict[str, Any]:
+    if (not isinstance(document, dict) or set(document) != {"format", "analysis"}
+            or document["format"] != ANALYSIS_TEMPLATE_FORMAT):
+        raise workspace.EventLogWorkspaceError("expected an OpenWorkGraph saved analysis file")
+    saved = _parse_saved(document["analysis"])
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            notion = workspace._case_type(conn, log_id, saved.spec.case_type)
+            saved = _pin_case_type(saved, notion)
+            prior = conn.execute("SELECT analysis_id, definition FROM saved_analyses WHERE log_id = ?",
+                                 [log_id]).fetchall()
+            default = workspace._case_type(conn, log_id, None) if prior else notion
+            duplicate = None
+            for analysis_id, definition in prior:
+                existing = SavedAnalysis.model_validate_json(definition)
+                if _pin_case_type(existing, existing.spec.case_type or default) == saved:
+                    duplicate = analysis_id
+                    break
+            if preview:
+                return {"analysis": saved.model_dump(), "duplicate": duplicate is not None,
+                        "available_slots": max(0, MAX_SAVED - len(prior))}
+            if duplicate is not None:
+                return {"added": False, "analysis_id": duplicate}
+            return {"added": True, **_store_saved(conn, log_id, saved, len(prior))}
+        finally:
+            conn.close()
 
 
 def delete_saved(log_id: str, analysis_id: str) -> dict[str, Any]:
@@ -806,4 +866,5 @@ def delete_metric(log_id: str, metric_id: str) -> dict[str, Any]:
     return {"deleted": True, "metric_id": metric_id}
 
 
-__all__ = ["delete_metric", "delete_saved", "list_metrics", "list_saved", "parse", "run", "save", "save_metric"]
+__all__ = ["delete_metric", "delete_saved", "export_template", "list_metrics", "list_saved", "parse", "run", "save",
+           "save_metric", "use_template"]
