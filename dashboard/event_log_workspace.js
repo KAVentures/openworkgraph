@@ -5441,6 +5441,20 @@
   }
   const measuredMinutes=(p,basis)=>basis==='mean'&&p.mean_minutes!==undefined?p.mean_minutes:p.minutes;
 
+  function serviceModelRows(models){
+    const reasons={insufficient_gaps:'Fewer than 10 recorded gaps',constant_gaps:'Constant recorded gaps',
+      all_gaps_zero:'All recorded gaps zero',dispersion_outside_supported_range:'Dispersion outside supported range',
+      moment_matched:'Moment-matched observed dispersion'};
+    return Object.entries(models||{}).sort(([a],[b])=>a.localeCompare(b)).map(([activity,m])=>[
+      activity,m.model,m.observed_gaps??'—',m.coefficient_of_variation==null?'—':Number(m.coefficient_of_variation).toFixed(3),
+      reasons[m.reason]||'Chosen distribution']);
+  }
+  function serviceModelReview(models){
+    return [el('h4','Activity-time distribution and calibration coverage'),
+      el('p','These are recorded gaps, including waiting, not observed processing times. Use the mean gap basis to match the measured moments.','muted'),
+      table(['Activity','Distribution','Recorded gaps','Coefficient of variation','Basis / fallback'],serviceModelRows(models))];
+  }
+
   function validationBlock(){
     const wrap=el('div');
     const share=select('owgEventLogSimHoldout',[['0.3','Latest 30% of cases'],['0.2','Latest 20% of cases'],['0.4','Latest 40% of cases']]);
@@ -5457,6 +5471,7 @@
         const r=await (await api(logPath('simulation/validation'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({holdout_share:Number(share.value),distribution:dist.value,activity_time_basis:basis.value,routing:holdoutRouting.value})})).json();
         const t=validationText(r);
         out.replaceChildren(el('div',t.cases,'muted'),...[t.routing,t.stopped].filter(Boolean).map(x=>el('div',x,'note')),table(['','Simulated','Later cases','Difference'],t.rows),el('div',t.verdict,'note'),
+          ...(r.service_time_models?serviceModelReview(r.service_time_models):[]),
           (()=>{const list=el('ul');list.className='muted';r.assumptions.slice(0,4).forEach(x=>list.appendChild(el('li',x)));return list;})());
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
       finally{run.disabled=false;}
@@ -5550,6 +5565,11 @@
         result.replaceChildren(
           table(['Run','Median cycle time','90th percentile cycle time','Post-warm-up cases completed','Completions per day','Longest mean waits','Comparison status'],entries),
           el('p','Runs with unstable queues or incomplete or abandoned cases have their deltas withheld. No winning option is selected or executed.','muted'),
+          ...(report.service_time_models?[
+            el('h4','Baseline variability'),...serviceModelReview(report.service_time_models.baseline),
+            ...Object.entries(report.service_time_models.alternatives).flatMap(([name,models])=>[
+              el('h4',name),...serviceModelReview(models)])
+          ]:[]),
           saveInputs,saveReport
         );
       }catch(error){if(active()&&isCurrent())result.replaceChildren(el('p',error.message,'muted'));}
@@ -5645,6 +5665,14 @@
           for(const activity of result.activities||[])for(const metric of ['resources','minutes','utilization','mean_wait_seconds','p90_wait_seconds'])
             data.push(['activity',name,activity.activity+' / '+metric,activity[metric],metric==='minutes'?'minutes':metric.endsWith('_seconds')?'seconds':metric==='utilization'?'fraction':'resources']);
         }
+        if(r.baseline_service_time_models){
+          const models=[['baseline',r.baseline_service_time_models],
+            ['scenario',Object.fromEntries(Object.entries(r.scenario.activities).map(([a,p])=>[a,p.service_time_model]))]];
+          for(const [name,items] of models)for(const [activity,m] of Object.entries(items)){
+            for(const key of ['model','observed_gaps','coefficient_of_variation','reason'])
+              data.push(['service_time_model',name,activity+' / '+key,m[key]??'',key==='observed_gaps'?'gaps':'']);
+          }
+        }
         for(const assumption of r.assumptions||[])data.push(['assumption','both',assumption,'','']);
         data.push(['interpretation','both',report.interpretation,'','']);
         return data;
@@ -5660,6 +5688,10 @@
         ...(r.result.unstable?[el('div','Warning: at least one activity has more work arriving than its resources can handle, so its queue keeps growing. Times below depend on how many cases you simulate.','note')]:[]),
         table(['Run','Median cycle time','90th percentile','Mean','Completed per day'],[line('Simulated baseline',r.baseline),line(r.scenario.label||'Scenario',r.result)]),
         el('div',change===null?'':'Median cycle time change: '+(change>=0?'+':'−')+duration(Math.abs(change))+'.','muted'),
+        ...(r.baseline_service_time_models?[
+          el('h4','Baseline variability'),...serviceModelReview(r.baseline_service_time_models),
+          el('h4','Scenario variability'),...serviceModelReview(Object.fromEntries(Object.entries(r.scenario.activities).map(([a,p])=>[a,p.service_time_model])))
+        ]:[]),
         ...(r.result.visits_per_case?[el('h4','Visits per case (step-by-step routing)'),
           table(['Activity','Baseline','Scenario','Change'],visitRows(r.baseline,r.result)),
           ...(r.result.routes_cut_at_path_limit||r.baseline.routes_cut_at_path_limit?[el('div',(r.result.routes_cut_at_path_limit+r.baseline.routes_cut_at_path_limit)+' simulated cases reached the path-length limit and were stopped there.','note')]:[])]:[]),
@@ -5816,6 +5848,7 @@
             if(new Set(choices.map(x=>x.label)).size!==choices.length)
               throw new Error('Give every alternative a distinct name.');
             const baseline={cases:caseCount,seed:1,activity_time_basis:timeBasis.value};
+            if(dist.value==='measured_gamma')baseline.distribution=dist.value;
             if(arrivals.value!=='')baseline.arrivals_per_hour=Number(arrivals.value);
             if(days.value)baseline.calendar=simCalendar({
               days:days.value,from:from.value,to:to.value,

@@ -1047,7 +1047,7 @@ def what_if(log_id: str, scenario: Any, case_type: str | None = None) -> dict[st
         raise EventLogWorkspaceError("measured_gamma cannot yet be combined with exponential-based estimation uncertainty")
     base = calibrate(log_id, case_type, pattern_zones=zones, routing=route_kind,
                      routing_context=scenario.get("routing_context") if isinstance(scenario, dict) else None,
-                     measure_variability=measured_gamma)
+                     **({"measure_variability": True} if measured_gamma else {}))
     if not base["paths"]:
         raise EventLogWorkspaceError("no complete case paths fit the simulation limits; inspect calibration coverage")
     baseline_spec = {"cases": scenario.get("cases", 2000) if isinstance(scenario, dict) else 2000,
@@ -1183,7 +1183,8 @@ def validate(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, 
     if holdout < 10 or training < 10:
         raise EventLogWorkspaceError("validation needs at least 10 cases finished before the cutoff and 10 started after it")
     measured_gamma = spec.get("distribution") == variability.DISTRIBUTION
-    base = calibrate(log_id, case_type, until=cutoff, routing=route_kind, measure_variability=measured_gamma)
+    base = calibrate(log_id, case_type, until=cutoff, routing=route_kind,
+                     **({"measure_variability": True} if measured_gamma else {}))
     if not base["paths"]:
         raise EventLogWorkspaceError("no cases finished before the cutoff fit the simulation limits")
     model = parse_scenario({k: spec[k] for k in ("cases", "seed", "distribution", "calendar", "arrival_pattern",
