@@ -25,6 +25,8 @@
       const expected=spec[key],actual=report.scope?.[key];
       if(expected==null?actual!=null:(!Number.isFinite(Date.parse(expected))||Date.parse(expected)!==Date.parse(actual)))return false;
     }
+    const mode=spec.projection||'actions',returnedMode=report.scope?.projection||'actions';
+    if(!['actions','actions_and_navigation'].includes(mode)||mode!==returnedMode)return false;
     const cases=report.cases;
     return report.case_count===ids.length&&integer(report.event_count)&&report.event_count>0&&report.event_count<=10000&&
       Array.isArray(cases)&&cases.length===ids.length&&cases.every((row,i)=>row?.execution_id===ids[i]&&
@@ -70,6 +72,12 @@
     });
     const nameLabel=el('label','Snapshot name ');
     const name=el('input');name.type='text';name.maxLength=90;name.value='Workflow selection';nameLabel.appendChild(name);
+    const projectionLabel=el('label','Structural observations ');
+    const projection=el('select');
+    for(const [value,label] of [['actions','Interactions only'],['actions_and_navigation','Interactions + navigation context']]){
+      const option=el('option',label);option.value=value;projection.appendChild(option);
+    }
+    projectionLabel.appendChild(projection);
     const preview=button('Preview execution event log');
     const summary=el('div');summary.setAttribute('role','status');
     const confirmLabel=el('label');const confirm=el('input');confirm.type='checkbox';
@@ -91,18 +99,20 @@
     });
     let generation=0,busy=false,review=null;
     const spec=()=>({execution_ids:controls.filter(row=>row.check.checked).map(row=>row.id),
-      ...(scope.since?{since:scope.since}:{}),...(scope.until?{until:scope.until}:{})});
+      ...(scope.since?{since:scope.since}:{}),...(scope.until?{until:scope.until}:{}),
+      ...(projection.value==='actions'?{}:{projection:projection.value})});
     const current=()=>section.isConnected&&isCurrent();
     const fresh=()=>review&&JSON.stringify(review.spec)===JSON.stringify(spec());
     const update=()=>{
       for(const row of controls)row.check.disabled=busy;
-      name.disabled=busy;
+      name.disabled=busy;projection.disabled=busy;
       preview.disabled=busy||!spec().execution_ids.length||!current();
       confirm.disabled=busy||!fresh();
       create.disabled=busy||!current()||!fresh()||!confirm.checked||!name.value.trim();
     };
     const invalidate=()=>{generation++;review=null;confirm.checked=false;summary.replaceChildren();status.textContent='';open.hidden=true;createdLogId=null;update();};
     controls.forEach(row=>row.check.addEventListener('change',invalidate));
+    projection.addEventListener('change',invalidate);
     name.addEventListener('input',()=>{confirm.checked=false;update();});
     confirm.addEventListener('change',update);
     preview.addEventListener('click',async()=>{
@@ -116,6 +126,7 @@
         if(!matchingPreview(report,selection))throw Error('The preview did not match the exact selection.');
         review={spec:selection,report};
         summary.replaceChildren(el('p',report.case_count+' execution cases · '+report.event_count+' observations · '+report.timestamp_tie_groups+' tied timestamp groups.'));
+        summary.appendChild(el('p','Projection: '+(report.scope.projection==='actions_and_navigation'?'Interactions + navigation context':'Interactions only')+'. Navigation context is a sensor observation, not proof of a business step.','muted'));
         const list=el('ul');
         report.cases.forEach(row=>list.appendChild(el('li',row.execution_id+' · '+row.events+' observations · '+row.membership_basis)));
         summary.appendChild(list);
@@ -146,7 +157,7 @@
         else persistentNotice('Local snapshot result: '+message);
       }finally{busy=false;update();}
     });
-    section.append(fieldset,nameLabel,preview,summary,confirmLabel,create,status,open);
+    section.append(fieldset,projectionLabel,nameLabel,preview,summary,confirmLabel,create,status,open);
     parent.appendChild(section);update();
   }
   function sourceManifestMatches(report,logId,metadata){
@@ -201,6 +212,7 @@
         if(!sourceManifestMatches(result,log.log_id,metadata))throw Error('Saved source manifest does not match this log.');
         report=result;
         details.appendChild(el('p','Original scope: '+(report.scope.since||'All retained history')+' to '+(report.scope.until||'unbounded end')+'.'));
+        details.appendChild(el('p','Projection: '+(report.scope.projection==='actions_and_navigation'?'Interactions + navigation context':'Interactions only')));
         details.appendChild(el('p','Snapshot SHA-256: '+report.snapshot_sha256,'muted'));
         const list=el('ul');
         report.cases.forEach(row=>{
