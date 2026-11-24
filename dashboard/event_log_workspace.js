@@ -5070,6 +5070,10 @@
 
   const SIM_SCENARIO_FORMAT='openworkgraph.simulation-scenario.v1';
   const SIM_REPORT_FORMAT='openworkgraph.simulation-report.v1';
+  const SIM_PORTFOLIO_FORMAT='openworkgraph.simulation-portfolio.v1';
+  const SIM_PORTFOLIO_REPORT_FORMAT='openworkgraph.simulation-portfolio-report.v1';
+  const SIM_PORTFOLIO_INPUT_LIMIT=65536;
+
   function simulationScenarioFile(raw){
     if(raw.length>2*1024*1024)throw Error('Choose JSON of at most 2 MiB.');
     let doc;
@@ -5099,10 +5103,102 @@
     replay.append(el('summary','Rerun saved simulation inputs'),
       el('p','Run against '+(targetLog?.name||state.logId)+' · '+(notion||'default case notion')+'. Calibration uses the whole case notion.'),
       field('Scenario or simulation report JSON',source),field('Review or edit scenario JSON',draft),rerun,ready);
-    box.append(load,form,replay,runStatus,out,validationBlock());
+    const portfolioReplay=document.createElement('details');
+    const portfolioFile=input('owgEventLogSimPortfolioFile','file');portfolioFile.accept='.json,application/json';
+    const portfolioDraft=document.createElement('textarea');
+    portfolioDraft.id='owgEventLogSimPortfolioDraft';portfolioDraft.rows=8;portfolioDraft.style.width='100%';
+    const portfolioRun=button('Run reviewed comparison','secondary');
+    portfolioRun.id='owgEventLogSimPortfolioReplayRun';portfolioRun.disabled=true;
+    const portfolioReplayStatus=el('p',null,'muted');portfolioReplayStatus.setAttribute('role','status');
+    const portfolioReplayResults=el('div');portfolioReplayResults.id='owgEventLogSimPortfolioReplayResults';
+    portfolioReplay.append(el('summary','Rerun a saved staffing comparison'),
+      el('p','Uses the selected log and case notion to recalibrate the baseline.'),
+      field('Staffing comparison JSON',portfolioFile),field('Review or edit comparison JSON',portfolioDraft),
+      portfolioRun,portfolioReplayStatus,portfolioReplayResults);
+    box.append(load,form,replay,portfolioReplay,runStatus,out,validationBlock());
 
     const generation=state.generation,simulationPath=logPath('simulate');
     const active=()=>generation===state.generation&&box.isConnected;
+    let portfolioRead=0,portfolioRunning=false;
+    const durationOrMissing=value=>value==null?'—':duration(value);
+    async function runPortfolio(packet,result,button,isCurrent){
+      if(new TextEncoder().encode(JSON.stringify(packet)).length>SIM_PORTFOLIO_INPUT_LIMIT){
+        result.replaceChildren(el('p','Comparison inputs must be at most 64 KiB.','muted'));
+        return;
+      }
+      button.disabled=true;
+      result.replaceChildren(el('p','Comparing the alternatives locally…','muted'));
+      try{
+        const report=await(await api(logPath('simulation/portfolio'),{
+          method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(packet)
+        })).json();
+        if(!active()||!isCurrent())return;
+        const metrics=run=>[
+          durationOrMissing(run.cycle_time_seconds?.p50),durationOrMissing(run.cycle_time_seconds?.p90),
+          run.cases_measured,run.completed_per_day??'—',
+          run.longest_wait_activities?.map(item=>item.activity+' ('+durationOrMissing(item.mean_wait_seconds)+')').join(', ')||'—'
+        ];
+        const entries=[['Calibrated baseline',...metrics(report.baseline),
+          report.baseline.unstable?'Overloaded':'Reference']];
+        for(const item of report.alternatives){
+          const delta=item.cycle_time_change_seconds.p50;
+          const status=item.descriptive_cycle_time_comparable&&delta!=null?
+            'Median change '+(delta>=0?'+':'−')+duration(Math.abs(delta)):
+            'No comparable delta'+(item.reasons_deltas_withheld.length?
+              ': '+item.reasons_deltas_withheld.join(', ').replaceAll('_',' '):'');
+          entries.push([item.label,...metrics(item.result),status]);
+        }
+        const saveInputs=buttonForDownload('Download comparison inputs','owg-simulation-portfolio.json',packet);
+        const saveReport=buttonForDownload('Download comparison report','owg-simulation-portfolio-report.json',
+          {format:SIM_PORTFOLIO_REPORT_FORMAT,submitted_portfolio:packet,comparison:report});
+        result.replaceChildren(
+          table(['Run','Median cycle time','90th percentile cycle time','Post-warm-up cases completed','Completions per day','Longest mean waits','Comparison status'],entries),
+          el('p','Runs with unstable queues or incomplete or abandoned cases have their deltas withheld. No winning option is selected or executed.','muted'),
+          saveInputs,saveReport
+        );
+      }catch(error){if(active()&&isCurrent())result.replaceChildren(el('p',error.message,'muted'));}
+      finally{if(isCurrent())button.disabled=false;}
+    }
+    function buttonForDownload(label,filename,packet){
+      const control=button(label,'secondary');
+      control.onclick=()=>download(filename,JSON.stringify(packet,null,2),'application/json');
+      return control;
+    }
+    function syncPortfolioReplay(){
+      portfolioFile.disabled=portfolioDraft.disabled=portfolioRunning;
+      portfolioRun.disabled=portfolioRunning||!portfolioDraft.value.trim();
+    }
+    portfolioDraft.oninput=()=>{
+      portfolioRead++;portfolioReplayStatus.textContent='';portfolioReplayResults.replaceChildren();syncPortfolioReplay();
+    };
+    portfolioFile.onchange=async()=>{
+      const turn=++portfolioRead,file=portfolioFile.files[0];
+      portfolioDraft.value='';portfolioReplayStatus.textContent='';portfolioReplayResults.replaceChildren();syncPortfolioReplay();
+      if(!file)return;
+      try{
+        if(file.size>2*1024*1024)throw Error('Choose a JSON file of at most 2 MiB.');
+        const doc=JSON.parse(await file.text());
+        if(!active()||turn!==portfolioRead)return;
+        const packet=doc?.format===SIM_PORTFOLIO_REPORT_FORMAT?doc.submitted_portfolio:doc;
+        if(packet?.format!==SIM_PORTFOLIO_FORMAT)throw Error('Choose an OWG staffing comparison or comparison report.');
+        portfolioDraft.value=JSON.stringify(packet,null,2);
+        const sourceName=doc.format===SIM_PORTFOLIO_REPORT_FORMAT?doc.comparison?.log?.name:null;
+        portfolioReplayStatus.textContent=typeof sourceName==='string'?
+          'Loaded comparison inputs from '+sourceName.slice(0,200)+'. Review them before running.':
+          'Review the loaded comparison inputs before running.';
+        syncPortfolioReplay();
+      }catch(error){if(active()&&turn===portfolioRead)portfolioReplayStatus.textContent=error instanceof SyntaxError?
+        'Comparison inputs must be valid JSON.':error.message;}
+    };
+    portfolioRun.onclick=async()=>{
+      let packet;
+      try{packet=JSON.parse(portfolioDraft.value);}
+      catch(_){portfolioReplayStatus.textContent='Comparison inputs must be valid JSON.';return;}
+      portfolioReplayStatus.textContent='';
+      portfolioRunning=true;syncPortfolioReplay();
+      try{await runPortfolio(packet,portfolioReplayResults,portfolioRun,()=>portfolioReplayResults.isConnected);}
+      finally{portfolioRunning=false;syncPortfolioReplay();}
+    };
     let reading=0,working=false,formRun=null;
     function syncRun(){
       if(formRun)formRun.disabled=working;
@@ -5328,29 +5424,9 @@
             if(days.value)baseline.calendar=simCalendar({
               days:days.value,from:from.value,to:to.value,
               timezone:zone.value,holidays:holidays.value});
-            const body={format:'openworkgraph.simulation-portfolio.v1',baseline,alternatives:choices};
-            comparePortfolio.disabled=true;portfolioResult.replaceChildren(el('p','Comparing the selected alternatives locally…','muted'));
-            const report=await(await api(logPath('simulation/portfolio'),{
-              method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)
-            })).json();
-            const cycle=result=>result.cycle_time_seconds?.p50===null?'—':duration(result.cycle_time_seconds?.p50);
-            const entries=[['Measured baseline',cycle(report.baseline),report.baseline.cases_measured,
-              report.baseline.unstable?'Overloaded':'Reference only']];
-            for(const item of report.alternatives){
-              entries.push([item.label,cycle(item.result),item.result.cases_measured,
-                item.descriptive_cycle_time_comparable?
-                  'Descriptive change '+(item.cycle_time_change_seconds.p50>=0?'+':'−')+
-                    duration(Math.abs(item.cycle_time_change_seconds.p50)):
-                  'No comparable delta: '+item.reasons_deltas_withheld.join(', ').replaceAll('_',' ')]);
-            }
-            portfolioResult.replaceChildren(
-              el('p','Shared source and calibration digest '+report.calibration_and_shared_inputs_sha256+
-                '. All numbers are simulations; a smaller median is not proof of savings.','muted'),
-              table(['Run','Median cycle time','Post-warm-up cases completed','Comparison status'],entries),
-              el('p','Runs with unstable queues or incomplete/abandoned cases have their deltas withheld. No winning option is selected or executed.','muted')
-            );
+            const packet={format:SIM_PORTFOLIO_FORMAT,baseline,alternatives:choices};
+            await runPortfolio(packet,portfolioResult,comparePortfolio,()=>portfolioResult.isConnected);
           }catch(error){portfolioResult.replaceChildren(el('p',error.message,'muted'));}
-          finally{comparePortfolio.disabled=false;}
         };
         formRun=run;syncRun();
         run.onclick=async()=>{
