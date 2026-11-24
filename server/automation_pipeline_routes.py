@@ -74,6 +74,23 @@ def portfolio_rollup(request: Request):
     return _respond(pipeline.portfolio)
 
 
+@router.get("/v1/automation-pipeline/budget-scenario/inventory")
+async def portfolio_budget_inventory(request: Request):
+    from . import automation_budget_scenario as scenario
+    _require_dashboard(request)
+    return await run_in_threadpool(_respond, scenario.inventory)
+
+
+@router.post("/v1/automation-pipeline/budget-scenario")
+async def portfolio_budget_scenario(request: Request):
+    from . import automation_budget_scenario as scenario
+    from .event_log_routes import _json_body
+    _require_dashboard(request)
+    spec = await _json_body(request, "portfolio budget scenario", strict=True, limit=16384)
+    _require_dashboard(request)
+    return await run_in_threadpool(_respond, scenario.solve, spec)
+
+
 @router.get("/v1/automation-pipeline/benefit-overlap")
 def benefit_overlap_review(request: Request):
     """Read-only potential benefit duplication review, never an aggregate savings claim."""
