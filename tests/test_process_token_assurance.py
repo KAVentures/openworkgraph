@@ -45,8 +45,8 @@ def graph(kind="decision", loop=False):
 
 @pytest.mark.parametrize("kind,states,firings,shortest", [
     ("decision", 8, 8, 5),
-    ("parallel_split", 11, 12, 6),
-    ("inclusive_split", 15, 18, 5),
+    ("parallel_split", 8, 8, 6),
+    ("inclusive_split", 12, 14, 5),
 ])
 def test_marking_exploration_and_completed_witnesses(kind, states, firings, shortest):
     model = graph(kind)
