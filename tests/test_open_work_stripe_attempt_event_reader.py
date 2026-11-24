@@ -84,7 +84,7 @@ def test_revocation_between_account_and_event_prevents_second_network_call():
     def reader(path, key):
         calls.append(path)
         return _reader(path, key)
-    checks = iter([True, False])
+    checks = iter([True, True, False])
     snapshot = _read(reader=reader, recheck_authorization=lambda: next(checks))
     assert snapshot["complete"] is False
     assert snapshot["revoked"] is True
@@ -96,7 +96,7 @@ def test_revocation_after_event_read_discards_provider_evidence():
     def reader(path, key):
         calls.append(path)
         return _reader(path, key)
-    checks = iter([True, True, False])
+    checks = iter([True, True, True, False])
     snapshot = _read(reader=reader, recheck_authorization=lambda: next(checks))
     assert snapshot["complete"] is False
     assert snapshot["revoked"] is True
