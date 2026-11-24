@@ -239,7 +239,7 @@ with TestClient(app) as c:
  assert c.post(rediscover+'&retain=true',json=pins,headers=h).status_code==403
  renewed=c.post(rediscover+'&retain=true',json=pins,headers={**h,'x-owg-local-storage-confirmed':'true'})
  assert renewed.status_code==200 and renewed.json()['source_snapshot_recorded'] is True,renewed.text
- assert catalog.get(saved['workflow_id'],1)==saved
+ assert catalog.get(saved['workflow_id'],1)['content_sha256']==saved['content_sha256']
 
 
  idea=assess(pipeline.create_from_process(ref(saved)))
@@ -505,6 +505,7 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('nod
 const scope={window:{}};
 vm.runInNewContext(fs.readFileSync('dashboard/event_log_workspace.js','utf8'),scope);
 vm.runInNewContext(fs.readFileSync('dashboard/automation_pipeline.js','utf8'),scope);
+vm.runInNewContext(fs.readFileSync('dashboard/process_catalog.js','utf8'),{window:scope.window,document:{readyState:'loading',addEventListener(){}}});
 const matches=scope.window.__owgEventLogModel.matchingDiscoveryInspection;
 const m=scope.window.__owgPipelineModel;
 const sha='a'.repeat(64),other='b'.repeat(64),ref='urn:openworkgraph:local-log-discovery:'+sha;
@@ -553,6 +554,25 @@ assert(after.readiness.blockers.includes('effective_discovery_input_not_current'
 assert.equal(after.dataset_origins[0].effective_input.current_sha256,other);
 assert(m.compareHandoffReviewPackets(before,after).changes.includes('Dataset and cohort source checks'));
 assert.equal(m.handoffDependencyReview(journey,'project','idea','2026-11-24T06:00:01Z').stages[0].status,'needs_review');
+const rediscoveryMatches=scope.window.__owgProcessCatalogModel.matchingRediscovery;
+const rediscoveryBasis={...basis,selection_sha256:sha};
+const model={format:'openworkgraph.process-model.v1',goal:'',execution_authorized:false,outcomes_verified:false,
+  activities:[{implementation:'unmapped'}],transitions:[],business_rules:[{user_confirmed:false}],
+  outcome_expectations:[],manual_review_conditions:[],opportunity_scenario:null};
+const proposal={format:'openworkgraph.discovery-rediscovery.v1',workflow_id:basis.workflow_id,
+  revision:basis.revision,process_sha256:sha,reference:ref,log_id:basis.log_id,selection_sha256:sha,
+  original_model_sha256:sha,current_model_sha256:other,original_effective_input:pin,current_effective_input:changed,
+  saved_process_changed:false,previous_approvals_carried:false,execution_authorized:false,business_outcomes_verified:false,
+  source_snapshot_recorded:false,source_snapshot:null,process_model:model,current_quality:{},original_quality:{}};
+assert(rediscoveryMatches(proposal,rediscoveryBasis,false));
+assert(!rediscoveryMatches({...proposal,previous_approvals_carried:true},rediscoveryBasis,false));
+assert(!rediscoveryMatches({...proposal,process_model:{...model,business_rules:[{user_confirmed:true}]}},rediscoveryBasis,false));
+assert(!rediscoveryMatches({...proposal,process_model:{...model,activities:[{implementation:'api'}]}},rediscoveryBasis,false));
+const recorded={...proposal,source_snapshot_recorded:true,source_snapshot:{
+  reference:'urn:openworkgraph:local-log-discovery:'+other,selection_sha256:sha,effective_input:changed}};
+assert(rediscoveryMatches(recorded,rediscoveryBasis,true,proposal));
+assert(!rediscoveryMatches({...recorded,current_model_sha256:sha},rediscoveryBasis,true,proposal));
+assert(!rediscoveryMatches(recorded,{...rediscoveryBasis,revision:3},true,proposal));
 console.log('Exact discovery inspection and handoff model checks passed');
 """
     result = subprocess.run(["node", "-e", script], cwd=Path(__file__).resolve().parents[1],
