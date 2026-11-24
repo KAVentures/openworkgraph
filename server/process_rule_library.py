@@ -150,13 +150,13 @@ def link(model_value: dict[str, Any], rule_id: str, rule_set_id: str, library_ru
     target = next((r for r in rules if r["id"] == rule_id), None)
     if target is None:
         raise RuleLibraryError("Unknown design rule")
-    target.update(text=source["text"], user_confirmed=False,
-                  library_ref={"rule_set_id": rule_set_id, "revision": library["revision"],
-                               "rule_id": library_rule_id, "content_sha256": source["content_sha256"]})
-    if source.get("predicate") is not None:
-        target["predicate"] = source["predicate"]
-    else:
-        target.pop("predicate", None)
+    if rule_digest(source) != source["content_sha256"]:
+        raise RuleLibraryError("Library rule content does not match its pinned digest")
+    _relink_rule(target, library, source)
+    _, affected = _table_impact(model, {rule_id})
+    for table in model.get("decision_tables", []):
+        if table["id"] in affected:
+            table["user_confirmed"] = False
     try:
         return ProcessModel.model_validate(model).model_dump()
     except ValidationError:
