@@ -200,6 +200,9 @@ def test_review_exact_export_bytes_without_provider_or_persistence(prepared):
     assert review['document_sha256']==meta['document_sha256']
     assert review['historical_source_operation_reported_verified'] is True
     assert review['process_expectation_status']=='retained_expectation_matches'
+    assert review['current_process_reference_status']=='current'
+    assert review['process_reference_is_current'] is True
+    assert review['latest_process_revision']==1
     assert review['run_attribution_status']=='no_run_selected_at_export'
     assert review['idea_revision_matches_export'] is True
     assert not review['source_read_performed'] and not review['current_source_state_verified']
@@ -218,8 +221,17 @@ def test_review_exact_export_bytes_without_provider_or_persistence(prepared):
         checks.review_export(other['idea_id'],pid,content)
     pipeline.transition(iid,{'to':'on_hold','expected_revision':idea['revision']})
     assert not checks.review_export(iid,pid,content)['idea_revision_matches_export']
+    newer = catalog.save(CatalogWrite(workflow_id='review',expected_revision=1,
+        title='Changed case review',process_model=model('Changed process goal'),user_confirmed=True))
+    historical=checks.review_export(iid,pid,content)
+    assert historical['process_expectation_status']=='retained_expectation_matches'
+    assert historical['current_process_reference_status']=='changed'
+    assert historical['process_reference_is_current'] is False
+    assert historical['latest_process_revision']==newer['revision']
     catalog.store.forget('local','review')
-    assert checks.review_export(iid,pid,content)['process_expectation_status']=='retained_expectation_unavailable_or_changed'
+    absent=checks.review_export(iid,pid,content)
+    assert absent['process_expectation_status']=='retained_expectation_unavailable_or_changed'
+    assert absent['current_process_reference_status']=='unavailable'
     assert len(calls)==1
 
 
