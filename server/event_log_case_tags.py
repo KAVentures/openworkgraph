@@ -11,8 +11,10 @@ in every analysis. Deleting the log deletes its tags.
 """
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timezone
+from hashlib import sha256
 from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -40,12 +42,21 @@ class AddTags(_Strict):
     case_ids: list[CaseID] | None = Field(default=None, min_length=1, max_length=MAX_CASE_IDS)
     cohort: dict[str, Any] | None = None
     case_type: str | None = Field(default=None, min_length=1, max_length=200)
+    expected_selection_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
     def _one_selector(self):
         if (self.case_ids is None) == (self.cohort is None):
             raise ValueError("give either case_ids or cohort")
         return self
+
+
+class EditTagNote(_Strict):
+    tag: str = Field(min_length=1, max_length=60)
+    case_id: CaseID
+    note: str = Field(max_length=500)
+    expected_note: str = Field(max_length=500)
+    expected_tagged_at: str = Field(min_length=1, max_length=40)
 
 
 class RemoveTags(_Strict):
@@ -77,33 +88,70 @@ def _summary(conn, log_id: str) -> list[dict[str, Any]]:
             for t, n, at, notes in rows]
 
 
+def _select_cases(conn, log_id: str, parsed: AddTags, tag: str) -> tuple[int, int, int]:
+    chosen = cohorts.parse_cohort(parsed.cohort) if parsed.cohort is not None else None
+    if chosen is not None:
+        cohorts.restrict(conn, chosen, log_id)
+        conn.execute("""CREATE TEMP TABLE ct_selected AS SELECT DISTINCT case_id
+            FROM ce LIMIT ?""", [MAX_CASES_BY_FILTER + 1])
+        selected = conn.execute("SELECT count(*) FROM ct_selected").fetchone()[0]
+        if selected > MAX_CASES_BY_FILTER:
+            raise workspace.EventLogWorkspaceError(f"the filter matches more than {MAX_CASES_BY_FILTER:,} cases")
+        unknown = 0
+    else:
+        wanted = list(dict.fromkeys(parsed.case_ids))
+        conn.execute("""CREATE TEMP TABLE ct_selected AS SELECT case_id FROM unnest(?) AS wanted(case_id)
+            WHERE case_id IN (SELECT case_id FROM ce)""", [wanted])
+        selected = conn.execute("SELECT count(*) FROM ct_selected").fetchone()[0]
+        unknown = len(wanted) - selected
+    already = conn.execute("""SELECT count(*) FROM case_tags WHERE log_id = ? AND tag = ?
+        AND case_id IN (SELECT case_id FROM ct_selected)""", [log_id, tag]).fetchone()[0]
+    return selected, already, unknown
+
+
+def _selection_review(conn, log_id, parsed, tag, unknown):
+    digest = sha256()
+    settings = [log_id, parsed.case_type, tag, parsed.note.strip(), unknown]
+    digest.update(json.dumps(settings, separators=(',', ':')).encode() + b'\n')
+    conn.execute("""SELECT s.case_id, t.note, CAST(t.tagged_at AS VARCHAR) FROM ct_selected s
+        LEFT JOIN case_tags t ON t.log_id = ? AND t.tag = ? AND s.case_id = t.case_id
+        ORDER BY s.case_id""", [log_id, tag])
+    examples = []
+    while rows := conn.fetchmany(2048):
+        for key, note, at in rows:
+            digest.update(json.dumps([key, note, at], separators=(',', ':')).encode() + b'\n')
+            if len(examples) < 15:
+                examples.append({"case_id": key, "already_tagged": at is not None, "note": note})
+    return digest.hexdigest(), examples
+
+
+def preview(log_id: str, spec: Any) -> dict[str, Any]:
+    parsed, tag = _validate(AddTags, spec)
+
+    def run(conn):
+        selected, already, unknown = _select_cases(conn, log_id, parsed, tag)
+        digest, examples = _selection_review(conn, log_id, parsed, tag, unknown)
+        return {"tag": tag, "matched_cases": selected, "already_tagged": already, "unknown_case_ids": unknown,
+                "selection_sha256": digest, "examples": examples}
+
+    return workspace._query(log_id, parsed.case_type, run)
+
+
 def add(log_id: str, spec: Any) -> dict[str, Any]:
     parsed, tag = _validate(AddTags, spec)
-    chosen = cohorts.parse_cohort(parsed.cohort) if parsed.cohort is not None else None
     note = parsed.note.strip()
 
     def run(conn):
-        if chosen is not None:
-            cohorts.restrict(conn, chosen, log_id)
-            conn.execute("""CREATE TEMP TABLE ct_selected AS SELECT DISTINCT case_id
-                FROM ce LIMIT ?""", [MAX_CASES_BY_FILTER + 1])
-            selected = conn.execute("SELECT count(*) FROM ct_selected").fetchone()[0]
-            if selected > MAX_CASES_BY_FILTER:
-                raise workspace.EventLogWorkspaceError(f"the filter matches more than {MAX_CASES_BY_FILTER:,} cases")
-            unknown = 0
-        else:
-            wanted = list(dict.fromkeys(parsed.case_ids))
-            conn.execute("""CREATE TEMP TABLE ct_selected AS SELECT case_id FROM unnest(?) AS wanted(case_id)
-                WHERE case_id IN (SELECT case_id FROM ce)""", [wanted])
-            selected = conn.execute("SELECT count(*) FROM ct_selected").fetchone()[0]
-            unknown = len(wanted) - selected
+        selected, already, unknown = _select_cases(conn, log_id, parsed, tag)
+        if parsed.expected_selection_sha256 is not None:
+            digest, _ = _selection_review(conn, log_id, parsed, tag, unknown)
+            if digest != parsed.expected_selection_sha256:
+                raise workspace.EventLogWorkspaceError("the tag selection or existing notes changed; preview again")
         if not selected:
             raise workspace.EventLogWorkspaceError("no cases to tag: none of them is in this log")
         existing_tags = {r[0] for r in conn.execute("SELECT DISTINCT tag FROM case_tags WHERE log_id = ?", [log_id]).fetchall()}
         if tag not in existing_tags and len(existing_tags) >= MAX_TAGS_PER_LOG:
             raise workspace.EventLogWorkspaceError(f"a log keeps at most {MAX_TAGS_PER_LOG} tags; remove one first")
-        already = conn.execute("""SELECT count(*) FROM case_tags WHERE log_id = ? AND tag = ?
-            AND case_id IN (SELECT case_id FROM ct_selected)""", [log_id, tag]).fetchone()[0]
         total = conn.execute("SELECT count(*) FROM case_tags WHERE log_id = ?", [log_id]).fetchone()[0]
         if total - already + selected > MAX_TAGGED_ROWS_PER_LOG:
             raise workspace.EventLogWorkspaceError(f"a log keeps at most {MAX_TAGGED_ROWS_PER_LOG:,} case tags")
@@ -125,6 +173,23 @@ def add(log_id: str, spec: Any) -> dict[str, Any]:
             "already_tagged": result["already_tagged"], "unknown_case_ids": result["unknown_case_ids"],
             "case_notion": result["case_notion"], "tags": result["tags"],
             "tags_are_analyst_judgement": True}
+
+
+def edit_note(log_id: str, spec: Any) -> dict[str, Any]:
+    parsed, tag = _validate(EditTagNote, spec)
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            key = [log_id, tag, parsed.case_id]
+            row = conn.execute("SELECT note, tagged_at FROM case_tags WHERE log_id = ? AND tag = ? AND case_id = ?", key).fetchone()
+            if row is None or (row[0], row[1].isoformat() + 'Z') != (parsed.expected_note, parsed.expected_tagged_at):
+                raise workspace.EventLogWorkspaceError("the case tag or note changed; reopen the tagged cases")
+            note = parsed.note.strip()
+            conn.execute("UPDATE case_tags SET note = ? WHERE log_id = ? AND tag = ? AND case_id = ?", [note, *key])
+            return {"format": FORMAT, "tag": tag, "case_id": parsed.case_id, "note": note, "tags": _summary(conn, log_id)}
+        finally:
+            conn.close()
 
 
 def remove(log_id: str, spec: Any) -> dict[str, Any]:

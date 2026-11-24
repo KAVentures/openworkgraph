@@ -572,8 +572,49 @@ def _unit(measure: Measure, coverage: list[dict[str, Any]], level: str) -> str |
     return {"duration_seconds": "seconds", "events": "events", "distinct_activities": "activities"}[measure.of]
 
 
-def run(log_id: str, spec: Any, *, control=None) -> dict[str, Any]:
+def case_group_digest(values: list[Any]) -> str:
+    """Identify exact dimension values, including nulls and complete variants."""
+    encoded = json.dumps(values, ensure_ascii=False, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _group_cases(conn, group: tuple[str, int], display_rows: list, columns: list[str],
+                 dimensions: list[str], dimension_params: list, where_sql: str,
+                 where_params: list, metric_columns: dict[str, str]) -> dict[str, Any]:
+    group_digest, offset = group
+    values = next((list(row[:len(dimensions)]) for row in display_rows
+                   if case_group_digest(list(row[:len(dimensions)])) == group_digest), None)
+    if values is None:
+        raise workspace.EventLogWorkspaceError("That group was not present in the reviewed result.")
+    aliases = [f"d{i}" for i in range(len(dimensions))]
+    dimension_select = [f"{sql} AS {alias}" for sql, alias in zip(dimensions, aliases)]
+    metrics = list(metric_columns.values())
+    projected = ["case_id", "duration", "events", "distinct_activities", *metrics, *dimension_select]
+    selection = f"WITH candidates AS (SELECT {', '.join(projected)} FROM qc{where_sql})"
+    predicates = "WHERE " + " AND ".join(f"{alias} IS NOT DISTINCT FROM ?" for alias in aliases) if aliases else ""
+    params = dimension_params + where_params + values
+    total = conn.execute(f"{selection} SELECT count(*) FROM candidates {predicates}", params).fetchone()[0]
+    page_size = 25
+    output = "case_id, duration, events, distinct_activities" + "".join(f", {metric}" for metric in metrics)
+    rows = conn.execute(
+        f"{selection} SELECT {output} FROM candidates {predicates} ORDER BY case_id LIMIT ? OFFSET ?",
+        params + [page_size, offset],
+    ).fetchall()
+    return {
+        "group": dict(zip(columns, values)),
+        "matching_cases": total,
+        "offset": offset,
+        "next_offset": offset + page_size if offset + page_size < total else None,
+        "cases": [{"case_id": case_id, "duration_seconds": duration, "event_count": events,
+                   "distinct_activities": distinct, "metrics": dict(zip(metric_columns, metric_values))}
+                  for case_id, duration, events, distinct, *metric_values in rows],
+    }
+
+
+def run(log_id: str, spec: Any, *, control=None, group_page: tuple[str, int] | None = None) -> dict[str, Any]:
     parsed = parse(spec)
+    if group_page is not None and parsed.level != "cases":
+        raise workspace.EventLogWorkspaceError("Review cases is available for case-level analyses.")
     try:
         import duckdb
     except ImportError:
@@ -665,6 +706,9 @@ def run(log_id: str, spec: Any, *, control=None) -> dict[str, Any]:
         tiebreak = "".join(f", d{i} NULLS LAST" for i in range(len(dimension_sql)))
         sql = f"SELECT {', '.join(select)} FROM {source}{where_sql}{group} ORDER BY {order}{tiebreak} LIMIT ?"
         rows = conn.execute(sql, dimension_params + params + [parsed.limit + 1]).fetchall()
+        if group_page is not None:
+            return _group_cases(conn, group_page, rows[:parsed.limit], list(parsed.dimensions),
+                                dimension_sql, dimension_params, where_sql, params, metric_columns)
         total = conn.execute(f"SELECT count(*), count(DISTINCT case_id) FROM {source}{where_sql}", params).fetchone()
         columns = list(parsed.dimensions) + [label for label, _ in measures]
         return {

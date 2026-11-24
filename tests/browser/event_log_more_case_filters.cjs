@@ -137,6 +137,10 @@ const path=require('node:path');
    await page.getByText('Import a filter from another log',{exact:true}).click();
    await page.locator('#owgFilterSetFile').setInputFiles({name:exported.suggestedFilename(),mimeType:'application/json',
      buffer:await fs.readFile(filterFile)});
+   assert.equal(await page.getByRole('button',{name:'Import filter',exact:true}).isDisabled(),true);
+   await page.getByRole('button',{name:'Preview filter file',exact:true}).click();
+   await page.locator('#owgFilterImportPreview').getByText(/Picked items · 1 of .* cases match in item/).waitFor();
+   assert.equal(await page.getByRole('row').filter({hasText:'Picked items'}).count(),0);
    await page.getByRole('button',{name:'Import filter',exact:true}).click();
    await page.locator('#owgFilterSetStatus').getByText('Imported "Picked items".').waitFor();
    const picked=page.getByRole('row').filter({hasText:'Picked items'});

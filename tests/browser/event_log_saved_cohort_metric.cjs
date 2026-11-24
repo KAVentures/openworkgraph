@@ -113,9 +113,21 @@ const path=require('node:path');
   // Ordinary analysis downloads must not release a cached result if the
   // authenticated saved-log recomputation changes after operator review.
   await page.locator('#owgAnalysisBackground').uncheck();
+  await page.locator('#owgAnalysisDim1').selectOption('last_activity');
   await page.locator('#owgAnalysisRun').click();
   await page.locator('#owgAnalysisJson').waitFor({state:'visible',timeout:60000});
   await page.waitForFunction(()=>!document.querySelector('#owgAnalysisJson').disabled,null,{timeout:60000});
+  const groupRun=page.getByRole('button',{name:'Review cases in result row 1',exact:true});
+  const [groupResponse]=await Promise.all([
+    page.waitForResponse(response=>response.url().endsWith('/analysis/groups/cases')),groupRun.click()
+  ]);
+  assert.equal(groupResponse.status(),200,await groupResponse.text());
+  const group=await groupResponse.json();
+  const groupPanel=page.locator('#owgAnalysisGroupCases');
+  assert.equal(group.group.last_activity,await groupRun.locator('xpath=../..').locator('td').first().textContent());
+  assert.ok(group.matching_cases>0);
+  await groupPanel.getByRole('button',{name:'Open analysis case '+group.cases[0].case_id,exact:true}).click();
+  await page.locator('#owgEventLogCaseEvents').getByText(/Showing \d+ of \d+ events/).waitFor();
   const analysisPath='/v1/event-logs/'+encodeURIComponent(logId)+'/analysis-source-bound';
   let revalidationSeen=false;
   const changedAnalysis=async route=>{

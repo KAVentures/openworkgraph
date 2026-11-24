@@ -81,6 +81,7 @@ const path=require('node:path');
    await page.locator('#owgEventLogResults table').first().waitFor();
    assert.match(await page.locator('#owgEventLogResults table').first().innerText(),/\n4\t12\t3\t/);
    const objects=[{id:'order-1',type:'order'},{id:'item-1',type:'item'},{id:'item-2',type:'item'}];
+   objects[0].relationships=[{objectId:'item-1',qualifier:'contains'}];
    const ocel={objectTypes:[],eventTypes:[],objects,events:[{
      id:'event-1',type:'Open',time:'2024-04-01T00:00:00Z',
      attributes:[{name:'lifecycle:transition',value:'complete'}],
@@ -112,8 +113,11 @@ const path=require('node:path');
    assert.deepEqual(objectExport.objects.map(object=>object.id),['item-1','item-2','order-1']);
    assert.deepEqual(objectExport.events.map(event=>event.id),['event-1']);
 
+   await page.getByRole('button',{name:'Preview copy',exact:true}).click();
+   await page.locator('#owgDerivePreview').getByText('The copy would also retain 1 supplied object relationship.',{exact:false}).waitFor();
    await page.locator('#owgDeriveName').fill('Order subset');
    await page.locator('#owgDeriveRun').click();
+   await page.locator('#owgDeriveResult').getByText('Retained 1 supplied object relationship.',{exact:false}).waitFor();
    await page.locator('#owgDeriveOpen').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Opened Order subset'}).waitFor();
    assert.equal(await page.locator('#owgEventLogCaseType option').first().getAttribute('value'),'item');
