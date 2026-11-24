@@ -219,7 +219,6 @@ def clarify(record: dict[str, Any], request: ClarificationRequest,
     pool, documents = _statement_inventory(request.documents)
     source_complete = not any(d["overlong_statements"] or d["omitted_by_budget"] for d in documents)
     questions = []
-    reported = set()
     subjects = []
 
     def evidence(kind, target, subject):
@@ -229,7 +228,13 @@ def clarify(record: dict[str, Any], request: ClarificationRequest,
         distinct = {s["statement_id"] for conflict in conflicts for s in conflict["statements"]}
         # Display all conflict witnesses when they fit the existing five-citation
         # decision contract; otherwise require narrowing the source set.
-        selected = [s for s in checked if s["statement_id"] in distinct][:MAX_CITATIONS]
+        # Include both sides of at least one contradiction even if dozens
+        # of higher-ranked statements all repeat the same policy wording.
+        by_id = {s["statement_id"]: s for s in checked}
+        selected = [by_id[s["statement_id"]] for s in conflicts[0]["statements"]] if conflicts else []
+        selected_ids = {s["statement_id"] for s in selected}
+        selected += [s for s in checked if s["statement_id"] in distinct
+                     and s["statement_id"] not in selected_ids][:MAX_CITATIONS-len(selected)]
         selected_ids = {s["statement_id"] for s in selected}
         selected += [s for s in candidates if s["statement_id"] not in selected_ids][:MAX_CITATIONS-len(selected)]
         visible = {s["statement_id"] for s in selected}
@@ -243,13 +248,9 @@ def clarify(record: dict[str, Any], request: ClarificationRequest,
                     "displayed_conflict_count": len(visible_conflicts),
                     "conflict_review_complete": complete}
         subjects.append(coverage)
-        fresh = []
-        for conflict in visible_conflicts:
-            pair = frozenset(c["statement_id"] for c in conflict["statements"])
-            if pair not in reported:
-                reported.add(pair)
-                fresh.append(conflict)
-        return selected, fresh, coverage, complete
+        # The same source pair may concern two distinct rules. Each subject
+        # needs its own human resolution rather than inheriting another rule's.
+        return selected, visible_conflicts, coverage, complete
 
     def add(kind, target, prompt, cited, conflicts, subject_type, coverage, complete):
         questions.append(_question(kind, target, prompt, cited, conflicts,
@@ -352,7 +353,8 @@ def validate_decision_evidence(question: dict[str, Any], decision: Decision) -> 
 
 def proposed_change(record: dict[str, Any], question: dict[str, Any], decision: Decision) -> dict[str, Any] | None:
     """A model change the owner may save; never applied automatically."""
-    if decision.decision != "confirm" or question["kind"] != "unconfirmed_rule":
+    if (question.get("coverage_blocked") or decision.decision != "confirm"
+            or question["kind"] != "unconfirmed_rule"):
         return None
     model = dict(record["process_model"])
     model["business_rules"] = [dict(rule, user_confirmed=True) if rule["id"] == question["target_id"] else rule
