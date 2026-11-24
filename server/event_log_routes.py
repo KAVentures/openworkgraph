@@ -1275,10 +1275,12 @@ def event_log_decision_rules(request: Request, log_id: str,
                              decision_activity: str = Query(min_length=1, max_length=200),
                              case_type: str | None = Query(default=None, max_length=200),
                              max_depth: int = Query(default=3, ge=1, le=4),
+                             include_case_attributes: bool = Query(default=True),
                              cohort: dict[str, Any] = Depends(_case_filter)):
     from . import event_log_decision_mining as decisions
     _require_dashboard(request)
-    return _respond(decisions.analyse, log_id, decision_activity, case_type, max_depth=max_depth, cohort=cohort)
+    return _respond(decisions.analyse, log_id, decision_activity, case_type, max_depth=max_depth, cohort=cohort,
+                    include_case_attributes=include_case_attributes)
 
 
 @router.get("/v1/event-logs/{log_id}/temporal-profile")

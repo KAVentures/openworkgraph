@@ -2720,15 +2720,23 @@
   function decisionSection(inspection){
     const box=section('Decision rules');box.id='owgDecisions';
     const branch=row=>row.next+(row.next_is_terminal?' · case completion':'');
-    box.appendChild(el('div','Find the activities after which cases go different ways, then learn which recorded data goes with each branch. Only data recorded at or before the decision is used. Rules are associations in this log, checked on held-out cases, not the business rule.','muted'));
+    box.appendChild(el('div','Find the activities after which cases go different ways, then learn which recorded data goes with each branch. Rules describe associations in the log. Compare their predictions with the recorded branches on held-out cases.','muted'));
     const find=button('Find decision points','secondary');find.id='owgDecisionFind';
     const points=el('div');points.id='owgDecisionPoints';points.setAttribute('role','status');
     const out=el('div');out.id='owgDecisionResults';out.setAttribute('role','status');
+    const quality=el('div');quality.id='owgDecisionHoldout';
+    const scope=select('owgDecisionAttributeScope',[
+      ['combined','Timed event and untimed case attributes'],['events','Timed event attributes only']
+    ]);
     const observed=el('div');observed.id='owgDecisionObservedBranches';
     const review=el('div');review.id='owgDecisionBranchCases';
-    box.append(find,points,observed,review,out);
+    box.append(field('Attributes for learning rules',scope),find,points,observed,review,out,quality);
     const generation=state.generation;
     let reviewTurn=0,ruleTurn=0;
+    scope.onchange=()=>{
+      ++ruleTurn;quality.replaceChildren();
+      out.replaceChildren(el('p','Attribute selection changed. Learn rules again to apply it.','muted'));
+    };
     const pct=x=>Math.round(x*100)+'%';
     const number=x=>Number(x).toLocaleString();
     const cond=c=>{
@@ -2791,27 +2799,72 @@
       next.onclick=()=>{offset+=25;render();};
       render();title.focus();
     }
+    function reviewTable(headers,rows){
+      const wrap=el('div'),body=el('div'),status=el('span',null,'muted');
+      status.setAttribute('role','status');
+      const previous=button('Previous page','secondary'),next=button('Next page','secondary');
+      let offset=0;
+      const size=25;
+      function render(){
+        const page=rows.slice(offset,offset+size);
+        body.replaceChildren(table(headers,page));
+        status.textContent='Showing '+number(offset+1)+'–'+number(offset+page.length)+' of '+number(rows.length)+'.';
+        previous.disabled=offset===0;next.disabled=offset+size>=rows.length;
+      }
+      previous.onclick=()=>{offset-=size;render();};
+      next.onclick=()=>{offset+=size;render();};
+      wrap.append(body);
+      if(rows.length>size)wrap.append(status,previous,next);
+      render();
+      return wrap;
+    }
+    function heldOutQuality(evaluation,terminal){
+      const score=value=>value===null?'—':(value*100).toFixed(1)+'%';
+      const rows=evaluation.holdout_branches.map(row=>[
+        branch(row),number(row.training_occurrences),number(row.actual_occurrences),
+        number(row.predicted_occurrences),number(row.correct_occurrences),score(row.precision),score(row.recall)
+      ]);
+      const mixups=Object.entries(evaluation.holdout_confusion).flatMap(([actual,predictions])=>
+        Object.entries(predictions).filter(([predicted])=>predicted!==actual).map(([predicted,count])=>({actual,predicted,count})));
+      mixups.sort((a,b)=>b.count-a.count||a.actual.localeCompare(b.actual)||a.predicted.localeCompare(b.predicted));
+      const label=next=>branch({next,next_is_terminal:next===terminal});
+      const details=document.createElement('details');
+      details.append(el('summary','Held-out branch mix-ups'),mixups.length?
+        reviewTable(['Recorded branch','Predicted branch','Occurrences'],mixups.map(item=>[
+          label(item.actual),label(item.predicted),number(item.count)
+        ])):el('p','All held-out predictions matched the recorded branch.','muted'));
+      quality.replaceChildren(el('h4','Held-out results by branch'),
+        el('p','Precision is the share of predictions for a branch that were correct. Recall is the share of recorded occurrences of that branch that the rules found. A dash indicates zero predictions or zero recorded occurrences for the relevant rate.','muted'),
+        reviewTable(['Branch','Training occurrences','Recorded in holdout','Predictions','Correct predictions','Precision','Recall'],rows),details);
+    }
     const learn=async(activity)=>{
       const turn=++ruleTurn,current=()=>generation===state.generation&&turn===ruleTurn;
-      out.replaceChildren(el('div','Learning rules for '+activity+'…','muted'));
+      out.replaceChildren(el('div','Learning rules for '+activity+'…','muted'));quality.replaceChildren();
       try{
-        const r=await getJSON(logPath('decision-rules',{decision_activity:activity}));
+        const r=await getJSON(logPath('decision-rules',{decision_activity:activity,include_case_attributes:scope.value==='combined'}));
         if(!current())return;
         const head=el('div','After '+activity+': '+r.branches.map(b=>branch(b)+' '+pct(b.share)).join(', ')+' ('+Number(r.occurrences).toLocaleString()+' occurrences'+(r.occurrences_capped?', the first '+Number(r.occurrences_used).toLocaleString()+' used':'')+').','muted');
-        if(!r.rules.length){out.replaceChildren(head,el('div',r.note,'muted'));return;}
+        const inputSummary=el('p',r.includes_case_attributes?
+          'Inputs include timed event and untimed case attributes.':
+          'Inputs use only event attributes recorded at or before the decision.','muted');
+        if(!r.rules.length){out.replaceChildren(head,inputSummary,el('div',r.note,'muted'));return;}
         const e=r.evaluation,parts=[];
-        if('holdout_accuracy' in e)parts.push('Held-out accuracy '+pct(e.holdout_accuracy)+' on '+e.holdout_occurrences+' occurrences, against '+pct(e.majority_baseline_accuracy)+' for always predicting “'+e.majority_baseline+'”.'+(e.beats_baseline?'':' The rules do not beat that baseline; treat them as noise.'));
+        if('holdout_accuracy' in e)parts.push('Held-out accuracy '+pct(e.holdout_accuracy)+' on '+e.holdout_occurrences+
+          ' occurrences across '+e.holdout_cases+' cases, against '+pct(e.majority_baseline_accuracy)+
+          ' for always predicting “'+branch({next:e.majority_baseline,next_is_terminal:e.majority_baseline_is_terminal})+'”.'+
+          (e.beats_baseline?'':' The rules match or underperform the majority baseline.'));
         else parts.push(e.note);
         const rows=r.rules.map(rule=>[rule.conditions.length?rule.conditions.map(cond).join(' and '):'(all occurrences)',branch(rule),pct(rule.confidence),String(rule.training_occurrences)]);
-        out.replaceChildren(head,el('div',parts.join(' '),'muted'),
+        out.replaceChildren(head,inputSummary,el('div',parts.join(' '),'muted'),
           table(['When','Then usually','Confidence','Training occurrences'],rows),
           el('div','Most informative data: '+(r.feature_importance.length?r.feature_importance.slice(0,5).map(f=>f.attribute+' '+pct(f.share)).join(', '):'none')+'.','muted'),
           el('div',r.caveat,'muted'));
+        if(e.holdout_branches?.length)heldOutQuality(e,r.terminal_label);
       }catch(error){if(current())out.replaceChildren(el('div',error.message,'muted'));}};
     find.onclick=async()=>{
       ++reviewTurn;++ruleTurn;find.disabled=true;
       points.replaceChildren(el('div','Looking for decision points…','muted'));
-      observed.replaceChildren();review.replaceChildren();out.replaceChildren();
+      observed.replaceChildren();review.replaceChildren();out.replaceChildren();quality.replaceChildren();
       try{
         const url=logPath('decision-points'),r=await getJSON(url);
         if(generation!==state.generation)return;

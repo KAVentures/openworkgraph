@@ -50,6 +50,26 @@ const path=require('node:path');
    const conditions=await results.locator('tbody tr td:first-child').allTextContents();
    assert(conditions.some(text=>/^event\.amount ≥ /.test(text)),conditions.join(' | '));
    assert(conditions.some(text=>/^\(event\.amount < .* or missing or nonnumeric\)$/.test(text)),conditions.join(' | '));
+   const holdout=page.locator('#owgDecisionHoldout');
+   await holdout.getByRole('heading',{name:'Held-out results by branch'}).waitFor();
+   await holdout.getByRole('columnheader',{name:'Precision',exact:true}).waitFor();
+   assert.equal(await holdout.locator('table').first().locator('tbody tr').count(),2);
+   await holdout.getByText('Held-out branch mix-ups',{exact:true}).click();
+   await page.locator('#owgDecisionAttributeScope').selectOption('events');
+   assert.equal(await holdout.locator('table').count(),0);
+   const [timedResponse]=await Promise.all([
+     page.waitForResponse(response=>{
+       const url=new URL(response.url());
+       return url.pathname.endsWith('/decision-rules')&&url.searchParams.get('include_case_attributes')==='false';
+     }),
+     points.getByRole('button',{name:'Learn rules after Check'}).click()
+   ]);
+   const timed=await timedResponse.json();
+   assert.equal(timedResponse.status(),200,JSON.stringify(timed));
+   assert.equal(timed.includes_case_attributes,false);
+   assert.ok(timed.features.every(feature=>feature.name.startsWith('event.')));
+   await results.getByText('Inputs use only event attributes recorded at or before the decision.').waitFor();
+   await holdout.getByRole('heading',{name:'Held-out results by branch'}).waitFor();
    const observed=page.locator('#owgDecisionObservedBranches'),cases=page.locator('#owgDecisionBranchCases');
    await points.getByRole('button',{name:'Review branches after Check'}).click();
    await observed.getByRole('button',{name:'Inspect cases continuing to Auto approve'}).click();
