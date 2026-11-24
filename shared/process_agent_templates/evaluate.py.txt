@@ -256,12 +256,21 @@ def main():
     mode.add_argument('--results', help='Offline previously captured plans bound to the exact suite')
     mode.add_argument('--model', help='Explicit provider opt-in: sends case inputs through the no-tools planner')
     parser.add_argument('--baseline-results', help='Optional offline baseline plans for the identical reviewed suite; requires --results')
+    parser.add_argument('--capture-results', help='Explicitly retain live model plans in a new private file for later paired evaluation; may include sensitive model text')
+    parser.add_argument('--confirm-retain-model-output', action='store_true', help='Confirm local retention of possibly sensitive model output')
     parser.add_argument('--output', required=True, help='New minimized report file; never overwrites existing files')
     args = parser.parse_args()
     if args.baseline_results and not args.results:
         parser.error('--baseline-results requires offline --results')
+    if args.capture_results and (not args.model or not args.confirm_retain_model_output):
+        parser.error('--capture-results requires --model and --confirm-retain-model-output')
+    if args.confirm_retain_model_output and not args.capture_results:
+        parser.error('--confirm-retain-model-output requires --capture-results')
     if Path(args.output).exists():
         raise ImplementationError('Choose a new evaluation report file')
+    if args.capture_results and (Path(args.capture_results).exists() or
+            Path(args.capture_results).resolve() == Path(args.output).resolve()):
+        raise ImplementationError('Choose a separate new captured-results file')
     spec = load_object(Path(__file__).parent / 'workflow.spec.json', limit=262144)
     suite = load_object(args.cases, limit=262144)
     validate_suite(spec, suite)
@@ -269,6 +278,13 @@ def main():
                else load_object(args.results, limit=262144))
     report = (compare_candidates(spec, suite, load_object(args.baseline_results, limit=262144), results)
               if args.baseline_results else compare(spec, suite, results))
+    if args.capture_results:
+        # These are raw planner outputs, unlike the minimized evaluation report.
+        # Exclusive creation and a private mode on POSIX; Windows inherits ACLs.
+        import os
+        fd = os.open(args.capture_results, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+            json.dump(results, stream, indent=2, allow_nan=False)
     with Path(args.output).open('x', encoding='utf-8') as stream:
         json.dump(report, stream, indent=2, allow_nan=False)
     summary = {'case_count': report['case_count'], 'review_required': report['review_required'],
