@@ -25,7 +25,7 @@ const path=require('node:path');
   }
   assert.ok(ready,logs);
   browser=await chromium.launch({...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE}:{}),headless:true,args:['--no-sandbox']});
-  const page=await browser.newPage(),errors=[];
+  const page=await browser.newPage({acceptDownloads:true}),errors=[];
   page.on('pageerror',e=>errors.push(e.message));
   await page.goto(base+'/#session='+(await fs.readFile(path.join(scratch,'session.txt'),'utf8')).trim());
   await page.locator('[role=tab][data-tab=evidence]').click();await page.locator('#owgEventLogCard').waitFor();
@@ -57,10 +57,18 @@ const path=require('node:path');
   await review.getByText(/matching cases/).waitFor();
   await review.getByRole('button',{name:/Open case /}).first().click();
   await page.locator('#owgEventLogCaseEvents').getByText(/Showing .* events/).waitFor();
+  const [download]=await Promise.all([page.waitForEvent('download'),page.locator('#owgImpactReportJson').click()]);
+  const report=JSON.parse(await fs.readFile(await download.path(),'utf8'));
+  assert.equal(report.format,'openworkgraph.intervention-impact-report.v1');
+  assert.equal(report.settings.treated.resource,'A');
+  assert.deepEqual(report.report,body);
+  const [csv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgImpactReportCsv').click()]);
+  assert.match(await fs.readFile(await csv.path(),'utf8'),/treated.*baseline/);
   // The SLA field appears only for SLA breaches.
   assert.equal(await page.locator('#owgImpactSla').isVisible(),false);
   await page.locator('#owgImpactMetric').selectOption('sla_breach');
   assert.equal(await page.locator('#owgImpactSla').isVisible(),true);
+  assert.equal(await page.locator('#owgImpactReportJson').isDisabled(),true);
   await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
   const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgImpact'),{
    runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
