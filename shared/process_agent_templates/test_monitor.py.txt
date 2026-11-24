@@ -186,6 +186,47 @@ class MonitoringCases(unittest.TestCase):
             self.assertIsNone(review['report_sha256'])
             self.assertEqual(review['export_refusal'],'one_or_more_selected_journals_refused')
 
+    def test_compare_journal_snapshots_preserves_exact_prefix_and_refuses_divergence(self):
+        from monitor import compare_journals
+        with TemporaryDirectory() as directory:
+            root=Path(directory)
+            rows=[self.start,self.attempt()[0]]
+            old=self.write_journal(root,'PRIVATE_OLD.jsonl',rows)
+            same=self.write_journal(root,'PRIVATE_SAME.jsonl',rows)
+            newer=self.write_journal(root,'PRIVATE_NEW.jsonl',
+                                     [*rows,self.attempt()[1],self.finish()])
+            changed=self.write_journal(root,'PRIVATE_CHANGED.jsonl',
+                [self.start,{**rows[1],'arguments_sha256':'f'*64},self.attempt()[1],self.finish()])
+            another=self.write_journal(root,'PRIVATE_OTHER.jsonl',
+                [{**self.start,'execution_id':'c'*64},*rows[1:]])
+            rewritten=root/'PRIVATE_REWRITTEN.jsonl'
+            rewritten.write_text(''.join(json.dumps(row,sort_keys=True)+'\\n' for row in rows),encoding='utf-8')
+            for baseline,candidate,relation,accepted,additional in (
+                (old,same,'identical_snapshot',True,0),
+                (old,newer,'exact_append_only_extension',True,2),
+                (newer,old,'candidate_is_earlier_snapshot',False,None),
+                (old,changed,'divergent_journal_history',False,None),
+                (old,rewritten,'divergent_journal_history',False,None),
+                (old,another,'different_execution_identity',False,None),
+            ):
+                with self.subTest(relation=relation):
+                    result=compare_journals(self.spec,baseline,candidate,'Run')
+                    self.assertEqual(result['relation'],relation)
+                    self.assertEqual(result['candidate_retains_exact_baseline_bytes'],accepted)
+                    self.assertEqual(result['additional_record_count'],additional)
+                    self.assertFalse(result['report_imported'])
+                    self.assertFalse(result['business_outcomes_verified'])
+                    self.assertFalse(result['journal_origin_independently_verified'])
+                    self.assertNotIn('PRIVATE_',json.dumps(result))
+            updated=compare_journals(self.spec,old,newer,'Run')
+            self.assertEqual(updated['baseline']['reported_status'],'running')
+            self.assertEqual(updated['candidate']['reported_status'],'succeeded')
+            self.assertFalse(updated['candidate_requires_reconciliation'])
+            bad=root/'torn.jsonl'
+            bad.write_bytes(newer.read_bytes()+b'{')
+            with self.assertRaises(ImplementationError):
+                compare_journals(self.spec,old,bad,'Run')
+
     def test_batch_bounds_fail_closed_and_never_silently_truncate(self):
         from unittest.mock import patch
         import monitor
@@ -283,6 +324,23 @@ class MonitoringCases(unittest.TestCase):
             run=subprocess.run(command+['--journal',str(a),'--review-only'],cwd=root,capture_output=True,text=True,timeout=20)
             self.assertEqual(run.returncode,2,run.stderr)
             self.assertEqual(json.loads((root/'refused.json').read_text())['refused_journal_count'],2)
+            candidate=self.write_journal(root,'extension.jsonl',[self.start,self.finish()])
+            baseline=self.write_journal(root,'baseline.jsonl',[self.start])
+            compare=[sys.executable,'monitor.py','--journal',str(candidate),'--compare-to',str(baseline),
+                     '--deployment-name','Run','--output','comparison.json']
+            result=subprocess.run(compare,cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertNotEqual(result.returncode,0)
+            self.assertFalse((root/'comparison.json').exists())
+            result=subprocess.run(compare+['--review-only'],cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,0,result.stderr)
+            comparison=json.loads((root/'comparison.json').read_text())
+            self.assertEqual(comparison['relation'],'exact_append_only_extension')
+            self.assertNotIn('runs',comparison)
+            compare[3],compare[5]=compare[5],compare[3]
+            compare[-1]='older.json'
+            result=subprocess.run(compare+['--review-only'],cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,2,result.stderr)
+            self.assertEqual(json.loads((root/'older.json').read_text())['relation'],'candidate_is_earlier_snapshot')
 
     def test_journal_reader_bounds_torn_lines_duplicate_keys_and_nonstandard_json(self):
         with TemporaryDirectory() as folder:
