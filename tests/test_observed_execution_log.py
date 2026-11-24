@@ -321,3 +321,44 @@ console.log('snapshot model checks passed');
     root = Path(__file__).resolve().parents[1]
     done = subprocess.run(["node", "-e", script], cwd=root, capture_output=True, text=True, timeout=20)
     assert done.returncode == 0, done.stderr
+
+
+def test_pipeline_review_carries_minimized_original_observation_lineage():
+    import shutil
+    import subprocess
+    from pathlib import Path
+    if not shutil.which("node"):
+        pytest.skip("Node.js unavailable")
+    script = r"""
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const context={window:{}};
+vm.runInNewContext(fs.readFileSync('dashboard/automation_pipeline.js','utf8'),context);
+const m=context.window.__owgPipelineModel;
+const digest='a'.repeat(64),now='2026-11-24T06:00:00Z';
+const journey={idea:{idea_id:'idea',revision:1,state:'approved'},
+  process_status:{status:'current',process_reference:{workflow_id:'workflow',revision:1,content_sha256:digest}},
+  projects:[{project_id:'project',idea_revision:1,idea_revision_is_current:true,spec_sha256:digest,
+    archive_sha256:digest,reported_specifications:[],source_check_exports:{count:0,last_document_sha256:null}}],
+  dataset_origins:[{status:'current',source_content_sha256:digest,selection_sha256:digest,
+    observed_execution_origin:{snapshot_sha256:digest,retained_manifest_status:'matches',
+      original_history_rechecked:false,execution_ids:['SECRET-EXECUTION'],private:'SECRET-TEXT'}}]};
+const packet=m.handoffReviewPacket(journey,'project','idea',now);
+const origin=packet.dataset_origins[0].observed_execution_origin;
+assert.equal(origin.snapshot_sha256,digest);
+assert.equal(origin.retained_manifest_status,'matches');
+assert.equal(origin.original_history_rechecked,false);
+assert(!JSON.stringify(packet).includes('SECRET'));
+assert(packet.readiness.blockers.includes('original_observation_history_not_rechecked'));
+assert.equal(m.handoffDependencyReview(journey,'project','idea',now).stages[0].status,'locally_current');
+journey.dataset_origins[0].observed_execution_origin.retained_manifest_status='unavailable_or_changed';
+const changed=m.handoffReviewPacket(journey,'project','idea',now);
+assert(changed.readiness.blockers.includes('original_observation_manifest_unavailable'));
+assert.equal(m.handoffDependencyReview(journey,'project','idea',now).stages[0].status,'needs_review');
+assert.equal(m.compareHandoffReviewPackets(packet,changed).status,'changed');
+assert(m.compareHandoffReviewPackets(packet,changed).changes.includes('Dataset and cohort source checks'));
+assert.equal(changed.execution_authorized,false);
+console.log('observed source lineage handoff checks passed');
+"""
+    root = Path(__file__).resolve().parents[1]
+    done = subprocess.run(["node", "-e", script], cwd=root, capture_output=True, text=True, timeout=20)
+    assert done.returncode == 0, done.stderr
