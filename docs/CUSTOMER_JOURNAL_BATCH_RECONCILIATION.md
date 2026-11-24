@@ -79,3 +79,28 @@ and explicit customer authorization. This tool never grants execution
 permission, replays writes, contacts a provider or performs remote cancellation.
 
 Related: [#370 R18](https://github.com/KAVentures/openworkgraph/issues/370).
+
+## Compare two snapshots of the same execution
+
+Retain the original reviewed journal in a separate local file before comparing it
+with a later candidate:
+
+    python monitor.py --journal candidate.jsonl --compare-to original.jsonl --deployment-name "Customer workflow" --review-only --output snapshot-comparison.json
+
+This comparison requires exactly one candidate, explicit review-only mode,
+and two valid exact-spec journals. Each input is bounded and read once. The
+report distinguishes identical snapshots, exact append-only extensions,
+earlier snapshots, divergent histories and different execution identities.
+Only identical bytes or an exact byte-prefix extension pass (exit 0); other
+valid comparisons produce a diagnostic report and exit 2. Malformed inputs
+are refused. Reformatting the same JSON is not exact byte continuity.
+The comparison includes both journal hashes, reported states, additional
+record count when continuity holds, and candidate reconciliation flags.
+Neither file is modified, imported or executed. A matching prefix establishes
+continuity relative to the selected original, not authenticity or truth.
+Do not retry a possibly completed write based on this comparison alone.
+
+Local targeted validation: 2,472 synthetic snapshot comparisons plus one torn
+input check passed using the exact extracted comparison function (length
+1,989 characters; FNV-1a checksum 615519281), with simulated journal projection
+helpers. Full generated-runtime regression and CLI execution remain pending CI.
