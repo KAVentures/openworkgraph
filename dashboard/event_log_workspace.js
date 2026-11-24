@@ -6037,50 +6037,60 @@
     const caseGeneration=state.generation,casesBase='/v1/event-logs/'+encodeURIComponent(state.logId);
     const postJSON=(path,body)=>api(casesBase+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(x=>x.json());
     const withType=body=>{if(state.caseType)body.case_type=state.caseType;return body;};
-    function caseActions(a){
+    let resultTurn=0,caseTurn=0;
+    const invalidate=()=>{++resultTurn;++caseTurn;run.disabled=false;casePanel.replaceChildren();out.replaceChildren();};
+    for(const control of [outcome,outcomeTag,hours,activity,exact])control.addEventListener('input',invalidate);
+    function caseActions(a,current){
       const label=a.feature.kind+': '+a.feature.value;
       const wrap=el('div',null,'row');
       const inspect=button('Inspect cases','secondary');inspect.setAttribute('aria-label','Inspect cases with '+label);
-      inspect.onclick=()=>inspection.cohort(a.cohort);
+      inspect.onclick=()=>{if(current()){++caseTurn;inspection.cohort(a.cohort);}};
       const slowest=button('Slowest cases','secondary');slowest.setAttribute('aria-label','Slowest cases with '+label);
       const tag=button('Tag cases','secondary');tag.setAttribute('aria-label','Tag the cases with '+label);
       const save=button('Save as log','secondary');save.setAttribute('aria-label','Save the cases with '+label+' as a new log');
       slowest.onclick=async()=>{
+        if(!current())return;
+        const ticket=++caseTurn,active=()=>current()&&ticket===caseTurn;
         try{
           const r=await postJSON('/cases/slowest',withType({cohort:a.cohort,limit:10}));
-          if(caseGeneration!==state.generation)return;
+          if(!active())return;
           const list=el('div',null,'row');
           r.cases.forEach(c=>{const b=button(c.case_id+' ('+duration(c.duration_seconds)+')','secondary');b.setAttribute('aria-label','Explain case '+c.case_id);
-            b.onclick=()=>{const id=document.getElementById('owgCaseExplainId'),run=document.getElementById('owgCaseExplainRun');
+            b.onclick=()=>{if(!active())return;const id=document.getElementById('owgCaseExplainId'),run=document.getElementById('owgCaseExplainRun');
               if(!id||!run)return;id.value=c.case_id;run.click();document.getElementById('owgCaseExplain').scrollIntoView({block:'start'});};
             list.appendChild(b);});
           casePanel.replaceChildren(el('h4','Slowest of the '+Number(a.cases_with_feature).toLocaleString()+' cases with '+label),
             r.cases.length?list:el('div','No cases.','muted'),el('div','Choose a case to explain where its time went.','muted'));
-        }catch(error){casePanel.replaceChildren(el('div',error.message,'muted'));}
+        }catch(error){if(active())casePanel.replaceChildren(el('div',error.message,'muted'));}
       };
       tag.onclick=async()=>{
+        if(!current())return;
         const name=(window.prompt('Tag for the '+a.cases_with_feature+' cases with '+label,'')||'').trim();
-        if(!name)return;
+        if(!name||!current())return;
+        const ticket=++caseTurn,active=()=>current()&&ticket===caseTurn;
         try{const r=await postJSON('/case-tags',withType({tag:name.slice(0,60),cohort:a.cohort,note:('root cause: '+label).slice(0,500)}));
-          casePanel.replaceChildren(el('div','Tagged '+Number(r.tagged).toLocaleString()+' cases “'+name.slice(0,60)+'”. Choose the tag under Tagged in any filter.'));}
-        catch(error){casePanel.replaceChildren(el('div',error.message,'muted'));}
+          if(active())casePanel.replaceChildren(el('div','Tagged '+Number(r.tagged).toLocaleString()+' cases “'+name.slice(0,60)+'”. Choose the tag under Tagged in any filter.'));}
+        catch(error){if(active())casePanel.replaceChildren(el('div',error.message,'muted'));}
       };
       save.onclick=async()=>{
+        if(!current())return;
         const name=(window.prompt('Name for a new log with the '+a.cases_with_feature+' cases with '+label,label.slice(0,120))||'').trim();
-        if(!name)return;
+        if(!name||!current())return;
+        const ticket=++caseTurn,active=()=>current()&&ticket===caseTurn;
         try{const r=await postJSON('/derive',withType({name:name.slice(0,120),cohort:a.cohort}));
-          casePanel.replaceChildren(el('div','Saved '+Number(r.copied.events).toLocaleString()+' events of '+Number(r.derived_from.cases_matched).toLocaleString()+' cases as “'+r.log.name+'”. This log is unchanged.'));}
-        catch(error){casePanel.replaceChildren(el('div',error.message,'muted'));}
+          if(active())casePanel.replaceChildren(el('div','Saved '+Number(r.copied.events).toLocaleString()+' events of '+Number(r.derived_from.cases_matched).toLocaleString()+' cases as “'+r.log.name+'”. This log is unchanged.'));}
+        catch(error){if(active())casePanel.replaceChildren(el('div',error.message,'muted'));}
       };
       if(a.cohort.attribute&&!filterOn()){
         const go=button('Filter','secondary');go.setAttribute('aria-label','Filter every view to the cases with '+label);
-        go.onclick=()=>{state.attr={attribute:a.cohort.attribute};analyse().catch(error=>status(error.message));};
+        go.onclick=()=>{if(!current())return;state.attr={attribute:a.cohort.attribute};analyse().catch(error=>status(error.message));};
         wrap.appendChild(go);
       }
       if(a.cohort.attribute_range||a.cohort.activity){
         const go=button('Filter views','secondary');
         go.setAttribute('aria-label','Filter views to '+a.feature.value+'; replace the case filter');
         go.onclick=async()=>{
+          if(!current())return;
           // Association counts are for the full case notion: explicitly replace,
           // rather than silently intersect with, the old workspace filter.
           state.follows=[];state.attr=a.cohort.attribute_range?{attribute_range:{...a.cohort.attribute_range}}:{};state.caseActivity=a.cohort.activity||'';
@@ -6098,6 +6108,8 @@
       wrap.append(inspect,slowest,tag,save);return wrap;
     }
     run.onclick=async()=>{
+      ++caseTurn;const ticket=++resultTurn,current=()=>caseGeneration===state.generation&&box.isConnected&&ticket===resultTurn;
+      run.disabled=true;casePanel.replaceChildren();out.replaceChildren(el('div','Finding associations…','muted'));
       try{
         const params={outcome:outcome.value};
         if(outcome.value==='duration_over'){const h=Number(hours.value);if(!(h>0))throw new Error('Enter the number of hours.');params.threshold_seconds=String(Math.round(h*3600));}
@@ -6105,14 +6117,16 @@
         if(!activityField.hidden){const label=exact.value||activity.value;
           if(!label||Array.from(label).length>200)throw new Error('Choose an activity label of at most 200 characters.');params.activity=label;}
         const r=await getJSON(logPath('root-cause',params));
-        const rows=(r.associations||[]).map(a=>[a.feature.kind+': '+a.feature.value,Number(a.cases_with_feature).toLocaleString(),pct(a.outcome_rate_with),pct(a.outcome_rate_without),(a.risk_difference>0?'+':'')+(a.risk_difference*100).toFixed(1)+' pts ['+(a.ci95[0]*100).toFixed(1)+', '+(a.ci95[1]*100).toFixed(1)+']',a.holds_after_bonferroni?'yes':'no',a.cohort?caseActions(a):'—']);
+        if(!current())return;
+        const rows=(r.associations||[]).map(a=>[a.feature.kind+': '+a.feature.value,Number(a.cases_with_feature).toLocaleString(),pct(a.outcome_rate_with),pct(a.outcome_rate_without),(a.risk_difference>0?'+':'')+(a.risk_difference*100).toFixed(1)+' pts ['+(a.ci95[0]*100).toFixed(1)+', '+(a.ci95[1]*100).toFixed(1)+']',a.holds_after_bonferroni?'yes':'no',a.cohort?caseActions(a,current):'—']);
         casePanel.replaceChildren();
         out.replaceChildren(
           el('div','Outcome in '+pct(r.outcome_rate)+' of '+Number(r.cases).toLocaleString()+' cases; '+Number(r.features_tested)+' features tested.','muted'),
           table(['Feature','Cases with it','Outcome with','Outcome without','Difference (95% CI)','Holds after correction','Its cases'],rows),
           ...((r.associations||[]).some(a=>a.cohort?.attribute_range||a.cohort?.activity)?[el('div','Filter views replaces the current case filter with the selected exact activity or numeric range. Save the current filter first to restore it afterward.','muted')]:[]),
           el('div',r.note||'These are associations in this log, not causes. A step can be a consequence of the outcome rather than its reason.','muted'),casePanel);
-      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      }catch(error){if(current())out.replaceChildren(el('div',error.message,'muted'));}
+      finally{if(current())run.disabled=false;}
     };
     return box;
   }
