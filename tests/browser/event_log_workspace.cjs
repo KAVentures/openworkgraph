@@ -1457,7 +1457,8 @@ const path=require('node:path');
    assert.equal(checkedAge.signals[0].new_cases_since_last_evaluation,null);
    assert.deepEqual([checkedAge.signals[0].new_cases_comparison.lower_bound,checkedAge.signals[0].new_cases_comparison.upper_bound],[0,1]);
    await page.locator('#owgSignalResults').getByText('0–1 (bounded history)',{exact:true}).waitFor();
-   assert.match(await page.locator('#owgSignalResults').textContent(),/ARecent \(age .*idle /);
+   await page.locator('#owgSignalResults').getByRole('button',{name:'Open case ARecent',exact:true}).waitFor();
+   assert.match(await page.locator('#owgSignalResults').textContent(),/ARecent\s+Age\s+4\.2 d, idle 60 min\./);
    const ageAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgEventLogCard'),{
      runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
    assert.deepEqual(ageAudit.violations.map(v=>v.id),[]);
