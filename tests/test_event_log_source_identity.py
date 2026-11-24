@@ -115,6 +115,41 @@ def test_source_csv_roundtrip_preserves_namespaces_ids_and_attributes_without_do
     assert report['transform']['mapping']['source_identity']['format']=='openworkgraph.supplied-source-event-identity.v1'
 
 
+def test_scoped_source_csv_preserves_only_selected_source_keys():
+    from server.event_log_cohort_export import export_matching_cases
+
+    mapping = {**MAPPING, 'case_namespace': 'common', 'attribute_columns': ['region']}
+    log = import_rows([row(), row('e3', activity='Close', time='2026-01-03T00:00:00Z')], mapping)['log_id']
+    append(log, [row('=e2', time='2026-01-02T00:00:00Z'),
+                 row('e4', case='c2', time='2026-01-02T00:00:00Z')],
+           {**mapping, 'source_namespace': 'helpdesk'})
+    scope = {'case_type': 'source_case', 'cohort': {'activity': 'Close'},
+             'events_from': '2026-01-02T00:00:00Z', 'events_before': '2026-01-03T00:00:00Z'}
+    exact, review = StringIO(newline=''), StringIO(newline='')
+    export_matching_cases(log, scope, exact, export_format='sourcecsv')
+    export_matching_cases(log, scope, review, export_format='sourcecsv-review')
+    assert list(csv.DictReader(StringIO(exact.getvalue()))) == [{
+        'source_namespace': 'helpdesk', 'source_event_id': '=e2', 'case_namespace': 'common',
+        'case_id': 'c1', 'activity': 'Open', 'timestamp': '2026-01-02T00:00:00Z',
+        'resource': 'ann', 'attributes': '{"region":"north"}',
+    }]
+    assert list(csv.DictReader(StringIO(review.getvalue())))[0]['source_event_id_review'] == "'=e2"
+    exported_mapping = {'case_column': 'case_id', 'activity_column': 'activity', 'timestamp_column': 'timestamp',
+                        'resource_column': 'resource', 'event_id_column': 'source_event_id',
+                        'source_namespace_column': 'source_namespace', 'case_namespace_column': 'case_namespace',
+                        'attributes_json_column': 'attributes'}
+    retry = workspace.append_log(log, BytesIO(exact.getvalue().encode()), source_format='csv', mapping=exported_mapping)
+    assert retry['added_events'] == 0 and retry['duplicate_events_skipped'] == 1
+    with pytest.raises(workspace.EventLogWorkspaceError, match="no event"):
+        export_matching_cases(log, {**scope, 'events_from': '2025-01-01T00:00:00Z',
+                                    'events_before': '2025-01-02T00:00:00Z'}, StringIO(), export_format='sourcecsv')
+    ordinary = workspace.import_log(file([row()]), name='No source IDs', source_format='csv',
+                                    mapping={key: MAPPING[key] for key in ('case_column', 'activity_column',
+                                                                         'timestamp_column')})['log_id']
+    with pytest.raises(workspace.EventLogWorkspaceError, match="source_case"):
+        export_matching_cases(ordinary, {'cohort': {'activity': 'Open'}}, StringIO(), export_format='sourcecsv')
+
+
 def test_source_mode_does_not_change_default_payload_dedupe_or_best_effort_quality(monkeypatch):
     legacy={k:v for k,v in MAPPING.items() if k not in {'event_id_column','source_namespace'}}
     made=import_rows([row('e1'),row('e2')],legacy);result=append(made['log_id'],[row('e3')],legacy)

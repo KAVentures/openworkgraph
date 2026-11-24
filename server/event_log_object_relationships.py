@@ -92,11 +92,13 @@ def copy_append(conn,log_id,staging):
     return added
 
 
-def export_map(conn,log_id):
+def export_map(conn,log_id,*,matching=False):
     validate_index(conn,log_id)
     result={}
-    cursor=conn.execute('''SELECT source_object_id,target_object_id,qualifier FROM object_relationships
-        WHERE log_id=? ORDER BY 1,2,3''',[log_id])
+    scope = """AND source_object_id IN (SELECT object_id FROM ocel_export_objects)
+                AND target_object_id IN (SELECT object_id FROM ocel_export_objects)""" if matching else ""
+    cursor=conn.execute(f'''SELECT source_object_id,target_object_id,qualifier FROM object_relationships
+        WHERE log_id=? {scope} ORDER BY 1,2,3''',[log_id])
     while rows:=cursor.fetchmany(10000):
         for source,target,qualifier in rows:result.setdefault(source,[]).append((target,qualifier))
     return result
