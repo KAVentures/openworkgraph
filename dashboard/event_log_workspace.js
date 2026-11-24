@@ -10217,21 +10217,32 @@
       result.business_case_identity_verified!==false||result.business_outcomes_verified!==false||
       result.execution_authorized!==false||!Number.isFinite(Date.parse(result.checked_at)))return false;
     const current=result.current_effective_input,original=result.original_effective_input;
+    const drift=result.case_drift;
+    if(!drift||!['complete','not_recorded','current_work_budget_exceeded','unavailable'].includes(drift.status))return false;
+    const complete=drift.status==='complete';
+    if(complete&&(!original||!['added','removed','modified','unchanged','original_cases','current_cases'].every(key=>count(drift[key]))||
+      drift.original_cases!==original.cases||drift.current_cases!==current.cases||
+      drift.removed+drift.modified+drift.unchanged!==drift.original_cases||
+      drift.added+drift.modified+drift.unchanged!==drift.current_cases||drift.removed_case_ids_retained!==false))return false;
+    const caseStatus=row=>complete?['added','modified','unchanged'].includes(row.comparison_status):row.comparison_status==='unknown';
     if(page.expected_projection_sha256&&current.sha256!==page.expected_projection_sha256)return false;
     if(result.effective_input_status!==(original===null?'not_recorded':
       original.sha256===current.sha256&&original.events===current.events&&original.cases===current.cases?'matches':'changed'))return false;
     if(page.case_id!==undefined){
-      return result.mode==='events'&&result.case_id===page.case_id&&result.offset===page.offset&&
+      return result.mode==='events'&&result.case_id===page.case_id&&result.offset===page.offset&&caseStatus(result)&&
         count(result.total_events)&&result.total_events>0&&result.total_events<=current.events&&
         Array.isArray(result.events)&&result.events.length<=page.limit&&
         result.events.every(row=>typeof row.event_id==='string'&&typeof row.activity==='string'&&Number.isFinite(Date.parse(row.timestamp)))&&
         (result.next_offset===null?result.offset+result.events.length>=result.total_events:
           result.events.length>0&&result.next_offset===result.offset+result.events.length&&result.next_offset<result.total_events);
     }
-    return result.mode==='cases'&&Array.isArray(result.cases)&&result.cases.length<=page.limit&&result.cases.length<=current.cases&&
+    const filter=page.case_status||'all';
+    if(filter!=='all'&&(!complete||!['added','modified','unchanged'].includes(filter)))return false;
+    const matching=filter==='all'?current.cases:drift[filter];
+    return result.mode==='cases'&&result.case_status===filter&&result.matching_cases===matching&&Array.isArray(result.cases)&&result.cases.length<=page.limit&&result.cases.length<=matching&&
       new Set(result.cases.map(row=>row.case_id)).size===result.cases.length&&
       result.cases.every(row=>typeof row.case_id==='string'&&row.case_id.length>0&&count(row.events)&&row.events>0&&
-        count(row.timestamp_ties)&&row.timestamp_ties<row.events&&typeof row.elapsed_seconds==='number'&&Number.isFinite(row.elapsed_seconds)&&row.elapsed_seconds>=0)&&
+        count(row.timestamp_ties)&&row.timestamp_ties<row.events&&caseStatus(row)&&(filter==='all'||row.comparison_status===filter)&&typeof row.elapsed_seconds==='number'&&Number.isFinite(row.elapsed_seconds)&&row.elapsed_seconds>=0)&&
       (result.next_after===null||(result.cases.length===page.limit&&result.next_after===result.cases.at(-1).case_id));
   }
 
@@ -10254,7 +10265,7 @@
     const refresh=button('Reopen exact selection','secondary'),close=button('Close source inspection','secondary');
     const controls=el('div',null,'row');controls.append(refresh,close);panel.append(controls,message,scope,caseList,eventList);
     const current=()=>generation===discoveryInspectionGeneration&&panel.isConnected;
-    let digest=null,caseTurn=0,eventTurn=0;
+    let digest=null,caseTurn=0,eventTurn=0,caseFilter='all';
     async function query(page){
       const body={reference:basis.reference,expected_process_sha256:basis.content_sha256,...page};
       const result=await (await api('/v1/event-log-discovery/inspect-selection?'+new URLSearchParams({workflow_id:basis.workflow_id,revision:String(basis.revision)}),
@@ -10263,6 +10274,7 @@
       return result;
     }
     const reset=error=>{++caseTurn;++eventTurn;digest=null;scope.replaceChildren();caseList.replaceChildren();eventList.replaceChildren();message.textContent=String(error.message||error)+' Reopen the selection to continue.';};
+    const caseStatusLabel=value=>({added:'Added to selection',modified:'Projection modified',unchanged:'Unchanged projection',unknown:'Unknown'})[value]||'Unknown';
     function showScope(result){
       const names={matches:'The effective input matches the recorded projection.',changed:'The effective input changed. The cases below are the current result of the original filter, not reconstructed historical cases.',not_recorded:'This older snapshot did not retain an effective-input digest. Historical membership cannot be established.'};
       const text=el('pre',JSON.stringify(result.selection,null,2));text.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere';
@@ -10271,26 +10283,42 @@
           ['At recording',result.original_effective_input?.cases??'Unknown',result.original_effective_input?.events??'Unknown',result.original_effective_input?.sha256??'Not recorded'],
           ['Current',result.current_effective_input.cases,result.current_effective_input.events,result.current_effective_input.sha256]]),text,
         el('p','Checked '+result.checked_at+'. Raw source fingerprint not rechecked here. Equal timestamps use a stable event-ID tie break, not proof of order.','muted'));
+      const drift=result.case_drift;
+      if(drift.status==='complete'){
+        scope.appendChild(table(['Case projection comparison','Count'],[
+          ['Added to current selection',drift.added],['Removed from selection',drift.removed],
+          ['Modified projected rows',drift.modified],['Unchanged projected rows',drift.unchanged]]));
+        scope.appendChild(el('p','Complete bounded fingerprint comparison. Removed case keys were not retained and cannot be reconstructed. Case changes can reflect filters, mappings or source changes, not business outcomes.','muted'));
+      }else scope.appendChild(el('p',drift.status==='current_work_budget_exceeded'?
+        'Current selection exceeds the complete case-comparison budget. No partial case differences are reported.':
+        'An original complete case-fingerprint index is unavailable. Case-level differences are unknown.','muted'));
+
     }
     async function loadCases(after=null,initial=false){
       const turn=++caseTurn;++eventTurn;eventList.replaceChildren();caseList.replaceChildren();refresh.disabled=true;
       message.textContent='Checking exact current discovery selection…';
-      const page={limit:30,...(initial?{}:{expected_projection_sha256:digest}),...(after===null?{}:{after})};
+      if(initial)caseFilter='all';
+      const page={limit:30,case_status:caseFilter,...(initial?{}:{expected_projection_sha256:digest}),...(after===null?{}:{after})};
       try{
         const result=await query(page);
         if(!current()||turn!==caseTurn)return;
         digest=result.current_effective_input.sha256;showScope(result);
-        message.textContent='Current selected cases: '+result.current_effective_input.cases+'. Showing '+result.cases.length+' on this page.';
+        message.textContent=caseFilter==='all'?'Current selected cases: '+result.current_effective_input.cases+'. Showing '+result.cases.length+' on this page.':
+          'Matching '+caseFilter+' cases: '+result.matching_cases+'. Showing '+result.cases.length+' on this page.';
         const rows=result.cases.map(row=>{
           const open=button(row.case_id,'secondary');open.style.cssText='max-width:100%;overflow-wrap:anywhere;white-space:normal';
           open.setAttribute('aria-label','Inspect exact selected case '+row.case_id);
           open.onclick=()=>loadEvents(row.case_id,0);
-          return [open,row.events,duration(row.elapsed_seconds),row.timestamp_ties];
+          return [open,row.events,duration(row.elapsed_seconds),row.timestamp_ties,caseStatusLabel(row.comparison_status)];
         });
         const first=button('First selected case page','secondary'),next=button('Next selected case page','secondary');
         first.disabled=after===null;next.disabled=result.next_after===null;
         first.onclick=()=>loadCases();next.onclick=()=>loadCases(result.next_after);
-        caseList.replaceChildren(table(['Supplied case key','Projected events','Elapsed time','Equal-timestamp events'],rows),first,next);
+        const filter=select('owgDiscoveryCaseDriftFilter',[['all','All current cases'],['added','Added'],['modified','Modified'],['unchanged','Unchanged']]);
+        filter.value=caseFilter;filter.disabled=result.case_drift.status!=='complete';
+        filter.onchange=()=>{caseFilter=filter.value;loadCases(null);};
+        caseList.replaceChildren(field('Case projection change',filter),
+          table(['Supplied case key','Projected events','Elapsed time','Equal-timestamp events','Original comparison'],rows),first,next);
       }catch(error){if(current()&&turn===caseTurn)reset(error);}
       finally{if(current())refresh.disabled=false;}
     }
@@ -10305,7 +10333,7 @@
         first.disabled=offset===0;next.disabled=result.next_offset===null;
         first.onclick=()=>loadEvents(caseId,0);next.onclick=()=>loadEvents(caseId,result.next_offset);
         eventList.replaceChildren(el('h4','Selected case '+caseId),
-          el('p','Showing '+result.events.length+' of '+result.total_events+' effective events at offset '+offset+'.'),
+          el('p','Showing '+result.events.length+' of '+result.total_events+' effective events at offset '+offset+'. '+caseStatusLabel(result.comparison_status)+'.'),
           table(['Event ID','Effective activity','Timestamp (UTC)'],result.events.map(row=>[row.event_id,row.activity,row.timestamp])),first,next);
         // Reuse the existing exact original-observation drill-down, if the
         // selected source is an observed execution snapshot.
