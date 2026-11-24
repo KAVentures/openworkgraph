@@ -215,6 +215,48 @@ class ConfigurationCases(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ImplementationError):
             audit_bindings(spec,catalog|{'omitted_tool_count':'PRIVATE_INVALID_COUNT'},suite,bindings)
 
+    async def test_paired_binding_review_detects_regressions_and_clear_but_changed_contracts(self):
+        from configure import compare_binding_configurations
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        same=compare_binding_configurations(spec,catalog,suite,bindings,deepcopy(bindings))
+        self.assertEqual(same['disposition_counts'],{'improved':0,'regressed':0,'unchanged_clear':2,'unchanged_findings':0})
+        self.assertFalse(same['review_required'])
+        changed=deepcopy(bindings)
+        changed['bindings'][0]['result_equals']=False
+        result=compare_binding_configurations(spec,catalog,suite,bindings,changed)
+        self.assertEqual(result['disposition_counts']['unchanged_clear'],2)
+        self.assertEqual(result['binding_changes']['changed_activity_ids'],['resolve'])
+        self.assertTrue(result['review_required'])
+        self.assertFalse(result['candidate_static_review_required'])
+        self.assertFalse(result['runtime_behavior_compatibility_verified'])
+        changed['bindings'][0]['tool_schema_sha256']='f'*64
+        regressed=compare_binding_configurations(spec,catalog,suite,bindings,changed)
+        self.assertEqual(regressed['disposition_counts']['regressed'],2)
+        self.assertEqual(regressed['routes_with_new_findings'],2)
+        for row in regressed['routes']:
+            self.assertIn({'code':'action:schema_pin_changed','activity_id':'resolve'},row['findings_added'])
+        improved=compare_binding_configurations(spec,catalog,suite,changed,bindings)
+        self.assertEqual(improved['disposition_counts']['improved'],2)
+        self.assertEqual(improved['routes_with_removed_findings'],2)
+        self.assertTrue(improved['review_required'])
+        for secret in ('PRIVATE_AUDIT_INPUT','SYNTHETIC_PRIVATE_RECORD','resolve_case','read_case','http://127.0.0.1'):
+            self.assertNotIn(secret,json.dumps(improved))
+        self.assertFalse(self.tools.business_calls)
+
+    async def test_paired_audit_detects_findings_replacement_without_binary_status_change(self):
+        from configure import compare_binding_configurations
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        old,new=deepcopy(bindings),deepcopy(bindings)
+        old['bindings'][0]['tool_schema_sha256']='f'*64
+        new['bindings'][0]['precondition'].pop('tool_schema_sha256')
+        result=compare_binding_configurations(spec,catalog,suite,old,new)
+        self.assertEqual(result['disposition_counts']['unchanged_findings'],2)
+        self.assertEqual(result['routes_with_new_findings'],2)
+        self.assertEqual(result['routes_with_removed_findings'],2)
+        for row in result['routes']:
+            self.assertIn({'code':'action:schema_pin_changed','activity_id':'resolve'},row['findings_removed'])
+            self.assertIn({'code':'precondition:schema_pin_missing','activity_id':'resolve'},row['findings_added'])
+
     async def test_binding_audit_cli_replays_exact_inputs_and_reports_failure_exit(self):
         import subprocess
         import sys
@@ -245,6 +287,20 @@ class ConfigurationCases(unittest.IsolatedAsyncioTestCase):
             result=subprocess.run(command+['--model','unused'],cwd=root,capture_output=True,text=True,timeout=20)
             self.assertNotEqual(result.returncode,0)
             self.assertFalse((root/'forbidden.json').exists())
+            bindings['enabled']=True
+            (root/'baseline.json').write_text(json.dumps(bindings),encoding='utf-8')
+            command[-1]='paired.json'
+            result=subprocess.run(command+['--baseline-bindings','baseline.json'],cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,2,result.stdout+result.stderr)
+            paired=json.loads((root/'paired.json').read_text())
+            self.assertEqual(paired['format'],'openworkgraph.paired-binding-readiness.v1')
+            self.assertEqual(paired['disposition_counts']['regressed'],2)
+            self.assertTrue(paired['binding_changes']['other_binding_fields_changed'])
+            command[-1]='ambiguous.json'
+            result=subprocess.run(command+['--baseline-bindings','baseline.json','--previous-catalog','catalog.json'],
+                                  cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertNotEqual(result.returncode,0)
+            self.assertFalse((root/'ambiguous.json').exists())
 
     async def test_inspection_minimizes_metadata_and_never_calls_business_tools(self):
         self.assertEqual(len(self.catalog['tools']),2);self.assertEqual(self.catalog['omitted_tool_count'],1)
