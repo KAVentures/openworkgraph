@@ -216,6 +216,89 @@ class ConfigurationCases(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ImplementationError):
             audit_bindings(spec,catalog|{'omitted_tool_count':'PRIVATE_INVALID_COUNT'},suite,bindings)
 
+    async def test_shortlist_distinguishes_exact_reviews_from_new_case_and_conflicts(self):
+        from configure import shortlist_reviewed_routes
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        selected=deepcopy(suite['cases'][0]['input'])
+        result=shortlist_reviewed_routes(spec,suite,bindings,selected)
+        self.assertEqual(result['status'],'one_exact_reviewed_route_static_checks_clear')
+        self.assertEqual(result['distinct_reviewed_route_count'],1)
+        self.assertEqual(result['exact_input_review_count'],2)
+        self.assertEqual(result['exact_input_reviewed_route_intersection_count'],1)
+        self.assertEqual(result['routes'][0]['exact_input_references'],
+            [{'case_id':'case_1','alternative':1},{'case_id':'case_2','alternative':1}])
+        self.assertTrue(result['review_required'])
+        for key in ('execution_authorized','automatic_route_selected','business_tools_called',
+                    'route_applicability_independently_verified','model_called'):
+            self.assertFalse(result[key])
+        new={**selected,'issue':'PRIVATE_NEW_CASE'}
+        result=shortlist_reviewed_routes(spec,suite,bindings,new)
+        self.assertEqual(result['status'],'new_input_requires_route_review')
+        self.assertEqual(result['routes_with_clear_offline_requirements'],1)
+        self.assertFalse(result['routes'][0]['supported_by_all_exact_reviews'])
+        self.assertNotIn('PRIVATE_',json.dumps(result))
+        disabled=shortlist_reviewed_routes(spec,suite,{**bindings,'enabled':False},selected)
+        self.assertEqual(disabled['status'],'reviewed_route_has_implementation_blockers')
+        self.assertIn('customer_bindings_disabled',disabled['routes'][0]['requirements'])
+        malformed=shortlist_reviewed_routes(spec,suite,bindings,{'issue':'missing data'})
+        self.assertEqual(malformed['routes_with_clear_offline_requirements'],0)
+        self.assertIn('offline_preparation_refused',malformed['routes'][0]['requirements'])
+        self.assertEqual(shortlist_reviewed_routes(spec,suite,bindings,suite['cases'][2]['input'])['status'],
+                         'exact_input_requires_clarification')
+        suite['cases'][2]['input']=selected
+        conflicted=shortlist_reviewed_routes(spec,suite,bindings,selected)
+        self.assertEqual(conflicted['status'],'conflicting_exact_input_reviews')
+        self.assertEqual(conflicted['exact_input_reviewed_route_intersection_count'],0)
+        self.assertFalse(self.tools.business_calls)
+        with self.assertRaises(ImplementationError):
+            shortlist_reviewed_routes(spec,suite,{**bindings,'process_reference':{}},selected)
+
+    async def test_shortlist_intersects_reviewed_alternatives_without_guessing(self):
+        from configure import shortlist_reviewed_routes
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        spec['process_model']['transitions'].append({'source':'resolve','target':'done'})
+        spec['process_model_sha256']=digest(spec['process_model'])
+        suite['spec_sha256']=digest(spec)
+        direct=['resolve','done']
+        suite['cases'][0]['expected']['accepted_routes'].append(direct)
+        selected=suite['cases'][0]['input']
+        result=shortlist_reviewed_routes(spec,suite,bindings,selected)
+        self.assertEqual(result['distinct_reviewed_route_count'],2)
+        self.assertEqual(result['status'],'one_exact_reviewed_route_static_checks_clear')
+        self.assertEqual(result['routes'][0]['activity_ids'],['resolve','readback','done'])
+        self.assertTrue(result['routes'][0]['supported_by_all_exact_reviews'])
+        suite['cases'][1]['expected']['accepted_routes'].append(direct)
+        self.assertEqual(shortlist_reviewed_routes(spec,suite,bindings,selected)['status'],
+                         'multiple_reviewed_alternatives')
+        suite['cases'][0]['expected']['accepted_routes']=[direct]
+        suite['cases'][1]['expected']['accepted_routes']=[['resolve','readback','done']]
+        self.assertEqual(shortlist_reviewed_routes(spec,suite,bindings,selected)['status'],
+                         'conflicting_exact_input_reviews')
+
+    async def test_route_inventory_randomized_intersection(self):
+        from configure import _reviewed_route_inventory
+        from random import Random
+        rng=Random(20261124)
+        pool=[['start',str(i),'end'] for i in range(8)]
+        for _ in range(1000):
+            cases=[{'id':f'case_{i}','input':{'v':rng.randrange(5)},
+                    'expected':{'accepted_routes':rng.sample(pool,rng.randrange(5))}}
+                   for i in range(rng.randrange(1,21))]
+            target={'v':rng.randrange(6)}
+            inventory,exact,common=_reviewed_route_inventory(cases,digest(target))
+            matches=[row for row in cases if row['input']==target]
+            self.assertEqual(exact,matches)
+            self.assertEqual(common,{tuple(route) for route in pool if matches and all(
+                route in row['expected']['accepted_routes'] for row in matches)})
+            self.assertEqual(set(inventory),{tuple(route) for row in cases for route in row['expected']['accepted_routes']})
+            for route,item in inventory.items():
+                self.assertEqual(item['references'],[
+                    {'case_id':row['id'],'alternative':i+1} for row in cases
+                    for i, candidate in enumerate(row['expected']['accepted_routes']) if tuple(candidate)==route])
+                self.assertEqual(item['exact_references'],[
+                    {'case_id':row['id'],'alternative':i+1} for row in matches
+                    for i, candidate in enumerate(row['expected']['accepted_routes']) if tuple(candidate)==route])
+
     async def test_prepare_reviewed_case_creates_real_executor_inputs_and_disabled_intent(self):
         from configure import prepare_reviewed_case, write_reviewed_case_directory
         from execute import prepare, validate_intent, review_template
@@ -381,6 +464,16 @@ class ConfigurationCases(unittest.IsolatedAsyncioTestCase):
                                   cwd=root,capture_output=True,text=True,timeout=20)
             self.assertNotEqual(result.returncode,0)
             self.assertFalse((root/'execution-journal').exists())
+            shortlist=[sys.executable,'configure.py','--shortlist-reviewed-routes','--cases','suite.json',
+                       '--bindings','bindings.json','--case','prepared/case.json','--output','shortlist.json']
+            result=subprocess.run(shortlist,cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            self.assertEqual(json.loads((root/'shortlist.json').read_text())['status'],
+                             'one_exact_reviewed_route_static_checks_clear')
+            shortlist[-1]='ambiguous.json'
+            result=subprocess.run(shortlist+['--confirm-retain-case-inputs'],cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertNotEqual(result.returncode,0)
+            self.assertFalse((root/'ambiguous.json').exists())
             new_case={**suite['cases'][0]['input'],'issue':'SYNTHETIC_NEW_CASE',
                       'request_id':'new-case-idempotency-key','record_ref':'owg:r:'+'e'*32}
             (root/'new-case.json').write_text(json.dumps(new_case),encoding='utf-8')
