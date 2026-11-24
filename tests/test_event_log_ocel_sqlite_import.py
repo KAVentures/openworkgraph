@@ -116,3 +116,26 @@ with TestClient(app) as client:
 '''
     env = {**os.environ, 'WORKFLOW_OBSERVER_DATA': str(tmp_path / 'data'), 'WORKFLOW_OBSERVER_AUTH_DIR': str(tmp_path / 'auth')}
     subprocess.run([sys.executable, '-c', code, str(tmp_path / "u.sqlite")], env=env, check=True, timeout=60)
+
+
+def test_ocel_conversion_rechecks_session_after_read(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from server import event_log_routes
+
+    active = {"valid": True}
+    monkeypatch.setattr(event_log_routes, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(event_log_routes, "dashboard_session_valid",
+                        lambda token: token == "valid" and active["valid"])
+
+    def convert(*args, **kwargs):
+        active["valid"] = False
+        return {"document": "private-conversion-result"}
+
+    monkeypatch.setattr(sq, "to_ocel_json", convert)
+    app = FastAPI()
+    app.include_router(event_log_routes.router)
+    response = TestClient(app).post("/v1/event-logs/ocel-sqlite-to-json",
+                                    content=b"fixture", headers={"Authorization": "OWG-Session valid"})
+    assert response.status_code == 403
+    assert "private-conversion-result" not in response.text

@@ -362,6 +362,8 @@ async def convert_ocel_sqlite_event_log(request: Request):
             result = await run_in_threadpool(sqlite_import.to_ocel_json, spool, folder=DATA_DIR)
         except sqlite_import.SqliteError as exc:
             raise HTTPException(422, str(exc)) from None
+    # Conversion can outlive the dashboard session; do not release revoked data.
+    _require_dashboard(request)
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
