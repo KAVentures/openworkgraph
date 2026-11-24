@@ -31,6 +31,7 @@
   FILTERED.add('heuristics-net');
   FILTERED.add('footprints');
   FILTERED.add('model-quality');
+  FILTERED.add('model-discovery.ptml');
   FILTERED.add('similar-cases');
   FILTERED.add('model-change');
   FILTERED.add('model-comparison');
@@ -6178,6 +6179,17 @@
           finally{draft.disabled=false;}
         };
         out.appendChild(draft);
+        const tree=button('Download process tree (PTML)','secondary');tree.id='owgDiscoveryPtml';
+        tree.onclick=async()=>{
+          try{
+            tree.disabled=true;
+            const response=await api(logPath('model-discovery.ptml',{noise:String(r.settings.noise),activities:String(r.settings.activities)}));
+            download(state.logId+'-discovered.ptml',await response.text(),'application/xml');
+            statusLine.textContent='Process tree downloaded ('+(response.headers.get('X-OWG-Process-Tree')||'').replace(/; /g,', ')+'). It opens with pm4py.read_ptml and in ProM.';
+          }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
+          finally{tree.disabled=false;}
+        };
+        out.appendChild(tree);
         const petri=button('Download Petri net (PNML)','secondary');petri.id='owgDiscoveryPnml';
         petri.onclick=async()=>{
           try{
