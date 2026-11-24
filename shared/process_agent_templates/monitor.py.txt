@@ -299,6 +299,47 @@ def batch_report(spec, paths, deployment_name):
     return document, review
 
 
+def compare_journals(spec, baseline_path, candidate_path, deployment_name):
+    """Compare two exact snapshots of one execution without importing either.
+
+    Only an exact byte-prefix extension establishes continuity relative to
+    the selected baseline. Equivalent JSON reserialization is not continuity.
+    The result never establishes authenticity of either local file.
+    """
+    validate_spec(spec)
+    snapshots = []
+    for index, path in enumerate((baseline_path, candidate_path), 1):
+        content = _read_snapshot(path)
+        records = _decode_journal(content)
+        run = report(spec, records, deployment_name)['runs'][0]
+        snapshots.append((content, _review_row(index, content, records, run)))
+    old, before = snapshots[0]
+    new, after = snapshots[1]
+    if before['run_id'] != after['run_id']:
+        relation = 'different_execution_identity'
+    elif old == new:
+        relation = 'identical_snapshot'
+    elif new.startswith(old):
+        relation = 'exact_append_only_extension'
+    elif old.startswith(new):
+        relation = 'candidate_is_earlier_snapshot'
+    else:
+        relation = 'divergent_journal_history'
+    accepted = relation in {'identical_snapshot', 'exact_append_only_extension'}
+    return {
+        'format': 'openworkgraph.customer-journal-snapshot-comparison.v1',
+        'process_reference': reference(spec), 'spec_sha256': digest(spec),
+        'baseline': before, 'candidate': after,
+        'relation': relation, 'candidate_retains_exact_baseline_bytes': accepted,
+        'additional_record_count': after['record_count'] - before['record_count'] if accepted else None,
+        'candidate_requires_reconciliation': bool(after['review_flags']),
+        'journal_origin_independently_verified': False,
+        'business_outcomes_verified': False, 'remote_cancellation_verified': False,
+        'report_imported': False, 'execution_authorized': False,
+        'network_contacted': False, 'business_tools_called': False,
+    }
+
+
 def _encoded(document):
     return (json.dumps(document, indent=2, allow_nan=False) + '\n').encode('utf-8')
 
@@ -320,8 +361,15 @@ def main():
     parser.add_argument('--output', required=True, help='New local JSON file; existing files are never overwritten')
     parser.add_argument('--review-only', action='store_true',
                         help='Write a minimized selection/reconciliation review instead of an importable report')
+    parser.add_argument('--compare-to', help='Original baseline journal for a read-only comparison with one --journal candidate')
     args = parser.parse_args()
+    if args.compare_to is not None and (not args.review_only or len(args.journal) != 1):
+        parser.error('--compare-to requires --review-only and exactly one candidate --journal')
     spec = load_object(Path(__file__).parent / 'workflow.spec.json', limit=512 * 1024)
+    if args.compare_to is not None:
+        review = compare_journals(spec, args.compare_to, args.journal[0], args.deployment_name)
+        _write_new(args.output, review)
+        return 0 if review['candidate_retains_exact_baseline_bytes'] else 2
     document, review = batch_report(spec, args.journal, args.deployment_name)
     if args.review_only:
         _write_new(args.output, review)
