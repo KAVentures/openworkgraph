@@ -45,6 +45,22 @@ def send(cid, secret, seq, body, ts=None):
     return channels.ingest(cid, h["X-OWG-Report-Timestamp"], h["X-OWG-Report-Sequence"], h["X-OWG-Report-Signature"], body)
 
 
+def test_revision_refusal_remains_durable_when_incident_store_is_unavailable(setup, monkeypatch):
+    dep, cid, secret = setup
+    final = _snapshot("durable", status="succeeded", step_status="completed")
+    send(cid, secret, 1, envelope(final))
+    stale = envelope(_snapshot("durable"))
+    def full(*args, **kwargs):
+        raise incidents.IncidentError("too many open incidents")
+    monkeypatch.setattr(incidents, "record", full)
+    with pytest.raises(channels.ChannelError, match="incident recording unavailable") as err:
+        send(cid, secret, 2, stale)
+    assert err.value.status == 409
+    replay = send(cid, secret, 2, stale)
+    assert replay["duplicate"] and replay["outcome"] == "refused_run_revision_conflict"
+    assert am.attributed_run(dep, "durable", SPEC)["run_status"] == "succeeded"
+
+
 def test_signature_is_standard_hmac_and_verification_codes():
     body = b'{"x":1}'
     h = signing.headers("00" * 32, 3, body, timestamp=1000)
