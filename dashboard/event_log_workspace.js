@@ -2573,10 +2573,34 @@
             const summary=r.files.length
               ?'Checked '+r.files.length+' matching files for '+f.pattern+'.'+(r.more_files?' Showing the oldest '+r.max_files+'.':'')
               :'No matching files in this folder.';
+            const rows=r.files.map(file=>{
+              let action='';
+              if(file.state==='new_content'&&file.sha256){
+                action=button('Append this file','secondary');
+                action.setAttribute('aria-label','Append '+file.name);
+                action.onclick=async()=>{
+                  if(!current())return;
+                  clearPreview();out.replaceChildren(el('div','Checking and appending '+file.name+'…','muted'));
+                  try{
+                    const result=await (await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/append-file',{
+                      method:'POST',headers:{'Content-Type':'application/json','X-OWG-Local-Storage-Confirmed':'true'},
+                      body:JSON.stringify({name:file.name,sha256:file.sha256})
+                    })).json();
+                    if(generation!==state.generation||!wrap.isConnected)return;
+                    const summary=result.selected_changed?'The selected file changed or disappeared. Preview the folder again.'
+                      :describe(result)+(result.events_added?' Analyse again to include them.':'');
+                    out.replaceChildren(el('div',summary),...(result.files||[]).filter(item=>item.outcome==='failed')
+                      .map(item=>el('div',item.name+': '+item.error,'muted')));
+                    const updated=await getJSON(base);
+                    if(generation===state.generation)render(updated);
+                  }catch(error){if(generation===state.generation&&wrap.isConnected)out.replaceChildren(el('div',error.message,'muted'));}
+                };
+              }
+              return [file.name,Number(file.bytes).toLocaleString()+' bytes',labels[file.state],action];
+            });
             previewOut.replaceChildren(el('div',summary,'muted'),
-              ...(r.files.length?[table(['File','Size','Status'],r.files.map(file=>[
-                file.name,Number(file.bytes).toLocaleString()+' bytes',labels[file.state]
-              ])),el('div','Run now checks the latest files and validates their event rows.','muted')]:[]));
+              ...(rows.length?[table(['File','Size','Status','Actions'],rows),
+                el('div','Appending checks the current file and validates its event rows.','muted')]:[]));
           }catch(error){if(current())previewOut.replaceChildren(el('div',error.message,'muted'));}
           finally{previewButton.disabled=false;}
         };

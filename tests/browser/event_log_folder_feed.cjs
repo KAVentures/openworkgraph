@@ -52,7 +52,16 @@ const path=require('node:path');
    const before=await page.evaluate(async()=>(await (await fetch('/v1/event-logs')).json()).logs[0].events);
    assert.equal(before,8);
 
-   await page.locator('#owgFolderFeedList').getByRole('button',{name:'Run feed for '+exports,exact:true}).click();
+   const chosen=path.join(exports,'orders-1.csv');
+   const original=await fs.readFile(chosen);
+   await fs.writeFile(chosen,Buffer.from(original.toString().replace('c4,Pay','c4,Changed')));
+   await fs.utimes(chosen,old,old);
+   await preview.getByRole('button',{name:'Append orders-1.csv',exact:true}).click();
+   await page.locator('#owgFolderFeedResult').getByText('The selected file changed or disappeared.',{exact:false}).waitFor();
+   assert.equal(await page.evaluate(async()=>(await (await fetch('/v1/event-logs')).json()).logs[0].events),8);
+   await fs.writeFile(chosen,original);await fs.utimes(chosen,old,old);
+   await previewFiles.click();
+   await preview.getByRole('button',{name:'Append orders-1.csv',exact:true}).click();
    await page.locator('#owgFolderFeedResult').filter({hasText:'1 file(s) appended with 2 new events. Analyse again to include them.'}).waitFor();
    await page.locator('#owgFolderFeedList').filter({hasText:'orders-1.csv — 2 events added'}).waitFor();
    await previewFiles.click();

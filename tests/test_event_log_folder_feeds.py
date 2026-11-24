@@ -111,8 +111,35 @@ def test_preview_compares_content_and_leaves_feed_history_untouched(tmp_path, mo
         "orders-current.csv": "settling",
     }
     assert review["counts"]["new_content"] == 1 and not review["more_files"]
-    assert all(set(file) == {"name", "bytes", "state"} for file in review["files"])
+    assert all(("sha256" in file) == (file["state"] == "new_content") for file in review["files"])
     assert feeds.feeds(log) == history and workspace.summary(log) == summary
+
+
+def test_append_one_pins_the_selected_name_and_content(tmp_path):
+    log = _log()
+    folder = tmp_path / "exports"
+    folder.mkdir()
+    feed_id = feeds.create(log, {"folder": str(folder), "confirm_folder_reads": True})["feed_id"]
+    first = HEADER + "o2;Create;04/03/2024 10:00\n"
+    second = HEADER + "o3;Ship;05/03/2024 10:00\n"
+    _drop(folder, "other.csv", first, age=600)
+    chosen = _drop(folder, "chosen.csv", second, age=300)
+    reviewed = next(row for row in feeds.preview(feed_id)["files"] if row["name"] == chosen.name)
+    spec = {"name": reviewed["name"], "sha256": reviewed["sha256"]}
+    _drop(folder, chosen.name, second.replace("Ship", "Edit"), age=300)
+    result = feeds.append_one(feed_id, spec)
+    assert result["selected_changed"] and result["files"] == []
+    assert workspace.summary(log)["events"] == 2
+    assert feeds.feeds(log)["feeds"][0]["recent_files"] == []
+
+    _drop(folder, chosen.name, second, age=300)
+    result = feeds.append_one(feed_id, spec)
+    assert result["files_appended"] == 1 and not result["selected_changed"]
+    assert result["files"][0]["name"] == chosen.name
+    assert workspace.summary(log)["events"] == 3
+    assert feeds.append_one(feed_id, spec)["files_already_appended"] == 1
+    assert next(row for row in feeds.preview(feed_id)["files"] if row["name"] == "other.csv")["state"] == "new_content"
+    assert workspace.summary(log)["events"] == 3
 
 
 def test_preview_bounds_hashing_bytes_and_the_number_of_files(tmp_path, monkeypatch):
@@ -191,6 +218,15 @@ with TestClient(app) as client:
     preview = client.get(preview_url, headers=owner)
     assert preview.status_code == 200 and preview.headers["cache-control"] == "no-store"
     assert [(item["name"], item["state"]) for item in preview.json()["files"]] == [("a.csv", "new_content")]
+    candidate = preview.json()["files"][0]
+    single = f"/v1/event-logs/feeds/{feed_id}/append-file"
+    selected = {"name": candidate["name"], "sha256": candidate["sha256"]}
+    assert client.post(single, json=selected, headers=owner).status_code == 403
+    assert client.post(single, json=selected, headers={**bearer, "X-OWG-Local-Storage-Confirmed": "true"}).status_code == 403
+    assert client.post(single, json={**selected, "name": "../a.csv"}, headers=store).status_code == 422
+    moved = client.post(single, json={**selected, "name": "missing.csv"}, headers=store)
+    assert moved.status_code == 200 and moved.json()["selected_changed"]
+
 
     assert client.post(f"/v1/event-logs/feeds/{feed_id}/retry-failed", headers=bearer).status_code == 403
     assert client.post(f"/v1/event-logs/feeds/{feed_id}/retry-failed", headers=owner).status_code == 403
