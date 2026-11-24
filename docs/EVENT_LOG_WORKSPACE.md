@@ -3222,6 +3222,15 @@ or `end`. The body also needs `activities` containing the two transition labels 
 end label. The dashboard-only response gives the exact totals and cases in literal key order.
 Send `next_after` as `after` to continue, and use `limit` from 1 to 100 (default 50).
 
+**Download JSON** saves the comparison shown. **Download CSV** gives the matrix in long form:
+
+- one row per ordered activity pair;
+- the log's and the model's relation (`→`, `←`, `||` or `#`);
+- whether the two agree.
+
+Changing the model or activity coverage disables the download until the footprints are compared
+again.
+
 ## Check against a Petri net (PNML import and token replay)
 
 ProM, PM4Py, Apromore, WoPeD and most academic tools exchange models as Petri nets in PNML. The

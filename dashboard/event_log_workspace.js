@@ -7344,7 +7344,15 @@
     const statusLine=el('div',null,'muted');statusLine.id='owgFootprintsStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgFootprintsResults';
     const review=el('div');review.id='owgFootprintsCaseReview';
-    box.append(row,statusLine,out,review);
+    // Every cell of the matrix as one row: the log's and the model's relation and whether they agree.
+    let lastFootprints=null;
+    const exports=exportButtons('owgFootprintsReport',()=>lastFootprints,r=>[
+      ['from','to','log_relation','model_relation','agrees'],
+      ...r.matrix.flatMap(row=>row.cells.map((x,j)=>[row.activity,r.activities[j],x.log,x.model,x.log===x.model]))]);
+    box.append(row,statusLine,out,review,exports.node);
+    // Different settings give a different matrix; the old one is no longer downloadable.
+    const staleFootprints=()=>{lastFootprints=null;exports.enable(false);};
+    noise.addEventListener('change',staleFootprints);coverage.addEventListener('change',staleFootprints);
     const number=n=>Number(n).toLocaleString();
     let reviewTurn=0;
     function evidenceButton(url,retained,group,activities,label){
@@ -7385,7 +7393,7 @@
     }
     run.onclick=async()=>{
       const generation=state.generation;run.disabled=true;statusLine.textContent='Comparing…';out.replaceChildren();
-      ++reviewTurn;review.replaceChildren();
+      ++reviewTurn;review.replaceChildren();staleFootprints();
       try{
         const url=logPath('footprints',{noise:noise.value,activities:coverage.value}),r=await getJSON(url);
         if(generation!==state.generation)return;
@@ -7410,6 +7418,7 @@
         r.matrix.forEach((row,i)=>row.cells.forEach((x,j)=>{if(x.log!==x.model){const cell=t.querySelector('tbody').rows[i].cells[j+1];cell.style.fontWeight='600';cell.setAttribute('aria-label',row.activity+' to '+r.activities[j]+': log '+x.log+', model '+x.model+' (differs)');}}));
         grid.appendChild(t);
         out.append(grid,el('div',r.caveat,'muted'));
+        lastFootprints=r;exports.enable(true);
       }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
       finally{run.disabled=false;}};
     return box;
