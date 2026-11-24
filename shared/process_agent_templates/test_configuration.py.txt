@@ -215,6 +215,85 @@ class ConfigurationCases(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ImplementationError):
             audit_bindings(spec,catalog|{'omitted_tool_count':'PRIVATE_INVALID_COUNT'},suite,bindings)
 
+    async def test_prepare_reviewed_case_creates_real_executor_inputs_and_disabled_intent(self):
+        from configure import prepare_reviewed_case, write_reviewed_case_directory
+        from execute import prepare, validate_intent, review_template
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        documents=prepare_reviewed_case(spec,suite,bindings,'case_1',1)
+        intent=documents['customer-intent.json']
+        review=documents['preparation-review.json']
+        self.assertFalse(intent['customer_authorization_confirmed'])
+        self.assertFalse(intent['source_reads_confirmed'])
+        self.assertIsNone(intent['expires_at'])
+        self.assertTrue(review['offline_requirements_clear'])
+        self.assertTrue(review['review_required'])
+        self.assertEqual(review['mapped_action_count'],2)
+        self.assertEqual(review['suite_sha256'],digest(suite))
+        self.assertEqual(review['disabled_intent_sha256'],digest(intent))
+        self.assertNotIn('SYNTHETIC_PRIVATE_RECORD',json.dumps(review))
+        self.assertFalse(self.tools.business_calls)
+        with TemporaryDirectory() as directory:
+            import stat
+            root=Path(directory)/'prepared'
+            write_reviewed_case_directory(root,documents)
+            plan,case,loaded_bindings,saved_intent=[load_object(root/name) for name in
+                ('plan.json','case.json','bindings.json','customer-intent.json')]
+            prepared=prepare(spec,plan,case,loaded_bindings)
+            self.assertEqual(saved_intent,review_template(spec,prepared,case,loaded_bindings))
+            with self.assertRaises(ImplementationError):
+                validate_intent(spec,prepared,case,loaded_bindings,saved_intent)
+            if os.name=='posix':
+                self.assertEqual(stat.S_IMODE(root.stat().st_mode),0o700)
+                for file in root.iterdir():
+                    self.assertEqual(stat.S_IMODE(file.stat().st_mode),0o600)
+            original=(root/'case.json').read_bytes()
+            with self.assertRaises(FileExistsError):
+                write_reviewed_case_directory(root,documents)
+            self.assertEqual((root/'case.json').read_bytes(),original)
+            oversized={**documents,'case.json':{'text':'a'*65536}}
+            with self.assertRaises(ImplementationError):
+                write_reviewed_case_directory(root.parent/'oversized',oversized)
+            self.assertFalse((root.parent/'oversized').exists())
+        disabled=deepcopy(bindings)
+        disabled['enabled']=False
+        packet=prepare_reviewed_case(spec,suite,disabled,'case_1',1)
+        self.assertIn('customer_bindings_disabled',packet['preparation-review.json']['requirements'])
+        self.assertFalse(packet['preparation-review.json']['offline_requirements_clear'])
+        for ident,alt in [('case_3',1),('unknown',1),('case_1',0),('case_1',2),('case_1',True)]:
+            with self.assertRaises(ImplementationError):
+                prepare_reviewed_case(spec,suite,bindings,ident,alt)
+
+    async def test_prepare_reviewed_case_cli_reuses_executor_without_network(self):
+        import subprocess
+        import sys
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        with TemporaryDirectory() as directory:
+            root=Path(directory)
+            for name,value in [('workflow.spec.json',spec),('suite.json',suite),('bindings.json',bindings)]:
+                (root/name).write_text(json.dumps(value),encoding='utf-8')
+            for name in ('configure.py','evaluate.py','execute.py','runtime.py',
+                         'process_source_state.py','process_rule_conditions.py'):
+                (root/name).write_bytes((Path(__file__).parent/name).read_bytes())
+            command=[sys.executable,'-c',
+                'import configure,runpy,socket; socket.socket=lambda *a,**k: (_ for _ in ()).throw(AssertionError("network")); runpy.run_path("configure.py",run_name="__main__")',
+                '--prepare-reviewed-case','--cases','suite.json','--bindings','bindings.json',
+                '--case-id','case_1','--alternative','1','--output','prepared']
+            denied=subprocess.run(command,cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertNotEqual(denied.returncode,0)
+            self.assertFalse((root/'prepared').exists())
+            result=subprocess.run(command+['--confirm-retain-case-inputs'],cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            self.assertFalse(json.loads(result.stdout)['execution_authorized'])
+            execute=[sys.executable,'execute.py','--plan','prepared/plan.json','--case','prepared/case.json',
+                     '--bindings','prepared/bindings.json']
+            result=subprocess.run(execute,cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            self.assertEqual(json.loads(result.stdout)['requirements'],[])
+            result=subprocess.run(execute+['--intent','prepared/customer-intent.json','--execute-approved'],
+                                  cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertNotEqual(result.returncode,0)
+            self.assertFalse((root/'execution-journal').exists())
+
     async def test_paired_binding_review_detects_regressions_and_clear_but_changed_contracts(self):
         from configure import compare_binding_configurations
         spec,catalog,suite,bindings=self.reviewed_audit_fixture()
