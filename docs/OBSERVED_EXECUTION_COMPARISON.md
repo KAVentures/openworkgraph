@@ -177,3 +177,19 @@ mode changes, overlap refusal, stale preview, duplicate save, malformed
 metadata, source drift/unavailability, local authorization, deletion,
 model-discovery lineage and minimized project review. Full cross-platform
 CI and real consenting pilot acceptance remain separate gates.
+
+### Exact event drill-down from process-mining findings
+
+The case-event inspector now offers an explicit **Recheck displayed
+observations** action for pages of up to 100 original saved event IDs.
+The request pins the retained log and exact inferred execution; event IDs
+from another case, duplicates, missing IDs and unsupported identifiers
+are refused. The server reads original saved rows before analysis activity
+mappings, projects retained evidence within the original bounded scope,
+and compares exact opaque evidence references, execution membership,
+activity and timestamp. Results distinguish matching, changed, absent
+from current projection and source unavailable. No source payload or raw
+identifier is returned, and neither the log nor capture is changed.
+The new POST /v1/workflow-evidence/event-log/observations endpoint requires
+the authenticated local dashboard session. Source rechecks are explicit,
+not automatic or a verification of business outcomes.
