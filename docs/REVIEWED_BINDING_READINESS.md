@@ -145,3 +145,5 @@ inputs, resolve requirements and supply the existing exact customer intent
 before using the existing execution mode. No model, source provider, tool
 or execution call occurs during preparation. A reviewed expectation is
 not evidence of current provider state or permission to act.
+
+Local validation of the exact extracted directory writer (1,596 characters, FNV-1a 352013743): 100 real filesystem round trips with permission and JSON checks, 100 overwrite refusals, five injected file-open failures and three invalid-input refusals passed. Full route preparation and generated executor integration tests are committed but have not been run locally.
