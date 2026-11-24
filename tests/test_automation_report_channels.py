@@ -217,6 +217,82 @@ def test_signed_running_history_refuses_nonmonotonic_changes(setup, mutation, re
     assert am.attributed_run(dep, "r", SPEC)["run_status"] == "running"
 
 
+@pytest.mark.parametrize("times,reason", [
+    (["09:59:59"], "step_precedes_run_start"),
+    (["10:01:00", "10:00:59"], "step_history_time_regressed"),
+    (["10:02:01"], "finish_precedes_retained_step"),
+])
+def test_new_signed_runs_require_consistent_chronology(setup, times, reason):
+    dep, cid, secret = setup
+    doc = _snapshot("invalid", status="succeeded", step_status="completed")
+    doc["runs"][0]["steps"] = [
+        {"step_id": "s"+str(index), "activity": "Synthetic step", "status":"completed",
+         "at":"2024-03-01T"+at+"Z"} for index, at in enumerate(times)]
+    doc["runs"].extend(report(["otherwise_valid"])["runs"])
+    body = envelope(doc)
+    with pytest.raises(channels.ChannelError) as exc:
+        send(cid, secret, 1, body)
+    assert exc.value.status == 409
+    assert am.attributed_run(dep,"invalid",SPEC) is None
+    assert am.attributed_run(dep,"otherwise_valid",SPEC) is None
+    conflict = next(i for i in incidents.listing(deployment_id=dep)["incidents"]
+                    if i["kind"]=="run_revision_conflict")
+    assert conflict["detail"]["conflict_counts"] == {reason:1}
+    assert send(cid,secret,1,body)["outcome"] == "refused_run_revision_conflict"
+
+
+def test_pending_resolution_cannot_move_past_newly_appended_step(setup):
+    dep,cid,secret = setup
+    send(cid,secret,1,envelope(_snapshot("pending")))
+    changed = _snapshot("pending",status="succeeded",step_status="completed",
+                        at="2024-03-01T10:01:30Z")
+    changed["runs"][0]["steps"].append({"step_id":"s2","activity":"Next","status":"completed",
+                                       "at":"2024-03-01T10:01:00Z"})
+    with pytest.raises(channels.ChannelError) as exc:
+        send(cid,secret,2,envelope(changed))
+    assert exc.value.status==409
+    assert am.attributed_run(dep,"pending",SPEC)["run_status"]=="running"
+    changed["runs"][0]["steps"][1]["at"]="2024-03-01T10:01:30Z"
+    assert send(cid,secret,3,envelope(changed))["revision_counts"]["advanced"]==1
+
+
+def test_nonjournal_handoff_is_not_a_pending_step_marker(setup):
+    dep,cid,secret = setup
+    old = _snapshot("handoff")
+    old["runs"][0]["outcome"]["source"]="external_runtime"
+    send(cid,secret,1,envelope(old))
+    changed = _snapshot("handoff",status="succeeded",step_status="completed",
+                        at="2024-03-01T10:01:00Z")
+    changed["runs"][0]["outcome"]["source"]="external_runtime"
+    with pytest.raises(channels.ChannelError) as exc:
+        send(cid,secret,2,envelope(changed))
+    assert exc.value.status==409
+    assert am.attributed_run(dep,"handoff",SPEC)["run_status"]=="running"
+
+
+def test_snapshot_chronology_and_pending_resolution_exhaustive():
+    from datetime import datetime,timedelta
+    from itertools import product
+    start=datetime(2026,1,1)
+    def run(times,finish,source="customer_execution_journal",pending=False):
+        return dict(started_at=start,finished_at=start+timedelta(seconds=finish) if finish is not None else None,
+                    status="succeeded" if finish is not None else "running",source=source,
+                    verified=None,spec_hash=SPEC,
+                    steps=[(str(i),"task","handed_to_human" if pending and i==len(times)-1 else "completed",
+                            start+timedelta(seconds=t)) for i,t in enumerate(times)])
+    for length in range(5):
+        for times in product(range(-1,5),repeat=length):
+            for finish in (None,0,1,3,5):
+                valid=all(t>=0 and (finish is None or t<=finish) for t in times) and list(times)==sorted(times)
+                assert (am._snapshot_time_conflict(run(times,finish)) is None)==valid
+    for source in ("customer_execution_journal","external"):
+        for before,after,next_time in product(range(5),repeat=3):
+            old=run([before],None,source,pending=True)
+            new=run([after,next_time],None,source)
+            valid=source=="customer_execution_journal" and after>=before and next_time>=after
+            assert (am._revision_relation(old,new,SPEC)=="advanced")==valid
+
+
 def test_signed_identical_legacy_run_can_receive_exact_spec_attribution(setup):
     dep, cid, secret = setup
     doc = _snapshot("legacy", status="succeeded", step_status="completed", spec=None)
