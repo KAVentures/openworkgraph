@@ -1053,6 +1053,24 @@ const path=require('node:path');
    await period.selectOption('7');
    assert.equal(await page.locator('#owgExplorerHandoffPanel').count(),0,'period change invalidates reviewed copy and JSON download');
    assert.equal(writes,0,'handoff flow never writes to workflow APIs');
+   await page.locator('#owgExplorerRanking').selectOption('navigation');
+   await page.locator('#owgExplorerMinRuns').selectOption('5');
+   await page.locator('#owgExplorerMultiApp').check();
+   assert.equal(await page.locator('#owgExplorerCandidates button').count(),0);
+   assert.match(await page.locator('#owgExplorerStatus').textContent(),/Discovery settings changed/);
+   let discoveryParams;
+   await page.route('**/v1/workflow-evidence/families?*',route=>{
+     discoveryParams=new URL(route.request().url()).searchParams;
+     return route.fulfill({status:200,contentType:'application/json',
+       body:JSON.stringify({candidate_clusters:[],total:0,source_limit_reached:false})});
+   });
+   await open.click();
+   await page.locator('#owgExplorerStatus').filter({hasText:'candidate groups shown'}).waitFor();
+   assert.equal(discoveryParams.get('rank_by_navigation'),'true');
+   assert.equal(discoveryParams.get('rank_by_quality'),'false');
+   assert.equal(discoveryParams.get('min_runs'),'5');
+   assert.equal(discoveryParams.get('require_multi_surface'),'true');
+   await page.unroute('**/v1/workflow-evidence/families?*');
    await page.setViewportSize({width:390,height:844});
    assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false);
    assert.equal(writes,0);assert.deepEqual(errors,[]);
