@@ -252,7 +252,7 @@ def inspect_selection(record, payload):
                     raise ValueError
             except (KeyError, TypeError, ValueError, RecursionError):
                 raise workspace.EventLogWorkspaceError("Discovery source metadata does not match its reference") from None
-            workspace._check_log(conn, log_id)
+            info = workspace._check_log(conn, log_id)
             if source_rows(conn, log_id) > MAX_SOURCE_ROWS:
                 raise workspace.EventLogWorkspaceError("Original source exceeds the inspection work budget")
             materialize_selection(conn, log_id, saved["selection"])
@@ -278,6 +278,7 @@ def inspect_selection(record, payload):
                 "historical_rows_retained": False,
                 "raw_source_fingerprint_rechecked": False,
                 "case_drift": case_drift,
+                "observed_execution_snapshot": info.get("observed_execution_snapshot"),
                 "business_case_identity_verified": False,
                 "business_outcomes_verified": False,
                 "execution_authorized": False,
