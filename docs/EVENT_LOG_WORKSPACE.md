@@ -865,6 +865,14 @@ whose offered load is 1 or more (the queue grows without bound). The first
 10% of cases are a warm-up and are not measured. At most 20,000 cases, 20
 paths and 100 activities.
 
+Use **Download scenario inputs** to keep the submitted settings as JSON. Under
+**Rerun saved simulation inputs**, open that file or a simulation JSON report
+with submitted inputs. Review or edit the JSON, then run it against the current
+log and case notion shown above the file picker. The simulator recalibrates
+from the current data. Explicit overrides stay in the submitted inputs, and
+omitted values use the current calibration. The new report identifies the log
+and case notion used for the run.
+
 Calibration selects complete paths of at most 100 events. It first counts case
 lengths, excludes longer cases whole, then keeps cases whose activities fit
 the 100 most frequent activities among the remaining complete cases. The most

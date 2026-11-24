@@ -4954,15 +4954,127 @@
     return wrap;
   }
 
+  const SIM_SCENARIO_FORMAT='openworkgraph.simulation-scenario.v1';
+  const SIM_REPORT_FORMAT='openworkgraph.simulation-report.v1';
+  function simulationScenarioFile(raw){
+    if(raw.length>2*1024*1024)throw Error('Choose JSON of at most 2 MiB.');
+    let doc;
+    try{doc=JSON.parse(raw);}catch(_){throw Error('Scenario inputs must be valid JSON.');}
+    if(doc?.format===SIM_SCENARIO_FORMAT)return {scenario:doc};
+    if(doc?.format!==SIM_REPORT_FORMAT)throw Error('Choose an OWG scenario or simulation report.');
+    if(doc.submitted_scenario?.format!==SIM_SCENARIO_FORMAT)throw Error('This report has no reusable submitted scenario.');
+    const source=[doc.analysis?.log?.name,doc.analysis?.case_notion]
+      .filter(v=>typeof v==='string'&&v.trim()).map(v=>v.slice(0,200)).join(' · ');
+    return {scenario:doc.submitted_scenario,source:source||'Unknown source'};
+  }
+
   function simulationSection(){
     const box=section('What-if simulation');
     box.appendChild(el('div','Simulate cases flowing through the process with the times and staffing you set. Start from values measured in this log, change them, and compare. Results are model outputs under the listed assumptions, not forecasts.','muted'));
     const load=button('Load measured values','secondary');load.id='owgEventLogSimLoad';
     const form=el('div');form.id='owgEventLogSimForm';
-    const out=el('div');box.append(load,form,out,validationBlock());
+    const out=el('div');out.id='owgEventLogSimulationResults';
+    const runStatus=el('div',null,'muted');runStatus.setAttribute('role','status');
+    const replay=document.createElement('details');replay.id='owgEventLogSimReplay';
+    const source=input('owgEventLogSimReplayFile','file');source.accept='.json,application/json';
+    const draft=document.createElement('textarea');draft.id='owgEventLogSimReplayInputs';draft.rows=8;draft.style.width='100%';
+    const rerun=button('Run reviewed scenario','secondary');rerun.id='owgEventLogSimReplayRun';rerun.disabled=true;
+    const ready=el('p',null,'muted');ready.setAttribute('role','status');
+    const targetLog=state.logs.find(l=>l.log_id===state.logId);
+    const notion=state.caseType;
+    replay.append(el('summary','Rerun saved simulation inputs'),
+      el('p','Run against '+(targetLog?.name||state.logId)+' · '+(notion||'default case notion')+'. Calibration uses the whole case notion.'),
+      field('Scenario or simulation report JSON',source),field('Review or edit scenario JSON',draft),rerun,ready);
+    box.append(load,form,replay,runStatus,out,validationBlock());
+
+    const generation=state.generation,simulationPath=logPath('simulate');
+    const active=()=>generation===state.generation&&box.isConnected;
+    let reading=0,working=false,formRun=null;
+    function syncRun(){
+      if(formRun)formRun.disabled=working;
+      source.disabled=draft.disabled=working;
+      rerun.disabled=working||!draft.value.trim();
+    }
+    source.onchange=async()=>{
+      const turn=++reading,file=source.files[0];
+      draft.value='';ready.textContent='';syncRun();
+      if(!file)return;
+      try{
+        if(file.size>2*1024*1024)throw Error('Choose a JSON file of at most 2 MiB.');
+        const decoded=simulationScenarioFile(await file.text());
+        if(!active()||turn!==reading)return;
+        draft.value=JSON.stringify(decoded.scenario,null,2);
+        ready.textContent=decoded.source?'Saved report · '+decoded.source+'. Review its submitted inputs before running.':
+          'Scenario loaded. Review its inputs before running.';
+      }catch(error){if(active()&&turn===reading)ready.textContent=error.message;}
+      finally{if(active()&&turn===reading)syncRun();}
+    };
+    draft.oninput=()=>{reading++;ready.textContent='';source.value='';syncRun();};
+    rerun.onclick=async()=>{
+      try{await runScenario(simulationScenarioFile(draft.value).scenario);}
+      catch(error){if(active()){out.replaceChildren();runStatus.textContent=error.message;}}
+    };
+    async function runScenario(scenario){
+      if(!active()||working)return;
+      const body=JSON.stringify(scenario);
+      if(new TextEncoder().encode(body).length>65536)throw Error('Scenario JSON must fit within 64 KiB.');
+      working=true;syncRun();out.replaceChildren();runStatus.textContent='Simulating…';
+      try{
+        const r=await (await api(simulationPath,{method:'POST',headers:{'Content-Type':'application/json'},body})).json();
+        if(active()){renderSimulation(scenario,r);runStatus.textContent='Simulation results ready.';}
+      }finally{if(active()){working=false;syncRun();}}
+    }
+    function renderSimulation(scenario,r){
+      const line=(name,x)=>{const c=x.cycle_time_seconds||{};return [name,duration(c.p50),duration(c.p90),duration(c.mean),x.completed_per_day===null?'—':Number(x.completed_per_day).toFixed(1)];};
+      const change=r.median_cycle_time_change_seconds;
+      const report={format:SIM_REPORT_FORMAT,generated_at:new Date().toISOString(),
+        interpretation:'Modelled outcomes under stated assumptions; not measured savings or execution approval.',
+        submitted_scenario:scenario,analysis:r};
+      const exports=exportButtons('owgEventLogSimulation',()=>report,()=>{
+        const data=[['section','run','metric','value','unit']];
+        for(const [name,result] of [['baseline',r.baseline],['scenario',r.result]]){
+          for(const metric of ['p50','p90','mean'])data.push(['cycle_time',name,metric,result.cycle_time_seconds?.[metric],'seconds']);
+          data.push(['throughput',name,'completed_per_day',result.completed_per_day,'cases/day']);
+          data.push(['stability',name,'unstable',Boolean(result.unstable),'boolean']);
+          for(const activity of result.activities||[])for(const metric of ['resources','minutes','utilization','mean_wait_seconds','p90_wait_seconds'])
+            data.push(['activity',name,activity.activity+' / '+metric,activity[metric],metric==='minutes'?'minutes':metric.endsWith('_seconds')?'seconds':metric==='utilization'?'fraction':'resources']);
+        }
+        for(const assumption of r.assumptions||[])data.push(['assumption','both',assumption,'','']);
+        data.push(['interpretation','both',report.interpretation,'','']);
+        return data;
+      });
+      exports.enable(true);
+      const saveInputs=button('Download scenario inputs','secondary');saveInputs.id='owgEventLogSimDownloadInputs';
+      saveInputs.onclick=()=>download('owg-simulation-scenario.json',JSON.stringify(scenario,null,2),'application/json');
+      exports.node.append(saveInputs);
+      out.replaceChildren(
+        exports.node,
+        el('p','Calibrated against '+r.log.name+' · '+r.case_notion+' using '+r.calibration.calibrated_cases+' complete cases.','muted'),
+        el('div','Downloads include activity labels, log metadata, declared schedules and model assumptions. Review them before sharing. JSON contains the complete run; CSV summarizes metrics in their stated units.','muted'),
+        ...(r.result.unstable?[el('div','Warning: at least one activity has more work arriving than its resources can handle, so its queue keeps growing. Times below depend on how many cases you simulate.','note')]:[]),
+        table(['Run','Median cycle time','90th percentile','Mean','Completed per day'],[line('Simulated baseline',r.baseline),line(r.scenario.label||'Scenario',r.result)]),
+        el('div',change===null?'':'Median cycle time change: '+(change>=0?'+':'−')+duration(Math.abs(change))+'.','muted'),
+        ...(r.result.visits_per_case?[el('h4','Visits per case (step-by-step routing)'),
+          table(['Activity','Baseline','Scenario','Change'],visitRows(r.baseline,r.result)),
+          ...(r.result.routes_cut_at_path_limit||r.baseline.routes_cut_at_path_limit?[el('div',(r.result.routes_cut_at_path_limit+r.baseline.routes_cut_at_path_limit)+' simulated cases reached the path-length limit and were stopped there.','note')]:[])]:[]),
+        ...(r.uncertainty?[(()=>{const box=el('div');box.id='owgEventLogSimUncertainty';
+          box.append(el('h4','Uncertainty from routing and arrivals ('+r.uncertainty.replications+' replications, 95% range)'),
+            table(['Run','Median cycle time','90th percentile'],uncertaintyRows(r.uncertainty)),
+            table(['Measured path','Cases','Share drawn (95% range)'],r.uncertainty.measured_routing.map(p=>[p.activities.join(' → '),Number(p.observed_cases).toLocaleString(),pct(p.drawn.median)+' ('+pct(p.drawn.low)+' – '+pct(p.drawn.high)+')'])),
+            ...((r.uncertainty.measured_activity_minutes||[]).length?[table(['Measured activity','Gaps measured','Minutes drawn (95% range)'],r.uncertainty.measured_activity_minutes.map(a=>[a.activity,Number(a.observed_gaps).toLocaleString(),a.drawn.median.toFixed(1)+' ('+a.drawn.low.toFixed(1)+' – '+a.drawn.high.toFixed(1)+')']))]:[]),
+            el('div','The scenario median is faster in '+r.uncertainty.replications_where_scenario_median_is_faster+' of '+r.uncertainty.replications+' replications. Values you entered stay fixed.','muted'));return box;})()]:[]),
+        ...(r.scenario.arrival_pattern?[el('div','Arrivals: '+arrivalText(r.scenario.arrival_pattern)+'. The arrival rate you set stays the long-run average.','muted')]:[]),
+        ...(r.baseline_calendar||r.scenario.calendar?[el('div','Working time: baseline '+calendarText(r.baseline_calendar)+'; scenario '+calendarText(r.scenario.calendar)+'. Utilization is measured against working time.','muted')]:[]),
+        table(['Activity','Resources','Minutes','Utilization','Mean wait','90th percentile wait'],r.result.activities.map(a=>[a.activity+(a.pool?' ('+a.pool+')':''),a.resources,a.minutes,pct(a.utilization),duration(a.mean_wait_seconds),duration(a.p90_wait_seconds)])),
+        ...(r.result.activities.some(a=>a.batch)?[table(['Batched activity','Cases per batch','Longest wait','Batches run','Average batch','Mean wait','Still waiting'],r.result.activities.filter(a=>a.batch).map(a=>[a.activity,a.batch.size,a.batch.max_wait_minutes?duration(a.batch.max_wait_minutes*60):'no limit',Number(a.batch.batches).toLocaleString(),a.batch.mean_batch_size===null?'—':Number(a.batch.mean_batch_size).toFixed(1),duration(a.mean_wait_seconds),a.batch.waiting_in_unfilled_batch]))]:[]),
+        ...(r.result.priority_classes?[table(['Priority class','Share','Rank','Median cycle time','90th percentile','Mean wait per step'],r.result.priority_classes.map(c=>[c.name,pct(c.share),c.rank,duration(c.cycle_time_seconds.p50),duration(c.cycle_time_seconds.p90),duration(c.mean_wait_seconds_per_step)]))]:[]),
+        ...(r.result.pools?[table(['Shared pool','People','Activities','Utilization','Mean wait','90th percentile wait'],r.result.pools.map(p=>[p.pool,p.resources,p.activities.join(', '),pct(p.utilization),duration(p.mean_wait_seconds),duration(p.p90_wait_seconds)]))]:[]),
+        (()=>{const list=el('ul');list.className='muted';r.assumptions.forEach(x=>list.appendChild(el('li',x)));return list;})());
+    }
     load.onclick=async()=>{
       try{
         const cal=await getJSON(logPath('simulation/calibration'));
+        if(!active())return;
         const coverage='Calibrated '+cal.calibrated_cases+' of '+cal.observed_cases+' complete cases ('+pct(cal.paths_cover_cases_share)+'). Omitted cases: '+
           Object.entries(cal.excluded_case_reasons||{}).map(([reason,n])=>reason.replace(/_/g,' ')+': '+n).join(', ')+'. Arrivals and activity parameters use the selected complete cases only.';
         if(!cal.paths?.length){form.replaceChildren(el('div',coverage+' No complete paths fit the simulation limits.','muted'));return;}
@@ -5126,11 +5238,12 @@
           }catch(error){portfolioResult.replaceChildren(el('p',error.message,'muted'));}
           finally{comparePortfolio.disabled=false;}
         };
+        formRun=run;syncRun();
         run.onclick=async()=>{
           try{
             const activities=Object.create(null);
             for(const r of rows){const m=Number(r.minutes.value),n=Number(r.people.value);if(!(m>=0)||!(n>=1)||!Number.isInteger(n))throw new Error('Check the minutes and resources for '+r.name+'.');activities[r.name]={minutes:m,resources:n};}
-            const scenario={format:'openworkgraph.simulation-scenario.v1',label:label.value.trim(),paths:parseWeightedPaths(paths.value),activities,distribution:dist.value,cases:Math.round(Number(cases.value)||2000),activity_time_basis:timeBasis.value};
+            const scenario={format:SIM_SCENARIO_FORMAT,label:label.value.trim(),paths:parseWeightedPaths(paths.value),activities,distribution:dist.value,cases:Math.round(Number(cases.value)||2000),activity_time_basis:timeBasis.value};
             if(arrivals.value!=='')scenario.arrivals_per_hour=Number(arrivals.value);
             if(routeKind.value==='transitions'){scenario.routing='transitions';delete scenario.paths;
               if(routeContext.value==='history')scenario.routing_context='history';
@@ -5157,53 +5270,10 @@
                 if(Number(r.people.value)===r.measured.resources)delete activities[r.name];else delete activities[r.name].minutes;
               }
             }
-            run.disabled=true;out.replaceChildren(el('div','Simulating…','muted'));
-            const r=await (await api(logPath('simulate'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(scenario)})).json();
-            const line=(name,x)=>{const c=x.cycle_time_seconds||{};return [name,duration(c.p50),duration(c.p90),duration(c.mean),x.completed_per_day===null?'—':Number(x.completed_per_day).toFixed(1)];};
-            const change=r.median_cycle_time_change_seconds;
-            const report={format:'openworkgraph.simulation-report.v1',generated_at:new Date().toISOString(),
-              interpretation:'Modelled outcomes under stated assumptions; not measured savings or execution approval.',
-              submitted_scenario:scenario,analysis:r};
-            const exports=exportButtons('owgEventLogSimulation',()=>report,()=>{
-              const data=[['section','run','metric','value','unit']];
-              for(const [name,result] of [['baseline',r.baseline],['scenario',r.result]]){
-                for(const metric of ['p50','p90','mean'])data.push(['cycle_time',name,metric,result.cycle_time_seconds?.[metric],'seconds']);
-                data.push(['throughput',name,'completed_per_day',result.completed_per_day,'cases/day']);
-                data.push(['stability',name,'unstable',Boolean(result.unstable),'boolean']);
-                for(const activity of result.activities||[])for(const metric of ['resources','minutes','utilization','mean_wait_seconds','p90_wait_seconds'])
-                  data.push(['activity',name,activity.activity+' / '+metric,activity[metric],metric==='minutes'?'minutes':metric.endsWith('_seconds')?'seconds':metric==='utilization'?'fraction':'resources']);
-              }
-              for(const assumption of r.assumptions||[])data.push(['assumption','both',assumption,'','']);
-              data.push(['interpretation','both',report.interpretation,'','']);
-              return data;
-            });
-            exports.enable(true);
-            out.replaceChildren(
-              exports.node,
-              el('div','Downloads include activity labels, log metadata, declared schedules and model assumptions. Review them before sharing. JSON contains the complete run; CSV summarizes metrics in their stated units.','muted'),
-              ...(r.result.unstable?[el('div','Warning: at least one activity has more work arriving than its resources can handle, so its queue keeps growing. Times below depend on how many cases you simulate.','note')]:[]),
-              table(['Run','Median cycle time','90th percentile','Mean','Completed per day'],[line('Simulated baseline',r.baseline),line(r.scenario.label||'Scenario',r.result)]),
-              el('div',change===null?'':'Median cycle time change: '+(change>=0?'+':'−')+duration(Math.abs(change))+'.','muted'),
-              ...(r.result.visits_per_case?[el('h4','Visits per case (step-by-step routing)'),
-                table(['Activity','Baseline','Scenario','Change'],visitRows(r.baseline,r.result)),
-                ...(r.result.routes_cut_at_path_limit||r.baseline.routes_cut_at_path_limit?[el('div',(r.result.routes_cut_at_path_limit+r.baseline.routes_cut_at_path_limit)+' simulated cases reached the path-length limit and were stopped there.','note')]:[])]:[]),
-              ...(r.uncertainty?[(()=>{const box=el('div');box.id='owgEventLogSimUncertainty';
-                box.append(el('h4','Uncertainty from routing and arrivals ('+r.uncertainty.replications+' replications, 95% range)'),
-                  table(['Run','Median cycle time','90th percentile'],uncertaintyRows(r.uncertainty)),
-                  table(['Measured path','Cases','Share drawn (95% range)'],r.uncertainty.measured_routing.map(p=>[p.activities.join(' → '),Number(p.observed_cases).toLocaleString(),pct(p.drawn.median)+' ('+pct(p.drawn.low)+' – '+pct(p.drawn.high)+')'])),
-                  ...((r.uncertainty.measured_activity_minutes||[]).length?[table(['Measured activity','Gaps measured','Minutes drawn (95% range)'],r.uncertainty.measured_activity_minutes.map(a=>[a.activity,Number(a.observed_gaps).toLocaleString(),a.drawn.median.toFixed(1)+' ('+a.drawn.low.toFixed(1)+' – '+a.drawn.high.toFixed(1)+')']))]:[]),
-                  el('div','The scenario median is faster in '+r.uncertainty.replications_where_scenario_median_is_faster+' of '+r.uncertainty.replications+' replications. Values you entered stay fixed.','muted'));return box;})()]:[]),
-              ...(r.scenario.arrival_pattern?[el('div','Arrivals: '+arrivalText(r.scenario.arrival_pattern)+'. The arrival rate you set stays the long-run average.','muted')]:[]),
-              ...(r.baseline_calendar||r.scenario.calendar?[el('div','Working time: baseline '+calendarText(r.baseline_calendar)+'; scenario '+calendarText(r.scenario.calendar)+'. Utilization is measured against working time.','muted')]:[]),
-              table(['Activity','Resources','Minutes','Utilization','Mean wait','90th percentile wait'],r.result.activities.map(a=>[a.activity+(a.pool?' ('+a.pool+')':''),a.resources,a.minutes,pct(a.utilization),duration(a.mean_wait_seconds),duration(a.p90_wait_seconds)])),
-              ...(r.result.activities.some(a=>a.batch)?[table(['Batched activity','Cases per batch','Longest wait','Batches run','Average batch','Mean wait','Still waiting'],r.result.activities.filter(a=>a.batch).map(a=>[a.activity,a.batch.size,a.batch.max_wait_minutes?duration(a.batch.max_wait_minutes*60):'no limit',Number(a.batch.batches).toLocaleString(),a.batch.mean_batch_size===null?'—':Number(a.batch.mean_batch_size).toFixed(1),duration(a.mean_wait_seconds),a.batch.waiting_in_unfilled_batch]))]:[]),
-              ...(r.result.priority_classes?[table(['Priority class','Share','Rank','Median cycle time','90th percentile','Mean wait per step'],r.result.priority_classes.map(c=>[c.name,pct(c.share),c.rank,duration(c.cycle_time_seconds.p50),duration(c.cycle_time_seconds.p90),duration(c.mean_wait_seconds_per_step)]))]:[]),
-              ...(r.result.pools?[table(['Shared pool','People','Activities','Utilization','Mean wait','90th percentile wait'],r.result.pools.map(p=>[p.pool,p.resources,p.activities.join(', '),pct(p.utilization),duration(p.mean_wait_seconds),duration(p.p90_wait_seconds)]))]:[]),
-              (()=>{const list=el('ul');list.className='muted';r.assumptions.forEach(x=>list.appendChild(el('li',x)));return list;})());
-          }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
-          finally{run.disabled=false;}
+            await runScenario(scenario);
+          }catch(error){if(active()){out.replaceChildren();runStatus.textContent=error.message;}}
         };
-      }catch(error){form.replaceChildren(el('div',error.message,'muted'));}
+      }catch(error){if(active())form.replaceChildren(el('div',error.message,'muted'));}
     };
     return box;
   }
