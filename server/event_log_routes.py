@@ -1911,6 +1911,21 @@ def event_log_waiting_hotspot_cases(request: Request, log_id: str,
                      end_attribute=end_attribute, cohort=cohort)
 
 
+@router.post('/v1/event-logs/{log_id}/waiting-time/cases')
+async def event_log_calendar_hotspot_cases(request: Request, log_id: str,
+        case_type: str | None = Query(default=None, max_length=200), cohort: dict[str, Any] = Depends(_case_filter)):
+    _require_dashboard(request)
+    from pydantic import ValidationError
+    from .event_log_calendar_metrics import CalendarHotspotRequest
+    body = await _json_body(request, 'scheduled waiting case page', strict=True)
+    try:
+        spec = CalendarHotspotRequest.model_validate(body)
+    except ValidationError:
+        raise HTTPException(422, 'Invalid scheduled waiting case settings') from None
+    return await run_in_threadpool(_respond, waiting.waiting_hotspot_cases, log_id, case_type,
+                                   cohort=cohort, **spec.model_dump())
+
+
 @router.post('/v1/event-logs/{log_id}/waiting-time')
 async def event_log_working_calendar(request: Request,log_id: str,
         case_type: str | None=Query(default=None,max_length=200),
