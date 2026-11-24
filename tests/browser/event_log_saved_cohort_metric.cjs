@@ -44,7 +44,10 @@ const path=require('node:path');
   await page.locator('#owgCohortMetricResult').filter({hasText:'matching cases'}).waitFor({timeout:60000});
   assert.match(await page.locator('#owgCohortMetricResult').innerText(),/No raw cases returned/);
   const [reviewResponse]=await Promise.all([
-    page.waitForResponse(response=>response.url().includes('/evaluate?include_case_values=true')),
+    page.waitForResponse(response=>{
+      const url=new URL(response.url());
+      return url.pathname.endsWith('/evaluate')&&url.searchParams.get('include_case_values')==='true';
+    }),
     page.locator('#owgCohortMetricReview').click()
   ]);
   assert.equal(reviewResponse.status(),200,await reviewResponse.text());
