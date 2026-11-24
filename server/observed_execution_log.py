@@ -268,6 +268,100 @@ def recheck(log_id: str) -> dict[str, Any]:
 
 
 
+def inspect_observations(spec: Any) -> dict[str, Any]:
+    """Recheck exact saved events, never substitute another case or nearby event.
+
+    Existing analysis mappings can rename or collapse displayed activities.
+    Read original retained event rows, and compare only with the same original
+    projection and execution membership. No source text or payload is returned.
+    """
+    if not isinstance(spec, dict) or set(spec) != {"log_id", "execution_id", "event_ids"}:
+        raise SnapshotError("Select an exact snapshot, execution and event IDs")
+    log_id, execution_id, ids = spec["log_id"], spec["execution_id"], spec["event_ids"]
+    if not isinstance(log_id, str) or not re.fullmatch(r"log_[a-f0-9]{16}", log_id):
+        raise SnapshotError("Invalid snapshot reference")
+    if not isinstance(execution_id, str) or not _ID.fullmatch(execution_id):
+        raise SnapshotError("Invalid original execution reference")
+    if (not isinstance(ids, list) or not 1 <= len(ids) <= 100
+            or not all(isinstance(value, str) and re.fullmatch(r"e[1-9][0-9]{0,4}", value) for value in ids)
+            or len(set(ids)) != len(ids)):
+        raise SnapshotError("Select 1–100 distinct original event IDs")
+    from . import event_log_workspace as workspace
+    with workspace._LOCK:
+        manifest = source(log_id)
+        if execution_id not in manifest["scope"]["execution_ids"]:
+            raise SnapshotError("Execution is not part of the original snapshot")
+        conn = workspace._connect()
+        try:
+            placeholders = ",".join("?" for _ in ids)
+            found = conn.execute(f"""
+                SELECT DISTINCT e.event_id, e.activity, e.ts, e.attributes
+                FROM events e JOIN event_objects eo
+                  ON e.log_id = eo.log_id AND e.event_id = eo.event_id
+                JOIN objects o ON o.log_id = eo.log_id AND o.object_id = eo.object_id
+                WHERE e.log_id = ? AND o.object_type = 'case'
+                  AND o.object_id = ? AND e.event_id IN ({placeholders})
+            """, [log_id, execution_id, *ids]).fetchall()
+        finally:
+            conn.close()
+    if len(found) != len(ids) or {row[0] for row in found} != set(ids):
+        raise SnapshotError("One or more events do not belong to the selected saved execution")
+    original = {}
+    refs = set()
+    for event_id, activity, stamp, raw in found:
+        try:
+            attributes = json.loads(raw)
+        except (ValueError, TypeError):
+            raise SnapshotError("Original event provenance is unavailable") from None
+        ref = attributes.get("evidence_ref") if isinstance(attributes, dict) else None
+        actor = attributes.get("actor_kind") if isinstance(attributes, dict) else None
+        membership = attributes.get("membership_basis") if isinstance(attributes, dict) else None
+        if (not isinstance(ref, str) or not re.fullmatch(r"event:[a-f0-9]{16}", ref)
+                or ref in refs or actor not in ("human", "agent")
+                or membership != ("native_agent_run" if actor == "agent" else "inferred_time_session")):
+            raise SnapshotError("Original event provenance is unavailable")
+        refs.add(ref)
+        original[event_id] = [execution_id, activity, stamp.replace(tzinfo=timezone.utc).isoformat(timespec="microseconds"),
+                              ref, actor, membership]
+    current = None
+    current_digest = None
+    try:
+        projected, report = prepare(manifest["scope"])
+        current_digest = report["snapshot_sha256"]
+        current = {row[3]: row for row in projected}
+    except (SnapshotError, evidence.WorkflowEvidenceError):
+        pass
+    latest = source(log_id)
+    if latest["snapshot_sha256"] != manifest["snapshot_sha256"]:
+        raise SnapshotError("The selected snapshot changed; reopen the retained log")
+    rows = []
+    for event_id in ids:
+        row = original[event_id]
+        observed = current.get(row[3]) if current is not None else None
+        if current is None:
+            status = "source_unavailable"
+        elif observed is None:
+            status = "not_in_current_projection"
+        elif observed == row:
+            status = "observation_matches"
+        else:
+            status = "observation_changed"
+        rows.append({
+            "event_id": event_id, "evidence_ref": row[3], "original_activity": row[1],
+            "original_observed_at": row[2], "status": status,
+            "membership_basis": row[5],
+        })
+    return {
+        "format": "openworkgraph.observed-execution-event-recheck.v1",
+        "log_id": log_id, "execution_id": execution_id,
+        "snapshot_sha256": manifest["snapshot_sha256"],
+        "current_projection_sha256": current_digest,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "events": rows, "capture_complete": False, "stored_log_changed": False,
+        "business_case_identity_verified": False, "business_outcomes_verified": False,
+    }
+
+
 def create(spec: Any, *, expected_sha256: str, name: str) -> dict[str, Any]:
     if not isinstance(expected_sha256, str) or not re.fullmatch(r"[a-f0-9]{64}", expected_sha256):
         raise SnapshotError("Review the exact snapshot preview before importing")
@@ -329,4 +423,4 @@ def create(spec: Any, *, expected_sha256: str, name: str) -> dict[str, Any]:
             "stored_independent_snapshot": True, "existing_snapshot_reused": False}
 
 
-__all__ = ["preview", "create", "project", "source", "recheck", "SnapshotError"]
+__all__ = ["preview", "create", "project", "source", "recheck", "inspect_observations", "SnapshotError"]
