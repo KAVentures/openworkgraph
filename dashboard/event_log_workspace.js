@@ -1256,7 +1256,7 @@
     results.appendChild(organizationSection(inspection));
     results.appendChild(privateMapSection());
     results.appendChild(logComparisonSection());
-    results.appendChild(analysisSection(names));
+    results.appendChild(analysisSection(names,inspection));
     results.appendChild(signalSection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(predictionSection(names,inspection));
     results.appendChild(nextActivitySection(names,inspection));
@@ -8260,7 +8260,7 @@
     return m.name+': '+(m.kind==='event_attribute_sum'?'sum of event attribute ':'case attribute ')+m.attribute+' ('+m.unit+')';
   }
 
-  function analysisSection(activityNames){
+  function analysisSection(activityNames,inspection){
     const metrics=[];let editingMetric=null;
     const box=section('Build an analysis');box.id='owgEventLogAnalysis';
     box.appendChild(el('div','Group cases or events by up to two dimensions and choose what to measure. The choices are fixed, so no query text is ever run directly.','muted'));
@@ -8716,6 +8716,55 @@
         if(generation===state.generation&&box.isConnected&&cancellationAttempt===attempt)message.textContent='Cancellation could not be confirmed. No result will be displayed; the local deadline still applies.';
       }
     };
+    function reviewedGroups(result){
+      const panel=el('div');panel.id='owgAnalysisGroupCases';
+      let sequence=0;
+      const controls=result.rows.map((_,index)=>{
+        const open=button('Review cases','secondary');
+        open.setAttribute('aria-label','Review cases in result row '+(index+1));
+        open.onclick=()=>load(index,0);
+        return open;
+      });
+      const columns=[...result.columns,'Case evidence'];
+      const grid=table(columns,result.rows.map((row,index)=>[
+        ...row.map((value,i)=>cell(result.columns[i],value,result.units?.[result.columns[i]])),
+        controls[index]
+      ]));
+      async function load(index,offset){
+        const ticket=++sequence;
+        const current=()=>ticket===sequence&&last===result&&generation===state.generation&&panel.isConnected;
+        const heading=el('h4','Cases in result row '+(index+1));heading.tabIndex=-1;
+        const progress=el('p','Loading cases…','muted');progress.setAttribute('role','status');
+        panel.replaceChildren(heading,progress);heading.focus();
+        try{
+          const page=await(await api(base()+'/analysis/groups/cases',{method:'POST',
+            headers:{'Content-Type':'application/json'},body:JSON.stringify({
+              spec:result.spec,group_index:index,offset,expected_case_review_sha256:result.case_review_sha256
+            })
+          })).json();
+          if(!current())return;
+          const previous=button('Previous case page','secondary'),next=button('Next case page','secondary');
+          previous.disabled=page.offset===0;next.disabled=page.next_offset===null;
+          previous.onclick=()=>load(index,Math.max(0,page.offset-25));
+          next.onclick=()=>load(index,page.next_offset);
+          progress.textContent=page.cases.length?
+            'Showing '+(page.offset+1)+'–'+(page.offset+page.cases.length)+' of '+page.matching_cases+' cases.':
+            'No cases in this group.';
+          const metrics=result.metrics||[];
+          if(page.cases.length)panel.append(table(
+            ['Case','Case duration','Events','Distinct activities',...metrics.map(metric=>metric.name),'Evidence'],
+            page.cases.map(item=>{
+              const events=button('Open case','secondary');events.setAttribute('aria-label','Open analysis case '+item.case_id);
+              events.onclick=()=>{if(current())inspection.open(item.case_id,page.case_notion);};
+              return [item.case_id,duration(item.duration_seconds),item.event_count,item.distinct_activities,
+                ...metrics.map(metric=>cell(metric.name,item.metrics[metric.name],metric.unit)),events];
+            })
+          ),previous,next);
+        }catch(error){if(current())progress.textContent=error.message;}
+      }
+      return [grid,panel];
+    }
+
     async function execute(spec){
       if(running)throw new Error('Wait for this analysis or cancel it first.');
       const ownAttempt=++attempt,jobBase=base()+'/analysis-jobs';
@@ -8762,7 +8811,8 @@
       const units=r.units||{};
       out.replaceChildren(el('div',Number(r.matching.cases).toLocaleString()+' matching cases'+(r.rows_truncated?'; showing the first '+r.rows.length+' rows.':'.'),'muted'),
         ...(r.case_notion?[el('div','Case notion: '+r.case_notion+'.','muted')]:[]),
-        table(r.columns,r.rows.map(row=>row.map((v,i)=>cell(r.columns[i],v,units[r.columns[i]])))),
+        ...(r.case_review_sha256?reviewedGroups(r):
+          [table(r.columns,r.rows.map(row=>row.map((v,i)=>cell(r.columns[i],v,units[r.columns[i]]))))]),
         ...(r.metrics||[]).map(c=>el('div',c.name+': '+Number(c.cases_with_value).toLocaleString()+' cases have a value, '+Number(c.cases_without_value).toLocaleString()+' do not'
           +(c.cases_without_from_activity!==undefined?' ('+c.cases_without_from_activity+' without '+c.definition.from_activity+', '+c.cases_without_to_activity+' without '+c.definition.to_activity+', '+c.cases_where_to_precedes_from+' where '+c.definition.to_activity+' comes first)':'')
           +(c.definition.kind==='arithmetic'?' ('+c.cases_with_missing_operand+' with a missing operand, '+c.cases_with_zero_divisor+' with a zero divisor; unit '+c.unit+')':'')

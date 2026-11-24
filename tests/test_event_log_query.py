@@ -53,6 +53,72 @@ def test_case_level_group_by_attribute_with_duration_measures():
     assert result["query_basis"] == "typed_spec_compiled_to_parameterized_sql"
 
 
+def test_review_group_uses_exact_scope_and_rejects_view_changes():
+    from server import event_log_analysis_review as review
+    from server import event_log_hidden_activities as hidden
+
+    log = _log()
+    spec = {"level": "cases", "dimensions": ["attribute:missing", "has_rework"],
+            "measures": [{"fn": "count"}, {"fn": "sum", "of": "metric:checks"}],
+            "metrics": [{"kind": "activity_count", "name": "checks", "activity": "Check"}],
+            "where": {"ends_with": "Close"}, "order": "dimensions", "limit": 1}
+    result = review.source_bound(log, spec)
+    assert result["rows"] == [[None, "no rework", 1, 1.0]]
+    assert result["rows_truncated"]
+    body = {"spec": result["spec"], "group_index": 0, "offset": 0,
+            "expected_case_review_sha256": result["case_review_sha256"]}
+    page = review.group_cases(log, body)
+    assert page["group"] == {"attribute:missing": None, "has_rework": "no rework"}
+    assert page["case_notion"] == "order"
+    assert page["matching_cases"] == 1 and page["next_offset"] is None
+    assert page["cases"] == [{"case_id": "o1", "duration_seconds": 7200.0,
+                              "event_count": 3, "distinct_activities": 3, "metrics": {"checks": 1.0}}]
+    with pytest.raises(workspace.EventLogWorkspaceError, match="not present"):
+        review.group_cases(log, {**body, "group_index": 1})
+    with pytest.raises(workspace.EventLogWorkspaceError, match="view changed"):
+        review.group_cases(log, {**body, "spec": {**spec, "where": {}}})
+    hidden.set_hidden(log, {"activities": ["Check"]})
+    assert review.source_bound(log, spec)["source_content_sha256"] == result["source_content_sha256"]
+    with pytest.raises(workspace.EventLogWorkspaceError, match="view changed"):
+        review.group_cases(log, body)
+
+
+def test_review_group_paging_is_stable_and_dashboard_only(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from server import event_log_analysis_review as review
+    from server import event_log_routes
+
+    rows = ["case,activity,time"] + [
+        f"c{i:02},Start,2024-01-01T00:00:00Z" for i in range(30)
+    ]
+    log = workspace.import_log(
+        BytesIO(("\n".join(rows) + "\n").encode()), name="pages", source_format="csv",
+        mapping={"case_column": "case", "activity_column": "activity", "timestamp_column": "time"},
+    )["log_id"]
+    spec = {"level": "cases", "dimensions": ["first_activity"], "measures": [{"fn": "count"}]}
+    result = review.source_bound(log, spec)
+    body = {"spec": spec, "group_index": 0, "offset": 0,
+            "expected_case_review_sha256": result["case_review_sha256"]}
+
+    monkeypatch.setattr(event_log_routes, "dashboard_session_valid", lambda token: token == "valid")
+    app = FastAPI()
+    app.include_router(event_log_routes.router)
+    client = TestClient(app)
+    path = f"/v1/event-logs/{log}/analysis/groups/cases"
+    assert client.post(path, json=body, headers={"Authorization": "Bearer valid"}).status_code == 403
+    headers = {"Authorization": "OWG-Session valid"}
+    response = client.post(path, json=body, headers=headers)
+    assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
+    first = response.json()
+    assert first["matching_cases"] == 30 and first["next_offset"] == 25
+    response = client.post(path, json={**body, "offset": 25}, headers=headers)
+    assert response.status_code == 200
+    second = response.json()
+    assert second["next_offset"] is None
+    assert [row["case_id"] for row in first["cases"] + second["cases"]] == [f"c{i:02}" for i in range(30)]
+
+
 def test_case_filters_variants_and_ordering():
     log = _log()
     closed = query.run(log, {"level": "cases", "dimensions": ["variant"], "measures": [{"fn": "count"}],
