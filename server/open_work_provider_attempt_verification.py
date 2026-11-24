@@ -59,6 +59,11 @@ def verify_provider_attempt(
         return {**unknown, "reason": "invalid_clock"}
     if not callable(read_events):
         return {**unknown, "reason": "invalid_provider_reader"}
+    # The verifier is a security boundary, including for direct callers.
+    # Never let an omitted grant callback turn an authenticated provider event
+    # into an authorized verification verdict.
+    if recheck_authorization is None:
+        return {**unknown, "reason": "authorization_required"}
     if recheck_authorization is not None:
         if not callable(recheck_authorization):
             return {**unknown, "reason": "invalid_authorization_guard"}
