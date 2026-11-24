@@ -6,7 +6,6 @@ latest report of each run. It cannot reconstruct a historical reporting state.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
 from hashlib import sha256
 import json
 from typing import Literal
