@@ -786,6 +786,20 @@ def observed_execution_log_source(request: Request, log_id: str = Query(pattern=
         raise HTTPException(422, str(exc)) from None
 
 
+@app.post("/v1/workflow-evidence/event-log/observations")
+async def observed_execution_log_observations(request: Request):
+    _require_process_log_dashboard(request)
+    from starlette.concurrency import run_in_threadpool
+    from . import observed_execution_log as snapshots
+    from .event_log_workspace import EventLogWorkspaceError
+    spec = await _process_json(request, maximum=8 * 1024)
+    try:
+        result = await run_in_threadpool(snapshots.inspect_observations, spec)
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+    except (snapshots.SnapshotError, EventLogWorkspaceError) as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
 @app.post("/v1/workflow-evidence/event-log/recheck")
 async def observed_execution_log_recheck(request: Request):
     _require_process_log_dashboard(request)
