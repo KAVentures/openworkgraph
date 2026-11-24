@@ -2756,7 +2756,8 @@
     const generation=state.generation;
     let previewTurn=0;
     const clearPreview=()=>{previewTurn++;previewOut.replaceChildren();};
-    const describe=r=>r.files_appended+' file(s) appended with '+Number(r.events_added).toLocaleString()+' new events'+(r.files_failed?', '+r.files_failed+' could not be appended':'')+(r.files_already_appended?', '+r.files_already_appended+' already appended':'')+(r.files_previously_failed?', '+r.files_previously_failed+' previously failed (use Retry failed files)':'')+(r.files_still_being_written?', '+r.files_still_being_written+' still being written (next run)':'')+'.'+((r.files||[]).some(file=>file.warning)?' An append committed, but its quality report could not be recorded.':'');
+    const describe=r=>r.files_appended+' file(s) appended with '+Number(r.events_added).toLocaleString()+' new events'+(r.files_failed?', '+r.files_failed+' could not be appended':'')+(r.files_already_appended?', '+r.files_already_appended+' already appended':'')+(r.files_previously_failed?', '+r.files_previously_failed+' previously failed (use Retry failed files)':'') +(r.files_still_being_written?', '+r.files_still_being_written+' still being written (next run)':'')+'.'+
+      (r.mapping_changed?' The feed mapping changed during this run. Later files are pending.':'')+((r.files||[]).some(file=>file.warning)?' An append committed, but its quality report could not be recorded.':'');
     const render=r=>{
       clearPreview();
       if(!r.feeds.length){list.replaceChildren(el('div','No folder feed yet.','muted'));return;}
@@ -2788,7 +2789,7 @@
                   try{
                     const result=await (await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/append-file',{
                       method:'POST',headers:{'Content-Type':'application/json','X-OWG-Local-Storage-Confirmed':'true'},
-                      body:JSON.stringify({name:file.name,sha256:file.sha256})
+                      body:JSON.stringify({name:file.name,sha256:file.sha256,mapping_revision:r.mapping_revision})
                     })).json();
                     if(generation!==state.generation||!wrap.isConnected)return;
                     const summary=result.selected_changed?'The selected file changed or disappeared. Preview the folder again.'
@@ -2807,6 +2808,48 @@
                 el('div','Appending checks the current file and validates its event rows.','muted')]:[]));
           }catch(error){if(current())previewOut.replaceChildren(el('div',error.message,'muted'));}
           finally{previewButton.disabled=false;}
+        };
+        const mappingButton=button('Review mapping','secondary');
+        mappingButton.setAttribute('aria-label','Review mapping for '+f.folder);
+        mappingButton.onclick=async()=>{
+          const ticket=++previewTurn;
+          const current=()=>ticket===previewTurn&&generation===state.generation&&wrap.isConnected;
+          const endpoint='/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/mapping';
+          mappingButton.disabled=true;previewOut.replaceChildren(el('div','Checking the latest CSV mapping…','muted'));
+          try{
+            const plan=await getJSON(endpoint);
+            if(!current())return;
+            const source=plan.source_batch?'Manual append '+plan.source_batch:'Original CSV import';
+            if(!plan.changed){
+              previewOut.replaceChildren(el('div','This feed already uses the mapping from '+source.toLowerCase()+'.'));
+              return;
+            }
+            const labels={case_column:'Case column',activity_column:'Activity column',timestamp_column:'Timestamp column',
+              resource_column:'Resource column',attribute_columns:'Attribute columns',delimiter:'Delimiter',
+              timestamp_format:'Timestamp format',naive_timestamp_offset:'Offset for unzoned timestamps'};
+            const delimiters={',':'Comma',';':'Semicolon','\t':'Tab','|':'Pipe'};
+            const display=(key,mapping)=>key==='delimiter'?delimiters[mapping[key]||',']:
+              Array.isArray(mapping[key])?mapping[key].join(', '):mapping[key]||'';
+            const rows=Object.keys(labels).filter(key=>display(key,plan.current_mapping)!==display(key,plan.proposed_mapping))
+              .map(key=>[labels[key],display(key,plan.current_mapping)||'—',display(key,plan.proposed_mapping)||'—']);
+            const apply=button('Use latest mapping','secondary');
+            apply.onclick=async()=>{
+              if(!current())return;
+              apply.disabled=true;
+              try{
+                await api(endpoint,{method:'POST',headers:{'Content-Type':'application/json','X-OWG-Local-Storage-Confirmed':'true'},
+                  body:JSON.stringify({mapping_revision:plan.mapping_revision,mapping_sha256:plan.mapping_sha256})});
+                if(generation!==state.generation||!wrap.isConnected)return;
+                out.replaceChildren(el('div','Feed mapping updated.'));
+                const updated=await getJSON(base);
+                if(generation===state.generation)render(updated);
+              }catch(error){if(current())previewOut.appendChild(el('div',error.message,'muted'));}
+            };
+            previewOut.replaceChildren(el('div','Latest mapping source: '+source+'.','muted'),
+              table(['Setting','Feed mapping','Latest mapping'],rows),
+              el('p','Apply this mapping to future manual and scheduled runs. Previously appended events and file history stay with this feed.','muted'),apply);
+          }catch(error){if(current())previewOut.replaceChildren(el('div',error.message,'muted'));}
+          finally{mappingButton.disabled=false;}
         };
         const run=button('Run now','secondary');run.setAttribute('aria-label','Run feed for '+f.folder);
         const retry=button('Retry failed files','secondary');retry.setAttribute('aria-label','Retry failed files for '+f.folder);retry.disabled=!f.files_failed;
@@ -2850,7 +2893,7 @@
         remove.onclick=async()=>{if(!window.confirm('Delete this feed? Events already appended stay in the log.'))return;
           try{await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/delete',{method:'POST'});out.replaceChildren(el('div','Feed deleted.'));render(await getJSON(base));}
           catch(error){out.replaceChildren(el('div',error.message,'muted'));}};
-        wrap.append(previewButton,run,retry,review,schedule,remove,failures);
+        wrap.append(previewButton,mappingButton,run,retry,review,schedule,remove,failures);
         const latest=f.recent_files[0];
         return [f.folder,f.pattern,Number(f.files_appended).toLocaleString(),Number(f.files_failed).toLocaleString(),
           latest?latest.name+' \u2014 '+(latest.outcome==='appended'?Number(latest.added_events).toLocaleString()+' events added'+(latest.warning?' · '+latest.warning:''):'not appended: '+latest.error):'\u2014',wrap];})));

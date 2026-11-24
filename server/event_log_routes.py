@@ -577,6 +577,23 @@ async def create_event_log_feed(request: Request, log_id: str):
     return await run_in_threadpool(_respond, folder_feeds.create, log_id, spec)
 
 
+@router.get("/v1/event-logs/feeds/{feed_id}/mapping")
+def review_event_log_feed_mapping(request: Request, feed_id: str):
+    from . import event_log_folder_feeds as folder_feeds
+    _require_dashboard(request)
+    return _respond(folder_feeds.review_mapping, feed_id)
+
+
+@router.post("/v1/event-logs/feeds/{feed_id}/mapping")
+async def apply_event_log_feed_mapping(request: Request, feed_id: str):
+    from . import event_log_folder_feeds as folder_feeds
+    _require_dashboard(request)
+    if request.headers.get("x-owg-local-storage-confirmed") != "true":
+        raise HTTPException(403, "Explicit confirmation to use the reviewed mapping is required")
+    document = await _json_body(request, "reviewed folder feed mapping", strict=True, limit=1024)
+    return await run_in_threadpool(_respond, folder_feeds.apply_mapping, feed_id, document)
+
+
 @router.get("/v1/event-logs/feeds/{feed_id}/preview")
 def preview_event_log_feed(request: Request, feed_id: str):
     from . import event_log_folder_feeds as folder_feeds
