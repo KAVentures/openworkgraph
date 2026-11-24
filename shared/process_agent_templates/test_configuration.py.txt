@@ -597,7 +597,7 @@ class ConfigurationCases(unittest.IsolatedAsyncioTestCase):
             for name,value in [('workflow.spec.json',spec),('suite.json',suite),('bindings.json',bindings)]:
                 (root/name).write_text(json.dumps(value),encoding='utf-8')
             for name in ('configure.py','evaluate.py','execute.py','runtime.py',
-                         'process_source_state.py','process_rule_conditions.py'):
+                         'process_source_state.py','process_rule_conditions.py','monitor.py','run_queue.py'):
                 (root/name).write_bytes((Path(__file__).parent/name).read_bytes())
             command=[sys.executable,'-c',
                 'import configure,runpy,socket; socket.socket=lambda *a,**k: (_ for _ in ()).throw(AssertionError("network")); runpy.run_path("configure.py",run_name="__main__")',
@@ -665,6 +665,17 @@ class ConfigurationCases(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(manifest['case_count'],1)
             self.assertFalse(manifest['execution_authorized'])
             self.assertFalse(load_object(root/'queue'/'case_1'/'customer-intent.json')['customer_authorization_confirmed'])
+            pin=json.loads(result.stdout)['queue_sha256']
+            self.assertEqual(pin,digest(manifest))
+            inspect=[sys.executable,'-c',
+                'import run_queue,runpy,socket; socket.socket=lambda *a,**k: (_ for _ in ()).throw(AssertionError("network")); runpy.run_path("run_queue.py",run_name="__main__")',
+                '--queue','queue','--queue-sha256',pin,'--inspect']
+            result=subprocess.run(inspect,cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            status=json.loads(result.stdout)
+            self.assertEqual(status['cases'][0]['status'],'waiting')
+            self.assertFalse((root/'queue'/'queue-state').exists())
+            self.assertFalse(status['business_outcomes_verified'])
 
             new_case={**suite['cases'][0]['input'],'issue':'SYNTHETIC_NEW_CASE',
                       'request_id':'new-case-idempotency-key','record_ref':'owg:r:'+'e'*32}
