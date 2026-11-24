@@ -5,7 +5,7 @@ Uses the existing pipeline snapshot; dependency closure is explicit.
 """
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from hashlib import sha256
 import json
 from typing import Annotated, Literal
@@ -89,6 +89,14 @@ def _decimal(value):
 
 
 def solve(value):
+    # Bounded JSON floats may include very small subnormal values. Preserve
+    # the full decimal range when adding up to 18 costs.
+    with localcontext() as context:
+        context.prec = 400
+        return _solve(value)
+
+
+def _solve(value):
     spec = _parse(value)
     snapshot = _snapshot()
     if snapshot["snapshot_sha256"] != spec.snapshot_sha256:
