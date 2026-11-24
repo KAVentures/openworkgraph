@@ -20,6 +20,7 @@ model against this log; none of them says which model is right.
 from __future__ import annotations
 
 from collections import Counter
+from hashlib import sha256
 from typing import Any
 
 from . import event_log_petri_replay as petri
@@ -67,7 +68,7 @@ def _simplicity(net: dict[str, Any]) -> tuple[float, float]:
     return 1 / (1 + max(0.0, mean - 2)), mean
 
 
-def _score(log_id: str, xml: str, rows, cohort_note: dict[str, Any]) -> dict[str, Any]:
+def _score(xml: str, rows) -> dict[str, Any]:
     net = petri.parse_pnml(xml.encode())
     by_label: dict[str, list[str]] = {}
     for t, label in sorted(net["transitions"].items()):
@@ -101,7 +102,7 @@ def _score(log_id: str, xml: str, rows, cohort_note: dict[str, Any]) -> dict[str
 
 
 def model_quality(log_id: str, case_type: str | None = None, *, levels: Any = None, activities: float = 1.0,
-                  cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+                  cohort: dict[str, Any] | None = None, include_nets: bool = False) -> dict[str, Any]:
     chosen = _levels(levels)
     if isinstance(activities, bool) or not isinstance(activities, (int, float)) or not 0 < activities <= 1:
         raise EventLogWorkspaceError("activities must be a share above 0 and at most 1")
@@ -113,21 +114,26 @@ def model_quality(log_id: str, case_type: str | None = None, *, levels: Any = No
         total = conn.execute("SELECT count(DISTINCT case_id) FROM ce").fetchone()[0]
         return {"rows": rows, "cases_total": total}
 
-    data = workspace._query_filtered(log_id, case_type, cohort, run)
-    rows = data.pop("rows")
-    if not rows:
-        raise EventLogWorkspaceError("No cases are available to score in this selection")
+    # Discovery and trace selection read the same workspace state. Replay uses
+    # only materialized inputs, so it can run after releasing the lock.
+    with workspace._LOCK:
+        data = workspace._query_filtered(log_id, case_type, cohort, run)
+        rows = data.pop("rows")
+        if not rows:
+            raise EventLogWorkspaceError("No cases are available to score in this selection")
+        drafts = [(noise, *pnml.discovered_pnml(log_id, data["case_notion"], noise=noise,
+                                               activities=activities, cohort=cohort)) for noise in chosen]
     out = []
-    for noise in chosen:
-        xml, meta = pnml.discovered_pnml(log_id, case_type, noise=noise, activities=activities, cohort=cohort)
-        out.append({"noise": noise, **_score(log_id, xml, rows, data),
-                    "process_model_sha256": meta.get("process_model_sha256")})
+    for noise, xml, meta in drafts:
+        out.append({"noise": noise, **_score(xml, rows), "process_model_sha256": meta.get("process_model_sha256"),
+                    **({"pnml": xml, "pnml_sha256": sha256(xml.encode()).hexdigest()} if include_nets else {})})
     scored = [r for r in out if r["f_score"] is not None]
     # Highest F-score; on a tie the simpler net, then the lower noise.
     best = max(scored, key=lambda r: (r["f_score"], r["simplicity"], -r["noise"]), default=None)
     cases = sum(n for _, n in rows)
     return {
         "format": FORMAT, "log_id": log_id, "case_notion": data.get("case_notion"),
+        **({"cohort": data.get("cohort", {})} if include_nets else {}),
         "cases": cases, "cases_total": data.get("cases_total"),
         "cases_excluded": max(0, (data.get("cases_total") or cases) - cases),
         "variants": len(rows), "activities_share": float(activities),

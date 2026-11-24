@@ -3047,6 +3047,11 @@ not say which model is right. Up to eight levels can be scored at once.
 `GET /v1/event-logs/{log_id}/model-quality?levels=0,0.1,0.2&activities=1` plus the case-filter
 parameters. Agents with access to a shared log use `get_process_model_quality` (aggregates only).
 
+Choose **Download PNML** on a score row to keep the exact Petri net used for that score.
+**Replay scored net** opens that net in the Petri net check against the current retained case
+selection. JSON and CSV score reports include coverage counts and PNML digests. On the dashboard
+API, `include_nets=true` adds the PNML and its SHA-256 digest per row and the case filter used.
+
 ## Footprints
 
 **Footprints** (the footprint matrices of van der Aalst's *Process Mining*, PM4Py's footprints

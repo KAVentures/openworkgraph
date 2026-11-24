@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+from hashlib import sha256
+from threading import Event
 
 import pytest
 
 from server import event_log_model_quality as mq
 from server import event_log_petri_replay as petri
+from server import event_log_workspace as workspace
 from server.event_log_workspace import EventLogWorkspaceError
 from tests.test_event_log_petri_replay import _dirs, _import, _sequence_net  # noqa: F401  (fixture reuse)
 
@@ -49,3 +53,43 @@ def test_default_levels_and_bad_input():
             mq.model_quality(log, levels=bad)
     with pytest.raises(EventLogWorkspaceError):
         mq.model_quality(log, activities=0)
+
+
+def test_returns_exact_scored_nets_only_when_requested():
+    log = _import([["A", "B", "C"]] * 12 + [["A", "C"]])
+    args = {"levels": "0,0.5", "cohort": {"activity": "B"}}
+    report = mq.model_quality(log, **args, include_nets=True)
+    plain = mq.model_quality(log, **args)
+    assert report["cohort"] == {"activity": "B"}
+    assert report["cases"] == 12
+    for row, other in zip(report["levels"], plain["levels"], strict=True):
+        pnml = row["pnml"].encode()
+        assert row["pnml_sha256"] == sha256(pnml).hexdigest()
+        assert {key: value for key, value in row.items() if key not in {"pnml", "pnml_sha256"}} == other
+        assert petri.replay(log, pnml, cohort=args["cohort"])["fitness"]["log"] == row["fitness"]
+
+
+def test_model_discovery_reads_hold_the_trace_snapshot(monkeypatch):
+    log = _import([["A", "B"]] * 10)
+    entered, attempting, acquired = Event(), Event(), Event()
+    original = mq.pnml.discovered_pnml
+
+    def discover(*args, **kwargs):
+        entered.set()
+        assert attempting.wait(5)
+        assert not acquired.wait(0.1)
+        return original(*args, **kwargs)
+
+    def competing_write():
+        assert entered.wait(5)
+        attempting.set()
+        with workspace._LOCK:
+            acquired.set()
+
+    monkeypatch.setattr(mq.pnml, "discovered_pnml", discover)
+    with ThreadPoolExecutor(2) as pool:
+        score = pool.submit(mq.model_quality, log, levels="0,0.2")
+        writer = pool.submit(competing_write)
+        assert score.result(timeout=30)["cases"] == 10
+        writer.result(timeout=30)
+    assert acquired.is_set()

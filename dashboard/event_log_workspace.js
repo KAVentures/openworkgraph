@@ -1246,10 +1246,11 @@
     results.appendChild(dueDatesSection(names,inspection));
     results.appendChild(unusualCasesSection());
     results.appendChild(funnelSection(names));
-    results.appendChild(modelQualitySection());
+    const petriReplay=petriReplaySection(inspection);
+    results.appendChild(modelQualitySection(petriReplay.replayScored));
     results.appendChild(modelChangeSection(inspection));
     results.appendChild(footprintsSection(inspection));
-    results.appendChild(petriReplaySection(inspection));
+    results.appendChild(petriReplay.node);
     results.appendChild(temporalProfileSection(inspection));
     results.appendChild(waitingSection(inspection));
     results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity),inspection));
@@ -6598,28 +6599,45 @@
     return box;
   }
 
-  function modelQualitySection(){
+  function modelQualitySection(replayScored){
     const box=section('Model quality');box.id='owgModelQuality';
     box.appendChild(el('div','How good the discovered model is at several noise levels: fitness (can it replay the cases), precision (does it allow little that no case did), their balance (F-score), generalization (is each part backed by many cases) and simplicity (how tangled it is). Use it to choose the noise setting of model discovery.','muted'));
     const levels=select('owgModelQualityLevels',[['0,0.1,0.2,0.3,0.5','0, 10%, 20%, 30% and 50% (default)'],['0,0.05,0.1,0.15,0.2','Fine steps up to 20%'],['0,0.2,0.4,0.6,0.8','Coarse steps up to 80%']]);
     const run=button('Score models','secondary');run.id='owgModelQualityRun';
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Noise levels',levels),run);
+    const coverage=select('owgModelQualityCoverage',[['1','All activities'],['0.9','90% of events'],['0.75','75% of events'],['0.5','50% of events']]);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Noise levels',levels),field('Activity coverage',coverage),run);
     const statusLine=el('div',null,'muted');statusLine.id='owgModelQualityStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgModelQualityResults';
     box.append(row,statusLine,out);
     const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
+    const generation=state.generation;let revision=0;
+    const current=t=>generation===state.generation&&box.isConnected&&t===revision;
+    levels.onchange=coverage.onchange=()=>{revision++;run.disabled=false;out.replaceChildren();statusLine.textContent='Settings changed. Score the models again.';};
     run.onclick=async()=>{
-      const generation=state.generation;run.disabled=true;statusLine.textContent='Discovering and scoring…';out.replaceChildren();
+      const turn=++revision;run.disabled=true;statusLine.textContent='Discovering and scoring…';out.replaceChildren();
       try{
-        const r=await getJSON(logPath('model-quality',{levels:levels.value}));
-        if(generation!==state.generation)return;
+        const r=await getJSON(logPath('model-quality',{levels:levels.value,activities:coverage.value,include_nets:true}));
+        if(!current(turn))return;
         const best=r.levels.find(l=>l.noise===r.best_f_score_noise);
         statusLine.textContent='Scored '+r.levels.length+' models on '+Number(r.cases).toLocaleString()+' cases.'+(best?' The best balance of fitness and precision is at noise '+pct(best.noise)+' (F-score '+pct(best.f_score)+', fitness '+pct(best.fitness)+', precision '+pct(best.precision)+').':'')+(r.cases_excluded?' '+Number(r.cases_excluded).toLocaleString()+' cases beyond the length or variant limit were left out.':'');
-        const t=table(['Noise','Fitness','Precision','F-score','Generalization','Simplicity','Places / transitions'],r.levels.map(l=>[pct(l.noise)+(l.noise===r.best_f_score_noise?' (best F-score)':''),pct(l.fitness),pct(l.precision),pct(l.f_score),pct(l.generalization),pct(l.simplicity),l.places+' / '+l.transitions]));
-        out.appendChild(t);
-        out.appendChild(el('div',r.caveat,'muted'));
-      }catch(error){statusLine.textContent=error.message;}
-      finally{run.disabled=false;}};
+        const report={...r,levels:r.levels.map(({pnml,...score})=>score)};
+        const exports=exportButtons('owgModelQualityExport',()=>report,value=>[
+          ['Log ID','Case notion','Activity coverage','Scored cases','Excluded cases','Noise','Fitness','Precision','F-score','Generalization','Simplicity','Places','Transitions','PNML digest'],
+          ...value.levels.map(l=>[value.log_id,value.case_notion,value.activities_share,value.cases,value.cases_excluded,l.noise,l.fitness,l.precision,
+            l.f_score,l.generalization,l.simplicity,l.places,l.transitions,l.pnml_sha256])]);
+        exports.enable(true);
+        out.append(table(['Noise','Fitness','Precision','F-score','Generalization','Simplicity','Places / transitions','Scored net'],r.levels.map(l=>{
+          const label='scored net at '+pct(l.noise)+' noise';
+          const actions=el('div',null,'row');
+          const save=button('Download PNML','secondary');save.setAttribute('aria-label','Download '+label+' as PNML');
+          save.onclick=()=>{if(current(turn))download('scored-model-noise-'+l.noise+'.pnml',l.pnml,'application/xml');};
+          const replay=button('Replay scored net','secondary');replay.setAttribute('aria-label','Replay '+label);
+          replay.onclick=async()=>{try{if(current(turn))await replayScored(l.pnml,label);}catch(error){if(current(turn))statusLine.textContent=error.message;}};
+          actions.append(save,replay);
+          return [pct(l.noise)+(l.noise===r.best_f_score_noise?' (best F-score)':''),pct(l.fitness),pct(l.precision),pct(l.f_score),pct(l.generalization),pct(l.simplicity),l.places+' / '+l.transitions,actions];
+        })),exports.node,el('div',r.caveat,'muted'));
+      }catch(error){if(current(turn))statusLine.textContent=error.message;}
+      finally{if(current(turn))run.disabled=false;}};
     return box;
   }
 
@@ -6760,7 +6778,7 @@
     };
     let lastNet=null;
     const replay=async(body,label)=>{
-      if(sectionGeneration!==state.generation)return;
+      if(sectionGeneration!==state.generation||run.disabled)return;
       const generation=sectionGeneration,cohort=globalCohort();
       run.disabled=own.disabled=happy.disabled=align.disabled=alertSave.disabled=true;aligned.replaceChildren();alertMessage.textContent='';lastNet=null;statusLine.textContent='Replaying on '+label+'…';out.replaceChildren();
       try{
@@ -6882,7 +6900,11 @@
     own.onclick=async()=>{
       try{statusLine.textContent='Discovering…';const xml=await (await api(logPath('model-discovery.pnml',{noise:'0'}))).text();await replay(xml,'the discovered net (every path kept)');}
       catch(error){statusLine.textContent=error.message;}};
-    return box;
+    return {node:box,replayScored:async(body,label)=>{
+      if(run.disabled)throw new Error('Wait for the current Petri net check to finish.');
+      statusLine.tabIndex=-1;statusLine.focus();
+      await replay(body,label);
+    }};
   }
 
   function temporalProfileSection(inspection){
