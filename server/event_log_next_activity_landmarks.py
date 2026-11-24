@@ -207,15 +207,28 @@ def evaluate_landmark(histories, cutoff, end, packet):
     ends=set(packet["end_activities"])
     model=nxt._Model(packet["history"])
     training=ambiguous_training=completed_before=0
+    uncertain_membership=[]
     candidates=[]
     for key,path in histories.items():
         index=bisect_left([t for t,_ in path],cutoff)
         if not index:
             continue
         prefix=path[:index]
-        # Completion is defined only by the last visible pre-cutoff label.
-        # Never inspect the later path when deciding who was open at cutoff.
-        if prefix[-1][1] in ends:
+        # Determine completion from the entire final timestamp, not the
+        # arbitrary order of event IDs when different labels tie.
+        last_timestamp=prefix[-1][0]
+        last_labels=set()
+        for ts,label in reversed(prefix):
+            if ts!=last_timestamp:
+                break
+            last_labels.add(label)
+        if last_labels & ends and last_labels - ends:
+            uncertain_membership.append({"case_id":key,"last_event_at":_stamp(last_timestamp),
+                "last_timestamp_activities":sorted(last_labels),"prefix_events":index,
+                "membership_reason":"mixed_completion_labels_at_last_timestamp"})
+            continue
+        # Never inspect later events when determining cutoff membership.
+        if last_labels <= ends:
             completed_before+=1
             if _ambiguous(prefix):
                 ambiguous_training+=1
@@ -253,10 +266,13 @@ def evaluate_landmark(histories, cutoff, end, packet):
             if sum(last.values())>=packet["min_support"]:
                 out["last_activity_baseline"]=_probabilities(last,1)
         rows.append(out)
-    return {"cutoff":_stamp(cutoff),"observed_until":_stamp(end),
+    result={"cutoff":_stamp(cutoff),"observed_until":_stamp(end),
             "completed_before_cutoff":completed_before,"training_cases":training,
             "training_cases_excluded_ambiguous_timestamps":ambiguous_training,
             "open_at_cutoff":len(rows),
+            "ambiguous_open_membership":len(uncertain_membership),
+            "open_population_size_bounds":{"lower":len(rows),"upper":len(rows)+len(uncertain_membership)},
+            "observed_prefix_cases":completed_before+len(rows)+len(uncertain_membership),
             "outcomes":dict(Counter(r["outcome_reason"] or "resolved" for r in rows)),
             "abstentions":dict(Counter(r["abstention_reason"] for r in rows if r["abstention_reason"])),
             "top1":_score(rows,"model",1),"top3":_score(rows,"model",3),
@@ -264,7 +280,19 @@ def evaluate_landmark(histories, cutoff, end, packet):
             "last_activity_baseline":_score(rows,"last_activity_baseline",1),
             "paired_vs_overall":_paired(rows,"overall_baseline"),
             "paired_vs_last_activity":_paired(rows,"last_activity_baseline"),
-            "calibration":_calibration(rows)},rows
+            "calibration":_calibration(rows)}
+    # Uncertain members receive no prediction. These bounds disclose the
+    # sensitivity of whole-open-population hit share to including them.
+    for key in ("top1","top3","overall_baseline","last_activity_baseline"):
+        score=result[key]
+        population=len(rows)
+        upper=score["whole_population_hit_share_bounds"]["upper"]
+        score["membership_sensitive_hit_share_bounds"]={
+            "lower":score["hits"]/(population+len(uncertain_membership)) if population+len(uncertain_membership) else None,
+            "upper":upper if population else (0.0 if uncertain_membership else None)}
+    result["ambiguous_membership_examples"]=uncertain_membership[:MAX_ROWS]
+    result["ambiguous_membership_examples_truncated"]=len(uncertain_membership)>MAX_ROWS
+    return result,rows
 
 
 def review(log_id,spec,*,evidence=None):
@@ -311,7 +339,7 @@ def review(log_id,spec,*,evidence=None):
                 "historical_reconstruction_not_prospective_snapshot":True,"execution_authorized":False,
                 "assumptions":[
                     "Training and open membership use events strictly before the cutoff; first subsequent events at or after it supply labels.",
-                    "Completion means the last visible pre-cutoff activity matches a declared label. A reopened case may appear completed at that cutoff.",
+                    "Completion requires every activity at the last visible pre-cutoff timestamp to be a declared completion label. Mixed completion and non-completion labels at that timestamp leave membership unknown; they are excluded from training and prediction, counted separately, and included in membership sensitivity bounds. A reopened case may appear completed at that cutoff.",
                     "Different activity labels tied at a timestamp are ambiguous. Ambiguous training prefixes are excluded; ambiguous open prefixes abstain.",
                     "The observation horizon is capped at the last visible event. No later event is not evidence that a case ended; such outcomes remain unresolved.",
                     "The existing history model may predict its synthetic case-end label, which cannot match a recorded next activity. This is intentionally not converted to a correct prediction on missing data.",

@@ -169,3 +169,20 @@ with TestClient(app) as client:
     done=subprocess.run([sys.executable,"-c",code],cwd=Path(__file__).resolve().parents[1],
                         env=env,text=True,capture_output=True,timeout=60)
     assert done.returncode==0,done.stdout+done.stderr
+
+
+def test_mixed_completion_ties_are_membership_unknown_independent_of_event_ids():
+    settings=lm.normalize(packet())
+    original=histories()
+    original["mixed"]=[(t(1),"A"),(t(2),"Done"),(t(2),"Reopen"),(t(5),"B")]
+    reversed_tie={**original,"mixed":[(t(1),"A"),(t(2),"Reopen"),(t(2),"Done"),(t(5),"B")]}
+    a,ar=lm.evaluate_landmark(original,t(4),t(7),settings)
+    b,br=lm.evaluate_landmark(reversed_tie,t(4),t(7),settings)
+    assert a==b and ar==br
+    assert a["ambiguous_open_membership"]==1
+    assert a["open_population_size_bounds"]=={"lower":4,"upper":5}
+    assert a["observed_prefix_cases"]==7
+    assert a["ambiguous_membership_examples"][0]["case_id"]=="mixed"
+    assert a["training_cases"]==1
+    assert a["top1"]["membership_sensitive_hit_share_bounds"]=={"lower":.2,"upper":.75}
+    assert all(row["case_id"]!="mixed" for row in ar)

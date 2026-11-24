@@ -10675,8 +10675,8 @@
     const name=x=>x.case_ends?'(case ends)':x.activity;
     const predicted=list=>list.length?list.map(x=>name(x)+' '+share(x.probability)).join(', '):'Abstained';
     const downloads=exportButtons('owg-next-activity-landmarks',()=>report,r=>[
-      ['cutoff','observed_until','training_cases','open_at_cutoff','predicted','resolved_predictions','top1_hits','top1_lower','top1_upper','top3_lower','top3_upper','paired_last_lower','paired_last_upper','review_sha256'],
-      ...r.landmarks.map(l=>[l.cutoff,l.observed_until,l.training_cases,l.open_at_cutoff,l.top1.predicted,l.top1.resolved_predictions,l.top1.hits,
+      ['cutoff','observed_until','training_cases','open_at_cutoff','ambiguous_open_membership','membership_sensitive_top1_lower','membership_sensitive_top1_upper','predicted','resolved_predictions','top1_hits','top1_lower','top1_upper','top3_lower','top3_upper','paired_last_lower','paired_last_upper','review_sha256'],
+      ...r.landmarks.map(l=>[l.cutoff,l.observed_until,l.training_cases,l.open_at_cutoff,l.ambiguous_open_membership,l.top1.membership_sensitive_hit_share_bounds.lower,l.top1.membership_sensitive_hit_share_bounds.upper,l.top1.predicted,l.top1.resolved_predictions,l.top1.hits,
         l.top1.whole_population_hit_share_bounds.lower,l.top1.whole_population_hit_share_bounds.upper,
         l.top3.whole_population_hit_share_bounds.lower,l.top3.whole_population_hit_share_bounds.upper,
         l.paired_vs_last_activity.paired_hit_share_change_bounds.lower,l.paired_vs_last_activity.paired_hit_share_change_bounds.upper,r.review_sha256])]);
@@ -10743,7 +10743,7 @@
         picker.onchange=()=>show(r.landmarks[Number(picker.value)]);
         const assumptions=el('ul');r.assumptions.forEach(a=>assumptions.append(el('li',a)));
         summary.replaceChildren(table(['Cutoff','Open cases','Training cases','Prediction coverage','Top 1 hit-share bounds','Top 3 hit-share bounds'],
-          r.landmarks.map(l=>[l.cutoff,l.open_at_cutoff,l.training_cases,share(l.top1.prediction_coverage),
+          r.landmarks.map(l=>[l.cutoff,l.open_at_cutoff+(l.ambiguous_open_membership?' (+ '+l.ambiguous_open_membership+' uncertain)':''),l.training_cases,share(l.top1.prediction_coverage),
             bounds(l.top1.whole_population_hit_share_bounds),bounds(l.top3.whole_population_hit_share_bounds)])),
           el('p',r.distinct_open_cases_across_landmarks+' distinct open cases; '+r.repeated_open_cases_across_landmarks+
             ' appear at multiple landmarks. No pooled independent accuracy is reported.','muted'),
