@@ -366,6 +366,11 @@ def test_exact_selection_pages_reject_outside_case_and_stale_projection():
     assert first["historical_rows_retained"] is False
     assert first["raw_source_fingerprint_rechecked"] is False
     assert first["current_effective_input"]["cases"] == 3
+    assert first["case_drift"] == {"status": "complete", "added": 0, "modified": 0,
+        "unchanged": 3, "removed": 0, "original_cases": 3, "current_cases": 3,
+        "removed_case_ids_retained": False}
+    assert first["cases"][0]["comparison_status"] == "unchanged"
+
     assert first["cases"][0]["case_id"] == "c0" and first["next_after"] == "c0"
     pinned = {**basis, "expected_projection_sha256": first["current_effective_input"]["sha256"]}
     rest = provenance.inspect_selection(saved, {**pinned, "after": "c0", "limit": 2})
@@ -389,6 +394,12 @@ def test_exact_selection_pages_reject_outside_case_and_stale_projection():
     changed = provenance.inspect_selection(saved, basis)
     assert changed["effective_input_status"] == "changed"
     assert [row["case_id"] for row in changed["cases"]] == ["c0", "c3"]
+    assert changed["case_drift"]["removed"] == 1
+    assert changed["case_drift"]["unchanged"] == 2
+    assert changed["case_drift"]["added"] == 0
+    assert changed["case_drift"]["modified"] == 0
+    assert "c2" not in json.dumps(changed)
+
     workspace.delete_log(log)
     with pytest.raises(workspace.EventLogWorkspaceError, match="unavailable"):
         provenance.inspect_selection(saved, basis)
@@ -401,6 +412,7 @@ def test_legacy_discovery_selection_reports_unknown_historical_membership():
     try:
         payload = json.loads(conn.execute("SELECT payload FROM discovery_snapshots WHERE reference=?", [original_ref]).fetchone()[0])
         payload.pop("effective_input")
+        payload.pop("case_digest_index", None)
         legacy_ref = provenance.PREFIX + provenance.digest(payload)
         conn.execute("UPDATE discovery_snapshots SET reference=?,payload=? WHERE reference=?",
                      [legacy_ref, json.dumps(payload), original_ref])
@@ -413,3 +425,59 @@ def test_legacy_discovery_selection_reports_unknown_historical_membership():
     assert inspected["original_effective_input"] is None
     assert inspected["effective_input_status"] == "not_recorded"
     assert inspected["historical_rows_retained"] is False
+
+
+def test_complete_case_drift_counts_and_filters_no_raw_removed_keys():
+    from server import event_log_case_tags as tags
+
+    log = _log([["Open", "Review", "Close"]] * 4)
+    tags.add(log, {"tag": "selected", "case_ids": ["c0", "c1", "c2"]})
+    preview = discovery.discover(log, cohort={"tag": "selected"}, _pin_projection=True)
+    made = provenance.record_draft(log, {"expected_model_sha256": preview["process_model_sha256"],
+                                        "cohort": {"tag": "selected"}})
+    saved, basis = _inspection_basis(made)
+    tags.remove(log, {"tag": "selected", "case_ids": ["c0"]})
+    tags.add(log, {"tag": "selected", "case_ids": ["c3"]})
+    conn = workspace._connect()
+    try:
+        conn.execute("""UPDATE events SET activity='Escalate' WHERE log_id=? AND event_id IN
+            (SELECT event_id FROM event_objects WHERE log_id=? AND object_id='c1')
+            AND activity='Review'""", [log, log])
+    finally:
+        conn.close()
+    result = provenance.inspect_selection(saved, basis)
+    assert result["case_drift"] == {"status": "complete", "added": 1, "removed": 1, "modified": 1,
+        "unchanged": 1, "original_cases": 3, "current_cases": 3, "removed_case_ids_retained": False}
+    assert {row["case_id"]: row["comparison_status"] for row in result["cases"]} == {
+        "c1": "modified", "c2": "unchanged", "c3": "added"}
+    assert "c0" not in json.dumps(result)
+    pin = result["current_effective_input"]["sha256"]
+    for status, case in (("added", "c3"), ("modified", "c1"), ("unchanged", "c2")):
+        filtered = provenance.inspect_selection(saved, {**basis, "case_status": status, "expected_projection_sha256": pin})
+        assert filtered["matching_cases"] == 1
+        assert [row["case_id"] for row in filtered["cases"]] == [case]
+    # No changed case in a matching original snapshot means an exact empty list.
+    tags.remove(log, {"tag": "selected", "case_ids": ["c3"]})
+    filtered = provenance.inspect_selection(saved, {**basis, "case_status": "added"})
+    assert filtered["matching_cases"] == 0 and filtered["cases"] == []
+
+
+def test_case_drift_budget_never_stores_or_presents_partial_index(monkeypatch):
+    monkeypatch.setattr(provenance, "MAX_INDEXED_CASES", 2)
+    log, _, _, made = prepare()
+    saved, basis = _inspection_basis(made)
+    conn = workspace._connect()
+    try:
+        payload = json.loads(conn.execute("SELECT payload FROM discovery_snapshots WHERE reference=?",
+                                          [basis["reference"]]).fetchone()[0])
+    finally:
+        conn.close()
+    assert "case_digest_index" not in payload
+    assert provenance.inspect_selection(saved, basis)["case_drift"] == {"status": "not_recorded"}
+    with pytest.raises(workspace.EventLogWorkspaceError, match="Complete case comparison is unavailable"):
+        provenance.inspect_selection(saved, {**basis, "case_status": "modified"})
+    monkeypatch.setattr(provenance, "MAX_INDEXED_CASES", 10)
+    _, _, _, indexed = prepare()
+    saved, basis = _inspection_basis(indexed)
+    monkeypatch.setattr(provenance, "MAX_INDEXED_EVENTS", 1)
+    assert provenance.inspect_selection(saved, basis)["case_drift"]["status"] == "current_work_budget_exceeded"
