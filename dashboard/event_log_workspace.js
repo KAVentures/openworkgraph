@@ -10337,8 +10337,8 @@
           table(['Event ID','Effective activity','Timestamp (UTC)'],result.events.map(row=>[row.event_id,row.activity,row.timestamp])),first,next);
         // Reuse the existing exact original-observation drill-down, if the
         // selected source is an observed execution snapshot.
-        const sourceLog=state.logs.find(log=>log.log_id===result.log_id);
-        if(sourceLog?.observed_execution_snapshot&&window.owgObservedExecutionLog?.renderObservationCheck)
+        const sourceLog={log_id:result.log_id,observed_execution_snapshot:result.observed_execution_snapshot};
+        if(sourceLog.observed_execution_snapshot?.manifest_available===true&&window.owgObservedExecutionLog?.renderObservationCheck)
           window.owgObservedExecutionLog.renderObservationCheck(eventList,sourceLog,caseId,result.events,
             ()=>current()&&turn===eventTurn&&digest===checkedDigest);
       }catch(error){if(current()&&turn===eventTurn)reset(error);}
