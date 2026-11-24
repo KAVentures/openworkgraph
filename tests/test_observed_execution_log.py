@@ -73,6 +73,20 @@ def test_create_real_workspace_and_reject_stale_preview(tmp_path, monkeypatch, s
     description = descriptions.description(log)["description"]
     assert "Independent saved copy" in description
     assert preview["snapshot_sha256"] in description
+    metadata = workspace.list_logs()["logs"][0]["observed_execution_snapshot"]
+    assert metadata["snapshot_sha256"] == preview["snapshot_sha256"]
+    assert metadata["original_event_count"] == 5
+    repeated = snapshots.create(spec, expected_sha256=preview["snapshot_sha256"], name="Test")
+    assert repeated["existing_snapshot_reused"] is True
+    assert repeated["log_id"] == log
+    assert len(workspace.list_logs()["logs"]) == 1
+    workspace.delete_log(log)
+    conn = workspace._connect()
+    try:
+        assert conn.execute("SELECT count(*) FROM observed_execution_log_sources").fetchone()[0] == 0
+    finally:
+        conn.close()
+
 
 
 def test_overlap_and_unavailable_case_refused():
@@ -110,3 +124,56 @@ def test_agent_activities_do_not_include_human_events_or_payloads():
     assert rows[0][1] == "Tool call"
     assert rows[0][-1] == "native_agent_run"
     assert "SECRET" not in json.dumps([rows, report])
+
+
+def test_snapshot_http_requires_local_dashboard_and_storage_confirmation(tmp_path):
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+
+    code = r"""
+from fastapi.testclient import TestClient
+from server.secure_app import app
+from server import local_auth
+from server.agent_ingest import ingest_agent_payloads
+from server import procedural_memory
+with TestClient(app) as client:
+    owner = {"Authorization": "OWG-Session " + local_auth.create_dashboard_session()}
+    bearer = {"Authorization": "Bearer " + local_auth.ensure_api_token()}
+    consent = {"X-OWG-Local-Storage-Confirmed": "true"}
+    base = "/v1/workflow-evidence/event-log"
+    assert client.post(base + "/preview", json={}, headers=bearer).status_code == 403
+    assert client.post(base + "/create", json={}, headers={**bearer, **consent}).status_code == 403
+    assert client.post(base + "/create", json={}, headers=owner).status_code == 403
+    assert client.post(base + "/preview", json={}, headers=owner).status_code == 422
+    ingest_agent_payloads([{"agent_name":"Coder","provider":"test","framework":"custom-agent",
+        "observation_level":"native_trace","run_id":"r1","session_id":"s1",
+        "event_id":f"e{n}","operation":op,"status":"success",
+        "observed_at":f"2026-09-01T08:0{n}:00+00:00"}
+        for n,op in enumerate(["run_started","tool_call","run_finished"])])
+    runs = procedural_memory.derive_executions(procedural_memory.load_recent_evidence(limit=25000))
+    run = next(r for r in runs if r["actor_kind"] == "agent")
+    selection = {"execution_ids":[run["execution_id"]]}
+    response = client.post(base + "/preview", json=selection, headers=owner)
+    assert response.status_code == 200, response.text
+    preview = response.json()
+    body = {"selection":selection,"expected_sha256":preview["snapshot_sha256"],"name":"Agent snapshot"}
+    response = client.post(base + "/create",json=body,headers={**owner,**consent})
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["case_count"] == 1 and result["event_count"] == 3, result
+    assert result["stored_independent_snapshot"] is True
+    duplicate = client.post(base + "/create",json=body,headers={**owner,**consent}).json()
+    assert duplicate["log_id"] == result["log_id"] and duplicate["existing_snapshot_reused"]
+    assert client.get("/v1/event-logs",headers=owner).json()["logs"][0]["log_id"] == result["log_id"]
+print("ok")
+"""
+    env = os.environ.copy()
+    env.update({"WORKFLOW_OBSERVER_DATA": str(tmp_path / "srv"),
+                "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth"),
+                "WORKFLOW_OBSERVER_CONFIG": str(tmp_path / "config.json")})
+    root = Path(__file__).resolve().parents[1]
+    done = subprocess.run([sys.executable, "-c", code], cwd=root, env=env,
+                          capture_output=True, text=True, timeout=180)
+    assert done.returncode == 0 and done.stdout.strip().endswith("ok"), done.stdout + done.stderr
