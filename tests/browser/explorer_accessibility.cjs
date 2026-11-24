@@ -91,12 +91,19 @@ const path=require('node:path');
      comparedEvidenceIds=new URL(route.request().url()).searchParams.get('execution_ids');
      return route.fulfill({status:200,contentType:'application/json',
        body:JSON.stringify({selector:{execution_ids:['execution:compare_right'],selected_execution_count:1},
-         structural_alignment:{high_support_steps:[]},provenance:{source_limit_reached:false}})});
+         structural_alignment:{high_support_steps:[]},executions:[{execution_id:'execution:compare_right',actor_kind:'human',duration_seconds:12,steps:['action:open','action:review','action:open'],outcome_status:'unknown'}],provenance:{source_limit_reached:false}})});
    });
    const inspectB=page.getByRole('button',{name:'Inspect variant B evidence',exact:true});
    await inspectB.focus();await page.keyboard.press('Enter');
    await page.locator('#owgExplorerEvidence h4').waitFor();
    assert.equal(comparedEvidenceIds,'execution:compare_right','comparison drilldown must select only lane B refs');
+   const runMatrix=page.locator('#owgExplorerRunMatrix');
+   await runMatrix.waitFor();
+   assert.match(await runMatrix.textContent(),/Run 1 · execution:compare_right/);
+   const occurrences=runMatrix.getByRole('table',{name:'Projected step occurrence matrix'});
+   assert.deepEqual(await occurrences.locator('tbody tr').first().locator('td').allTextContents(),['1/1','2']);
+   await audit(page,'#owgWorkflowExplorer','Selected execution workbench');
+
    assert.equal(await page.locator('#owgExplorerHandoffPanel').count(),0,'switching lanes revokes old handoff review');
    assert.match(await page.locator('#owgExplorerStepInfo').textContent(),/Variant 2 selected from comparison/);
    await page.getByRole('button',{name:'Review safe agent handoff',exact:true}).click();
