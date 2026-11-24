@@ -263,6 +263,51 @@
           }
           table.appendChild(body);wrap.appendChild(table);section.appendChild(wrap);
         }else section.appendChild(el('p','No stored-model difference detected. Source evidence and outcomes remain unverified.'));
+        const impactHost=el('div');impactHost.setAttribute('aria-live','polite');
+        const impactButton=button('Review policy change impact',async()=>{
+          impactButton.disabled=true;impactHost.replaceChildren(el('p','Comparing the exact saved policy declarations…'));
+          const active=()=>generation===revisionCompareGeneration&&record===selected&&impactHost.isConnected;
+          try{
+            const data=await request('/v1/process-catalog/policy-impact?'+new URLSearchParams({
+              workflow_id:selected.workflow_id,before_revision:String(previous.revision),after_revision:String(selected.revision),
+              before_sha256:previous.content_sha256,after_sha256:selected.content_sha256}));
+            if(!active())return;
+            if(data.before.content_sha256!==previous.content_sha256||data.after.content_sha256!==selected.content_sha256||
+              data.before.workflow_id!==selected.workflow_id||data.after.workflow_id!==selected.workflow_id||
+              data.before.revision!==previous.revision||data.after.revision!==selected.revision)throw Error('Unexpected saved revision references.');
+            const parts=[el('h4','Policy revision impact'),
+              el('p','Potential structural impact only. Text meaning, policy equivalence, actual execution and outcomes are not verified. No source state is read.')];
+            const list=(title,rows,describe)=>{
+              const group=el('details');group.open=true;group.appendChild(el('summary',title+' ('+rows.length+')'));
+              for(const row of rows)group.appendChild(el('p',describe(row)));
+              if(!rows.length)group.appendChild(el('p','None detected.'));
+              parts.push(group);
+            };
+            list('Changed rules',data.rule_changes,r=>r.rule_id+' · '+r.changes.join(', ')+
+              ' · Previous fact paths: '+(r.old_fact_paths.join(', ')||'none')+' · Current fact paths: '+(r.new_fact_paths.join(', ')||'none'));
+            list('Changed decision tables',data.decision_table_changes,t=>t.table_id+' · '+t.changes.join(', '));
+            list('Changed transitions',data.transition_changes,e=>e.edge.join(' → ')+' · '+
+              (e.old_exists?(e.old_rule_id||'unconditional'):'absent')+' → '+(e.new_exists?(e.new_rule_id||'unconditional'):'absent'));
+            list('Changed manual review conditions',data.manual_review_changes,r=>r.identity.join(' · ')+' · '+r.change);
+            list('Changed outcome expectations',data.outcome_expectation_changes,r=>r.identity.join(' · ')+' · '+r.change);
+            for(const [side,value] of [['Compared revision',data.before_impact],['Opened revision',data.after_impact]]){
+              parts.push(el('h5',side),el('p','Potentially affected terminals: '+(value.potentially_affected_terminal_ids.join(', ')||'none')));
+              list('Direct affected edges',value.direct_guarded_edges,e=>e.join(' → '));
+              list('Decision dependency paths',value.decision_dependency_witnesses,r=>r.path.join(' → '));
+              list('Downstream activity paths',value.downstream_activity_witnesses,r=>r.path.join(' → '));
+              parts.push(el('p','Changed but unreferenced rules: '+(value.unreferenced_changed_rule_ids.join(', ')||'none')));
+            }
+            parts.push(button('Download minimized policy-impact JSON',()=>{
+              if(!active())return;
+              const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
+              const link=el('a');link.href=url;link.download='owg-policy-impact-r'+previous.revision+'-r'+selected.revision+'.json';
+              link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+            }));
+            impactHost.replaceChildren(...parts);
+          }catch(error){if(active())impactHost.replaceChildren(el('p',error.message));}
+          finally{impactButton.disabled=false;}
+        });
+        section.append(impactButton,impactHost);
         if(revision<selected.revision){
           section.appendChild(el('p','Restoration creates an UNSAVED draft from the historical model against the current latest revision. All earlier confirmations and evidence links are removed. A separate human review and new save are required.'));
           section.appendChild(button('Prepare historical r'+revision+' as unsaved restoration draft',
