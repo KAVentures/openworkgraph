@@ -218,12 +218,17 @@ def _pinned_spec(root: Path | str, manifest: dict) -> dict:
         raw = source.read(MAX_FILE_BYTES + 1)
     if len(raw) > MAX_FILE_BYTES or _hash(raw) != manifest["workflow_spec_sha256"]:
         raise ReleaseIntegrityError("Runtime specification changed during comparison")
-    return json.loads(raw, object_pairs_hook=_unique)
+    return json.loads(raw, object_pairs_hook=_unique,
+                      parse_constant=lambda _: (_ for _ in ()).throw(ReleaseIntegrityError("Nonfinite JSON value")))
 
 
 def _structural_changes(before: dict, after: dict) -> dict:
     """Describe exact saved model changes by stable IDs, never disclose values."""
     old, new = before["process_model"], after["process_model"]
+    def differs(a, b):
+        # Python equality treats True, 1 and 1.0 as equal. Their JSON
+        # representations can carry distinct customer rule semantics.
+        return json.dumps(a, sort_keys=True, allow_nan=False) != json.dumps(b, sort_keys=True, allow_nan=False)
     groups = {
         "activities": ("id",),
         "transitions": ("source", "target"),
@@ -254,8 +259,8 @@ def _structural_changes(before: dict, after: dict) -> dict:
             "removed": [identity(k) for k in sorted(a.keys() - b.keys())],
             "changed": [{**identity(k), "changed_fields": sorted(
                 field for field in a[k].keys() | b[k].keys()
-                if field not in a[k] or field not in b[k] or a[k][field] != b[k][field])}
-                for k in sorted(a.keys() & b.keys()) if a[k] != b[k]],
+                if field not in a[k] or field not in b[k] or differs(a[k][field], b[k][field]))}
+                for k in sorted(a.keys() & b.keys()) if differs(a[k], b[k])],
             "retained_identity_order_changed": ([k for k in a if k in b] != [k for k in b if k in a]),
         }
     def terminals(model):
@@ -271,11 +276,11 @@ def _structural_changes(before: dict, after: dict) -> dict:
         "terminal_activity_ids_changed": terminals(old) != terminals(new),
         "other_changed_model_fields": sorted(
             k for k in old.keys() | new.keys() if k not in groups
-            and (k not in old or k not in new or old[k] != new[k])),
+            and (k not in old or k not in new or differs(old[k], new[k]))),
         "changed_runtime_contract_fields": sorted(
             k for k in before.keys() | after.keys()
             if k not in {"workflow_id", "revision", "content_sha256", "process_model", "process_model_sha256"}
-            and (k not in before or k not in after or before[k] != after[k])),
+            and (k not in before or k not in after or differs(before[k], after[k]))),
         "model_field_values_returned": False,
         "structural_changes_establish_compatibility": False,
     }
