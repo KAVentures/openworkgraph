@@ -2901,6 +2901,14 @@ takes the due-date settings and case filter from the summary, plus `due_group`. 
 Case filters choose which cases appear. Open cases are evaluated at the latest event in the
 selected case notion, so filtering to cases that are still open preserves the observation cutoff.
 
+Set **As of (UTC, optional)** to reconstruct a deadline report using only events at or before that
+time. Event-based filters and completion checks use that truncated history. For attribute deadlines,
+the report uses values recorded on events by the cutoff. Joined or object-level attributes lack an
+observation timestamp and remain available in the default current report. Case tags and case-level
+filter attributes reflect the current workspace. Each case page uses the report's cutoff, and the
+linked case history shows the full retained record. JSON and CSV downloads contain aggregate scores
+and the assessment time. Pass an offset-qualified `as_of` to either dashboard due-date API.
+
 **Due dates** checks whether the step that matters, such as *Pay invoice* or *Ship order*, happened
 by the date it was due, as UiPath Process Mining's due dates and Celonis's on-time views do. The due
 date is either an attribute (a joined case attribute, or else the first value of an event attribute in
