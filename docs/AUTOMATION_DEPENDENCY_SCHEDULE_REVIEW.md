@@ -60,3 +60,27 @@ and missing prerequisites, cycle residuals, unknown target dates, an exact
 1,000-node chain, bounded risk-list independence, and browser navigation.
 This is not a production scheduling optimizer or independently verified
 business implementation plan.
+
+
+### Exact dependency cycles
+
+The wave review independently finds strongly connected components of the
+unfinished retained prerequisite graph, including self-loops. A hold or
+missing prerequisite can block an idea without hiding a simultaneous cycle.
+The dashboard lists exact cycle groups and counts distinct additional ideas
+depending on any cycle. These counts can overlap the state-blocked population;
+the original residual count remains the number unresolved solely by cycle
+precedence after state-blocker propagation. Implemented prerequisites remain
+satisfied declarations and are outside the unfinished graph.
+
+The bounded risk-path display does not determine whether cycles exist.
+The overall review is incomplete if the exact graph contains a cycle or an
+unknown dependency link, even if a bounded risk-path traversal misses it.
+Non-ASCII historical quarter labels are treated as unknown rather than
+interpreted as valid dates.
+
+The exact standalone cycle inventory passed 1,000 randomized graph checks
+against an independent reachability oracle and four long-chain checks
+(1,000 and 10,000 vertices, with and without a cycle). The local tested file
+matches Git blob db72e9175355374c52f2b9aba8e05cf81ebf80e4.
+Full application/browser checks still require CI.
