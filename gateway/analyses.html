@@ -297,6 +297,14 @@ function portfolioPayload(){
 function renderPortfolioReport(report){
  const target=$('portfolioResult');target.replaceChildren();
  target.append(text('p',report.comparable_count+' comparable and '+report.incomparable_count+' withheld comparisons. Report digest '+report.report_sha256));
+ if(report.conflicting_claimed_basis_pairs.length){
+   const list=document.createElement('ul');
+   for(const pair of report.conflicting_claimed_basis_pairs){
+     const names=pair.selection_indices.map(i=>report.selections[i].title+' · revision '+report.selections[i].revision);
+     list.append(text('li',names.join(' versus ')+' — same claimed analysis/source basis, conflicting values.'));
+   }
+   target.append(text('p','Conflicting publications detected; comparisons involving these selections are withheld.'),list);
+ }
  const base=report.selections[report.baseline_index];
  target.append(text('p','Baseline: '+base.title+' · revision '+base.revision+' · '+base.matching_cases+' selected cases'));
  for(const pair of report.comparisons){
@@ -304,7 +312,7 @@ function renderPortfolioReport(report){
    target.append(text('h3',item.title+' · revision '+item.revision));
    target.append(text('p',item.matching_cases+' selected cases; '+item.matching_rows+' matching rows. '+(pair.same_claimed_source?'Same':'Different')+' claimed source fingerprint.'));
    if(!pair.comparable){
-     const reasons=document.createElement('ul');pair.refusal_reasons.forEach(r=>reasons.append(text('li',COMPARISON_REASONS[r]||r)));
+     const reasons=document.createElement('ul');pair.refusal_reasons.forEach(r=>reasons.append(text('li',(r==='portfolio_conflicting_claimed_basis'?'Conflicting report elsewhere in the selected portfolio':COMPARISON_REASONS[r]||r))));
      target.append(text('p','Numeric comparison withheld.'),reasons);continue;
    }
    const t=document.createElement('table'),head=document.createElement('tr'),thead=document.createElement('thead'),tbody=document.createElement('tbody');

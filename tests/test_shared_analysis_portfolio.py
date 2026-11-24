@@ -133,3 +133,28 @@ def test_expired_member_fails_entire_portfolio(store):
     with pytest.raises(PublicationError) as exc:review(store,person(),select(a,b))
     assert exc.value.status==404
     assert not any(x["action"]=="analysis.portfolio_compared" for x in store.db.audit_rows("acme",50))
+
+
+def test_conflicting_alternatives_with_same_claimed_basis_are_both_withheld(store):
+    a=store.publish(person(),published(4,source="a"))
+    b=store.publish(person(),published(8,source="c"))
+    c=store.publish(person(),published(9,source="c"))
+    d=store.publish(person(),published(12,source="d"))
+    r=review(store,person(),select(a,b,c,d))
+    assert r["conflicting_claimed_basis_pairs"]==[
+        {"selection_indices":[1,2],"reason":"same_claimed_basis_conflicting_values"}]
+    assert r["comparable_count"]==1
+    assert r["incomparable_count"]==2
+    assert all(not x["changes"] and "portfolio_conflicting_claimed_basis" in x["refusal_reasons"]
+               for x in r["comparisons"][:2])
+    assert r["comparisons"][2]["changes"][0]["change_decimal"]=="8"
+    assert review(store,person(),select(a,b,c,d,baseline=1))["comparable_count"]==0
+
+
+def test_same_source_with_different_spec_is_not_a_portfolio_contradiction(store):
+    a=store.publish(person(),published(4,source="a"))
+    b=store.publish(person(),published(8,source="c"))
+    c=store.publish(person(),published(9,source="c",spec="d"))
+    r=review(store,person(),select(a,b,c))
+    assert r["conflicting_claimed_basis_pairs"]==[]
+    assert r["comparable_count"]==1

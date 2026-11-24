@@ -72,17 +72,40 @@ def review(store,principal,request: PortfolioRequest):
                for d,s in zip(details,request.selections,strict=True)):
             raise PublicationError("A selected revision differs from its reviewed digest; reopen the selections",409)
         base=details[request.baseline_index]
+        # Detect contradictions between alternatives as well as the baseline.
+        # Only compare complete, ungrouped reports of the same claimed basis.
+        contradictions=set()
+        conflicts=[]
+        for i,left in enumerate(details):
+            l=left["snapshot"]
+            for j in range(i+1,len(details)):
+                r=details[j]["snapshot"]
+                fields=("source_content_sha256","analysis_spec_sha256","metric_definition_sha256",
+                        "fingerprint_algorithm","level","columns")
+                if not all(l[k]==r[k] for k in fields):
+                    continue
+                pair=compare_snapshots(left,details[j])
+                if pair["refusal_reasons"]!=["same_fingerprint_but_different_values"]:
+                    continue
+                contradictions.update((i,j))
+                conflicts.append({"selection_indices":[i,j],
+                                  "reason":"same_claimed_basis_conflicting_values"})
         comparisons=[]
         for i,detail in enumerate(details):
             if i==request.baseline_index:
                 continue
             pair=compare_snapshots(base,detail)
+            if i in contradictions or request.baseline_index in contradictions:
+                pair["comparable"]=False
+                pair["changes"]=[]
+                pair["refusal_reasons"]=[*pair["refusal_reasons"],"portfolio_conflicting_claimed_basis"]
             comparisons.append({"selection_index":i,"comparable":pair["comparable"],
                 "refusal_reasons":pair["refusal_reasons"],"changes":pair["changes"],
                 "same_claimed_source":pair["same_claimed_source"],
                 "same_claimed_analysis_spec":pair["same_claimed_analysis_spec"]})
         report={"format":FORMAT,"baseline_index":request.baseline_index,
                 "selections":[_basis(d) for d in details],"comparisons":comparisons,
+                "conflicting_claimed_basis_pairs":conflicts,
                 "comparable_count":sum(p["comparable"] for p in comparisons),
                 "incomparable_count":sum(not p["comparable"] for p in comparisons),
                 "source_independently_verified":False,"case_identities_joined":False,
@@ -91,7 +114,7 @@ def review(store,principal,request: PortfolioRequest):
                 "interpretation":[
                     "Each comparison uses the same explicitly chosen baseline. Exact selected revisions are immutable; current authorization and expiry are checked at review time.",
                     "Only complete ungrouped numeric snapshots with matching specifications, measure definitions, units and metric coverage are compared. Group codes never establish cross-publication identity.",
-                    "Matching source and specification digests are publisher claims, not verification. Different values with an identical claimed source are withheld.",
+                    "Matching source and specification digests are publisher claims, not verification. Conflicting complete numeric reports with the same claimed source and analysis basis are flagged across all selections, even between two alternatives. Comparisons involving conflicting members are withheld.",
                     "Populations may overlap or differ. No aggregation, ranking, savings, intervention effect, case join or execution permission is inferred.",
                     "No case attachments or case-viewer grants are read. Aggregate permissions alone do not authorize access to cases."]}
         report["report_sha256"]=_digest(report)
@@ -103,5 +126,6 @@ def review(store,principal,request: PortfolioRequest):
                     baseline_index=request.baseline_index,
                     comparable_count=report["comparable_count"],
                     incomparable_count=report["incomparable_count"],
+                    conflicting_pair_count=len(conflicts),
                     report_sha256=report["report_sha256"])
         return report
