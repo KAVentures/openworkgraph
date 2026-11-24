@@ -43,6 +43,33 @@ const path=require('node:path');
   await page.locator('#owgCohortMetricRun').click();
   await page.locator('#owgCohortMetricResult').filter({hasText:'matching cases'}).waitFor({timeout:60000});
   assert.match(await page.locator('#owgCohortMetricResult').innerText(),/No raw cases returned/);
+  const [reviewResponse]=await Promise.all([
+    page.waitForResponse(response=>response.url().includes('/evaluate?include_case_values=true')),
+    page.locator('#owgCohortMetricReview').click()
+  ]);
+  assert.equal(reviewResponse.status(),200,await reviewResponse.text());
+  const reviewed=await reviewResponse.json();
+  assert.equal(reviewed.saved_metric.metric_id,savedId);
+  assert.equal(reviewed.case_values.length,reviewed.metric.rows);
+  const caseReview=page.locator('#owgCohortMetricCases');
+  const caseRows=caseReview.locator('tbody tr');
+  await caseRows.first().waitFor();
+  assert.equal(await caseRows.first().locator('td').nth(1).textContent(),reviewed.metric.max);
+  const order=page.locator('#owgCohortMetricCaseOrder');
+  await order.selectOption('lowest');
+  assert.equal(await caseRows.first().locator('td').nth(1).textContent(),reviewed.metric.min);
+  if(reviewed.metric.non_null>25){
+    await caseReview.getByRole('button',{name:'Next case page'}).click();
+    await caseReview.getByRole('status').filter({hasText:/Showing 26–/}).waitFor();
+    await caseReview.getByRole('button',{name:'Previous case page'}).click();
+  }
+  await caseRows.first().getByRole('button',{name:/Open metric case/}).click();
+  await page.locator('#owgEventLogCaseEvents').getByText(/Showing \d+ of \d+ events/).waitFor();
+  await order.selectOption('missing');
+  await caseReview.getByText('No cases in this view.').waitFor();
+  await page.locator('#owgCohortMetricField').selectOption('event_count');
+  assert.equal(await caseReview.locator('table').count(),0);
+  assert.equal(await order.count(),0);
   // A second saved log must not inherit the first log's private metric definitions.
   // Switching back must recover the original definition from authenticated storage.
   const picker=page.locator('#owgEventLogPick');

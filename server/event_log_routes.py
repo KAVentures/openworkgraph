@@ -3152,6 +3152,7 @@ async def event_log_delete_cohort_metric_definition(request: Request, log_id: st
 async def event_log_evaluate_saved_cohort_metric(
     request: Request, log_id: str, metric_id: str,
     case_type: str | None = Query(default=None, max_length=200),
+    include_case_values: bool = Query(default=False),
 ):
     """Evaluate a saved, log-scoped metric without accepting a new expression."""
     _require_dashboard(request)
@@ -3160,7 +3161,8 @@ async def event_log_evaluate_saved_cohort_metric(
         raise HTTPException(422, "cohort is required")
     from . import event_log_saved_cohort_metrics as saved
     response = await run_in_threadpool(
-        _respond, saved.evaluate, log_id, metric_id, body["cohort"], case_type
+        _respond, saved.evaluate, log_id, metric_id, body["cohort"], case_type,
+        include_case_values=include_case_values,
     )
     _require_dashboard(request)
     return response
@@ -3170,13 +3172,15 @@ async def event_log_evaluate_saved_cohort_metric(
 async def event_log_cohort_metric(
     request: Request, log_id: str,
     case_type: str | None = Query(default=None, max_length=200),
+    include_case_values: bool = Query(default=False),
 ):
     """Compute a bounded numeric metric on a saved, explicitly selected case cohort."""
     _require_dashboard(request)
     spec = await _json_body(request, "cohort metric", strict=True, limit=8192)
     from . import event_log_cohort_metrics
     response = await run_in_threadpool(
-        _respond, event_log_cohort_metrics.summarize, log_id, spec, case_type
+        _respond, event_log_cohort_metrics.summarize, log_id, spec, case_type,
+        include_case_values=include_case_values,
     )
     # A session can be revoked while DuckDB is computing the aggregate.
     # Check again before releasing even aggregate-only numeric results.
