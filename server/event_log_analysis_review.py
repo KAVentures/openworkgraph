@@ -36,7 +36,7 @@ def _case_review_digest(conn, log_id: str, spec: dict, source_digest: str) -> st
     })
 
 
-def _bound(log_id: str, spec: Any, page: tuple[int, int] | None = None,
+def _bound(log_id: str, spec: Any, page: tuple[str, int] | None = None,
            expected: str | None = None) -> dict[str, Any]:
     parsed = analysis.parse(spec)
     normalized = parsed.model_dump(mode="json")
@@ -62,6 +62,11 @@ def _bound(log_id: str, spec: Any, page: tuple[int, int] | None = None,
     result["source_content_sha256"] = source_digest
     if case_digest is not None:
         result["case_review_sha256"] = case_digest
+        if page is None:
+            dimensions = len(parsed.dimensions)
+            result["case_review_groups"] = [
+                analysis.case_group_digest(row[:dimensions]) for row in result["rows"]
+            ]
     return result
 
 
@@ -70,12 +75,12 @@ def source_bound(log_id: str, spec: Any) -> dict[str, Any]:
 
 
 def group_cases(log_id: str, body: Any) -> dict[str, Any]:
-    keys = {"spec", "group_index", "offset", "expected_case_review_sha256"}
+    keys = {"spec", "group_sha256", "offset", "expected_case_review_sha256"}
     if not isinstance(body, dict) or set(body) != keys:
-        raise workspace.EventLogWorkspaceError("Provide the reviewed analysis, group index, offset and case review digest.")
-    digest, group, offset = body["expected_case_review_sha256"], body["group_index"], body["offset"]
+        raise workspace.EventLogWorkspaceError("Provide the reviewed analysis, group digest, offset and case review digest.")
+    digest, group, offset = body["expected_case_review_sha256"], body["group_sha256"], body["offset"]
     if (not isinstance(digest, str) or not DIGEST.fullmatch(digest)
-            or type(group) is not int or not 0 <= group < analysis.MAX_ROWS
+            or not isinstance(group, str) or not DIGEST.fullmatch(group)
             or type(offset) is not int or not 0 <= offset <= provenance.MAX_SOURCE_ROWS):
-        raise workspace.EventLogWorkspaceError("Invalid case review digest, group index or offset.")
+        raise workspace.EventLogWorkspaceError("Invalid case review digest, group digest or offset.")
     return _bound(log_id, body["spec"], (group, offset), digest)

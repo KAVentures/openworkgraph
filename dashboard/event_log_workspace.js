@@ -8739,7 +8739,8 @@
         try{
           const page=await(await api(base()+'/analysis/groups/cases',{method:'POST',
             headers:{'Content-Type':'application/json'},body:JSON.stringify({
-              spec:result.spec,group_index:index,offset,expected_case_review_sha256:result.case_review_sha256
+              spec:result.spec,group_sha256:result.case_review_groups[index],offset,
+              expected_case_review_sha256:result.case_review_sha256
             })
           })).json();
           if(!current())return;

@@ -572,13 +572,20 @@ def _unit(measure: Measure, coverage: list[dict[str, Any]], level: str) -> str |
     return {"duration_seconds": "seconds", "events": "events", "distinct_activities": "activities"}[measure.of]
 
 
-def _group_cases(conn, group: tuple[int, int], display_rows: list, columns: list[str],
+def case_group_digest(values: list[Any]) -> str:
+    """Identify exact dimension values, including nulls and complete variants."""
+    encoded = json.dumps(values, ensure_ascii=False, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _group_cases(conn, group: tuple[str, int], display_rows: list, columns: list[str],
                  dimensions: list[str], dimension_params: list, where_sql: str,
                  where_params: list, metric_columns: dict[str, str]) -> dict[str, Any]:
-    index, offset = group
-    if index >= len(display_rows):
+    group_digest, offset = group
+    values = next((list(row[:len(dimensions)]) for row in display_rows
+                   if case_group_digest(list(row[:len(dimensions)])) == group_digest), None)
+    if values is None:
         raise workspace.EventLogWorkspaceError("That group was not present in the reviewed result.")
-    values = list(display_rows[index][:len(dimensions)])
     aliases = [f"d{i}" for i in range(len(dimensions))]
     dimension_select = [f"{sql} AS {alias}" for sql, alias in zip(dimensions, aliases)]
     metrics = list(metric_columns.values())
@@ -604,7 +611,7 @@ def _group_cases(conn, group: tuple[int, int], display_rows: list, columns: list
     }
 
 
-def run(log_id: str, spec: Any, *, control=None, group_page: tuple[int, int] | None = None) -> dict[str, Any]:
+def run(log_id: str, spec: Any, *, control=None, group_page: tuple[str, int] | None = None) -> dict[str, Any]:
     parsed = parse(spec)
     if group_page is not None and parsed.level != "cases":
         raise workspace.EventLogWorkspaceError("Review cases is available for case-level analyses.")

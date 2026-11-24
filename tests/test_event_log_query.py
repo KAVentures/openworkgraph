@@ -65,7 +65,7 @@ def test_review_group_uses_exact_scope_and_rejects_view_changes():
     result = review.source_bound(log, spec)
     assert result["rows"] == [[None, "no rework", 1, 1.0]]
     assert result["rows_truncated"]
-    body = {"spec": result["spec"], "group_index": 0, "offset": 0,
+    body = {"spec": result["spec"], "group_sha256": result["case_review_groups"][0], "offset": 0,
             "expected_case_review_sha256": result["case_review_sha256"]}
     page = review.group_cases(log, body)
     assert page["group"] == {"attribute:missing": None, "has_rework": "no rework"}
@@ -74,7 +74,7 @@ def test_review_group_uses_exact_scope_and_rejects_view_changes():
     assert page["cases"] == [{"case_id": "o1", "duration_seconds": 7200.0,
                               "event_count": 3, "distinct_activities": 3, "metrics": {"checks": 1.0}}]
     with pytest.raises(workspace.EventLogWorkspaceError, match="not present"):
-        review.group_cases(log, {**body, "group_index": 1})
+        review.group_cases(log, {**body, "group_sha256": "0" * 64})
     with pytest.raises(workspace.EventLogWorkspaceError, match="view changed"):
         review.group_cases(log, {**body, "spec": {**spec, "where": {}}})
     hidden.set_hidden(log, {"activities": ["Check"]})
@@ -98,7 +98,7 @@ def test_review_group_paging_is_stable_and_dashboard_only(monkeypatch):
     )["log_id"]
     spec = {"level": "cases", "dimensions": ["first_activity"], "measures": [{"fn": "count"}]}
     result = review.source_bound(log, spec)
-    body = {"spec": spec, "group_index": 0, "offset": 0,
+    body = {"spec": spec, "group_sha256": result["case_review_groups"][0], "offset": 0,
             "expected_case_review_sha256": result["case_review_sha256"]}
 
     monkeypatch.setattr(event_log_routes, "dashboard_session_valid", lambda token: token == "valid")
