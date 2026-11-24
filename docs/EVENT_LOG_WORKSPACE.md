@@ -2904,6 +2904,15 @@ case filter. Send the exact activity pair as `{"segment":["A","B"]}`, with optio
 (default 50). Use the returned `next_after` as `after` to continue. Both routes require a
 dashboard session.
 
+**Download JSON** saves the spectrum as drawn, including the sampled lines. **Download CSV** has
+two kinds of row:
+
+- one `segment` row per segment, with occurrences, the median, 25th, 75th and 95th percentile
+  duration in seconds, and the shares that finish in start order (`fifo_share`) or are released
+  together (`batched_share`);
+- one `period` row per busy period of that segment, with its UTC start, its occurrences by speed
+  class and its median duration.
+
 ## Heuristics net
 
 **Heuristics net** (the heuristics miner of ProM and PM4Py, after Weijters and Ribeiro's Flexible

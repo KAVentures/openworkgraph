@@ -6348,7 +6348,18 @@
     const statusLine=el('div',null,'muted');statusLine.id='owgSpectrumStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgSpectrumResults';
     const review=el('div');review.id='owgSpectrumCaseReview';
-    box.append(run,statusLine,out,review);
+    // A segment row with its duration percentiles and order shares, then its busy periods by speed class.
+    let lastSpectrum=null;
+    const exports=exportButtons('owgSpectrumReport',()=>lastSpectrum,r=>[
+      ['kind','from','to','period_start_utc','occurrences','fast','normal','slow','very_slow','median_seconds',
+        'p25_seconds','p75_seconds','p95_seconds','fifo_share','batched_share'],
+      ...r.segments.flatMap(seg=>[
+        ['segment',seg.from,seg.to,'',seg.occurrences,'','','','',seg.duration_seconds.median,seg.duration_seconds.p25,
+          seg.duration_seconds.p75,seg.duration_seconds.p95,seg.fifo_share,seg.batched_share],
+        ...seg.bins.filter(b=>Object.values(b.counts).some(n=>n)).map(b=>{const c=b.counts;
+          return ['period',seg.from,seg.to,new Date(Date.parse(r.time_origin)+b.bin*r.bin_width_seconds*1000).toISOString(),
+            (c.fast||0)+(c.normal||0)+(c.slow||0)+(c.very_slow||0),c.fast||0,c.normal||0,c.slow||0,c.very_slow||0,b.median_seconds,'','','','',''];})])]);
+    box.append(run,statusLine,out,review,exports.node);
     const pct=x=>x===null?'—':Math.round(x*100)+'%';
     const number=n=>Number(n).toLocaleString();
     const classes=['fast','normal','slow','very_slow'];
@@ -6389,7 +6400,7 @@
     }
     run.onclick=async()=>{
       const generation=state.generation;run.disabled=true;statusLine.textContent='Drawing…';out.replaceChildren();
-      ++reviewTurn;review.replaceChildren();
+      ++reviewTurn;review.replaceChildren();lastSpectrum=null;exports.enable(false);
       try{
         const url=logPath('performance-spectrum',{top:'6',bins:'30'}),r=await getJSON(url);
         if(generation!==state.generation)return;
@@ -6439,6 +6450,7 @@
         }
         out.appendChild(el('div',r.caveat,'muted'));
         statusLine.textContent+=' Time runs from '+stamp(0)+' to '+stamp(span)+'.';
+        lastSpectrum=r;exports.enable(true);
       }catch(error){statusLine.textContent=error.message;}
       finally{run.disabled=false;}};
     return box;
