@@ -800,7 +800,6 @@
         const token=unknown?null:step;
         if (!sequence.length||sequence[sequence.length-1]!==token) sequence.push(token);
       }
-      const seen=new Set();
       for (const token of sequence) if(token) {
         if(!groups.has(token))groups.set(token,new Set());
         groups.get(token).add(row.id);
@@ -810,7 +809,7 @@
         if(!from||!to||from===to)continue;
         const key=JSON.stringify([from,to]);
         if(!edges.has(key))edges.set(key,{from,to,occurrences:0,ids:new Set()});
-        const edge=edges.get(key);edge.occurrences++;edge.ids.add(row.id);seen.add(key);
+        const edge=edges.get(key);edge.occurrences++;edge.ids.add(row.id);
       }
     }
     const all=[...edges.values()].map(e=>({from:e.from,to:e.to,occurrences:e.occurrences,
@@ -898,6 +897,8 @@
       }
     }
     renderSurfaceRoutes(panel, matrix, bundle);
+    renderRunTrace(panel, matrix, bundle);
+    renderAutomationReview(panel, matrix, bundle);
     host.appendChild(panel);
   }
 
@@ -945,6 +946,127 @@
       if(transfers.length>20)section.appendChild(element('p','Additional transfer summaries not displayed.','muted'));
     }
     section.appendChild(element('p','Clipboard values are not included. Review the underlying evidence before proposing direct connector integration.','muted'));
+    panel.appendChild(section);
+  }
+
+  function selectedRunTrace(bundle, id) {
+    const selector=bundle?.selector, provenance=bundle?.provenance;
+    const returned=safeArray(selector?.execution_ids), evidence=safeArray(bundle?.canonical_evidence);
+    if(returned.length!==1||returned[0]!==id||selector?.selected_execution_count!==1||
+      bundle?.canonical_evidence_included!==true||evidence.length!==1||evidence[0]?.execution_id!==id)return null;
+    const run=evidence[0], events=safeArray(run.events);
+    if(events.length>160||!Number.isSafeInteger(run.observed_event_count)||run.observed_event_count<events.length||
+      run.returned_event_count!==events.length||run.events_truncated!==(run.observed_event_count>events.length))return null;
+    const seen=new Set(), rows=[];
+    for(const event of events){
+      if(!event||typeof event.event_ref!=='string'||!/^event:[a-f0-9]{16}$/.test(event.event_ref)||
+        seen.has(event.event_ref)||typeof event.observed_at!=='string'||!Number.isFinite(Date.parse(event.observed_at)))return null;
+      seen.add(event.event_ref);
+      rows.push({ref:event.event_ref,time:event.observed_at.slice(0,64),
+        type:typeof event.event_type==='string'?event.event_type.slice(0,100):'unknown',
+        app:typeof event.app==='string'?event.app.slice(0,100):'Unknown app'});
+    }
+    return {rows,observed:run.observed_event_count,truncated:run.events_truncated,
+      sourceLimited:provenance?.source_limit_reached!==false,
+      membership:run.event_membership_basis==='native_agent_run'?'Native agent run':'Inferred time/session window',
+      nearby:run.nearby_events_may_be_unrelated!==false};
+  }
+
+  function renderRunTrace(panel,matrix,bundle){
+    const section=element('section');section.id='owgExplorerRunTrace';
+    section.appendChild(element('h5','Inspect individual run chronology'));
+    section.appendChild(element('p','Explicitly load the first 160 retained events of a selected execution. Human run membership remains inferred; titles, content, coordinates and metadata are not displayed.','muted'));
+    const label=element('label','Execution ');
+    const select=element('select');
+    matrix.rows.forEach((row,i)=>{const option=element('option','Run '+(i+1));option.value=row.id;select.appendChild(option);});
+    label.appendChild(select);
+    const result=element('div');result.setAttribute('role','status');
+    let generation=0;
+    const loadButton=button('Load selected run events',async()=>{
+      const serial=++generation,id=select.value,requestId=latestEvidenceRequest;
+      const current=()=>serial===generation&&requestId===latestEvidenceRequest&&activeBundle===bundle&&
+        select.value===id&&section.isConnected;
+      result.replaceChildren(element('p','Reading selected run evidence…','muted'));loadButton.disabled=true;
+      try{
+        await window.__owgAuthReady;
+        if(!current())return;
+        const params=new URLSearchParams({...currentWindow,execution_ids:id,max_runs:'1',
+          source_event_limit:'25000',max_events_per_run:'160',include_canonical_evidence:'true'});
+        const response=await fetch('/v1/workflow-evidence?'+params,{cache:'no-store'});
+        if(!response.ok)throw Error('Run evidence unavailable ('+response.status+').');
+        const payload=await response.json();
+        if(!current())return;
+        const trace=selectedRunTrace(payload,id);
+        if(!trace)throw Error('Returned evidence does not match this execution or has invalid coverage.');
+        result.replaceChildren(element('p',trace.rows.length+' of '+trace.observed+' retained events in the selected projection. '+trace.membership+'. '+
+          (trace.nearby?'Nearby events may be unrelated. ':'')+(trace.sourceLimited?'Source limit reached or unknown. ':'')+
+          (trace.truncated?'Later retained events are not displayed.':''),'muted'));
+        const filterLabel=element('label','Filter event type or app ');
+        const filter=element('input');filter.type='search';filterLabel.appendChild(filter);
+        const table=element('table');table.setAttribute('aria-label','Selected run event chronology');
+        const head=element('thead'),header=element('tr');
+        for(const value of ['Observed at','App','Event type','Evidence reference']){
+          const th=element('th',value);th.scope='col';header.appendChild(th);
+        }
+        head.appendChild(header);table.appendChild(head);
+        const body=element('tbody');table.appendChild(body);
+        const refresh=()=>{
+          const q=filter.value.trim().toLowerCase();
+          body.replaceChildren();
+          for(const row of trace.rows.filter(row=>(row.type+' '+row.app).toLowerCase().includes(q))){
+            const tr=element('tr');append(tr,element('td',row.time),element('td',row.app),
+              element('td',row.type),element('td',row.ref));body.appendChild(tr);
+          }
+        };
+        filter.addEventListener('input',refresh);refresh();
+        const scroll=element('div',null,'owg-map-scroll');scroll.appendChild(table);
+        append(result,filterLabel,scroll);
+      }catch(error){if(current())result.replaceChildren(element('p',String(error.message||error),'muted'));}
+      finally{if(current())loadButton.disabled=false;}
+    },true);
+    select.addEventListener('change',()=>{++generation;loadButton.disabled=false;result.replaceChildren();});
+    append(section,label,loadButton,result);panel.appendChild(section);
+  }
+
+  function automationReviewSignals(matrix,bundle){
+    if(!matrix?.completeProjection)return null;
+    const routes=projectedSurfaceRoutes(matrix);
+    const runs=matrix.rows.length;
+    const repeated=[];
+    // Repeated within multiple runs, not merely common across runs.
+    for(const step of matrix.steps){
+      const support=step.occurrences.filter(n=>n>1).length;
+      if(support>=2&&step.token.startsWith('action:'))repeated.push({label:step.label,support});
+    }
+    const shared=matrix.steps.filter(step=>step.support===runs&&runs>=2).length;
+    const variants=new Set(matrix.rows.map(row=>JSON.stringify(row.steps))).size;
+    const transfers=safeArray(bundle?.data_movement?.clipboard_transfers).filter(row=>
+      row?.cross_surface===true&&row.clipboard_contents_observed===false&&
+      Number.isSafeInteger(row.support_runs)&&row.support_runs>=2&&row.support_runs<=runs&&
+      typeof row.source_surface==='string'&&typeof row.destination_surface==='string');
+    return {runs,shared,variants,repeated,transfers:transfers.slice(0,20).map(row=>({
+      from:row.source_surface.slice(0,100),to:row.destination_surface.slice(0,100),support:row.support_runs})),
+      transferSummariesOmitted:Math.max(0,transfers.length-20),routeCount:routes.edges.length,
+      displayedStepCount:matrix.steps.length,omittedSteps:matrix.omitted,sourceLimited:matrix.sourceLimited};
+  }
+
+  function renderAutomationReview(panel,matrix,bundle){
+    const signals=automationReviewSignals(matrix,bundle);
+    if(!signals)return;
+    const section=element('section');section.id='owgExplorerAutomationReview';
+    section.appendChild(element('h5','Automation opportunity review'));
+    section.appendChild(element('p',signals.runs+' selected runs · '+signals.variants+' distinct projected paths · '+signals.shared+
+      ' steps shared by every selected run (displayed step sample). These are investigation signals, not savings or automation eligibility.','muted'));
+    if(signals.omittedSteps||signals.sourceLimited)section.appendChild(element('p','Evidence is bounded or source coverage is unknown. Narrow the scope before generalizing.','muted'));
+    const list=element('ul');
+    if(signals.shared)list.appendChild(element('li','Review shared steps for stable input/output requirements and authorized connector operations.'));
+    if(signals.variants>1)list.appendChild(element('li','Review differing paths for exceptions, missing capture and decisions requiring human clarification.'));
+    for(const row of signals.repeated)list.appendChild(element('li',row.label+' repeats within '+row.support+' runs; investigate whether repetition is required.'));
+    for(const row of signals.transfers)list.appendChild(element('li',row.from+' → '+row.to+' linked transfer in '+row.support+' runs; investigate a direct authorized integration.'));
+    if(signals.transferSummariesOmitted)list.appendChild(element('li',signals.transferSummariesOmitted+' further transfer summaries not displayed.'));
+    if(!list.childNodes.length)list.appendChild(element('li','Insufficient repeated structural evidence; select more examples before proposing automation.'));
+    section.appendChild(list);
+    section.appendChild(element('p','Next: use Review variant for process design to create an editable AS-IS draft, or Review safe agent handoff to confirm the goal, rules, tools and independent outcome checks. No automatic execution or approval follows from these signals.','muted'));
     panel.appendChild(section);
   }
 
@@ -2181,7 +2303,7 @@
   }
 
   // Read-only model exposed for pure Node regression tests; no sensor or server changes.
-  window.__owgWorkflowExplorerModel = {buildLanes, titleFor, readable, observedRunMatrix, runDifference, projectedSurfaceRoutes};
+  window.__owgWorkflowExplorerModel = {buildLanes, titleFor, readable, observedRunMatrix, runDifference, projectedSurfaceRoutes, selectedRunTrace, automationReviewSignals};
   window.owgWorkflowExplorer=Object.freeze({
     showReviewedGroup({bundle,label,workflow_id,revision,window:filter={}}){
       const clusters=safeArray(bundle.structural_alignment?.structural_sequence_variants);
