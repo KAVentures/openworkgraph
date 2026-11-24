@@ -15,7 +15,7 @@
   function clearSourceRuleChecks(){sourceRuleGeneration++;document.getElementById('owgCatalogSourceRuleResult')?.replaceChildren();}
   function clearOrigins(){originGeneration++;document.getElementById('owgCatalogOriginResult')?.replaceChildren();}
   function clearRevisionComparison(){revisionCompareGeneration++;document.getElementById('owgCatalogRevisionCompare')?.replaceChildren();}
-  function changed(invalidateTables=true){editGeneration++;if(invalidateTables&&model?.decision_tables?.length){for(const t of model.decision_tables)t.user_confirmed=false;document.querySelectorAll("input[data-table-confirmation]").forEach(n=>{n.checked=false;});}clearOrigins();clearRevisionComparison();clearSourceRuleChecks();reviewed=false;const check=document.getElementById('owgCatalogReviewed');if(check)check.checked=false;clearShadowReview();clearRuleChecks();}
+  function changed(invalidateTables=true){editGeneration++;document.getElementById('owgCatalogTokenAssurance')?.closest('details')?.dispatchEvent(new Event('owg-token-assurance-clear'));if(invalidateTables&&model?.decision_tables?.length){for(const t of model.decision_tables)t.user_confirmed=false;document.querySelectorAll("input[data-table-confirmation]").forEach(n=>{n.checked=false;});}clearOrigins();clearRevisionComparison();clearSourceRuleChecks();reviewed=false;const check=document.getElementById('owgCatalogReviewed');if(check)check.checked=false;clearShadowReview();clearRuleChecks();}
   function field(parent,title,value,apply,options){
     const label=el('label',title+' '),input=el(options?'select':'input');
     if(options)options.forEach(value=>{const option=el('option',value);option.value=value;input.appendChild(option);});
@@ -445,6 +445,67 @@
     }));
     host.appendChild(section);
   }
+  function renderTokenAssurance(host){
+    if(!record?.workflow_id||!record.revision||!record.content_sha256)return;
+    const section=el('details');section.appendChild(el('summary','Structural execution assurance'));
+    section.appendChild(el('p','Explore possible token schedules of the exact saved revision, excluding unsaved edits. This does not evaluate rules, verify outcomes or authorize execution.'));
+    const result=el('div');result.id='owgCatalogTokenAssurance';result.setAttribute('role','status');
+    let report=null;
+    const download=button('Download structural assurance JSON',()=>{
+      if(!report)return;
+      const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));
+      const a=el('a');a.href=url;a.download='owg-token-assurance-r'+report.reference.revision+'.json';
+      a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    });download.disabled=true;
+    const inspect=button('Analyze saved token flow',async()=>{
+      const selected={workflow_id:record.workflow_id,revision:String(record.revision),content_sha256:record.content_sha256};
+      const generation=editGeneration;
+      const current=()=>result.isConnected&&generation===editGeneration&&record?.workflow_id===selected.workflow_id&&
+        String(record.revision)===selected.revision&&record.content_sha256===selected.content_sha256;
+      report=null;download.disabled=true;inspect.disabled=true;
+      result.replaceChildren(el('p','Exploring bounded structural markings…'));
+      try{
+        const data=await request('/v1/process-catalog/token-assurance?'+new URLSearchParams(selected));
+        if(!current())return;
+        if(data.reference.workflow_id!==selected.workflow_id||String(data.reference.revision)!==selected.revision||
+          data.reference.content_sha256!==selected.content_sha256)throw new Error('Unexpected saved revision reference.');
+        report=data;download.disabled=false;
+        result.replaceChildren(el('h4','Saved revision '+data.reference.revision+' · structural token analysis'),
+          el('p','SHA-256: '+data.reference.content_sha256),
+          el('p',(data.complete?'Complete bounded marking exploration.':'Incomplete exploration ('+data.incomplete_reason+'); missing witnesses remain unknown.')+
+            ' '+data.states_discovered+' markings, '+data.firings_examined+' firings.'),
+          el('p','Completion reachable: '+(data.completion_reachable===null?'unknown':data.completion_reachable?'yes':'no')+
+            ' · Every reachable marking can complete: '+(data.every_reachable_marking_can_complete===null?'unknown':data.every_reachable_marking_can_complete?'yes':'no')),
+          el('p',data.known_deadlock_count+' known dead-end markings · '+data.known_cyclic_component_count+' known cyclic components'+
+            (data.complete?'':' (partial observations, not exact totals)')+'. A cycle permits repeated structural firings; it does not prove an actual endless execution.'),
+          el('p',data.activities_with_complete_witness+' / '+data.activities.length+' nodes and '+
+            data.transitions_with_complete_witness+' / '+data.transitions.length+' transitions have completed structural witnesses.'));
+        const pathText=w=>w?w.node_ids.join(' → ')+(w.truncated?' … [display truncated; '+w.firing_count+' firings]':''):'No completed witness established';
+        if(data.shortest_completion)result.appendChild(el('p','Shortest known completion: '+pathText(data.shortest_completion)));
+        const table=el('table'),thead=el('thead'),head=el('tr'),body=el('tbody');
+        for(const title of ['Transition','Structural coverage','Completed firing witness']){
+          const th=el('th',title);th.scope='col';head.appendChild(th);
+        }
+        thead.appendChild(head);table.append(thead,body);
+        for(const item of data.transitions){
+          const row=el('tr');
+          for(const value of [item.source+' → '+item.target+(item.rule_id?' · '+item.rule_id:''),
+            {complete_witness:'Completed witness',no_complete_witness:'No completed witness',unknown_budget:'Unknown: budget'}[item.status],pathText(item.witness)])
+            row.appendChild(el('td',value));
+          body.appendChild(row);
+        }
+        const scroll=el('div');scroll.style.cssText='overflow-x:auto;max-width:100%;overflow-wrap:anywhere';scroll.appendChild(table);result.appendChild(scroll);
+        for(const item of data.deadlock_examples)result.appendChild(el('p','Dead-end prefix: '+pathText(item.prefix)));
+        for(const item of data.cycle_examples)result.appendChild(el('p','Cycle: '+pathText(item.cycle)+' · prefix: '+pathText(item.prefix)));
+        result.appendChild(el('p','Structural witnesses include gateway firings. Rules and inclusive selections are possibilities, not facts or approved routes.'));
+      }catch(error){if(current())result.replaceChildren(el('p',error.message));}
+      finally{inspect.disabled=false;}
+    });
+    section.append(inspect,download,result);host.appendChild(section);
+    // An edit invalidates both the report and its downloadable snapshot.
+    section.addEventListener('owg-token-assurance-clear',()=>{report=null;download.disabled=true;result.replaceChildren();});
+  }
+
   function renderEditor(){
     clearRevisionComparison();
     clearOrigins();
@@ -506,6 +567,7 @@
       'Inclusive splits run one or more branches: each branch has its own rule, and the join waits for exactly the branches that started. Rules stay unconfirmed until you confirm them. Generated projects check that a plan is a valid token flow and list the rules of the branches it chose; they do not evaluate those rules.'));
     host.appendChild(button('Refresh graph preview',()=>renderEditor()));
     renderDifferenceReview(host);
+    renderTokenAssurance(host);
     const mutate=fn=>{fn();changed();renderEditor();};
     model.activities.forEach((activity,index)=>{
       const row=el('fieldset');row.appendChild(el('legend',activity.id));
