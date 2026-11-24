@@ -184,3 +184,17 @@ with TestClient(app) as client:
     done=subprocess.run([sys.executable,"-c",code],cwd=Path(__file__).resolve().parents[1],
                         env=env,text=True,capture_output=True,timeout=60)
     assert done.returncode==0,done.stdout+done.stderr
+
+
+def test_tied_order_sensitivity_does_not_masquerade_as_verified_order():
+    doc=_deviating()
+    doc["events"].append({"id":"tied-place","type":"Place","time":"2024-01-03T07:00:00Z",
+                          "relationships":[{"objectId":"o3","qualifier":"q"}]})
+    log=_ocel(doc)
+    spec={"model":model.discover(_ocel(_order_to_cash()))["model"],"object_type":"order"}
+    result=lifecycle.review(log,spec)
+    assert result["ambiguous_order_objects"]>=1
+    bounds=result["order_sensitive_fitting_share_bounds"]
+    raw=result["fitting_share_bounds"]
+    assert bounds["lower"]<=raw["lower"]<=raw["upper"]<=bounds["upper"]
+    assert not result["alternative_event_orders_replayed"]

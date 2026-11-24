@@ -92,6 +92,14 @@ def _population(conn, log_id: str, request: Request, model, label_of: dict[str, 
         SELECT o.object_id, count(c.event_id) AS events, min(c.ts) AS first_at, max(c.ts) AS last_at
         FROM objects o LEFT JOIN ce c ON o.object_id=c.case_id
         WHERE o.log_id=? AND o.object_type=? GROUP BY o.object_id""", [log_id, request.object_type])
+    # Distinct activities at the same timestamp have an unresolved order.
+    # Retain the original deterministic replay, but separately quantify
+    # sensitivity to that ordering assumption over the whole population.
+    conn.execute("""CREATE TEMP TABLE lifecycle_order_ties AS
+        SELECT case_id,count(*) AS ambiguous_timestamps FROM (
+            SELECT case_id,ts FROM ce GROUP BY case_id,ts
+            HAVING count(DISTINCT activity)>1
+        ) GROUP BY case_id""")
     conn.execute("""CREATE TEMP TABLE lifecycle_paths AS
         SELECT c.case_id AS object_id, list(c.activity ORDER BY c.ts,c.event_id) AS path
         FROM ce c JOIN lifecycle_counts n ON c.case_id=n.object_id
@@ -119,7 +127,8 @@ def _population(conn, log_id: str, request: Request, model, label_of: dict[str, 
     if rows:
         conn.executemany("INSERT INTO lifecycle_selected VALUES (?)", [(path,) for path,_ in rows])
     conn.execute("""CREATE TEMP TABLE lifecycle_population AS
-        SELECT n.*,p.path,r.variant_sha256,r.fitness,r.missing,r.remaining,
+        SELECT n.*,coalesce(t.ambiguous_timestamps,0) AS ambiguous_timestamps,
+            p.path,r.variant_sha256,r.fitness,r.missing,r.remaining,
             coalesce(r.status,'unknown') AS status,
             CASE WHEN r.status IS NOT NULL THEN NULL
                  WHEN n.events=0 THEN 'no_visible_events'
@@ -128,7 +137,8 @@ def _population(conn, log_id: str, request: Request, model, label_of: dict[str, 
                  ELSE 'replay_budget' END AS unknown_reason
         FROM lifecycle_counts n LEFT JOIN lifecycle_paths p USING(object_id)
         LEFT JOIN lifecycle_replayed r ON p.path=r.path
-        LEFT JOIN lifecycle_selected s ON p.path=s.path""", [ocpm.MAX_TRACE_LENGTH])
+        LEFT JOIN lifecycle_selected s ON p.path=s.path
+        LEFT JOIN lifecycle_order_ties t ON n.object_id=t.case_id""", [ocpm.MAX_TRACE_LENGTH])
     return variants, replay
 
 
@@ -196,7 +206,19 @@ def review(log_id: str, spec: Any) -> dict:
         fitting,deviating,unknown = (counts.get(k,0) for k in ("fitting","deviating","unknown"))
         if fitting+deviating+unknown != registered or fitting+deviating != replay["replayed_cases"]:
             raise workspace.EventLogWorkspaceError("Lifecycle review accounting is inconsistent")
+        tied=dict(conn.execute("""SELECT status,count(*) FROM lifecycle_population
+            WHERE ambiguous_timestamps>0 GROUP BY status""").fetchall())
+        fitting_without_ties=fitting-tied.get("fitting",0)
+        # Count every tied, replayed object as unknown for the sensitivity
+        # interval; this does not claim to enumerate alternate event orders.
+        ordering_unknown=unknown+tied.get("fitting",0)+tied.get("deviating",0)
         base = {"format":FORMAT,"object_type":request.object_type,"review_sha256":digest,
+                "ambiguous_order_objects":sum(tied.values()),
+                "ambiguous_order_objects_by_replay_status":tied,
+                "order_sensitive_fitting_share_bounds":{
+                    "lower":fitting_without_ties/registered if registered else None,
+                    "upper":(fitting_without_ties+ordering_unknown)/registered if registered else None},
+                "alternative_event_orders_replayed":False,
                 "registered_objects":registered,"fitting_objects":fitting,"deviating_objects":deviating,
                 "unknown_objects":unknown,"unknown_reasons":reasons,
                 "fitting_share_bounds":{"lower":fitting/registered if registered else None,

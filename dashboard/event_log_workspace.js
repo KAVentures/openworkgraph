@@ -4043,6 +4043,10 @@
           [result.registered_objects,result.fitting_objects,result.deviating_objects,result.unknown_objects,result.replayed_variants]]),
           el('p','Fitting share across all registered objects: '+(result.fitting_share_bounds.lower==null?'—':
             pct(result.fitting_share_bounds.lower)+' – '+pct(result.fitting_share_bounds.upper)),'note'),
+          el('p',result.ambiguous_order_objects+' objects have different activities at an identical timestamp. Event-ID ordering is deterministic, not verified chronology.','muted'),
+          el('p','Order-sensitive fitting bounds: '+(result.order_sensitive_fitting_share_bounds.lower==null?'—':
+            pct(result.order_sensitive_fitting_share_bounds.lower)+' – '+pct(result.order_sensitive_fitting_share_bounds.upper))+
+            '. All ambiguous replayed objects are treated as uncertain in these bounds; alternate orders were not replayed.','note'),
           table(['Unknown reason','Objects'],Object.entries(result.unknown_reasons)),
           variants,all,fitting,deviations,unknown);
         exportSummary.disabled=false;notice.textContent='Review complete. Evidence pages require the same projected source and model.';
