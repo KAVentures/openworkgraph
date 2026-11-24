@@ -4695,16 +4695,28 @@
   function reworkSection(inspection){
     const box=section('Rework and loops');box.id='owgEventLogRework';
     box.appendChild(el('div','Activities that happen again in the same case, the loops they form, and how cases with rework compare with cases without.','muted'));
+    const limit=select('owgReworkLimit',[['20','20'],['50','50'],['100','100']]);
     const run=button('Find rework','secondary');run.id='owgReworkRun';
     const out=el('div');out.id='owgReworkResults';out.setAttribute('role','status');
-    box.append(run,out);
+    let last=null,revision=0;
+    const exports=exportButtons('owgReworkReport',()=>last,r=>[
+      ['activity','cases_with_activity','cases_repeating','repeat_share','extra_occurrences'],
+      ...r.activities.map(item=>[item.activity,item.cases_with_activity,item.cases_repeating,item.repeat_share_of_cases_with_activity,item.extra_occurrences]),
+      [],['loop_pattern_json','cases'],
+      ...r.loop_patterns.map(item=>[JSON.stringify(item.pattern),item.cases])
+    ]);
+    box.append(field('Maximum activities and loop patterns',limit),run,out,exports.node);
     const generation=state.generation;
+    limit.onchange=()=>{revision++;last=null;exports.enable(false);out.replaceChildren();run.disabled=false;};
     run.onclick=async()=>{
-      run.disabled=true;
+      const ticket=++revision;
+      const current=()=>box.isConnected&&generation===state.generation&&ticket===revision;
+      last=null;exports.enable(false);run.disabled=true;
       try{
-        const cohort=globalCohort(),spec={cohort};if(state.caseType)spec.case_type=state.caseType;
+        const cohort=globalCohort(),spec={cohort,limit:Number(limit.value)};if(state.caseType)spec.case_type=state.caseType;
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/rework',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
-        if(generation!==state.generation)return;
+        if(!current())return;
+        last=r;exports.enable(true);
         const k=r.loop_kinds,c=r.comparison;
         const parts=[el('div',pct(r.rework_rate)+' of '+Number(r.cases).toLocaleString()+' cases repeat at least one activity: '+k.self_loop+' with an immediate repeat, '+k.short_loop+' with a short loop (one step in between), '+k.longer_loop+' with a longer return.')];
         const inspect=(label,selector)=>{
@@ -4717,14 +4729,16 @@
           a.activity,Number(a.cases_repeating).toLocaleString(),pct(a.repeat_share_of_cases_with_activity),Number(a.extra_occurrences).toLocaleString(),
           inspect('cases repeating '+a.activity,{repeat_activity:a.activity})
         ])));
+        parts.push(el('div','Showing '+r.activities.length+' of '+r.distinct_repeated_activities+
+          ' repeated activities and '+r.loop_patterns.length+' of '+r.distinct_loop_patterns+' recorded loop patterns (up to 6 activities).','muted'));
         if(r.loop_patterns.length)parts.push(el('h4','Most common loops'),table(['Loop','Cases','Evidence'],r.loop_patterns.map(p=>[
           p.pattern.join(' → '),Number(p.cases).toLocaleString(),
           inspect('cases with loop '+p.pattern.join(' → '),{loop_pattern:p.pattern})
         ])));
         if(c)parts.push(el('div','Median throughput '+duration(c.median_throughput_with_rework_seconds)+' with rework vs '+duration(c.median_throughput_without_rework_seconds)+' without'+(c.median_difference_ci95_seconds?' (difference 95% interval '+duration(c.median_difference_ci95_seconds[0])+' to '+duration(c.median_difference_ci95_seconds[1])+')':'')+'; '+c.mean_events_with_rework+' vs '+c.mean_events_without_rework+' events per case.'));
         parts.push(el('div',r.interpretation,'muted'));out.replaceChildren(...parts);
-      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
-      finally{run.disabled=false;}
+      }catch(error){if(current())out.replaceChildren(el('div',error.message,'muted'));}
+      finally{if(current())run.disabled=false;}
     };
     return box;
   }
