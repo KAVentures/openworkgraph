@@ -1,6 +1,7 @@
 """Review the case population of a previously displayed local analysis group."""
 from __future__ import annotations
 
+from contextlib import nullcontext
 import re
 from typing import Any
 
@@ -37,28 +38,33 @@ def _case_review_digest(conn, log_id: str, spec: dict, source_digest: str) -> st
 
 
 def _bound(log_id: str, spec: Any, page: tuple[str, int] | None = None,
-           expected: str | None = None) -> dict[str, Any]:
+           expected: str | None = None, *, control=None) -> dict[str, Any]:
     parsed = analysis.parse(spec)
     normalized = parsed.model_dump(mode="json")
     if expected is not None and parsed.level != "cases":
         raise workspace.EventLogWorkspaceError("Review cases is available for case-level analyses.")
-    with workspace._LOCK:
+    # The same reentrant lock covers fingerprint and actual analysis. The job
+    # deadline includes waiting for this lock and the digest computation itself.
+    with control.workspace_lock(workspace._LOCK) if control is not None else workspace._LOCK:
         conn = workspace._connect()
         try:
-            workspace._check_log(conn, log_id)
-            if provenance.source_rows(conn, log_id) > provenance.MAX_SOURCE_ROWS:
-                raise workspace.EventLogWorkspaceError(
-                    "Source exceeds complete fingerprint budget; source-bound export unavailable")
-            source_digest = provenance.source_digest(conn, log_id)
-            case_digest = (_case_review_digest(conn, log_id, normalized, source_digest)
-                           if parsed.level == "cases" else None)
+            with control.connection(conn) if control is not None else nullcontext(conn) as reader:
+                workspace._check_log(reader, log_id)
+                if provenance.source_rows(reader, log_id) > provenance.MAX_SOURCE_ROWS:
+                    raise workspace.EventLogWorkspaceError(
+                        "Source exceeds complete fingerprint budget; source-bound export unavailable")
+                source_digest = provenance.source_digest(reader, log_id)
+                case_digest = (_case_review_digest(reader, log_id, normalized, source_digest)
+                               if parsed.level == "cases" else None)
         finally:
             conn.close()
         if expected is not None and expected != case_digest:
             raise workspace.EventLogWorkspaceError(
                 "The reviewed source or case view changed. Run the analysis again before opening its cases.")
-        result = (analysis.run(log_id, normalized) if page is None
-                  else analysis.run(log_id, normalized, group_page=page))
+        options = {"control": control} if control is not None else {}
+        if page is not None:
+            options["group_page"] = page
+        result = analysis.run(log_id, normalized, **options)
     result["source_content_sha256"] = source_digest
     if case_digest is not None:
         result["case_review_sha256"] = case_digest
@@ -70,8 +76,8 @@ def _bound(log_id: str, spec: Any, page: tuple[str, int] | None = None,
     return result
 
 
-def source_bound(log_id: str, spec: Any) -> dict[str, Any]:
-    return _bound(log_id, spec)
+def source_bound(log_id: str, spec: Any, *, control=None) -> dict[str, Any]:
+    return _bound(log_id, spec, control=control)
 
 
 def group_cases(log_id: str, body: Any) -> dict[str, Any]:

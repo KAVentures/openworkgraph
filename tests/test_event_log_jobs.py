@@ -249,6 +249,19 @@ with TestClient(app) as client:
     result=client.get(url+'/result',headers=h)
     assert result.status_code==200 and result.headers['cache-control']=='no-store',result.text
     assert result.json()['rows']==[[1]]
+    bound=client.post(base+'?source_bound=true',json=spec,headers=h)
+    assert bound.status_code==202,bound.text
+    bound_url=base+'/'+bound.json()['job_id']
+    deadline=time.monotonic()+5
+    while client.get(bound_url,headers=h).json()['state'] in ['queued','running']:
+        assert time.monotonic()<deadline;time.sleep(.01)
+    assert client.get(bound_url,headers=h).json()['source_bound_result_available']
+    assert client.get(bound_url+'/result',headers=other).status_code==404
+    bound_result=client.get(bound_url+'/result',headers=h)
+    assert bound_result.status_code==200,bound_result.text
+    assert len(bound_result.json()['source_content_sha256'])==64
+    assert bound_result.json()['rows']==[[1]]
+    client.post(bound_url+'/delete',headers=h)
     # Revoking the session prevents access even when the job ID is known.
     with local_auth._LOCK:local_auth._DASHBOARD_SESSIONS.pop(token)
     assert client.get(url+'/result',headers=h).status_code in (401,403)
@@ -306,3 +319,63 @@ def test_job_deadline_interrupts_native_work_and_next_job_recovers(jobs,monkeypa
     next_job=jobs.submit('owner',source,SPEC)['job_id']
     assert wait(jobs,source,next_job)['state']=='succeeded'
     assert json.loads(jobs.result('owner',source,next_job))['rows']==[[2]]
+
+
+def test_source_bound_job_runs_once_and_retains_reviewed_result(jobs, monkeypatch):
+    from server import event_log_analysis_review as review
+    source = log()
+    expected = review.source_bound(source, SPEC)
+    original = query.run
+    calls = []
+    def counted(*args, **kwargs):
+        calls.append(args[0])
+        return original(*args, **kwargs)
+    monkeypatch.setattr(query, 'run', counted)
+    made = jobs.submit('owner', source, SPEC, source_bound=True)
+    assert made['source_bound_result_requested']
+    assert not made['source_bound_result_available']
+    status = wait(jobs, source, made['job_id'])
+    assert status['state'] == 'succeeded', status
+    assert status['source_bound_result_available']
+    assert not status['source_version_pinned_at_submission']
+    result = json.loads(jobs.result('owner', source, made['job_id']))
+    assert result == expected
+    assert len(result['source_content_sha256']) == 64
+    assert len(result['case_review_sha256']) == 64
+    assert calls == [source]
+    workspace.append_log(source, BytesIO(b'case,activity,time\n3,C,2024-01-01T00:00:00Z\n'),
+        source_format='csv', mapping={'case_column':'case','activity_column':'activity','timestamp_column':'time'})
+    assert json.loads(jobs.result('owner', source, made['job_id'])) == result
+    assert review.source_bound(source, SPEC)['source_content_sha256'] != result['source_content_sha256']
+
+
+def test_source_bound_job_cancel_interrupts_fingerprint(jobs, monkeypatch):
+    from server import process_discovery_provenance as provenance
+    source = log()
+    entered = threading.Event()
+    def heavy(conn, log_id):
+        entered.set()
+        conn.execute('SELECT sum(sin(a.i+b.i)) FROM range(1000000) a(i),range(1000000) b(i)').fetchone()
+        pytest.fail('fingerprint unexpectedly completed')
+    monkeypatch.setattr(provenance, 'source_digest', heavy)
+    made = jobs.submit('owner', source, SPEC, source_bound=True)
+    assert entered.wait(3)
+    assert jobs.cancel('owner', source, made['job_id'])['state'] == 'cancelled'
+    with pytest.raises(module.JobError):
+        jobs.result('owner', source, made['job_id'])
+    # A separate ordinary query must recover after the cancelled fingerprint.
+    next_job = jobs.submit('owner', source, SPEC)
+    assert wait(jobs, source, next_job['job_id'])['state'] == 'succeeded'
+
+
+def test_source_bound_job_refuses_incomplete_fingerprint(jobs, monkeypatch):
+    from server import process_discovery_provenance as provenance
+    source = log()
+    monkeypatch.setattr(provenance, 'MAX_SOURCE_ROWS', 0)
+    made = jobs.submit('owner', source, SPEC, source_bound=True)
+    status = wait(jobs, source, made['job_id'])
+    assert status['state'] == 'failed'
+    assert not status['source_bound_result_available']
+    assert 'fingerprint budget' in status['error']
+    with pytest.raises(module.JobError):
+        jobs.result('owner', source, made['job_id'])
