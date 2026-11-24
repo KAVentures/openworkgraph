@@ -158,8 +158,8 @@ def _impact(model,index,rule_ids,table_ids,edge_changes,manual,outcomes):
         starts.update(node for node in pair if node in {a.id for a in model.activities})
         if pair in edges:
             guarded_edges.add(pair)
-            # If a decision table exists at this activity it is potentially affected.
-            direct_tables.update(t.id for t in tables.values() if t.decision_activity_id==pair[0])
+        # A removed alternative can affect a surviving decision too.
+        direct_tables.update(t.id for t in tables.values() if t.decision_activity_id==pair[0])
     table_paths = _reach(direct_tables,required_by)
     for ident in table_paths:
         table = tables[ident]
