@@ -155,3 +155,33 @@ Portable project handoff reviews carry only the minimized original/current
 effective input digests and check status, not filter values, case IDs or
 the case index. Changed, unavailable or unrecorded effective inputs remain
 human-review blockers, not automated permission decisions.
+
+### Rediscover a saved selection and review a successor revision
+
+From a saved process revision's exact source reference, **Rediscover current
+data for this selection** runs the existing inductive discovery algorithm
+with the original case notion, cohort and settings. It previews the fresh
+model, original/current model and projection digests, coverage, and differences
+from the saved reviewed graph. It records no new source metadata or design.
+
+**Record refreshed source and prepare successor draft** requires a separate
+explicit retention confirmation and both fresh preview digests. Changes to
+the projected cases or generated graph invalidate the request. The original
+source reference must still resolve and belong to the same saved revision.
+The dashboard checks the latest process revision before and after retention;
+an intervening process edit leaves any recorded metadata separate and opens
+no successor draft. The proposed successor retains the new exact source
+reference, but no inherited business goal, reviewed rules, tool mappings,
+decision tables, manual gates, outcome expectations or approvals. It stays
+unsaved until the existing optimistic revision-save flow receives a new human
+review. Prior designs and their artifacts are unchanged. The unsaved successor
+does not offer the saved-revision project export or pipeline actions until
+saved. No customer action or source-system write occurs.
+
+POST /v1/event-log-discovery/rediscover takes the exact workflow_id and revision
+query parameters and a strict body with reference and expected_process_sha256.
+With retain=true, the local dashboard must also send the confirmed local
+storage header and expected_model_sha256 and expected_projection_sha256.
+Both modes use the original selection server-side; no client-supplied filter
+or replacement graph is accepted. Preview and recording have the same bounded
+source and projection work budgets.
