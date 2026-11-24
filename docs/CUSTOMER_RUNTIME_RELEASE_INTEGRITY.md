@@ -122,3 +122,24 @@ binding, and provider checks before any upgrade. No execution is authorized.
 Tests cover same-design code changes, added/removed paths, upgrades,
 rollbacks, revision reuse, missing pins, changed files, forged manifests
 and the standalone CLI.
+
+
+### Inspect changes to the underlying saved design
+
+The comparison also reports added, removed and modified stable activity,
+transition, business-rule, decision-table and outcome-expectation identities.
+Modified objects list changed top-level field names; the report does not
+copy labels, goals, rule expressions, table contents or other model values.
+A reordered retained identity list is flagged separately. Entry/terminal
+changes and other changed model/contract field names are included. Identity
+strings themselves may contain customer information and should be reviewed
+before sharing the report.
+
+The structural inventory is bounded and rejects duplicate or malformed
+identities. It describes exact JSON changes, not semantic equivalence,
+validity of a newly edited design, or whether customer bindings still work.
+The spec is read with the existing byte bound and checked against its pinned
+digest before interpreting these changes. The single-release verifier also
+uses the same verified specification bytes for parsing rather than reopening
+the spec after hashing it. The check is not a filesystem lock; use dedicated
+directories that are not being modified during review.
