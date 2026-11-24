@@ -897,11 +897,97 @@
         append(panel,controls,result);
       }
     }
+    renderForegroundCoverage(panel, matrix, bundle);
     renderSurfaceRoutes(panel, matrix, bundle);
     renderProjectedPaths(panel, matrix, bundle);
     renderRunTrace(panel, matrix, bundle);
     renderAutomationReview(panel, matrix, bundle);
     host.appendChild(panel);
+  }
+
+  function foregroundCoverageRows(matrix,bundle) {
+    const coverage=bundle?.timing?.per_execution_foreground_coverage;
+    if(coverage?.format!=='openworkgraph.execution-foreground-coverage.v1'||
+      coverage.uncovered_time_is_unknown!==true||coverage.distinct_surface_overlaps_are_unattributed!==true||
+      coverage.active_labor_or_waiting_measured!==false)return null;
+    const rows=safeArray(coverage.runs);
+    if(rows.length!==matrix.rows.length||new Set(rows.map(row=>row?.execution_id)).size!==rows.length||
+      !matrix.rows.every(run=>rows.some(row=>row?.execution_id===run.id)))return null;
+    const seconds=value=>typeof value==='number'&&Number.isFinite(value)&&value>=0;
+    const countValue=value=>Number.isSafeInteger(value)&&value>=0;
+    return matrix.rows.map(run=>{
+      const row=rows.find(r=>r.execution_id===run.id);
+      if(row.actor_kind!==run.actor||!countValue(row.observed_event_count))return null;
+      const base={id:run.id,events:row.observed_event_count,status:row.status};
+      if(['no_retained_foreground_spans','unavailable','not_applicable'].includes(row.status)){
+        if(row.foreground_union_seconds!==null||row.uncovered_window_seconds!==null)return null;
+        return {...base,window:seconds(row.window_seconds)?row.window_seconds:null,covered:null};
+      }
+      const duration=row.window_seconds,covered=row.foreground_union_seconds,
+        overlap=row.overlapping_distinct_surface_seconds,unknown=row.uncovered_window_seconds;
+      if(row.status!=='observed_bounded_coverage'||run.actor!=='human'||
+        ![duration,covered,overlap,unknown,row.exclusive_other_surface_seconds].every(seconds)||
+        !countValue(row.surface_rows_omitted)||!countValue(row.foreground_span_count)||
+        !countValue(row.invalid_span_count)||duration<=0||overlap>covered+0.002||
+        Math.abs(duration-covered-unknown)>0.002)return null;
+      const surfaces=safeArray(row.surface_rows);
+      if(surfaces.length>30||new Set(surfaces.map(item=>item?.surface)).size!==surfaces.length||
+        !surfaces.every(item=>typeof item?.surface==='string'&&item.surface.startsWith('surface:')&&
+          item.surface.length<=240&&seconds(item.exclusive_foreground_seconds)))return null;
+      const allocated=surfaces.reduce((sum,item)=>sum+item.exclusive_foreground_seconds,0)+row.exclusive_other_surface_seconds;
+      if(Math.abs(covered-overlap-allocated)>0.02)return null;
+      return {...base,window:duration,covered,overlap,unknown,surfaces,omitted:row.surface_rows_omitted,
+        other:row.exclusive_other_surface_seconds,invalid:row.invalid_span_count,spans:row.foreground_span_count};
+    });
+  }
+
+  function renderForegroundCoverage(panel,matrix,bundle){
+    const rows=foregroundCoverageRows(matrix,bundle);
+    if(!rows)return; // Older API responses remain supported.
+    const section=element('section');section.id='owgExplorerForegroundCoverage';
+    section.appendChild(element('h5','Recorded foreground coverage by execution'));
+    section.appendChild(element('p','Union of retained foreground spans inside each inferred execution window. Overlapping different surfaces are unattributed; uncovered time is unknown, not idle time, waiting or labor. Runs can overlap; do not sum them as unique time.','muted'));
+    const table=element('table');table.setAttribute('aria-label','Foreground time coverage');
+    const head=element('thead'),header=element('tr');
+    for(const caption of ['Execution','Retained events','Window (s)','Covered (s)','Unknown (s)','Ambiguous overlap (s)']){
+      const th=element('th',caption);th.scope='col';header.appendChild(th);
+    }
+    head.appendChild(header);table.appendChild(head);
+    const body=element('tbody'),show=value=>value===null?'Unknown':String(value);
+    rows.forEach((row,i)=>{
+      const tr=element('tr');
+      const title='Run '+(i+1);
+      if(!row){append(tr,element('td',title),element('td','Unavailable'));tr.lastChild.colSpan=5;}
+      else if(row.covered===null){
+        append(tr,element('td',title),element('td',row.events),element('td',show(row.window)),
+          element('td',row.status==='not_applicable'?'Not applicable':'Not observed'));
+        tr.lastChild.colSpan=3;
+      }else append(tr,element('td',title),element('td',row.events),element('td',show(row.window)),
+        element('td',show(row.covered)),element('td',show(row.unknown)),element('td',show(row.overlap)));
+      body.appendChild(tr);
+    });
+    table.appendChild(body);const scroll=element('div',null,'owg-map-scroll');scroll.appendChild(table);section.appendChild(scroll);
+    const valid=rows.map((row,i)=>({row,i})).filter(({row})=>row&&row.covered!==null);
+    if(valid.length){
+      const label=element('label','Foreground surface breakdown ');
+      const select=element('select');valid.forEach(({i})=>{
+        const opt=element('option','Run '+(i+1));opt.value=String(i);select.appendChild(opt);
+      });label.appendChild(select);
+      const detail=element('div');const labels=bundle?.structural_alignment?.surface_labels||{};
+      const refresh=()=>{
+        const row=rows[Number(select.value)];detail.replaceChildren();
+        if(!row||row.covered===null)return;
+        const list=element('ul');
+        row.surfaces.forEach(item=>list.appendChild(element('li',readable(item.surface,labels)+' · '+item.exclusive_foreground_seconds+' s exclusively attributed')));
+        if(row.omitted)list.appendChild(element('li',row.omitted+' additional surfaces · '+row.other+' s'));
+        if(row.overlap)list.appendChild(element('li','Ambiguous overlap · '+row.overlap+' s'));
+        if(!list.childNodes.length)list.appendChild(element('li','No exclusive foreground attribution.'));
+        detail.appendChild(list);
+        detail.appendChild(element('p',row.spans+' retained spans used; '+row.invalid+' invalid spans ignored. A span outside the retained evidence scope may be missing.','muted'));
+      };
+      select.addEventListener('change',refresh);refresh();append(section,label,detail);
+    }
+    panel.appendChild(section);
   }
 
   function renderSurfaceRoutes(panel, matrix, bundle) {
@@ -2473,7 +2559,7 @@
   }
 
   // Read-only model exposed for pure Node regression tests; no sensor or server changes.
-  window.__owgWorkflowExplorerModel = {buildLanes, titleFor, readable, observedRunMatrix, runDifference, projectedSurfaceRoutes, projectedProcessPaths, observedPathProposal, projectedPathAgentBrief, selectedRunTrace, automationReviewSignals};
+  window.__owgWorkflowExplorerModel = {buildLanes, titleFor, readable, observedRunMatrix, runDifference, projectedSurfaceRoutes, projectedProcessPaths, observedPathProposal, projectedPathAgentBrief, selectedRunTrace, automationReviewSignals, foregroundCoverageRows};
   window.owgWorkflowExplorer=Object.freeze({
     showReviewedGroup({bundle,label,workflow_id,revision,window:filter={}}){
       const clusters=safeArray(bundle.structural_alignment?.structural_sequence_variants);
