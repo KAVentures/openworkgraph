@@ -717,6 +717,126 @@
     const ids = lane ? safeArray(lane.ids) : safeArray(candidate.execution_ids);
     return ids.filter(id => /^execution:[a-zA-Z0-9_-]+$/.test(String(id))).slice(0, 12);
   }
+  // Inspect the selected executions themselves, rather than only aggregate lanes.
+  // Missing steps are not observed in the supplied projection, not proven omissions.
+  function observedRunMatrix(bundle, requestedIds) {
+    const ids = safeArray(requestedIds);
+    const returned = safeArray(bundle?.selector?.execution_ids);
+    const runs = safeArray(bundle?.executions);
+    const validId = id => typeof id === 'string' && /^execution:[a-zA-Z0-9_-]+$/.test(id);
+    if (!ids.length || ids.length > 12 || !ids.every(validId) ||
+        new Set(ids).size !== ids.length || returned.length !== ids.length ||
+        new Set(returned).size !== ids.length || !ids.every(id => returned.includes(id)) ||
+        bundle?.selector?.selected_execution_count !== ids.length ||
+        runs.length !== ids.length || new Set(runs.map(r => r?.execution_id)).size !== ids.length ||
+        !ids.every(id => runs.some(r => r?.execution_id === id))) return null;
+    const labels = bundle?.structural_alignment?.surface_labels || {};
+    const rows = ids.map(id => {
+      const run = runs.find(r => r.execution_id === id);
+      const raw = safeArray(run.steps);
+      const valid = raw.length > 0 && raw.length <= 160 &&
+        raw.every(step => typeof step === 'string' && step.length > 0 && step.length <= 240);
+      const duration = typeof run.duration_seconds === 'number' &&
+        Number.isFinite(run.duration_seconds) && run.duration_seconds >= 0 ? run.duration_seconds : null;
+      return {id, actor: ['human','agent'].includes(run.actor_kind) ? run.actor_kind : 'unknown',
+        outcome: typeof run.outcome_status === 'string' ? run.outcome_status.slice(0,80) : 'unknown',
+        duration, steps: valid ? raw.slice() : null};
+    });
+    const completeProjection = rows.every(r => r.steps !== null);
+    const counts = new Map();
+    if (completeProjection) for (const row of rows) for (const step of new Set(row.steps))
+      counts.set(step, (counts.get(step) || 0) + 1);
+    const ordered = [...counts].sort((a,b) => b[1]-a[1] || a[0].localeCompare(b[0]));
+    const steps = ordered.slice(0,40).map(([token,support]) => ({
+      token, label:readable(token,labels), support,
+      occurrences:rows.map(row=>row.steps.filter(step=>step===token).length)
+    }));
+    return {rows, steps, omitted:Math.max(0,ordered.length-steps.length),
+      completeProjection, sourceLimited:bundle?.provenance?.source_limit_reached !== false ||
+        bundle?.provenance?.truncated === true};
+  }
+
+  function runDifference(matrix, baseline, target) {
+    if (!matrix?.completeProjection || baseline === target) return null;
+    const a = matrix.rows.find(row=>row.id===baseline), b = matrix.rows.find(row=>row.id===target);
+    if (!a || !b) return null;
+    const left = {structural:a.steps, steps:a.steps};
+    const right = {structural:b.steps, steps:b.steps};
+    const aligned = alignObservedVariants(left,right);
+    const shared = aligned.filter(row=>row.kind==='shared').length;
+    return {shared, onlyA:a.steps.length-shared, onlyB:b.steps.length-shared,
+      elapsedDifference:a.duration===null||b.duration===null||a.actor!==b.actor||a.actor==='unknown'
+        ? null : b.duration-a.duration};
+  }
+
+  function renderObservedRunMatrix(host, bundle, ids) {
+    const matrix = observedRunMatrix(bundle,ids);
+    if (!matrix) return;
+    const panel = element('section');
+    panel.id = 'owgExplorerRunMatrix';
+    panel.setAttribute('aria-label','Selected execution comparison');
+    panel.appendChild(element('h4','Compare selected executions'));
+    panel.appendChild(element('p','These are bounded, inferred execution projections, not verified business cases or employee performance. Elapsed duration includes unobserved time; outcome labels are observations only.','muted'));
+    if(matrix.sourceLimited) panel.appendChild(element('p','Source coverage is limited or unknown. Missing steps may reflect missing capture.','muted'));
+    const table = element('table');
+    table.setAttribute('aria-label','Selected execution inventory');
+    const head = element('thead'), header = element('tr');
+    for(const label of ['Execution','Actor','Elapsed seconds','Projected steps','Observed outcome']) {
+      const th=element('th',label);th.scope='col';header.appendChild(th);
+    }
+    head.appendChild(header);table.appendChild(head);
+    const body=element('tbody');
+    matrix.rows.forEach((row,i)=>{
+      const tr=element('tr');
+      append(tr,element('td','Run '+(i+1)+' · '+row.id),
+        element('td',row.actor),element('td',row.duration===null?'Unknown':String(Math.round(row.duration*1000)/1000)),
+        element('td',row.steps===null?'Unavailable':row.steps.length),element('td',row.outcome));
+      body.appendChild(tr);
+    });
+    table.appendChild(body);
+    const scroll=element('div',null,'owg-map-scroll');scroll.appendChild(table);panel.appendChild(scroll);
+    if (!matrix.completeProjection) {
+      panel.appendChild(element('p','Step comparison unavailable for one or more runs; no missing projection is counted as zero.','muted'));
+    } else {
+      panel.appendChild(element('h5','Step occurrence across selected runs'));
+      panel.appendChild(element('p','Counts include repeated projected steps. Zero means not observed in this projection, not proof that a step was skipped.','muted'));
+      const grid=element('table');grid.setAttribute('aria-label','Projected step occurrence matrix');
+      const gh=element('thead'),gr=element('tr');
+      for(const label of ['Step','Runs with step',...matrix.rows.map((_,i)=>'Run '+(i+1))]){
+        const th=element('th',label);th.scope='col';gr.appendChild(th);
+      }
+      gh.appendChild(gr);grid.appendChild(gh);
+      const gb=element('tbody');
+      for(const step of matrix.steps){
+        const tr=element('tr');const th=element('th',step.label);th.scope='row';
+        append(tr,th,element('td',step.support+'/'+matrix.rows.length),
+          ...step.occurrences.map(n=>element('td',n)));gb.appendChild(tr);
+      }
+      grid.appendChild(gb);const gs=element('div',null,'owg-map-scroll');gs.appendChild(grid);panel.appendChild(gs);
+      if(matrix.omitted)panel.appendChild(element('p',matrix.omitted+' additional distinct steps not displayed.','muted'));
+      if(matrix.rows.length>1){
+        const controls=element('div',null,'owg-explorer-actions');
+        const makeSelect=(label,index)=>{
+          const wrap=element('label',label+' '),select=element('select');
+          matrix.rows.forEach((row,i)=>{const option=element('option','Run '+(i+1));option.value=row.id;select.appendChild(option);});
+          select.value=matrix.rows[index].id;wrap.appendChild(select);controls.appendChild(wrap);return select;
+        };
+        const a=makeSelect('Baseline',0),b=makeSelect('Comparison',1);
+        const result=element('p');result.setAttribute('role','status');
+        const refresh=()=>{
+          const difference=runDifference(matrix,a.value,b.value);
+          result.textContent=difference?'Shared ordered steps: '+difference.shared+
+            '; only in baseline projection: '+difference.onlyA+'; only in comparison projection: '+difference.onlyB+
+            '. Elapsed difference (comparison minus baseline): '+(difference.elapsedDifference===null?'Unknown or unlike actor types':String(Math.round(difference.elapsedDifference*1000)/1000)+' s')+
+            '. Structural differences are not causes or required process changes.':'Choose different executions.';
+        };
+        a.addEventListener('change',refresh);b.addEventListener('change',refresh);refresh();
+        append(panel,controls,result);
+      }
+    }
+    host.appendChild(panel);
+  }
+
   async function inspect(candidate, lane, preserveComparison = false) {
     const output = document.getElementById('owgExplorerEvidence');
     if (!output) return;
@@ -758,6 +878,7 @@
         (bundle.provenance && bundle.provenance.source_limit_reached ?
           'Source limit reached; earlier evidence may be absent. ' : '') +
         'Observed completion does not verify the real business outcome. Use the existing Evidence and AI export views for canonical traces.', 'muted'));
+      renderObservedRunMatrix(output, bundle, ids);
       return bundle;
     } catch (error) {
       if (requestId !== latestEvidenceRequest || selectedId !== candidate.candidate_cluster_id) return;
@@ -1949,7 +2070,7 @@
   }
 
   // Read-only model exposed for pure Node regression tests; no sensor or server changes.
-  window.__owgWorkflowExplorerModel = {buildLanes, titleFor, readable};
+  window.__owgWorkflowExplorerModel = {buildLanes, titleFor, readable, observedRunMatrix, runDifference};
   window.owgWorkflowExplorer=Object.freeze({
     showReviewedGroup({bundle,label,workflow_id,revision,window:filter={}}){
       const clusters=safeArray(bundle.structural_alignment?.structural_sequence_variants);
