@@ -846,8 +846,10 @@
     dependencyScheduleHost.setAttribute('aria-live','polite');
     dependencyScheduleButton.onclick=async()=>{
       dependencyScheduleButton.disabled=true;
+      const generation=refreshGeneration;
       try{
         const r=await (await api('/v1/automation-pipeline/dependency-schedule')).json();
+        if(generation!==refreshGeneration)return;
         if(!Array.isArray(r.risk_candidates)||typeof r.active_ideas!=='number')
           throw new Error('Unexpected dependency schedule review');
         const name=id=>(latestIdeas.find(idea=>idea.idea_id===id)||{}).title||id;
@@ -899,7 +901,7 @@
             ' have target quarters; '+r.risk_candidates.length+' candidates shown.','muted'),
           ...(r.risk_candidates.length?[lines]:[]),
           el('p',caveat,'muted'),el('p',r.interpretation,'muted'),wavesHost);
-      }catch(e){dependencyScheduleHost.replaceChildren(el('p',e.message,'muted'));}
+      }catch(e){if(generation===refreshGeneration)dependencyScheduleHost.replaceChildren(el('p',e.message,'muted'));}
       finally{dependencyScheduleButton.disabled=false;}
     };
     card.append(row,resumeSection,auditSection,tools,planningFilters,status,counts,portfolioButton,portfolioHost,benefitOverlapButton,benefitOverlapHost,benefitReadinessButton,benefitReadinessHost,dependencyScheduleButton,dependencyScheduleHost,viewCount,list,comparison,detail);
@@ -1311,6 +1313,7 @@
 
     async function refresh(){
       clearCumulative('Portfolio review cleared; explicitly check again after the list refresh.');
+      if(dependencyScheduleHost.childNodes.length)dependencyScheduleHost.replaceChildren(el('p','Dependency review cleared; run it again after the portfolio refresh.','muted'));
       const generation=++refreshGeneration;
       const requested=filter.value;
       loadedState=currentView=null;shortlistLink.disabled=shortlistJson.disabled=true;
