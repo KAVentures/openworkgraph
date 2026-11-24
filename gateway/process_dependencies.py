@@ -2,6 +2,7 @@
 import json
 
 from shared.process_dependencies import Saved, MAX_REVISIONS, MAX_ROOTS, MAX_PROCESSES, MAX_LINKS, content_digest, topology, impact
+from shared.process_dependency_reassessment import reassessment
 from .process_collaboration import ProcessCollaborationError as Error, _now
 from .process_hierarchies import ProcessHierarchies
 
@@ -157,6 +158,7 @@ class ProcessDependencies:
                 item=items[edge['consumer']];d=item['dependencies'];link=next(link for link in d['links'] if link['id']==edge['link_id'])
                 edge.update(consumer_process=d['root_process'],prerequisite_process=link['prerequisite'],
                     declaration_revision=item['revision'],declaration_sha256=item['content_sha256'])
+            graph['reassessment_worklist']=reassessment(graph,items)
             result['graph']=graph;result['current_basis']=bool(items) and all(n['current_declared_basis'] for n in nodes)
             result['status']='empty' if not items else 'current_declared_basis' if result['current_basis'] else 'needs_reassessment'
             if focus:
