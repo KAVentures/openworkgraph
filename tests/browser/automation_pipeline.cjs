@@ -343,6 +343,14 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    assert.equal(manifest.project_id,projectResponse.headers()['x-owg-project-id']);
    await page.locator('#owgPipelineProjects').getByRole('status').filter({hasText:'Project downloaded.'}).waitFor();
    await page.locator('#owgPipelineProjects li').filter({hasText:'current idea revision'}).waitFor();
+   const archiveFile=page.locator('#owgPipelineArchiveReviewFile');
+   await archiveFile.setInputFiles({name:'original.zip',mimeType:'application/zip',buffer:zipBytes});
+   await page.getByRole('button',{name:'Verify original project ZIP',exact:true}).click();
+   await page.getByText('Exact retained project ZIP matches',{exact:false}).waitFor();
+   await page.getByText('generated files match the complete release inventory',{exact:false}).waitFor();
+   await archiveFile.setInputFiles({name:'changed.zip',mimeType:'application/zip',buffer:Buffer.concat([zipBytes,Buffer.from(' ')])});
+   await page.getByRole('button',{name:'Verify original project ZIP',exact:true}).click();
+   await page.getByText('archive does not match one retained project export for this idea',{exact:false}).waitFor();
    const [sameProject]=await Promise.all([page.waitForEvent('download'),page.locator('#owgPipelineProjectDownload').click()]);
    assert.deepEqual(await fs.readFile(await sameProject.path()),zipBytes);
    await page.locator('#owgPipelineProjects').getByRole('status').filter({hasText:'Project downloaded.'}).waitFor();
