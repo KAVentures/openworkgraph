@@ -1519,6 +1519,19 @@ not even on handover edges. Handover counts say who touched a case next, not who
 responsible or how well anyone worked. One million events are analysed in seconds
 (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_organization.py`).
 
+**Download network (GraphML)** saves the same network for Gephi, yEd or Cytoscape
+(`GET /v1/event-logs/{log_id}/organization.graphml`, with the same parameters as `organization`):
+
+- one node per resource, with its event, case and activity counts and its kind;
+- directed `handover` and `subcontracting` edges;
+- `working_together` edges weighted by shared cases. Their `symmetric` attribute is true and
+  their direction carries no meaning; the graph stays directed so networkx and other strict
+  readers load it.
+
+Resources stay pseudonymous unless **Show resource names** is checked, and the file says which.
+No duration, speed or score is added. Node identifiers are generated, and labels are escaped XML
+text. The `X-OWG-Network` header counts resources and edges and states the naming choice.
+
 ### Roles
 
 "Discover roles" groups resources that perform a similar mix of activities. This is organizational
