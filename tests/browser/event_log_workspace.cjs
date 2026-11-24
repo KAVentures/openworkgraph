@@ -1500,7 +1500,7 @@ const path=require('node:path');
    await page.locator('#owgEventLogAnalyze').click();
    await page.locator('#owgSignalName').fill('Open age, not idle time');
    await page.locator('#owgSignalCondition').selectOption('open_longer_than');
-   await page.locator('#owgSignalHours').fill('48');await page.locator('#owgSignalEnds').fill('Close');
+   await page.locator('#owgSignalHours').fill('48');await page.locator('#owgSignalEnds').fill('Close');await page.locator('#owgSignalAddEnd').click();
    await page.locator('#owgSignalAdd').click();
    await page.locator('#owgSignalStatus').filter({hasText:'Signal saved.'}).waitFor();
    const firstAgeResponse=page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/signals/evaluate'));

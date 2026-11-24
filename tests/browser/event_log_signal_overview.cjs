@@ -254,6 +254,31 @@ const path=require('node:path');
     const evaluated=page.locator('#owgSignalResults tbody tr').filter({hasText:'Closed cohort'});
     await evaluated.getByText('no',{exact:true}).waitFor();
     await evaluated.getByText('1 case',{exact:true}).waitFor();
+    // Completion labels are literal: punctuation and whitespace must survive preview and save.
+    await page.locator('#owgSignalName').fill('Exact completion');
+    await page.locator('#owgSignalKind').selectOption('cases');
+    await page.locator('#owgSignalCondition').selectOption('open_longer_than');
+    await page.locator('#owgSignalHours').fill('1');
+    await page.locator('#owgSignalEnds').fill('Close');
+    await page.locator('#owgSignalAddEnd').click();
+    await page.locator('#owgSignalEnds').fill('Close, archived');
+    await page.locator('#owgSignalAddEnd').click();
+    await page.locator('#owgSignalEnds').fill('  Exact  ');
+    await page.locator('#owgSignalAddEnd').click();
+    const [checked]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/signals/preview')),
+      page.locator('#owgSignalPreview').click()]);
+    assert.deepEqual(checked.request().postDataJSON().when.end_activities,['Close','Close, archived','  Exact  ']);
+    await preview.getByText(/Would (trigger|stay clear)/).waitFor();
+    await page.getByRole('button',{name:'Remove signal end activity   Exact  '}).click();
+    assert.equal(await preview.textContent(),'');
+    await page.locator('#owgSignalEnds').fill('Unadded');
+    await page.locator('#owgSignalAdd').click();
+    await page.locator('#owgSignalStatus').getByText('Add the entered end activity before continuing.').waitFor();
+    await page.locator('#owgSignalEnds').fill('');
+    const [created]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/signals')&&r.request().method()==='POST'),
+      page.locator('#owgSignalAdd').click()]);
+    assert.deepEqual(created.request().postDataJSON().when.end_activities,['Close','Close, archived']);
+    await page.locator('#owgSignalRules tr').filter({hasText:'Exact completion'}).getByText(/Close, archived/).waitFor();
     await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
     const audit=await page.evaluate(()=>window.axe.run(document.querySelector('#owgEventLogSignals'),{
       runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']}
