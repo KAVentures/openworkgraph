@@ -113,7 +113,7 @@ const path=require('node:path');
      window.__owgOriginalDraftObserved=window.owgProcessCatalog.draftObserved;
      window.owgProcessCatalog.draftObserved=source=>{window.__owgCapturedProjectedDraft=source;return true;};
    });
-   await projectedPaths.getByRole('checkbox').check();
+   await projectedPaths.getByRole('checkbox',{name:/I reviewed this selected projected path/}).check();
    await draftSelected.click();
    const captured=await page.evaluate(()=>{
      const result=window.__owgCapturedProjectedDraft;
@@ -125,6 +125,17 @@ const path=require('node:path');
    assert.deepEqual(captured,{path:['open','review','open'],count:1,
      basis:'selected_observed_variant',evidenceRefs:['execution:compare_right']});
    assert.equal(await draftSelected.isDisabled(),true);
+   const planning=projectedPaths.getByRole('group',{name:'Prepare selected path for an AI agent'});
+   const copyPlanning=planning.getByRole('button',{name:'Copy selected-path agent planning request'});
+   assert.equal(await copyPlanning.isDisabled(),true);
+   await planning.getByLabel('Business goal').fill('Resolve case');
+   await planning.getByLabel('Authoritative source or tool').fill('Case API');
+   await planning.getByLabel('Decision rules, exceptions or unknowns').fill('Ask about exceptions');
+   await planning.getByLabel('Independent outcome check').fill('Read back status');
+   await planning.getByRole('checkbox').check();
+   assert.equal(await copyPlanning.isEnabled(),true);
+   await planning.getByLabel('Business goal').fill('Resolve selected case');
+   assert.equal(await copyPlanning.isDisabled(),true);
    await audit(page,'#owgWorkflowExplorer','Selected execution workbench');
    await page.unroute('**/v1/workflow-evidence?*');
    await page.route('**/v1/workflow-evidence?*',route=>{
