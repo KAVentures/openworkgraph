@@ -618,4 +618,38 @@ class DependentDecisionPlanning(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.tools.calls)
 
 
+class DeclaredDependencyScenarioCases(unittest.TestCase):
+    def test_dependency_review_uses_declared_facts_and_effective_dates(self):
+        from review_facts import review_scenarios
+        from execute import reference
+        spec,plan,case,bindings=dependent_fixture()
+        raw=spec['process_model']
+        # Test real numeric business facts, outside the live-source contract.
+        for rule in raw['business_rules']:
+            if rule['id'] in ('open_rule','merged_rule'):
+                rule['predicate']={'conditions':[{'path':'/credit/score',
+                    'operator':'gte' if rule['id']=='open_rule' else 'lt','expected':700}]}
+        spec['process_model']=ProcessModel.model_validate(raw).model_dump()
+        spec['process_model_sha256']=digest(spec['process_model'])
+        suite={'format':'openworkgraph.reviewed-shadow-cases.v1','process_reference':reference(spec),
+            'spec_sha256':digest(spec),'reviewed_by_customer':True,'case_inputs_authorized':True,
+            'cases':[]}
+        for i,(facts,path) in enumerate([({'credit':{'score':750}},plan['activity_ids']),
+                ({'credit':{'score':650}},['choose','hold']),({},None),
+                ({'credit':{'score':750},'decisions':{'first':'hold'}},None)],1):
+            suite['cases'].append({'id':f'case_{i}','category':'normal' if path else 'missing_facts',
+                'input':facts,'expected':{'status':'proposal' if path else 'needs_clarification',
+                    'accepted_routes':[path] if path else [],'review_confirmed':True}})
+        report=review_scenarios(spec,suite,as_of_date='2026-06-01')
+        self.assertEqual(report['matching_case_count'],4)
+        rows=report['cases']
+        self.assertEqual(rows[0]['search_status'],'unique_supported_route')
+        self.assertEqual(rows[2]['search_status'],'unresolved_routes')
+        self.assertEqual(next(r for r in rows[3]['decision_checks'] if r['table_id']=='second_decision')['status'],
+            'dependency_fact_conflict')
+        expired=review_scenarios(spec,suite,as_of_date='2100-01-01')
+        self.assertEqual(expired['matching_case_count'],2)
+        self.assertTrue(expired['review_required'])
+        self.assertFalse(expired['execution_plan_created'])
+
 if __name__=='__main__':unittest.main()
