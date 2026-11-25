@@ -253,6 +253,34 @@ def _changed_ids(before,after,key):
     return sorted(k for k in a.keys()|b.keys() if a.get(k)!=b.get(k))
 
 
+def _coverage_delta(before,after):
+    def inventory(report):
+        cov=report['scenario_coverage']
+        result={}
+        for a in cov['activities']:
+            result[('activity',a['activity_id'])]=a['reviewed_matching_cases']
+        for e in cov['transitions']:
+            result[('transition',e['source_activity_id'],e['target_activity_id'])]=e['reviewed_matching_cases']
+        for t in cov['decision_tables']:
+            for r in t['rows']:
+                result[('decision_row',t['table_id'],r['row_id'],r['target_activity_id'])]=r['reviewed_matching_route_cases']
+        return result
+    old,new=inventory(before),inventory(after)
+    def item(key):
+        return {'kind':key[0],'ids':list(key[1:]),'baseline_matching_cases':old.get(key),
+                'candidate_matching_cases':new.get(key)}
+    common=old.keys()&new.keys()
+    return {'lost_matching_support':[item(k) for k in sorted(common) if old[k]>0 and new[k]==0],
+        'gained_matching_support':[item(k) for k in sorted(common) if old[k]==0 and new[k]>0],
+        'added_without_matching_support':[item(k) for k in sorted(new.keys()-old.keys()) if new[k]==0],
+        'removed_items':[item(k) for k in sorted(old.keys()-new.keys())],
+        'baseline_transition_basis':before['scenario_coverage']['transition_basis'],
+        'candidate_transition_basis':after['scenario_coverage']['transition_basis'],
+        'comparison_complete':not any(r['scenario_coverage']['incomplete_search_case_ids'] or
+            r['scenario_coverage']['route_replay_unknown_case_ids'] for r in (before,after)),
+        'interpretation':'Matching scenario support only; stable identifiers do not prove unchanged business semantics.'}
+
+
 def compare_scenarios(before_spec,after_spec,before_suite,after_suite,*,as_of_date):
     """Compare design behavior with one evaluator, never execute the two releases."""
     as_of_date=_as_of(as_of_date)
@@ -301,6 +329,7 @@ def compare_scenarios(before_spec,after_spec,before_suite,after_suite,*,as_of_da
             'changed_decision_table_ids':_changed_ids(a['decision_checks'],b['decision_checks'],'table_id'),
             'review_required':not complete or new_match is not True or behavior_changed is True
                 or changed_expectation})
+    coverage_delta=_coverage_delta(old_report,new_report)
     groups={}
     for row in rows:
         groups.setdefault(row['category'],Counter())[row['classification']]+=1
@@ -316,7 +345,9 @@ def compare_scenarios(before_spec,after_spec,before_suite,after_suite,*,as_of_da
         'by_category':{k:dict(sorted(v.items())) for k,v in sorted(groups.items())},
         'changed_expectation_count':sum(r['expectation_changed'] for r in rows),
         'changed_route_behavior_count':sum(r['route_behavior_changed'] is True for r in rows),
-        'cases':rows,'review_required':any(r['review_required'] for r in rows),
+        'cases':rows,'coverage_delta':coverage_delta,
+        'review_required':any(r['review_required'] for r in rows) or not coverage_delta['comparison_complete']
+            or bool(coverage_delta['lost_matching_support'] or coverage_delta['added_without_matching_support']),
         'identical_case_facts_and_date':True,'same_evaluator_used_for_both_revisions':True,
         'historical_release_code_executed':False,'release_runtime_compatibility_verified':False,
         'case_values_included':False,'source_reads_performed':False,'model_invoked':False,
@@ -351,18 +382,27 @@ def main(argv=None):
     parser.add_argument('--as-of-date',required=True)
     parser.add_argument('--output',required=True)
     parser.add_argument('--confirm-declared-fact-review',action='store_true')
+    parser.add_argument('--require-all-declared-items-covered',action='store_true',
+        help='Require matching scenario support for every declared activity, transition and decision row (single revision only)')
     args=parser.parse_args(argv)
     if not args.confirm_declared_fact_review or Path(args.output).exists():
         raise ImplementationError('Confirm local declared-fact review and select a new output file')
     comparison=[args.baseline_release,args.candidate_release,args.baseline_manifest_sha256,
                 args.candidate_manifest_sha256,args.baseline_cases]
     if any(v is not None for v in comparison):
+        if args.require_all_declared_items_covered:
+            raise ImplementationError('Use single-revision review for the complete declared-item coverage requirement')
         if not all(comparison):
             raise ImplementationError('Supply both release directories, independent manifest pins and both reviewed suites')
         result=compare_releases(*comparison[:4],load_object(args.baseline_cases,limit=MAX_INPUT_BYTES),
             load_object(args.cases,limit=MAX_INPUT_BYTES),as_of_date=args.as_of_date)
     else:
         result=review_scenarios(load_spec(),load_object(args.cases,limit=MAX_INPUT_BYTES),as_of_date=args.as_of_date)
+    if not any(comparison):
+        coverage=result['scenario_coverage']
+        coverage['strict_coverage_requested']=args.require_all_declared_items_covered
+        if args.require_all_declared_items_covered and not coverage['all_declared_items_have_reviewed_matching_support']:
+            result['review_required']=True
     # Serialize before opening the output to avoid creating a partial report
     # because of an invalid or oversized result.
     raw=json.dumps(result,indent=2,ensure_ascii=False,allow_nan=False)
