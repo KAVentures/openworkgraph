@@ -23,6 +23,7 @@ MAX_INPUT_BYTES=262144
 MAX_REPORT_BYTES=2*1024*1024
 MAX_CASES=50
 MAX_BATCH_WORK=500000
+MAX_COVERAGE_REPLAY_WORK=500000
 
 
 def _as_of(value):
@@ -108,21 +109,29 @@ def _scenario_coverage(spec,cases,rows):
     token=spec.get('control_flow_contract')=='openworkgraph.parallel-node-firing-plan.v1'
     # A token order is not an adjacency path. Replay returns the union of
     # viable histories and their intersection; strict coverage uses only guaranteed edges.
-    paths={}
+    paths={};replay_work=0;replay_budget_exhausted=False
     if token:
         from owg_model.process_model import ProcessModel
-        from owg_model.process_parallel import replay_node_ids
+        from owg_model.process_parallel import replay_node_ids, MAX_FIRING_REPLAY_WORK
         graph=ProcessModel.model_validate(model)
     def route_edges(path):
+        nonlocal replay_work,replay_budget_exhausted
         key=tuple(path)
         if key not in paths:
             if token:
+                allowance=min(MAX_FIRING_REPLAY_WORK,MAX_COVERAGE_REPLAY_WORK-replay_work)
+                if allowance<=0:
+                    replay_budget_exhausted=True;paths[key]=None
+                    return None
                 try:
-                    replay=replay_node_ids(path,graph)
+                    replay=replay_node_ids(path,graph,max_work=allowance)
+                    replay_work+=replay['work_count']
                     def edge_set(indices):
                         return {(model['transitions'][i]['source'],model['transitions'][i]['target']) for i in indices}
                     paths[key]=(edge_set(replay['transition_indices']),edge_set(replay['guaranteed_transition_indices']))
                 except ValueError:
+                    replay_work+=allowance
+                    replay_budget_exhausted=replay_budget_exhausted or replay_work>=MAX_COVERAGE_REPLAY_WORK
                     paths[key]=None
             else:
                 exact=set(zip(path,path[1:]))
@@ -205,6 +214,8 @@ def _scenario_coverage(spec,cases,rows):
     return {'format':'openworkgraph.declared-scenario-coverage.v1',
         'case_count':len(cases),'transition_basis':'guaranteed_transitions_in_all_complete_token_replays' if token else 'exact_adjacent_transitions',
         'route_replay_unknown_case_ids':sorted(set(replay_unknown)),
+        'coverage_replay_work_count':replay_work,'coverage_replay_budget':MAX_COVERAGE_REPLAY_WORK,
+        'coverage_replay_budget_exhausted':replay_budget_exhausted,
         'incomplete_search_case_ids':[r['case_id'] for r in rows if not r['search_complete']],
         'activities':activity_rows,'transitions':transition_rows,'decision_tables':decision_rows,'coverage_gaps':gaps,
         'all_declared_items_have_reviewed_matching_support':not any(gaps.values()) and not replay_unknown and all(r['search_complete'] for r in rows),
@@ -240,6 +251,8 @@ def review_scenarios(spec,suite,*,as_of_date):
         'execution_plan_created':False,'execution_authorized':False,
         'case_values_included':False,
         'interpretation':'Caller-declared hypothetical facts at an explicit date. Derived route candidates are design diagnostics, not current-source proposals or authorization. Incomplete search is unknown even if a clarification was expected.'}
+    if report['scenario_coverage']['route_replay_unknown_case_ids']:
+        report['review_required']=True
     if len(json.dumps(report,allow_nan=False).encode())>MAX_REPORT_BYTES:
         raise ImplementationError('Scenario report exceeds the bounded output size; narrow the suite')
     return report
