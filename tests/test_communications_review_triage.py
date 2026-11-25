@@ -279,3 +279,16 @@ def test_filter_validation_and_holdout_exclusion(monkeypatch):
         with pytest.raises(review.ReviewError):
             triage.queue(TAXONOMY,**kwargs)
     assert triage.queue(TAXONOMY,keyword_intent="Cancel")["matching_count"]==0
+
+
+def test_labelled_basis_change_during_ranking_refuses_stale_queue(monkeypatch):
+    entries=seed(monkeypatch)
+    held=next(e for e in entries if e["split"]=="holdout")
+    review.label({"example_id":held["example_id"],"labels":["Cancel"]},["Refund","Cancel"])
+    original=mining.classify
+    def change(text,intents):
+        review.label({"example_id":held["example_id"],"labels":["Refund"]},["Refund","Cancel"])
+        return original(text,intents)
+    monkeypatch.setattr(mining,"classify",change)
+    with pytest.raises(review.ReviewError,match="changed during ranking"):
+        triage.queue(TAXONOMY)

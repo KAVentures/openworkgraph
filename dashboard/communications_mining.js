@@ -164,11 +164,12 @@
       const picker=el('select');picker.setAttribute('aria-label',label);
       const option=el('option','All');option.value='';picker.append(option);
       facetFields[key]=picker;facetControls.append(field(label,picker));
-      picker.onchange=()=>{reviewOffset=0;queuePin=null;loadReview();};
+      picker.onchange=()=>{resetQueue();loadReview();};
     }
+    const resetQueue=()=>{reviewOffset=0;queuePin=null;reviewGeneration++;previousReview.disabled=nextReview.disabled=true;examples.replaceChildren();};
     const refreshQueue=button('Refresh review queue','secondary');
-    refreshQueue.onclick=()=>{reviewOffset=0;queuePin=null;loadReview();};
-    facetControls.append(refreshQueue);
+    refreshQueue.onclick=()=>{resetQueue();loadReview();};
+    facetControls.append(refreshQueue);facetControls.style.display='none';
     function drawFacets(page){
       for(const [key,picker] of Object.entries(facetFields)){
         const selected=picker.value;picker.replaceChildren();
@@ -302,6 +303,7 @@
       const generation=++reviewGeneration;
       const current=()=>generation===reviewGeneration;
       previousReview.disabled=nextReview.disabled=true;
+      examples.replaceChildren();
       try{
         const st=await api('/v1/communications/review/settings');if(!current())return;
         ackVersion=st.acknowledgement_version;ackText.textContent=' '+st.acknowledgement;
@@ -310,7 +312,7 @@
         const t=await api('/v1/communications/taxonomy');if(!current())return;
         intentNames=t.taxonomy.intents.map(i=>i.name);
         prioritize.disabled=diverse.disabled=newest.disabled=!st.enabled;
-        facetControls.hidden=!st.enabled||!triageMode;
+        facetControls.hidden=!st.enabled||!triageMode;facetControls.style.display=facetControls.hidden?'none':'';
         if(!st.enabled){examples.replaceChildren();reviewOffset=0;queuePin=null;}
         const params=new URLSearchParams({limit:'20',offset:String(reviewOffset),order:triageOrder});
         for(const [key,picker] of Object.entries(facetFields))if(picker.value)params.set(key,picker.value);
@@ -336,8 +338,8 @@
       try{await api('/v1/communications/review/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(reviewOn.checked?{enabled:true,acknowledgement_version:ackVersion,retention_days:Number(retention.value)}:{enabled:false})});await loadReview();}
       catch(error){reviewStatus.textContent=error.message;}
     };
-    train.onclick=async()=>{train.disabled=true;reviewStatus.textContent='Training on this computer…';try{renderModel(await api('/v1/communications/review/train',{method:'POST'}));reviewStatus.textContent='Model trained. Choose "Learned model" above to use it.';}catch(error){reviewStatus.textContent=error.message;}finally{train.disabled=false;}};
-    dropModel.onclick=async()=>{try{await api('/v1/communications/review/model/delete',{method:'POST'});renderModel({trained:false});}catch(error){reviewStatus.textContent=error.message;}};
+    train.onclick=async()=>{resetQueue();train.disabled=true;reviewStatus.textContent='Training on this computer…';try{await api('/v1/communications/review/train',{method:'POST'});resetQueue();await loadReview();}catch(error){resetQueue();reviewStatus.textContent=error.message;}finally{train.disabled=false;}};
+    dropModel.onclick=async()=>{resetQueue();dropModel.disabled=true;try{await api('/v1/communications/review/model/delete',{method:'POST'});resetQueue();await loadReview();}catch(error){resetQueue();reviewStatus.textContent=error.message;}finally{dropModel.disabled=false;}};
     review.addEventListener('toggle',()=>{if(review.open)loadReview();});
 
     function render(r){

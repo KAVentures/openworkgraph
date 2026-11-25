@@ -63,3 +63,8 @@ freshness basis, settings, unlabelled population and (HTTP path) taxonomy.
 The digest is an opaque local consistency token, not authentication or proof
 of representativeness. No new retention, labels, inference over holdout
 messages or provider access. Full browser and native CI remain required.
+
+The dashboard clears displayed queue text while reloading or changing filters,
+and invalidates its page pin before and after local training/model deletion.
+After a successful model change it reloads the queue rather than leaving
+previous model suggestions visible. No held-out text is used for ranking.
