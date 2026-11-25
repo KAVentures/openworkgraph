@@ -724,13 +724,15 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_waiting_times(log_id: str, case_type: str | None = None,
-                                  working_calendar: dict[str, Any] | None = None) -> dict[str, Any]:
+                                  working_calendar: dict[str, Any] | None = None,
+                                  case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Processing and waiting time per activity of a shared log, when the log records when work on an activity
         started and completed (lifecycle start/complete or an end-time attribute): how long each activity is
         worked on and how long cases wait before it. Says so when the log has no such data. Optionally give a
         working_calendar to also measure in working time, for example {"timezone": "Europe/Berlin", "hours":
         {"mon": [["09:00", "17:00"]], "tue": [["09:00", "17:00"]]}, "holidays": ["2025-12-25"]} (days not listed
-        are closed). Aggregates only.
+        are closed). case_filter (the same keys as insight cohorts) limits it to one group of at least 5 cases.
+        Aggregates only.
         """
         params: dict[str, Any] = {"case_type": case_type}
         if working_calendar is not None:
@@ -738,6 +740,11 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                 raise ToolError("working_calendar must be an object with timezone, hours and optional holidays")
             import json as _json
             params["working_calendar"] = _json.dumps(working_calendar, separators=(",", ":"))
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
         return _get("get_process_waiting_times", f"/v1/process-intelligence/{_log(log_id)}/waiting-times", params)
 
     @mcp.tool(annotations=_READ_ONLY)

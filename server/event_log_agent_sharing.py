@@ -1187,12 +1187,18 @@ def rework(log_id: str, case_type: str | None = None, limit: int = 20) -> dict[s
 
 
 def waiting_times(log_id: str, case_type: str | None = None,
-                  working_calendar: dict[str, Any] | None = None) -> dict[str, Any]:
+                  working_calendar: dict[str, Any] | None = None,
+                  case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
     """Processing and waiting time per activity from start/complete lifecycle data (aggregates level). With a
     working calendar (timezone, weekly hours, holidays) the same figures are also measured in working time."""
     require(log_id, "aggregates")
     from . import event_log_waiting as waiting
-    result = waiting.waiting_time(log_id, case_type, working_calendar=working_calendar)
+    if case_filter is not None:
+        if not isinstance(case_filter, dict) or not case_filter:
+            raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+        if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
+            raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
+    result = waiting.waiting_time(log_id, case_type, working_calendar=working_calendar, cohort=case_filter)
     return {**_withhold_small_waits(result), "format": FORMAT, "log_id": log_id}
 
 
