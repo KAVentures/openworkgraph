@@ -2212,6 +2212,19 @@ cases and the median, mean and 90th-percentile gap in seconds) and end activity,
 would start a formula prefixed with `'`.
 Nothing is uploaded; activity names in the file are as sensitive as the log.
 
+**Download map (Graphviz DOT)** saves the same map as a Graphviz graph, as PM4Py and bupaR draw
+directly-follows graphs. Use it to re-lay out the map with `dot -Tsvg`, or open it in Graphviz
+Online, Gephi or yEd. The server builds it from the current slider settings and case filter with
+`GET /v1/event-logs/{log_id}/process-map.dot`, which takes the same parameters as `process-map`.
+
+- Each shown activity is a box labelled with its event count.
+- Start and end are circles.
+- Each path's arrow is labelled with its count and median gap, and its width grows with frequency.
+
+Node identifiers are generated (`a0`, `a1`, …). Activity names appear only inside escaped,
+quoted labels, so a name cannot add statements to the graph. The `X-OWG-Map` header counts
+activities and paths. Dashboard session only.
+
 ## Predicting open cases
 
 `POST /v1/event-logs/{log_id}/predictions` (dashboard session only) estimates remaining time and,

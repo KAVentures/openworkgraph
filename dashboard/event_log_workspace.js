@@ -24,6 +24,7 @@
   // Views that honour the workspace case filter; every other section uses all cases.
   const FILTERED=new Set(['automation-candidates','summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','performance-spectrum','waiting-time','drift','model-discovery','organization','report.html','decision-points','decision-rules']);
   FILTERED.add('roles');
+  FILTERED.add('process-map.dot');
   FILTERED.add('anonymized-export');
   FILTERED.add('anonymized-export.csv');
   FILTERED.add('model-discovery.pnml');
@@ -10454,7 +10455,8 @@
     const svgButton=button('Download map (SVG)','secondary');svgButton.id='owgMapDownloadSvg';
     const pngButton=button('Download map (PNG)','secondary');pngButton.id='owgMapDownloadPng';
     const csvButton=button('Download map data (CSV)','secondary');csvButton.id='owgMapDownloadCsv';
-    const exportRow=el('div',null,'row');exportRow.append(svgButton,pngButton,csvButton);
+    const dotButton=button('Download map (Graphviz DOT)','secondary');dotButton.id='owgMapDownloadDot';
+    const exportRow=el('div',null,'row');exportRow.append(svgButton,pngButton,csvButton,dotButton);
     box.append(row,status,player.node,graphHost,exportRow,slow);
     const generation=state.generation;let timer=null,request=0,lastCaption='',lastMap=null;
     // The numbers behind the drawn map, one row per activity, start, path and end, for a spreadsheet.
@@ -10467,6 +10469,16 @@
       Object.entries(r.end_activities||{}).forEach(([a,n])=>lines.push(['end',a,'',n,'','','','']));
       downloadBlob(new Blob([toCSV(lines)],{type:'text/csv'}),mapFileName('csv'));
       status.textContent='Downloaded the map data: '+r.activities.length+' activities and '+r.transitions.length+' paths at the current settings.';
+    };
+    // The same map as a Graphviz graph, recomputed on the server at the current slider settings.
+    dotButton.onclick=async()=>{
+      try{
+        dotButton.disabled=true;
+        const response=await api(logPath('process-map.dot',{activities:String(Number(acts.node.value)/100),paths:String(Number(paths.node.value)/100)}));
+        downloadBlob(new Blob([await response.text()],{type:'text/vnd.graphviz'}),mapFileName('dot'));
+        status.textContent='Downloaded the map as a Graphviz graph ('+(response.headers.get('X-OWG-Map')||'').replace(/; /g,', ')+'). Render it with dot -Tsvg or any Graphviz viewer.';
+      }catch(error){status.textContent=error.message;}
+      finally{dotButton.disabled=false;}
     };
     const currentSvg=()=>graphHost.querySelector('#owgMapDrawing svg')||graphHost.querySelector('svg');
     svgButton.onclick=()=>{const svg=currentSvg();if(!svg){status.textContent='No map is drawn to download.';return;}
