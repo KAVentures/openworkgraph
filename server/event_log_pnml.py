@@ -8,6 +8,8 @@ into the equivalent workflow net with the usual block construction:
 * a sequence chains its parts through new places;
 * a choice (xor) puts every branch between the same two places;
 * a parallel block (and) adds a silent split and a silent join around one place pair per branch;
+* an inclusive choice (or) executes a nonempty subset of branches in parallel;
+* an interleaving block executes every child once, in arbitrary order but never concurrently;
 * a loop (body, redo) runs the body, then either leaves through a silent transition or runs the
   redo part and the body again.
 
@@ -81,6 +83,41 @@ def _emit(net: _Net, node: dict[str, Any], src: str, dst: str) -> None:
         for child, a, b in zip(node["children"], starts, ends):
             _emit(net, child, a, b)
         net.silent_between(ends, [dst])
+    elif op == "or":
+        # All branches start pending. A branch can be skipped or executed, but
+        # only execution (including a tau child) can set the selected flag.
+        # The flag persists until the final join, excluding the all-skip path.
+        # Unlike a subset-per-transition construction this is linear in arity.
+        children = node["children"]
+        if not children:
+            raise EventLogWorkspaceError("inclusive choice needs at least one child")
+        none, some = net.place(), net.place()
+        pending = [net.place() for _ in children]
+        done = [net.place() for _ in children]
+        net.silent_between([src], [none, *pending])
+        for child, start, finish in zip(children, pending, done):
+            completed = net.place()
+            net.transition(None, start, finish)  # skip
+            _emit(net, child, start, completed)
+            net.silent_between([completed, none], [finish, some])
+            net.silent_between([completed, some], [finish, some])
+        net.silent_between([some, *done], [dst])
+    elif op == "interleaved":
+        # A single lock is held for the entire child, not just one activity.
+        # Distinct pending and done tokens prevent repeated or omitted children.
+        children = node["children"]
+        if not children:
+            raise EventLogWorkspaceError("interleaving needs at least one child")
+        lock = net.place()
+        pending = [net.place() for _ in children]
+        done = [net.place() for _ in children]
+        net.silent_between([src], [lock, *pending])
+        for child, ready, finish in zip(children, pending, done):
+            start, completed = net.place(), net.place()
+            net.silent_between([lock, ready], [start])
+            _emit(net, child, start, completed)
+            net.silent_between([completed], [lock, finish])
+        net.silent_between([lock, *done], [dst])
     elif op == "loop":
         body, redo = node["children"]
         enter, leave = net.place(), net.place()
