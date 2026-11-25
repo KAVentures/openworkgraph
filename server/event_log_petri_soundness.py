@@ -129,6 +129,44 @@ def _strict_net(data):
     return parsed
 
 
+def _execution_graph(edges):
+    """Return one deterministic reachable cycle, or a DAG finishing order.
+
+    Edges contain an actual transition ID for each reachable successor. Iterative
+    DFS avoids Python's recursion limit. A cycle in even a partial graph proves
+    that an infinite execution is possible; absence needs complete exploration.
+    """
+    color = [0] * len(edges)
+    parent = {}
+    order = []
+    for root in range(len(edges)):
+        if color[root]:
+            continue
+        color[root] = 1
+        stack = [(root, iter(sorted(edges[root].items())))]
+        while stack:
+            node, children = stack[-1]
+            edge = next(children, None)
+            if edge is None:
+                color[node] = 2
+                order.append(node)
+                stack.pop()
+                continue
+            target, transition = edge
+            if color[target] == 0:
+                color[target] = 1
+                parent[target] = (node, transition)
+                stack.append((target, iter(sorted(edges[target].items()))))
+            elif color[target] == 1:
+                cycle = [transition]
+                current = node
+                while current != target:
+                    current, transition = parent[current]
+                    cycle.append(transition)
+                return (target, list(reversed(cycle))), None
+    return None, order
+
+
 def analyze(data: bytes) -> dict:
     net = _strict_net(data)
     places = sorted(net["places"])
@@ -172,6 +210,7 @@ def analyze(data: bytes) -> dict:
     indices = {initial: 0}
     parents = [None]
     predecessors = [set()]
+    edges = [{}]
     fired = set()
     checks = 0
     complete = True
@@ -218,7 +257,9 @@ def analyze(data: bytes) -> dict:
                 markings.append(key)
                 parents.append((cursor, t))
                 predecessors.append(set())
+                edges.append({})
             predecessors[target].add(cursor)
+            edges[cursor].setdefault(target, t)
         if not complete:
             break
         if not enabled and marking != final and deadlock is None:
@@ -252,6 +293,25 @@ def analyze(data: bytes) -> dict:
                 "truncated": len(ids) > MAX_WITNESS,
                 "marking": [{"place_id": p, "tokens": n} for p, n in zip(places, markings[index]) if n]}
 
+    cycle, dag_order = _execution_graph(edges)
+    cycle_witness = None
+    if cycle is not None:
+        entry, loop = cycle
+        cycle_witness = {"entry": witness(entry), "cycle_transition_ids": loop[:MAX_WITNESS],
+                         "cycle_steps": len(loop), "cycle_truncated": len(loop) > MAX_WITNESS}
+    universal_completion = (False if cycle is not None or deadlock is not None
+                            else (True if complete else None))
+    # Every maximal execution ends at final in a complete acyclic graph with
+    # no nonfinal deadlock. The longest execution is then finite and exact.
+    max_steps = None
+    if universal_completion is True:
+        longest = [0] * len(markings)
+        for node in dag_order:
+            if edges[node]:
+                longest[node] = 1 + max(longest[target] for target in edges[node])
+        max_steps = longest[0]
+    final_witness = witness(final_id)
+
     no_dead = (len(fired) == len(transitions)) if complete else (True if len(fired) == len(transitions) else None)
     option_to_complete = (unable_count == 0) if complete else (False if deadlock is not None else None)
     proper_completion = False if improper is not None else (True if complete else None)
@@ -267,6 +327,12 @@ def analyze(data: bytes) -> dict:
             "no_dead_transitions": no_dead, "one_safe": one_safe,
             "final_reachable": True if final_id is not None else (False if complete else None),
             "noncompleting_markings": unable_count,
+            "all_maximal_executions_complete": universal_completion,
+            "infinite_execution_possible": True if cycle is not None else (False if complete else None),
+            "shortest_completion_steps": final_witness["steps"] if final_witness is not None else None,
+            "longest_execution_steps": max_steps,
+            "completion_witness": final_witness,
+            "infinite_execution_witness": cycle_witness,
             "dead_transition_ids": sorted(set(transitions) - fired) if complete else None,
             "not_yet_fired_transition_ids": sorted(set(transitions) - fired),
             "witnesses": {"deadlock": witness(deadlock), "improper_completion": witness(improper),
