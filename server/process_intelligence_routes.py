@@ -449,9 +449,19 @@ async def agent_variants(request: Request, log_id: str, limit: int = Query(defau
 @router.get("/v1/process-intelligence/{log_id}/process-map")
 async def agent_process_map(request: Request, log_id: str, activities: float = Query(default=1.0, gt=0, le=1),
                             paths: float = Query(default=1.0, gt=0, le=1),
-                            case_type: str | None = Query(default=None, max_length=200)):
+                            case_type: str | None = Query(default=None, max_length=200),
+                            case_filter: str | None = Query(default=None, max_length=8192)):
     _require_agent_access(request)
-    return await _answer(sharing.process_map, log_id, case_type, activities, paths)
+    chosen = None
+    if case_filter is not None:
+        import json
+        try:
+            chosen = json.loads(case_filter)
+        except ValueError:
+            raise HTTPException(422, "case_filter must be a JSON object") from None
+        if not isinstance(chosen, dict):
+            raise HTTPException(422, "case_filter must be a JSON object")
+    return await _answer(sharing.process_map, log_id, case_type, activities, paths, chosen)
 
 
 @router.get("/v1/process-intelligence/{log_id}/duration-distribution")

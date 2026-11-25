@@ -8063,12 +8063,12 @@
     const box=section('Check against a Petri net');box.id='owgPetri';
     const netsBase=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/reference-nets';
     box.appendChild(el('div','Replay the recorded cases on a Petri net from ProM, PM4Py, Apromore or another tool (a .pnml file), or on the net discovered here. Tokens that are missing or left behind show where the cases and the net disagree. The file is read for this check and not stored.','muted'));
-    const file=input('owgPetriFile','file');file.accept='.pnml,application/xml,text/xml';
+    const file=input('owgPetriFile','file');file.accept='.pnml,.ptml,application/xml,text/xml';
     const run=button('Replay on this net','secondary');run.id='owgPetriRun';
     const own=button('Replay on the discovered net','secondary');own.id='owgPetriDiscovered';
     const happy=button('Check against the most common path','secondary');happy.id='owgPetriHappy';
     const align=button('Explain each case step by step','secondary');align.id='owgPetriAlign';align.disabled=true;
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Petri net (.pnml)',file),run,own,happy,align);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Petri net (.pnml) or process tree (.ptml)',file),run,own,happy,align);
     const statusLine=el('div',null,'muted');statusLine.id='owgPetriStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgPetriResults';
     const aligned=el('div');aligned.id='owgPetriAlignResults';
@@ -8077,7 +8077,20 @@
     const alertSave=button('Alert me','secondary');alertSave.id='owgPetriAlertSave';alertSave.disabled=true;
     const alertMessage=el('div',null,'muted');alertMessage.id='owgPetriAlertMessage';alertMessage.setAttribute('role','status');alertMessage.setAttribute('aria-live','polite');
     const alertRow=el('div',null,'row');alertRow.style.alignItems='end';alertRow.append(field('Signal when cases not fitting this net are',alertShare),field('Among cases',alertWindow),alertSave);
-    box.append(row,statusLine,out,aligned,alertRow,alertMessage);
+    // A tree printed by PM4Py (print(tree)) can be pasted instead of saved as a file.
+    const treeText=document.createElement('textarea');treeText.id='owgPetriTreeText';treeText.rows=2;treeText.maxLength=200000;
+    treeText.placeholder="->( 'Register', X( 'Check', tau ), 'Pay' )";treeText.style.cssText='width:100%;font-family:monospace';
+    const treeRun=button('Replay on pasted process tree','secondary');treeRun.id='owgPetriTreeRun';
+    const treeRow=el('div',null,'row');treeRow.style.alignItems='end';treeRow.append(field('Or paste a PM4Py process tree',treeText),treeRun);
+    treeRun.onclick=async()=>{
+      if(!treeText.value.trim()){statusLine.textContent='Paste a process tree first.';return;}
+      try{
+        statusLine.textContent='Converting the process tree…';
+        const converted=await (await api('/v1/event-logs/process-tree-to-pnml',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({notation:treeText.value})})).json();
+        await replay(converted.pnml,'the pasted process tree');
+      }catch(error){statusLine.textContent=error.message;}
+    };
+    box.append(row,treeRow,statusLine,out,aligned,alertRow,alertMessage);
     // Reference nets saved with this log: keep the net just checked, or check again against a saved one.
     const savedPick=select('owgPetriSaved',[]);const savedRun=button('Replay on saved net','secondary');savedRun.id='owgPetriSavedRun';
     const savedDelete=button('Delete saved net','secondary');savedDelete.id='owgPetriSavedDelete';
@@ -8228,6 +8241,15 @@
       finally{run.disabled=own.disabled=false;align.disabled=!lastNet;}};
     run.onclick=async()=>{const chosen=file.files&&file.files[0];if(!chosen){statusLine.textContent='Choose a .pnml file first.';return;}
       if(chosen.size>2*1024*1024){statusLine.textContent='The Petri net file is larger than 2 MB.';return;}
+      // A process tree from PM4Py or ProM is converted to its workflow net first, then replayed as usual.
+      if(/\.ptml$/i.test(chosen.name)){
+        try{
+          statusLine.textContent='Converting the process tree…';
+          const converted=await (await api('/v1/event-logs/ptml-to-pnml',{method:'POST',headers:{'Content-Type':'application/xml'},body:await chosen.arrayBuffer()})).json();
+          await replay(converted.pnml,chosen.name+' (process tree)');
+        }catch(error){statusLine.textContent=error.message;}
+        return;
+      }
       await replay(await chosen.text(),chosen.name);};
     happy.onclick=async()=>{
       try{statusLine.textContent='Building the most common path…';const response=await api(logPath('variant.pnml',{rank:'1'}));

@@ -357,6 +357,38 @@ async def convert_sqlite_event_log(request: Request, table: str | None = Query(d
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/ptml-to-pnml")
+async def convert_ptml_process_tree(request: Request):
+    """Convert a PTML process tree (ProM, PM4Py) to a PNML workflow net for replay. Nothing is stored."""
+    from . import event_log_ptml_import as ptml_import
+    _require_dashboard(request)
+    data = bytearray()
+    async for chunk in request.stream():
+        data += chunk
+        if len(data) > ptml_import.MAX_BYTES:
+            raise HTTPException(413, "the process tree file is larger than 2 MB")
+    try:
+        result = await run_in_threadpool(ptml_import.to_pnml, bytes(data))
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/process-tree-to-pnml")
+async def convert_process_tree_notation(request: Request):
+    """Convert a process tree in PM4Py's printed notation to a PNML net: {"notation": "->( 'A', 'B' )"}."""
+    from . import event_log_ptml_import as ptml_import
+    _require_dashboard(request)
+    spec = await _json_body(request, "process tree", strict=True, limit=ptml_import.MAX_NOTATION_CHARS * 2)
+    if not isinstance(spec, dict) or set(spec) != {"notation"}:
+        raise HTTPException(422, "send the tree as notation")
+    try:
+        result = await run_in_threadpool(ptml_import.notation_to_pnml, spec["notation"])
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/mapping-matches")
 async def event_log_mapping_matches(request: Request):
     """Earlier CSV column mappings that fit a file header (by column names only). Nothing is stored."""
