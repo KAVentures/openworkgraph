@@ -218,6 +218,14 @@ def _review(data, rules):
     results = []
     for i, rule in enumerate(rules):
         check = joint if len(rules) == 1 else _search(graph, [rule], budget)
+        if len(rules) > 1:
+            # Witness indices always refer to the original ordered suite.
+            check["witnesses"] = {
+                k: None if w is None else {**w,
+                    "violated_rule_indices": [i for _ in w["violated_rule_indices"]],
+                    "activated_rule_indices": [i for _ in w["activated_rule_indices"]]}
+                for k, w in check["witnesses"].items()
+            }
         results.append({"rule_index": i, "rule": rule, **check})
     return {"model": {k: v for k, v in graph.items() if k not in {"edges", "final"}},
             "joint": joint, "rules": results, "total_work": budget.work}
