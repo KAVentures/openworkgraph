@@ -127,6 +127,12 @@ sharing checks.
 the existing signals, looks at trends, drift and stuck or overdue cases, and tests each draft rule with
 `preview_process_signal` before proposing it. Nothing is saved; the owner decides which to keep.
 
+### Prompt: `evaluate_process_change`
+
+`evaluate_process_change(change, log_id)` asks the AI to weigh a proposed change: baseline, an observed comparison
+with cases that already work that way, 2 to 4 simulated alternatives side by side, side effects, and what to
+monitor afterwards. Observed and simulated evidence are kept apart; nothing authorises making the change.
+
 ## HTTP
 
 | Route | Who |
