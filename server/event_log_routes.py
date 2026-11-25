@@ -1191,9 +1191,10 @@ def event_log_object_types(request: Request, log_id: str):
 
 
 @router.get("/v1/event-logs/{log_id}/object-map")
-def event_log_object_map(request: Request, log_id: str):
+def event_log_object_map(request: Request, log_id: str,
+                         object_type: str | None = Query(default=None, min_length=1, max_length=200)):
     _require_dashboard(request)
-    return _respond(objects.object_graph, log_id)
+    return _respond(objects.object_graph, log_id, object_type)
 
 
 @router.get("/v1/event-logs/{log_id}/object-relationships")

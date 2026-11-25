@@ -95,14 +95,21 @@ def _bounded_relations(conn, types, status):
                          'relations_count_method': 'not_computed'}
 
 
-def object_graph(log_id: str) -> dict[str, Any]:
+def object_graph(log_id: str, object_type: str | None = None) -> dict[str, Any]:
+    if object_type is not None and (not isinstance(object_type, str) or not 1 <= len(object_type) <= 200):
+        raise workspace.EventLogWorkspaceError('choose a retained object type')
     with workspace._LOCK:
         conn = workspace._connect()
         try:
             info = workspace._check_log(conn, log_id)
             conn.execute(_TYPED, [log_id])
+            if object_type is not None and not conn.execute(
+                    'SELECT 1 FROM te WHERE object_type = ? LIMIT 1', [object_type]).fetchone():
+                raise workspace.EventLogWorkspaceError('the selected object type has no retained events')
+            order = '(object_type = ?) DESC, 2 DESC, 1' if object_type is not None else '2 DESC, 1'
             types = conn.execute(f"""SELECT object_type, count(DISTINCT object_id), count(DISTINCT event_id)
-                FROM te GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT {MAX_TYPES}""").fetchall()
+                FROM te GROUP BY 1 ORDER BY {order} LIMIT {MAX_TYPES}""",
+                                 [object_type] if object_type is not None else []).fetchall()
             conn.execute("""CREATE OR REPLACE TEMP TABLE steps AS SELECT object_type, object_id, activity, ts, event_id,
                   lead(activity) OVER w AS nxt, date_diff('second', ts, lead(ts) OVER w) AS gap,
                   row_number() OVER w AS position, count(*) OVER (PARTITION BY object_type, object_id) AS length
