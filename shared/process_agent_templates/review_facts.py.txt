@@ -54,7 +54,8 @@ def _fact_checks(spec,facts,as_of_date):
         from owg_model.process_model import ProcessModel
         from owg_model.process_decision_tables import evaluate_decisions
         for row in evaluate_decisions(ProcessModel.model_validate(model),facts,as_of_date):
-            tables.append({k:row[k] for k in ('table_id','status','selected_target_activity_id')})
+            tables.append({**{k:row[k] for k in ('table_id','status','selected_target_activity_id')},
+                'rows':[{'row_id':item['row_id'],'status':item['status']} for item in row['rows']]})
     return rules,tables
 
 
@@ -98,6 +99,112 @@ def _validated_cases(spec,suite):
     return cases
 
 
+def _scenario_coverage(spec,cases,rows):
+    """Count distinct cases; never turn a merely evaluated row into a route visit."""
+    model=spec['process_model']
+    activities={a['id']:a for a in model['activities']}
+    edges={(e['source'],e['target']):e for e in model['transitions']}
+    tables={t['id']:t for t in model.get('decision_tables',[])}
+    token=spec.get('control_flow_contract')=='openworkgraph.parallel-node-firing-plan.v1'
+    # A token order is not an adjacency path. Replay returns the union of
+    # viable histories, so count possible transitions separately.
+    paths={}
+    if token:
+        from owg_model.process_model import ProcessModel
+        from owg_model.process_parallel import replay_node_ids
+        graph=ProcessModel.model_validate(model)
+    def route_edges(path):
+        key=tuple(path)
+        if key not in paths:
+            if token:
+                try:
+                    indices=replay_node_ids(path,graph)['transition_indices']
+                    paths[key]={(model['transitions'][i]['source'],model['transitions'][i]['target']) for i in indices}
+                except ValueError:
+                    paths[key]=None
+            else:
+                paths[key]=set(zip(path,path[1:]))
+        return paths[key]
+    activity_counts={k:Counter() for k in activities}
+    transition_counts={k:Counter() for k in edges}
+    table_counts={k:Counter() for k in tables}
+    row_counts={(tid,r['id']):Counter() for tid,t in tables.items() for r in t['rows']}
+    replay_unknown=[]
+    for case,row in zip(cases,rows):
+        expected_paths=case['expected']['accepted_routes']
+        selected=[p['activity_ids'] for p in row['candidate_examples'] if p['status']=='supported']
+        actual_path=selected[0] if row['search_complete'] and row['search_status']=='unique_supported_route' and len(selected)==1 else None
+        reviewed_match=actual_path is not None and row['matches_reviewed_expectation'] is True
+        expected_nodes={node for path in expected_paths for node in path}
+        expected_edges=set()
+        for path in expected_paths:
+            found=route_edges(path)
+            if found is None:
+                replay_unknown.append(case['id'])
+            else:
+                expected_edges.update(found)
+        actual_edges=route_edges(actual_path) if actual_path else set()
+        if actual_edges is None:
+            replay_unknown.append(case['id']);actual_edges=set()
+        actual_nodes=set(actual_path or [])
+        for ident in expected_nodes:activity_counts[ident]['reviewed_expected_cases']+=1
+        for ident in actual_nodes:
+            activity_counts[ident]['unique_supported_cases']+=1
+            if reviewed_match:activity_counts[ident]['reviewed_matching_cases']+=1
+        for edge in expected_edges:transition_counts[edge]['reviewed_expected_cases']+=1
+        for edge in actual_edges:
+            transition_counts[edge]['unique_supported_cases']+=1
+            if reviewed_match:transition_counts[edge]['reviewed_matching_cases']+=1
+        for check in row['decision_checks']:
+            tid=check['table_id'];table=tables[tid];counts=table_counts[tid]
+            counts['evaluated_cases']+=1
+            counts['status:'+check['status']]+=1
+            visited=table['decision_activity_id'] in actual_nodes
+            if visited:counts['unique_route_visit_cases']+=1
+            target=check['selected_target_activity_id']
+            for row_check in check['rows']:
+                rc=row_counts[(tid,row_check['row_id'])]
+                rc['evaluated_cases']+=1;rc['status:'+row_check['status']]+=1
+            for declaration in table['rows']:
+                if target==declaration['target_activity_id']:
+                    rc=row_counts[(tid,declaration['id'])]
+                    rc['selected_cases']+=1
+                    if visited and (table['decision_activity_id'],target) in actual_edges:
+                        rc['unique_route_selection_cases']+=1
+                        if reviewed_match:rc['reviewed_matching_route_cases']+=1
+    def counts(counter,names):
+        return {k:counter[k] for k in names}
+    columns=('reviewed_expected_cases','unique_supported_cases','reviewed_matching_cases')
+    activity_rows=[{'activity_id':ident,**counts(c,columns)} for ident,c in sorted(activity_counts.items())]
+    transition_rows=[{'source_activity_id':source,'target_activity_id':target,**counts(c,columns)}
+                     for (source,target),c in sorted(transition_counts.items())]
+    decision_rows=[]
+    for tid,c in sorted(table_counts.items()):
+        t=tables[tid];items=[]
+        for declaration in t['rows']:
+            ident=declaration['id'];rc=row_counts[(tid,ident)]
+            items.append({'row_id':ident,'target_activity_id':declaration['target_activity_id'],
+                **counts(rc,('evaluated_cases','selected_cases','unique_route_selection_cases','reviewed_matching_route_cases')),
+                'row_status_counts':{k[7:]:v for k,v in sorted(rc.items()) if k.startswith('status:')}})
+        decision_rows.append({'table_id':tid,'decision_activity_id':t['decision_activity_id'],
+            **counts(c,('evaluated_cases','unique_route_visit_cases')),
+            'table_status_counts':{k[7:]:v for k,v in sorted(c.items()) if k.startswith('status:')},
+            'rows':items})
+    gaps={'activities_without_reviewed_match':[r['activity_id'] for r in activity_rows if not r['reviewed_matching_cases']],
+        'transitions_without_reviewed_match':[{'source_activity_id':r['source_activity_id'],'target_activity_id':r['target_activity_id']}
+            for r in transition_rows if not r['reviewed_matching_cases']],
+        'decision_rows_without_reviewed_match':[{'table_id':t['table_id'],'row_id':r['row_id']}
+            for t in decision_rows for r in t['rows'] if not r['reviewed_matching_route_cases']]}
+    return {'format':'openworkgraph.declared-scenario-coverage.v1',
+        'case_count':len(cases),'transition_basis':'possible_transitions_in_complete_token_replays' if token else 'exact_adjacent_transitions',
+        'route_replay_unknown_case_ids':sorted(set(replay_unknown)),
+        'incomplete_search_case_ids':[r['case_id'] for r in rows if not r['search_complete']],
+        'activities':activity_rows,'transitions':transition_rows,'decision_tables':decision_rows,'coverage_gaps':gaps,
+        'all_declared_items_have_reviewed_matching_support':not any(gaps.values()) and not replay_unknown and all(r['search_complete'] for r in rows),
+        'exhaustive_business_domain_coverage_verified':False,'execution_authorized':False,
+        'interpretation':'Distinct scenario counts, not visits. Only complete unique supported routes matching reviewed expectations contribute matching-route coverage. Decision rows evaluated in isolation do not establish route coverage. Token replay transition counts are possible support, not guaranteed traversal.'}
+
+
 def review_scenarios(spec,suite,*,as_of_date):
     """Compare bounded scenario results with customer-reviewed expectations."""
     as_of_date=_as_of(as_of_date)
@@ -119,6 +226,7 @@ def review_scenarios(spec,suite,*,as_of_date):
         'reason_counts':dict(sorted(Counter(r['reason'] for r in rows).items())),
         'by_category':{k:dict(sorted(v.items())) for k,v in sorted(categories.items())},
         'cases':rows,'review_required':any(r['review_required'] for r in rows),
+        'scenario_coverage':_scenario_coverage(spec,cases,rows),
         'facts_authoritativeness_verified':False,'historical_case_truth_verified':False,
         'business_policy_compliance_verified':False,'model_invoked':False,
         'source_reads_performed':False,'business_tools_called':False,
