@@ -802,6 +802,8 @@ from .focus_report_routes import router as _focus_report_router  # noqa: E402
 app.include_router(_focus_report_router)
 from .process_pdd_routes import router as _process_pdd_router  # noqa: E402
 app.include_router(_process_pdd_router)
+from .agent_procurement_routes import router as _agent_procurement_router  # noqa: E402
+app.include_router(_agent_procurement_router)
 from .automation_pipeline_routes import router as _automation_pipeline_router  # noqa: E402
 app.include_router(_automation_pipeline_router)
 from .review_choice_routes import router as _review_choice_router  # noqa: E402

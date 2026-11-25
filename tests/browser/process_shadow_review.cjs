@@ -33,6 +33,25 @@ const path=require('node:path');
   assert.equal(reportRequests,1);
   assert.match(await page.locator('#owgCatalogShadowResult').textContent(),/Unexpected clarification/);
   assert(!(await page.locator('#owgCatalogShadowResult').textContent()).includes('PRIVATE_'));
+  let procurementRequests=0;
+  page.on('request',r=>{if(new URL(r.url()).pathname.startsWith('/v1/process-catalog/procurement/'))procurementRequests++;});
+  const alternate={...report,results_sha256:'d'.repeat(64)};
+  const candidate=(id,r)=>({candidate_id:id,provider:'provider',model:id,runtime:'cli',report:r,
+    measurements:[{case_id:'case_1',cost_microunits:100,elapsed_ms:500}]});
+  const procurement={format:'openworkgraph.agent-procurement.v1',baseline_candidate_id:'current',currency:'USD',
+    gates:{minimum_match_basis_points:0,maximum_critical_cases:0,require_all_categories:false},
+    candidates:[candidate('current',report),candidate('other',alternate)]};
+  await page.getByLabel('Procurement JSON document',{exact:true}).setInputFiles({name:'procurement.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(procurement))});
+  assert.equal(procurementRequests,0);
+  await page.getByRole('button',{name:'Inspect procurement evidence against saved revision',exact:true}).click();
+  await page.locator('#owgCatalogProcurementResult').getByText('Candidate procurement comparison',{exact:true}).waitFor();
+  assert.equal(procurementRequests,1);
+  assert.match(await page.locator('#owgCatalogProcurementResult').textContent(),/current · pass/);
+  assert.match(await page.locator('#owgCatalogProcurementResult').textContent(),/other · pass/);
+  assert(!(await page.locator('#owgCatalogProcurementResult').textContent()).includes('PRIVATE_'));
+  await page.getByRole('button',{name:'Clear procurement review',exact:true}).click();
+  assert.equal(await page.locator('#owgCatalogProcurementResult').textContent(),'');
+
   await page.getByLabel('Business goal',{exact:true}).fill('Revised draft only');
   assert.equal(await page.locator('#owgCatalogShadowResult').textContent(),'');
   await page.getByRole('button',{name:'Inspect report against saved revision',exact:true}).click();

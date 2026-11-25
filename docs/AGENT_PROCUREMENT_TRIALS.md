@@ -74,3 +74,7 @@ independently captured provenance remain separate R26 work. Do not treat
 review as deployment approval. Protect the reference and report hashes as
 customer-controlled identifiers. Inputs are limited to 8 MiB each, at most
 10 candidates, 50 cases and 10 repeats. Output files never overwrite.
+
+## Local dashboard
+
+The same catalog panel supports **Freeze a repeated trial plan** and **Review a frozen trial and captures**. Download the exact plan and later select it alongside the capture ledger. Planned and recorded attempt counts, gates, missing-data bounds and paginated paired evidence remain local. API requests are dashboard-session-only, scoped to the saved revision, strictly bounded and no-store. The raw file text is parsed server-side to preserve duplicate-key refusal; no report is retained. The production CLI is also available as python -m shared.agent_procurement_trials.

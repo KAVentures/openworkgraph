@@ -83,3 +83,7 @@ Keep inputs and outputs private; hashes identify content, not anonymization.
 This first slice compares complete shadow reports, not failed attempts, verified
 runtime identities, actual business outcomes, repeated stochastic performance or
 independently captured provider usage. Those remain R26 acceptance work.
+
+## Local dashboard
+
+Open a saved process revision in the Process catalog and select **AI workforce procurement**. Choose the operation and a request JSON file, then explicitly inspect it. The local API resolves the exact saved revision, not a client-supplied export. Candidate gates, quality/cost/latency, nondominated candidates and paginated paired case evidence are shown. The minimized result can be downloaded. Selecting files sends nothing; edits, file changes, revision changes and reloads clear temporary review. No data is persisted by the API. The production code lives in shared/agent_procurement.py; the development CLI remains compatible, and installed source users can invoke python -m shared.agent_procurement.

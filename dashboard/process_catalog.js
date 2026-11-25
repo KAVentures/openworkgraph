@@ -2,7 +2,7 @@
 (() => {
   'use strict';
   let record=null, model=null, reviewed=false, busy=false, after='', restorationDraft=null;
-  let shadowGeneration=0;
+  let shadowGeneration=0,procurementGeneration=0;
   let importGeneration=0,importDraft=null;
   let ruleCheckGeneration=0,sourceRuleGeneration=0;
   let originGeneration=0,editGeneration=0,revisionCompareGeneration=0;
@@ -10,7 +10,8 @@
   const button=(text,fn)=>{const n=el('button',text);n.type='button';n.className='secondary';n.addEventListener('click',()=>Promise.resolve().then(fn).catch(error=>status(error.message)));return n;};
   const status=text=>{const n=document.getElementById('owgCatalogStatus');if(n)n.textContent=String(text);};
   const copy=value=>JSON.parse(JSON.stringify(value));
-  function clearShadowReview(){shadowGeneration++;document.getElementById('owgCatalogShadowResult')?.replaceChildren();}
+  function clearProcurementReview(){procurementGeneration++;document.getElementById('owgCatalogProcurementResult')?.replaceChildren();}
+  function clearShadowReview(){shadowGeneration++;document.getElementById('owgCatalogShadowResult')?.replaceChildren();clearProcurementReview();}
   function clearRuleChecks(){ruleCheckGeneration++;document.getElementById('owgCatalogRuleCheckResult')?.replaceChildren();}
   function clearSourceRuleChecks(){sourceRuleGeneration++;document.getElementById('owgCatalogSourceRuleResult')?.replaceChildren();}
   function clearOrigins(){originGeneration++;document.getElementById('owgCatalogOriginResult')?.replaceChildren();}
@@ -655,7 +656,7 @@
     })));
     }
     host.appendChild(actions);
-    if(record.revision){renderRuleChecks(host);renderSourceRuleChecks(host);renderShadowReview(host);renderClarification(host);renderDMNImport(host);renderRuleLibrary(host);renderPrerequisites(host);}
+    if(record.revision){renderRuleChecks(host);renderSourceRuleChecks(host);renderShadowReview(host);renderProcurement(host);renderClarification(host);renderDMNImport(host);renderRuleLibrary(host);renderPrerequisites(host);}
     const historyHost=el('div');historyHost.id='owgCatalogHistory';host.appendChild(historyHost);
   }
   function renderPrerequisites(host){
@@ -1300,6 +1301,99 @@
     })));
     section.appendChild(button('Clear shadow report review',()=>{file.value='';clearShadowReview();}));
     section.appendChild(output);host.appendChild(section);
+  }
+
+  function renderProcurement(host){
+    const section=el('section');section.appendChild(el('h4','AI workforce procurement'));
+    section.appendChild(el('p','Compare portable shadow evaluations, freeze a repeated trial, or review its full scheduled population. Files are inspected only on this computer and are not retained. Model identities, measurements and business outcomes remain unverified.'));
+    const mode=el('select');mode.id='owgCatalogProcurementMode';
+    for(const [value,label] of [['compare','Compare completed shadow reports'],['freeze','Freeze a repeated trial plan'],['review','Review a frozen trial and captures']]){
+      const option=el('option',label);option.value=value;mode.appendChild(option);
+    }
+    const modeLabel=el('label','Procurement operation ');modeLabel.htmlFor=mode.id;modeLabel.appendChild(mode);
+    function chooser(id,title){
+      const label=el('label',title+' '),file=el('input');file.id=id;file.type='file';file.accept='.json,application/json';file.setAttribute('aria-label',title);
+      label.htmlFor=id;label.appendChild(file);file.addEventListener('change',clearProcurementReview);return [label,file];
+    }
+    const [documentLabel,documentFile]=chooser('owgCatalogProcurementDocument','Procurement JSON document');
+    const [planLabel,planFile]=chooser('owgCatalogProcurementPlan','Frozen trial plan JSON');
+    planLabel.hidden=true;
+    const hint=el('p','Choose an existing comparison request (see AGENT_PROCUREMENT.md).');
+    mode.addEventListener('change',()=>{
+      documentFile.value='';planFile.value='';planLabel.hidden=mode.value!=='review';
+      hint.textContent=mode.value==='compare'?'Choose an existing comparison request (see AGENT_PROCUREMENT.md).':
+        mode.value==='freeze'?'Choose a confirmed design JSON with exact reference report, candidates, gates and repeats (see AGENT_PROCUREMENT_TRIALS.md).':
+        'Choose the frozen plan and a capture ledger. Failed and missing scheduled slots remain in the denominator.';
+      clearProcurementReview();
+    });
+    const output=el('div');output.id='owgCatalogProcurementResult';output.setAttribute('aria-live','polite');
+    const run=button('Inspect procurement evidence against saved revision',()=>locked(async()=>{
+      clearProcurementReview();
+      const generation=procurementGeneration,selected=record,operation=mode.value;
+      const file=documentFile.files?.[0],plan=planFile.files?.[0],cap=8*1024*1024;
+      if(!file||file.size>cap||(operation==='review'&&(!plan||plan.size>cap)))throw new Error('Choose the required JSON file(s), at most 8 MiB each.');
+      const payload={document:await file.text()};
+      if(operation==='review')payload.plan=await plan.text();
+      if(generation!==procurementGeneration||record!==selected||!output.isConnected)return;
+      const query=new URLSearchParams({workflow_id:selected.workflow_id,revision:String(selected.revision)});
+      const envelope=await request('/v1/process-catalog/procurement/'+operation+'?'+query,payload);
+      if(generation!==procurementGeneration||record!==selected||!output.isConnected)return;
+      const result=envelope.result;
+      output.appendChild(el('h5',operation==='freeze'?'Frozen trial plan · '+result.scheduled_attempts+' attempts':'Candidate procurement comparison'));
+      output.appendChild(el('p','Exact saved revision '+envelope.revision+'. '+(envelope.references_latest_revision_at_inspection?
+        'Latest saved revision at inspection.':'Historical revision; current revision '+envelope.latest_revision_at_inspection+'. Evaluate the current design before substitution.')));
+      if(operation==='freeze'){
+        output.appendChild(el('p',result.basis.candidates.length+' candidates · '+result.basis.repeats+' repeats · '+result.basis.reference_report.case_count+' cases. Planned order only; no execution was authorized.'));
+        const list=el('ul');
+        for(const c of result.basis.candidates)list.appendChild(el('li',c.candidate_id+' · '+c.provider+' / '+c.model+' / '+c.runtime));
+        output.appendChild(list);
+      }else{
+        const rate=v=>v==null?'unknown':(100*v).toFixed(1)+'%';
+        for(const c of result.candidates){
+          const box=el('section');box.appendChild(el('h6',c.candidate_id+' · '+c.gate_status));
+          const match=c.match_rate_bounds?rate(c.match_rate_bounds.lower)+'–'+rate(c.match_rate_bounds.upper):rate(c.match_rate);
+          const cost=c.cost.total_microunits==null?'unknown (known lower bound '+((c.cost.lower_bound_microunits??c.cost.known_cost_lower_bound_microunits)/1e6).toFixed(6)+' '+result.currency+')':
+            (c.cost.total_microunits/1e6).toFixed(6)+' '+result.currency;
+          box.appendChild(el('p','Expectation match: '+match+' · All-attempt cost: '+cost+' · p95 elapsed: '+(c.latency.p95_ms==null?'unknown':c.latency.p95_ms+' ms')));
+          if(c.status_counts)box.appendChild(el('p',Object.entries(c.status_counts).map(([k,v])=>k+': '+v).join(' · ')));
+          const gates=el('ul');for(const [key,value] of Object.entries(c.gates))gates.appendChild(el('li',key.replaceAll('_',' ')+': '+value));
+          box.appendChild(gates);output.appendChild(box);
+        }
+        output.appendChild(el('p','Fully measured, gate-passing nondominated candidates: '+(result.pareto.candidate_ids.join(', ')||'none')+'. No automatic selection.'));
+        const comparisons=result.paired_comparisons||result.comparisons;
+        if(comparisons.length){
+          const picker=el('select');picker.setAttribute('aria-label','Compare candidate against baseline');
+          for(const c of comparisons){const option=el('option',c.candidate_id);option.value=c.candidate_id;picker.appendChild(option);}
+          const filter=el('input');filter.type='checkbox';filter.setAttribute('aria-label','Show only possible regressions or critical cases');
+          const filterLabel=el('label',' Show only possible regressions or critical cases');filterLabel.prepend(filter);
+          const view=el('div');let offset=0;
+          const draw=()=>{
+            const comparison=comparisons.find(c=>c.candidate_id===picker.value);
+            const all=comparison.rows||comparison.cases;
+            const rows=filter.checked?all.filter(r=>r.regression_upper||r.new_critical_upper||r.change==='regressed'||r.new_critical):all;
+            const list=el('ul');
+            for(const r of rows.slice(offset,offset+25)){
+              list.appendChild(el('li',r.case_id+(r.repeat?' · repeat '+r.repeat:'')+' · '+(r.baseline_reason||r.baseline_status)+' → '+(r.candidate_reason||r.candidate_status)+
+                (r.change?' · '+r.change:' · possible regression: '+r.regression_upper+' · possible new critical: '+r.new_critical_upper)));
+            }
+            const nav=el('div');if(offset)nav.appendChild(button('Previous case page',()=>{offset=Math.max(0,offset-25);draw();}));
+            if(offset+25<rows.length)nav.appendChild(button('Next case page',()=>{offset+=25;draw();}));
+            view.replaceChildren(el('p',rows.length?'Showing '+(offset+1)+'–'+Math.min(rows.length,offset+25)+' of '+rows.length+' paired rows':'No matching paired rows.'),list,nav);
+          };
+          picker.addEventListener('change',()=>{offset=0;draw();});filter.addEventListener('change',()=>{offset=0;draw();});
+          output.append(el('h5','Paired case evidence'),picker,filterLabel,view);draw();
+        }
+      }
+      output.appendChild(button('Download minimized procurement JSON',()=>{
+        const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)+'\n'],{type:'application/json'}));
+        const link=el('a');link.href=url;link.download=operation==='freeze'?'owg-procurement-plan.json':'owg-procurement-review.json';
+        link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+      }));
+      output.appendChild(el('p','No model or business tool was called; reported identity, measurements and outcomes remain unverified. This review grants no execution or substitution permission.'));
+    }));
+    section.append(modeLabel,hint,documentLabel,planLabel,run,
+      button('Clear procurement review',()=>{documentFile.value='';planFile.value='';clearProcurementReview();}),output);
+    host.appendChild(section);
   }
   async function backlog(currency){
     const result=await request('/v1/process-catalog/opportunities?'+new URLSearchParams({currency}));
