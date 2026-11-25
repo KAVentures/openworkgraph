@@ -189,6 +189,18 @@ class DeterministicEvaluationCases(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report['cases'][1]['deterministic_search_status'],'unresolved_routes')
         self.assertNotIn(self.case['approved_record'],json.dumps(report))
 
+    async def test_incomplete_search_requires_review_even_when_clarification_expected(self):
+        from route_candidates import _search
+        suite=self.suite()
+        suite['cases'][0]['expected']={'status':'needs_clarification','accepted_routes':[],'review_confirmed':True}
+        with patch('route_candidates._search',side_effect=lambda *args,**kwargs:_search(*args,max_work=1,**kwargs)):
+            report,summary=await evaluate_current_sources(self.spec,suite,self.bindings,
+                deterministic=True,source_reads_confirmed=True,source_state_reader=self.source)
+        self.assertEqual(report['matching_case_count'],1)
+        self.assertEqual(report['deterministic_incomplete_search_count'],1)
+        self.assertTrue(report['review_required'])
+        self.assertTrue(summary['review_required'])
+
     async def test_modes_and_consent_refused_before_reads(self):
         for options in ({'paired':True,'model':'unused'},{'deterministic':True,'model':'unused'},
                         {'deterministic':True,'paired':True},{'deterministic':True,'source_reads_confirmed':False}):
