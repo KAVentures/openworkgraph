@@ -80,18 +80,6 @@ without limit; a damaged archive is refused. The dashboard picks the format from
 report's digests describe the decompressed bytes, so the same log compressed or not counts as the same
 file.
 
-### XES and OCEL times without an offset
-
-XES and OCEL times should carry a UTC offset, but some tools write them without one. PM4Py, for
-example, writes the times of a log without time zones as `2024-03-04T14:05:00`. Such a file used to
-import no events. Now it is refused with a hint until you choose the offset those times use: the same
-**Offset for times without one** as for CSV (`naive_timestamp_offset=` on the import and append
-routes). Times that carry an offset are read as written, and times that are not ISO 8601 are still
-rejected. The offset also applies to the times of OCEL object attribute values. The import reports
-`timestamps_with_assumed_offset`, or `timestamps_without_offset` when no offset was chosen, and the
-offset is part of the import's recorded transform. The dashboard looks at the first times of an XES
-or OCEL file and proposes this computer's offset when some have none.
-
 ### Timestamp formats
 
 ISO 8601 times (`2024-03-04T14:05:00Z`, `2024-03-04 14:05:00+01:00`) need no
@@ -117,6 +105,18 @@ day in the sample is 12 or less, day-first and month-first both fit; the
 dashboard then lists both with how the first value would read, and you choose.
 Quarantined rows are released with ISO parsing only, so re-import a file that
 needs a format.
+
+### XES and OCEL times without an offset
+
+XES and OCEL times should carry a UTC offset, but some tools write them without one. PM4Py, for
+example, writes the times of a log without time zones as `2024-03-04T14:05:00`. Such a file used to
+import no events. Now it is refused with a hint until you choose the offset those times use: the same
+**Offset for times without one** as for CSV (`naive_timestamp_offset=` on the import and append
+routes). Times that carry an offset are read as written, and times that are not ISO 8601 are still
+rejected. The offset also applies to the times of OCEL object attribute values. The import reports
+`timestamps_with_assumed_offset`, or `timestamps_without_offset` when no offset was chosen, and the
+offset is part of the import's recorded transform. The dashboard looks at the first times of an XES
+or OCEL file and proposes this computer's offset when some have none.
 
 ### Reusing an earlier mapping
 
