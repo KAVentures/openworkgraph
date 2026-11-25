@@ -311,3 +311,13 @@ def test_mcp_tools_are_listed_only_when_a_log_is_shared(tmp_path):
     assert off == DEFAULT_TOOLS
     on = asyncio.run(_listed_tools(tmp_path, True))
     assert on == DEFAULT_TOOLS | PROCESS_TOOLS
+
+
+def test_agents_get_no_aggregates_from_a_log_with_fewer_than_five_cases():
+    rows = ["case,activity,time,who"] + [f"c{i},A,2024-03-0{1 + i}T08:00:00Z,x" for i in range(3)]
+    log_id = workspace.import_log(BytesIO("\n".join(rows).encode()), name="tiny", source_format="csv", mapping=MAPPING)["log_id"]
+    sharing.set_share(log_id, "aggregates")
+    with pytest.raises(sharing.NotAllowed):
+        sharing.overview(log_id)
+    sharing.set_share(log_id, "cases")
+    assert sharing.overview(log_id)["cases"] == 3
