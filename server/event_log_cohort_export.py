@@ -3,7 +3,7 @@ from datetime import timezone
 from typing import Any, IO, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from shared.event_log_formats import EventLogFormatError, write_csv, write_jsonl, write_ocel_json, write_ocel_xml, write_xes
+from shared.event_log_formats import EventLogFormatError, write_csv, write_csv_attributes, write_jsonl, write_ocel_json, write_ocel_xml, write_xes
 
 from . import event_log_cohorts as cohorts
 from . import event_log_derive as derived
@@ -11,7 +11,7 @@ from . import event_log_source_identity as source_identity
 from . import event_log_workspace as workspace
 
 
-MatchingExportFormat = Literal["csv", "csv-review", "sourcecsv", "sourcecsv-review", "jsonl", "xes", "xes-attributes", "ocel", "ocelxml"]
+MatchingExportFormat = Literal["csv", "csv-attributes", "csv-review", "sourcecsv", "sourcecsv-review", "jsonl", "xes", "xes-attributes", "ocel", "ocelxml"]
 
 
 class ExportSpec(BaseModel):
@@ -66,13 +66,19 @@ def export_matching_cases(log_id: str, spec: Any, out: IO[str], *,
         window_join = "SEMI JOIN dv_events ON source.event_id = dv_events.event_id" if has_window else ""
         is_xes = export_format in ("xes", "xes-attributes")
         include_attributes = export_format == "xes-attributes"
-        fields = "source.*" if is_xes else "source.case_id, source.activity, source.ts, source.resource"
+        grouped = is_xes or export_format == "csv-attributes"
+        fields = "source.*" if grouped else "source.case_id, source.activity, source.ts, source.resource"
         join = ""
         params = [log_id, notion]
         if include_attributes:
             fields += ", o.attributes"
             join = "JOIN objects o ON o.log_id = ? AND o.object_id = source.case_id"
             params.append(log_id)
+        # Column names first: a second query on this connection would end the export cursor.
+        names: list[str] = []
+        if export_format == "csv-attributes":
+            names = workspace._event_attribute_names(conn, f"""(SELECT source.attributes FROM ({workspace._CASE_EVENTS}) source
+                SEMI JOIN ce ON source.case_id = ce.case_id {window_join})""", [log_id, notion])
         cursor = conn.execute(f"""
             SELECT {fields} FROM ({workspace._CASE_EVENTS}) source
             SEMI JOIN ce ON source.case_id = ce.case_id
@@ -83,6 +89,13 @@ def export_matching_cases(log_id: str, spec: Any, out: IO[str], *,
         if is_xes:
             try:
                 write_xes(workspace._group_export_cursor(cursor), out, include_attributes=include_attributes)
+            except EventLogFormatError as exc:
+                raise workspace.EventLogWorkspaceError(str(exc)) from None
+            return {}
+        if export_format == "csv-attributes":
+            try:
+                write_csv_attributes((event for _, events, _ in workspace._group_export_cursor(cursor) for event in events),
+                                     names, out)
             except EventLogFormatError as exc:
                 raise workspace.EventLogWorkspaceError(str(exc)) from None
             return {}

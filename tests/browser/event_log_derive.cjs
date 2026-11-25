@@ -120,6 +120,12 @@ const path=require('node:path');
    const [jsonlFile]=await Promise.all([page.waitForEvent('download'),page.locator('#owgDeriveExport').click()]);
    assert.match(jsonlFile.suggestedFilename(),/matching-cases\.jsonl$/);
    assert.deepEqual((await fs.readFile(await jsonlFile.path(),'utf8')).trim().split('\n').map(line=>JSON.parse(line).case_id),['order-1']);
+   await page.locator('#owgDeriveExportFormat').selectOption('csv-attributes');
+   const [attributeFile]=await Promise.all([page.waitForEvent('download'),page.locator('#owgDeriveExport').click()]);
+   assert.match(attributeFile.suggestedFilename(),/matching-cases\.csv$/);
+   const attributeRows=(await fs.readFile(await attributeFile.path(),'utf8')).trim().split(/\r?\n/);
+   assert.match(attributeRows[0],/^case_id,activity,timestamp,resource/);
+   assert.equal(attributeRows.length,2);
 
    await page.getByRole('button',{name:'Preview copy',exact:true}).click();
    await page.locator('#owgDerivePreview').getByText('The copy would also retain 1 supplied object relationship.',{exact:false}).waitFor();
