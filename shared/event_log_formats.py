@@ -322,8 +322,9 @@ def _ocel_resource(pairs: list[tuple[Any, Any]]) -> tuple[str, dict[str, str]]:
 
 def _ocel_event_attributes(event: dict[str, Any]) -> list[tuple[str, str]]:
     """An event's attributes for OCEL output, with its resource first as ``org:resource``."""
-    attributes = sorted((event.get("attributes") or {}).items())
-    if event.get("resource") and all(k != OCEL_RESOURCE_ATTRIBUTE for k, _ in attributes):
+    stored = event.get("attributes") or {}
+    attributes = sorted(stored.items())
+    if event.get("resource") and OCEL_RESOURCE_ATTRIBUTE not in stored:
         attributes.insert(0, (OCEL_RESOURCE_ATTRIBUTE, event["resource"]))
     return attributes
 
