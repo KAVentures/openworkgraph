@@ -776,3 +776,15 @@ route's ordinary invariants. An unused downstream record is therefore
 not required for an otherwise valid short branch. A missing record on a
 required prerequisite or selected route remains blocking. Broad source
 planning still considers all candidate decisions and rules.
+
+
+Read-only source planning and current-source shadow evaluation distinguish
+a missing case record pointer from an invalid binding declaration. Missing
+candidate inputs remain unbound, with their rule/table identifiers exposed
+in the minimized planning report. If a confirmed upstream decision excludes
+that branch, deterministic planning may still propose the uniquely supported
+short route. If the branch remains viable and its source data are unavailable,
+the planner requires clarification. Invalid pointer syntax and malformed
+record references still refuse planning. Actual implementation preparation
+and validation of reviewed expected routes retain strict required-record
+resolution; planning does not create an execution grant.
