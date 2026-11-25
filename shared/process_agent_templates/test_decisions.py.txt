@@ -531,6 +531,39 @@ class DependentDecisionExecution(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ImplementationError):report(self.data[0],omitted,'Missing whole checkpoint')
 
 
+    async def test_monitor_refuses_route_and_checkpoint_scope_tampering(self):
+        await self.run_case()
+        from monitor import report,read_journal
+        records=read_journal(next(Path(self.folder.name).glob('*.jsonl')))
+        variants=[]
+        # A self-consistent empty claimed closure must not hide visited decisions.
+        empty=deepcopy(records)
+        empty[0]['dependent_decision_routes']=[]
+        empty=[r for r in empty if r['phase']!='decision_table_checked']
+        variants.append(empty)
+        # Remove the initial checkpoint and renumber all remaining checks.
+        omitted=[deepcopy(r) for r in records if not
+            (r['phase']=='decision_table_checked' and r['checkpoint_purpose']=='initial')]
+        for r in omitted:
+            if r['phase']=='decision_table_checked':r['checkpoint_number']-=1
+        variants.append(omitted)
+        # Claim a shorter route or omit a declared business operation.
+        wrong=deepcopy(records);wrong[0]['declared_activity_ids']=['choose','hold']
+        variants.append(wrong)
+        wrong=deepcopy(records);wrong[0]['declared_precondition_attempts']=[]
+        variants.append(wrong)
+        wrong=deepcopy(records)
+        row=next(r for r in wrong if r['phase']=='decision_table_checked' and r['checkpoint_purpose']=='action')
+        row['checkpoint_attempt']=80
+        variants.append(wrong)
+        wrong=deepcopy(records)
+        row=next(r for r in wrong if r['phase']=='attempt_pending')
+        row['activity_id']='readback'
+        variants.append(wrong)
+        for variant in variants:
+            with self.assertRaises(ImplementationError):
+                report(self.data[0],variant,'Modified dependency journal')
+
     async def test_model_free_dependent_route_proposal(self):
         import sys
         from plan_sources import propose_with_sources
