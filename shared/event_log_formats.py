@@ -189,6 +189,17 @@ def write_csv(events: Iterable[dict[str, Any]], out: IO[str], *, spreadsheet_rev
         writer.writerow([review_cell(value) for value in row] if spreadsheet_review else row)
 
 
+def write_jsonl(events: Iterable[dict[str, Any]], out: IO[str]) -> None:
+    """JSON Lines for one case notion: one object per event with the CSV export's four fields.
+
+    A missing resource is ``null``; the JSON Lines import reads the file back to the same CSV.
+    """
+    for event in events:
+        out.write(json.dumps({"case_id": event["case_id"], "activity": event["activity"],
+                              "timestamp": _iso(event["timestamp"]), "resource": event.get("resource") or None},
+                             ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
 # ---------------------------------------------------------------- XES
 
 def _refuse_dtd(stream: IO[bytes]) -> None:
@@ -605,5 +616,5 @@ def detect_format(head: bytes) -> str:
 __all__ = [
     "CASE_TYPE", "EventLogFormatError", "EventRecord", "ObjectRecord", "ReadStats",
     "detect_format", "parse_timestamp", "read_csv", "read_ocel_json", "read_ocel_xml", "read_xes",
-    "write_csv", "write_ocel_json", "write_ocel_xml", "write_xes",
+    "write_csv", "write_jsonl", "write_ocel_json", "write_ocel_xml", "write_xes",
 ]

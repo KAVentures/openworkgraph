@@ -116,6 +116,10 @@ const path=require('node:path');
    const [xlsxFile]=await Promise.all([page.waitForEvent('download'),page.locator('#owgDeriveExport').click()]);
    assert.match(xlsxFile.suggestedFilename(),/matching-cases\.xlsx$/);
    assert.equal((await fs.readFile(await xlsxFile.path())).subarray(0,2).toString(),'PK');
+   await page.locator('#owgDeriveExportFormat').selectOption('jsonl');
+   const [jsonlFile]=await Promise.all([page.waitForEvent('download'),page.locator('#owgDeriveExport').click()]);
+   assert.match(jsonlFile.suggestedFilename(),/matching-cases\.jsonl$/);
+   assert.deepEqual((await fs.readFile(await jsonlFile.path(),'utf8')).trim().split('\n').map(line=>JSON.parse(line).case_id),['order-1']);
 
    await page.getByRole('button',{name:'Preview copy',exact:true}).click();
    await page.locator('#owgDerivePreview').getByText('The copy would also retain 1 supplied object relationship.',{exact:false}).waitFor();

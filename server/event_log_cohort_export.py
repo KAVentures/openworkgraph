@@ -3,7 +3,7 @@ from datetime import timezone
 from typing import Any, IO, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from shared.event_log_formats import EventLogFormatError, write_csv, write_ocel_json, write_ocel_xml, write_xes
+from shared.event_log_formats import EventLogFormatError, write_csv, write_jsonl, write_ocel_json, write_ocel_xml, write_xes
 
 from . import event_log_cohorts as cohorts
 from . import event_log_derive as derived
@@ -11,7 +11,7 @@ from . import event_log_source_identity as source_identity
 from . import event_log_workspace as workspace
 
 
-MatchingExportFormat = Literal["csv", "csv-review", "sourcecsv", "sourcecsv-review", "xes", "xes-attributes", "ocel", "ocelxml"]
+MatchingExportFormat = Literal["csv", "csv-review", "sourcecsv", "sourcecsv-review", "jsonl", "xes", "xes-attributes", "ocel", "ocelxml"]
 
 
 class ExportSpec(BaseModel):
@@ -93,7 +93,10 @@ def export_matching_cases(log_id: str, spec: Any, out: IO[str], *,
                     yield {"case_id": case_id, "activity": activity,
                            "timestamp": timestamp.replace(tzinfo=timezone.utc), "resource": resource}
 
-        write_csv(rows(), out, spreadsheet_review=export_format == "csv-review")
+        if export_format == "jsonl":
+            write_jsonl(rows(), out)
+        else:
+            write_csv(rows(), out, spreadsheet_review=export_format == "csv-review")
         return {}
 
     workspace._query(log_id, settings.case_type, run)

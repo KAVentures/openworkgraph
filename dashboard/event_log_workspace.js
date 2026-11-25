@@ -232,7 +232,7 @@
     card.append(row,mapping,identity,previewPanel,consentLabel,keepLabel,importRow,statusLine,saveMessage,storageRow,storageList);
 
     const pick=select('owgEventLogPick',[]);const caseType=select('owgEventLogCaseType',[]);
-    const exportFormat=select('owgEventLogExportFormat',[['csv','CSV (exact interchange)'],['csv-review','CSV for spreadsheet review'],['sourcecsv','Source-ID CSV (exact interchange)'],['sourcecsv-review','Source-ID CSV for spreadsheet review'],['xes','XES'],['xes-attributes','XES with retained attributes'],['ocel','OCEL 2.0 JSON'],['ocelxml','OCEL 2.0 XML']]);
+    const exportFormat=select('owgEventLogExportFormat',[['csv','CSV (exact interchange)'],['csv-review','CSV for spreadsheet review'],['sourcecsv','Source-ID CSV (exact interchange)'],['sourcecsv-review','Source-ID CSV for spreadsheet review'],['jsonl','JSON Lines'],['xes','XES'],['xes-attributes','XES with retained attributes'],['ocel','OCEL 2.0 JSON'],['ocelxml','OCEL 2.0 XML']]);
     const analyze=button('Analyse');analyze.id='owgEventLogAnalyze';
     const exportButton=button('Export','secondary');exportButton.id='owgEventLogExport';
     const remove=button('Delete log','secondary');remove.id='owgEventLogDelete';
@@ -953,7 +953,7 @@
   // Save the cases matching a filter as a new saved log, to analyse or compare a slice on its own.
   function deriveSection(activityNames){
     const box=section('Save or export matching cases');box.id='owgEventLogDerive';
-    box.appendChild(el('div','Save matching cases as a new log or download their original events in CSV, XES, OCEL or Excel. Saved copies start without the source log’s activity mapping, saved filters, signals and quality reports.','muted'));
+    box.appendChild(el('div','Save matching cases as a new log or download their original events in CSV, JSON Lines, XES, OCEL or Excel. Saved copies start without the source log’s activity mapping, saved filters, signals and quality reports.','muted'));
     const filter=cohortFields('owgDeriveCohort','Cases to include',activityNames);
     const name=input('owgDeriveName','text');name.maxLength=120;name.autocomplete='off';
     const current=state.logs.find(l=>l.log_id===state.logId);name.value=((current&&current.name)||'Log')+' (subset)';
@@ -962,7 +962,7 @@
     const previewStatus=el('div',null,'muted');previewStatus.id='owgDerivePreview';previewStatus.setAttribute('role','status');
     const formatOptions=[['csv','CSV (exact interchange)'],['csv-review','CSV for spreadsheet review'],
       ['xes','XES'],['xes-attributes','XES with retained attributes'],['ocel','OCEL 2.0 JSON'],['ocelxml','OCEL 2.0 XML'],
-      ['xlsx','Excel workbook']];
+      ['xlsx','Excel workbook'],['jsonl','JSON Lines']];
     if(current?.source_identity&&state.caseType==='source_case'){
       formatOptions.push(['sourcecsv','Source-ID CSV (exact interchange)'],['sourcecsv-review','Source-ID CSV for spreadsheet review']);
     }
@@ -979,6 +979,7 @@
         'xes-attributes':'Also includes retained trace and event attribute values. Use OCEL for timed object attributes and relationships.',
         'ocel':'Includes objects linked to matching events, their timed attributes, and relationships between included objects.',
         'ocelxml':'Includes objects linked to matching events, their timed attributes, and relationships between included objects.',
+        'jsonl':'One JSON object per line with case ID, activity, timestamp and resource (null when missing).',
         'xlsx':'One Events worksheet with the exact CSV columns as text cells, a frozen header and a filter. At most 1,048,575 events.'
       }[formats.value];
     }
@@ -1033,7 +1034,7 @@
     };
     download.onclick=async()=>{
       const logId=state.logId,format=formats.value;
-      const extension={'csv-review':'review.csv','sourcecsv-review':'review.csv',xes:'xes','xes-attributes':'xes',ocel:'jsonocel',ocelxml:'xmlocel',xlsx:'xlsx'}[format]||'csv';
+      const extension={'csv-review':'review.csv','sourcecsv-review':'review.csv',xes:'xes','xes-attributes':'xes',ocel:'jsonocel',ocelxml:'xmlocel',xlsx:'xlsx',jsonl:'jsonl'}[format]||'csv';
       download.disabled=true;
       try{
         const spec=copySelection('export');
