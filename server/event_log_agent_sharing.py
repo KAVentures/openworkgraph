@@ -1192,8 +1192,53 @@ def waiting_times(log_id: str, case_type: str | None = None,
     working calendar (timezone, weekly hours, holidays) the same figures are also measured in working time."""
     require(log_id, "aggregates")
     from . import event_log_waiting as waiting
-    return {**waiting.waiting_time(log_id, case_type, working_calendar=working_calendar),
-            "format": FORMAT, "log_id": log_id}
+    result = waiting.waiting_time(log_id, case_type, working_calendar=working_calendar)
+    return {**_withhold_small_waits(result), "format": FORMAT, "log_id": log_id}
+
+
+def _withhold_small_waits(result: dict[str, Any]) -> dict[str, Any]:
+    """Blank timing statistics resting on fewer than AGENT_MIN_CELL_CASES instances, so one case's wait or
+    processing time is never returned on its own. Counts stay; withheld rows are counted."""
+    keep = AGENT_MIN_CELL_CASES
+    blank = {"median_seconds": None, "p90_seconds": None, "mean_seconds": None}
+    withheld = {"activities": 0, "waiting_hotspots": 0, "min_instances": keep}
+
+    def activity(row: dict[str, Any]) -> dict[str, Any]:
+        row = dict(row)
+        small = False
+        if (row.get("instances_with_processing_time") or 0) < keep and row.get("processing"):
+            row["processing"], small = dict(blank), True
+        waiting = row.get("waiting_before")
+        if waiting and (waiting.get("instances") or 0) < keep:
+            row["waiting_before"] = {**blank, "instances": waiting.get("instances"), "total_seconds": None}
+            row["share_of_all_waiting"], small = None, True
+        withheld["activities"] += small
+        return row
+
+    def hotspot(row: dict[str, Any]) -> dict[str, Any] | None:
+        if (row.get("count") or 0) >= keep:
+            return row
+        withheld["waiting_hotspots"] += 1
+        return None
+    out = dict(result)
+    if "activities" in out:
+        out["activities"] = [activity(r) for r in out["activities"]]
+    if "waiting_hotspots" in out:
+        out["waiting_hotspots"] = [r for r in map(hotspot, out["waiting_hotspots"]) if r]
+    calendar = out.get("working_calendar")
+    if isinstance(calendar, dict):
+        calendar = dict(calendar)
+        if "activities" in calendar:
+            calendar["activities"] = [activity(r) for r in calendar["activities"]]
+        if "waiting_hotspots" in calendar:
+            calendar["waiting_hotspots"] = [r for r in map(hotspot, calendar["waiting_hotspots"]) if r]
+        out["working_calendar"] = calendar
+    flow = out.get("flow_efficiency")
+    if isinstance(flow, dict) and (flow.get("cases") or 0) < keep:
+        out["flow_efficiency"] = {"cases": flow.get("cases"), "median": None, "p10": None, "p90": None,
+                                  "busy_seconds": None, "elapsed_seconds": None}
+    out["withheld"] = withheld
+    return out
 
 
 def drift(log_id: str, case_type: str | None = None, window: str = "month") -> dict[str, Any]:
