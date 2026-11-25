@@ -799,7 +799,18 @@ def funnel(log_id: str, steps: list[str], case_type: str | None = None,
     """Milestone funnel over chosen activities (aggregates level: counts, timings, last activities)."""
     require(log_id, "aggregates")
     from . import event_log_funnel as fn
-    return {**fn.funnel(log_id, steps, case_type, within_hours=within_hours), "format": FORMAT, "log_id": log_id}
+    result = fn.funnel(log_id, steps, case_type, within_hours=within_hours)
+    keep = AGENT_MIN_CELL_CASES
+    for step in result["steps"]:
+        if step.get("hours_from_previous") and step["cases"] < keep:
+            step["hours_from_previous"] = {"median": None, "p90": None, "mean": None}
+        step["stopped_cases_last_activity"] = None if step.get("stopped_cases_last_activity") is None else [
+            row for row in step["stopped_cases_last_activity"] if row["cases"] >= keep]
+    completed = result.get("completed") or {}
+    if (completed.get("cases") or 0) < keep and completed.get("hours_first_to_last"):
+        completed["hours_first_to_last"] = {"median": None, "p90": None}
+    result.pop("evidence", None)
+    return {**result, "withheld_below": keep, "format": FORMAT, "log_id": log_id}
 
 
 def unusual_cases(log_id: str, case_type: str | None = None, limit: int = 25) -> dict[str, Any]:
@@ -828,7 +839,17 @@ def next_steps(log_id: str, steps: list[str] | None = None, case_type: str | Non
     """Path explorer: what happens after a sequence of steps (aggregates level)."""
     require(log_id, "aggregates")
     from . import event_log_path_explorer as px
-    return {**px.next_steps(log_id, steps, case_type, anchor=anchor), "format": FORMAT, "log_id": log_id}
+    result = px.next_steps(log_id, steps, case_type, anchor=anchor)
+    keep = AGENT_MIN_CELL_CASES
+    for step in result["next"]:
+        if step["cases"] < keep:
+            if step.get("hours_from_previous"):
+                step["hours_from_previous"] = {"median": None, "p90": None}
+            if step.get("hours_to_case_end"):
+                step["hours_to_case_end"] = {"median": None}
+    if result.get("hours_to_reach_point") and (result.get("cases_at_point") or 0) < keep:
+        result["hours_to_reach_point"] = {"median": None, "p90": None}
+    return {**result, "withheld_below": keep, "format": FORMAT, "log_id": log_id}
 
 
 def insights(log_id: str, case_type: str | None = None, sla_hours: float | None = None,
@@ -1296,4 +1317,12 @@ def batching(log_id: str, case_type: str | None = None, gap_seconds: int = 60, m
     spec: dict[str, Any] = {"gap_seconds": gap_seconds, "min_batch_size": min_batch_size, "by_resource": by_resource}
     if case_type:
         spec["case_type"] = case_type
-    return {**bt.batching(log_id, spec), "format": FORMAT, "log_id": log_id}
+    result = bt.batching(log_id, spec)
+    keep = AGENT_MIN_CELL_CASES
+    for row in result.get("activities", []):
+        if (row.get("batched_events") or 0) < keep:
+            row["median_wait_before_batched_seconds"] = None
+            row["median_batch_span_seconds"] = None
+        if (row.get("events") or 0) - (row.get("batched_events") or 0) < keep:
+            row["median_wait_before_unbatched_seconds"] = None
+    return {**result, "withheld_below": keep, "format": FORMAT, "log_id": log_id}
