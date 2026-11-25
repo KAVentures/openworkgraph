@@ -7686,10 +7686,10 @@
       if(chosen.length<2){statusLine.textContent='Choose at least two steps.';out.replaceChildren();return;}
       if(evidenceStep.value&&(Number(evidenceStep.value)>chosen.length||(evidenceStep.value==='1'&&evidenceStatus.value==='dropped'))){statusLine.textContent='Choose a valid evidence step; drop-off requires step 2 or later.';out.replaceChildren();return;}
       const generation=state.generation;run.disabled=true;statusLine.textContent='Following cases…';out.replaceChildren();
-      const version=++revision,current=()=>generation===state.generation&&version===revision;
       try{
         const params={step:chosen};if(windowPick.value)params.within_hours=windowPick.value;
         if(evidenceStep.value){params.evidence_step=evidenceStep.value;params.evidence_status=evidenceStatus.value;params.evidence_page=true;}
+        const version=++revision,current=()=>generation===state.generation&&version===revision;
         const basePath=logPath('funnel',params),r=await getJSON(basePath).catch(error=>{if(!current())return null;throw error;});
         if(!current())return;
         const first=r.steps[0],last=r.steps[r.steps.length-1];
