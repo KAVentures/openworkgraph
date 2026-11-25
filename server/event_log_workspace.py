@@ -36,6 +36,7 @@ from shared.event_log_formats import (
     write_ocel_xml, write_xes,
 )
 
+from shared.event_log_formats import TRAILING_UNNAMED, TRAILING_VALUES
 from .db import DATA_DIR
 from . import event_log_source_identity as source_identity
 from . import event_log_object_relationships as object_relationships
@@ -395,6 +396,10 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
         raise EventLogFormatError("missing required columns: " + ", ".join(sorted(missing))[:300])
     if identity_mode:source_identity.validate_columns(identity_mode,header)
     q = lambda name: 'source_rows."' + name.replace('"', '""') + '"'
+    if TRAILING_UNNAMED in header and conn.execute(
+            f"SELECT 1 FROM {source} AS source_rows WHERE trim(coalesce({q(TRAILING_UNNAMED)}, '')) <> '' LIMIT 1",
+            [str(path), original_header]).fetchone():
+        raise EventLogFormatError(TRAILING_VALUES)
     case, activity, stamp = (q(c) for c in columns)
     res = q(resource) if resource else "''"
     # Optional extra columns kept as event attributes, with the streaming reader's bounds.
