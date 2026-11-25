@@ -66,6 +66,9 @@ directly-follows counts and its start and end activity counts equal PM4Py's `dis
 on the same events, ordered by time and then by OWG's event order for ties.
 Variants match too: 15,930 distinct variants in both, with identical case counts for the 200
 most frequent.
+Case durations (first to last event) match PM4Py's `get_all_case_durations` to the millisecond:
+median 1,649,180.668 s, 90th percentile 3,028,742.910 s and mean 1,892,125.923 s over all 31,509
+cases.
 
 OWG replays the 2,000 most frequent variants (10,721 of 13,087 cases, disclosed as
 `cases_excluded`); PM4Py replays every case, which explains the small precision and share
