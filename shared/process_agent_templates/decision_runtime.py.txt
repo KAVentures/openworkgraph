@@ -36,14 +36,18 @@ def decision_bindings(spec, routes, case, bindings):
     rows=bindings.get('decision_table_checks',[])
     if not isinstance(rows,list) or len(rows)>12:
         raise ImplementationError('Use at most twelve explicit decision-table bindings')
-    mapped={}
+    targets={route['table_id']:list(route['target_activity_ids']) for route in routes}
+    if len(targets)!=len(routes) or not set(targets)<=set(tables):
+        raise ImplementationError('Decision route must identify unique declared tables')
+    needed=_required_tables(model,targets) if _dependent(spec) else set(targets)
+    mapped={};seen=set()
     keys={'table_id','source_type','resource_ref_pointer','mode','record_semantics_reviewed',
           'non_atomic_reads_reviewed','utc_effective_dates_reviewed'}
     for row in rows:
         if (not isinstance(row,dict) or not isinstance(row.get('table_id'),str)
-            or row['table_id'] not in tables or row['table_id'] in mapped):
+            or row['table_id'] not in tables or row['table_id'] in seen):
             raise ImplementationError('Each table needs an exact reviewed current-source route binding')
-        table=tables[row['table_id']]
+        table=tables[row['table_id']];seen.add(table.id)
         first=table.hit_policy=='FIRST'
         expected=keys|({'row_precedence_reviewed'} if first else set())
         mode='first_route_before_each_action' if first else 'unique_route_before_each_action'
@@ -65,6 +69,10 @@ def decision_bindings(spec, routes, case, bindings):
             raise ImplementationError('Decision dependencies cannot replace or extend authenticated source facts')
         if any(c.path not in SOURCE_PATHS and c.path not in paths for r in table.rows for c in rules[r.rule_id].predicate.conditions):
             raise ImplementationError('Every competing row must use supported current-source or exact declared dependency fact paths')
+        # A declaration for an unvisited, non-prerequisite table does not
+        # require its case-specific record reference on this route.
+        if table.id not in needed:
+            continue
         ref=pointer(case,row['resource_ref_pointer'])
         import re
         if not isinstance(ref,str) or re.fullmatch(r'owg:r:[a-f0-9]{32}',ref) is None:
@@ -77,10 +85,6 @@ def decision_bindings(spec, routes, case, bindings):
             else:requests.append({**mapped[route['table_id']],'target_activity_ids':list(route['target_activity_ids'])})
         return requests,missing
     from owg_model.process_decision_tables import decision_order
-    targets={route['table_id']:list(route['target_activity_ids']) for route in routes}
-    if len(targets)!=len(routes) or not set(targets)<=set(tables):
-        raise ImplementationError('Decision route must identify unique declared tables')
-    needed=_required_tables(model,targets)
     for table in decision_order(model.decision_tables):
         ident=table.id
         if ident not in needed:
