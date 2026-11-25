@@ -519,7 +519,27 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
             ensure_current(intent, now, stop_marker)
         async def check_decisions():
             if not prepared.get('decision_tables'):return
-            from decision_runtime import check_decision_receipt
+            from decision_runtime import check_decision_receipt, check_decision_batch, _dependent
+            if _dependent(spec):
+                # Read each exact record/type once per checkpoint; never carry
+                # source results across actions or across the final check.
+                receipts={};selected_records={}
+                for request in prepared['decision_tables']:
+                    ensure_current(intent,now,stop_marker)
+                    key=(request['resource_ref'],request['source_type'])
+                    if key not in selected_records:
+                        try:selected_records[key]=await source_state_reader(endpoint(bindings['source_api_url'],source=True),source_token,request)
+                        except Exception:selected_records[key]=None
+                    receipts[request['table_id']]=selected_records[key]
+                ensure_current(intent,now,stop_marker)
+                summaries=check_decision_batch(spec,prepared['decision_tables'],receipts,now=now)
+                for summary in summaries:
+                    result.setdefault('decision_table_checks',[]).append(summary)
+                    record('decision_table_checked',**summary)
+                ensure_current(intent,now,stop_marker)
+                if len(summaries)!=len(prepared['decision_tables']) or any(not row['route_matches'] for row in summaries):
+                    raise ImplementationError('Current dependent decision route or prerequisite not established')
+                return
             passed=True
             for request in prepared['decision_tables']:
                 ensure_current(intent,now,stop_marker)
