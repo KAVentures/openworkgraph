@@ -494,6 +494,9 @@ def build_runtime_project(packet: dict) -> bytes:
         "--baseline-cases OLD_SUITE and --cases NEW_SUITE, with the same scenario date and confirmation. "
         "Both suites must contain identical ordered case IDs, categories and facts. "
         "This evaluator reads the two pinned specifications; it never executes historical release code.\n"
+        "\nFor fixed-design effective-period review, add --until-date YYYY-MM-DD (exclusive) to single-date "
+        "scenario review. Each declared policy start/expiry partitions the period; case facts and expectations "
+        "remain fixed. Search-budget exhaustion and behavior changes require review.\n"
     )
     files['verify_release.py'] = Path(release_integrity.__file__).read_text(encoding='utf-8')
     files['release-manifest.json'] = create_manifest(files, spec)
