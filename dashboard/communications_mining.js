@@ -152,8 +152,12 @@
     const examples=el('div');examples.id='owgCommsReviewExamples';
     const prioritize=button('Prioritize human review','secondary');prioritize.id='owgCommsReviewTriage';
     const newest=button('Show unlabelled examples','secondary');newest.id='owgCommsReviewNormal';
-    const reviewOrder=el('div',null,'row');reviewOrder.append(prioritize,newest);
-    let triageMode=false;
+    const diverse=button('Review diverse training examples','secondary');diverse.id='owgCommsReviewDiverse';
+    const previousReview=button('Previous review page','secondary'),nextReview=button('Next review page','secondary');
+    previousReview.id='owgCommsReviewPrevious';nextReview.id='owgCommsReviewNext';
+    previousReview.disabled=nextReview.disabled=true;
+    const reviewOrder=el('div',null,'row');reviewOrder.append(prioritize,diverse,newest,previousReview,nextReview);
+    let triageMode=false,triageOrder='priority',reviewOffset=0,reviewGeneration=0;
     const train=button('Train intent model','secondary');train.id='owgCommsTrain';
     const dropModel=button('Delete model','secondary');dropModel.id='owgCommsModelDelete';
     const model=el('div');model.id='owgCommsModel';
@@ -206,9 +210,9 @@
         const lang=input('owgCommsLang_'+x.example_id,'text','en');lang.value=x.language==='und'?'':x.language;lang.maxLength=12;
         box.appendChild(field('Language',lang));
         const saveLabel=button(x.labels===null?'Save labels (none ticked means no intent)':'Update labels','secondary');
-        saveLabel.onclick=async()=>{try{await api('/v1/communications/review/label',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({example_id:x.example_id,labels:picks.filter(c=>c.checked).map(c=>c.value),language:lang.value.trim()})});await loadReview();reviewStatus.textContent='Labels saved. '+reviewStatus.textContent;}catch(error){reviewStatus.textContent=error.message;}};
+        saveLabel.onclick=async()=>{try{await api('/v1/communications/review/label',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({example_id:x.example_id,labels:picks.filter(c=>c.checked).map(c=>c.value),language:lang.value.trim()})});reviewOffset=0;await loadReview();reviewStatus.textContent='Labels saved. '+reviewStatus.textContent;}catch(error){reviewStatus.textContent=error.message;}};
         const remove=button('Delete example','secondary');remove.setAttribute('aria-label','Delete example '+x.example_id);
-        remove.onclick=async()=>{try{await api('/v1/communications/review/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({example_ids:[x.example_id]})});await loadReview();}catch(error){reviewStatus.textContent=error.message;}};
+        remove.onclick=async()=>{try{await api('/v1/communications/review/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({example_ids:[x.example_id]})});reviewOffset=0;await loadReview();}catch(error){reviewStatus.textContent=error.message;}};
         box.append(saveLabel,remove);list.appendChild(box);
       });
       const intro=triageMode?
@@ -217,26 +221,45 @@
         (page.learned_predictions_used?'Current learned-model suggestions included.':
           'Keyword-only order; learned model '+page.model_status+'.'):
         page.total+' unlabelled examples; showing '+items.length+'.';
+      const details=triageMode&&page.review_order==='diverse'?
+        el('p','Diverse order: rotate through declared language and keyword groups. This page: '+
+          Object.entries(page.page_by_declared_language||{}).map(([lang,n])=>lang+': '+n).join(', ')+
+          '. Language is not inferred; these are review suggestions, not a representative sample.','muted'):el('span');
       examples.replaceChildren(el('h3',triageMode?'Human review suggestions':'Examples to label'),
-        el('div',intro,'muted'),list);
+        el('div',intro,'muted'),details,list);
+      previousReview.disabled=!triageMode||reviewOffset===0;
+      nextReview.disabled=!triageMode||reviewOffset+items.length>=page.total||!items.length;
     }
     async function loadReview(){
+      const generation=++reviewGeneration;
+      const current=()=>generation===reviewGeneration;
+      previousReview.disabled=nextReview.disabled=true;
       try{
-        const st=await api('/v1/communications/review/settings');ackVersion=st.acknowledgement_version;ackText.textContent=' '+st.acknowledgement;
+        const st=await api('/v1/communications/review/settings');if(!current())return;
+        ackVersion=st.acknowledgement_version;ackText.textContent=' '+st.acknowledgement;
         reviewOn.checked=st.enabled;retention.value=String(st.retention_days||30);
         reviewStatus.textContent=st.enabled?st.example_count+' examples kept ('+st.labelled_count+' labelled, '+st.holdout_count+' held out).':'Review examples are off.';
-        await names();
-        prioritize.disabled=!st.enabled;newest.disabled=!st.enabled;
-        const endpoint=triageMode?'/v1/communications/review/triage?limit=20':
+        const t=await api('/v1/communications/taxonomy');if(!current())return;
+        intentNames=t.taxonomy.intents.map(i=>i.name);
+        prioritize.disabled=diverse.disabled=newest.disabled=!st.enabled;
+        if(!st.enabled){examples.replaceChildren();reviewOffset=0;}
+        const endpoint=triageMode?'/v1/communications/review/triage?limit=20&offset='+reviewOffset+'&order='+triageOrder:
           '/v1/communications/review/examples?status=unlabelled&limit=20';
-        renderExamples(st.enabled?await api(endpoint):{examples:[],total:0,unlabelled_holdout_excluded:0,model_status:'absent'});
-        renderModel(await api('/v1/communications/review/model'));
-      }catch(error){reviewStatus.textContent=error.message;}
+        const data=st.enabled?await api(endpoint):{examples:[],total:0,unlabelled_holdout_excluded:0,model_status:'absent'};
+        if(!current())return;
+        if(triageMode&&reviewOffset&&reviewOffset>=data.total){reviewOffset=0;return loadReview();}
+        renderExamples(data);
+        const fresh=await api('/v1/communications/review/model');if(current())renderModel(fresh);
+      }catch(error){if(current()){examples.replaceChildren();reviewStatus.textContent=error.message;}}
     }
-    prioritize.onclick=()=>{triageMode=true;loadReview();};
-    newest.onclick=()=>{triageMode=false;loadReview();};
+    prioritize.onclick=()=>{triageMode=true;triageOrder='priority';reviewOffset=0;loadReview();};
+    diverse.onclick=()=>{triageMode=true;triageOrder='diverse';reviewOffset=0;loadReview();};
+    newest.onclick=()=>{triageMode=false;reviewOffset=0;loadReview();};
+    previousReview.onclick=()=>{reviewOffset=Math.max(0,reviewOffset-20);loadReview();};
+    nextReview.onclick=()=>{reviewOffset+=20;loadReview();};
     saveReview.onclick=async()=>{
       if(!reviewOn.checked&&!window.confirm('Turn off review examples and delete every kept example and the model?'))return;
+      ++reviewGeneration;examples.replaceChildren();reviewOffset=0;
       try{await api('/v1/communications/review/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(reviewOn.checked?{enabled:true,acknowledgement_version:ackVersion,retention_days:Number(retention.value)}:{enabled:false})});await loadReview();}
       catch(error){reviewStatus.textContent=error.message;}
     };
