@@ -3437,6 +3437,20 @@ Two directional results distinguish candidate regressions (baseline traces remov
 
 This is completed **visible trace language** equivalence, not branching-time equivalence, identical concurrency, absence of deadlocks, guaranteed termination, policy compliance, equal costs/timing or business-outcome equivalence. Use soundness and independent evidence alongside it; no result grants execution authority.
 
+### Verify declared compliance rules on a Petri-net model
+
+Expand **Verify declared compliance rules on the model** in the structural and behavioral validation panel. Use the rule builder or paste an editable JSON object containing a `rules` array. It accepts the same five untimed activity-only templates as the existing log compliance checker: `response`, `chain_response`, `precedence`, `not_coexistence` and `existence`. Labels match exactly. Time-bounded response and segregation-of-duties rules are explicitly refused: an ordinary P/T net does not model timestamps or resources.
+
+For each rule and the entire suite jointly, OWG explores the product of reachable Petri markings and deterministic finite rule-monitor states. Silent transitions do not count as visible steps. Only completed traces ending at the exact final marking are classified. The joint check matters: two rules can each be satisfiable on different executions while no single completed execution satisfies both.
+
+Results distinguish verified satisfaction, observed counterexamples, vacuous-only satisfaction, absence of any completed trace, and inconclusive exploration. A rule that is never activated is not evidence that its required step occurs. A model with no completed trace is not reported as verified. Each result includes the possibility of satisfying, violating, activated satisfying and vacuous traces, with concrete witness sequences when found. The search prioritizes shortest visible paths and then total firings; incomplete marking graphs may hide shorter witnesses. Long traces are explicitly marked as prefixes. Rule indices in witnesses refer to the zero-based original ordered suite.
+
+Optionally upload a candidate revision to compare against the same baseline and rule suite. A change from no possible violating trace to a possible violation is a model-policy regression; the reverse is a removal of that possibility. Unchanged possibility is not proof of identical violating trace languages. See the separate completed-behavior comparison for exact visible trace equivalence. The JSON export pins both model byte digests, canonical normalized rule-suite digest, all rules, witnesses and search coverage.
+
+The owner-only endpoint is `POST /v1/event-logs/petri-policy-review`, with `Content-Type: application/octet-stream`. The frame is a four-byte unsigned big-endian rule JSON byte count, that many UTF-8 rule JSON bytes, a four-byte unsigned big-endian baseline byte count, that many baseline PNML bytes, then optional candidate PNML bytes. Rules are limited to 64 KiB and 20 entries; each model is limited to 2 MiB. Unknown keys, duplicate rules, duplicate JSON keys and unsupported templates are refused. A maximum of 10,000 product states per check and 600,000 counted work units per model is enforced in addition to the marking-graph bounds. Later checks may be inconclusive when the shared budget is exhausted. The response is non-retained and `Cache-Control: no-store`.
+
+These are model-level untimed activity trace properties, not legal compliance, real-world case evidence, policy approval or a grant of agent execution authority. A completed-trace property does not by itself establish that all executions complete; use the separate soundness and termination checks.
+
 ### Process trees (PTML) from PM4Py and ProM
 
 The file picker also accepts a **process tree** in PTML, as `pm4py.write_ptml` and ProM's Inductive
