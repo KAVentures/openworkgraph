@@ -207,6 +207,25 @@ async def agent_automation_candidates(request: Request, log_id: str, limit: int 
     return await _answer(sharing.automation_candidates, log_id, case_type, limit)
 
 
+@router.post("/v1/process-intelligence/{log_id}/automation-estimate")
+async def agent_automation_estimate(request: Request, log_id: str):
+    """Body: {"handling_minutes": [low, high], "automatable_share"?: {...}, "hourly_cost"?: number,
+    "case_type"?: text, "limit"?: 1-50}."""
+    _require_agent_access(request)
+    spec = await _json_body(request, "automation estimate", strict=True, limit=8192)
+    allowed = {"handling_minutes", "automatable_share", "hourly_cost", "case_type", "limit"}
+    if not isinstance(spec, dict) or "handling_minutes" not in spec or set(spec) - allowed:
+        raise HTTPException(422, 'send {"handling_minutes": [low, high]} with optional automatable_share, '
+                                 'hourly_cost, case_type and limit')
+    case_type, limit = spec.get("case_type"), spec.get("limit", 10)
+    if case_type is not None and (not isinstance(case_type, str) or not 0 < len(case_type) <= 200):
+        raise HTTPException(422, "case_type must be a short text")
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
+        raise HTTPException(422, "limit must be 1 to 50")
+    return await _answer(sharing.automation_estimate, log_id, spec["handling_minutes"], spec.get("automatable_share"),
+                         spec.get("hourly_cost"), case_type, limit)
+
+
 @router.post("/v1/process-intelligence/{log_id}/costs")
 async def agent_costs(request: Request, log_id: str):
     """POST because prices are a JSON object. Body: {"model"?: {...}, "case_type"?: text, "limit"?: 1-100}.

@@ -217,6 +217,31 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"limit": max(1, min(int(limit), 50)), "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def estimate_process_automation_benefit(log_id: str, handling_minutes: list[float],
+                                            automatable_share: dict[str, list[float]] | None = None,
+                                            hourly_cost: float | None = None, case_type: str | None = None,
+                                            limit: int = 10) -> dict[str, Any]:
+        """Hours per week (and, with hourly_cost, cost per year) that automating each top candidate activity might
+        free, as low-high ranges under assumptions you state. handling_minutes is [low, high] minutes of work per
+        occurrence (ask the user; a log cannot show effort). automatable_share optionally replaces the default
+        [low, high] share per routing pattern: fixed, mostly_fixed, variable. Only occurrences per week are
+        measured; every assumption is returned. A planning aid for people to review, not a measured saving.
+        Aggregates only.
+        """
+        payload: dict[str, Any] = {"handling_minutes": handling_minutes, "limit": limit}
+        for key, value in (("automatable_share", automatable_share), ("hourly_cost", hourly_cost),
+                           ("case_type", case_type)):
+            if value is not None:
+                payload[key] = value
+        runtime_module.authorize_tool("estimate_process_automation_benefit")
+        try:
+            result = runtime_module.secure_post(f"/v1/process-intelligence/{_log(log_id)}/automation-estimate", payload)
+        except Exception as exc:
+            raise ToolError(str(exc) or "process intelligence request failed") from None
+        result["interpretation"] = _NOTE
+        return runtime_module.core._finish("estimate_process_automation_benefit", result)
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_costs(log_id: str, model: dict[str, Any] | None = None, limit: int = 20,
                           case_type: str | None = None) -> dict[str, Any]:
         """Process cost of a shared log from the owner's saved cost model, or from prices you supply for a what-if:

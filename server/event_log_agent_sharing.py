@@ -466,6 +466,17 @@ def automation_candidates(log_id: str, case_type: str | None = None, limit: int 
     return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
 
 
+def automation_estimate(log_id: str, handling_minutes: Any, automatable_share: Any = None, hourly_cost: Any = None,
+                        case_type: str | None = None, limit: int = 10) -> dict[str, Any]:
+    """Hours-per-week (and optional cost) ranges for the automation candidates under the caller's stated
+    assumptions (aggregates level). Only occurrences per week are measured; the rest is assumed."""
+    require(log_id, "aggregates")
+    from . import event_log_automation_estimate as est
+    result = est.estimate(log_id, case_type, handling_minutes=handling_minutes, automatable_share=automatable_share,
+                          hourly_cost=hourly_cost, limit=max(1, min(int(limit), 50)))
+    return {**{k: v for k, v in result.items() if k != "log"}, "format": FORMAT, "log_id": log_id}
+
+
 def costs(log_id: str, model: dict[str, Any] | None = None, case_type: str | None = None,
           limit: int = 20) -> dict[str, Any]:
     """Process cost from the owner's saved cost model, or from prices the agent supplies for a what-if

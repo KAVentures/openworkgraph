@@ -277,7 +277,7 @@ PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_overv
                  "get_process_temporal_profile", "get_process_heuristics_net",
                  "get_process_footprints", "get_process_model_quality",
                  "get_process_deviations", "list_process_reference_nets", "get_process_reference_deviations",
-                 "get_process_funnel",
+                 "get_process_funnel", "estimate_process_automation_benefit",
                  "get_process_trace_clusters", "check_process_compliance", "get_process_performance_spectrum",
                  "get_unusual_process_cases",
                  "get_process_due_dates",
