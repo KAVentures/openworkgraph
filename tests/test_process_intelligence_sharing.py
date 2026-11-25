@@ -311,3 +311,21 @@ def test_mcp_tools_are_listed_only_when_a_log_is_shared(tmp_path):
     assert off == DEFAULT_TOOLS
     on = asyncio.run(_listed_tools(tmp_path, True))
     assert on == DEFAULT_TOOLS | PROCESS_TOOLS
+
+
+def test_agent_rework_and_activity_profile_withhold_single_case_timings():
+    rows = ["case,activity,time,who"]
+    for i in range(10):
+        rows += [f"c{i},Receive,2024-03-{1 + i:02d}T08:00:00Z,clerk", f"c{i},Pay,2024-03-{1 + i:02d}T10:00:00Z,bot"]
+    rows += ["c0,Fix,2024-03-01T09:00:00Z,clerk", "c0,Fix,2024-03-01T09:30:00Z,clerk"]
+    log_id = workspace.import_log(BytesIO("\n".join(rows).encode()), name="r", source_format="csv", mapping=MAPPING)["log_id"]
+    sharing.set_share(log_id, "aggregates")
+    rework = sharing.rework(log_id)
+    assert rework["comparison"]["cases_with_rework"] == 1
+    assert "median_throughput_with_rework_seconds" not in rework["comparison"]
+    assert rework["loop_patterns"] == []
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        sharing.activity_profile(log_id, "Fix")
+    profile = sharing.activity_profile(log_id, "Pay")
+    assert profile["case_hours"]["without_activity"] == {"median": None, "p90": None}
+    assert all(r["median_hours"] is None for r in profile["comes_after"] if r["times"] < 5)

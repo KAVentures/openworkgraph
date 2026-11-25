@@ -1014,7 +1014,17 @@ def activity_profile(log_id: str, activity: str, case_type: str | None = None) -
     """One activity from every side (aggregates level)."""
     require(log_id, "aggregates")
     from . import event_log_activity_profile as ap
-    return {**ap.activity_profile(log_id, activity, case_type), "format": FORMAT, "log_id": log_id}
+    result = ap.activity_profile(log_id, activity, case_type)
+    keep = AGENT_MIN_CELL_CASES
+    if result["cases_with_activity"] < keep:
+        raise EventLogWorkspaceError(f"this activity occurs in fewer than {keep} cases; it is not profiled for agents")
+    for side in ("comes_after", "comes_before"):
+        result[side] = [{**row, "median_hours": row.get("median_hours") if row["times"] >= keep else None}
+                        for row in result[side]]
+    without = result["cases"] - result["cases_with_activity"]
+    if without < keep and isinstance(result.get("case_hours"), dict):
+        result["case_hours"] = {**result["case_hours"], "without_activity": {"median": None, "p90": None}}
+    return {**result, "withheld_below": keep, "format": FORMAT, "log_id": log_id}
 
 
 def activity_glossary(log_id: str) -> dict[str, Any]:
@@ -1183,7 +1193,15 @@ def rework(log_id: str, case_type: str | None = None, limit: int = 20) -> dict[s
     spec: dict[str, Any] = {"limit": max(1, min(int(limit), 100))}
     if case_type:
         spec["case_type"] = case_type
-    return {**rw.rework(log_id, spec), "format": FORMAT, "log_id": log_id}
+    result = rw.rework(log_id, spec)
+    keep = AGENT_MIN_CELL_CASES
+    comparison = result.get("comparison")
+    if comparison and min(comparison["cases_with_rework"], comparison["cases_without_rework"]) < keep:
+        result["comparison"] = {"cases_with_rework": comparison["cases_with_rework"],
+                                "cases_without_rework": comparison["cases_without_rework"],
+                                "withheld": f"one side has fewer than {keep} cases"}
+    result["loop_patterns"] = [p for p in result.get("loop_patterns", []) if p["cases"] >= keep]
+    return {**result, "withheld_below": keep, "format": FORMAT, "log_id": log_id}
 
 
 def waiting_times(log_id: str, case_type: str | None = None) -> dict[str, Any]:
