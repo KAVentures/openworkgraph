@@ -12,3 +12,11 @@ def test_playbook_ignores_a_malformed_log_id_and_long_questions():
     assert "../etc" not in text and "list_process_logs" in text
     assert "x" * 501 not in text
     assert "Question: How does this process perform" in investigate_process_prompt()
+
+
+def test_monitor_playbook_uses_preview_and_never_saves():
+    from mcp_server.process_intelligence_tools import propose_monitors_prompt
+    text = propose_monitors_prompt("Spot slow approvals", "log_0123456789abcdef")
+    assert "Spot slow approvals" in text and "log_0123456789abcdef" in text
+    assert "preview_process_signal" in text and "cannot save" in text
+    assert "list_process_logs" in propose_monitors_prompt("", "bad")

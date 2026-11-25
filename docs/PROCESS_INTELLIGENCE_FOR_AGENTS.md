@@ -121,6 +121,12 @@ over time, then options and simulation. It sets the rules for reporting: associa
 counts acknowledged, people never named, simulations as model outputs. It is plain text; every tool keeps its own
 sharing checks.
 
+### Prompt: `propose_process_monitors`
+
+`propose_process_monitors(goal, log_id)` asks the AI to propose up to five monitoring signals for the owner. It checks
+the existing signals, looks at trends, drift and stuck or overdue cases, and tests each draft rule with
+`preview_process_signal` before proposing it. Nothing is saved; the owner decides which to keep.
+
 ## HTTP
 
 | Route | Who |

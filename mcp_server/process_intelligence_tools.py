@@ -50,6 +50,31 @@ def investigate_process_prompt(question: str = "", log_id: str = "") -> str:
     ])
 
 
+def propose_monitors_prompt(goal: str = "", log_id: str = "") -> str:
+    """A playbook for proposing monitoring signals to the owner from evidence. Pure text: nothing is saved."""
+    goal = " ".join(str(goal or "").split())[:500] or "Catch problems in this process early."
+    log_id = str(log_id or "").strip()
+    target = (f"Use the shared log {log_id}." if _LOG_ID.fullmatch(log_id)
+              else "Start with list_process_logs and pick the log that matches the goal; ask if it is unclear.")
+    return "\n".join([
+        f"Goal: {goal}",
+        target,
+        "",
+        "1. get_process_signals: see what the owner already monitors, so you do not propose duplicates.",
+        "2. get_process_overview (weekly trend, KPIs), get_process_drift and get_stuck_process_cases or "
+        "get_process_due_dates where shared: find what has gone wrong before or tends to.",
+        "3. For each candidate, write a draft rule and run preview_process_signal on it: a KPI threshold (for "
+        "example median_throughput_seconds above a level), a case condition (duration_over, has_rework, "
+        "open_longer_than) with a minimum_cases, or a compliance rule. Tune the threshold so it would not "
+        "trigger on every evaluation.",
+        "4. Propose at most five monitors to the owner. For each give its name, the exact rule, what the "
+        "preview showed now, why it matters, and what the owner should do when it triggers.",
+        "",
+        "Rules: you cannot save, evaluate saved rules, acknowledge or snooze; the owner decides. A triggered "
+        "preview is not a verified problem. Do not name people. Say when a figure was withheld for small counts.",
+    ])
+
+
 def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
     sid = id(mcp)
     if sid in _REGISTERED:
@@ -84,6 +109,11 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
     def investigate_process(question: str = "", log_id: str = "") -> str:
         """Ask the connected AI to investigate a shared process log with the process tools, step by step."""
         return investigate_process_prompt(question=question, log_id=log_id)
+
+    @mcp.prompt()
+    def propose_process_monitors(goal: str = "", log_id: str = "") -> str:
+        """Ask the connected AI to propose monitoring signals for a shared process log, tested on the log first."""
+        return propose_monitors_prompt(goal=goal, log_id=log_id)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_brief(log_id: str, sla_hours: float | None = None, case_type: str | None = None) -> dict[str, Any]:
