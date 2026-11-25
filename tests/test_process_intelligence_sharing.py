@@ -212,6 +212,12 @@ with TestClient(app) as client:
     r = client.get(f"/v1/process-intelligence/{log_id}/overview", headers=agent)
     assert r.status_code == 200 and r.json()["cases"] == 6, r.text
     assert client.get(f"/v1/process-intelligence/{log_id}/case?case_id=c0", headers=agent).status_code == 404
+    cal = json.dumps({"timezone": "UTC", "hours": {"mon": [["09:00", "17:00"]]}})
+    r = client.get(f"/v1/process-intelligence/{log_id}/waiting-times", params={"working_calendar": cal}, headers=agent)
+    assert r.status_code == 200, r.text
+    for bad in ("not json", "[1]"):
+        r = client.get(f"/v1/process-intelligence/{log_id}/waiting-times", params={"working_calendar": bad}, headers=agent)
+        assert r.status_code == 422, r.text
     r = client.get(f"/v1/process-intelligence/{log_id}/root-cause?outcome=rework", headers=agent)
     assert r.status_code == 200, r.text
     r = client.get(f"/v1/process-intelligence/{log_id}/signals", headers=agent)

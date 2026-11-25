@@ -500,9 +500,19 @@ async def agent_rework(request: Request, log_id: str, limit: int = Query(default
 
 
 @router.get("/v1/process-intelligence/{log_id}/waiting-times")
-async def agent_waiting_times(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200)):
+async def agent_waiting_times(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                              working_calendar: str | None = Query(default=None, max_length=4096)):
     _require_agent_access(request)
-    return await _answer(sharing.waiting_times, log_id, case_type)
+    calendar = None
+    if working_calendar is not None:
+        import json
+        try:
+            calendar = json.loads(working_calendar)
+        except ValueError:
+            raise HTTPException(422, "working_calendar must be a JSON object") from None
+        if not isinstance(calendar, dict):
+            raise HTTPException(422, "working_calendar must be a JSON object")
+    return await _answer(sharing.waiting_times, log_id, case_type, calendar)
 
 
 @router.get("/v1/process-intelligence/{log_id}/drift")
