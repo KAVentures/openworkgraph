@@ -36,7 +36,7 @@ const path=require('node:path');
   assert.equal(await page.locator('#owgSignalActivityExact').inputValue(),'');assert.equal(await page.locator('#owgSignalPreviewStatus').textContent(),'');
   await page.locator('#owgSignalActivityExact').fill(rare);
   const [saved]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/signals')&&r.request().method()==='POST'),page.locator('#owgSignalAdd').click()]);
-  assert.equal(saved.status(),200,await saved.text());assert.equal(saved.request().postDataJSON().when.activity,rare);
+  assert.equal(saved.status(),200);assert.equal(saved.request().postDataJSON().when.activity,rare);
   await page.locator('#owgSignalStatus').filter({hasText:'Signal saved.'}).waitFor();
   await page.locator('#owgSignalCondition').selectOption('lacks_activity');await page.locator('#owgSignalName').fill('Missing rare');
   const [missing]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/signals/preview')),page.locator('#owgSignalPreview').click()]);
