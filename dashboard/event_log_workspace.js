@@ -22,7 +22,7 @@
   const attrText=()=>[state.attr.attribute,state.attr.attribute_range?rangeText(state.attr.attribute_range):'',state.attr.starts_with?'starts with '+JSON.stringify(state.attr.starts_with):'',state.attr.ends_with?'ends with '+JSON.stringify(state.attr.ends_with):'',state.attr.duration?durationText(state.attr.duration):'',moreFilterText(state.attr)].filter(Boolean).join('; ');
   let labelLookupBusy=false;
   // Views that honour the workspace case filter; every other section uses all cases.
-  const FILTERED=new Set(['automation-candidates','summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','performance-spectrum','waiting-time','drift','model-discovery','organization','report.html','decision-points','decision-rules']);
+  const FILTERED=new Set(['automation-candidates','automation-estimate','summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','performance-spectrum','waiting-time','drift','model-discovery','organization','report.html','decision-points','decision-rules']);
   FILTERED.add('roles');
   FILTERED.add('process-map.dot');
   FILTERED.add('anonymized-export');
@@ -2834,6 +2834,38 @@
         last=r;exports.enable(true);
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
       finally{run.disabled=false;}};
+    // Hours-per-week ranges from the owner's own assumptions; only occurrences per week are measured.
+    const est=el('div');est.id='owgAutomationEstimate';
+    est.append(el('h4','Estimate the time automation could free'),
+      el('div','Enter how many minutes one occurrence takes. A log records when steps happened, not how long anyone worked on them, so this is your assumption. Results are ranges, not measured savings.','muted'));
+    const minLow=input('owgAutomationMinutesLow','number'),minHigh=input('owgAutomationMinutesHigh','number'),rate=input('owgAutomationHourlyCost','number');
+    for(const n of [minLow,minHigh,rate]){n.min='0';n.step='any';}
+    minLow.value='3';minHigh.value='8';
+    const estRun=button('Estimate','secondary');estRun.id='owgAutomationEstimateRun';
+    const estRow=el('div',null,'row');estRow.style.alignItems='end';
+    estRow.append(field('Minutes per occurrence, low',minLow),field('Minutes per occurrence, high',minHigh),field('Hourly cost (optional)',rate),estRun);
+    const estOut=el('div');estOut.id='owgAutomationEstimateResults';estOut.setAttribute('role','status');estOut.setAttribute('aria-live','polite');
+    est.append(estRow,estOut);box.appendChild(est);
+    const range=([a,b],f)=>f(a)+'\u2013'+f(b);
+    const hrs=v=>Number(v).toLocaleString(undefined,{maximumFractionDigits:1});
+    estRun.onclick=async()=>{
+      const low=Number(minLow.value),high=Number(minHigh.value);
+      if(!(low>=0)||!(high>=low)){estOut.replaceChildren(el('div','Enter a low and a high number of minutes, with the high at least the low.','muted'));return;}
+      const body={handling_minutes:[low,high],limit:15};
+      if(rate.value!==''){const c=Number(rate.value);if(!(c>0)){estOut.replaceChildren(el('div','The hourly cost must be above 0, or left empty.','muted'));return;}body.hourly_cost=c;}
+      estRun.disabled=true;estOut.replaceChildren(el('div','Estimating\u2026','muted'));
+      try{
+        const r=await (await api(logPath('automation-estimate',{}),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+        const withCost='cost_per_year_total' in r;
+        const shares=r.assumptions.automatable_share;
+        estOut.replaceChildren(
+          el('div','About '+range(r.hours_per_week_total,hrs)+' hours a week across these '+r.candidates.length+' activities'+(withCost?', about '+range(r.cost_per_year_total,hrs)+' a year at '+r.assumptions.hourly_cost+' an hour':'')+'.'),
+          table(['Activity','Routing','Per week (measured)','Share automatable (assumed)','Hours a week','Consider'].concat(withCost?['Cost a year']:[]),
+            r.candidates.map(c=>[c.activity,PATTERNS[c.routing_pattern],String(c.measured.occurrences_per_week),
+              range(c.assumed.automatable_share,v=>Math.round(v*100)+'%'),range(c.hours_per_week,hrs),c.alternative_to_consider].concat(withCost?[range(c.cost_per_year,hrs)]:[]))),
+          el('div','Assumed automatable shares: fixed '+range(shares.fixed,pct)+', mostly fixed '+range(shares.mostly_fixed,pct)+', variable '+range(shares.variable,pct)+'. '+r.interpretation,'muted'));
+      }catch(error){estOut.replaceChildren(el('div',error.message,'muted'));}
+      finally{estRun.disabled=false;}};
     return box;
   }
 
