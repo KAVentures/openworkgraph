@@ -137,6 +137,21 @@ def source_check_exports(request: Request,idea_id: str,project_id: str):
     return _respond(project_source_checks.exports,idea_id,project_id)
 
 
+@router.post("/v1/automation-pipeline/{idea_id}/projects/{project_id}/source-check-review")
+async def review_source_check(request: Request, idea_id: str, project_id: str):
+    """Review original bytes without storing the supplied receipt or reading providers."""
+    _require_dashboard(request)
+    if str(request.headers.get("content-type", "")).split(";")[0].strip().lower() != "application/json":
+        raise HTTPException(415, "select the original JSON source-check download")
+    content = bytearray()
+    async for chunk in request.stream():
+        if len(content) + len(chunk) > project_source_checks.MAX_REVIEW_BYTES:
+            raise HTTPException(413, "source-check document exceeds 64 KiB")
+        content.extend(chunk)
+    return await run_in_threadpool(_respond, project_source_checks.review_export,
+                                   idea_id, project_id, bytes(content))
+
+
 @router.post("/v1/automation-pipeline/{idea_id}/projects/{project_id}/source-check-export")
 async def export_source_check(request: Request,idea_id: str,project_id: str):
     _require_dashboard(request)
@@ -174,6 +189,21 @@ async def unlink_project_report(request: Request, idea_id: str):
 def idea_journey(request: Request, idea_id: str):
     _require_dashboard(request)
     return _respond(opportunity_journey.journey, idea_id)
+
+
+@router.post("/v1/automation-pipeline/{idea_id}/project-archive-review")
+async def review_project_archive(request: Request, idea_id: str):
+    _require_dashboard(request)
+    from . import project_archive_review
+    if str(request.headers.get("content-type", "")).split(";")[0].strip().lower() != "application/zip":
+        raise HTTPException(415, "select the original tracked project ZIP")
+    content = bytearray()
+    async for chunk in request.stream():
+        if len(content) + len(chunk) > project_archive_review.MAX_ARCHIVE_BYTES:
+            raise HTTPException(413, "project ZIP exceeds 16 MiB")
+        content.extend(chunk)
+    return await run_in_threadpool(_respond, project_archive_review.review_archive,
+                                   idea_id, bytes(content))
 
 
 @router.get("/v1/automation-pipeline/{idea_id}/projects")

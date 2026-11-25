@@ -34,6 +34,7 @@ from . import process_discovery_provenance as discovery_provenance
 from . import event_log_object_attributes as object_attributes
 from . import event_log_object_constraints as object_constraints
 from . import event_log_object_process_model as object_process_model
+from . import event_log_object_lifecycle_review as object_lifecycle_review
 from . import event_log_impact as impact
 from . import event_log_domain_packs as domain_packs
 from . import event_log_object_diagnostics as object_diagnostics
@@ -58,6 +59,7 @@ from . import event_log_signal_overview as signal_overview
 from . import event_log_signal_timeline as signal_timeline
 from . import event_log_simulation as simulation
 from . import event_log_simulation_portfolio as simulation_portfolio
+from . import event_log_simulation_capacity as simulation_capacity
 from . import event_log_trace_clusters as trace_clusters
 from . import event_log_waiting as waiting
 from . import event_log_workspace as workspace
@@ -1491,6 +1493,26 @@ async def event_log_tag_non_fitting_cases(request: Request, log_id: str,
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/model-quality/temporal")
+async def event_log_temporal_model_quality(request: Request, log_id: str):
+    from . import event_log_temporal_model_quality as temporal
+    _require_dashboard(request)
+    spec = await _json_body(request, "temporal model quality", strict=True, limit=32768)
+    response = await run_in_threadpool(_respond, temporal.review, log_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/model-quality/temporal/evidence")
+async def event_log_temporal_model_quality_evidence(request: Request, log_id: str):
+    from . import event_log_temporal_model_quality as temporal
+    _require_dashboard(request)
+    spec = await _json_body(request, "temporal model evidence", strict=True, limit=32768)
+    response = await run_in_threadpool(_respond, temporal.evidence, log_id, spec)
+    _require_dashboard(request)
+    return response
+
+
 @router.get("/v1/event-logs/{log_id}/model-quality")
 def event_log_model_quality(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                             levels: str | None = Query(default=None, max_length=100),
@@ -2273,6 +2295,17 @@ async def event_log_object_process_model_conformance(request: Request, log_id: s
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/object-process-model/conformance/lifecycle-review")
+async def event_log_object_lifecycle_review(request: Request, log_id: str):
+    """Review exact lifecycle replay populations and their retained event evidence."""
+    _require_dashboard(request)
+    spec = await _json_body(request, "object lifecycle evidence", strict=True,
+                            limit=object_process_model.MAX_REQUEST_BYTES + 4096)
+    response = await run_in_threadpool(_respond, object_lifecycle_review.review, log_id, spec)
+    _require_dashboard(request)
+    return response
+
+
 @router.post("/v1/event-logs/{log_id}/object-process-model/conformance/arc-evidence")
 async def event_log_object_process_arc_evidence(request: Request, log_id: str):
     _require_dashboard(request)
@@ -2355,6 +2388,26 @@ def event_log_domain_pack_uninstall(request: Request, log_id: str, pack_id: str 
     return _respond(domain_packs.uninstall, log_id, pack_id, expected_installation=expected_installation)
 
 
+@router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}/benchmark/preview")
+async def event_log_domain_pack_benchmark_preview(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_benchmark as benchmark
+    _require_dashboard(request)
+    spec = await _json_body(request, "domain benchmark preview", strict=True, limit=4096)
+    response = await run_in_threadpool(_respond, benchmark.preflight, log_id, pack_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}/benchmark")
+async def event_log_domain_pack_benchmark(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_benchmark as benchmark
+    _require_dashboard(request)
+    spec = await _json_body(request, "domain benchmark", strict=True, limit=4096)
+    response = await run_in_threadpool(_respond, benchmark.compare, log_id, pack_id, spec)
+    _require_dashboard(request)
+    return response
+
+
 @router.get("/v1/event-logs/{log_id}/domain-packs/{pack_id}/report")
 def event_log_domain_pack_report(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
     _require_dashboard(request)
@@ -2433,6 +2486,26 @@ async def event_log_next_activity(request: Request, log_id: str):
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/next-activity/landmarks")
+async def event_log_next_activity_landmarks(request: Request, log_id: str):
+    from . import event_log_next_activity_landmarks as landmarks
+    _require_dashboard(request)
+    spec = await _json_body(request, "next-activity landmark settings", strict=True, limit=32768)
+    response = await run_in_threadpool(_respond, landmarks.review, log_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/next-activity/landmarks/evidence")
+async def event_log_next_activity_landmark_evidence(request: Request, log_id: str):
+    from . import event_log_next_activity_landmarks as landmarks
+    _require_dashboard(request)
+    spec = await _json_body(request, "next-activity landmark evidence", strict=True, limit=32768)
+    response = await run_in_threadpool(_respond, landmarks.evidence, log_id, spec)
+    _require_dashboard(request)
+    return response
 
 
 @router.post("/v1/event-logs/{log_id}/next-activity/training-evidence")
@@ -3127,6 +3200,17 @@ async def event_log_simulation_portfolio(request: Request, log_id: str,
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/simulation/capacity-grid")
+async def event_log_simulation_capacity(request: Request, log_id: str,
+                                       case_type: str | None = Query(default=None, max_length=200)):
+    """Bounded, reproducible demand-by-design stress grid on local calibrated paths."""
+    _require_dashboard(request)
+    spec = await _json_body(request, "capacity grid", strict=True, limit=65536)
+    result = await run_in_threadpool(_respond, simulation_capacity.run_grid, log_id, spec, case_type)
+    _require_dashboard(request)
+    return result
 
 
 @router.post("/v1/event-logs/{log_id}/simulation/validation")

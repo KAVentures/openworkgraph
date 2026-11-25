@@ -136,6 +136,35 @@ async def save_release_inventory(request: Request, deployment_id: str):
         raise HTTPException(422, str(exc)) from None
 
 
+@router.post("/v1/automation-monitoring/deployments/{deployment_id}/runs/search")
+async def search_run_evidence(request: Request, deployment_id: str):
+    from . import automation_run_evidence as evidence
+    from .event_log_routes import _json_body
+    _require_dashboard(request)
+    spec = await _json_body(request, "run evidence filters", strict=True, limit=16384)
+    _require_dashboard(request)
+    return await _respond(evidence.search, deployment_id, spec)
+
+
+@router.get("/v1/automation-monitoring/deployments/{deployment_id}/runs/detail")
+async def get_run_evidence(request: Request, deployment_id: str,
+                           run_id: str = Query(min_length=1, max_length=128),
+                           expected_sha256: str | None = Query(default=None, pattern=r"^[a-f0-9]{64}$")):
+    from . import automation_run_evidence as evidence
+    _require_dashboard(request)
+    return await _respond(evidence.detail, deployment_id, run_id, expected_sha256)
+
+
+@router.post("/v1/automation-monitoring/runs/compare")
+async def compare_run_evidence(request: Request):
+    from . import automation_run_evidence as evidence
+    from .event_log_routes import _json_body
+    _require_dashboard(request)
+    spec = await _json_body(request, "pinned run comparison", strict=True, limit=16384)
+    _require_dashboard(request)
+    return await _respond(evidence.compare, spec)
+
+
 @router.get("/v1/automation-monitoring/deployments/{deployment_id}/monitor")
 async def monitor_deployment(request: Request, deployment_id: str, recent_days: int = Query(default=7, ge=1, le=90),
                              baseline_days: int = Query(default=28, ge=1, le=365)):
