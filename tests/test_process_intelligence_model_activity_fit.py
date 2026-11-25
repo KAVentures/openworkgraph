@@ -30,3 +30,11 @@ def test_logs_with_too_many_activities_get_a_fitting_share():
     assert fit["activities_left_out"] == 6 and 0 < fit["share"] < 1
     result = sharing.footprints(log_id)
     assert result["model_activities"] == fit
+
+
+def test_model_change_reports_the_fitted_share():
+    log_id = _log()
+    sharing.set_share(log_id, "aggregates")
+    with __import__("pytest").raises(workspace.EventLogWorkspaceError):
+        sharing.model_change(log_id)  # 12 cases cannot fill two periods of 10; the share is still computed first
+    assert sharing._fitting_activities(log_id, None)["share"] == 1.0
