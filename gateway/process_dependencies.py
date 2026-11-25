@@ -174,6 +174,26 @@ class ProcessDependencies:
             result.pop('focused_build_basis',None)
         return result
 
+    def check_build_basis(self,p,wid,revision,expected_basis):
+        """Return minimized live read-only status, never an execution grant."""
+        with self.catalog.reading(p) as c:
+            result=self.snapshot(c,p,wid)
+            basis=result.get('focused_build_basis')
+            root=next((r for r in basis['processes'] if r['workflow_id']==wid),None) if basis else None
+            exact=bool(root and root['current_model']['revision']==revision
+                and basis['basis_sha256']==expected_basis)
+            current=bool(exact and basis['all_declared_prerequisites_current'])
+            response={'format':'openworkgraph.dependency-build-basis-status.v1',
+                'organization_id':p.organization_id,'workflow_id':wid,'requested_revision':revision,
+                'requested_basis_sha256':expected_basis,'current_exact_reviewed_basis':current,
+                'status':'current' if current else 'unavailable' if not basis else 'changed_or_unreviewed',
+                'checked_at':_now(),'read_only':True,'execution_authorized':False,
+                'business_outcomes_verified':False}
+        self.db.audit(organization_id=p.organization_id,principal_id=p.audit_id,
+            action='process.dependencies.build.checked',details={'workflow_id':wid,'revision':revision,
+                'basis_sha256':expected_basis,'current':current})
+        return response
+
     def build_bundle(self,p,wid,revision,expected_basis):
         """Create a root starter plus its exact reviewed prerequisite basis.
 
