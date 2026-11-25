@@ -97,3 +97,5 @@ is separate from the counts-only import diagnostics. Changing the selection
 requires running the analysis again.
 
 The **Download quality overview JSON** button saves the loaded overview snapshot, including its batch-window metadata, live diagnostics, integrity result, mapping and attribute names, and retained report summaries. It does not export rejected rows. The snapshot contains only the displayed batch window; use Compare batches to browse older history. Reload the overview to capture a later diagnostic reference time.
+
+After running timestamp ordering, **Download timestamp ordering JSON** saves that result, including the case notion, active filter if any, and activity truncation flag. It reflects the last completed analysis; run it again after changing the selection.

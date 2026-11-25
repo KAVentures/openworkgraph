@@ -8514,7 +8514,9 @@
       try{
         const r=await getJSON(logPath('quality/timestamp-ties'));
         if(generation!==state.generation||!tieOut.isConnected)return;
-        tieOut.replaceChildren(el('p',Number(r.tied_case_event_occurrences).toLocaleString()+' of '+Number(r.case_event_occurrences).toLocaleString()+' case-event occurrences share a timestamp in '+Number(r.cases_with_ties).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases. '+Number(r.groups_with_different_activities).toLocaleString()+' timestamp groups contain different activity labels.','muted'),
+        const tieDownload=button('Download timestamp ordering JSON','secondary');tieDownload.id='owgQualityTiesJson';
+        tieDownload.onclick=()=>download('event-log-timestamp-ordering.json',JSON.stringify(r,null,2),'application/json');
+        tieOut.replaceChildren(tieDownload,el('p','The download contains this analysis snapshot, including activity names and any active case filter.','muted'),el('p',Number(r.tied_case_event_occurrences).toLocaleString()+' of '+Number(r.case_event_occurrences).toLocaleString()+' case-event occurrences share a timestamp in '+Number(r.cases_with_ties).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases. '+Number(r.groups_with_different_activities).toLocaleString()+' timestamp groups contain different activity labels.','muted'),
           el('p',r.interpretation,'muted'),
           ...(r.activities_truncated?[el('p','Showing the 100 activities with the most tied occurrences; other activities are omitted.','muted')]:[]),
           table(['Activity','Occurrences','Tied occurrences','Cases with ties'],r.activities.map(a=>[a.activity,Number(a.occurrences).toLocaleString(),Number(a.tied_occurrences).toLocaleString(),Number(a.cases_with_ties).toLocaleString()])));
