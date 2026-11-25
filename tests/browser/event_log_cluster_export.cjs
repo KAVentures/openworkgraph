@@ -107,6 +107,13 @@ const path=require('node:path');
   await review.getByRole('button',{name:'Preview cluster tag'}).click();
   await review.locator('#owgClusterTagStatus').filter({hasText:'2 matching cases.'}).waitFor();
   assert(await review.getByRole('button',{name:'Apply cluster tag'}).isEnabled());
+  // The case-count safety limit refuses tagging instead of applying a partial cluster.
+  await page.route('**/trace-clusters',async route=>{const response=await route.fetch(),body=await response.json();
+    body.clusters[0].cases=100001;await route.fulfill({response,json:body});},{times:1});
+  await page.locator('#owgClusterRun').click();await out.getByRole('button',{name:'Inspect cases in cluster 1'}).click();
+  await review.locator('#owgClusterTagging summary').click();
+  await review.getByText(/limited to 100,000 cases/).waitFor();
+  assert.equal(await review.getByRole('button',{name:'Apply cluster tag'}).count(),0);
   await page.locator('#owgClusterK').selectOption('3');assert.equal(await out.textContent(),'');assert.equal(await review.textContent(),'');
   assert(await box.getByRole('button',{name:'Download cluster report JSON'}).isDisabled());
   assert(await box.getByRole('button',{name:'Download cluster report CSV'}).isDisabled());
