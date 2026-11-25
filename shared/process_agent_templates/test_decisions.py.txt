@@ -659,5 +659,32 @@ class DeclaredDependencyScenarioCases(unittest.TestCase):
         self.assertEqual(expired['matching_case_count'],2)
         self.assertTrue(expired['review_required'])
         self.assertFalse(expired['execution_plan_created'])
+        from review_facts import review_effective_period
+        from unittest.mock import patch
+        for table in spec['process_model']['decision_tables']:
+            table['effective_from']='2026-05-01' if table['id']=='source_decision' else '2026-06-01'
+            table['effective_until']='2026-07-01'
+        spec['process_model_sha256']=digest(spec['process_model'])
+        suite['spec_sha256']=digest(spec)
+        period=review_effective_period(spec,suite,start='2026-04-01',end='2026-08-01')
+        intervals=period['intervals']
+        self.assertEqual([(r['start'],r['end_exclusive']) for r in intervals],
+            [('2026-04-01','2026-05-01'),('2026-05-01','2026-06-01'),
+             ('2026-06-01','2026-07-01'),('2026-07-01','2026-08-01')])
+        self.assertEqual([r['cases'][0]['matches_fixed_expectation'] for r in intervals],
+            [False,False,True,False])
+        self.assertEqual(intervals[2]['boundary_changes'],[
+            {'table_id':'second_decision','kind':'effective_start'}])
+        self.assertEqual(len(intervals[3]['boundary_changes']),2)
+        self.assertTrue(period['review_required'])
+        self.assertTrue(period['all_interval_searches_complete'])
+        self.assertFalse(period['independent_date_specific_expectations_verified'])
+        self.assertNotIn('750',json.dumps(intervals))
+        with patch('review_facts.MAX_BATCH_WORK',1):
+            bounded=review_effective_period(spec,suite,start='2026-04-01',end='2026-08-01')
+        self.assertFalse(bounded['all_interval_searches_complete'])
+        self.assertTrue(bounded['review_required'])
+        self.assertEqual(bounded['intervals'][-1]['counts']['unresolved'],4)
+
 
 if __name__=='__main__':unittest.main()
