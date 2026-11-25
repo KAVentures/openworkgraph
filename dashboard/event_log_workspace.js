@@ -11470,7 +11470,7 @@
           offset=start;following=result.next_offset;
           progress.textContent=result.total+' cases in this selection.';
           rows.replaceChildren(table(['Case','Last known activity','Model top 3','Current-activity baseline','Recorded next activity','Outcome / abstention','Evidence'],
-            result.cases.map(c=>[c.case_id,c.last_activity,predicted(c.model),predicted(c.last_activity_baseline),
+            result.cases.map(c=>[c.case_id,c.last_activity,predicted(c.model)+(c.distribution_scores?.model?' · Brier '+c.distribution_scores.model.brier.map(v=>v.toFixed(3)).join(' – '):''),predicted(c.last_activity_baseline),
               c.actual_next_activity??'Unresolved', [c.outcome_reason,c.abstention_reason].filter(Boolean).join(' · ')||'Resolved',
               predictionCaseButton(inspection,c.case_id)])));
         }catch(error){if(live()){progress.textContent=error.message;rows.replaceChildren();following=null;}}
@@ -11502,6 +11502,21 @@
             [label,s.paired_predictions,s.paired_resolved,delta(s.paired_hit_share_change_bounds)])),
         el('h5','Top prediction calibration'),table(['Probability bin','Predicted','Resolved','Mean probability','Observed hit-share bounds'],
           l.calibration.bins.map(b=>[share(b.lower)+' – '+share(b.upper),b.predicted,b.resolved,share(b.mean_top1_probability),bounds(b.observed_hit_share_bounds)])),
+        ...(l.distribution_validation?[
+          el('h5','Full next-activity probability distribution validation'),
+          el('p','Lower loss is better. The full empirical distribution is scored, including probability on synthetic case end; unresolved observations are not scored as case end.','muted'),
+          table(['Estimator','Predicted / open','Resolved','Zero actual probability','Mean END mass','Resolved Brier','Brier bounds','Resolved clipped log loss','Log-loss bounds'],
+            Object.entries(l.distribution_validation.estimators).map(([key,s])=>{
+              const n=v=>v==null?'—':Number(v).toFixed(4);
+              const b=v=>n(v.lower)+' – '+n(v.upper);
+              return [key.replaceAll('_',' '),s.predicted+' / '+s.population,s.resolved,s.resolved_zero_actual_probability,share(s.mean_synthetic_end_mass),
+                n(s.brier.resolved_mean),b(s.brier.predicted_population_mean_bounds),n(s.clipped_log_loss.resolved_mean),b(s.clipped_log_loss.predicted_population_mean_bounds)];})),
+          table(['Paired history minus baseline','Common predictions','Resolved pairs','Brier difference bounds','Log-loss difference bounds'],
+            Object.entries(l.distribution_validation.paired_comparisons).map(([k,s])=>{
+              const b=v=>v.lower==null?'—':v.lower.toFixed(4)+' – '+v.upper.toFixed(4);
+              return [k.replaceAll('_',' '),s.paired_predictions,s.paired_resolved,b(s.brier.paired_population_mean_difference_bounds),b(s.clipped_log_loss.paired_population_mean_difference_bounds)];})),
+          ...l.distribution_validation.interpretation.map(t=>el('p',t,'muted'))
+        ]:[]),
         el('h5','Outcome and abstention accounting'),table(['Outcome','Cases'],Object.entries(l.outcomes)),
         table(['Abstention','Cases'],Object.entries(l.abstentions)),actions);
     }
