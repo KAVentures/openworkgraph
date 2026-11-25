@@ -6879,7 +6879,10 @@
     const row=el('div',null,'row');row.style.alignItems='end';row.append(load,csv,field('Import glossary (CSV)',upload));
     const statusLine=el('div',null,'muted');statusLine.id='owgGlossaryStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgGlossaryResults';
-    box.append(row,statusLine,out);
+    const review=el('div');review.id='owgGlossaryImportReview';
+    const apply=button('Apply glossary import','secondary');apply.id='owgGlossaryApplyImport';apply.disabled=true;
+    let importTurn=0,candidate=null;
+    box.append(row,statusLine,review,apply,out);
     const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/activity-glossary';
     const levels=[['','Not set'],['manual','Manual'],['partly','Partly automated'],['automated','Automated'],['candidate','Automation candidate']];
     const summary=r=>r.coverage.described+' of '+r.coverage.activities_in_log+' activities described, covering '+Math.round(r.coverage.events_described_share*100)+'% of events.'+(r.automation.candidate?' '+r.automation.candidate+' marked as automation candidates.':'');
@@ -6906,13 +6909,41 @@
       try{const r=await getJSON(base());if(generation!==state.generation)return;statusLine.textContent=summary(r);render(r);}
       catch(error){statusLine.textContent=error.message;}
       finally{load.disabled=false;}};
-    upload.onchange=async()=>{const file=upload.files&&upload.files[0];if(!file)return;
-      const generation=state.generation;upload.disabled=true;statusLine.textContent='Importing the glossary…';
-      try{const r=await (await api(base()+'/import',{method:'POST',headers:{'Content-Type':'text/csv'},body:await file.text()})).json();
-        if(generation!==state.generation)return;
-        statusLine.textContent='Imported '+r.imported+' entries.'+(r.skipped_not_in_log_total?' Skipped '+r.skipped_not_in_log_total+' activities not in this log.':'')+' '+summary(r);render(r);}
-      catch(error){statusLine.textContent=error.message;}
-      finally{upload.disabled=false;upload.value='';}};
+    upload.onchange=async()=>{
+      const file=upload.files&&upload.files[0],ticket=++importTurn,generation=state.generation;
+      candidate=null;apply.disabled=true;review.replaceChildren();
+      if(!file)return;
+      const current=()=>generation===state.generation&&box.isConnected&&ticket===importTurn;
+      if(file.size>1000000){statusLine.textContent='Choose a CSV file of at most 1 MB.';return;}
+      upload.disabled=true;statusLine.textContent='Previewing the glossary…';
+      try{
+        const result=await(await api(base()+'/import/preview',{method:'POST',headers:{'Content-Type':'text/csv'},body:file})).json();
+        if(!current())return;
+        candidate={file,fingerprint:result.fingerprint};apply.disabled=false;
+        const changed=result.changes.filter(item=>item.action!=='unchanged');
+        review.append(el('p',changed.length+' entries would change. '+result.skipped_not_in_log_total+' activity labels are absent from this log.','muted'));
+        if(changed.length)review.append(table(['Activity','Change','Existing','Proposed'],changed.map(item=>[
+          item.activity,item.action,JSON.stringify(item.before),JSON.stringify(item.after)
+        ])));
+        if(result.skipped_not_in_log.length)review.append(el('p','Not in this log: '+result.skipped_not_in_log.join(', '),'muted'));
+        statusLine.textContent='Review the proposed changes before applying.';
+      }catch(error){if(current())statusLine.textContent=error.message;}
+      finally{if(current())upload.disabled=false;}
+    };
+    apply.onclick=async()=>{
+      const chosen=candidate,ticket=++importTurn,generation=state.generation;
+      if(!chosen)return;
+      candidate=null;apply.disabled=true;upload.disabled=true;
+      const current=()=>generation===state.generation&&box.isConnected&&ticket===importTurn;
+      try{
+        const url=base()+'/import?'+new URLSearchParams({expected_fingerprint:chosen.fingerprint});
+        const r=await(await api(url,{method:'POST',headers:{'Content-Type':'text/csv'},body:chosen.file})).json();
+        if(!current())return;
+        upload.value='';review.replaceChildren();statusLine.textContent='Imported '+r.imported+' entries.'+
+          (r.skipped_not_in_log_total?' Skipped '+r.skipped_not_in_log_total+' activities not in this log.':'')+' '+summary(r);render(r);
+      }catch(error){if(current())statusLine.textContent=error.message;}
+      finally{if(current())upload.disabled=false;}
+    };
     csv.onclick=async()=>{csv.disabled=true;
       try{const response=await api(base()+'.csv');downloadBlob(await response.blob(),(state.logId||'log')+'-activity-glossary.csv');statusLine.textContent='Glossary downloaded.';}
       catch(error){statusLine.textContent=error.message;}
