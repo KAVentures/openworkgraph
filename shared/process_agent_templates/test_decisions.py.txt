@@ -420,4 +420,125 @@ class FirstDecisionPlanning(DecisionPlanning):
     asyncSetUp=FirstDecisionExecution.asyncSetUp
 
 
+def dependent_fixture():
+    spec,plan,case,bindings=mixed_fixture()
+    raw=spec['process_model']
+    second=next(t for t in raw['decision_tables'] if t['id']=='second_decision')
+    second['required_decisions']=[{'table_id':'source_decision','fact_path':'/decisions/first'}]
+    for rule in raw['business_rules']:
+        if rule['id'] in ('again_open','again_merged'):
+            rule['predicate']={'conditions':[{'path':'/decisions/first','operator':'eq',
+                'expected':'resolve' if rule['id']=='again_open' else 'hold'}]}
+    spec['process_model']=ProcessModel.model_validate(raw).model_dump()
+    spec['process_model_sha256']=digest(spec['process_model'])
+    spec['decision_table_contract']='openworkgraph.current-source-dependent-decision.v1'
+    bindings['decision_table_checks'][1]['dependency_semantics_reviewed']=True
+    return spec,plan,case,bindings
+
+
+class DependentDecisionContracts(unittest.TestCase):
+    def test_unvisited_prerequisite_closure_and_dependency_output(self):
+        from decision_runtime import check_decision_batch
+        spec,plan,case,bindings=dependent_fixture()
+        requests,missing=decision_bindings(spec,[{'table_id':'second_decision','target_activity_ids':['readback']}],case,bindings)
+        self.assertEqual(missing,[])
+        self.assertEqual([r['table_id'] for r in requests],['source_decision','second_decision'])
+        self.assertEqual(requests[0]['target_activity_ids'],[])
+        receipts={r['table_id']:receipt(r) for r in requests}
+        result=check_decision_batch(spec,requests,receipts)
+        self.assertTrue(all(r['route_matches'] for r in result))
+        self.assertEqual(result[0]['check_purpose'],'prerequisite_output')
+        self.assertEqual(result[1]['selected_target_activity_id'],'readback')
+        self.assertEqual(result[1]['required_decision_table_ids'],['source_decision'])
+        # The case cannot supply or override a dependent output.
+        case['decisions']={'first':'hold'}
+        self.assertEqual(decision_bindings(spec,[{'table_id':'second_decision','target_activity_ids':['readback']}],case,bindings)[0],requests)
+        receipts['source_decision']=None
+        result=check_decision_batch(spec,requests,receipts)
+        self.assertEqual(result[1]['status'],'dependency_unresolved')
+        self.assertFalse(result[1]['route_matches'])
+        receipts['source_decision']=receipt(requests[0],'merged')
+        result=check_decision_batch(spec,requests,receipts)
+        self.assertEqual(result[1]['selected_target_activity_id'],'hold')
+        self.assertFalse(result[1]['route_matches'])
+
+    def test_missing_prerequisite_binding_and_explicit_review(self):
+        spec,plan,case,bindings=dependent_fixture()
+        routes=[{'table_id':'second_decision','target_activity_ids':['readback']}]
+        bindings['decision_table_checks'].pop(0)
+        requests,missing=decision_bindings(spec,routes,case,bindings)
+        self.assertEqual(missing,['source_decision'])
+        from decision_runtime import check_decision_batch
+        result=check_decision_batch(spec,requests,{r['table_id']:receipt(r) for r in requests})
+        self.assertEqual(result[0]['status'],'dependency_unresolved')
+        bindings['decision_table_checks'][0]['dependency_semantics_reviewed']=False
+        with self.assertRaises(ImplementationError):decision_bindings(spec,routes,case,bindings)
+
+    def test_source_namespace_and_legacy_contract_refused(self):
+        spec,plan,case,bindings=dependent_fixture()
+        spec['decision_table_contract']='openworkgraph.current-source-ordered-decision.v1'
+        with self.assertRaises(ValueError):validate_spec(spec)
+        spec,plan,case,bindings=dependent_fixture()
+        spec['process_model']['decision_tables'][1]['required_decisions'][0]['fact_path']='/source/state'
+        with self.assertRaises(ImplementationError):decision_bindings(spec,[{'table_id':'second_decision','target_activity_ids':['readback']}],case,bindings)
+
+
+class DependentDecisionExecution(unittest.IsolatedAsyncioTestCase):
+    source=DecisionExecution.source
+    outcomes=DecisionExecution.outcomes
+    run_case=DecisionExecution.run_case
+
+    async def asyncSetUp(self):
+        await DecisionExecution.asyncSetUp(self)
+        self.data=dependent_fixture()
+
+    async def test_dependency_runtime_success_and_minimized_journal(self):
+        result=await self.run_case()
+        self.assertTrue(result['declared_route_checks_satisfied'])
+        self.assertEqual(len(self.reads),5)  # shared exact reference once per checkpoint
+        self.assertEqual([c[0] for c in self.tools.calls],['read_case','resolve_case','read_case'])
+        from monitor import report,read_journal
+        journal=read_journal(next(Path(self.folder.name).glob('*.jsonl')))
+        self.assertEqual(report(self.data[0],journal,'Dependent runtime')['runs'][0]['status'],'succeeded')
+        tampered=deepcopy(journal)
+        row=next(r for r in tampered if r['phase']=='decision_table_checked' and r['table_id']=='second_decision')
+        row['required_decision_table_ids']=[]
+        with self.assertRaises(ImplementationError):report(self.data[0],tampered,'Tampered dependency journal')
+
+    async def test_dependency_changes_after_precondition_stop_write(self):
+        original=self.tools.call_tool
+        async def change(*args):
+            result=await original(*args)
+            self.state='merged'
+            return result
+        self.tools.call_tool=change
+        result=await self.run_case()
+        self.assertEqual([c[0] for c in self.tools.calls],['read_case'])
+        self.assertFalse(result['declared_route_checks_satisfied'])
+
+
+@unittest.skipUnless(SDK_AVAILABLE,'Install requirements.txt for dependency-aware SDK checks')
+class DependentDecisionPlanning(unittest.IsolatedAsyncioTestCase):
+    source=DecisionExecution.source
+    async def asyncSetUp(self):
+        await DecisionExecution.asyncSetUp(self)
+        self.data=dependent_fixture()
+
+    async def test_actual_sdk_and_shadow_suite_with_dependencies(self):
+        from evaluate_sources import evaluate_current_sources
+        from test_agent_sdk import OfflineModel
+        from execute import reference
+        spec,plan,case,bindings=self.data
+        case['text']='SYNTHETIC_UNTRUSTED_INSTRUCTION';plan['missing_business_inputs']=[]
+        suite={'format':'openworkgraph.reviewed-shadow-cases.v1','process_reference':reference(spec),
+            'spec_sha256':digest(spec),'reviewed_by_customer':True,'case_inputs_authorized':True,
+            'cases':[{'id':'case_1','category':'normal','input':case,'expected':{'status':'proposal',
+                'accepted_routes':[plan['activity_ids']],'review_confirmed':True}}]}
+        report,summary=await evaluate_current_sources(spec,suite,bindings,model=OfflineModel(plan),
+            source_reads_confirmed=True,share_rule_checks_with_model_confirmed=True,source_state_reader=self.source)
+        self.assertEqual(report['matching_case_count'],1)
+        self.assertEqual(summary['source_receipt_request_count'],1)
+        self.assertFalse(self.tools.calls)
+
+
 if __name__=='__main__':unittest.main()
