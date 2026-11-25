@@ -752,3 +752,16 @@ remain non-atomic, and neither these timestamps nor journal assertions
 constitute independently signed provider evidence. A successful synthetic
 mixed-route fixture should require five state reads rather than fifteen for
 two rules and two tables bound to the same exact record.
+
+
+Deterministic token-route search charges structural replay firings to the
+same per-case work allowance as graph exploration. A failed or budget-limited
+replay consumes its reserved allowance and makes the search incomplete rather
+than establishing a unique route. Reports separate graph and replay work.
+All transitions in the union of viable structural replays are checked,
+including natural-language rules and contradictory alternate predicates.
+Scenario coverage has a separate bounded 500,000-firing replay allowance
+across the suite, caching each distinct node sequence. An unresolved coverage
+replay remains visible by case ID and requires review even when strict item
+coverage is not requested. These bounds count enumerated firings, not wall
+clock time or all internal computation.
