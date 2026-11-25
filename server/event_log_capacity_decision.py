@@ -23,8 +23,8 @@ OPTIONAL = {"dedicated_hour_costs", "pool_hour_costs"}
 
 
 def _number(value, low, high, label):
-    if (type(value) not in (float,int) or not math.isfinite(value)
-            or not low <= value <= high):
+    if (type(value) not in (float,int) or not low <= value <= high
+            or not math.isfinite(value)):
         raise EventLogWorkspaceError(f"{label} must be between {low:g} and {high:g}")
     return value
 

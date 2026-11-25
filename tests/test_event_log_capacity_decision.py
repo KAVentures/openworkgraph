@@ -53,7 +53,7 @@ def test_demand_mix_exact_weights_and_worst_seed_not_pooled():
 def test_robust_dominance_requires_every_rate_and_seed_and_strict_improvement():
     a=grid("A",[run(1,9),run(2,9)],[run(1,9),run(2,9)])
     b=grid("B",[run(1,8,1),run(2,8)],[run(1,7),run(2,9)])
-    c=grid("C",[run(1,10),run(2,9)],[run(1,7),run(2,9)])
+    c=grid("C",[run(1,10),run(2,9)],[run(1,6),run(2,9)])
     d=grid("D",[run(1,10,0,True),run(2,10)],[run(1,10),run(2,10)])
     r=decision.review(a+b+c+d,{"A":cost(200),"B":cost(220),"C":cost(190),"D":cost(100)},normalized(),.8)
     assert [(w["dominant_design"],w["dominated_design"]) for w in r["robust_dominance_witnesses"]]==[("A","B")]
