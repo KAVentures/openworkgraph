@@ -114,7 +114,13 @@ def sample_column(text: str, delimiter: str, column: str, limit: int = MAX_SAMPL
     if "\n" in text and not text.endswith("\n"):
         text = text[:text.rfind("\n") + 1]
     reader = csv.reader(io.StringIO(text), delimiter=delimiter)
-    header = next(reader, None) or []
+    # The header is the first of the first 50 lines that names the column (title rows or an Excel
+    # "sep=" line may come before it).
+    header: list[str] = []
+    for _ in range(50):
+        header = next(reader, None) or []
+        if column in header or not header and reader.line_num > 50:
+            break
     if column not in header:
         raise TimestampFormatError("the timestamp column is not in the file header")
     index, values = header.index(column), []

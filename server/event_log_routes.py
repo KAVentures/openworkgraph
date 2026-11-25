@@ -473,6 +473,7 @@ async def preview_event_log_import(
     attribute_column: list[str] = Query(default=[], max_length=200),
     delimiter: str = Query(default=",", max_length=1),
     keep_rejected: bool = Query(default=False),
+    header_row: int = Query(default=1, ge=1, le=50),
     naive_timestamp_offset: str = Query(default="", max_length=6),
     timestamp_format: str = Query(default="", max_length=64),
     identity: dict = Depends(_source_identity_mapping),
@@ -488,6 +489,7 @@ async def preview_event_log_import(
     mapping = {"case_column": case_column, "activity_column": activity_column,
                "timestamp_column": timestamp_column, "resource_column": resource_column,
                "attribute_columns": attribute_column[:64], "delimiter": "\t" if delimiter == "t" else delimiter,
+               **({"header_row": header_row} if header_row > 1 else {}),
                "keep_rejected": keep_rejected, "naive_timestamp_offset": naive_timestamp_offset,
                "timestamp_format": timestamp_format, **identity}
     return await run_in_threadpool(_respond, preview.preview_csv, bytes(body), mapping, partial=partial)
@@ -505,6 +507,7 @@ async def import_event_log(
     attribute_column: list[str] = Query(default=[], max_length=200),
     delimiter: str = Query(default=",", max_length=1),
     keep_rejected: bool = Query(default=False),
+    header_row: int = Query(default=1, ge=1, le=50),
     naive_timestamp_offset: str = Query(default="", max_length=6),
     timestamp_format: str = Query(default="", max_length=64),
     identity: dict = Depends(_source_identity_mapping),
@@ -525,6 +528,7 @@ async def import_event_log(
                    "timestamp_column": timestamp_column, "resource_column": resource_column,
                    "attribute_columns": attribute_column[:64],
                    "delimiter": "\t" if delimiter == "t" else delimiter,
+                   **({"header_row": header_row} if header_row > 1 else {}),
                    **({"keep_rejected": True} if keep_rejected else {}),
                    **({"naive_timestamp_offset": naive_timestamp_offset} if naive_timestamp_offset else {}),
                    **({"timestamp_format": timestamp_format} if timestamp_format else {})}
@@ -543,6 +547,7 @@ async def append_event_log(
     attribute_column: list[str] = Query(default=[], max_length=200),
     delimiter: str = Query(default=",", max_length=1),
     keep_rejected: bool = Query(default=False),
+    header_row: int = Query(default=1, ge=1, le=50),
     naive_timestamp_offset: str = Query(default="", max_length=6),
     timestamp_format: str = Query(default="", max_length=64),
     identity: dict = Depends(_source_identity_mapping),
@@ -562,6 +567,7 @@ async def append_event_log(
                    "timestamp_column": timestamp_column, "resource_column": resource_column,
                    "attribute_columns": attribute_column[:64],
                    "delimiter": "\t" if delimiter == "t" else delimiter,
+                   **({"header_row": header_row} if header_row > 1 else {}),
                    **({"keep_rejected": True} if keep_rejected else {}),
                    **({"naive_timestamp_offset": naive_timestamp_offset} if naive_timestamp_offset else {}),
                    **({"timestamp_format": timestamp_format} if timestamp_format else {})}

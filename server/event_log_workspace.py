@@ -363,6 +363,14 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
     delimiter = mapping.get("delimiter") or ","
     if delimiter not in {",", ";", "\t", "|"}:
         raise EventLogFormatError("unsupported delimiter")
+    trimmed = _without_preamble(path, mapping)
+    if trimmed is not None:
+        copy, hinted = trimmed
+        try:
+            return _load_csv_fast(conn, log_id, copy, {**mapping, "header_row": 1, "delimiter": hinted or delimiter},
+                                  reasons, keep_rejected)
+        finally:
+            copy.unlink(missing_ok=True)
     columns = [mapping.get(k) or "" for k in ("case_column", "activity_column", "timestamp_column")]
     resource = mapping.get("resource_column") or ""
     if not all(columns):
@@ -462,6 +470,40 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
     if identity_mode:return source_identity.SourceReadStats(events=kept,rejected_events=0,objects=objects,
         source_identity={'input_events':total,'duplicate_source_ids_skipped':source_duplicates})
     return ReadStats(events=kept, rejected_events=total - kept, objects=objects)
+
+
+MAX_HEADER_ROW = 50
+_SEP_HINT = re.compile(r"^\ufeff?sep=([,;|\t])\r?\n?$")
+
+
+def _without_preamble(path: Path, mapping: dict[str, Any]) -> tuple[Path, str] | None:
+    """A copy of the CSV without the lines above its header, and the delimiter a ``sep=`` line names.
+
+    ``header_row`` (1-based, default 1) says which line holds the column names, for exports that put a
+    title or export date above them. Excel's delimiter hint (a first line ``sep=;``) is skipped
+    automatically and its delimiter used. Returns None when nothing is to be skipped."""
+    header_row = mapping.get("header_row")
+    header_row = 1 if header_row in (None, "") else header_row
+    if isinstance(header_row, bool) or not isinstance(header_row, int) or not 1 <= header_row <= MAX_HEADER_ROW:
+        raise EventLogFormatError(f"the header row must be a line number from 1 to {MAX_HEADER_ROW}")
+    with path.open("rb") as raw:
+        first = raw.readline(64)
+    hint = _SEP_HINT.match(first.decode("utf-8", "replace"))
+    skip = header_row - 1 if header_row > 1 else (1 if hint else 0)
+    if not skip:
+        return None
+    handle, target = tempfile.mkstemp(prefix="owg-csv-header-", suffix=".csv", dir=str(DATA_DIR))
+    try:
+        with open(handle, "wb") as out, path.open("rb") as raw:
+            for _ in range(skip):
+                if not raw.readline(1 << 20):
+                    raise EventLogFormatError("the file has fewer lines than the header row")
+            while chunk := raw.read(1 << 20):
+                out.write(chunk)
+    except BaseException:
+        os.unlink(target)
+        raise
+    return Path(target), (hint.group(1) if hint and header_row in (1, 2) else "")
 
 
 def _ingest(conn: duckdb.DuckDBPyConnection, log_id: str, upload: Path, folder: Path, source_format: str,
