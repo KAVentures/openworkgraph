@@ -32,7 +32,7 @@ from shared.event_log_formats import (
     CASE_TYPE, RESOURCE_PRESENCE_WHITESPACE, MAX_ATTRIBUTE_VALUE, MAX_ATTRIBUTES, MAX_OBJECT_ATTRIBUTE_VALUES,
     EventLogFormatError, EventRecord,
     ObjectRecord, ReadStats,
-    read_csv, read_csv_header, read_ocel_json, read_ocel_xml, read_xes, write_csv, write_ocel_json,
+    TRAILING_UNNAMED, TRAILING_VALUES, read_csv, read_csv_header, read_ocel_json, read_ocel_xml, read_xes, write_csv, write_ocel_json,
     write_ocel_xml, write_xes,
 )
 
@@ -378,6 +378,10 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
         raise EventLogFormatError("missing required columns: " + ", ".join(sorted(missing))[:300])
     if identity_mode:source_identity.validate_columns(identity_mode,header)
     q = lambda name: 'source_rows."' + name.replace('"', '""') + '"'
+    if TRAILING_UNNAMED in header and conn.execute(
+            f"SELECT 1 FROM {source} AS source_rows WHERE trim(coalesce({q(TRAILING_UNNAMED)}, '')) <> '' LIMIT 1",
+            [str(path), original_header]).fetchone():
+        raise EventLogFormatError(TRAILING_VALUES)
     case, activity, stamp = (q(c) for c in columns)
     res = q(resource) if resource else "''"
     # Optional extra columns kept as event attributes, with the streaming reader's bounds.

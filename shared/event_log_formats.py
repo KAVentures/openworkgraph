@@ -125,8 +125,20 @@ def _iso(stamp: datetime) -> str:
 MAX_HEADER_CHARS = 1024 * 1024
 
 
+# The name given to an unnamed last column, as a delimiter at the end of every line produces
+# ("case;activity;time;"). Such a column must hold no values; it is never mapped.
+TRAILING_UNNAMED = "(unnamed trailing column)"
+
+
+TRAILING_VALUES = ("the last column has no name but holds values; give it a name in the header row, "
+                   "or remove the delimiter at the end of each line")
+
+
 def read_csv_header(stream: IO[str], delimiter: str = ",") -> list[str]:
-    """Read one bounded logical record without accepting ambiguous columns."""
+    """Read one bounded logical record without accepting ambiguous columns.
+
+    A single unnamed last column (a trailing delimiter) is named ``TRAILING_UNNAMED``; readers check
+    that it holds no values. Any other empty or duplicate name refuses the file."""
     def lines():
         remaining=MAX_HEADER_CHARS
         while remaining:
@@ -140,6 +152,8 @@ def read_csv_header(stream: IO[str], delimiter: str = ",") -> list[str]:
     except (csv.Error,UnicodeError):
         raise EventLogFormatError("CSV header could not be parsed") from None
     if header:header[0]=header[0].removeprefix("\ufeff")
+    if len(header)>1 and not header[-1].strip() and header[-2].strip() and TRAILING_UNNAMED not in header:
+        header[-1]=TRAILING_UNNAMED
     if not header or any(not name.strip() for name in header) or len({name.casefold() for name in header})!=len(header):
         raise EventLogFormatError("CSV requires nonempty unambiguous column names without duplicate casing")
     return header
@@ -161,7 +175,10 @@ def read_csv(stream: IO[str], *, case_column: str, activity_column: str, timesta
         raise EventLogFormatError("missing required columns: " + ", ".join(sorted(missing))[:300])
     extra = [name for name in attribute_columns if name in header][:MAX_ATTRIBUTES]
     seen: set[str] = set()
+    trailing = TRAILING_UNNAMED in header
     for index, row in enumerate(reader, 1):
+        if trailing and (row.get(TRAILING_UNNAMED) or "").strip():
+            raise EventLogFormatError(TRAILING_VALUES)
         case_id = _exact_key(row.get(case_column))
         activity = _exact_key(row.get(activity_column), MAX_ACTIVITY)
         stamp = parse_timestamp(row.get(timestamp_column))

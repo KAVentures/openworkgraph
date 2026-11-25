@@ -70,6 +70,15 @@ mapping, `naive_timestamp_offset=+01:00` in the API). That choice is recorded
 with the import. XML with a `DOCTYPE` or entity declaration is refused before
 parsing.
 
+### Unnamed and duplicate columns
+
+Column names must be non-empty and unambiguous (not repeated, also ignoring case), so a mapping can
+never pick a different column than the one you meant; a file with an empty or repeated column name
+is refused. One exception: many exports end every line with a delimiter (`case;activity;time;`),
+which leaves one unnamed last column. That column is ignored when it is empty in every row. If it
+holds a value in any row the file is refused, rather than a value being dropped silently, and two or
+more unnamed trailing columns are still refused.
+
 ### Compressed files
 
 Any import or appended file may be gzip-compressed, as public logs such as the BPI Challenge
