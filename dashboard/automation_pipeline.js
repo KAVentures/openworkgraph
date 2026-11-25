@@ -1593,6 +1593,18 @@
                     const wrap=el('div',null,'table-wrap');wrap.appendChild(table);
                     const money=data.financial_scenario;output.replaceChildren(el('h5','Pooled period evidence'),wrap,el('h5','Review gates'));
                     for(const g of data.review_gates)output.appendChild(el('p',g.gate+' · '+g.status+' · observed '+pct(g.observed)+' · threshold '+pct(g.threshold)));
+                    const population=data.whole_population_quality;
+                    if(population){
+                      const range=(lo,hi)=>pct(lo)+' to '+pct(hi);
+                      output.append(el('h5','Whole-population quality bounds'),
+                        el('p','Baseline failure rate: '+range(population.baseline.failure_rate_lower,population.baseline.failure_rate_upper)+'; '+population.baseline.unchecked_cases+' unchecked cases.'),
+                        el('p','After failure rate: '+range(population.after.failure_rate_lower,population.after.failure_rate_upper)+'; '+population.after.unchecked_cases+' unchecked cases.'),
+                        el('p','After minus baseline failure-rate change: '+range(population.failure_rate_change_lower,population.failure_rate_change_upper)+' (percentage points).'),
+                        el('p','Whole-population threshold: '+population.threshold_status.replaceAll('_',' ')+' · maximum increase '+pct(population.maximum_declared_increase)+'. Separate from the checked-case gates above.'),
+                        el('p','After cases both attempted without handoff and passing quality: '+population.after.nonhandoff_and_quality_pass_count_lower+'–'+population.after.nonhandoff_and_quality_pass_count_upper+'; share of eligible '+range(population.after.nonhandoff_and_quality_pass_share_of_eligible_lower,population.after.nonhandoff_and_quality_pass_share_of_eligible_upper)+'. No case-level linkage or autonomous success proven.'),
+                        el('p','Best-case additional checks to establish within threshold: '+(population.minimum_favorable_new_checks_to_establish_within??'not attainable')+'; to establish above threshold under adverse outcomes: '+(population.minimum_adverse_new_checks_to_establish_above??'not attainable')+'.'),
+                        el('p',population.interpretation,'muted'));
+                    }
                     output.append(el('h5','Conditional cost and effort scenario'),
                       el('p','Retained effort change at after volume: '+money.retained_effort_change_hours_at_after_volume+' hours/month'),
                       el('p','Including additional review effort: '+money.effort_change_with_extra_review_hours_at_after_volume+' hours/month'),
