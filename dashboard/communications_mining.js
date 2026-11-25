@@ -238,6 +238,11 @@
               reliabilityView.push(el('h4','Learned probability reliability'),
                 el('p','Fixed holdout only. Macro support: '+reliability.macro_supported_intents+
                   ' trained intents with at least five positive and five negative scores and no missing predictions. No threshold was fitted.','muted'),
+                table(['Supported-intent macro metric','Value','Intents included'],[
+                  ['Brier score','brier_score'],['Brier skill','brier_skill_against_training_prior'],
+                  ['Clipped log loss','log_loss_clipped'],['Calibration error','ece_fixed_10_bins'],
+                  ['AUROC','auroc'],['Average precision','average_precision']
+                ].map(([label,key])=>[label,fmt(reliability.macro[key]),reliability.macro_metric_support[key]])),
                 table(['Intent','Scored / total','Brier','Training prior Brier','Brier skill','Log loss','ECE','AUROC','Average precision','Support'],
                   metrics.map(x=>{const m=x.metrics;return m?[x.intent,m.scored_examples+' / '+m.holdout_examples,
                     fmt(m.brier_score),fmt(m.training_prior_brier_score),fmt(m.brier_skill_against_training_prior),fmt(m.log_loss_clipped),
