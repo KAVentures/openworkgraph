@@ -113,9 +113,6 @@ All tools except `tag_process_cases` are read-only. All are idempotent. Their an
 durations are elapsed time between recorded events, that associations are not causes, and that
 nothing authorizes an action.
 
-`get_process_data_quality` also returns `stray_dates`: events dated far outside the bulk of the log (placeholder or
-mistyped dates) and a `suggested_case_filter` that leaves only those cases out.
-
 ## HTTP
 
 | Route | Who |
@@ -157,3 +154,8 @@ mistyped dates) and a `suggested_case_filter` that leaves only those cases out.
 
 Not covered: acting in source systems. That would need separate, explicit action authority,
 which this feature never grants.
+
+## Stray dates
+
+`get_process_data_quality` also returns `stray_dates`: events dated far outside the bulk of the log (placeholder or
+mistyped dates) and a `suggested_case_filter` that leaves only those cases out.
