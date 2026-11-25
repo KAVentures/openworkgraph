@@ -632,6 +632,8 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                         if action['precondition']:
                             await check_decisions()
                             condition = action['precondition']
+                            if 'dependency_build_basis_sha256' in spec:
+                                await check_catalog()
                             record('precondition_pending', activity_id=action['activity_id'], attempt=index+1)
                             try:
                                 ensure_current(intent, now, stop_marker)
@@ -646,6 +648,8 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                         await check_catalog()
                         await check_source_rules()
                         ensure_current(intent, now, stop_marker)
+                        if 'dependency_build_basis_sha256' in spec:
+                            await check_catalog()
                         record('attempt_pending', activity_id=action['activity_id'], attempt=index+1,
                                arguments_sha256=digest(action['arguments']))
                         status = 'uncertain'
