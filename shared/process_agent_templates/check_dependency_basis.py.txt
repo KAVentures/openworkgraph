@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 from urllib.parse import quote
 
-from execute import ImplementationError, endpoint, _read_json
+from execute import ImplementationError, endpoint, _read_json, catalog_is_current
 from verify_release import _pinned_inventory, _pinned_spec, _unique
 
 
@@ -40,6 +40,8 @@ def load_basis(root, pin):
     digest = basis['basis_sha256']
     if not isinstance(digest, str) or len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest):
         raise ImplementationError('Invalid dependency basis pin')
+    if spec.get('dependency_build_basis_sha256') != digest:
+        raise ImplementationError('Dependency basis differs from the runtime specification')
     return spec, digest
 
 
@@ -51,18 +53,7 @@ async def check(root, pin, catalog_url, *, reader=_read_json, token=None):
         raise ImplementationError('A separate catalog-read credential is required')
     state = await reader(base + '/v1/human/processes/' + quote(spec['workflow_id'], safe='') + '/dependencies/build-status',
                          token, {'revision': spec['revision'], 'basis_sha256': digest})
-    return bool(isinstance(state, dict)
-                and state.get('format') == 'openworkgraph.dependency-build-basis-status.v1'
-                and state.get('organization_id') == spec['organization_catalog_reference']['organization_id']
-                and state.get('workflow_id') == spec['workflow_id']
-                and type(state.get('requested_revision')) is int
-                and state['requested_revision'] == spec['revision']
-                and state.get('requested_basis_sha256') == digest
-                and state.get('status') == 'current'
-                and state.get('current_exact_reviewed_basis') is True
-                and state.get('read_only') is True
-                and state.get('execution_authorized') is False
-                and state.get('business_outcomes_verified') is False)
+    return catalog_is_current(state, spec)
 
 
 def main():
