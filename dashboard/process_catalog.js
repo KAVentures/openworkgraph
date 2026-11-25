@@ -1307,7 +1307,7 @@
     const section=el('section');section.appendChild(el('h4','AI workforce procurement'));
     section.appendChild(el('p','Compare portable shadow evaluations, freeze a repeated trial, or review its full scheduled population. Files are inspected only on this computer and are not retained. Model identities, measurements and business outcomes remain unverified.'));
     const mode=el('select');mode.id='owgCatalogProcurementMode';
-    for(const [value,label] of [['compare','Compare completed shadow reports'],['freeze','Freeze a repeated trial plan'],['review','Review a frozen trial and captures'],['nominate','Nominate a candidate before holdout'],['assess','Assess the held-out trial'],['decide','Record a pinned rehearsal decision'],['outcome-review','Review controlled sandbox outcomes'],['rollout-review','Request separate rollout review']]){
+    for(const [value,label] of [['compare','Compare completed shadow reports'],['freeze','Freeze a repeated trial plan'],['review','Review a frozen trial and captures'],['nominate','Nominate a candidate before holdout'],['assess','Assess the held-out trial'],['decide','Record a pinned rehearsal decision'],['outcome-review','Review controlled sandbox outcomes'],['rollout-review','Request separate rollout review'],['deployment-review','Review monitored deployment readiness'],['deployment-decide','Record deployment review referral']]){
       const option=el('option',label);option.value=value;mode.appendChild(option);
     }
     const modeLabel=el('label','Procurement operation ');modeLabel.htmlFor=mode.id;modeLabel.appendChild(mode);
@@ -1324,6 +1324,7 @@
       hint.textContent=mode.value==='compare'?'Choose an existing comparison request (see AGENT_PROCUREMENT.md).':
         mode.value==='freeze'?'Choose a confirmed design JSON with exact reference report, candidates, gates and repeats (see AGENT_PROCUREMENT_TRIALS.md).':
         mode.value==='review'?'Choose the frozen plan and a capture ledger. Failed and missing scheduled slots remain in the denominator.':
+        ['deployment-review','deployment-decide'].includes(mode.value)?'Choose the deployment readiness bundle (see AGENT_PROCUREMENT_DEPLOYMENT.md). Existing monitoring records are read locally; no release changes are made.':
         ['outcome-review','rollout-review'].includes(mode.value)?'Choose the outcome review bundle (see AGENT_PROCUREMENT_OUTCOMES.md). No rollout or execution permission will be granted.':
         'Choose the exact selection bundle (see AGENT_PROCUREMENT_SELECTION.md). Nomination and decision require a current saved revision and explicit confirmation in the document.';
       clearProcurementReview();
@@ -1343,8 +1344,9 @@
       const result=envelope.result;
       const selectionMode=['nominate','assess','decide'].includes(operation);
       const outcomeMode=['outcome-review','rollout-review'].includes(operation);
-      const heading={nominate:'Frozen candidate nomination',assess:'Held-out selection assessment',decide:'Rehearsal decision receipt','outcome-review':'Controlled sandbox outcome review','rollout-review':'Separate rollout review receipt'};
-      output.appendChild(el('h5',(selectionMode||outcomeMode)?heading[operation]:operation==='freeze'?'Frozen trial plan · '+result.scheduled_attempts+' attempts':'Candidate procurement comparison'));
+      const deploymentMode=['deployment-review','deployment-decide'].includes(operation);
+      const heading={nominate:'Frozen candidate nomination',assess:'Held-out selection assessment',decide:'Rehearsal decision receipt','outcome-review':'Controlled sandbox outcome review','rollout-review':'Separate rollout review receipt','deployment-review':'Monitored deployment readiness','deployment-decide':'Release-owner referral receipt'};
+      output.appendChild(el('h5',(selectionMode||outcomeMode||deploymentMode)?heading[operation]:operation==='freeze'?'Frozen trial plan · '+result.scheduled_attempts+' attempts':'Candidate procurement comparison'));
       output.appendChild(el('p','Exact saved revision '+envelope.revision+'. '+(envelope.references_latest_revision_at_inspection?
         'Latest saved revision at inspection.':'Historical revision; current revision '+envelope.latest_revision_at_inspection+'. Evaluate the current design before substitution.')));
       if(operation==='freeze'){
@@ -1352,6 +1354,23 @@
         const list=el('ul');
         for(const c of result.basis.candidates)list.appendChild(el('li',c.candidate_id+' · '+c.provider+' / '+c.model+' / '+c.runtime));
         output.appendChild(list);
+      }else if(deploymentMode){
+        if(operation==='deployment-decide'){
+          output.appendChild(el('p','Disposition: '+result.request.decision.replaceAll('_',' ')+'. No production rollout authorized.'));
+          output.appendChild(el('p','Pinned release revisions: baseline '+result.baseline_release_revision+' · candidate '+result.candidate_release_revision));
+        }else{
+          output.appendChild(el('p','Selected UTC window: '+result.window.from+' to '+result.window.until_exclusive+' (exclusive).'));
+          for(const arm of ['baseline','candidate']){
+            const data=result[arm];output.appendChild(el('h6',arm+' · '+data.reported_stage.replaceAll('_',' ')+' · revision '+data.release_revision));
+            output.appendChild(el('p',data.runs+' retained runs · '+data.unattributed_runs+' without exact spec attribution · '+data.step_count+' retained steps'));
+            output.appendChild(el('p',Object.entries(data.status_counts).map(([k,v])=>k.replaceAll('_',' ')+': '+v).join(' · ')));
+            output.appendChild(el('p','p95 elapsed: '+(data.p95_elapsed_ms==null?'unknown':data.p95_elapsed_ms+' ms')));
+          }
+          const checks=el('ul');for(const [key,value] of Object.entries(result.checks))checks.appendChild(el('li',key.replaceAll('_',' ')+': '+value));
+          output.appendChild(checks);
+          output.appendChild(el('p',result.eligible_for_release_owner_referral?'Eligible for separate release-owner referral.':'Monitoring evidence blocks a positive referral.'));
+        }
+        output.appendChild(el('p','Reported run states are not independently verified outcomes. Rollback targets are pinned, not tested; no release inventory is changed.'));
       }else if(outcomeMode){
         if(operation==='rollout-review'){
           output.appendChild(el('p','Disposition: '+result.request.decision.replaceAll('_',' ')+'. No production rollout authorized.'));
@@ -1441,7 +1460,7 @@
       }
       output.appendChild(button('Download minimized procurement JSON',()=>{
         const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)+'\n'],{type:'application/json'}));
-        const link=el('a');link.href=url;link.download=(selectionMode||outcomeMode)?'owg-procurement-'+operation+'.json':operation==='freeze'?'owg-procurement-plan.json':'owg-procurement-review.json';
+        const link=el('a');link.href=url;link.download=(selectionMode||outcomeMode||deploymentMode)?'owg-procurement-'+operation+'.json':operation==='freeze'?'owg-procurement-plan.json':'owg-procurement-review.json';
         link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
       }));
       output.appendChild(el('p','No model or business tool was called; reported identity, measurements and outcomes remain unverified. This review grants no execution or substitution permission.'));
