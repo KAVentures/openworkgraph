@@ -2902,6 +2902,12 @@ def event_log_evaluate_signals(request: Request, log_id: str):
     return _respond(signals.evaluate, log_id)
 
 
+@router.post("/v1/event-logs/{log_id}/signals/{rule_id}/evaluate")
+def event_log_evaluate_signal(request: Request, log_id: str, rule_id: str):
+    _require_dashboard(request)
+    return _respond(signals.evaluate, log_id, rule_id=rule_id)
+
+
 @router.post("/v1/event-logs/{log_id}/signals/{rule_id}/delete")
 def event_log_delete_signal_rule(request: Request, log_id: str, rule_id: str):
     _require_dashboard(request)
