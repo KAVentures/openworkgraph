@@ -208,12 +208,12 @@ class ProcessDependencies:
         with ZipFile(BytesIO(archive)) as original:
             files={name:original.read(name).decode('utf-8') for name in original.namelist()
                    if name!='release-manifest.json'}
-        files['dependency-build-basis.json']=json.dumps(basis,indent=2,ensure_ascii=False,allow_nan=False)+'\\n'
-        files['README.md'] += ('\\n## Declared dependency build basis\\n\\n'
+        files['dependency-build-basis.json']=json.dumps(basis,indent=2,ensure_ascii=False,allow_nan=False)+'\n'
+        files['README.md'] += ('\n## Declared dependency build basis\n\n'
             'This starter was exported with a reviewed prerequisite closure. See dependency-build-basis.json. '
             'Recheck the exact basis against the authenticated shared process portal before use. '
             'The runtime does not enforce this sidecar or execute prerequisite processes. '
-            'The snapshot grants no business execution permissions.\\n')
+            'The snapshot grants no business execution permissions.\n')
         spec=json.loads(files['workflow.spec.json'])
         files['release-manifest.json']=create_manifest(files,spec)
         out=BytesIO()
