@@ -18,7 +18,7 @@ const path=require('node:path');
   const objects=[],events=[];
   for(let i=0;i<22;i++){
    const type=`type${String(i).padStart(2,'0')}`,id=`object${i}`;
-   objects.push({id,type,attributes:i===21?[{name:'status',time:'1970-01-01T00:00:00Z',value:'new'},{name:'status',time:'2023-01-01T00:00:00Z',value:'ready'}]:[]});
+   objects.push({id,type,attributes:i===21?[{name:'status',time:'1970-01-01T00:00:00Z',value:'new'},...Array.from({length:114},(_,n)=>({name:'status',time:new Date(Date.UTC(2023,0,1,0,n)).toISOString(),value:n===113?'<img src=x onerror=alert(1)>':`ready${n}`}))]:[]});
    events.push({id:`event${i}`,type:'Action',time:'2024-01-01T00:00:00Z',attributes:[],relationships:[{objectId:id,qualifier:''}]});
   }
   const emptyType='  No events, 雪  ';objects.push({id:'empty',type:emptyType,attributes:[{name:'status',time:'1970-01-01T00:00:00Z',value:'new'},{name:'status',time:'2023-01-01T00:00:00Z',value:'ready'}]});
@@ -46,8 +46,21 @@ const path=require('node:path');
   assert.equal(selectedMap.status(),200);await page.locator('#owgEventLogObjectCases h3').filter({hasText:'type21'}).waitFor({state:'attached'});
   await page.locator('#owgEventLogFlatteningBox h4').filter({hasText:'Analysing type21 as the case'}).waitFor();
   await page.locator('#owgEventLogObjectAttributesBox').getByText('status changes on 1 of 1 type21 objects',{exact:false}).waitFor();
+  const history=page.locator('#owgObjectAttributeHistory');await history.locator('#owgObjectAttributeHistoryId').fill('object21');await history.getByRole('button',{name:'Review attribute history'}).click();
+  await history.getByRole('status').filter({hasText:'Showing 1–50 of 115'}).waitFor();
+  await history.getByRole('button',{name:'Next attribute values'}).click();await history.getByRole('status').filter({hasText:'Showing 51–100 of 115'}).waitFor();
+  await history.getByRole('button',{name:'Next attribute values'}).click();await history.getByRole('status').filter({hasText:'Showing 101–115 of 115'}).waitFor();
+  await history.getByText('<img src=x onerror=alert(1)>',{exact:true}).waitFor();assert.equal(await history.locator('img').count(),0);
+  await history.getByRole('button',{name:'Previous attribute values'}).click();await history.getByRole('status').filter({hasText:'Showing 51–100 of 115'}).waitFor();
+  let releaseHistory,notifyHistory;
+  const historyGate=new Promise(resolve=>{releaseHistory=resolve;}),historyRequested=new Promise(resolve=>{notifyHistory=resolve;});
+  await page.route('**/object-attribute-history?*',async route=>{notifyHistory();await historyGate;await route.continue();});
+  await history.getByRole('button',{name:'Review attribute history'}).click();await historyRequested;
   await mapType.selectOption(emptyType);await page.locator('#owgEventLogObjectMap').getByText('This object type has no retained events',{exact:false}).waitFor();
+  const lateHistory=page.waitForResponse(r=>r.url().includes('/object-attribute-history?'));releaseHistory();await lateHistory;await page.unroute('**/object-attribute-history?*');
+  assert.equal(await history.getByRole('status').textContent(),'');
   await page.locator('#owgEventLogObjectAttributesBox').getByText('status changes on 1 of 1',{exact:false}).waitFor();
+  await history.locator('#owgObjectAttributeHistoryId').fill('empty');await history.getByRole('button',{name:'Review attribute history'}).click();await history.getByRole('status').filter({hasText:'Showing 1–2 of 2'}).waitFor();
   await mapType.selectOption('type00');await page.locator('#owgEventLogObjectCases h3').filter({hasText:'type00'}).waitFor({state:'attached'});
   await page.locator('#owgEventLogFlatteningBox h4').filter({hasText:'Analysing type00 as the case'}).waitFor();
   await page.locator('#owgEventLogObjectAttributesBox').getByText('No timed object attributes are recorded for this type.').waitFor();
@@ -77,6 +90,7 @@ const path=require('node:path');
   await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
   const audit=await page.evaluate(()=>window.axe.run(document.querySelector('#owgObjectRules'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));assert.deepEqual(audit.violations.map(v=>v.id),[]);
   const modelAudit=await page.evaluate(()=>window.axe.run(document.querySelector('#owgObjectModel'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));assert.deepEqual(modelAudit.violations.map(v=>v.id),[]);
+  const historyAudit=await page.evaluate(()=>window.axe.run(document.querySelector('#owgObjectAttributeHistory'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));assert.deepEqual(historyAudit.violations.map(v=>v.id),[]);
   await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2));assert.deepEqual(errors,[]);
   console.log('Object type browser passed: omitted and zero-event types, rules, selected and default discovery, accessibility.');
  }finally{if(browser)await browser.close();server.kill('SIGTERM');await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);if(server.exitCode===null)server.kill('SIGKILL');await fs.rm(scratch,{recursive:true,force:true});}

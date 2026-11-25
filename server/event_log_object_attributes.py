@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import event_log_workspace as workspace
+from .event_log_object_relationships import _revision
 
 MAX_TYPES = 20
 MAX_ATTRIBUTES = 20
@@ -23,6 +24,41 @@ MAX_TIMELINE = 200
 MAX_ASOF_LINKS = 5_000_000      # event links examined to compare stored values with values at event time
 
 _INITIAL = "TIMESTAMP '1970-01-01 00:00:00'"
+
+
+def object_history(log_id: str, object_type: str, object_id: str, offset: int = 0,
+                   limit: int = 50, revision: int | None = None) -> dict[str, Any]:
+    """Page one literal object's retained timed values from a single log revision."""
+    if (not isinstance(object_type, str) or not 1 <= len(object_type) <= 200 or
+            not isinstance(object_id, str) or not 1 <= len(object_id) <= 200 or
+            type(offset) is not int or not 0 <= offset <= 2_147_483_647 or
+            type(limit) is not int or not 1 <= limit <= 100 or
+            (revision is not None and (type(revision) is not int or revision < 0))):
+        raise workspace.EventLogWorkspaceError('invalid object attribute history request')
+    if offset and revision is None:
+        raise workspace.EventLogWorkspaceError('restart object attribute history from the first page')
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            current = _revision(conn, log_id)
+            if revision is not None and revision != current:
+                raise workspace.EventLogWorkspaceError('the retained log has changed; restart the object attribute history')
+            found = conn.execute('SELECT 1 FROM objects WHERE log_id=? AND object_id=? AND object_type=?',
+                                 [log_id, object_id, object_type]).fetchone()
+            if not found:
+                raise workspace.EventLogWorkspaceError('the object was not found in the selected type')
+            total = conn.execute('SELECT count(*) FROM object_attribute_values WHERE log_id=? AND object_id=?',
+                                 [log_id, object_id]).fetchone()[0]
+            rows = conn.execute('''SELECT name, valid_from, value FROM object_attribute_values
+                WHERE log_id=? AND object_id=? ORDER BY valid_from, name, value LIMIT ? OFFSET ?''',
+                                [log_id, object_id, limit, offset]).fetchall()
+            return {'object_type': object_type, 'object_id': object_id, 'log_revision': current,
+                    'total_values': total, 'offset': offset,
+                    'next_offset': offset + len(rows) if offset + len(rows) < total else None,
+                    'values': [{'name': name, 'valid_from': _iso(at), 'value': value} for name, at, value in rows]}
+        finally:
+            conn.close()
 
 
 def attribute_changes(log_id: str, object_type: str | None = None, object_id: str | None = None) -> dict[str, Any]:
@@ -147,4 +183,4 @@ def _iso(stamp) -> str | None:
     return None if stamp is None else stamp.isoformat() + "Z"
 
 
-__all__ = ["attribute_changes"]
+__all__ = ["attribute_changes", "object_history"]
