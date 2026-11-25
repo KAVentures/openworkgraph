@@ -161,7 +161,7 @@ def test_token_limit_is_not_an_unboundedness_claim(monkeypatch):
     (lambda b: b.replace(b'<finalmarkings>', b'<unsupported>'), "well-formed"),
     (lambda b: b.replace(b'</page>', b'<transition id="extra"><condition/></transition></page>'), "unsupported PNML"),
     (lambda b: b.replace(b'grammar/ptnet', b'grammar/highlevelnet'), "ordinary PNML"),
-    (lambda b: b.replace(b'</net>', b'<toolspecific><place id="hidden"/></toolspecific></net>'), "unexpected semantic"),
+    (lambda b: b.replace(b'</net>', b'<toolspecific><place id="hidden"/></toolspecific></net>'), "unsupported tool-specific"),
     (lambda b: b.replace(b'</pnml>', b'<net id="other"/></pnml>'), "exactly one net"),
     (lambda b: b.decode().encode("utf-16"), "ASCII-compatible"),
 ])
