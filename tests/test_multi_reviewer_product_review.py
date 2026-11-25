@@ -79,6 +79,10 @@ class MultiReviewerProductReviewTests(unittest.TestCase):
         self.assertEqual(result["status"], "pilot_only")
         self.assertEqual(result["product_decision"], "insufficient_reviewed_real_episodes")
         self.assertEqual(result["model_calls_performed_by_this_script"], 0)
+        sensitivity=result["reviewer_choice_sensitivity"]
+        self.assertEqual(sensitivity["episode_count"],1)
+        self.assertFalse(sensitivity["canonical_product_decision_changed"])
+        self.assertEqual(set(sensitivity["comparisons"]),{"goal_vs_no_owg","raw_vs_no_owg","goal_vs_raw"})
         multi = result["multi_reviewer_review"]
         self.assertEqual(multi["resolved_disagreement_entries"], 1)
         self.assertTrue(multi["all_entries_resolved"])
