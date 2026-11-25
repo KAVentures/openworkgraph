@@ -115,9 +115,9 @@ def build_runtime_project(packet: dict) -> bytes:
         files['decision_runtime.py'] = (_TEMPLATES / 'decision_runtime.py.txt').read_text(encoding='utf-8')
     if spec.get('control_flow_contract') or model.decision_tables:
         files['test_route_parallel.py'] = (_TEMPLATES / 'test_route_parallel.py.txt').read_text(encoding='utf-8')
-        files['owg_model/__init__.py'] = '"""Portable OWG process validation; no source or tool execution."""\n'
-        for name in ('process_model.py','process_parallel.py','process_opportunities.py','process_rule_conditions.py','process_decision_tables.py'):
-            files['owg_model/'+name]=(Path(__file__).parent/name).read_text(encoding='utf-8')
+    files['owg_model/__init__.py'] = '"""Portable OWG process validation; no source or tool execution."""\n'
+    for name in ('process_model.py','process_parallel.py','process_opportunities.py','process_rule_conditions.py','process_decision_tables.py'):
+        files['owg_model/'+name]=(Path(__file__).parent/name).read_text(encoding='utf-8')
     files['LICENSE'] = (_TEMPLATES / 'LICENSE.txt').read_text(encoding='utf-8')
     files['workflow.spec.json'] = json.dumps(spec, indent=2, ensure_ascii=False) + '\n'
     files['synthetic-cases.json'] = json.dumps(synthetic_routes(model), indent=2) + '\n'
@@ -489,6 +489,11 @@ def build_runtime_project(packet: dict) -> bytes:
         "Checks include arbitrary supported predicates, effective dates and dependent decisions using the shared evaluators. "
         "No network, source reads or model calls occur. The report is not an execution plan; "
         "caller facts are not authoritative source evidence. Unresolved searches require review.\n"
+        "\nFor cross-revision review, provide --baseline-release and --candidate-release directories, "
+        "--baseline-manifest-sha256 and --candidate-manifest-sha256 independently recorded pins, "
+        "--baseline-cases OLD_SUITE and --cases NEW_SUITE, with the same scenario date and confirmation. "
+        "Both suites must contain identical ordered case IDs, categories and facts. "
+        "This evaluator reads the two pinned specifications; it never executes historical release code.\n"
     )
     files['verify_release.py'] = Path(release_integrity.__file__).read_text(encoding='utf-8')
     files['release-manifest.json'] = create_manifest(files, spec)
