@@ -311,7 +311,7 @@ def _load(conn: duckdb.DuckDBPyConnection, log_id: str, paths: tuple[Path, Path,
 
 
 MAX_QUARANTINED_ROWS = 10_000          # rejected rows kept per batch when the user asks to keep them
-_OFFSET_RE = r"(Z|[+-][0-9]{2}:?[0-9]{2})$"
+_OFFSET_RE = r"([Zz]|[+-][0-9]{2}:?[0-9]{2})$"
 _DECISION = re.compile(r"^(Z|[+-](0[0-9]|1[0-4]):[0-5][0-9])$")
 
 
@@ -340,7 +340,9 @@ def timestamp_sql(raw: str, offset: str, pattern: str = "") -> str:
     ``pattern`` every value must match it exactly."""
     if pattern:
         return timestamp_formats.timestamp_sql(raw, offset, pattern)
-    parsed = f"CASE WHEN regexp_matches(trim({raw}), '{_OFFSET_RE}') THEN try_cast(trim({raw}) AS TIMESTAMPTZ)"
+    # RFC 3339 also allows a lowercase "t" and "z"; DuckDB reads only the uppercase forms.
+    iso = f"regexp_replace(regexp_replace(trim({raw}), '[zZ]$', '+00:00'), '^([0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}})t', '\\1T')"
+    parsed = f"CASE WHEN regexp_matches(trim({raw}), '{_OFFSET_RE}') THEN try_cast({iso} AS TIMESTAMPTZ)"
     if offset:
         suffix = "+00:00" if offset == "Z" else offset
         parsed += (f" WHEN trim(coalesce({raw}, '')) <> '' THEN try_cast(strftime(try_cast(trim({raw}) AS TIMESTAMP),"
