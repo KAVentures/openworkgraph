@@ -279,8 +279,9 @@ by the existing release manifest. It contains prerequisite identifiers and
 review/declaration pins, not prerequisite model bodies or reason text.
 The existing unsigned release integrity contract applies. The authenticated
 audit records the root, revision, basis and manifest digests and process
-count. This is an export-time snapshot, not live runtime enforcement or
-authorization: recheck before relying on it. Ordinary agent-project exports
+count. The snapshot is pinned in the exported runtime specification, and the
+runtime revalidates it at catalog checkpoints. It grants no execution
+authority. Ordinary agent-project exports
 remain unchanged, and prerequisite processes are not executed automatically.
 
 
@@ -302,6 +303,26 @@ current reviewed basis; exit code two means that was not established.
 No business tools are called, and no credential is printed.
 
 This is a point-in-time preflight for explicit use by operators or external
-orchestrators, not an atomic lock on later model changes. It is not
-automatically invoked by the generated executor. Ordinary runtime
+orchestrators, not an atomic lock on later model changes. The standalone checker is optional: the generated executor also
+performs live basis checks through its existing catalog-read transport. Ordinary runtime
 permissions, source checks and exact root review requirements are unchanged.
+
+
+### Automatic runtime basis enforcement
+
+New dependency-aware starters include the exact basis digest in
+`workflow.spec.json`; their existing execution intent and shadow-suite spec
+hashes therefore bind this digest. The catalog reader selects the
+dependency status endpoint for these specs, requiring the exact organization,
+root revision, root content and model digests, and prerequisite basis digest.
+The executor checks the basis initially, before precondition and action
+attempts, and at completion. An unavailable or changed basis stops future
+attempts or prevents a successful route classification; it does not undo
+operations already attempted. Source-aware planning uses the same catalog
+reader. Ordinary exports without a dependency pin retain their existing
+catalog contract.
+
+These checks are non-atomic with external operations, and are not a
+substitute for independent authorization, provider concurrency controls or
+business outcome verification. They enforce the supplied declared closure,
+not completeness of dependency discovery.
