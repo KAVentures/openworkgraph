@@ -145,3 +145,36 @@ def test_hard_timeout_observed_and_no_retry(bound,tmp_path,monkeypatch):
     assert len(calls)==1
     assert ledger["captures"][0]["attempts"][0]["status"]=="timeout"
     assert evidence["receipts"][0]["reason"]=="wall_timeout"
+
+
+def test_preflight_previous_started_slots_and_pinned_chain_heads(bound,tmp_path):
+    packet,suite,plan,adapters,requests=bound
+    first=tmp_path/"first"
+    run_shard(packet,suite,plan,adapters,first,offset=0,count=1,confirm_local_endpoint=True)
+    path=first/"attempts.private.jsonl"
+    _,evidence=collect(packet,suite,plan,adapters,[path])
+    pins=evidence["journal_head_manifest"]
+    assert collect(packet,suite,plan,adapters,[path],expected_heads=pins)[1]["externally_supplied_head_pins_matched"]
+    with pytest.raises(ValueError,match="overlaps"):
+        run_shard(packet,suite,plan,adapters,tmp_path/"overlap",offset=0,count=2,
+                  confirm_local_endpoint=True,previous_journals=[path],expected_previous_heads=pins)
+    assert len(requests)==1 and not (tmp_path/"overlap").exists()
+    # Dropping the entire final line leaves a syntactically valid, internally
+    # consistent prefix. External head pins must detect that truncation.
+    raw=path.read_bytes();path.write_bytes(b"".join(raw.splitlines(keepends=True)[:-1]))
+    assert collect(packet,suite,plan,adapters,[path])[1]["terminal_attempts"]==0
+    with pytest.raises(ValueError,match="heads differ"):
+        collect(packet,suite,plan,adapters,[path],expected_heads=pins)
+    path.write_bytes(raw)
+    run_shard(packet,suite,plan,adapters,tmp_path/"next",offset=1,count=1,
+              confirm_local_endpoint=True,previous_journals=[path],expected_previous_heads=pins)
+    assert len(requests)==2
+
+
+def test_combined_journal_bounds(bound,tmp_path,monkeypatch):
+    packet,suite,plan,adapters,_=bound
+    directory=tmp_path/"shard"
+    run_shard(packet,suite,plan,adapters,directory,offset=0,count=1,confirm_local_endpoint=True)
+    monkeypatch.setattr("shared.agent_procurement_http.MAX_COMBINED_JOURNAL_BYTES",1)
+    with pytest.raises(ValueError,match="combined journal"):
+        collect(packet,suite,plan,adapters,[directory/"attempts.private.jsonl"])

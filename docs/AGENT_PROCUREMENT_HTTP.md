@@ -127,3 +127,24 @@ real model execution, independent costs, actual business outcomes, global
 schedule order across shards, or no missing journal. No selection or
 deployment is authorized. Production telemetry and stronger independent
 attestation remain R26 follow-up.
+
+
+### Recovery and external head pins
+
+When running another shard, supply every previous journal using repeated
+`--previous-journal PATH`. The collector validates those journals and refuses
+any overlap with a previously started slot **before** network access. This
+protects the explicitly supplied history; it is not a global lock against
+other processes or forgotten journals. Do not run overlapping shards or
+discard previous journals.
+
+Collection also exports `journal-heads.json`, containing the plan digest
+and exact sorted journal-chain heads. Retain that small manifest separately
+from the private journals. Pass `--expected-heads journal-heads.json` to
+verify a collection against those exact heads, or on a subsequent run with
+the corresponding previous journals. This catches complete-suffix deletion
+or a rewritten chain relative to the previously retained pins. A locally
+created manifest is not a signature, identity attestation or independent
+timestamp. The exact selected journal set must match. A combined 32 MiB
+journal input cap and bounded per-record reads supplement the existing raw
+ledger budget.

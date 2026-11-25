@@ -33,6 +33,8 @@ MAX_SHARD = 100
 MAX_JOURNAL = 24 * 1024 * 1024
 MAX_RAW_SHARD = 4 * 1024 * 1024
 MAX_JOURNALS = 100
+MAX_RECORD_BYTES = 256 * 1024
+MAX_COMBINED_JOURNAL_BYTES = 32 * 1024 * 1024
 ZERO = "0" * 64
 
 
@@ -170,13 +172,22 @@ class _Writer:
         self.stream.close()
 
 
-def run_shard(packet,suite,plan,adapters,directory,*,offset,count,confirm_local_endpoint=False):
+def run_shard(packet,suite,plan,adapters,directory,*,offset,count,confirm_local_endpoint=False,
+              previous_journals=(),expected_previous_heads=None):
     if confirm_local_endpoint is not True:
         raise ValueError("explicit confirmation of local sandbox endpoints and case submission is required")
     verified,design,by_id,cases,spec=_context(packet,suite,plan,adapters)
     if (type(offset) is not int or type(count) is not int or offset<0 or
             not 1<=count<=MAX_SHARD or offset+count>len(verified["slots"])):
         raise ValueError("choose a bounded contiguous shard of frozen slots")
+    if expected_previous_heads is not None and not previous_journals:
+        raise ValueError("head pins require the previous journal files")
+    if previous_journals:
+        _, evidence=collect(packet,suite,verified,adapters,previous_journals,
+                            expected_heads=expected_previous_heads)
+        used={row["slot_id"] for row in evidence["receipts"]}
+        if any(s["slot_id"] in used for s in verified["slots"][offset:offset+count]):
+            raise ValueError("selected shard overlaps a previously started slot; no requests submitted")
     # Preflight every selected request before opening the journal or making a
     # network request. No partial execution due to an oversized later case.
     prepared=[]
@@ -213,9 +224,11 @@ def _read_records(path):
     previous=ZERO
     size=0
     with path.open("rb") as handle:
-        for sequence,line in enumerate(handle):
+        sequence=0
+        while line:=handle.readline(MAX_RECORD_BYTES+1):
             size+=len(line)
-            if size>MAX_JOURNAL or sequence>2*MAX_SHARD or not line.endswith(b"\n"):
+            if (len(line)>MAX_RECORD_BYTES or size>MAX_JOURNAL or sequence>2*MAX_SHARD
+                    or not line.endswith(b"\n")):
                 raise ValueError("journal exceeds bounds or has an incomplete trailing record")
             row=loads(line)
             if not isinstance(row,dict) or set(row)!={"sequence","previous_sha256","event","record_sha256"}:
@@ -225,6 +238,7 @@ def _read_records(path):
                 raise ValueError("journal chain mismatch")
             previous=row["record_sha256"]
             yield row["event"],previous
+            sequence+=1
 
 
 def _time(value):
@@ -237,7 +251,7 @@ def _keys(event,keys):
         raise ValueError("invalid journal event")
 
 
-def collect(packet,suite,plan,adapters,journals):
+def collect(packet,suite,plan,adapters,journals,*,expected_heads=None):
     """Validate exact disjoint journal shards and export raw ledger + receipts.
 
     Started but unfinished slots stay unresolved. Hash chains identify content,
@@ -246,7 +260,18 @@ def collect(packet,suite,plan,adapters,journals):
     verified,design,by_id,cases,spec=_context(packet,suite,plan,adapters)
     if not 1<=len(journals)<=MAX_JOURNALS:
         raise ValueError("select 1 to 100 journal files")
-    seen=set();grouped=defaultdict(list);receipts=[];chains=[]
+    if sum(p.stat().st_size for p in journals)>MAX_COMBINED_JOURNAL_BYTES:
+        raise ValueError("combined journal input exceeds 32 MiB")
+    if expected_heads is not None:
+        if (not isinstance(expected_heads,dict) or set(expected_heads)!={"format","plan_sha256","chain_heads_sha256"}
+                or expected_heads["format"]!="openworkgraph.procurement-journal-heads.v1"
+                or expected_heads["plan_sha256"]!=verified["plan_sha256"]
+                or not isinstance(expected_heads["chain_heads_sha256"],list)
+                or len(expected_heads["chain_heads_sha256"])!=len(journals)
+                or any(not isinstance(h,str) or len(h)!=64 or any(c not in "0123456789abcdef" for c in h)
+                       for h in expected_heads["chain_heads_sha256"])):
+            raise ValueError("invalid expected journal head manifest")
+    seen=set();grouped=defaultdict(list);receipts=[];chains=[];combined_attempt_bytes=0
     for path in journals:
         records=iter(_read_records(path))
         try:header,head=next(records)
@@ -284,6 +309,9 @@ def collect(packet,suite,plan,adapters,journals):
                      "cost_microunits":transport.cost_microunits,"elapsed_ms":event["elapsed_ms"]}
                 if transport.status=="completed":raw["plan"]=transport.plan
                 attempt=RawAttempt.model_validate(raw).model_dump(exclude_unset=True)
+                combined_attempt_bytes+=len(json.dumps(attempt,allow_nan=False,indent=2).encode())
+                if combined_attempt_bytes>MAX_BYTES:
+                    raise ValueError("combined raw attempt payload exceeds the supported limit")
                 grouped[(slot["candidate_id"],slot["repeat"])].append(attempt)
                 receipts.append({**slot,"status":transport.status,"request_sha256":start["request_sha256"],
                                  "configuration_sha256":start["configuration_sha256"],"started_at":start["at"],
@@ -302,6 +330,13 @@ def collect(packet,suite,plan,adapters,journals):
                              "start_record_sha256":start_hash,"terminal_record_sha256":None})
         chains.append({"offset":offset,"count":count,"terminal_slots":position,
                        "started_unfinished":started is not None,"chain_head_sha256":head})
+    chain_heads=sorted(c["chain_head_sha256"] for c in chains)
+    if len(set(chain_heads))!=len(chain_heads):
+        raise ValueError("duplicate journal chain")
+    if expected_heads is not None and chain_heads!=sorted(expected_heads["chain_heads_sha256"]):
+        raise ValueError("journal chain heads differ from the pinned manifest")
+    head_manifest={"format":"openworkgraph.procurement-journal-heads.v1",
+                   "plan_sha256":verified["plan_sha256"],"chain_heads_sha256":chain_heads}
     captures=[]
     for (cid,repeat),attempts in sorted(grouped.items()):
         captures.append({"candidate_id":cid,"repeat":repeat,
@@ -309,7 +344,7 @@ def collect(packet,suite,plan,adapters,journals):
                          "attempts":sorted(attempts,key=lambda a:a["case_id"])})
     ledger={"format":RAW_CAPTURES,"plan_sha256":verified["plan_sha256"],"captures":captures}
     RawLedger.model_validate(ledger)
-    if len(json.dumps(ledger,allow_nan=False,separators=(",",":")).encode())>MAX_BYTES:
+    if len((json.dumps(ledger,allow_nan=False,indent=2)+"\n").encode())>MAX_BYTES:
         raise ValueError("combined raw ledger exceeds 8 MiB; reduce trial size or returned plan length")
     evidence={"format":"openworkgraph.procurement-attempt-receipts.v1","plan_sha256":verified["plan_sha256"],
               "raw_capture_sha256":digest(ledger),"scheduled_attempts":len(verified["slots"]),
@@ -317,6 +352,7 @@ def collect(packet,suite,plan,adapters,journals):
               "unstarted_attempts":len(verified["slots"])-len(seen),"journal_chains":chains,
               "receipts":sorted(receipts,key=lambda r:(r["case_id"],r["repeat"],r["position"])),
               "receipt_chain_consistency_checked":True,"receipt_authenticity_verified":False,
+              "journal_head_manifest":head_manifest,"externally_supplied_head_pins_matched":expected_heads is not None,
               "elapsed_time_basis":"collector_wall_time_including_transport_child_overhead",
               "provider_cost_verified":False,"external_agent_identity_verified":False,
               "endpoint_sandbox_verified":False,"execution_authorized":False}
@@ -334,22 +370,26 @@ def main(argv=None):
             p.add_argument("--offset",type=int,required=True)
             p.add_argument("--count",type=int,required=True)
             p.add_argument("--confirm-local-endpoint",action="store_true")
+            p.add_argument("--previous-journal",type=Path,action="append",default=[])
         else:p.add_argument("--journal",type=Path,action="append",required=True)
+        p.add_argument("--expected-heads",type=Path,help="Previously retained exact journal head manifest")
     args=parser.parse_args(argv)
     try:
         packet,suite,plan,adapters=(_load(p) for p in (args.process_export,args.suite,args.plan,args.adapters))
+        heads=_load(args.expected_heads) if args.expected_heads else None
         if args.operation=="run":
             result=run_shard(packet,suite,plan,adapters,args.out_dir,offset=args.offset,count=args.count,
-                             confirm_local_endpoint=args.confirm_local_endpoint)
+                             confirm_local_endpoint=args.confirm_local_endpoint,previous_journals=args.previous_journal,
+                             expected_previous_heads=heads)
             print(json.dumps(result))
         else:
-            ledger,receipts=collect(packet,suite,plan,adapters,args.journal)
+            ledger,receipts=collect(packet,suite,plan,adapters,args.journal,expected_heads=heads)
             minimized,result=score(packet,suite,plan,ledger)
             result.update(local_transport_receipts_sha256=digest(receipts),
                           local_transport_receipt_consistency_checked=True,
                           provider_cost_verified=False,external_candidate_execution_observed=False)
             _output(args.out_dir,{"captures.raw.private.json":ledger,"captures.minimized.json":minimized,
-                                  "receipts.json":receipts,"review.json":result})
+                                  "receipts.json":receipts,"journal-heads.json":receipts["journal_head_manifest"],"review.json":result})
     except (OSError,ValueError,KeyError,TypeError,RecursionError,OverflowError):
         parser.exit(2,"Replay collection stopped or evidence was incompatible. Inspect any retained private journal; do not blindly retry a started slot.\n")
     return 0
