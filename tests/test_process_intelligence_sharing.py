@@ -214,6 +214,17 @@ with TestClient(app) as client:
     assert client.get(f"/v1/process-intelligence/{log_id}/case?case_id=c0", headers=agent).status_code == 404
     r = client.get(f"/v1/process-intelligence/{log_id}/root-cause?outcome=rework", headers=agent)
     assert r.status_code == 200, r.text
+    other = client.post("/v1/event-logs/import?format=csv&name=other&case_column=case&activity_column=activity&timestamp_column=time",
+                        content="\n".join(rows).encode(), headers={**owner, "X-OWG-Local-Storage-Confirmed": "true"}).json()["log_id"]
+    unshared_cmp = client.post(f"/v1/process-intelligence/{log_id}/compare-logs", json={"comparison_log_id": other}, headers=agent)
+    unknown_cmp = client.post(f"/v1/process-intelligence/{log_id}/compare-logs",
+                              json={"comparison_log_id": "log_" + "0" * 16}, headers=agent)
+    assert unshared_cmp.status_code == unknown_cmp.status_code == 404 and unshared_cmp.json() == unknown_cmp.json()
+    client.post(f"/v1/event-logs/{other}/agent-share", json={"level": "aggregates"}, headers=owner)
+    r = client.post(f"/v1/process-intelligence/{log_id}/compare-logs", json={"comparison_log_id": other}, headers=agent)
+    assert r.status_code == 200 and r.json()["kpis"]["comparison"]["cases"] == 6, r.text
+    assert client.post(f"/v1/process-intelligence/{log_id}/compare-logs", json={"comparison_log_id": other, "x": 1},
+                       headers=agent).status_code == 422
     r = client.get(f"/v1/process-intelligence/{log_id}/signals", headers=agent)
     assert r.status_code == 200 and r.json()["signals"] == [], r.text
     r = client.get(f"/v1/process-intelligence/{log_id}/automation-candidates?limit=5", headers=agent)
@@ -275,7 +286,7 @@ PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_overv
                  "get_process_rework", "get_process_waiting_times", "get_process_drift", "get_stuck_process_cases",
                  "get_process_automation_candidates", "get_process_signals", "get_process_decision_rules",
                  "get_process_temporal_profile", "get_process_heuristics_net",
-                 "get_process_footprints", "get_process_model_quality",
+                 "get_process_footprints", "get_process_model_quality", "compare_process_logs",
                  "get_process_deviations", "list_process_reference_nets", "get_process_reference_deviations",
                  "get_process_funnel",
                  "get_process_trace_clusters", "check_process_compliance", "get_process_performance_spectrum",
@@ -311,3 +322,34 @@ def test_mcp_tools_are_listed_only_when_a_log_is_shared(tmp_path):
     assert off == DEFAULT_TOOLS
     on = asyncio.run(_listed_tools(tmp_path, True))
     assert on == DEFAULT_TOOLS | PROCESS_TOOLS
+
+
+def test_compare_logs_needs_both_shared_and_withholds_small_rows():
+    def make(name, rework_every, rare=False):
+        rows = ["case,activity,time,who"]
+        for i in range(20):
+            steps = ["Receive", "Check"] + (["Check"] if i % rework_every == 0 else []) + ["Pay"]
+            if rare and i < 2:
+                steps.insert(1, "Escalate")
+            rows += [f"c{i},{a},2024-03-{1 + i:02d}T{8 + k:02d}:00:00Z,clerk" for k, a in enumerate(steps)]
+        return workspace.import_log(BytesIO("\n".join(rows).encode()), name=name, source_format="csv",
+                                    mapping=MAPPING)["log_id"]
+    before, after = make("before", 2), make("after", 5, rare=True)
+    sharing.set_share(before, "aggregates")
+    with pytest.raises(sharing.NotShared):
+        sharing.compare_logs(before, after)
+    sharing.set_share(after, "aggregates")
+    result = sharing.compare_logs(before, after)
+    assert result["kpis"]["baseline"]["cases"] == result["kpis"]["comparison"]["cases"] == 20
+    assert result["kpis"]["difference"]["repeat_rate"] == -0.3
+    # "Escalate" occurs in 2 cases of one log only: withheld, never named.
+    assert "Escalate" not in str(result) and result["withheld"]["activities"] >= 1
+    variant_rows = result["variants"]["largest_share_differences"]
+    assert all(r["baseline_cases"] == 0 or r["baseline_cases"] >= 5 for r in variant_rows)
+    assert all(r["comparison_cases"] == 0 or r["comparison_cases"] >= 5 for r in variant_rows)
+    assert "c1" not in str(result).replace("Check", "") and "clerk" not in str(result)
+    with pytest.raises(workspace.EventLogWorkspaceError, match="fewer than 5 cases"):
+        sharing.compare_logs(before, after, comparison_filter={"activity": "Escalate"})
+    with pytest.raises(workspace.EventLogWorkspaceError, match="limit"):
+        sharing.compare_logs(before, after, limit=0)
+
