@@ -157,7 +157,7 @@ def report(spec, records, deployment_name):
             if type(number) is not int or purpose not in {'initial','precondition','action','completion'}:
                 _fail()
             if purpose in {'initial','completion'}:
-                if attempt is not None or (purpose=='initial' and (attempts or source_number)):
+                if attempt is not None or (purpose=='initial' and (attempts or number!=1)):
                     _fail()
             elif type(attempt) is not int or attempt!=attempts+1 or attempt>len(declared_actions) or pending:
                 _fail()
@@ -255,6 +255,12 @@ def report(spec, records, deployment_name):
                     checkpoint=number;checkpoint_rows={};checkpoint_ready=False
                     checkpoint_kind=row.get('checkpoint_purpose')
                     checkpoint_attempt=row.get('checkpoint_attempt')
+                    if expected_source_rules:
+                        if not isinstance(checkpoint_kind,str) or (checkpoint_attempt is not None and type(checkpoint_attempt) is not int):
+                            _fail()
+                        key=(checkpoint_kind,checkpoint_attempt)
+                        if key!=source_key or source_checks.get(key)!=['matched']*len(expected_source_rules):
+                            _fail()
                     if checkpoint_kind=='initial':
                         if checkpoint!=1 or checkpoint_attempt is not None:
                             _fail()
