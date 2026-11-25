@@ -152,8 +152,12 @@
     const examples=el('div');examples.id='owgCommsReviewExamples';
     const prioritize=button('Prioritize human review','secondary');prioritize.id='owgCommsReviewTriage';
     const newest=button('Show unlabelled examples','secondary');newest.id='owgCommsReviewNormal';
-    const reviewOrder=el('div',null,'row');reviewOrder.append(prioritize,newest);
-    let triageMode=false;
+    const diverse=button('Review diverse training examples','secondary');diverse.id='owgCommsReviewDiverse';
+    const previousReview=button('Previous review page','secondary'),nextReview=button('Next review page','secondary');
+    previousReview.id='owgCommsReviewPrevious';nextReview.id='owgCommsReviewNext';
+    previousReview.disabled=nextReview.disabled=true;
+    const reviewOrder=el('div',null,'row');reviewOrder.append(prioritize,diverse,newest,previousReview,nextReview);
+    let triageMode=false,triageOrder='priority',reviewOffset=0,reviewGeneration=0;
     const train=button('Train intent model','secondary');train.id='owgCommsTrain';
     const dropModel=button('Delete model','secondary');dropModel.id='owgCommsModelDelete';
     const model=el('div');model.id='owgCommsModel';
@@ -189,6 +193,52 @@
         el('p','Optional reviewer-labelled language gate: '+(gateLines.join('; ')||'no supported language reported')+
           '. Each modelled intent needs at least five held-out positives and negatives, F1 at least 0.80, and at most 35% uncertain decisions. Passing is NOT external validation. OWG does not detect the language of an uploaded export.','muted'),
         ...(m.skipped_intents.length?[el('div','Not trained (fewer than 5 positive or negative examples): '+m.skipped_intents.map(x=>x.intent).join(', ')+'.','muted')]:[]));
+      const pairedButton=button('Compare learned and keyword classifiers','secondary');
+      const pairedHost=el('div');pairedHost.setAttribute('aria-live','polite');
+      pairedButton.id='owgCommsPairedEvaluation';pairedHost.id='owgCommsPairedEvaluationResult';
+      let generation=0;
+      pairedButton.onclick=async()=>{
+        const n=++generation;pairedButton.disabled=true;
+        const active=()=>n===generation&&pairedHost.isConnected&&reviewOn.checked;
+        pairedHost.replaceChildren(el('p','Evaluating the same reviewed holdout with both methods…','muted'));
+        try{
+          const data=await api('/v1/communications/review/paired-evaluation');
+          if(!active())return;
+          if(data.model_sha256!==m.model_sha256)throw Error('Model changed; refresh model status before comparing.');
+          const select=el('select');select.setAttribute('aria-label','Holdout language');
+          for(const [value,label] of [['','All languages'],...data.by_language.map(g=>[g.language,g.language])]){
+            const option=el('option',label);option.value=value;select.appendChild(option);}
+          const subset=el('select');subset.setAttribute('aria-label','Holdout subset');
+          for(const [value,label] of [['all_holdout','All reviewed holdout'],['without_detected_lexical_overlap','Without detected lexical overlap']]){
+            const option=el('option',label);option.value=value;subset.appendChild(option);}
+          subset.value=data.without_detected_lexical_overlap?'without_detected_lexical_overlap':'all_holdout';
+          const body=el('div');
+          function draw(){
+            const selected=select.value?data.by_language.find(g=>g.language===select.value):data;
+            const report=selected?.[subset.value];
+            if(!report){body.replaceChildren(el('p','Screened results unavailable within the overlap work budget.','note'));return;}
+            const pair=report.strict_all_intent_message_comparison;
+            const rows=report.per_intent.map(i=>[i.intent,
+              pct(i.keyword.accuracy_all),pct(i.learned.accuracy_all),pct(i.keyword.coverage),pct(i.learned.coverage),
+              pct(i.keyword.recall_all_positives),pct(i.learned.recall_all_positives),i.paired.learned_only_correct,i.paired.keyword_only_correct]);
+            body.replaceChildren(el('p',report.message_count+' reviewed messages; '+report.declared_intents+' declared intents.'),
+              el('p','Strict complete-message correctness: learned only '+pair.learned_only_correct+' · keyword only '+pair.keyword_only_correct+
+                ' · difference '+pct(pair.paired_correctness_difference)+' · exact paired p '+(pair.unadjusted_exact_mcnemar_p===null?'—':pair.unadjusted_exact_mcnemar_p.toPrecision(3))),
+              table(['Intent','Keyword correct','Learned correct','Keyword coverage','Learned coverage','Keyword recall','Learned recall','Learned only correct','Keyword only correct'],rows),
+              table(['Keyword result','Learned result','Messages'],pair.transitions.map(t=>[t.keyword,t.learned,t.count])),
+              el('p','Accuracy uses all cases, with abstentions not counted as correct. Recall counts positive abstentions in the denominator. Untrained intents are abstentions.','muted'));
+          }
+          select.onchange=draw;subset.onchange=draw;draw();
+          const download=button('Download aggregate comparison JSON','secondary');
+          download.onclick=()=>{if(!active())return;const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));const a=el('a');a.href=url;a.download='owg-communications-paired-evaluation.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+          pairedHost.replaceChildren(el('h3','Paired classifier evaluation'),el('p',data.interpretation,'muted'),
+            el('p','Language groups displayed '+data.language_groups_displayed+' of '+data.language_groups_total+
+              '. Untrained intents: '+(data.untrained_intents.join(', ')||'none')+'.'),
+            field('Holdout subset',subset),field('Language',select),body,download);
+        }catch(error){if(active())pairedHost.replaceChildren(el('p',error.message,'note'));}
+        finally{pairedButton.disabled=false;}
+      };
+      model.append(pairedButton,pairedHost);
     }
     function renderExamples(page){
       if(!reviewOn.checked){examples.replaceChildren();return;}
@@ -206,9 +256,9 @@
         const lang=input('owgCommsLang_'+x.example_id,'text','en');lang.value=x.language==='und'?'':x.language;lang.maxLength=12;
         box.appendChild(field('Language',lang));
         const saveLabel=button(x.labels===null?'Save labels (none ticked means no intent)':'Update labels','secondary');
-        saveLabel.onclick=async()=>{try{await api('/v1/communications/review/label',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({example_id:x.example_id,labels:picks.filter(c=>c.checked).map(c=>c.value),language:lang.value.trim()})});await loadReview();reviewStatus.textContent='Labels saved. '+reviewStatus.textContent;}catch(error){reviewStatus.textContent=error.message;}};
+        saveLabel.onclick=async()=>{try{await api('/v1/communications/review/label',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({example_id:x.example_id,labels:picks.filter(c=>c.checked).map(c=>c.value),language:lang.value.trim()})});reviewOffset=0;await loadReview();reviewStatus.textContent='Labels saved. '+reviewStatus.textContent;}catch(error){reviewStatus.textContent=error.message;}};
         const remove=button('Delete example','secondary');remove.setAttribute('aria-label','Delete example '+x.example_id);
-        remove.onclick=async()=>{try{await api('/v1/communications/review/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({example_ids:[x.example_id]})});await loadReview();}catch(error){reviewStatus.textContent=error.message;}};
+        remove.onclick=async()=>{try{await api('/v1/communications/review/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({example_ids:[x.example_id]})});reviewOffset=0;await loadReview();}catch(error){reviewStatus.textContent=error.message;}};
         box.append(saveLabel,remove);list.appendChild(box);
       });
       const intro=triageMode?
@@ -217,26 +267,45 @@
         (page.learned_predictions_used?'Current learned-model suggestions included.':
           'Keyword-only order; learned model '+page.model_status+'.'):
         page.total+' unlabelled examples; showing '+items.length+'.';
+      const details=triageMode&&page.review_order==='diverse'?
+        el('p','Diverse order: rotate through declared language and keyword groups. This page: '+
+          Object.entries(page.page_by_declared_language||{}).map(([lang,n])=>lang+': '+n).join(', ')+
+          '. Language is not inferred; these are review suggestions, not a representative sample.','muted'):el('span');
       examples.replaceChildren(el('h3',triageMode?'Human review suggestions':'Examples to label'),
-        el('div',intro,'muted'),list);
+        el('div',intro,'muted'),details,list);
+      previousReview.disabled=!triageMode||reviewOffset===0;
+      nextReview.disabled=!triageMode||reviewOffset+items.length>=page.total||!items.length;
     }
     async function loadReview(){
+      const generation=++reviewGeneration;
+      const current=()=>generation===reviewGeneration;
+      previousReview.disabled=nextReview.disabled=true;
       try{
-        const st=await api('/v1/communications/review/settings');ackVersion=st.acknowledgement_version;ackText.textContent=' '+st.acknowledgement;
+        const st=await api('/v1/communications/review/settings');if(!current())return;
+        ackVersion=st.acknowledgement_version;ackText.textContent=' '+st.acknowledgement;
         reviewOn.checked=st.enabled;retention.value=String(st.retention_days||30);
         reviewStatus.textContent=st.enabled?st.example_count+' examples kept ('+st.labelled_count+' labelled, '+st.holdout_count+' held out).':'Review examples are off.';
-        await names();
-        prioritize.disabled=!st.enabled;newest.disabled=!st.enabled;
-        const endpoint=triageMode?'/v1/communications/review/triage?limit=20':
+        const t=await api('/v1/communications/taxonomy');if(!current())return;
+        intentNames=t.taxonomy.intents.map(i=>i.name);
+        prioritize.disabled=diverse.disabled=newest.disabled=!st.enabled;
+        if(!st.enabled){examples.replaceChildren();reviewOffset=0;}
+        const endpoint=triageMode?'/v1/communications/review/triage?limit=20&offset='+reviewOffset+'&order='+triageOrder:
           '/v1/communications/review/examples?status=unlabelled&limit=20';
-        renderExamples(st.enabled?await api(endpoint):{examples:[],total:0,unlabelled_holdout_excluded:0,model_status:'absent'});
-        renderModel(await api('/v1/communications/review/model'));
-      }catch(error){reviewStatus.textContent=error.message;}
+        const data=st.enabled?await api(endpoint):{examples:[],total:0,unlabelled_holdout_excluded:0,model_status:'absent'};
+        if(!current())return;
+        if(triageMode&&reviewOffset&&reviewOffset>=data.total){reviewOffset=0;return loadReview();}
+        renderExamples(data);
+        const fresh=await api('/v1/communications/review/model');if(current())renderModel(fresh);
+      }catch(error){if(current()){examples.replaceChildren();reviewStatus.textContent=error.message;}}
     }
-    prioritize.onclick=()=>{triageMode=true;loadReview();};
-    newest.onclick=()=>{triageMode=false;loadReview();};
+    prioritize.onclick=()=>{triageMode=true;triageOrder='priority';reviewOffset=0;loadReview();};
+    diverse.onclick=()=>{triageMode=true;triageOrder='diverse';reviewOffset=0;loadReview();};
+    newest.onclick=()=>{triageMode=false;reviewOffset=0;loadReview();};
+    previousReview.onclick=()=>{reviewOffset=Math.max(0,reviewOffset-20);loadReview();};
+    nextReview.onclick=()=>{reviewOffset+=20;loadReview();};
     saveReview.onclick=async()=>{
       if(!reviewOn.checked&&!window.confirm('Turn off review examples and delete every kept example and the model?'))return;
+      ++reviewGeneration;examples.replaceChildren();reviewOffset=0;
       try{await api('/v1/communications/review/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(reviewOn.checked?{enabled:true,acknowledgement_version:ackVersion,retention_days:Number(retention.value)}:{enabled:false})});await loadReview();}
       catch(error){reviewStatus.textContent=error.message;}
     };

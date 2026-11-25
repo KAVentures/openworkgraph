@@ -974,7 +974,7 @@
       const selected=record;
       if(!sets.value||!libraryRule.value||!designRule.value)throw new Error('Choose a design rule, a rule set and a library rule.');
       const value=await request('/v1/process-catalog/rule-library/link?'+new URLSearchParams({workflow_id:selected.workflow_id,revision:String(selected.revision)}),
-        {rule_id:designRule.value,rule_set_id:sets.value,library_rule_id:libraryRule.value});
+        {rule_id:designRule.value,rule_set_id:sets.value,library_rule_id:libraryRule.value,library_revision:latest?.revision});
       if(record!==selected)return;
       if(model&&!window.confirm('Replace the editor contents with this linked-rule proposal?'))return;
       model=copy(value.proposed_process_model);reviewed=false;renderEditor();
@@ -988,8 +988,47 @@
       value.findings.forEach(f=>list.appendChild(el('li',f.workflow_id+' r'+f.revision+' · rule '+f.rule_id+' · linked to revision '+f.linked_revision+(f.latest_revision?' (latest '+f.latest_revision+')':'')+' · '+(words[f.status]||f.status))));
       output.appendChild(list);
     });
+    const reviewUpgrades=()=>locked(async()=>{
+      const selected=record;
+      const url='/v1/process-catalog/rule-library/upgrade-review?'+new URLSearchParams({
+        workflow_id:selected.workflow_id,revision:String(selected.revision)});
+      const base={expected_content_sha256:selected.content_sha256};
+      const preview=await request(url,base);
+      if(record!==selected)return;
+      output.replaceChildren(el('p',preview.linked_rules.length+' linked rules · '+preview.selectable_rule_count+
+        ' available upgrades. Review exact source revisions and select rules to update together. Nothing is saved automatically.'));
+      const choices=[];
+      for(const row of preview.linked_rules){
+        const item=el('fieldset');item.append(el('legend',row.rule_id+' · '+row.status.replaceAll('_',' ')));
+        item.append(el('p','Linked revision '+row.linked_revision+' · latest '+(row.latest_revision??'unavailable')));
+        if(row.latest_text!==null){
+          item.append(el('p','Current rule: '+row.current_text),el('p','Library rule: '+row.latest_text));
+          if(row.predicate_changed)item.append(el('p','Current predicate: '+JSON.stringify(row.current_predicate)),
+            el('p','Library predicate: '+JSON.stringify(row.latest_predicate)));
+        }
+        if(row.affected_decision_table_ids.length)item.append(el('p','Decision tables requiring fresh review: '+row.affected_decision_table_ids.join(', ')));
+        if(row.selectable){
+          const label=el('label'),check=el('input');check.type='checkbox';
+          check.setAttribute('aria-label','Upgrade linked rule '+row.rule_id);
+          label.append(check,el('span','Include this exact upgrade'));item.append(label);
+          choices.push({check,row});
+        }else if(row.status!=='current')item.append(el('p','Cannot upgrade automatically; review the missing, edited or inconsistent reference separately.'));
+        output.append(item);
+      }
+      if(choices.length)output.append(button('Open selected rule upgrades in editor',()=>locked(async()=>{
+        if(record!==selected)throw new Error('Saved process changed; reopen the upgrade review.');
+        const selections=choices.filter(c=>c.check.checked).map(({row})=>({
+          rule_id:row.rule_id,library_revision:row.latest_revision,content_sha256:row.latest_content_sha256}));
+        if(!selections.length)throw new Error('Select at least one linked rule to upgrade.');
+        const value=await request(url,{...base,selections});
+        if(record!==selected)return;
+        if(model&&!window.confirm('Replace the editor contents with this exact rule upgrade proposal? Affected rule and decision confirmations will be cleared.'))return;
+        model=copy(value.proposed_process_model);reviewed=false;renderEditor();
+        status('Opened '+value.selected_rule_ids.length+' linked rule upgrades as unsaved edits; review the affected rules and decision tables before saving.');
+      })));
+    });
     section.append(button('Load rule sets',()=>locked(()=>refresh())),sets,name,source,button('Save design rules to library',saveSet),designRule,libraryRule,
-      button('Link rule from library',linkRule),button('Show rule drift',showDrift),output);
+      button('Link rule from library',linkRule),button('Show rule drift',showDrift),button('Review linked rule upgrades',reviewUpgrades),output);
     host.appendChild(section);
   }
   function renderDMNImport(host){
@@ -1157,12 +1196,27 @@
       output.replaceChildren(el('p',result.questions.length+' open questions · '+result.answered_question_count+
         ' answered on this process revision and exact source bundle · '+result.statement_count+
         ' source statements. Full documents are not retained; selected citations and answers are recorded.'));
+      const coverage=result.source_coverage;
+      if(coverage){
+        const omitted=coverage.documents.reduce((sum,d)=>sum+d.overlong_statements+d.omitted_by_budget,0);
+        const incomplete=coverage.subjects.filter(s=>!s.conflict_review_complete).length;
+        if(omitted||incomplete)output.append(el('p',
+          'Source review incomplete: '+omitted+' statement(s) omitted and '+incomplete+
+          ' subject(s) with incomplete conflict coverage. Narrow or split the sources before confirming affected questions.','note'));
+        else output.append(el('p','All bounded source and conflict scans completed. Lexical matches are review prompts, not proof of policy accuracy.'));
+      }
       if(result.instruction_like_statements.length)output.append(el('p',
         result.instruction_like_statements.length+' statement(s) look like instructions to the system and were excluded from evidence.'));
       for(const q of result.questions){
         const box=el('section');box.append(el('h5',q.prompt));
+        if(q.source_coverage)box.append(el('p',q.source_coverage.matching_statements+
+          ' matching statements · '+q.source_coverage.conflict_candidates_checked+
+          ' checked for possible conflicts · '+q.source_coverage.displayed_conflict_count+' of '+
+          q.source_coverage.possible_conflict_count+' possible conflicts displayed.','muted'));
+        if(q.coverage_blocked)box.append(el('p','Confirmation is unavailable until source coverage is complete. Narrow the supplied documents or defer this question.','note'));
+        if(q.previous_decision)box.append(el('p','Previous decision: '+q.previous_decision+'. This question remains unresolved.','muted'));
         const cites=el('ul');
-        const citeText=c=>'“'+c.text+'” — '+c.document_title+' (characters '+c.start+'–'+c.end+')';
+        const citeText=c=>'“'+c.text+'” — '+c.document_title+' (source '+(Number(c.document_index)+1)+', characters '+c.start+'–'+c.end+')';
         for(const c of q.citations)cites.append(el('li',citeText(c)));
         box.append(cites);
         const disputed=new Map();

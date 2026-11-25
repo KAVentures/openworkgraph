@@ -143,6 +143,7 @@ def verify_directory(root: Path | str, expected_manifest_sha256: str | None = No
     if (not isinstance(hashes, dict) or not 1 <= len(hashes) <= MAX_FILES
         or not REQUIRED_GENERATED_FILES.issubset(hashes)):
         raise ReleaseIntegrityError("Invalid release file inventory")
+    verified_spec_bytes = None
     for name, digest in hashes.items():
         if not _safe_name(name) or not isinstance(digest, str) or not _HEX.fullmatch(digest):
             raise ReleaseIntegrityError("Invalid or unsafe inventory path/digest")
@@ -157,8 +158,10 @@ def verify_directory(root: Path | str, expected_manifest_sha256: str | None = No
             data = source.read(MAX_FILE_BYTES + 1)
         if len(data) > MAX_FILE_BYTES or _hash(data) != digest:
             raise ReleaseIntegrityError("Generated file missing or changed: " + name)
+        if name == "workflow.spec.json":
+            verified_spec_bytes = data
     try:
-        spec = json.loads((root / "workflow.spec.json").read_bytes(), object_pairs_hook=_unique)
+        spec = json.loads(verified_spec_bytes, object_pairs_hook=_unique)
     except ReleaseIntegrityError:
         raise
     except (ValueError, UnicodeError):
@@ -190,12 +193,184 @@ def verify_directory(root: Path | str, expected_manifest_sha256: str | None = No
     }
 
 
+def _pinned_inventory(root: Path | str, pin: str) -> dict:
+    if not isinstance(pin, str) or not _HEX.fullmatch(pin):
+        raise ReleaseIntegrityError("Both releases require separately pinned manifest SHA-256 digests")
+    verify_directory(root, pin)
+    # Retain exactly the manifest that was verified, not an unpinned second
+    # read. This remains a local snapshot, not a live filesystem lock.
+    path = Path(root) / MANIFEST_NAME
+    if path.is_symlink() or not path.is_file():
+        raise ReleaseIntegrityError("Release manifest changed during comparison")
+    with path.open("rb") as source:
+        raw = source.read(MAX_MANIFEST_BYTES + 1)
+    if len(raw) > MAX_MANIFEST_BYTES or _hash(raw) != pin:
+        raise ReleaseIntegrityError("Release manifest changed during comparison")
+    return json.loads(raw, object_pairs_hook=_unique)
+
+
+def _pinned_spec(root: Path | str, manifest: dict) -> dict:
+    """Read bounded spec bytes and verify the digest again before using them."""
+    path = Path(root) / "workflow.spec.json"
+    if path.is_symlink() or not path.is_file():
+        raise ReleaseIntegrityError("Runtime specification changed during comparison")
+    with path.open("rb") as source:
+        raw = source.read(MAX_FILE_BYTES + 1)
+    if len(raw) > MAX_FILE_BYTES or _hash(raw) != manifest["workflow_spec_sha256"]:
+        raise ReleaseIntegrityError("Runtime specification changed during comparison")
+    return json.loads(raw, object_pairs_hook=_unique,
+                      parse_constant=lambda _: (_ for _ in ()).throw(ReleaseIntegrityError("Nonfinite JSON value")))
+
+
+def _structural_changes(before: dict, after: dict) -> dict:
+    """Describe exact saved model changes by stable IDs, never disclose values."""
+    old, new = before["process_model"], after["process_model"]
+    def differs(a, b):
+        # Python equality treats True, 1 and 1.0 as equal. Their JSON
+        # representations can carry distinct customer rule semantics.
+        return json.dumps(a, sort_keys=True, allow_nan=False) != json.dumps(b, sort_keys=True, allow_nan=False)
+    groups = {
+        "activities": ("id",),
+        "transitions": ("source", "target"),
+        "business_rules": ("id",),
+        "decision_tables": ("id",),
+        "outcome_expectations": ("terminal_activity_id", "operation"),
+    }
+    changes = {}
+    for name, keys in groups.items():
+        def index(model):
+            rows = model.get(name, [])
+            if not isinstance(rows, list) or len(rows) > 100:
+                raise ReleaseIntegrityError("Invalid bounded model inventory")
+            result = {}
+            for row in rows:
+                if not isinstance(row, dict):
+                    raise ReleaseIntegrityError("Invalid model inventory row")
+                identity = tuple(row.get(key) for key in keys)
+                if any(not isinstance(value, str) or not value or len(value) > 200 for value in identity) or identity in result:
+                    raise ReleaseIntegrityError("Invalid or duplicate model inventory identity")
+                result[identity] = row
+            return result
+        a, b = index(old), index(new)
+        def identity(k):
+            return dict(zip(keys, k))
+        changes[name] = {
+            "added": [identity(k) for k in sorted(b.keys() - a.keys())],
+            "removed": [identity(k) for k in sorted(a.keys() - b.keys())],
+            "changed": [{**identity(k), "changed_fields": sorted(
+                field for field in a[k].keys() | b[k].keys()
+                if field not in a[k] or field not in b[k] or differs(a[k][field], b[k][field]))}
+                for k in sorted(a.keys() & b.keys()) if differs(a[k], b[k])],
+            "retained_identity_order_changed": ([k for k in a if k in b] != [k for k in b if k in a]),
+        }
+    def terminals(model):
+        values = model.get("terminal_activity_ids", [])
+        if (not isinstance(values, list) or len(values) > 40
+                or any(not isinstance(value, str) or not value or len(value) > 200 for value in values)
+                or len(set(values)) != len(values)):
+            raise ReleaseIntegrityError("Invalid terminal activity inventory")
+        return set(values)
+    return {
+        "keyed_model_changes": changes,
+        "entry_activity_changed": old.get("entry_activity_id") != new.get("entry_activity_id"),
+        "terminal_activity_ids_changed": terminals(old) != terminals(new),
+        "other_changed_model_fields": sorted(
+            k for k in old.keys() | new.keys() if k not in groups
+            and (k not in old or k not in new or differs(old[k], new[k]))),
+        "changed_runtime_contract_fields": sorted(
+            k for k in before.keys() | after.keys()
+            if k not in {"workflow_id", "revision", "content_sha256", "process_model", "process_model_sha256"}
+            and (k not in before or k not in after or differs(before[k], after[k]))),
+        "model_field_values_returned": False,
+        "structural_changes_establish_compatibility": False,
+    }
+
+
+def compare_directories(baseline_root: Path | str, candidate_root: Path | str,
+                        baseline_manifest_sha256: str, candidate_manifest_sha256: str) -> dict:
+    """Review a proposed runtime upgrade without executing either release.
+
+    Distinguish the saved design identity, specification bytes and generated
+    file changes. All comparisons are between independently pinned snapshots.
+    Customer-managed files, dependencies and provider behavior are outside
+    the generated manifest and cannot be declared compatible here.
+    """
+    before = _pinned_inventory(baseline_root, baseline_manifest_sha256)
+    after = _pinned_inventory(candidate_root, candidate_manifest_sha256)
+    for inventory in (before, after):
+        ref = inventory["workflow_reference"]
+        if (not isinstance(ref, dict) or set(ref) != {"workflow_id", "revision", "content_sha256"}
+                or not isinstance(ref["workflow_id"], str) or not ref["workflow_id"]
+                or type(ref["revision"]) is not int or ref["revision"] < 1
+                or not isinstance(ref["content_sha256"], str) or not _HEX.fullmatch(ref["content_sha256"])):
+            raise ReleaseIntegrityError("Invalid versioned release identity")
+    if before["workflow_reference"]["workflow_id"] != after["workflow_reference"]["workflow_id"]:
+        raise ReleaseIntegrityError("Compare releases of the same saved workflow ID")
+    old, new = before["files"], after["files"]
+    added = sorted(new.keys() - old.keys())
+    removed = sorted(old.keys() - new.keys())
+    changed = sorted(name for name in old.keys() & new.keys() if old[name] != new[name])
+    unchanged = sorted(name for name in old.keys() & new.keys() if old[name] == new[name])
+    old_ref, new_ref = before["workflow_reference"], after["workflow_reference"]
+    direction = ("newer_revision" if new_ref["revision"] > old_ref["revision"]
+                 else "older_revision" if new_ref["revision"] < old_ref["revision"]
+                 else "same_revision_same_content" if new_ref == old_ref
+                 else "same_revision_different_content")
+    spec_changed = before["workflow_spec_sha256"] != after["workflow_spec_sha256"]
+    model_changed = before["process_model_sha256"] != after["process_model_sha256"]
+    model_delta = _structural_changes(_pinned_spec(baseline_root, before), _pinned_spec(candidate_root, after))
+    return {
+        "format": "openworkgraph.customer-runtime-release-comparison.v1",
+        "baseline": {"manifest_sha256": baseline_manifest_sha256, "workflow_reference": old_ref,
+                     "workflow_spec_sha256": before["workflow_spec_sha256"],
+                     "process_model_sha256": before["process_model_sha256"]},
+        "candidate": {"manifest_sha256": candidate_manifest_sha256, "workflow_reference": new_ref,
+                      "workflow_spec_sha256": after["workflow_spec_sha256"],
+                      "process_model_sha256": after["process_model_sha256"]},
+        "revision_direction": direction,
+        "specification_bytes_changed": spec_changed,
+        "process_model_changed": model_changed,
+        "design_changes": model_delta,
+        "generated_file_changes": {
+            "added": [{"path": n, "candidate_sha256": new[n]} for n in added],
+            "removed": [{"path": n, "baseline_sha256": old[n]} for n in removed],
+            "changed": [{"path": n, "baseline_sha256": old[n], "candidate_sha256": new[n]} for n in changed],
+            "unchanged_count": len(unchanged),
+        },
+        "generated_files_changed": bool(added or removed or changed),
+        "requires_review_before_upgrade": bool(added or removed or changed or old_ref != new_ref),
+        "both_generated_inventories_verified_against_pins": True,
+        "customer_managed_files_compared": False,
+        "dependency_compatibility_verified": False,
+        "runtime_behavior_compatibility_verified": False,
+        "execution_authorized": False,
+        "independent_signature_verified": False,
+        "remote_deployment_verified": False,
+        "business_outcomes_verified": False,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Verify generated OWG runtime file integrity (offline, read-only)")
     parser.add_argument("--root", default=".", help="Extracted runtime project directory")
     parser.add_argument("--manifest-sha256", default=None,
                         help="SHA-256 pinned separately from this unsigned exported ZIP")
+    parser.add_argument("--compare-root", default=None, help="Candidate extracted release directory")
+    parser.add_argument("--compare-manifest-sha256", default=None,
+                        help="Separately pinned candidate manifest SHA-256")
     args = parser.parse_args(argv)
+    if args.compare_root is not None:
+        try:
+            comparison = compare_directories(args.root, args.compare_root,
+                                             args.manifest_sha256, args.compare_manifest_sha256)
+        except (ReleaseIntegrityError, OSError, ValueError, RecursionError) as exc:
+            print("Release comparison FAILED: " + (str(exc) if isinstance(exc, ReleaseIntegrityError)
+                                                   else "local release could not be checked"), file=sys.stderr)
+            return 2
+        print(json.dumps(comparison, sort_keys=True, indent=2, allow_nan=False))
+        return 0
+    if args.compare_manifest_sha256 is not None:
+        parser.error("--compare-manifest-sha256 requires --compare-root")
     try:
         result = verify_directory(args.root, args.manifest_sha256)
     except ReleaseIntegrityError as exc:

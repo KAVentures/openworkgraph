@@ -792,6 +792,8 @@ app.include_router(_object_lead_time_router)
 # R24 same-pair co-attached events are a separate local-only session-scoped read.
 from .event_log_object_binding_routes import router as _object_binding_router  # noqa: E402
 app.include_router(_object_binding_router)
+from .event_log_relationship_comparison_routes import router as _relationship_comparison_router  # noqa: E402
+app.include_router(_relationship_comparison_router)
 from .automation_monitoring_routes import router as _automation_monitoring_router  # noqa: E402
 app.include_router(_automation_monitoring_router)
 from .communications_routes import router as _communications_router  # noqa: E402

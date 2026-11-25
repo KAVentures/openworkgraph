@@ -792,7 +792,8 @@ const path=require('node:path');
    await page.locator('#owgSignalEvaluate').click();
    await page.locator('#owgSignalResults').getByText('signals hold now').waitFor();
    const signalText=await page.locator('#owgSignalResults').textContent();
-   assert.match(signalText,/1 of 1 signals hold now/);assert.match(signalText,/6 cases/);assert.match(signalText,/C0\b/);assert.match(signalText,/first check/);
+   assert.match(signalText,/1 of 1 signals hold now/);assert.match(signalText,/6 cases/);assert.match(signalText,/first check/);
+   await page.locator('#owgSignalResults').getByRole('button',{name:'Open case C0',exact:true}).waitFor();
    await page.locator('#owgSignalEvaluate').click();
    await page.locator('#owgSignalResults').getByText('first check').waitFor({state:'detached'});
    // Manual reviews belong to the current evaluated state. They do not grant
@@ -1515,7 +1516,8 @@ const path=require('node:path');
    assert.equal(checkedAge.signals[0].new_cases_since_last_evaluation,null);
    assert.deepEqual([checkedAge.signals[0].new_cases_comparison.lower_bound,checkedAge.signals[0].new_cases_comparison.upper_bound],[0,1]);
    await page.locator('#owgSignalResults').getByText('0–1 (bounded history)',{exact:true}).waitFor();
-   assert.match(await page.locator('#owgSignalResults').textContent(),/ARecent \(age .*idle /);
+   await page.locator('#owgSignalResults').getByRole('button',{name:'Open case ARecent',exact:true}).waitFor();
+   assert.match(await page.locator('#owgSignalResults').textContent(),/ARecent\s+Age\s+4\.2 d, idle 60 min\./);
    const ageAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgEventLogCard'),{
      runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
    assert.deepEqual(ageAudit.violations.map(v=>v.id),[]);

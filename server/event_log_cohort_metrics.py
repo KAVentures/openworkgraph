@@ -1,4 +1,4 @@
-"""Dashboard-only, bounded aggregate of case metrics from a saved local event log.
+"""Dashboard-only, bounded cohort metric evaluation from a saved local event log.
 
 This is intentionally not an AI token endpoint. The route authenticates the
 live dashboard session before calling this module. Workspace._query verifies
@@ -19,8 +19,9 @@ FIELDS = {"duration_seconds", "event_count", "resource_count"}
 MAX_CASES = derived.MAX_BATCH_ROWS
 
 
-def summarize(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, Any]:
-    """Return only a metric aggregate; never raw case identifiers or event rows."""
+def summarize(log_id: str, spec: Any, case_type: str | None = None, *,
+              include_case_values: bool = False) -> dict[str, Any]:
+    """Summarize a metric with an optional dashboard-only case value review."""
     if not isinstance(spec, dict) or set(spec) != {"definition", "cohort"}:
         raise workspace.EventLogWorkspaceError("definition and cohort are required")
     chosen = cohorts.parse_cohort(spec["cohort"])
@@ -38,20 +39,23 @@ def summarize(log_id: str, spec: Any, case_type: str | None = None) -> dict[str,
             raise workspace.EventLogWorkspaceError(
                 f"cohort has more than {MAX_CASES} cases; narrow the cohort before calculating a metric"
             )
-        # No user-provided SQL, field names or expressions are interpolated.
-        # This query does not fetch any case IDs or source attributes into Python.
-        rows = conn.execute("""
+        # Only the explicit case review selects case keys. Both queries use
+        # identical scope and numeric fields with no user-supplied SQL.
+        keys = ", case_id" if include_case_values else ""
+        rows = conn.execute(f"""
             SELECT epoch(max(ts) - min(ts)) AS duration_seconds,
                    count(*) AS event_count,
                    count(DISTINCT resource) FILTER (WHERE resource <> '') AS resource_count
+                   {keys}
             FROM ce GROUP BY case_id
         """).fetchall()
-        values = [dict(zip(("duration_seconds", "event_count", "resource_count"), row)) for row in rows]
+        fields = ("duration_seconds", "event_count", "resource_count")
+        values = [dict(zip(fields, row)) for row in rows]
         try:
-            result = projection.summarize_projected(definition, values, FIELDS)
+            result, evaluated = projection.evaluate_projected(definition, values, FIELDS)
         except derived.MetricDefinitionError as exc:
             raise workspace.EventLogWorkspaceError(str(exc)) from None
-        return {
+        response = {
             "metric": result,
             "cohort": cohorts.describe(chosen),
             "cases_before_filter": before,
@@ -61,4 +65,10 @@ def summarize(log_id: str, spec: Any, case_type: str | None = None) -> dict[str,
             "complete_cohort": True,
             "raw_cases_returned": False,
         }
+        if include_case_values:
+            pairs = sorted(zip(evaluated, (row[3] for row in rows)),
+                           key=lambda pair: (pair[0] is None, pair[0], pair[1]))
+            response["case_values"] = [{"case_id": case_id, "value": str(value) if value is not None else None}
+                                       for value, case_id in pairs]
+        return response
     return workspace._query(log_id, case_type, run)

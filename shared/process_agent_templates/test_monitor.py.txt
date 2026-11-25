@@ -6,7 +6,7 @@ import json
 import unittest
 
 from execute import ImplementationError, digest, reference
-from monitor import MAX_BYTES, read_journal, report
+from monitor import MAX_BYTES, read_journal, report, batch_report
 from test_execution import fixture
 
 
@@ -103,6 +103,244 @@ class MonitoringCases(unittest.TestCase):
         ]
         for rows in invalid:
             with self.subTest(rows=rows), self.assertRaises(ImplementationError):report(self.spec, rows, 'Run')
+
+    def stop(self):
+        return self.row('operator_stop_observed', future_tool_attempts_stopped=True,
+                        already_in_flight_requests_not_cancelled=True)
+
+    def test_operator_stop_projects_without_inventing_cancellation_or_success(self):
+        rows = [self.start, *self.attempt(), self.stop(),
+                self.row('source_rules_not_established_at_completion'),
+                self.row('operator_stop_active_at_completion', in_flight_requests_not_cancelled=True),
+                self.finish(False)]
+        run = report(self.spec, rows, 'Run')['runs'][0]
+        self.assertEqual(run['status'], 'handed_to_human')
+        self.assertEqual(len(run['steps']), 1)
+        self.assertIsNone(run['outcome']['verified'])
+        early = report(self.spec, [self.start, self.stop(),
+                        self.row('stopped_before_tools', reason='operator_stop')], 'Run')['runs'][0]
+        self.assertEqual(early['status'], 'handed_to_human')
+        self.assertEqual(early['steps'], [])
+        self.assertEqual(report(self.spec, [self.start, self.stop()], 'Run')['runs'][0]['status'], 'running')
+        for invalid in ([self.start, self.stop(), *self.attempt(), self.finish(False)],
+                        [self.start, self.stop(), self.finish()],
+                        [self.start, {**self.stop(), 'future_tool_attempts_stopped': False}],
+                        [self.start, self.row('operator_stop_active_at_completion', in_flight_requests_not_cancelled=False)]):
+            with self.assertRaises(ImplementationError):
+                report(self.spec, invalid, 'Run')
+
+    def write_journal(self, root, name, rows):
+        path = root / name
+        path.write_text(''.join(json.dumps(row) + '\n' for row in rows), encoding='utf-8')
+        return path
+
+    def test_batch_reconciles_complete_interrupted_and_stopped_runs_without_private_paths(self):
+        import hashlib
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            a = self.write_journal(root, 'PRIVATE_FIRST.jsonl',
+                                   [self.start, *self.attempt(), self.finish()])
+            b = self.write_journal(root, 'PRIVATE_SECOND.jsonl',
+                                   [{**self.start, 'execution_id':'c'*64},
+                                    self.row('attempt_pending', activity_id='resolve', attempt=1,
+                                             arguments={'secret':'PRIVATE_ARGUMENT'})])
+            d = self.write_journal(root, 'PRIVATE_THIRD.jsonl',
+                                   [{**self.start, 'execution_id':'d'*64},
+                                    self.row('precondition_pending', activity_id='resolve', attempt=1),
+                                    self.stop(), self.finish(False)])
+            document, review = batch_report(self.spec, [d,b,a], 'Run')
+            self.assertEqual([r['run_id'] for r in document['runs']], ['b'*64,'c'*64,'d'*64])
+            self.assertEqual(review['selected_journal_count'], 3)
+            self.assertEqual(review['accepted_journal_count'], 3)
+            self.assertEqual(review['journals_requiring_reconciliation'], 2)
+            self.assertEqual(review['reported_status_counts'],
+                             {'succeeded':1,'running':1,'handed_to_human':1})
+            self.assertEqual(review['report_sha256'], digest(document))
+            self.assertEqual(review['journals'][0]['journal_sha256'], hashlib.sha256(d.read_bytes()).hexdigest())
+            self.assertIn('precondition_request_without_recorded_disposition', review['journals'][0]['review_flags'])
+            self.assertIn('operator_stop_reported_not_remote_cancellation', review['journals'][0]['review_flags'])
+            self.assertIn('attempt_without_recorded_result', review['journals'][1]['review_flags'])
+            self.assertEqual(review['journals'][1]['recorded_uncertain_attempt_count'], 1)
+            self.assertFalse(review['business_outcomes_verified'])
+            self.assertFalse(review['remote_cancellation_verified'])
+            self.assertFalse(review['execution_authorized'])
+            self.assertNotIn('PRIVATE_',json.dumps([document,review]))
+            self.assertTrue(all(r['outcome']['verified'] is None for r in document['runs']))
+
+    def test_batch_refuses_duplicate_wrong_spec_torn_and_missing_inputs_without_partial_export(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            a = self.write_journal(root,'a.jsonl',[self.start,self.finish()])
+            duplicate = self.write_journal(root,'duplicate.jsonl',[self.start])
+            wrong = self.write_journal(root,'wrong.jsonl',[{**self.start,'spec_sha256':'a'*64}])
+            torn = root/'torn.jsonl'
+            torn.write_text(json.dumps(self.start),encoding='utf-8')
+            document,review=batch_report(self.spec,[a,duplicate,wrong,torn,root/'missing.jsonl'],'Run')
+            self.assertIsNone(document)
+            self.assertFalse(review['complete_selection_projectable'])
+            self.assertEqual(review['accepted_journal_count'],0)
+            self.assertEqual(review['refused_journal_count'],5)
+            self.assertEqual([r['refusal'] for r in review['journals']],
+                             ['duplicate_execution_id','duplicate_execution_id',
+                              'invalid_or_wrong_spec_journal','invalid_or_wrong_spec_journal','journal_unreadable'])
+            self.assertIsNone(review['report_sha256'])
+            self.assertEqual(review['export_refusal'],'one_or_more_selected_journals_refused')
+
+    def test_compare_journal_snapshots_preserves_exact_prefix_and_refuses_divergence(self):
+        from monitor import compare_journals
+        with TemporaryDirectory() as directory:
+            root=Path(directory)
+            rows=[self.start,self.attempt()[0]]
+            old=self.write_journal(root,'PRIVATE_OLD.jsonl',rows)
+            same=self.write_journal(root,'PRIVATE_SAME.jsonl',rows)
+            newer=self.write_journal(root,'PRIVATE_NEW.jsonl',
+                                     [*rows,self.attempt()[1],self.finish()])
+            changed=self.write_journal(root,'PRIVATE_CHANGED.jsonl',
+                [self.start,{**rows[1],'arguments_sha256':'f'*64},self.attempt()[1],self.finish()])
+            another=self.write_journal(root,'PRIVATE_OTHER.jsonl',
+                [{**self.start,'execution_id':'c'*64},*rows[1:]])
+            rewritten=root/'PRIVATE_REWRITTEN.jsonl'
+            rewritten.write_text(''.join(json.dumps(row,sort_keys=True)+'\n' for row in rows),encoding='utf-8')
+            for baseline,candidate,relation,accepted,additional in (
+                (old,same,'identical_snapshot',True,0),
+                (old,newer,'exact_append_only_extension',True,2),
+                (newer,old,'candidate_is_earlier_snapshot',False,None),
+                (old,changed,'divergent_journal_history',False,None),
+                (old,rewritten,'divergent_journal_history',False,None),
+                (old,another,'different_execution_identity',False,None),
+            ):
+                with self.subTest(relation=relation):
+                    result=compare_journals(self.spec,baseline,candidate,'Run')
+                    self.assertEqual(result['relation'],relation)
+                    self.assertEqual(result['candidate_retains_exact_baseline_bytes'],accepted)
+                    self.assertEqual(result['additional_record_count'],additional)
+                    self.assertFalse(result['report_imported'])
+                    self.assertFalse(result['business_outcomes_verified'])
+                    self.assertFalse(result['journal_origin_independently_verified'])
+                    self.assertNotIn('PRIVATE_',json.dumps(result))
+            updated=compare_journals(self.spec,old,newer,'Run')
+            self.assertEqual(updated['baseline']['reported_status'],'running')
+            self.assertEqual(updated['candidate']['reported_status'],'succeeded')
+            self.assertFalse(updated['candidate_requires_reconciliation'])
+            bad=root/'torn.jsonl'
+            bad.write_bytes(newer.read_bytes()+b'{')
+            with self.assertRaises(ImplementationError):
+                compare_journals(self.spec,old,bad,'Run')
+
+    def test_batch_bounds_fail_closed_and_never_silently_truncate(self):
+        from unittest.mock import patch
+        import monitor
+        with TemporaryDirectory() as directory:
+            root=Path(directory)
+            a=self.write_journal(root,'a.jsonl',[self.start])
+            b=self.write_journal(root,'b.jsonl',[{**self.start,'execution_id':'c'*64}])
+            with patch.object(monitor,'MAX_BATCH_BYTES',len(a.read_bytes())+1):
+                document,review=batch_report(self.spec,[a,b],'Run')
+                self.assertIsNone(document)
+                self.assertEqual(review['refused_journal_count'],1)
+            with patch.object(monitor,'MAX_EXPORT_BYTES',1):
+                document,review=batch_report(self.spec,[a],'Run')
+                self.assertIsNone(document)
+                self.assertEqual(review['export_refusal'],'signed_report_sender_size_limit_exceeded')
+            for paths in ([],[a]*101):
+                with self.assertRaises(ImplementationError):
+                    batch_report(self.spec,paths,'Run')
+
+    def test_actual_executor_stop_journals_project_before_and_between_tool_attempts(self):
+        import asyncio
+        from unittest.mock import patch
+        from execute import execute_approved
+        from test_execution import FakeTools, receipt
+        from stop import stop
+
+        async def exercise(folder, early):
+            data = fixture()
+            tools = FakeTools()
+            original = tools.call_tool
+            async def call_tool(name, arguments):
+                value = await original(name, arguments)
+                if name == 'resolve_case':
+                    stop(folder)
+                return value
+            tools.call_tool = call_tool
+            async def read_source(base, token, request):
+                if early:
+                    stop(folder)
+                    return None
+                value = receipt(request)
+                if not tools.resolved:
+                    value.update(operation_verified=False,availability='unknown',
+                                 reason='provider_state_not_expected_operation')
+                return value
+            with patch.dict('os.environ',{'OWG_EXECUTION_MCP_TOKEN':'SYNTHETIC_TOKEN',
+                                          'OWG_EXECUTION_SOURCE_READ_TOKEN':'SYNTHETIC_SOURCE'}):
+                result = await execute_approved(*data,journal_directory=folder,
+                    client_factory=lambda *args:tools,receipt_reader=read_source)
+            self.assertTrue(result['operator_stopped'])
+            paths = list(folder.glob('*.jsonl'))
+            self.assertEqual(len(paths),1)
+            document, review = batch_report(data[0],paths,'Run')
+            self.assertEqual(document['runs'][0]['status'],'handed_to_human')
+            self.assertTrue(review['journals'][0]['operator_stop_reported'])
+            self.assertIsNone(document['runs'][0]['outcome']['verified'])
+            if early:
+                self.assertEqual(tools.calls,[])
+                self.assertEqual(document['runs'][0]['steps'],[])
+            else:
+                self.assertEqual([name for name,_ in tools.calls],['read_case','resolve_case'])
+                self.assertEqual([s['step_id'] for s in document['runs'][0]['steps']],['resolve'])
+        with TemporaryDirectory() as directory:
+            asyncio.run(exercise(Path(directory)/'early',True))
+            asyncio.run(exercise(Path(directory)/'later',False))
+
+    def test_batch_cli_review_and_import_report_are_distinct_and_offline(self):
+        import subprocess
+        import sys
+        from send_report import _validate_report
+        with TemporaryDirectory() as directory:
+            root=Path(directory)
+            for name in ('monitor.py','execute.py','runtime.py','process_source_state.py','process_rule_conditions.py'):
+                (root/name).write_bytes((Path(__file__).parent/name).read_bytes())
+            (root/'workflow.spec.json').write_text(json.dumps(self.spec),encoding='utf-8')
+            a=self.write_journal(root,'a.jsonl',[self.start,self.finish()])
+            b=self.write_journal(root,'b.jsonl',[{**self.start,'execution_id':'c'*64},self.stop(),
+                self.row('stopped_before_tools',reason='operator_stop')])
+            command=[sys.executable,'monitor.py','--journal',str(a),'--journal',str(b),
+                     '--deployment-name','Run','--output','batch.json']
+            run=subprocess.run(command,cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(run.returncode,0,run.stderr)
+            document=json.loads((root/'batch.json').read_text())
+            _validate_report(document)
+            self.assertEqual(len(document['runs']),2)
+            command[-1]='review.json'
+            run=subprocess.run(command+['--review-only'],cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(run.returncode,0,run.stderr)
+            review=json.loads((root/'review.json').read_text())
+            self.assertEqual(review['report_sha256'],digest(document))
+            command[-1]='refused.json'
+            run=subprocess.run(command+['--journal',str(a)],cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertNotEqual(run.returncode,0)
+            self.assertFalse((root/'refused.json').exists())
+            run=subprocess.run(command+['--journal',str(a),'--review-only'],cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(run.returncode,2,run.stderr)
+            self.assertEqual(json.loads((root/'refused.json').read_text())['refused_journal_count'],2)
+            candidate=self.write_journal(root,'extension.jsonl',[self.start,self.finish()])
+            baseline=self.write_journal(root,'baseline.jsonl',[self.start])
+            compare=[sys.executable,'monitor.py','--journal',str(candidate),'--compare-to',str(baseline),
+                     '--deployment-name','Run','--output','comparison.json']
+            result=subprocess.run(compare,cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertNotEqual(result.returncode,0)
+            self.assertFalse((root/'comparison.json').exists())
+            result=subprocess.run(compare+['--review-only'],cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,0,result.stderr)
+            comparison=json.loads((root/'comparison.json').read_text())
+            self.assertEqual(comparison['relation'],'exact_append_only_extension')
+            self.assertNotIn('runs',comparison)
+            compare[3],compare[5]=compare[5],compare[3]
+            compare[-1]='older.json'
+            result=subprocess.run(compare+['--review-only'],cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,2,result.stderr)
+            self.assertEqual(json.loads((root/'older.json').read_text())['relation'],'candidate_is_earlier_snapshot')
 
     def test_journal_reader_bounds_torn_lines_duplicate_keys_and_nonstandard_json(self):
         with TemporaryDirectory() as folder:
