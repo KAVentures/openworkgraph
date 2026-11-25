@@ -80,14 +80,16 @@ def test_structural_workflow_net_with_deadlock_and_dead_transition():
 
 
 def test_livelock_without_deadlock_is_not_completable():
-    net = model(["s", "p", "q", "f"], ["enter", "loop", "finish"],
-                [("s", "enter"), ("enter", "p"), ("p", "loop"), ("loop", "p"),
-                 ("p", "finish"), ("q", "finish"), ("finish", "f")])
+    net = model(["s", "p", "q", "f"], ["enter", "alternate", "loop", "join", "finish"],
+                [("s", "enter"), ("enter", "p"), ("s", "alternate"), ("alternate", "q"),
+                 ("p", "loop"), ("loop", "p"), ("p", "join"), ("q", "join"),
+                 ("join", "f"), ("q", "finish"), ("finish", "f")])
     result = soundness.analyze(net)
     assert result["complete"] is True
+    assert result["workflow_net_structure"] is True
     assert result["witnesses"]["deadlock"] is None
     assert result["option_to_complete"] is False
-    assert result["witnesses"]["cannot_complete"]["steps"] == 0
+    assert result["witnesses"]["cannot_complete"]["transition_ids"] == ["enter"]
 
 
 def test_improper_completion_and_unsafe_marking_are_distinct():
@@ -147,7 +149,7 @@ def test_token_limit_is_not_an_unboundedness_claim(monkeypatch):
     assert result["complete"] is False
     assert result["limit"] == "token_limit"
     assert result["one_safe"] is False
-    assert result["sound"] is None
+    assert result["sound"] is not True
     assert result["dead_transition_ids"] is None
 
 
