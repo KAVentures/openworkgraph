@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import re
 from typing import IO, Any, Iterable, Iterator
@@ -72,6 +72,10 @@ class ReadStats:
     object_attribute_values: int = 0              # timed values kept in object histories
     object_attribute_values_without_time: int = 0  # values whose time is missing or not timezone-qualified
     object_attribute_values_over_limit: int = 0    # values past MAX_OBJECT_ATTRIBUTE_VALUES for one object
+    # An explicit offset ("+01:00", "Z") for XES/OCEL times written without one; "" rejects them.
+    assumed_offset: str = ""
+    timestamps_with_assumed_offset: int = 0         # event and attribute times read with assumed_offset
+    timestamps_without_offset: int = 0              # ISO times without an offset, left unread for lack of a decision
 
 
 def _text(value: Any, limit: int) -> str:
@@ -102,6 +106,31 @@ def parse_timestamp(value: Any) -> datetime | None:
     if stamp.tzinfo is None or stamp.utcoffset() is None:
         return None  # an unzoned time cannot be ordered safely across sources
     return stamp.astimezone(timezone.utc)
+
+
+def _read_stamp(value: Any, stats: ReadStats) -> datetime | None:
+    """``parse_timestamp``, and under an explicit ``stats.assumed_offset`` also ISO times written without one."""
+    stamp = parse_timestamp(value)
+    if stamp is not None:
+        return stamp
+    raw = _text(value, 64)
+    try:
+        naive = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if naive.tzinfo is not None:
+        return None
+    if not stats.assumed_offset:
+        stats.timestamps_without_offset += 1
+        return None
+    offset = stats.assumed_offset
+    if offset == "Z":
+        zone = timezone.utc
+    else:
+        sign = -1 if offset[0] == "-" else 1
+        zone = timezone(sign * timedelta(hours=int(offset[1:3]), minutes=int(offset[4:6])))
+    stats.timestamps_with_assumed_offset += 1
+    return naive.replace(tzinfo=zone).astimezone(timezone.utc)
 
 
 def _attributes(pairs: Iterable[tuple[Any, Any]]) -> dict[str, str]:
@@ -235,7 +264,7 @@ def read_xes(stream: IO[bytes], *, stats: ReadStats | None = None) -> Iterator[E
                 fields = list(_xes_key_values(event))
                 lookup = {k: v for _, k, v in fields}
                 activity = _exact_key(lookup.get("concept:name"), MAX_ACTIVITY)
-                stamp = parse_timestamp(lookup.get("time:timestamp"))
+                stamp = _read_stamp(lookup.get("time:timestamp"), stats)
                 if not activity or stamp is None:
                     stats.rejected_events += 1
                     continue
@@ -319,7 +348,7 @@ def _object_history(values: list[tuple[Any, Any, Any]], attributes: dict[str, st
             continue
         first = name not in seen
         seen.add(name)
-        stamp = parse_timestamp(time)
+        stamp = _read_stamp(time, stats)
         if stamp is None:
             stats.object_attribute_values_without_time += 1
         elif not first and others >= MAX_OBJECT_ATTRIBUTE_VALUES:
@@ -432,7 +461,7 @@ def read_ocel_json(stream: IO[bytes], *, stats: ReadStats | None = None) -> Iter
             stats.rejected_events += 1
             continue
         event_id, activity = _exact_key(item.get("id")), _exact_key(item.get("type"), MAX_ACTIVITY)
-        stamp = parse_timestamp(item.get("time"))
+        stamp = _read_stamp(item.get("time"), stats)
         if not event_id or not activity or stamp is None:
             stats.rejected_events += 1
             continue
@@ -510,7 +539,7 @@ def read_ocel_xml(stream: IO[bytes], *, stats: ReadStats | None = None) -> Itera
                     yield record
             elif section == "events" and element.tag == "event":
                 event_id, activity = _exact_key(element.get("id")), _exact_key(element.get("type"), MAX_ACTIVITY)
-                stamp = parse_timestamp(element.get("time"))
+                stamp = _read_stamp(element.get("time"), stats)
                 if not event_id or not activity or stamp is None:
                     stats.rejected_events += 1
                 else:

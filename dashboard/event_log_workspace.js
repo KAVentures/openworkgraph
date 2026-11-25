@@ -174,6 +174,10 @@
     const format=select('owgEventLogFormat',[['csv','CSV'],['xes','XES'],['ocel','OCEL 2.0 JSON'],['ocelxml','OCEL 2.0 XML']]);
     const name=input('owgEventLogName','text','Log name');name.maxLength=120;
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('File',file),field('Format',format),field('Name',name));
+    // XES and OCEL files written without UTC offsets (as PM4Py writes naive times) need the same explicit decision as CSV.
+    const standardOffset=input('owgEventLogStandardOffset','text','none: reject them');standardOffset.maxLength=6;standardOffset.size=8;
+    standardOffset.pattern='Z|[+-][0-9]{2}:[0-9]{2}';
+    const standardOffsetField=field('Offset for times without one',standardOffset);standardOffsetField.hidden=true;row.append(standardOffsetField);
     const mapping=el('div',null,'row');mapping.id='owgEventLogMapping';mapping.style.alignItems='end';
     const cols={case:select('owgEventLogCase',[]),activity:select('owgEventLogActivity',[]),time:select('owgEventLogTime',[]),resource:select('owgEventLogResource',[])};
     const delimiter=select('owgEventLogDelimiter',[[',','Comma'],[';','Semicolon'],['t','Tab'],['|','Pipe']]);
@@ -282,7 +286,8 @@
       importButton.disabled=savingImport||!(ready&&consent.checked&&name.value.trim());
       appendButton.disabled=savingImport||!(ready&&consent.checked&&state.logId);
       previewImport.disabled=!(csv&&ready&&!previewBusy);show(previewPanel,csv);
-      show(mapping,csv);show(identity,csv);show(identityFields,active);};
+      show(mapping,csv);show(identity,csv);show(identityFields,active);
+      standardOffsetField.hidden=csv||!(file.files&&file.files[0]);};
     for(const control of [useIdentity,eventId,sourceNamespace,sourceColumn,caseNamespace,caseColumn,jsonColumn]){
       control.addEventListener('change',()=>{consent.checked=false;refreshImport();});
       if(control.tagName==='INPUT'&&control.type==='text')control.addEventListener('input',()=>{consent.checked=false;refreshImport();});
@@ -348,6 +353,22 @@
       columnsReady=!!(cols.case.value&&cols.activity.value&&cols.time.value);
     }
     function clearReusableMapping(){reuseRow.hidden=true;reuseRow.replaceChildren();}
+    // Look at the first times in an XES or OCEL file: when some have no UTC offset, propose this computer's offset.
+    async function checkUnzonedTimes(chosen,sequence){
+      try{
+        const text=new TextDecoder().decode(await (await headBlob(chosen,256*1024)).arrayBuffer());
+        const pattern=/key="time:timestamp"\s+value="([^"]{10,40})"|"time"\s*:\s*"([^"]{10,40})"|\btime="([^"]{10,40})"/g;
+        let naive=0,seen=0,example='';
+        for(const match of text.matchAll(pattern)){
+          const value=match[1]||match[2]||match[3];seen++;
+          if(/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(value)){naive++;example=example||value;}
+          if(seen>=500)break;
+        }
+        if(sequence!==columnReadSequence||file.files?.[0]!==chosen||format.value==='csv'||!naive)return;
+        if(!standardOffset.value.trim())standardOffset.value=localOffset();
+        status('Times in this file have no UTC offset (for example '+example+'). They will be read at '+standardOffset.value.trim()+'. Change "Offset for times without one" if the source system used another.');
+      }catch(_){/* a convenience; the import still validates every time */}
+    }
     async function readColumns(){
       const sequence=++columnReadSequence;
       formatSequence++;
@@ -360,7 +381,9 @@
         // CSV read from changing this status or the current file's readiness.
         readingColumns=false;
         status(chosen?'File mapping ready. Review the selected columns before storing.':'');
-        refreshImport();return;
+        refreshImport();
+        if(chosen)void checkUnzonedTimes(chosen,sequence);
+        return;
       }
       const selectedDelimiter=delimiter.value;
       const sep=selectedDelimiter==='t'?'\t':selectedDelimiter;
@@ -515,6 +538,7 @@
       const q=new URLSearchParams({format:format.value});
       if(!target)q.set('name',name.value.trim());
       if(format.value==='csv')csvMapping(q);
+      else if(standardOffset.value.trim())q.set('naive_timestamp_offset',standardOffset.value.trim());
       return q;
     }
     async function saveSelectedFile(target){

@@ -470,11 +470,10 @@ def _ingest(conn: duckdb.DuckDBPyConnection, log_id: str, upload: Path, folder: 
     if source_format == "csv":
         return _load_csv_fast(conn, log_id, upload, mapping or {}, reasons, keep_rejected)
     if source_identity.settings(mapping):raise EventLogFormatError('Supplied source event identity mode is supported only for CSV')
-    if (mapping or {}).get("keep_rejected") or (mapping or {}).get("naive_timestamp_offset") \
-            or (mapping or {}).get("timestamp_format"):
-        raise EventLogWorkspaceError("keeping rejected rows, assuming an offset and declaring a timestamp format "
-                                     "are available for CSV only")
-    stats = ReadStats()
+    if (mapping or {}).get("keep_rejected") or (mapping or {}).get("timestamp_format"):
+        raise EventLogWorkspaceError("keeping rejected rows and declaring a timestamp format are available for CSV only")
+    # An explicit offset decision also reads XES/OCEL times written without one (as PM4Py writes naive times).
+    stats = ReadStats(assumed_offset=naive_offset(mapping))
     with upload.open("rb") as raw:
         reader = {"xes": read_xes, "ocel": read_ocel_json, "ocelxml": read_ocel_xml}[source_format](raw, stats=stats)
         paths = _stage(reader, folder)
@@ -542,6 +541,9 @@ def import_log(source: IO[bytes], *, name: str, source_format: str, mapping: dic
                 kept = {} if (mapping or {}).get("keep_rejected") else None
                 stats = _ingest(conn, log_id, upload, folder, source_format, mapping, reasons, kept)
                 if stats.events == 0:
+                    if getattr(stats, "timestamps_without_offset", 0):
+                        raise EventLogWorkspaceError(
+                            "the file's times have no UTC offset; choose the offset they use (naive_timestamp_offset)")
                     raise EventLogWorkspaceError("no events with a case, activity and timezone-qualified time")
                 _store_rejected(conn, log_id, 0, kept)
                 conn.execute("INSERT INTO logs VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -726,9 +728,14 @@ def _append_values(conn: duckdb.DuckDBPyConnection, log_id: str, staging: str) -
 
 def _history_counts(source_format: str, stats: ReadStats, added: int | None = None,
                     over_limit: int = 0, over_names: int = 0) -> dict[str, Any]:
-    """Counts of timed object attribute values read from an OCEL file (other formats have none)."""
+    """Counts of timed object attribute values read from an OCEL file (other formats have none), and how many
+    XES/OCEL times were read with an explicitly assumed offset."""
+    assumed = ({"timestamps_with_assumed_offset": stats.timestamps_with_assumed_offset}
+               if source_format != "csv" and getattr(stats, "assumed_offset", "") else
+               {"timestamps_without_offset": stats.timestamps_without_offset}
+               if source_format != "csv" and getattr(stats, "timestamps_without_offset", 0) else {})
     if source_format not in ("ocel", "ocelxml"):
-        return {}
+        return assumed
     counts = {"read": stats.object_attribute_values,
               "without_timezone_qualified_time": stats.object_attribute_values_without_time,
               "over_per_object_limit": stats.object_attribute_values_over_limit + over_limit,
@@ -738,7 +745,7 @@ def _history_counts(source_format: str, stats: ReadStats, added: int | None = No
         counts["added"] = added
         counts["over_attribute_name_limit"] = over_names
         counts["attribute_name_limit"] = MAX_ATTRIBUTES
-    return {"object_attribute_values": counts}
+    return {"object_attribute_values": counts, **assumed}
 
 
 def _store_rejected(conn: duckdb.DuckDBPyConnection, log_id: str, batch: int, kept: dict[str, int] | None) -> None:
