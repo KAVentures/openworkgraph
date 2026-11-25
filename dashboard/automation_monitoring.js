@@ -132,6 +132,16 @@
         parts.push(table(['Accepted','Refused','Highest sequence','Missing (retained)'],[[String(live.accepted_reports),String(live.refused_reports),String(live.highest_sequence),live.missing_count?live.missing_sequences.join(', ')+(live.missing_count>live.missing_sequences.length?' …':''):'none']]));
         if(live.missing_truncated)parts.push(el('p','Earlier missing sequence numbers were truncated from the 1,000-ID recovery window. The retained list cannot prove that all reports arrived, even when empty.','note'));
         if(live.versions.length)parts.push(el('h4','Versions seen'),table(['Version','Workflow spec','First seen','Last seen','Reports','Runs'],live.versions.map(v=>[v.version_label||'(none)',v.workflow_spec_sha256?v.workflow_spec_sha256.slice(0,12)+'…':'(none)',v.first_seen,v.last_seen,String(v.reports),String(v.runs)])));
+        const receipts=live.recent_sequence_receipts||[];
+        if(receipts.length){
+          const disposition={imported:'Accepted',refused_invalid:'Invalid report',refused_version_drift:'Specification mismatch',
+            refused_run_revision_conflict:'Conflicting run revision'};
+          parts.push(el('h4','Recent signed sequence dispositions'),
+            el('p','Highest '+receipts.length+' retained sequences, not execution or arrival order. Original refusal status is preserved even on an exact resend.','muted'),
+            table(['Sequence','Received','Disposition','Original HTTP status'],receipts.map(r=>[
+              r.sequence,r.received_at,disposition[r.outcome]||r.outcome,String(r.original_status)])));
+          if(live.receipt_list_truncated)parts.push(el('p',live.retained_receipt_count+' receipts retained; only the highest 50 are displayed.','muted'));
+        }
         const rotate=button('Rotate secret','secondary');rotate.id='owgMonitorChannelRotate';
         rotate.onclick=async()=>{if(!window.confirm('Replace the channel secret? The old one stops working immediately.'))return;try{const r=await api('/v1/automation-monitoring/channels/'+encodeURIComponent(live.channel_id)+'/rotate',{method:'POST'});await renderChannel(r.secret);}catch(error){status.textContent=error.message;}};
         const revoke=button('Revoke channel','secondary');revoke.id='owgMonitorChannelRevoke';
@@ -140,7 +150,7 @@
       }
       channelHost.replaceChildren(...parts);
     }
-    const KIND={run_failures:'Failed runs',run_handoffs:'Runs handed to a person',signature_rejected:'Rejected signatures',replay_conflict:'Reused sequence numbers',lost_reports:'Lost reports',version_drift:'Version drift'};
+    const KIND={run_failures:'Failed runs',run_handoffs:'Runs handed to a person',signature_rejected:'Rejected signatures',replay_conflict:'Reused sequence numbers',lost_reports:'Lost reports',version_drift:'Version drift',run_revision_conflict:'Conflicting run revisions'};
     async function renderIncidents(){
       const selected=pick.value;if(!selected)return;
       const version=++incidentVersion,requestedScope=incidentScope;
