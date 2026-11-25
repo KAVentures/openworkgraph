@@ -722,3 +722,16 @@ outside the supplied design. No network reads or model calls occur.
 
 Effective-period mode cannot be combined with paired release comparison
 or the single-date strict item-coverage option. Review those separately.
+
+
+Dependent-runtime journals also bind ordinary structured source invariants
+to the declared route. The executor performs those checks before the initial
+tool inventory, before mapped write preconditions, before every mapped action,
+and at completion. Each check records its rule ID and checkpoint purpose,
+number and attempt position, without recording raw facts. The monitor derives
+the exact required ordinary rule IDs from structural replay, requires all
+matched rows at every relevant checkpoint and refuses a successful report
+with missing, repeated or out-of-order invariant checks. A dependent table
+checkpoint cannot substitute for an ordinary invariant checkpoint. These
+remain non-atomic, customer-reported checks; neither journal validation nor
+a matched predicate independently verifies a provider's business outcome.
