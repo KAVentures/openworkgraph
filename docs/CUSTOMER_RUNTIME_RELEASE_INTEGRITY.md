@@ -173,3 +173,10 @@ unreviewed candidate. This is not a general-purpose safe extraction utility.
 Tests exercise deterministic exported ZIPs, standalone CLI, member attacks,
 byte budgets, pin mismatches, missing and changed members, and upgrade deltas.
 Full generated runtime and platform CI remain required.
+
+Archive verification also rejects inconsistent capitalization of any shared
+directory prefix (for example nested/a.py and NESTED/b.py), regardless of
+member order. Corrupt DEFLATE errors produce a sanitized integrity failure.
+The versioned process reference must have a nonempty workflow ID, a positive
+integer revision and a lowercase 64-character content digest even if the
+manifest and specification otherwise agree.

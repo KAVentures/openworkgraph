@@ -452,3 +452,46 @@ def test_archive_bounds_before_payload_and_no_extraction(tmp_path,monkeypatch):
     monkeypatch.setattr(release,"MAX_ARCHIVE_BYTES",1)
     with pytest.raises(ReleaseIntegrityError,match="archive byte"):
         release.verify_archive(path,pin)
+
+
+@pytest.mark.parametrize("names",[
+    ["nested/one.py","NESTED/two.py"],["nested/Sub/a.py","nested/sub/b.py"],
+    ["folder","folder/child"],["folder/child","folder"],["a.py","A.py"],["a.py","a.py"],
+])
+def test_archive_cross_platform_path_inventory_refuses_aliases(names):
+    from shared.process_agent_release import _check_path_aliases
+    with pytest.raises(ReleaseIntegrityError):_check_path_aliases(names)
+    with pytest.raises(ReleaseIntegrityError):_check_path_aliases(list(reversed(names)))
+
+
+def test_archive_consistent_directory_spellings():
+    from shared.process_agent_release import _check_path_aliases
+    _check_path_aliases(["nested/Sub/a.py","nested/Sub/b.py","nested/other.py","other/Sub/a.py"])
+
+
+def test_archive_normalizes_corrupt_deflate_error(tmp_path,monkeypatch):
+    from shared.process_agent_release import verify_archive
+    import zlib
+    root=tmp_path/"generated";_extract(root)
+    path=_archive(root,tmp_path/"release.zip")
+    def corrupt(*args,**kwargs):raise zlib.error("private malformed compressed data")
+    monkeypatch.setattr(ZipFile,"open",corrupt)
+    with pytest.raises(ReleaseIntegrityError,match="could not be checked") as e:
+        verify_archive(path,_pin(root))
+    assert "private malformed" not in str(e.value)
+
+
+def test_archive_rejects_invalid_reference_even_when_manifest_is_consistent(tmp_path):
+    from shared.process_agent_release import verify_archive, MANIFEST_NAME
+    root=tmp_path/"generated";_extract(root)
+    spec_path=root/"workflow.spec.json"
+    spec=json.loads(spec_path.read_text());spec["revision"]=True
+    spec_path.write_text(json.dumps(spec))
+    manifest_path=root/MANIFEST_NAME
+    manifest=json.loads(manifest_path.read_text())
+    manifest["workflow_reference"]["revision"]=True
+    digest=hashlib.sha256(spec_path.read_bytes()).hexdigest()
+    manifest["files"]["workflow.spec.json"]=manifest["workflow_spec_sha256"]=digest
+    manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(ReleaseIntegrityError,match="Invalid versioned release identity"):
+        verify_archive(_archive(root,tmp_path/"bad.zip"),_pin(root))

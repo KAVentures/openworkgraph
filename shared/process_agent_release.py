@@ -16,6 +16,7 @@ from pathlib import Path
 import re
 import sys
 import stat
+import zlib
 from zipfile import ZipFile, BadZipFile, ZIP_STORED, ZIP_DEFLATED
 
 FORMAT = "openworkgraph.customer-runtime-file-manifest.v1"
@@ -141,7 +142,8 @@ def _directory_file(root, name):
 def _verify_inventory(raw, read_file, expected_manifest_sha256):
     actual_manifest_sha256 = _hash(raw)
     if expected_manifest_sha256 is not None and (
-        not _HEX.fullmatch(expected_manifest_sha256) or expected_manifest_sha256 != actual_manifest_sha256
+        not isinstance(expected_manifest_sha256,str) or not _HEX.fullmatch(expected_manifest_sha256)
+        or expected_manifest_sha256 != actual_manifest_sha256
     ):
         raise ReleaseIntegrityError("The manifest differs from the independently pinned digest")
     try:
@@ -149,7 +151,7 @@ def _verify_inventory(raw, read_file, expected_manifest_sha256):
                               parse_constant=lambda _: (_ for _ in ()).throw(ReleaseIntegrityError("Nonfinite JSON value")))
     except ReleaseIntegrityError:
         raise
-    except (ValueError, UnicodeError):
+    except (ValueError, UnicodeError, RecursionError):
         raise ReleaseIntegrityError("Invalid release manifest JSON") from None
     if not isinstance(manifest, dict) or set(manifest) != _EXACT_FIELDS or (
         manifest.get("format") != FORMAT or
@@ -176,7 +178,7 @@ def _verify_inventory(raw, read_file, expected_manifest_sha256):
         spec = json.loads(verified_spec_bytes, object_pairs_hook=_unique)
     except ReleaseIntegrityError:
         raise
-    except (ValueError, UnicodeError):
+    except (ValueError, UnicodeError, RecursionError):
         raise ReleaseIntegrityError("Invalid exported workflow spec") from None
     if not isinstance(spec, dict) or (
         spec.get("format") != "openworkgraph.agent-runtime-project.v1"
@@ -185,6 +187,10 @@ def _verify_inventory(raw, read_file, expected_manifest_sha256):
     ):
         raise ReleaseIntegrityError("The exported workflow has an invalid authorization boundary")
     reference = {name: spec.get(name) for name in ("workflow_id", "revision", "content_sha256")}
+    if (not isinstance(reference["workflow_id"],str) or not reference["workflow_id"]
+            or type(reference["revision"]) is not int or reference["revision"]<1
+            or not isinstance(reference["content_sha256"],str) or not _HEX.fullmatch(reference["content_sha256"])):
+        raise ReleaseIntegrityError("Invalid versioned release identity")
     if manifest["workflow_reference"] != reference or manifest["workflow_spec_sha256"] != hashes["workflow.spec.json"]:
         raise ReleaseIntegrityError("Release identity differs from its exported workflow")
     model_hash = _canonical_model_hash(spec.get("process_model"))
@@ -204,6 +210,28 @@ def _verify_inventory(raw, read_file, expected_manifest_sha256):
                            "outside the archive. This does not verify remote deployment or business results."),
     }
     return result, manifest, spec
+
+
+def _check_path_aliases(names):
+    """Refuse file aliases, mixed-case directory prefixes and file ancestors."""
+    spellings={}
+    leaves=set()
+    for name in names:
+        parts=name.split("/")
+        for i in range(1,len(parts)+1):
+            prefix="/".join(parts[:i])
+            folded=prefix.casefold()
+            if folded in spellings and spellings[folded]!=prefix:
+                raise ReleaseIntegrityError("Case-aliased runtime ZIP path component")
+            spellings[folded]=prefix
+            if i==len(parts):
+                if folded in leaves:
+                    raise ReleaseIntegrityError("Duplicate runtime ZIP member")
+                leaves.add(folded)
+    for name in leaves:
+        parts=name.split("/")
+        if any("/".join(parts[:i]) in leaves for i in range(1,len(parts))):
+            raise ReleaseIntegrityError("Conflicting runtime ZIP member paths")
 
 
 def _archive_snapshot(path, expected_manifest_sha256):
@@ -229,7 +257,7 @@ def _archive_snapshot(path, expected_manifest_sha256):
             entries = archive.infolist()
             if not 2 <= len(entries) <= MAX_FILES + 1:
                 raise ReleaseIntegrityError("Runtime ZIP exceeds the member count limit")
-            members, aliases = {}, set()
+            members = {}
             total = 0
             for member in entries:
                 name = member.filename
@@ -244,10 +272,8 @@ def _archive_snapshot(path, expected_manifest_sha256):
                         *("COM"+str(i) for i in range(1,10)),
                         *("LPT"+str(i) for i in range(1,10))}:
                         raise ReleaseIntegrityError("Unsafe cross-platform runtime ZIP member path")
-                folded=name.casefold()
-                if folded in aliases:
-                    raise ReleaseIntegrityError("Duplicate or case-aliased runtime ZIP member")
-                aliases.add(folded)
+                if name in members:
+                    raise ReleaseIntegrityError("Duplicate runtime ZIP member")
                 mode=(member.external_attr >> 16) & 0xffff
                 if stat.S_IFMT(mode) not in (0,stat.S_IFREG) or member.external_attr & 0x10:
                     raise ReleaseIntegrityError("Nonregular runtime ZIP member")
@@ -262,11 +288,7 @@ def _archive_snapshot(path, expected_manifest_sha256):
                 members[name]=member
             if MANIFEST_NAME not in members:
                 raise ReleaseIntegrityError("Release manifest is missing from runtime ZIP")
-            # A path cannot be both a regular file and an ancestor.
-            for name in aliases:
-                parts=name.split("/")
-                if any("/".join(parts[:i]) in aliases for i in range(1,len(parts))):
-                    raise ReleaseIntegrityError("Conflicting runtime ZIP member paths")
+            _check_path_aliases(members)
             def read(name,cap=MAX_FILE_BYTES):
                 if name not in members:
                     raise ReleaseIntegrityError("Generated file missing or changed: "+name)
@@ -282,7 +304,7 @@ def _archive_snapshot(path, expected_manifest_sha256):
         return {**result,"archive_sha256":_hash(raw),"archive_bytes":len(raw),
                 "archive_inventory_closed":True,"archive_extracted":False,
                 "execution_authorized":False},manifest,spec
-    except (BadZipFile,RuntimeError,NotImplementedError,OSError,EOFError) as exc:
+    except (BadZipFile,RuntimeError,NotImplementedError,OSError,EOFError,zlib.error):
         raise ReleaseIntegrityError("Runtime ZIP could not be checked") from None
 
 
