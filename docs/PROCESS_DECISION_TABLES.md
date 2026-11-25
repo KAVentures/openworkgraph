@@ -667,3 +667,30 @@ runtime semantics, provider behavior, tool mappings, historical ground truth
 or actual operations. An unsigned manifest is not an independent signature.
 The portable graph model is included in all newly generated releases so a
 linear candidate can also compare an older decision-table or token-flow design.
+
+
+### Scenario coverage and regression support
+
+Every declared-fact scenario report includes a coverage inventory for all
+declared activities, transitions, decision tables and decision rows. It
+distinguishes reviewed expected-route support, unique supported-route
+selection and complete unique routes that match a reviewed expectation.
+Counts represent distinct cases, not repeated visits or observed operations.
+Decision tables are evaluated across cases independently of route selection;
+an evaluated or selected row in an unvisited table is not counted as matching
+route coverage. Parallel token schedules use the union of viable structural
+replays, explicitly labeled possible transition support, not guaranteed
+traversal. Missing support and incomplete search/replay remain visible.
+
+For single-revision review, optionally add
+`--require-all-declared-items-covered` to require matching scenario support
+for every declared item. This is a finite-suite coverage check, not proof of
+reachable branches, exhaustive business-domain coverage or correct policy.
+Some designs intentionally contain manual, unavailable or unresolved routes,
+so use this stricter check only when appropriate.
+
+Paired revision review also reports lost matching support, gained support,
+new items without matching support and removed items using stable IDs.
+Decision row identity includes its target activity ID. Newly uncovered
+items and incomplete comparisons require review even if aggregate case
+agreement does not decline. No raw facts or rule values appear in coverage.
