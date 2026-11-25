@@ -1061,7 +1061,8 @@ async def process_policy_regression(request: Request,
         workflow_id: str = Query(pattern=_PROCESS_ID),
         before_revision: int = Query(ge=1), after_revision: int = Query(ge=1),
         before_sha256: str = Query(pattern=r'^[a-f0-9]{64}$'),
-        after_sha256: str = Query(pattern=r'^[a-f0-9]{64}
+        after_sha256: str = Query(pattern=r'^[a-f0-9]{64}$'),
+        include_change_review: bool = Query(default=False)) -> Response:
     from .local_source_routes import _require_dashboard
     from shared.process_policy_regression import compare
     from shared.process_change_review import review
@@ -1079,32 +1080,6 @@ async def process_policy_regression(request: Request,
     after = pinned(after_revision, after_sha256)
     try:
         result = await run_in_threadpool(review if include_change_review else compare, before, after, payload)
-    except ValueError:
-        # Validation errors can contain supplied facts. Return no raw values.
-        raise HTTPException(422, 'Invalid reviewed decision regression suite or revision pairing') from None
-    pinned(before_revision, before_sha256)
-    pinned(after_revision, after_sha256)
-    _require_dashboard(request)
-    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
-
-),
-        include_change_review: bool = Query(default=False)) -> Response:
-    from .local_source_routes import _require_dashboard
-    from shared.process_policy_regression import compare
-    from starlette.concurrency import run_in_threadpool
-    _require_dashboard(request)
-    if request.headers.get('x-owg-case-facts-authorized') != 'true':
-        raise HTTPException(403, 'explicit local case-fact analysis authorization required')
-    payload = await _process_json(request)
-    def pinned(revision, digest):
-        packet = _catalog_export(workflow_id, revision)
-        if packet['content_sha256'] != digest:
-            raise HTTPException(409, 'Saved revision reference changed; select it again')
-        return packet
-    before = pinned(before_revision, before_sha256)
-    after = pinned(after_revision, after_sha256)
-    try:
-        result = await run_in_threadpool(compare, before, after, payload)
     except ValueError:
         # Validation errors can contain supplied facts. Return no raw values.
         raise HTTPException(422, 'Invalid reviewed decision regression suite or revision pairing') from None
