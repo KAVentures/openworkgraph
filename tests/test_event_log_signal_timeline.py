@@ -155,6 +155,12 @@ with TestClient(app) as client:
     assert client.get(url+"?limit=201", headers=owner).status_code == 422
     assert client.get(url+"?before=bad!", headers=owner).status_code == 422
     assert client.post(url, json={}, headers=owner).status_code == 405
+    episode_url="/v1/event-logs/signal-episode-review?start_date=2026-01-01&end_date=2026-12-31"
+    assert client.get(episode_url,headers=bearer).status_code in (401,403)
+    ep=client.get(episode_url,headers=owner)
+    assert ep.status_code==200,ep.text
+    assert ep.headers["cache-control"]=="no-store"
+    assert not ep.json()["evaluations_performed"]
 '''
     env = os.environ.copy()
     env.update({"WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"),
@@ -221,3 +227,78 @@ def test_timeline_rejects_invalid_cursors():
                 encoded({'at':'2024-01-01T00:00:00Z','id':'sevt_'+'0'*24,'extra':1})):
         with pytest.raises(workspace.EventLogWorkspaceError, match='cursor'):
             timeline.timeline(before=bad)
+
+
+def test_episode_review_retained_rows_and_uncertain_boundaries():
+    from server import event_log_signal_episode_review as episodes
+    from datetime import timedelta
+    log=_log();rid=_add(log,"Episode test")
+    base=datetime(2026,1,1)
+    events=[(0,"cleared"),(1,"triggered"),(3,"cleared"),(4,"triggered"),
+            (5,"triggered"),(6,"triggered"),(6,"cleared"),(7,"cleared"),
+            (8,"triggered")]
+    with workspace._LOCK:
+        conn=workspace._connect()
+        try:
+            conn.executemany("INSERT INTO signal_transitions VALUES (?,?,?,?,?,?)",
+                [[log,rid,f"sevt_{i:024x}",base+timedelta(hours=h),kind,"a"*64]
+                 for i,(h,kind) in enumerate(events)])
+        finally:conn.close()
+    args={"start_date":"2026-01-01","end_date":"2026-01-02"}
+    r=episodes.review(**args,limit=2)
+    assert r["retained_transition_count"]==r["accounted_transitions"]==9
+    assert r["status_counts"]=={"cleared":1,"unresolved_at_window_end":1,
+        "interrupted_by_repeated_trigger":1,"interrupted_by_ambiguous_timestamp":1,
+        "clearance_without_retained_trigger":2,"ambiguous_timestamp":1}
+    assert r["observed_trigger_to_clear_seconds"]["p50"]==7200
+    assert r["retained_trigger_count"]==5
+    p=episodes.review(**args,status="ambiguous_timestamp",expected_review_sha256=r["review_sha256"])
+    assert p["page"]["matching_rows"]==1
+    assert p["page"]["rows"][0]["ambiguous_trigger_count"]==1
+    assert p["page"]["rows"][0]["ambiguous_clear_count"]==1
+    second=episodes.review(**args,offset=2,limit=2,expected_review_sha256=r["review_sha256"])
+    assert second["review_sha256"]==r["review_sha256"]
+    assert "state_fingerprint" not in json.dumps(second)
+    signals.delete_rule(log,rid)
+    with pytest.raises(workspace.EventLogWorkspaceError,match="changed"):
+        episodes.review(**args,expected_review_sha256=r["review_sha256"])
+
+
+def test_episode_review_window_edges_and_validation():
+    from server import event_log_signal_episode_review as episodes
+    log=_log();rid=_add(log,"Window")
+    with workspace._LOCK:
+        conn=workspace._connect()
+        try:
+            conn.executemany("INSERT INTO signal_transitions VALUES (?,?,?,?,?,?)",[
+                [log,rid,"sevt_"+"1"*24,datetime(2025,12,31,23),"triggered","a"*64],
+                [log,rid,"sevt_"+"2"*24,datetime(2026,1,1),"cleared","a"*64],
+                [log,rid,"sevt_"+"3"*24,datetime(2026,1,1,23),"triggered","a"*64],
+                [log,rid,"sevt_"+"4"*24,datetime(2026,1,2),"cleared","a"*64]])
+        finally:conn.close()
+    args={"start_date":"2026-01-01","end_date":"2026-01-02"}
+    r=episodes.review(**args)
+    assert r["retained_transition_count"]==2
+    assert r["status_counts"]["clearance_without_retained_trigger"]==1
+    assert r["status_counts"]["unresolved_at_window_end"]==1
+    assert r["observed_trigger_to_clear_seconds"]["p50"] is None
+    for change in ({"start_date":"2026-02-01"},{"end_date":"2028-01-01"},{"start_date":"2026-1-1"},
+                   {"limit":True},{"status":"bad"},{"offset":1},{"expected_review_sha256":"bad"}):
+        with pytest.raises(workspace.EventLogWorkspaceError):episodes.review(**{**args,**change})
+
+
+def test_episode_budget_and_empty_window(monkeypatch):
+    from server import event_log_signal_episode_review as episodes
+    log=_log();rid=_add(log,"Budget")
+    with workspace._LOCK:
+        conn=workspace._connect()
+        try:conn.execute("INSERT INTO signal_transitions VALUES (?,?,?,?,?,?)",
+            [log,rid,"sevt_"+"1"*24,datetime(2026,1,1),"triggered","a"*64])
+        finally:conn.close()
+    args={"start_date":"2026-01-01","end_date":"2026-01-02"}
+    monkeypatch.setattr(episodes,"MAX_TRANSITIONS",0)
+    with pytest.raises(workspace.EventLogWorkspaceError,match="budget"):episodes.review(**args)
+    r=episodes.review(start_date="2026-02-01",end_date="2026-02-02")
+    assert r["retained_transition_count"]==0
+    assert r["observed_trigger_to_clear_seconds"]["count"]==0
+    assert not r["actions_authorized"]

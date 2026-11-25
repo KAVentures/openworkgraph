@@ -73,3 +73,30 @@ history may already have been trimmed.
 This is local product functionality, not a real-provider reliability test,
 alert-delivery SLA, organizational monitoring service or an authorization to
 execute work on a triggered signal.
+
+## Historical signal episode review
+
+The adjacent read-only review accepts explicit UTC start and exclusive end
+dates (at most 366 days). It reconstructs trigger-to-clear intervals for
+the same retained log and rule, using the complete bounded selected journal.
+Leading clearances, repeated triggers, simultaneous changes and unresolved
+triggers are separate evidence statuses. Timestamp ties interrupt pending
+episodes rather than being ordered by opaque random transition IDs. Every
+selected transition is accounted for once. Only paired observed intervals
+contribute to minimum, median, maximum and mean elapsed duration.
+
+The endpoint GET /v1/event-logs/signal-episode-review accepts start_date,
+end_date, status, limit (1–100), offset and expected_review_sha256. The
+review pin includes selected transition identities, timestamps, current
+retained names/definitions and exact window; changing history refuses
+pinned evidence requests. The 100,000-transition work cap fails explicitly.
+Dashboard evidence status filters and page navigation use the same pin;
+JSON and CSV exports contain the current page plus JSON summary. The view
+never exposes state fingerprints or checks a source system.
+
+A retained trigger-clear interval is evaluation-to-evaluation time, not
+actual incident duration or recovery time. History outside the window,
+trimmed history, deleted rules and events before journal creation are
+unknown. No live state, SLA, notification delivery, action or historical
+rule-definition validity is inferred. Native and browser verification
+remain necessary.
