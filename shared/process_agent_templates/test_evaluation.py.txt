@@ -9,7 +9,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from evaluate import compare, validate_suite, run_planner
+from evaluate import compare, compare_candidates, validate_suite, run_planner
 from execute import ImplementationError, digest, reference
 from test_execution import fixture
 
@@ -44,6 +44,212 @@ class EvaluationCases(unittest.TestCase):
             self.assertIs(report[key], False)
         for secret in ('SYNTHETIC_PRIVATE_RECORD', 'PRIVATE_MISSING_FACTS', 'PRIVATE_QUESTION'):
             self.assertNotIn(secret, json.dumps(report))
+
+    def test_paired_comparison_exposes_case_swaps_at_identical_aggregate_score(self):
+        baseline = deepcopy(self.results)
+        baseline['results'][1]['plan'] = deepcopy(baseline['results'][0]['plan'])
+        candidate = deepcopy(self.results)
+        candidate['results'][0]['plan'] = deepcopy(candidate['results'][1]['plan'])
+        candidate['results'].reverse()
+        report = compare_candidates(self.spec, self.suite, baseline, candidate)
+        self.assertEqual(report['baseline_matching_case_count'], 1)
+        self.assertEqual(report['candidate_matching_case_count'], 1)
+        self.assertEqual(report['matching_case_count_change'], 0)
+        self.assertEqual(report['paired_transitions'], {
+            'unchanged_match': 0, 'improved': 1, 'regressed': 1, 'unchanged_mismatch': 0})
+        self.assertEqual(report['by_category']['normal']['regressed'], 1)
+        self.assertEqual(report['by_category']['missing_facts']['improved'], 1)
+        self.assertEqual(report['missing_categories'], ['exception'])
+        self.assertFalse(report['by_category']['exception']['represented'])
+        self.assertEqual(report['by_category']['exception']['case_count'], 0)
+        self.assertFalse(report['no_new_case_regressions'])
+        self.assertTrue(report['review_required'])
+        self.assertEqual(report['baseline_results_sha256'], digest(baseline))
+        self.assertEqual(report['candidate_results_sha256'], digest(candidate))
+        self.assertEqual([r['case_id'] for r in report['cases']], ['case_1', 'case_2'])
+        for key in ('independent_business_ground_truth_verified', 'execution_authorized',
+                    'business_tools_called', 'source_outcomes_verified',
+                    'model_identity_independently_verified', 'case_inputs_and_model_text_included'):
+            self.assertIs(report[key], False)
+        for secret in ('SYNTHETIC_PRIVATE_RECORD', 'PRIVATE_MISSING_FACTS', 'PRIVATE_QUESTION'):
+            self.assertNotIn(secret, json.dumps(report))
+
+    def test_paired_comparison_distinguishes_new_review_bypass_and_clean_candidate(self):
+        candidate = deepcopy(self.results)
+        candidate['results'][1]['plan'] = deepcopy(candidate['results'][0]['plan'])
+        report = compare_candidates(self.spec, self.suite, self.results, candidate)
+        self.assertEqual(report['candidate_critical_review_failure_count'], 1)
+        self.assertEqual(report['new_critical_review_failure_count'], 1)
+        self.assertEqual(report['cases'][1]['candidate_reason'], 'expected_clarification')
+        self.assertTrue(report['review_required'])
+        clean = compare_candidates(self.spec, self.suite, candidate, self.results)
+        self.assertTrue(clean['no_new_case_regressions'])
+        self.assertTrue(clean['candidate_all_reviewed_expectations_matched'])
+        self.assertFalse(clean['review_required'])
+        self.assertEqual(clean['paired_transitions']['improved'], 1)
+
+    def test_paired_comparison_refuses_different_or_incomplete_case_population(self):
+        baseline = deepcopy(self.results)
+        for mutation in ('suite', 'spec', 'duplicate', 'missing'):
+            altered = deepcopy(baseline)
+            if mutation == 'suite': altered['suite_sha256'] = 'c'*64
+            elif mutation == 'spec': altered['spec_sha256'] = 'd'*64
+            elif mutation == 'duplicate': altered['results'][1]['case_id'] = 'case_1'
+            else: altered['results'].pop()
+            with self.subTest(mutation=mutation), self.assertRaises(ImplementationError):
+                compare_candidates(self.spec, self.suite, altered, self.results)
+            with self.subTest(candidate=mutation), self.assertRaises(ImplementationError):
+                compare_candidates(self.spec, self.suite, baseline, altered)
+
+    def test_repeated_review_exposes_intermittent_critical_failures_and_duplicate_captures(self):
+        from evaluate import compare_repeated_results
+        wrong = deepcopy(self.results)
+        wrong['results'][1]['plan'] = deepcopy(wrong['results'][0]['plan'])
+        report = compare_repeated_results(self.spec, self.suite, [self.results, wrong, self.results])
+        self.assertEqual(report['capture_count'], 3)
+        self.assertEqual(report['distinct_result_document_count'], 2)
+        self.assertEqual(report['duplicate_result_document_occurrences'], 1)
+        self.assertEqual(report['minimum_matching_case_count'], 1)
+        self.assertEqual(report['maximum_matching_case_count'], 2)
+        self.assertEqual(report['mean_matching_case_fraction'], round(5/6, 6))
+        self.assertEqual(report['case_summary'], {'case_count':2,'always_matches':1,
+                         'intermittent_match':1,'never_matches':0,'cases_with_any_critical_failure':1})
+        case = report['cases'][1]
+        self.assertEqual(case['status'], 'intermittent_match')
+        self.assertEqual(case['critical_review_failure_captures'], 1)
+        self.assertEqual(case['reason_counts'], {'expected_clarification':1,'matches_reviewed_expectation':2})
+        self.assertEqual(report['missing_categories'], ['exception'])
+        self.assertTrue(report['review_required'])
+        for key in ('capture_independence_verified','same_model_or_configuration_verified',
+                    'statistical_confidence_interval','execution_authorized','business_tools_called'):
+            self.assertIs(report[key],False)
+        self.assertNotIn('PRIVATE_',json.dumps(report))
+        clean = compare_repeated_results(self.spec,self.suite,[self.results,self.results])
+        self.assertFalse(clean['review_required'])
+        self.assertEqual(clean['distinct_result_document_count'],1)
+        never = compare_repeated_results(self.spec,self.suite,[wrong,wrong])
+        self.assertEqual(never['case_summary']['never_matches'],1)
+        for captures in ([self.results], [self.results]*11,
+                         [self.results,{**self.results,'suite_sha256':'f'*64}]):
+            with self.assertRaises(ImplementationError):
+                compare_repeated_results(self.spec,self.suite,captures)
+
+    def test_repeatability_summary_randomized_oracle_and_basis_refusals(self):
+        from evaluate import _repeatability_summary
+        from random import Random
+        rng=Random(20261124)
+        reasons=['matches_reviewed_expectation','expected_clarification','unresolved_review_bypassed','invalid_route']
+        categories=['normal','exception','missing_facts']
+        for _ in range(100):
+            n,k=rng.randint(1,50),rng.randint(2,10)
+            cats=[rng.choice(categories) for i in range(n)]
+            matrix=[[rng.choice(reasons) for i in range(n)] for j in range(k)]
+            reports=[]
+            for j,line in enumerate(matrix):
+                cases=[dict(case_id=str(i),case_sha256=str(i),category=cats[i],reason=reason,
+                            matches_reviewed_expectation=reason==reasons[0]) for i,reason in enumerate(line)]
+                rng.shuffle(cases)
+                reports.append(dict(process_reference='p',spec_sha256='s',suite_sha256='t',results_sha256=str(j),cases=cases))
+            result=_repeatability_summary(reports)
+            totals=[line.count(reasons[0]) for line in matrix]
+            self.assertEqual(result['minimum_matching_case_count'],min(totals))
+            self.assertEqual(result['maximum_matching_case_count'],max(totals))
+            self.assertEqual(result['review_required'],sum(totals)!=n*k)
+            for row in result['cases']:
+                col=[line[int(row['case_id'])] for line in matrix]
+                matches=col.count(reasons[0])
+                self.assertEqual(row['matching_captures'],matches)
+                self.assertEqual(row['critical_review_failure_captures'],col.count(reasons[1])+col.count(reasons[2]))
+                self.assertEqual(row['status'],'always_matches' if matches==k else 'never_matches' if not matches else 'intermittent_match')
+        first=reports[0]
+        for changed in ({**first,'suite_sha256':'bad'}, {**first,'cases':[]},
+                        {**first,'cases':first['cases']+first['cases'][:1]},
+                        {**first,'cases':[{**row,'category':'different'} for row in first['cases']]}):
+            with self.assertRaises(ImplementationError):
+                _repeatability_summary([first,changed])
+
+    def test_paired_cli_is_offline_and_returns_review_required_for_regression(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidate = deepcopy(self.results)
+            candidate['results'][1]['plan'] = deepcopy(candidate['results'][0]['plan'])
+            for name, value in [('workflow.spec.json', self.spec), ('suite.json', self.suite),
+                                ('baseline.json', self.results), ('candidate.json', candidate)]:
+                (root / name).write_text(json.dumps(value), encoding='utf-8')
+            for name in ('evaluate.py', 'execute.py', 'runtime.py',
+                         'process_source_state.py', 'process_rule_conditions.py'):
+                (root / name).write_bytes((Path(__file__).parent / name).read_bytes())
+            command = [sys.executable, '-c',
+                'import evaluate,runpy,socket; socket.socket=lambda *a,**k: (_ for _ in ()).throw(AssertionError("network")); runpy.run_path("evaluate.py",run_name="__main__")',
+                '--cases', 'suite.json', '--baseline-results', 'baseline.json',
+                '--results', 'candidate.json', '--output', 'paired.json']
+            run = subprocess.run(command, cwd=root, capture_output=True, text=True, timeout=20)
+            self.assertEqual(run.returncode, 2, run.stdout + run.stderr)
+            report = json.loads((root / 'paired.json').read_text())
+            self.assertEqual(report['paired_transitions']['regressed'], 1)
+            self.assertEqual(json.loads(run.stdout)['paired_transitions']['regressed'], 1)
+            command[-1] = 'clean.json'
+            command[command.index('candidate.json')] = 'baseline.json'
+            run = subprocess.run(command, cwd=root, capture_output=True, text=True, timeout=20)
+            self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+            self.assertFalse(json.loads((root / 'clean.json').read_text())['review_required'])
+            command[-1] = 'invalid.json'
+            command[command.index('--results')] = '--model'
+            run = subprocess.run(command, cwd=root, capture_output=True, text=True, timeout=20)
+            self.assertNotEqual(run.returncode, 0)
+            self.assertFalse((root / 'invalid.json').exists())
+            repeat = [sys.executable,'evaluate.py','--cases','suite.json','--results','baseline.json',
+                      '--repeat-results','candidate.json','--repeat-results','baseline.json','--output','repeat.json']
+            run=subprocess.run(repeat,cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(run.returncode,2,run.stdout+run.stderr)
+            repeated=json.loads((root/'repeat.json').read_text())
+            self.assertEqual(repeated['case_summary']['intermittent_match'],1)
+            self.assertEqual(json.loads(run.stdout)['capture_count'],3)
+            repeat[-1]='ambiguous.json'
+            run=subprocess.run(repeat+['--baseline-results','baseline.json'],cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertNotEqual(run.returncode,0)
+            self.assertFalse((root/'ambiguous.json').exists())
+
+    def test_live_capture_is_explicit_private_bounded_and_reusable_offline(self):
+        with TemporaryDirectory() as directory:
+            import os
+            import stat
+            root = Path(directory)
+            for name, value in [('workflow.spec.json', self.spec), ('suite.json', self.suite),
+                                ('mock-plans.json', self.results)]:
+                (root / name).write_text(json.dumps(value), encoding='utf-8')
+            for name in ('evaluate.py', 'execute.py', 'runtime.py',
+                         'process_source_state.py', 'process_rule_conditions.py'):
+                (root / name).write_bytes((Path(__file__).parent / name).read_bytes())
+            runner = ('import evaluate,json,pathlib\n'
+                      'async def fake(*a,**k): return json.loads(pathlib.Path("mock-plans.json").read_text())\n'
+                      'evaluate.run_planner=fake; raise SystemExit(evaluate.main())')
+            command = [sys.executable, '-c', runner, '--cases', 'suite.json',
+                       '--model', 'fixture', '--output', 'report.json',
+                       '--capture-results', 'capture.json']
+            denied = subprocess.run(command, cwd=root, capture_output=True, text=True, timeout=20)
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertFalse((root / 'capture.json').exists())
+            self.assertFalse((root / 'report.json').exists())
+            command.append('--confirm-retain-model-output')
+            accepted = subprocess.run(command, cwd=root, capture_output=True, text=True, timeout=20)
+            self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
+            captured = root / 'capture.json'
+            self.assertEqual(json.loads(captured.read_text()), self.results)
+            self.assertNotIn('PRIVATE_QUESTION', (root / 'report.json').read_text())
+            if os.name == 'posix':
+                self.assertEqual(stat.S_IMODE(captured.stat().st_mode), 0o600)
+            paired = subprocess.run([sys.executable, 'evaluate.py', '--cases', 'suite.json',
+                                     '--results', 'capture.json', '--baseline-results', 'capture.json',
+                                     '--output', 'paired.json'], cwd=root, capture_output=True,
+                                    text=True, timeout=20)
+            self.assertEqual(paired.returncode, 0, paired.stdout + paired.stderr)
+            self.assertEqual(json.loads((root / 'paired.json').read_text())['paired_transitions']['unchanged_match'], 2)
+            command[command.index('report.json')] = 'second.json'
+            refused = subprocess.run(command, cwd=root, capture_output=True, text=True, timeout=20)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertEqual(json.loads(captured.read_text()), self.results)
+            self.assertFalse((root / 'second.json').exists())
 
     def test_stale_duplicate_unreviewed_unauthorized_and_tampered_suites_are_rejected(self):
         for field, value in [('reviewed_by_customer', False), ('case_inputs_authorized', False),
