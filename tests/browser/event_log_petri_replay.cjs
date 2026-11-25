@@ -114,14 +114,20 @@ const path=require('node:path');
    await page.locator('#owgPetriStatus').filter({hasText:'on strict.ptml (process tree): 24 of 30 cases'}).waitFor();
    await page.locator('#owgPetriFile').setInputFiles({name:'or.ptml',mimeType:'application/xml',buffer:Buffer.from('<ptml><processTree id="x" root="o"><or id="o" name=""/></processTree></ptml>')});
    await page.locator('#owgPetriRun').click();
-   await page.locator('#owgPetriStatus').filter({hasText:'<or> is not supported'}).waitFor();
+   await page.locator('#owgPetriStatus').filter({hasText:'<or> node has no children'}).waitFor();
    // The same tree pasted as PM4Py prints it.
    await page.locator('#owgPetriTreeText').fill("->( 'Register', 'Check', 'Pay', 'Close' )");
    await page.locator('#owgPetriTreeRun').click();
    await page.locator('#owgPetriStatus').filter({hasText:'on the pasted process tree: 24 of 30 cases'}).waitFor();
-   await page.locator('#owgPetriTreeText').fill("O( 'Register', 'Check' )");
+   await page.locator('#owgPetriTreeText').fill("->( 'Register', O( 'Check', tau ), 'Pay', 'Close' )");
    await page.locator('#owgPetriTreeRun').click();
-   await page.locator('#owgPetriStatus').filter({hasText:'O (or) is not supported'}).waitFor();
+   await page.locator('#owgPetriStatus').filter({hasText:'on the pasted process tree:'}).waitFor();
+   await page.locator('#owgPetriTreeText').fill("->( 'Register', <>( 'Check', 'Pay' ), 'Close' )");
+   await page.locator('#owgPetriTreeRun').click();
+   await page.locator('#owgPetriStatus').filter({hasText:'on the pasted process tree: 24 of 30 cases'}).waitFor();
+   await page.locator('#owgPetriTreeText').fill('O()');
+   await page.locator('#owgPetriTreeRun').click();
+   await page.locator('#owgPetriStatus').filter({hasText:'unexpected text'}).waitFor();
    // The most common path (Register, Check, Pay, Close; 24 of 30 cases) as the reference model.
    await page.locator('#owgPetriHappy').click();
    await page.locator('#owgPetriStatus').filter({hasText:'on the most common path (followed by 80% of cases): 24 of 30 cases'}).waitFor();
