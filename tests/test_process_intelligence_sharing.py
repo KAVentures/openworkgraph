@@ -289,7 +289,7 @@ PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_overv
                  "get_process_rework", "get_process_waiting_times", "get_process_drift", "get_stuck_process_cases",
                  "get_process_automation_candidates", "get_process_signals", "get_process_decision_rules",
                  "get_process_temporal_profile", "get_process_heuristics_net",
-                 "get_process_footprints", "get_process_model_quality", "compare_process_logs", "get_process_model",
+                 "get_process_footprints", "get_process_model_quality", "compare_process_logs", "get_process_model", "get_process_attributes",
                  "get_process_deviations", "list_process_reference_nets", "get_process_reference_deviations",
                  "get_process_funnel",
                  "get_process_trace_clusters", "check_process_compliance", "get_process_performance_spectrum",
@@ -383,4 +383,24 @@ def test_process_tree_notation_round_trips_and_refuses_unwritable_labels():
         {"op": "and", "children": [{"op": "activity", "activity": "A"}, {"op": "activity", "activity": "B"}]},
         {"op": "tau"}]}) == "*( +( 'A', 'B' ), tau )"
     assert sharing._tree_notation({"op": "seq", "children": [{"op": "activity", "activity": "O'Brien"}]}) is None
+
+
+def test_attributes_list_filters_without_rare_values_or_extremes():
+    rows = ["case,activity,time,region,amount,ticket"]
+    for i in range(20):
+        region = "EU" if i < 12 else ("US" if i < 18 else "APAC")
+        rows += [f"c{i},A,2024-03-{1 + i:02d}T08:00:00Z,{region},{10 * i},T{i}A",
+                 f"c{i},B,2024-03-{1 + i:02d}T09:00:00Z,{region},{10 * i},T{i}B"]
+    log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="a", source_format="csv",
+                               mapping={**MAPPING, "resource_column": "", "attribute_columns": ["region", "amount", "ticket"]})["log_id"]
+    with pytest.raises(sharing.NotShared):
+        sharing.attributes(log)
+    sharing.set_share(log, "aggregates")
+    result = sharing.attributes(log)
+    by_name = {a["attribute"]: a for a in result["attributes"]}
+    assert [v["value"] for v in by_name["region"]["top_values"]] == ["EU", "US"]      # APAC (2 cases) withheld
+    assert by_name["region"]["level"] == "case" and by_name["ticket"]["level"] == "event"
+    assert by_name["ticket"]["top_values"] == [] and "T1A" not in str(result)          # identifier-like
+    assert set(by_name["amount"]["numeric"]) == {"p25", "median", "p75", "mean"} and "190" not in str(by_name["amount"])
+    assert result["withheld"]["values"] > 0 and "c1" not in str(result).replace("case", "")
 

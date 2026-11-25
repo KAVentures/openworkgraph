@@ -137,6 +137,19 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         return runtime_module.core._finish("check_process_compliance", result)
 
     @mcp.tool(annotations=_READ_ONLY)
+    def get_process_attributes(log_id: str, top_values: int = 10, case_type: str | None = None) -> dict[str, Any]:
+        """The case and event attributes a shared log records (region, channel, amount, ...), to choose case filters,
+        breakdowns and root-cause features: how many cases and events carry each, numeric or categorical, whether it
+        stays the same within a case, quartiles for numbers, and the most frequent values with their share of cases
+        and median case duration. Values in fewer than 5 cases, minimum and maximum, and values of identifier-like
+        attributes are withheld. Use a value as {"attribute": "name=value"} in other tools. Aggregates only.
+        """
+        if isinstance(top_values, bool) or not isinstance(top_values, int) or not 1 <= top_values <= 50:
+            raise ToolError("top_values must be a whole number from 1 to 50")
+        return _get("get_process_attributes", f"/v1/process-intelligence/{_log(log_id)}/attributes",
+                    {"top_values": top_values, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
     def compare_process_logs(baseline_log_id: str, comparison_log_id: str, baseline_case_type: str | None = None,
                              comparison_case_type: str | None = None, baseline_filter: dict[str, Any] | None = None,
                              comparison_filter: dict[str, Any] | None = None, limit: int = 25) -> dict[str, Any]:
