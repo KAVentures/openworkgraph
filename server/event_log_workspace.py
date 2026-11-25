@@ -354,6 +354,15 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
 
     With ``keep_rejected`` the mapped fields of up to MAX_QUARANTINED_ROWS rejected rows are left in the
     temporary table ``rejected_rows`` for the caller to store, and the dict receives the counts."""
+    from . import event_log_encodings as encodings
+    declared = encodings.encoding(mapping)
+    if declared != "utf-8":
+        # Read a UTF-8 copy; the caller's file (and its digest) stays the original bytes.
+        converted = encodings.to_utf8(path, declared, DATA_DIR)
+        try:
+            return _load_csv_fast(conn, log_id, converted, {**mapping, "encoding": "utf-8"}, reasons, keep_rejected)
+        finally:
+            converted.unlink(missing_ok=True)
     offset = naive_offset(mapping)
     pattern = timestamp_format(mapping)
     has_offset = timestamp_formats.offset_present_sql("raw_ts", pattern)
@@ -399,12 +408,20 @@ def _load_csv_fast(conn: duckdb.DuckDBPyConnection, log_id: str, path: Path, map
     if identity_mode and identity_mode.attributes_json_column:
         attrs=f'try_cast({q(identity_mode.attributes_json_column)} AS JSON)::VARCHAR'
     identity_columns=', '+identity_mode.expressions(q) if identity_mode else ''
-    conn.execute(f"""CREATE TEMP TABLE staged AS SELECT
-          {case} AS case_id, {activity} AS activity,
-          {timestamp_sql(stamp, offset, pattern)} AS ts,
-          coalesce({res}, '') AS resource, {attrs} AS attributes, {stamp} AS raw_ts,
-          row_number() OVER () AS n {identity_columns}
-        FROM {source} AS source_rows""", [str(path),original_header])
+    import duckdb
+    try:
+        conn.execute(f"""CREATE TEMP TABLE staged AS SELECT
+              {case} AS case_id, {activity} AS activity,
+              {timestamp_sql(stamp, offset, pattern)} AS ts,
+              coalesce({res}, '') AS resource, {attrs} AS attributes, {stamp} AS raw_ts,
+              row_number() OVER () AS n {identity_columns}
+            FROM {source} AS source_rows""", [str(path),original_header])
+    except duckdb.InvalidInputException as exc:
+        if "invalid unicode" not in str(exc).lower():
+            raise
+        line = re.search(r"Line: ([0-9]+)", str(exc))
+        raise EventLogFormatError("the file is not UTF-8 text" + (f" (line {line.group(1)})" if line else "") +
+                                  "; choose its encoding (for example windows-1252)") from None
     if conn.execute("""SELECT count(*) FROM staged WHERE length(case_id)>200 OR length(activity)>200
         OR length(resource)>200 OR regexp_matches(concat_ws('',case_id,activity,resource),?)""",
         [r'[\x00-\x1f\x7f-\x9f\x{fffe}\x{ffff}]']).fetchone()[0]:

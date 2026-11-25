@@ -137,7 +137,9 @@ def read_csv_header(stream: IO[str], delimiter: str = ",") -> list[str]:
             yield line
     try:
         header=next(csv.reader(lines(),delimiter=delimiter),[])
-    except (csv.Error,UnicodeError):
+    except UnicodeError:
+        raise EventLogFormatError("the file is not UTF-8 text; choose its encoding (for example windows-1252)") from None
+    except csv.Error:
         raise EventLogFormatError("CSV header could not be parsed") from None
     if header:header[0]=header[0].removeprefix("\ufeff")
     if not header or any(not name.strip() for name in header) or len({name.casefold() for name in header})!=len(header):

@@ -16,13 +16,15 @@ MAX_BYTES = 512 * 1024
 MAX_ROWS = 2000
 
 
-def _prefix(data: bytes, delimiter: str, partial: bool) -> tuple[str, bool]:
+def _prefix(data: bytes, delimiter: str, partial: bool, encoding: str = "utf-8") -> tuple[str, bool]:
     """Keep complete logical CSV records, including quoted multiline fields."""
+    from .event_log_encodings import ENCODINGS
     try:
-        decoder = codecs.getincrementaldecoder("utf-8-sig")()
+        decoder = codecs.getincrementaldecoder(ENCODINGS[encoding])()
         text = decoder.decode(data, final=not partial)
     except UnicodeError:
-        raise workspace.EventLogWorkspaceError("CSV must use UTF-8 text") from None
+        raise workspace.EventLogWorkspaceError(
+            "CSV must use UTF-8 text" if encoding == "utf-8" else f"the file is not valid {encoding} text") from None
     stream = io.StringIO(text, newline="")
     end = 0
     records = 0
@@ -49,7 +51,14 @@ def preview_csv(data: bytes, mapping: dict[str, Any], *, partial: bool = False) 
         raise workspace.EventLogWorkspaceError("unsupported delimiter")
     if len(data) > MAX_BYTES:
         raise workspace.EventLogWorkspaceError("CSV preview exceeds its supported size")
-    sample, limited = _prefix(data, delimiter, partial)
+    from .event_log_encodings import encoding as declared_encoding
+    try:
+        encoding = declared_encoding(mapping)
+    except EventLogFormatError as error:
+        raise workspace.EventLogWorkspaceError(str(error)) from None
+    sample, limited = _prefix(data, delimiter, partial, encoding)
+    # The sample is decoded here and written as UTF-8 for the normal transform.
+    mapping = {**mapping, "encoding": "utf-8"}
     try:
         import duckdb
     except ImportError:
