@@ -2934,6 +2934,11 @@ and authorizes nothing.
 `GET /v1/event-logs/{log_id}/automation-candidates?limit=&case_type=` plus the usual case-filter
 parameters; dashboard session only.
 
+**Download JSON** and **Download CSV** save the ranking shown. The CSV has one row per activity
+with the score and its volume, routine and waiting components, occurrences, cases, per-week
+rate, routing pattern, same-predecessor and same-successor shares, median wait before, resources
+and repeats per case. Cells that a spreadsheet would read as formulas start with `'`.
+
 ## Performance spectrum
 
 The performance spectrum shows how long each step-to-step segment took, over calendar time. It
@@ -2980,6 +2985,15 @@ case filter. Send the exact activity pair as `{"segment":["A","B"]}`, with optio
 (default 50). Use the returned `next_after` as `after` to continue. Both routes require a
 dashboard session.
 
+**Download JSON** saves the spectrum as drawn, including the sampled lines. **Download CSV** has
+two kinds of row:
+
+- one `segment` row per segment, with occurrences, the median, 25th, 75th and 95th percentile
+  duration in seconds, and the shares that finish in start order (`fifo_share`) or are released
+  together (`batched_share`);
+- one `period` row per busy period of that segment, with its UTC start, its occurrences by speed
+  class and its median duration.
+
 ## Heuristics net
 
 **Heuristics net** (the heuristics miner of ProM and PM4Py, after Weijters and Ribeiro's Flexible
@@ -3011,6 +3025,12 @@ as the two literal labels for a transition or back-and-forth loop, or one for a 
 For a repeated activity, send a transition with the same label twice. Send the returned
 `next_after` as `after` to page by literal case key. The optional `limit` is 1–100 (default 50).
 
+**Download JSON** saves the net shown, including its settings, splits, joins and loops.
+**Download CSV** lists every arrow the miner kept, one per row: from, to, occurrences, dependency
+measure (empty for start and end arrows) and why it was kept (`threshold`, `best_connection`,
+`short_loop`, `start` or `end`). Changing a threshold disables the download until the net is
+discovered again.
+
 ## Activity profile
 
 **Activity profile** shows one activity from every side, like the activity views of Celonis and
@@ -3027,6 +3047,10 @@ from activities literally named `(start)` or `(end)`. The profile API marks boun
 
 `GET /v1/event-logs/{log_id}/activity-profile?profile_activity=Check` plus the case-filter
 parameters (`activity` there is the case filter). Agents use `get_process_activity_profile`.
+
+**Download JSON** and **Download CSV** save the profile shown. The CSV has one row per neighbour
+(`comes_after` and `comes_before`, with times, share and median gap in hours, and the case start
+or end as `(start of case)` or `(end of case)`), per weekday and per UTC hour.
 
 ## Activities that happen together
 
@@ -3190,6 +3214,11 @@ parameters. Dashboard sessions can additionally request `evidence_step=2&evidenc
 truncation flag. Case evidence is not available through the shared agent tool; agents with access
 to a shared log use `get_process_funnel` (aggregates only).
 
+**Download JSON** and **Download CSV** save the funnel shown. The CSV has one row per step with
+cases reached, share of step 1, conversion from the previous step, cases dropped (and how many may
+still be open), the median hours from the previous step and what stopped cases did last. Changing
+a step, the window or the evidence choice disables the download until the funnel is shown again.
+
 ## Model change
 
 **Model change** shows how the discovered process model differs before and after a date, as ProM's
@@ -3279,6 +3308,15 @@ Send `retained_activities` from the report's `activities`, plus a `group` of `tr
 or `end`. The body also needs `activities` containing the two transition labels or one start or
 end label. The dashboard-only response gives the exact totals and cases in literal key order.
 Send `next_after` as `after` to continue, and use `limit` from 1 to 100 (default 50).
+
+**Download JSON** saves the comparison shown. **Download CSV** gives the matrix in long form:
+
+- one row per ordered activity pair;
+- the log's and the model's relation (`→`, `←`, `||` or `#`);
+- whether the two agree.
+
+Changing the model or activity coverage disables the download until the footprints are compared
+again.
 
 ## Check against a Petri net (PNML import and token replay)
 

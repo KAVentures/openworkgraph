@@ -2798,10 +2798,17 @@
     box.appendChild(el('div','Rank this process\u2019s activities by how often they happen, how fixed their routing is and how much waiting comes right before them. Every component is shown. It is evidence for a review, not a recommendation, and it estimates no savings.','muted'));
     const run=button('Rank activities','secondary');run.id='owgAutomationRun';
     const out=el('div');out.id='owgAutomationResults';out.setAttribute('role','status');
-    box.append(run,out);
+    // The ranking with every score component, for a review document or spreadsheet.
+    let last=null;
+    const exports=exportButtons('owgAutomationReport',()=>last,r=>[
+      ['activity','score','volume_component','routine_component','waiting_component','occurrences','cases','per_week',
+        'routing_pattern','same_predecessor_share','same_successor_share','median_wait_before_seconds','resources','repeats_per_case'],
+      ...r.candidates.map(c=>[c.activity,c.score,c.components.volume,c.components.routine,c.components.time,c.occurrences,c.cases,c.per_week,
+        c.routing_pattern,c.same_predecessor_share,c.same_successor_share,c.median_wait_before_seconds,c.resources,c.repeats_per_case])]);
+    box.append(run,out,exports.node);
     const PATTERNS={fixed:'Fixed',mostly_fixed:'Mostly fixed',variable:'Variable'};
     const pct=x=>Math.round(x*100)+'%';
-    run.onclick=async()=>{run.disabled=true;out.replaceChildren(el('div','Ranking activities\u2026','muted'));
+    run.onclick=async()=>{run.disabled=true;last=null;exports.enable(false);out.replaceChildren(el('div','Ranking activities\u2026','muted'));
       try{
         const r=await getJSON(logPath('automation-candidates',{limit:15}));
         if(!r.candidates.length){out.replaceChildren(el('div','No activity occurs in at least '+r.min_cases+' cases.','muted'));return;}
@@ -2824,6 +2831,7 @@
           el('div','Score = 100 \u00d7 (0.4 volume + 0.4 routine + 0.2 waiting share), over '+Number(r.cases).toLocaleString()+' cases and '+r.weeks_observed+' weeks'+(r.cases_before_filter?' (filtered from '+Number(r.cases_before_filter).toLocaleString()+')':'')+'.'+(r.activities_below_min_cases?' '+r.activities_below_min_cases+' rarer activit'+(r.activities_below_min_cases===1?'y is':'ies are')+' left out.':''),'muted'),
           table(['Activity','Score','Volume / routine / waiting','Per week','Routing','Median wait before','Resources','Per case','Action'],rows),
           el('div','Fixed routing suggests rules may cover the step; variable routing suggests judgement, where an AI agent with human review may fit. '+r.caveat,'muted'));
+        last=r;exports.enable(true);
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
       finally{run.disabled=false;}};
     return box;
@@ -6907,7 +6915,18 @@
     const statusLine=el('div',null,'muted');statusLine.id='owgSpectrumStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgSpectrumResults';
     const review=el('div');review.id='owgSpectrumCaseReview';
-    box.append(run,statusLine,out,review);
+    // A segment row with its duration percentiles and order shares, then its busy periods by speed class.
+    let lastSpectrum=null;
+    const exports=exportButtons('owgSpectrumReport',()=>lastSpectrum,r=>[
+      ['kind','from','to','period_start_utc','occurrences','fast','normal','slow','very_slow','median_seconds',
+        'p25_seconds','p75_seconds','p95_seconds','fifo_share','batched_share'],
+      ...r.segments.flatMap(seg=>[
+        ['segment',seg.from,seg.to,'',seg.occurrences,'','','','',seg.duration_seconds.median,seg.duration_seconds.p25,
+          seg.duration_seconds.p75,seg.duration_seconds.p95,seg.fifo_share,seg.batched_share],
+        ...seg.bins.filter(b=>Object.values(b.counts).some(n=>n)).map(b=>{const c=b.counts;
+          return ['period',seg.from,seg.to,new Date(Date.parse(r.time_origin)+b.bin*r.bin_width_seconds*1000).toISOString(),
+            (c.fast||0)+(c.normal||0)+(c.slow||0)+(c.very_slow||0),c.fast||0,c.normal||0,c.slow||0,c.very_slow||0,b.median_seconds,'','','','',''];})])]);
+    box.append(run,statusLine,out,review,exports.node);
     const pct=x=>x===null?'—':Math.round(x*100)+'%';
     const number=n=>Number(n).toLocaleString();
     const classes=['fast','normal','slow','very_slow'];
@@ -6948,7 +6967,7 @@
     }
     run.onclick=async()=>{
       const generation=state.generation;run.disabled=true;statusLine.textContent='Drawing…';out.replaceChildren();
-      ++reviewTurn;review.replaceChildren();
+      ++reviewTurn;review.replaceChildren();lastSpectrum=null;exports.enable(false);
       try{
         const url=logPath('performance-spectrum',{top:'6',bins:'30'}),r=await getJSON(url);
         if(generation!==state.generation)return;
@@ -6998,6 +7017,7 @@
         }
         out.appendChild(el('div',r.caveat,'muted'));
         statusLine.textContent+=' Time runs from '+stamp(0)+' to '+stamp(span)+'.';
+        lastSpectrum=r;exports.enable(true);
       }catch(error){statusLine.textContent=error.message;}
       finally{run.disabled=false;}};
     return box;
@@ -7018,7 +7038,15 @@
     const graphHost=el('div');graphHost.id='owgHeuristicsGraph';
     const out=el('div');out.id='owgHeuristicsResults';
     const review=el('div');review.id='owgHeuristicsCaseReview';
-    box.append(row,statusLine,graphHost,out,review);
+    // Every arrow the miner kept, with its count, dependency measure and why it was kept.
+    let lastNet=null;
+    const exports=exportButtons('owgHeuristicsReport',()=>lastNet,r=>[
+      ['from','to','occurrences','dependency','kept_by'],
+      ...r.edges.map(e=>[e.from,e.to,e.transition_count,e.dependency===null?'':e.dependency,e.kept_by])]);
+    box.append(row,statusLine,graphHost,out,review,exports.node);
+    // New thresholds give a different net; the old one is no longer downloadable.
+    const staleNet=()=>{lastNet=null;exports.enable(false);};
+    row.addEventListener('change',staleNet);row.addEventListener('input',staleNet);
     const kind=k=>({and:'AND (parallel)',xor:'XOR (choice)',mixed:'Mixed'})[k]||k;
     const number=n=>Number(n).toLocaleString();
     let reviewTurn=0;
@@ -7058,7 +7086,7 @@
     }
     run.onclick=async()=>{
       const generation=state.generation;run.disabled=true;statusLine.textContent='Discovering…';graphHost.replaceChildren();out.replaceChildren();
-      ++reviewTurn;review.replaceChildren();
+      ++reviewTurn;review.replaceChildren();staleNet();
       try{
         if(!support.value||!support.validity.valid)throw new Error('Enter a whole number from 1 to 1,000,000 for minimum occurrences.');
         const settings={dependency_threshold:dep.value,and_threshold:and.value,loop_two_threshold:loop.value,
@@ -7092,6 +7120,7 @@
             evidenceButton(evidenceURL,group,activities,label)];
         })));
         out.append(more,el('div',r.note,'muted'));
+        lastNet=r;exports.enable(true);
       }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
       finally{run.disabled=false;}};
     return box;
@@ -7218,19 +7247,28 @@
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activity',pick),field('Exact activity',exact),lookup.wrap,run);
     const statusLine=el('div',null,'muted');statusLine.id='owgActivityProfileStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgActivityProfileResults';
-    box.append(row,statusLine,out);
+    // Neighbours before and after, then the weekday and hour profile, one row each.
+    let lastProfile=null;
+    const exports=exportButtons('owgActivityProfileReport',()=>lastProfile,r=>[
+      ['section','value','times','share','median_hours'],
+      ...r.comes_after.map(n=>['comes_after',n.boundary?'(start of case)':n.activity,n.times,n.share,n.median_hours]),
+      ...r.comes_before.map(n=>['comes_before',n.boundary?'(end of case)':n.activity,n.times,n.share,n.median_hours]),
+      ...r.by_weekday.map(d=>['weekday',d.day,d.times,'','']),
+      ...r.by_hour.map(h=>['hour_utc',String(h.hour).padStart(2,'0')+':00',h.times,'',''])]);
+    box.append(row,statusLine,out,exports.node);
     const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
     const hrs=x=>x===null||x===undefined?'—':(x<48?(Math.round(x*10)/10)+' h':(Math.round(x/24*10)/10)+' d');
     const generation=state.generation;
     let revision=0;
     const reset=()=>{
       ++revision;run.disabled=false;lookup.reset();out.replaceChildren();statusLine.textContent='Show the profile for this activity.';
+      lastProfile=null;exports.enable(false);
     };
     exact.oninput=reset;pick.onchange=()=>{exact.value='';reset();};
     run.onclick=async()=>{
       const ticket=++revision,cohort=globalCohort();
       const current=()=>generation===state.generation&&ticket===revision;
-      run.disabled=true;statusLine.textContent='Profiling…';out.replaceChildren();
+      run.disabled=true;statusLine.textContent='Profiling…';out.replaceChildren();lastProfile=null;exports.enable(false);
       try{
         const activity=exact.value||pick.value;
         if(!activity||Array.from(activity).length>200)throw new Error('Choose an activity label of 1 to 200 characters.');
@@ -7269,6 +7307,7 @@
         const busy=r.by_hour.filter(h=>h.times).sort((a,b)=>b.times-a.times).slice(0,3).map(h=>String(h.hour).padStart(2,'0')+':00 ('+h.times+')');
         if(busy.length)out.appendChild(el('div','Busiest hours (UTC): '+busy.join(', ')+'.'));
         out.appendChild(el('div',r.caveat,'muted'));
+        lastProfile=r;exports.enable(true);
       }catch(error){if(current())statusLine.textContent=error.message;}
       finally{if(current())run.disabled=false;}};
     return box;
@@ -7728,7 +7767,19 @@
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Conversion window',windowPick),field('Case evidence',evidenceStep),field('Evidence group',evidenceStatus),more,run);
     const statusLine=el('div',null,'muted');statusLine.id='owgFunnelStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgFunnelResults';
-    box.append(steps,row,statusLine,out);
+    // One row per step with conversion, drop-off and time from the previous step.
+    let lastFunnel=null;
+    const exports=exportButtons('owgFunnelReport',()=>lastFunnel,r=>[
+      ['step','activity','cases','share_of_first_step','conversion_from_previous','dropped_after_previous',
+        'stopped_cases_possibly_open','median_hours_from_previous','stopped_cases_last_activities'],
+      ...r.steps.map(x=>[x.step,x.activity,x.cases,x.share_of_first_step,x.step===1?'':x.conversion_from_previous,
+        x.step===1?'':x.dropped_after_previous,x.step===1?'':(x.stopped_cases_possibly_open||0),
+        x.step===1||!x.hours_from_previous?'':x.hours_from_previous.median,
+        x.step===1?'':(x.stopped_cases_last_activity||[]).map(a=>a.activity+' ('+a.cases+')').join('; ')])]);
+    box.append(steps,row,statusLine,out,exports.node);
+    // A changed step, window or evidence choice no longer matches the downloaded funnel.
+    const stale=()=>{lastFunnel=null;exports.enable(false);};
+    steps.addEventListener('change',stale);row.addEventListener('change',stale);
     for(let i=0;i<3;i++)addStep();
     const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
     const hrs=x=>x===null||x===undefined?'—':(x<48?(Math.round(x*10)/10)+' h':(Math.round(x/24*10)/10)+' d');
@@ -7736,7 +7787,7 @@
       const chosen=pickers.map(p=>p.value).filter(Boolean);
       if(chosen.length<2){statusLine.textContent='Choose at least two steps.';out.replaceChildren();return;}
       if(evidenceStep.value&&(Number(evidenceStep.value)>chosen.length||(evidenceStep.value==='1'&&evidenceStatus.value==='dropped'))){statusLine.textContent='Choose a valid evidence step; drop-off requires step 2 or later.';out.replaceChildren();return;}
-      const generation=state.generation;run.disabled=true;statusLine.textContent='Following cases…';out.replaceChildren();
+      const generation=state.generation;run.disabled=true;statusLine.textContent='Following cases…';out.replaceChildren();stale();
       try{
         const params={step:chosen};if(windowPick.value)params.within_hours=windowPick.value;
         if(evidenceStep.value){params.evidence_step=evidenceStep.value;params.evidence_status=evidenceStatus.value;}
@@ -7751,6 +7802,7 @@
           out.appendChild(el('div','Showing '+e.cases.length+' of '+e.total+' cases '+(e.status==='reached'?'reaching step ':'stopping before step ')+e.step+(e.truncated?' (first 50 by case ID).':'.'),'muted'));
           if(e.cases.length)out.appendChild(table(['Case ID','Last recorded activity','Steps reached'],e.cases.map(c=>[c.case_id,c.last_activity,c.steps_reached])));}
         out.appendChild(el('div',r.caveat,'muted'));
+        lastFunnel=r;exports.enable(true);
       }catch(error){statusLine.textContent=error.message;}
       finally{run.disabled=false;}};
     return box;
@@ -7988,7 +8040,15 @@
     const statusLine=el('div',null,'muted');statusLine.id='owgFootprintsStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgFootprintsResults';
     const review=el('div');review.id='owgFootprintsCaseReview';
-    box.append(row,statusLine,out,review);
+    // Every cell of the matrix as one row: the log's and the model's relation and whether they agree.
+    let lastFootprints=null;
+    const exports=exportButtons('owgFootprintsReport',()=>lastFootprints,r=>[
+      ['from','to','log_relation','model_relation','agrees'],
+      ...r.matrix.flatMap(row=>row.cells.map((x,j)=>[row.activity,r.activities[j],x.log,x.model,x.log===x.model]))]);
+    box.append(row,statusLine,out,review,exports.node);
+    // Different settings give a different matrix; the old one is no longer downloadable.
+    const staleFootprints=()=>{lastFootprints=null;exports.enable(false);};
+    noise.addEventListener('change',staleFootprints);coverage.addEventListener('change',staleFootprints);
     const number=n=>Number(n).toLocaleString();
     let reviewTurn=0;
     function evidenceButton(url,retained,group,activities,label){
@@ -8029,7 +8089,7 @@
     }
     run.onclick=async()=>{
       const generation=state.generation;run.disabled=true;statusLine.textContent='Comparing…';out.replaceChildren();
-      ++reviewTurn;review.replaceChildren();
+      ++reviewTurn;review.replaceChildren();staleFootprints();
       try{
         const url=logPath('footprints',{noise:noise.value,activities:coverage.value}),r=await getJSON(url);
         if(generation!==state.generation)return;
@@ -8054,6 +8114,7 @@
         r.matrix.forEach((row,i)=>row.cells.forEach((x,j)=>{if(x.log!==x.model){const cell=t.querySelector('tbody').rows[i].cells[j+1];cell.style.fontWeight='600';cell.setAttribute('aria-label',row.activity+' to '+r.activities[j]+': log '+x.log+', model '+x.model+' (differs)');}}));
         grid.appendChild(t);
         out.append(grid,el('div',r.caveat,'muted'));
+        lastFootprints=r;exports.enable(true);
       }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
       finally{run.disabled=false;}};
     return box;
@@ -11355,7 +11416,19 @@
     const cases=el('div');cases.id='owgBatchCases';
     const resWrap=el('div');const resLabel=el('label',' Separate by resource');resLabel.htmlFor=byResource.id;resWrap.append(byResource,resLabel);
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Gap within a batch (seconds)',gap),field('Smallest batch',size),resWrap,run);
-    box.append(row,out,batches,cases);
+    // One row per activity: how much of it is batched, batch sizes, waits and the simulation proposal.
+    let lastBatching=null;
+    const exports=exportButtons('owgBatchReport',()=>lastBatching,r=>[
+      ['activity','events','batched_share','batches','simultaneous_batches','median_batch_size','p90_batch_size','max_batch_size',
+        'median_wait_before_batched_seconds','median_wait_before_unbatched_seconds','proposed_batch_size','proposed_max_wait_minutes'],
+      ...r.activities.map(a=>[a.activity,a.events,a.batched_share,a.batches,a.simultaneous_batches||0,
+        a.batch_size?a.batch_size.median:'',a.batch_size?a.batch_size.p90:'',a.batch_size?a.batch_size.max:'',
+        a.median_wait_before_batched_seconds,a.median_wait_before_unbatched_seconds,
+        a.simulation_batch_proposal?a.simulation_batch_proposal.size:'',a.simulation_batch_proposal?a.simulation_batch_proposal.max_wait_minutes:''])]);
+    box.append(row,out,batches,cases,exports.node);
+    // Other settings find other batches; the old summary is no longer downloadable.
+    const staleBatching=()=>{lastBatching=null;exports.enable(false);};
+    row.addEventListener('change',staleBatching);row.addEventListener('input',staleBatching);
     const generation=state.generation,endpoint='/v1/event-logs/'+encodeURIComponent(state.logId)+'/batching';
     const number=n=>Number(n).toLocaleString();
     const utc=value=>value.replace('T',' ').replace('Z',' UTC');
@@ -11410,7 +11483,7 @@
       }),clearCases);
     }
     run.onclick=async()=>{
-      ++batchTurn;batches.replaceChildren();clearCases();run.disabled=true;
+      ++batchTurn;batches.replaceChildren();clearCases();run.disabled=true;staleBatching();
       out.replaceChildren(el('div','Finding batches…','muted'));
       try{
         const spec={gap_seconds:Number(gap.value),min_batch_size:Number(size.value),by_resource:byResource.checked};
@@ -11431,6 +11504,7 @@
           el('div',Number(r.batched_events).toLocaleString()+' of '+Number(r.events).toLocaleString()+' events were in batches ('+r.grouping+(r.resources_recorded?'':'; no resources are recorded in this log')+').','muted'),
           shown.length?table(['Activity','Events in batches','Batches','Batch size (median)','Wait before: batched vs not','Simulation proposal','Evidence'],rows):el('div','No batches with these settings.','muted'),
           el('div',r.interpretation,'muted'));
+        lastBatching=r;exports.enable(true);
       }catch(error){if(generation===state.generation)out.replaceChildren(el('div',error.message,'muted'));}
       finally{run.disabled=false;}
     };
