@@ -19,6 +19,6 @@ def test_rework_case_filter_narrows_and_unlocks_large_logs(monkeypatch):
     with pytest.raises(workspace.EventLogWorkspaceError):
         sharing.rework(log_id, case_filter={})
     monkeypatch.setattr(rework_module, "MAX_CASES", 8)
-    with pytest.raises(workspace.EventLogWorkspaceError, match="use a cohort"):
+    with pytest.raises(workspace.EventLogWorkspaceError, match="narrower case_filter"):
         sharing.rework(log_id)
     assert sharing.rework(log_id, case_filter={"resource": "ana"})["cases"] == 6

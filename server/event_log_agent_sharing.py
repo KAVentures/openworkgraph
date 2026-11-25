@@ -1222,7 +1222,13 @@ def rework(log_id: str, case_type: str | None = None, limit: int = 20,
         if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
             raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
         spec["cohort"] = case_filter
-    result = rw.rework(log_id, spec)
+    try:
+        result = rw.rework(log_id, spec)
+    except EventLogWorkspaceError as exc:
+        if "use a cohort" in str(exc):
+            raise EventLogWorkspaceError(f"rework reads at most {rw.MAX_CASES:,} cases; pass a narrower case_filter, "
+                                         "for example a start-date range") from None
+        raise
     keep = AGENT_MIN_CELL_CASES
     comparison = result.get("comparison")
     if comparison and min(comparison["cases_with_rework"], comparison["cases_without_rework"]) < keep:
