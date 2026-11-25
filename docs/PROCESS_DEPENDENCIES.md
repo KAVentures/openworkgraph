@@ -262,3 +262,23 @@ Compare it against a freshly requested focused graph before relying on a saved
 snapshot. The existing export still checks the full graph fingerprint, and a
 corrupt or oversized organization scan withholds the focused result as well.
 No new grants, subprocess execution or automatic review inheritance are added.
+
+
+### Dependency-aware starter export
+
+When the focused basis is current, use **Download dependency-aware starter
+ZIP**. The authenticated endpoint is
+`GET /v1/human/processes/{workflow_id}/dependencies/build?revision=...&basis_sha256=...`.
+It recomputes the closure and verifies the requested root revision and
+previously reviewed basis digest in one authorized read snapshot. A stale
+basis, missing declaration or withdrawn model review refuses the build.
+
+The deterministic ZIP includes the normal root agent starter and
+`dependency-build-basis.json`, with the sidecar and amended README covered
+by the existing release manifest. It contains prerequisite identifiers and
+review/declaration pins, not prerequisite model bodies or reason text.
+The existing unsigned release integrity contract applies. The authenticated
+audit records the root, revision, basis and manifest digests and process
+count. This is an export-time snapshot, not live runtime enforcement or
+authorization: recheck before relying on it. Ordinary agent-project exports
+remain unchanged, and prerequisite processes are not executed automatically.
