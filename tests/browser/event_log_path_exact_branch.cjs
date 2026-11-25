@@ -25,6 +25,8 @@ const path=require('node:path');
   await page.locator('#owgEventLogStatus').filter({hasText:'Imported'}).waitFor();await page.locator('#owgEventLogAnalyze').click();
   await page.locator('#owgPathsStart').click();await page.locator('#owgPathsStatus').filter({hasText:'Showing the 30 most common of 36 next steps.'}).waitFor();
   assert.equal(await page.locator('#owgPathsResults').getByRole('button',{name:'Go to '+rare,exact:true}).count(),0);
+  await page.locator('#owgPathsExact').fill('x'.repeat(201));await page.locator('#owgPathsExactGo').click();
+  await page.locator('#owgPathsStatus').filter({hasText:'1 to 200 characters'}).waitFor();
   await page.locator('#owgPathsExact').fill('rare');await page.locator('#owgPathsExactFind').click();
   await page.locator('#owgPathsExactMatches').selectOption(rare);await page.locator('#owgPathsExactUse').click();
   assert.equal(await page.locator('#owgPathsExact').inputValue(),rare);
