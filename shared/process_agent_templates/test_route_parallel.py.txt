@@ -27,4 +27,27 @@ class ParallelRouteSearch(unittest.TestCase):
         self.assertEqual(result['supported_schedule_count'],2)
         self.assertTrue(result['search_complete'])
         self.assertIsNone(result['unique_activity_ids'])
+        from owg_model.process_parallel import replay_node_ids
+        from review_facts import _scenario_coverage
+        from unittest.mock import patch
+        path=result['examples'][0]['activity_ids']
+        replay=replay_node_ids(path,ProcessModel.model_validate(model))
+        self.assertEqual(replay['transition_indices'],list(range(6)))
+        self.assertEqual(replay['guaranteed_transition_indices'],list(range(6)))
+        # Deliberately supply a replay projection in which one possible edge
+        # is not guaranteed, to exercise the strict coverage consumer.
+        case={'id':'case_1','expected':{'accepted_routes':[path]}}
+        row={'case_id':'case_1','candidate_examples':[{'activity_ids':path,'status':'supported'}],
+            'search_complete':True,'search_status':'unique_supported_route',
+            'matches_reviewed_expectation':True,'decision_checks':[]}
+        with patch('owg_model.process_parallel.replay_node_ids',return_value={
+                'transition_indices':list(range(6)),'guaranteed_transition_indices':list(range(5))}):
+            coverage=_scenario_coverage(spec,[case],[row])
+        self.assertFalse(coverage['all_declared_items_have_reviewed_matching_support'])
+        omitted=model['transitions'][5]
+        item=next(e for e in coverage['transitions'] if
+                  (e['source_activity_id'],e['target_activity_id'])==(omitted['source'],omitted['target']))
+        self.assertEqual(item['possible_reviewed_matching_cases'],1)
+        self.assertEqual(item['reviewed_matching_cases'],0)
+
 
