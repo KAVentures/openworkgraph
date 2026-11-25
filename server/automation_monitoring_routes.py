@@ -165,6 +165,16 @@ async def compare_run_evidence(request: Request):
     return await _respond(evidence.compare, spec)
 
 
+@router.post("/v1/automation-monitoring/deployments/{deployment_id}/service-objectives")
+async def service_objective_review(request: Request, deployment_id: str):
+    from . import automation_service_objectives as objectives
+    from .event_log_routes import _json_body
+    _require_dashboard(request)
+    spec = await _json_body(request, "service objective settings", strict=True, limit=16384)
+    _require_dashboard(request)
+    return await _respond(objectives.analyze, deployment_id, spec)
+
+
 @router.get("/v1/automation-monitoring/deployments/{deployment_id}/monitor")
 async def monitor_deployment(request: Request, deployment_id: str, recent_days: int = Query(default=7, ge=1, le=90),
                              baseline_days: int = Query(default=28, ge=1, le=365)):
