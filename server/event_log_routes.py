@@ -3300,6 +3300,27 @@ def export_event_log_xlsx(request: Request, log_id: str, case_type: str | None =
                         background=BackgroundTask(shutil.rmtree, folder, ignore_errors=True))
 
 
+@router.get("/v1/event-logs/{log_id}/events.parquet")
+def export_event_log_parquet(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200)):
+    """The log's events as a typed Apache Parquet file (the CSV export's rows). Not stored."""
+    import shutil
+    from . import event_log_parquet_export as parquet_export
+    _require_dashboard(request)
+    folder = tempfile.mkdtemp(prefix="owg-parquet-export-", dir=str(DATA_DIR))
+    path = Path(folder) / "events.parquet"
+    try:
+        meta = parquet_export.write(log_id, path, case_type)
+    except workspace.EventLogWorkspaceError as exc:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise HTTPException(422, str(exc)) from None
+    except BaseException:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+    return FileResponse(str(path), media_type="application/vnd.apache.parquet", filename=f"{log_id}.parquet",
+                        headers={"Cache-Control": "no-store", "X-OWG-Rows": str(meta["rows"])},
+                        background=BackgroundTask(shutil.rmtree, folder, ignore_errors=True))
+
+
 @router.get("/v1/event-logs/{log_id}/export")
 def export_event_log(request: Request, log_id: str, format: str = Query(pattern="^(csv|sourcecsv|csv-review|sourcecsv-review|xes|xes-attributes|ocel|ocelxml)$"),
                      case_type: str | None = Query(default=None, max_length=200)):
