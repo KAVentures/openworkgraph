@@ -4799,10 +4799,11 @@
     const traceHeading=el('h4','Follow related objects (up to three hops)');
     const traceNote=el('p','Trace links in the retained OCEL relationship graph. This is a bounded navigation view, not a reconstructed case or validated handoff. Select one literal object ID above first. The direction and optional exact qualifier filter above also apply here.','muted');
     const traceHops=select('owgObjectRelationTraceHops',[['1','1 hop'],['2','2 hops'],['3','3 hops']]);traceHops.value='2';
+    const traceTarget=input('owgObjectRelationTraceTarget','text','Optional exact destination object');traceTarget.maxLength=200;traceTarget.style.maxWidth='100%';
     const traceRun=button('Trace related objects','secondary');traceRun.id='owgObjectRelationTraceRun';traceRun.disabled=true;
     const traceStatus=el('p');traceStatus.id='owgObjectRelationTraceStatus';traceStatus.setAttribute('role','status');traceStatus.setAttribute('aria-live','polite');
     const traceView=el('div');traceView.id='owgObjectRelationTraceResult';traceView.style.cssText='overflow-x:auto;max-width:100%';
-    const traceControls=el('div',null,'row');traceControls.style.alignItems='end';traceControls.append(field('Traversal depth',traceHops),traceRun);
+    const traceControls=el('div',null,'row');traceControls.style.alignItems='end';traceControls.append(field('Traversal depth',traceHops),field('Target object ID (optional)',traceTarget),traceRun);
     box.append(controls,statusLine,groups,drawing,rowsOut,evidence,
       traceHeading,traceNote,traceControls,traceStatus,traceView);
     let requestVersion=0,nextCursor=null,bookmarks=[null];
@@ -4813,6 +4814,7 @@
     for(const control of [object,sourceType,targetType,direction,exact,qualifier,limit]){
       control.addEventListener(control.tagName==='INPUT'&&control.type==='text'?'input':'change',scopeChanged);
     }
+    traceTarget.addEventListener('input',()=>{traceVersion++;traceRun.disabled=object.value==='';traceView.replaceChildren();traceStatus.textContent='Target changed. Trace again.';});
     traceHops.addEventListener('change',()=>{
       traceVersion++;traceRun.disabled=object.value==='';traceView.replaceChildren();
       traceStatus.textContent='Traversal depth changed. Trace again for the selected object.';
@@ -4876,6 +4878,7 @@
       traceStatus.textContent='Tracing bounded retained relationships locally…';
       const spec={object_id:object.value,direction:direction.value,
         max_hops:Number(traceHops.value),max_nodes:60,max_edges:100};
+      if(traceTarget.value!=='')spec.target_object_id=traceTarget.value;
       if(exact.checked)spec.qualifier=qualifier.value;
       try{
         const response=await(await api(base+'/object-relationships/trace',{method:'POST',
@@ -4886,7 +4889,20 @@
           Number(response.hops_visited)+' hop(s)'+
           (response.truncated?' — limited: '+String(response.truncation_reason).replaceAll('_',' '):' — selected depth fully traversed within the retained graph')+
           '. This does not verify case membership or causality.';
-        traceView.replaceChildren(
+        const route=response.target_route,routeSection=el('section');routeSection.id='owgObjectRelationTargetRoute';
+        if(route){
+          routeSection.append(el('h5','Route to selected target'));
+          if(route.status==='reached'){
+            routeSection.append(el('p',route.shortest_hops+' hops · '+(route.route_count_complete?'':'at least ')+
+              route.shortest_assertion_routes+' shortest assertion route(s). One deterministic example is shown.'));
+            if(route.example_route.length)routeSection.append(table(['From','Traversal','Original source','Qualifier','Original target','To'],
+              route.example_route.map(e=>[objectButton(e.from_id),e.traversal,objectButton(e.source_id),literal(e.qualifier),objectButton(e.target_id),objectButton(e.to_id)])));
+            else routeSection.append(el('p','The target is the selected starting object.'));
+          }else routeSection.append(el('p',route.status==='unknown_due_to_limit'?
+            'Target not reached in the bounded trace; limits prevent a conclusion.':'Target not reached within the selected depth and direction in the retained graph.'));
+          routeSection.append(el('p','Assertion paths are not evidence of a causal handoff, temporal validity or a shared business case.','muted'));
+        }
+        traceView.replaceChildren(...(route?[routeSection]:[]),
           el('p','Objects: source IDs and types as imported, with the shortest displayed hop distance.','muted'),
           table(['Distance','Object ID','Object type'],(response.nodes||[]).map(n=>[
             n.hop,objectButton(n.object_id),n.object_type
