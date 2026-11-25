@@ -250,7 +250,7 @@ def _population(conn, log_id, parsed, at, window):
             raise workspace.EventLogWorkspaceError("treated and control cohorts must not share cases")
         groups = {"treated": [row for row in rows if row[0] in treated],
                   "control": [row for row in rows if row[0] in control]}
-    return groups, first, start, end, recent, last
+    return groups, first, start, end, recent, last, len(rows)
 
 
 def cases(log_id: str, request: Any) -> dict[str, Any]:
@@ -280,10 +280,10 @@ def cases(log_id: str, request: Any) -> dict[str, Any]:
     window = timedelta(days=parsed.window_days) if parsed.window_days else None
 
     def run(conn):
-        groups, first, start, end, recent, last = _population(conn, log_id, parsed, at, window)
+        groups, first, start, end, recent, last, population_count = _population(conn, log_id, parsed, at, window)
         members=groups[group]
         if index is not None:
-            report,inventory=time_profile.build(log_id,groups,at,start,end,recent,parsed,first,last,_case_period)
+            report,inventory=time_profile.build(log_id,groups,at,start,end,recent,parsed,first,last,_case_period,population_count)
             if report["profile_sha256"]!=pin:
                 raise workspace.EventLogWorkspaceError("time profile evidence changed; rerun impact analysis")
             members=inventory[group][index]
@@ -310,7 +310,7 @@ def analyze(log_id: str, spec: Any) -> dict[str, Any]:
     window = timedelta(days=parsed.window_days) if parsed.window_days else None
 
     def run(conn):
-        groups, first, start, end, recent_from, last = _population(conn, log_id, parsed, at, window)
+        groups, first, start, end, recent_from, last, population_count = _population(conn, log_id, parsed, at, window)
         periods, excluded = {}, {}
         for name, members in groups.items():
             before, after, left = _split(members, at, start, end, recent_from, parsed.exclude_spanning)
@@ -352,7 +352,7 @@ def analyze(log_id: str, spec: Any) -> dict[str, Any]:
             placebo = {"estimated": False, "reason": "no baseline cases"}
         result["placebo"] = placebo
         if parsed.time_profile is not None:
-            result["time_profile"]=time_profile.build(log_id,groups,at,start,end,recent_from,parsed,first,last,_case_period)[0]
+            result["time_profile"]=time_profile.build(log_id,groups,at,start,end,recent_from,parsed,first,last,_case_period,population_count)[0]
         change = result["change"]
         result["reading"] = _reading(parsed, change, result.get("control_adjusted"), placebo)
         result.update({

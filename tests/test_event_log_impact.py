@@ -277,3 +277,20 @@ def test_invalid_time_profiles(profile):
 def test_profile_must_fit_main_window():
     with pytest.raises(workspace.EventLogWorkspaceError,match="fit"):
         impact.parse({"intervention_at":AT,"window_days":10,"time_profile":_profile()})
+
+
+def test_profile_discloses_cases_outside_explicit_treated_control():
+    log=_log(480,lambda i,t,team:48,teams=("A","B","C"))
+    spec={"intervention_at":AT,"rounds":100,"treated":{"resource":"A"},
+          "control":{"resource":"B"},"time_profile":_profile()}
+    p=impact.analyze(log,spec)["time_profile"]
+    n=p["population"]
+    assert n["all_projected_cases"]==480
+    assert n["selected_group_cases"]==320
+    assert n["outside_selected_groups"]==160
+    assert n["included_profile_cases"]==sum(a["included_cases"] for a in p["accounting"].values())
+    assert n["excluded_from_selected_groups"]+n["included_profile_cases"]==320
+    assert n["outside_selected_groups"]+n["excluded_from_selected_groups"]+n["included_profile_cases"]==480
+    plain=impact.analyze(log,{"intervention_at":AT,"rounds":100,
+          "time_profile":_profile()})["time_profile"]["population"]
+    assert plain["outside_selected_groups"]==0 and plain["selected_group_cases"]==480

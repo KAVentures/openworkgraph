@@ -4568,7 +4568,7 @@
     }
     markerPick.addEventListener('change',invalidate);
     function showTimeProfile(profile,spec,t,unit){
-      const metricValue=v=>v==null?'—':unit==='seconds'?duration(v):Number(v).toLocaleString(undefined,{maximumFractionDigits:4});
+      const metricValue=v=>v==null?'—':unit==='seconds'?(v<0?'−':'')+duration(Math.abs(v)):Number(v).toLocaleString(undefined,{maximumFractionDigits:4});
       function reviewBin(bin,group){
         const panel=el('div'),status=el('p','Loading reviewed cases…','muted'),list=el('div'),next=button('Next bin case page','secondary');
         panel.append(el('h4',group+' · relative bin '+bin.relative_bin),status,list,next);evidence.replaceChildren(panel);
@@ -4599,6 +4599,7 @@
           s.baseline_spanning_intervention_cases_before_exclusion,s.minimum_support_met?'Supported':'Below minimum'];
       }));
       profileOut.replaceChildren(el('h4','Time-resolved intervention profile'),
+        el('p',profile.population.all_projected_cases+' projected cases · '+profile.population.selected_group_cases+' in selected groups · '+profile.population.outside_selected_groups+' outside selected groups · '+profile.population.included_profile_cases+' included in profile.','muted'),
         el('p','Reference bin '+profile.reference_bin+' · minimum '+profile.minimum_cases_per_cell+' cases per cell · '+unit,'muted'),
         table(['Relative bin','From UTC','Before UTC','Group','Cases','Mean','Median','Change vs reference','Visible span','Recent exclusion','Spanning before exclusion','Support'],rows),
         ...(names.includes('control')?[table(['Relative bin','Treated minus control','Gap change vs reference'],profile.bins.map(b=>[b.relative_bin,metricValue(b.treated_minus_control_mean),metricValue(b.control_adjusted_change_from_reference)]))]:[]),

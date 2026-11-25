@@ -30,7 +30,7 @@ def _gap(a,b):
     return round(a-b,6)
 
 
-def build(log_id,groups,at,start,end,recent,settings,visible_first,visible_last,period_fn):
+def build(log_id,groups,at,start,end,recent,settings,visible_first,visible_last,period_fn,population_count):
     """Build a complete selected-group profile and its exact case inventory."""
     profile=settings.time_profile
     width=timedelta(days=profile.bin_days)
@@ -43,7 +43,7 @@ def build(log_id,groups,at,start,end,recent,settings,visible_first,visible_last,
     def feed(value):
         digest.update(json.dumps(value,ensure_ascii=True,sort_keys=True,
                                  separators=(",",":"),allow_nan=False).encode()+b"\n")
-    feed([FORMAT,log_id,settings.model_dump(mode="json"),_stamp(visible_first),_stamp(visible_last),
+    feed([FORMAT,log_id,settings.model_dump(mode="json"),population_count,_stamp(visible_first),_stamp(visible_last),
           _stamp(recent) if recent is not None else None])
     for name,rows in sorted(groups.items()):
         for row in rows:
@@ -90,7 +90,15 @@ def build(log_id,groups,at,start,end,recent,settings,visible_first,visible_last,
         if included[g]+sum(counts.values())!=len(rows):
             raise ValueError("Intervention profile accounting did not close")
         accounting[g]={"selected_group_cases":len(rows),"included_cases":included[g],"excluded":counts}
-    return {"format":FORMAT,"profile_sha256":digest.hexdigest(),
+    selected_count=sum(a["selected_group_cases"] for a in accounting.values())
+    included_count=sum(a["included_cases"] for a in accounting.values())
+    outside_count=population_count-selected_count
+    if outside_count<0:
+        raise ValueError("Intervention profile selected groups overlap or exceed population")
+    population={"all_projected_cases":population_count,"selected_group_cases":selected_count,
+                "outside_selected_groups":outside_count,"included_profile_cases":included_count,
+                "excluded_from_selected_groups":selected_count-included_count}
+    return {"format":FORMAT,"profile_sha256":digest.hexdigest(),"population":population,
             "bin_days":profile.bin_days,"reference_bin":reference,
             "minimum_cases_per_cell":profile.minimum_cases,
             "reference_group_cells":reference_cells,"reference_treated_minus_control_mean":ref_gap,
@@ -101,5 +109,6 @@ def build(log_id,groups,at,start,end,recent,settings,visible_first,visible_last,
             "interpretation":[
                 "Equal-width bins are anchored to the declared intervention, start-inclusive and end-exclusive. Bin -1 immediately precedes it; bin 0 begins at it. Cases are assigned by recorded start, with the same metric and spanning/recent exclusions as the main impact report.",
                 "Means and medians are withheld below the selected minimum case count. Changes subtract the explicitly chosen baseline reference mean. With controls, the change in the treated-minus-control gap is descriptive, not a verified causal effect.",
+                "Cases outside both explicit groups are disclosed separately from cases excluded within the selected groups.",
                 "Visible event span flags do not establish complete observation, and recent follow-up exclusions can reduce bin coverage. Cohort definitions may depend on later events; this profile does not establish ex ante treatment assignment.",
                 "No per-bin confidence intervals, trend significance tests, parallel-trends proof or verified savings are claimed. The original before/after and placebo estimates are unchanged."]},member_rows

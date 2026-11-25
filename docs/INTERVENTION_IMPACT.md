@@ -140,3 +140,9 @@ includes bin drill-down, aggregate JSON and additional CSV profile rows.
 Regression cases cover fixed bins, control gaps, boundary exclusions,
 minimum support, pinned case pages and unchanged default analysis. Full
 native and browser acceptance remain outstanding.
+
+The profile accounts separately for all projected cases, cases belonging
+to selected groups, cases outside both explicitly chosen groups, and
+included/excluded selected-group cases. The total projected count is
+bound to the evidence pin. This makes cohort exclusions visible without
+including outside-cohort case identifiers in the reviewed inventory.
