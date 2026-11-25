@@ -515,3 +515,38 @@ remote references, incomplete assignments, downstream review invalidation,
 quoted literal whitespace and unsupported literal refusal. Full DMN/FEEL
 interoperability, third-party engine acceptance and arbitrary source facts
 remain outside this scope.
+
+
+## Deterministic source-aware route proposals (no model)
+
+Generated SDK projects also support a local alternative to model planning:
+
+```sh
+python plan_sources.py --case case.json --bindings tool-bindings.json \
+  --deterministic --confirm-source-reads
+```
+
+At least one reviewed source binding is needed. No model is invoked, so no
+model credential or model-sharing consent is required. The existing explicit
+source-read authorization, exact record references, catalog checks and receipt
+freshness checks remain. The case is processed locally; selected record
+references go to the authorized OWG source verifier.
+
+The deterministic search examines linear paths or complete serial token-firing
+schedules. It distinguishes excluded branches, supported schedules and
+unresolved schedules. An unknown source condition, unconfirmed or natural
+language rule, human activity or manual condition withholds support. A
+proposal is emitted only if exactly one schedule is supported, no unresolved
+alternative remains and search completed within the bounds. Parallel firing
+orders are not treated as interchangeable. Work, states, path length and
+candidate limits produce an explicit incomplete result rather than a guessed
+unique route. Reported counts are discovered schedules when search is
+incomplete. The structural replay contract remains authoritative.
+
+The report contains minimized activity IDs, reason codes and search counts,
+not case values or raw receipts. The source snapshot is rechecked for expiry
+after the shared catalog recheck and the existing final route checks still
+apply. A unique route is neither independent policy verification nor a tool
+mapping approval, execution authorization or business outcome attestation.
+Synthetic fixtures cover competing and unresolved alternatives, source
+expiry, no-model consent, dependent tables and parallel schedules.
