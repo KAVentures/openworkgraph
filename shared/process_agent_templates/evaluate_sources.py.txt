@@ -50,40 +50,107 @@ def validate_source_suite(spec,suite,bindings):
     return cases,total_records
 
 
-async def evaluate_current_sources(spec,suite,bindings,*,model,source_reads_confirmed=False,
+def _single_results(spec,single_suite,case,plan):
+    return {'format':'openworkgraph.shadow-plan-results.v1','process_reference':reference(spec),
+        'spec_sha256':digest(spec),'suite_sha256':digest(single_suite),
+        'results':[{'case_id':case['id'],'plan':plan}]}
+
+
+def _aggregate_results(spec,suite,plans):
+    return {'format':'openworkgraph.shadow-plan-results.v1','process_reference':reference(spec),
+        'spec_sha256':digest(spec),'suite_sha256':digest(suite),'results':plans}
+
+
+async def evaluate_current_sources(spec,suite,bindings,*,model=None,source_reads_confirmed=False,
                                    share_rule_checks_with_model_confirmed=False,
+                                   deterministic=False,paired=False,
                                    source_state_reader=_source_state_receipt,catalog_reader=_catalog_state,clock=None):
-    if source_reads_confirmed is not True or share_rule_checks_with_model_confirmed is not True:
-        raise ImplementationError('Separately confirm batch source reads and sharing case inputs/rule results with the selected model')
+    if type(deterministic) is not bool or type(paired) is not bool or (deterministic and paired):
+        raise ImplementationError('Choose exactly one planning evaluation mode')
+    if source_reads_confirmed is not True or (not deterministic and share_rule_checks_with_model_confirmed is not True):
+        raise ImplementationError('Confirm batch source reads and, for model evaluation, sharing case inputs/rule results')
+    if (deterministic and model is not None) or (not deterministic and model is None):
+        raise ImplementationError('Choose a model only for model or paired evaluation')
     spec=deepcopy(spec);suite=deepcopy(suite);bindings=deepcopy(bindings)
     cases,_records=validate_source_suite(spec,suite,bindings)
-    rows=[];plans=[];request_count=0
-    # The deadline covers the complete batch, including sources and the model.
-    # Earlier per-case comparisons remain as-of their own case, not a single
-    # atomic or historical snapshot. Contexts are discarded after comparison.
+    rows=[];plans=[];local_rows=[];local_plans=[];pairs=[];request_count=0
+    # The deadline covers all cases and any model calls. Source snapshots are
+    # never shared across cases, even if their selected reference is identical.
     async with asyncio.timeout(300):
         for case in cases:
             result,context=await _propose_with_source_context(case['input'],bindings,model=model,spec=spec,
-                source_reads_confirmed=True,share_rule_checks_with_model_confirmed=True,
-                source_state_reader=source_state_reader,catalog_reader=catalog_reader,clock=clock)
+                source_reads_confirmed=True,share_rule_checks_with_model_confirmed=share_rule_checks_with_model_confirmed,
+                deterministic=deterministic,source_state_reader=source_state_reader,catalog_reader=catalog_reader,clock=clock)
             if result['source_planning']['catalog_review_current_at_completion'] is False:
                 raise ImplementationError('Current independent shared design review is unavailable')
             request_count+=result['source_planning']['source_receipt_request_count']
             single_suite={**suite,'cases':[case]}
-            single_results={'format':'openworkgraph.shadow-plan-results.v1','process_reference':reference(spec),
-                'spec_sha256':digest(spec),'suite_sha256':digest(single_suite),
-                'results':[{'case_id':case['id'],'plan':result['plan']}]}
+            # Both candidates must be judged at the same final consumer clock.
+            # This is not a historical or atomic provider snapshot. No receipt
+            # is refreshed to favor one candidate, and no expectations go to
+            # either planner.
+            boundary=context.clock()
+            context.clock=lambda:boundary
+            local=None
+            if deterministic or paired:
+                from route_candidates import deterministic_proposal
+                local=deterministic_proposal(spec,case['input'],context)
+            if deterministic:
+                result=local
+            single_results=_single_results(spec,single_suite,case,result['plan'])
             checked=compare(spec,single_suite,single_results,source_rule_contexts={case['id']:context})
-            rows.extend(checked['cases']);plans.extend(single_results['results'])
-            del context,result,checked
-    results={'format':'openworkgraph.shadow-plan-results.v1','process_reference':reference(spec),
-        'spec_sha256':digest(spec),'suite_sha256':digest(suite),'results':plans}
+            row=checked['cases'][0]
+            if deterministic:
+                row['deterministic_search_status']=local['deterministic_route_search']['status']
+                row['deterministic_search_complete']=local['deterministic_route_search']['search_complete']
+            rows.append(row);plans.extend(single_results['results'])
+            if paired:
+                alternative=_single_results(spec,single_suite,case,local['plan'])
+                local_checked=compare(spec,single_suite,alternative,source_rule_contexts={case['id']:context})
+                local_row=local_checked['cases'][0]
+                local_row['deterministic_search_status']=local['deterministic_route_search']['status']
+                local_row['deterministic_search_complete']=local['deterministic_route_search']['search_complete']
+                local_rows.append(local_row);local_plans.extend(alternative['results'])
+                a,b=row['matches_reviewed_expectation'],local_row['matches_reviewed_expectation']
+                pairs.append({'case_id':case['id'],'category':case['category'],
+                    'model_matches':a,'deterministic_matches':b,
+                    'classification':'both_match' if a and b else 'model_only' if a else 'deterministic_only' if b else 'neither_matches',
+                    'model_reason':row['reason'],'deterministic_reason':local_row['reason'],
+                    'deterministic_search_status':local_row['deterministic_search_status'],
+                    'deterministic_search_complete':local_row['deterministic_search_complete']})
+                del alternative,local_checked
+            del context,result,checked,local
+    results=_aggregate_results(spec,suite,plans)
     report=evaluation_report(spec,suite,results,rows)
+    mode='paired_model_and_deterministic' if paired else 'deterministic' if deterministic else 'selected_model'
+    if paired:
+        from collections import Counter
+        alternative=_aggregate_results(spec,suite,local_plans)
+        local_report=evaluation_report(spec,suite,alternative,local_rows)
+        report['paired_planning']={
+            'format':'openworkgraph.paired-current-source-planning.v1',
+            'deterministic_results_sha256':digest(alternative),
+            'model_matching_case_count':report['matching_case_count'],
+            'deterministic_matching_case_count':local_report['matching_case_count'],
+            'classification_counts':dict(sorted(Counter(row['classification'] for row in pairs).items())),
+            'cases':pairs,'same_case_inputs':True,'same_per_case_source_receipts':True,
+            'same_final_per_case_consumer_clock':True,'independent_ground_truth_verified':False,
+            'model_superiority_established':False,'execution_authorized':False}
+        report['review_required']=report['review_required'] or local_report['review_required']
+    if deterministic or paired:
+        report['planning_mode']=mode
+        report['source_snapshot_basis']='per_case_read_only_non_atomic_current_source_checks'
+        report['model_invoked']=not deterministic
+        report['bindings_sha256']=digest(bindings)
     summary={'evaluation_basis':'per_case_current_source_invariants_and_customer_expectations',
         'case_count':report['case_count'],'matching_case_count':report['matching_case_count'],
         'review_required':report['review_required'],'source_receipt_request_count':request_count,
+        'planning_mode':mode,'model_invoked':not deterministic,
         'historical_case_facts_verified':False,'case_association_verified':False,
         'business_tools_called':False,'execution_authorized':False,'source_outcomes_verified':False}
+    if paired:
+        summary['paired_classification_counts']=report['paired_planning']['classification_counts']
+        summary['deterministic_matching_case_count']=report['paired_planning']['deterministic_matching_case_count']
     return report,summary
 
 
@@ -91,7 +158,10 @@ def main():
     parser=argparse.ArgumentParser(description='Evaluate up to eight reviewed current-source cases; no business actions')
     parser.add_argument('--cases',required=True)
     parser.add_argument('--bindings',required=True)
-    parser.add_argument('--model',required=True)
+    mode=parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument('--model')
+    mode.add_argument('--deterministic',action='store_true')
+    mode.add_argument('--paired-model',help='Compare this model and deterministic planning on the same per-case source reads')
     parser.add_argument('--output',required=True,help='New minimized report; never overwrites an existing file')
     parser.add_argument('--confirm-source-reads',action='store_true')
     parser.add_argument('--confirm-model-rule-check-sharing',action='store_true')
@@ -99,7 +169,8 @@ def main():
     if Path(args.output).exists():raise ImplementationError('Choose a new evaluation report file')
     spec=load_object(Path(__file__).parent/'workflow.spec.json',limit=262144)
     report,summary=asyncio.run(evaluate_current_sources(spec,load_object(args.cases,limit=262144),
-        load_object(args.bindings),model=args.model,source_reads_confirmed=args.confirm_source_reads,
+        load_object(args.bindings),model=args.model or args.paired_model,deterministic=args.deterministic,
+        paired=args.paired_model is not None,source_reads_confirmed=args.confirm_source_reads,
         share_rule_checks_with_model_confirmed=args.confirm_model_rule_check_sharing))
     with Path(args.output).open('x',encoding='utf-8') as stream:json.dump(report,stream,indent=2,allow_nan=False)
     print(json.dumps(summary,indent=2))
