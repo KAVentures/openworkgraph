@@ -140,7 +140,8 @@ def report(spec, records, deployment_name):
                 or prior.get('dependency_check_attempt')!=row['attempt']):
                 _fail()
             if purpose=='precondition':
-                if row['attempt'] in precondition_attempts or row.get('activity_id') not in nodes:
+                if (row['attempt'] in precondition_attempts or not isinstance(row.get('activity_id'),str)
+                    or row['activity_id'] not in nodes):
                     _fail()
                 precondition_attempts.add(row['attempt'])
         if phase == 'operator_stop_observed':
