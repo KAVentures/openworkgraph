@@ -331,8 +331,8 @@ rules then test that path, for example `/decisions/credit eq "good"`.
 - The per-rule list in a case check still evaluates each rule against the supplied facts
   only; the decision-table results carry the dependency-aware outcome.
 - BPMN export keeps the declaration in the table's documentation, and BPMN import reads it
-  back. DMN export still refuses designs with dependent tables (DMN outputs are
-  step labels, while dependencies pass step IDs). Generated SDK projects use a
+  back. Dependent DMN interchange now supports the bounded local scalar-decision
+  profile described below. Generated SDK projects use a
   distinct dependent current-source runtime contract; arbitrary caller facts
   are not accepted as runtime decision evidence.
 
@@ -406,8 +406,8 @@ that the file is the same one you inspected. The API uses
 `assignments` query parameter containing an array of
 `{"index":0,"decision_activity_id":"choose"}` entries. Include
 `workflow_id`, `revision`, `document_sha256`, `effective_from`, and optionally
-`effective_until`. A file may contain up to 12 tables. Decision and knowledge
-dependencies and imported definitions are refused in this DMN subset.
+`effective_until`. A file may contain up to 12 tables. Local scalar decision dependencies are supported as a dependency-closed batch.
+Knowledge dependencies and imported definitions remain refused.
 
 Only what maps exactly is accepted, in both directions:
 
@@ -442,7 +442,7 @@ table's own receipt-derived facts. No caller or model value can supply a
 dependency. Even a purely dependency-based table needs a valid current
 receipt under this conservative contract. Arbitrary domain facts such as
 credit scores, unsupported source fields, and unreviewed tables remain
-blocked. DMN interchange of dependencies remains out of scope.
+blocked.
 
 The planner and source-aware shadow evaluation use the same dependency
 closure engine. A missing, stale, ambiguous, unconfirmed or unresolved
@@ -471,3 +471,47 @@ prerequisites, separate source identity, stale receipts, missing bindings,
 source namespace conflicts, write-precondition drift, omitted journal
 checks and source-aware SDK shadow evaluation. Real provider and customer
 acceptance remain separate.
+
+
+## DMN interchange with required decisions
+
+The existing DMN inspector and batch-import preview now support local
+`informationRequirement/requiredDecision` references between selected
+decision tables. Each referenced decision must have a unique simple name,
+a matching scalar string variable and an exact downstream input expression
+using that name. All prerequisites must be explicitly mapped to existing
+design decisions in the same batch. Cycles, external references, missing
+tables, unsupported expressions and overlapping dependency/fact paths are
+refused. No FEEL execution or remote XML resolution takes place.
+
+For external documents, the existing output convention names a next step
+by its unique label. Dependency equality and membership literals must name
+one of the exact upstream outputs, and are translated to stable OWG activity
+IDs. Derived facts use /dmn_dependencies/<decision_name>. Existence tests
+remain declaration checks; OWG's unknown/unresolved semantics are not
+claimed to match arbitrary FEEL engines.
+
+For exports containing dependencies, OWG uses an explicit
+`https://openworkgraph.local/dmn/dependencies/v1` profile: the definitions
+attribute declares the activity-ID output convention; generated simple
+decision/variable names are referenced through ordinary requiredDecision
+links; an OWG namespaced factPath attribute preserves the original derived
+fact path. This profile round-trips into a design with matching activity IDs.
+Independent exports keep the previous label convention. Third-party
+acceptance of this extension is not certified. Unsupported literals or
+operators are refused rather than silently rewritten.
+
+The inspector reports required table indices and the dashboard shows the
+mapping closure and proposed dependency paths. The import updates one
+unsaved draft, preserves existing table IDs, clears confirmations on
+imported rules/tables and invalidates the review of every transitively
+affected downstream table. Replacing a dependent table without its
+dependency declaration is refused. Review dates and source basis are still
+explicit input; importing is not permission to execute.
+
+Tests exercise dependent export/import round trips through the actual OWG
+decision evaluator, external label-to-ID translation, dependency cycles,
+remote references, incomplete assignments, downstream review invalidation,
+quoted literal whitespace and unsupported literal refusal. Full DMN/FEEL
+interoperability, third-party engine acceptance and arbitrary source facts
+remain outside this scope.
