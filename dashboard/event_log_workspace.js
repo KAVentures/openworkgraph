@@ -8131,7 +8131,7 @@
     const soundStatus=el('div',null,'muted');soundStatus.id='owgPetriSoundnessStatus';soundStatus.setAttribute('role','status');soundStatus.setAttribute('aria-live','polite');
     const soundOut=el('div');soundOut.id='owgPetriSoundnessResults';
     const soundBox=document.createElement('details');soundBox.append(el('summary','Structural and behavioral net validation'),
-      el('div','Check whether the model itself can reach completion, deadlock, leave tokens behind or contain transitions that can never fire. This check is independent of recorded cases.','muted'),
+      el('div','Check whether the model itself can reach completion, deadlock, leave tokens behind, loop indefinitely or contain transitions that can never fire. This check is independent of recorded cases.','muted'),
       soundRun,soundStatus,soundOut);box.appendChild(soundBox);
     let soundBusy=false;
     const clearSound=()=>{soundStatus.textContent='';soundOut.replaceChildren();soundRun.disabled=true;};
@@ -8149,8 +8149,24 @@
           ['Completion possible from every marking',verdict(r.option_to_complete)],
           ['Proper completion',verdict(r.proper_completion)],
           ['No dead transitions',verdict(r.no_dead_transitions)],
-          ['At most one token per place',verdict(r.one_safe)]
+          ['At most one token per place',verdict(r.one_safe)],
+          ['Every maximal execution completes',verdict(r.all_maximal_executions_complete)]
         ]));
+        const steps=n=>n==null?'Not established':Number(n).toLocaleString();
+        soundOut.appendChild(table(['Execution property','Result'],[
+          ['Repeatable execution cycle possible',r.infinite_execution_possible===true?'Yes':r.infinite_execution_possible===false?'No':'Inconclusive'],
+          ['Shortest completion (transition firings)',steps(r.shortest_completion_steps)],
+          ['Longest execution when completion is guaranteed (transition firings)',steps(r.longest_execution_steps)]
+        ]));
+        const cycle=r.infinite_execution_witness;
+        if(cycle){
+          soundOut.appendChild(el('h4','Repeatable cycle witness'));
+          soundOut.appendChild(table(['Reach the cycle','Repeat these transitions'],[[
+            (cycle.entry.transition_ids.join(' → ')||'(initial marking)')+(cycle.entry.truncated?' … (prefix only)':''),
+            cycle.cycle_transition_ids.join(' → ')+(cycle.cycle_truncated?' … (prefix only)':'')
+          ]]));
+          soundOut.appendChild(el('div','A repeatable cycle proves that an infinite execution is possible, not that it is inevitable. A model can remain sound when the cycle has an exit.','muted'));
+        }
         if(r.dead_transition_ids?.length)soundOut.appendChild(el('div','Unreachable transition IDs: '+r.dead_transition_ids.join(', ')));
         const witnesses=Object.entries(r.witnesses).filter(([,w])=>w!==null);
         if(witnesses.length){soundOut.appendChild(el('h4','Counterexamples'));
