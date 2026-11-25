@@ -420,6 +420,54 @@ def test_human_api_exact_export_preflight_strict_parser_and_fresh_graph_fingerpr
         assert client.get('/v1/human/process-dependency-graph',headers={'Authorization':'Bearer foreign'}).json()['status']=='empty'
 
 
+def test_focused_basis_randomized_graph_invariants():
+    from collections import defaultdict
+    from random import Random
+    from shared.process_dependency_build_basis import focused_basis
+    from shared.process_dependency_reassessment import reassessment
+    from shared.process_dependencies import content_digest, topology
+    rng=Random(2601125)
+    def make_graph(ids,pairs,revisions=None,reviewed=None):
+        revisions=revisions or {};reviewed=reviewed or {}
+        def ref(wid,rev=1):
+            return {'workflow_id':wid,'revision':rev,'content_sha256':content_digest([wid,rev])}
+        outgoing=defaultdict(list)
+        for a,b in pairs:outgoing[a].append(b)
+        items={}
+        for wid in ids:
+            declaration={'root_process':ref(wid),'links':[
+                {'id':wid+'_'+target,'prerequisite':ref(target),'relationship':'uses_output','reason':'Synthetic'}
+                for target in sorted(outgoing[wid])]}
+            items[wid]={'revision':1,'content_sha256':content_digest(declaration),'dependencies':declaration}
+        graph=topology([item['dependencies'] for item in items.values()])
+        graph['nodes']=[{**ref(wid,revisions.get(wid,1)),'available':True,'current':True,
+            'state':'current','independent_model_review':'reviewed_design' if reviewed.get(wid,True) else 'needs_review',
+            'active_latest_independently_reviewed_model':reviewed.get(wid,True)} for wid in ids]
+        for edge in graph['edges']:
+            root=items[edge['consumer']]
+            edge.update(consumer_process=ref(edge['consumer']),prerequisite_process=ref(edge['prerequisite']),
+                declaration_revision=root['revision'],declaration_sha256=root['content_sha256'])
+        graph['reassessment_worklist']=reassessment(graph,items)
+        return graph,items
+    for _ in range(100):
+        n=rng.randrange(3,30);ids=[str(i) for i in range(n)]
+        pairs=[(str(a),str(b)) for a in range(n) for b in range(a) if rng.random()<.15]
+        root=rng.choice(ids);graph,items=make_graph(ids,pairs)
+        baseline=focused_basis('acme',graph,items,root)
+        closure={r['workflow_id'] for r in baseline['processes']}
+        assert baseline['all_declared_prerequisites_current'] and not baseline['execution_authorized']
+        outside=set(ids)-closure
+        if outside:
+            changed=rng.choice(sorted(outside));g,d=make_graph(ids,pairs,{changed:2},{changed:False})
+            assert focused_basis('acme',g,d,root)['basis_sha256']==baseline['basis_sha256']
+        changed=rng.choice(sorted(closure))
+        for revisions,reviewed in [({changed:2},{}),({},{changed:False})]:
+            g,d=make_graph(ids,pairs,revisions,reviewed);result=focused_basis('acme',g,d,root)
+            assert not result['all_declared_prerequisites_current']
+            assert result['basis_sha256']!=baseline['basis_sha256']
+        assert focused_basis('foreign',graph,items,root)['basis_sha256']!=baseline['basis_sha256']
+
+
 def test_authenticated_dependency_build_and_status_refuse_withdrawn_reviews(tmp_path):
     from io import BytesIO
     from zipfile import ZipFile
