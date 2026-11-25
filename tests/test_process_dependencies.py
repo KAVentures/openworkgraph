@@ -181,6 +181,46 @@ def test_focused_build_basis_ignores_unrelated_consumer_pins_and_tracks_exact_cl
     assert basis()["basis_sha256"]==repaired["basis_sha256"]
 
 
+def test_dependency_starter_export_requires_exact_current_basis_and_covers_sidecar(store,tmp_path):
+    from io import BytesIO
+    from zipfile import ZipFile
+    from hashlib import sha256
+    from shared.process_agent_release import verify_directory
+    dep=ProcessDependencies(store)
+    a,b=[process(store,name) for name in ("Root","Prerequisite")]
+    for record in (a,b):
+        approve(store,record)
+    dep.save(person(),a["workflow_id"],body(a,b,access=2))
+    first=graph(store,a["workflow_id"])["focused_build_basis"]
+    with pytest.raises(Error):
+        dep.build_bundle(person(),a["workflow_id"],a["revision"],first["basis_sha256"])
+    dep.save(person(),b["workflow_id"],body(b,access=2))
+    basis=graph(store,a["workflow_id"])["focused_build_basis"]
+    with pytest.raises(Error):
+        dep.build_bundle(person(),a["workflow_id"],a["revision"],first["basis_sha256"])
+    with pytest.raises(Error):
+        dep.build_bundle(person(),a["workflow_id"],a["revision"]+1,basis["basis_sha256"])
+    bundle=dep.build_bundle(person(),a["workflow_id"],a["revision"],basis["basis_sha256"])
+    assert bundle==dep.build_bundle(person(),a["workflow_id"],a["revision"],basis["basis_sha256"])
+    with ZipFile(BytesIO(bundle)) as archive:
+        saved=json.loads(archive.read("dependency-build-basis.json"))
+        assert saved==basis and not saved["execution_authorized"]
+        assert b"PRIVATE_REASON" not in archive.read("dependency-build-basis.json")
+        spec=json.loads(archive.read("workflow.spec.json"))
+        assert spec["workflow_id"]==a["workflow_id"] and not spec["execution_authorization"]
+        manifest=json.loads(archive.read("release-manifest.json"))
+        assert manifest["files"]["dependency-build-basis.json"]==sha256(archive.read("dependency-build-basis.json")).hexdigest()
+        manifest_pin=sha256(archive.read("release-manifest.json")).hexdigest()
+        archive.extractall(tmp_path)
+    verify_directory(tmp_path,expected_manifest_sha256=manifest_pin)
+    (tmp_path/"dependency-build-basis.json").write_text("{}")
+    with pytest.raises(ValueError):
+        verify_directory(tmp_path,expected_manifest_sha256=manifest_pin)
+    store.save(person(),write("Changed prerequisite",expected=1),b["workflow_id"])
+    with pytest.raises(Error):
+        dep.build_bundle(person(),a["workflow_id"],a["revision"],basis["basis_sha256"])
+
+
 def test_cross_root_cycle_refused_and_existing_map_groupings_remain_independent(store):
     dep=ProcessDependencies(store);a=process(store,'A');b=process(store,'B');c=process(store,'C')
     dep.save(person(),a['workflow_id'],body(a,b));dep.save(person(),b['workflow_id'],body(b,c))
