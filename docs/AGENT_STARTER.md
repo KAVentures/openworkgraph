@@ -73,3 +73,33 @@ it to an authorized operation. Activity labels are never placed in tool
 descriptions. The `starter-runtimes` CI workflow generates a real starter,
 typechecks and runs the AI SDK project against its pinned packages and loads
 the n8n workflow with n8n's own workflow library.
+
+## Reviewed SDK implementation: offline binding rehearsal
+
+Versioned SDK projects (distinct from the linear starter above) now include
+`review_bindings.py`. After verifying the exact generated release, install its
+requirements in an isolated environment. Use a customer-reviewed shadow-case
+suite, the existing fresh inspected tool catalog and separately reviewed
+customer bindings:
+
+```sh
+python review_bindings.py --cases reviewed-cases.json --bindings bindings.json \
+  --catalog tool-catalog.json --output binding-review.json --confirm-local-case-review
+```
+
+Every accepted route is passed through the existing offline execution preparation
+contract. The rehearsal checks action and write-precondition tool names, exact
+schema digests, required fields and known top-level types against the inspected
+metadata. Unknown field types, unlisted tools/arguments, disabled mappings and
+unresolved preparation requirements are blockers. It does not validate the full
+JSON Schema, refresh a tool listing, call a provider, invoke a model, perform
+human work or create an execution intent. Clarification-only cases are counted
+but not rehearsed. Unvisited activities remain visible.
+
+The minimized report binds specification, suite, bindings and catalog hashes;
+it excludes raw case values, arguments, tool descriptions and exception text.
+Treat hashes and stable IDs as potentially sensitive. It creates a new file
+only. Exit codes: 0 = matching offline checks and declared activity coverage;
+1 = at least one blocked route; 2 = refused inputs or output failure;
+3 = incomplete coverage. No exit code grants execution authority. The new
+generated synthetic suite is included in the pinned runtime acceptance command.
