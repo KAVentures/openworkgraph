@@ -155,12 +155,12 @@ def _search(spec,rule_checks,table_checks,*,max_work=MAX_WORK,max_states=MAX_STA
         'interpretation':'Distinct node-firing orders are distinct schedules. Bounds, unresolved facts, manual review and alternative supported routes prevent a unique proposal.'}
 
 
-def deterministic_proposal(spec,case,context):
+def deterministic_proposal(spec,case,context,*,checked_at=None):
     """Consume only an exact pinned source planning context, never caller statuses."""
     model=spec['process_model']
     tables=model.get('decision_tables',[])
     rule_ids=[r['id'] for r in model['business_rules'] if r.get('predicate')]
-    checked_at=context.clock()
+    checked_at=checked_at if checked_at is not None else context.clock()
     rules=context.check_rules(rule_ids,spec,case,checked_at=checked_at)
     checks=context.check_tables([{'table_id':t['id'],'target_activity_ids':[]} for t in tables],
         spec,case,checked_at=checked_at) if tables else []
