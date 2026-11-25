@@ -203,3 +203,77 @@ def test_keeping_spanning_cases_avoids_a_baseline_biased_short():
     assert abs(kept["groups"]["all"]["baseline"]["mean"] - 59 * HOUR) < 1 * HOUR
     assert dropped["groups"]["all"]["baseline"]["mean"] < kept["groups"]["all"]["baseline"]["mean"] - 2 * HOUR
     assert kept["change"]["mean_change_ci95"][0] < 0 < kept["change"]["mean_change_ci95"][1]
+
+
+def _profile(**changes):
+    return {"bin_days":7,"baseline_bins":2,"follow_up_bins":2,"reference_bin":-1,
+            "minimum_cases":10,**changes}
+
+
+def test_time_profile_control_adjusted_bins_and_main_unchanged():
+    log=_log(480,lambda i,t,team:48-(6+(18 if team=="A" else 0) if _after(t) else 0))
+    spec={"intervention_at":AT,"treated":{"resource":"A"},"rounds":100}
+    plain=impact.analyze(log,spec)
+    reviewed=impact.analyze(log,{**spec,"time_profile":_profile()})
+    p=reviewed.pop("time_profile")
+    assert reviewed==plain
+    assert [r["relative_bin"] for r in p["bins"]]==[-2,-1,0,1]
+    assert [r["control_adjusted_change_from_reference"] for r in p["bins"]]==[0,0,-18*HOUR,-18*HOUR]
+    assert all(r["groups"]["treated"]["cases"]==14 for r in p["bins"])
+    assert all(r["groups"]["control"]["cases"]==14 for r in p["bins"])
+    assert p["accounting"]["treated"]["included_cases"]==56
+    assert p["accounting"]["treated"]["excluded"]["outside_profile"]==184
+    assert not p["causal_effect_verified"]
+
+
+def test_time_profile_pinned_case_pages_and_stale_source():
+    log=_log(480,lambda i,t,team:48 if not _after(t) else 24)
+    spec={"intervention_at":AT,"rounds":100,"time_profile":_profile()}
+    report=impact.analyze(log,spec)["time_profile"]
+    body={"analysis":spec,"group":"all","period":"follow_up","relative_bin":0,
+          "expected_profile_sha256":report["profile_sha256"],"limit":7}
+    page=impact.cases(log,body);keys=[]
+    while True:
+        keys.extend(x["case_id"] for x in page["cases"])
+        assert page["selected_cases"]==28
+        if page["next_after"] is None:break
+        page=impact.cases(log,{**body,"after":page["next_after"]})
+    assert len(keys)==len(set(keys))==28
+    with pytest.raises(workspace.EventLogWorkspaceError,match="changed"):
+        impact.cases(log,{**body,"expected_profile_sha256":"0"*64})
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        impact.cases(log,{**body,"period":"baseline"})
+    with workspace._LOCK:
+        conn=workspace._connect()
+        try:conn.execute("UPDATE events SET ts=ts+INTERVAL '1 minute' WHERE log_id=? AND activity='Close'",[log])
+        finally:conn.close()
+    with pytest.raises(workspace.EventLogWorkspaceError,match="changed"):
+        impact.cases(log,body)
+
+
+def test_profile_support_recent_and_spanning_exclusions():
+    log=_log(480,lambda i,t,team:48)
+    p=impact.analyze(log,{"intervention_at":AT,"rounds":100,"exclude_spanning":True,
+          "time_profile":_profile(minimum_cases=30)})["time_profile"]
+    assert p["bins"][1]["groups"]["all"]["cases"]==20
+    assert p["bins"][1]["groups"]["all"]["baseline_spanning_intervention_cases_before_exclusion"]==8
+    assert p["bins"][1]["groups"]["all"]["mean"] is None
+    assert all(r["groups"]["all"]["change_from_reference_mean"] is None for r in p["bins"])
+    assert p["accounting"]["all"]["excluded"]["spanning_intervention"]==8
+    p=impact.analyze(log,{"intervention_at":AT,"rounds":100,"exclude_recent_days":60,
+          "time_profile":_profile()})["time_profile"]
+    assert p["accounting"]["all"]["excluded"]["recent_possibly_running"]>0
+    assert any(r["recent_follow_up_exclusion_overlaps_bin"] for r in p["bins"])
+
+
+@pytest.mark.parametrize("profile",[_profile(bin_days=True),_profile(baseline_bins=0),
+    _profile(reference_bin=-3),_profile(follow_up_bins=13),_profile(minimum_cases=0),
+    _profile(extra=True)])
+def test_invalid_time_profiles(profile):
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        impact.parse({"intervention_at":AT,"time_profile":profile})
+
+
+def test_profile_must_fit_main_window():
+    with pytest.raises(workspace.EventLogWorkspaceError,match="fit"):
+        impact.parse({"intervention_at":AT,"window_days":10,"time_profile":_profile()})

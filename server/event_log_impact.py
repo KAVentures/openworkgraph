@@ -31,6 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, Valida
 
 from . import event_log_cohorts as cohorts
 from . import event_log_workspace as workspace
+from . import event_log_impact_time_profile as time_profile
 
 MIN_CASES = 10                 # per period and cohort before an estimate is shown
 MAX_SAMPLE = 5000              # cases per cell used for the bootstrap (seeded sample; counts stay exact)
@@ -41,6 +42,14 @@ UNITS = {"cycle_time": "seconds", "rework": "share of cases", "sla_breach": "sha
 
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class TimeProfileSpec(_Strict):
+    bin_days: StrictInt = Field(ge=1,le=90)
+    baseline_bins: StrictInt = Field(ge=1,le=12)
+    follow_up_bins: StrictInt = Field(ge=1,le=12)
+    reference_bin: StrictInt = Field(default=-1,ge=-12,le=-1)
+    minimum_cases: StrictInt = Field(default=10,ge=1,le=10000)
 
 
 class ImpactSpec(_Strict):
@@ -56,6 +65,7 @@ class ImpactSpec(_Strict):
     case_type: Annotated[str, Field(min_length=1, max_length=200)] | None = None
     rounds: StrictInt = Field(default=400, ge=100, le=2000)
     seed: StrictInt = Field(default=20261101, ge=0, le=2 ** 31)
+    time_profile: TimeProfileSpec | None = None
 
     @field_validator("intervention_at")
     @classmethod
@@ -86,6 +96,18 @@ def parse(spec: Any) -> ImpactSpec:
         raise workspace.EventLogWorkspaceError("sla_seconds applies only to sla_breach")
     if parsed.control is not None and parsed.treated is None:
         raise workspace.EventLogWorkspaceError("a control cohort needs a treated cohort")
+    profile=parsed.time_profile
+    if profile is not None:
+        if profile.reference_bin < -profile.baseline_bins:
+            raise workspace.EventLogWorkspaceError("time profile reference must be a selected baseline bin")
+        if parsed.window_days is not None and max(profile.baseline_bins,profile.follow_up_bins)*profile.bin_days>parsed.window_days:
+            raise workspace.EventLogWorkspaceError("time profile bins must fit inside the selected main window")
+        try:
+            at=datetime.fromisoformat(parsed.intervention_at.replace("Z","+00:00"))
+            at-timedelta(days=profile.baseline_bins*profile.bin_days)
+            at+timedelta(days=profile.follow_up_bins*profile.bin_days)
+        except OverflowError:
+            raise workspace.EventLogWorkspaceError("time profile dates exceed the supported range") from None
     for cohort in (parsed.treated, parsed.control):
         if cohort is not None:
             cohorts.parse_cohort(cohort)
@@ -228,27 +250,45 @@ def _population(conn, log_id, parsed, at, window):
             raise workspace.EventLogWorkspaceError("treated and control cohorts must not share cases")
         groups = {"treated": [row for row in rows if row[0] in treated],
                   "control": [row for row in rows if row[0] in control]}
-    return groups, first, start, end, recent
+    return groups, first, start, end, recent, last
 
 
 def cases(log_id: str, request: Any) -> dict[str, Any]:
     from .event_log_cases import _integer, _spec, _text
-    request = _spec(request, {"analysis", "group", "period", "after", "limit"})
+    request = _spec(request, {"analysis", "group", "period", "after", "limit", "relative_bin", "expected_profile_sha256"})
     parsed = parse(request.get("analysis"))
     group, period = request.get("group"), request.get("period")
     if group not in ("all", "treated", "control") or period not in ("baseline", "follow_up"):
         raise workspace.EventLogWorkspaceError("choose an impact group and period")
     if (parsed.treated is None) != (group == "all"):
         raise workspace.EventLogWorkspaceError("group does not match the analysis")
+    index=request.get("relative_bin")
+    pin=request.get("expected_profile_sha256")
+    if index is not None:
+        profile=parsed.time_profile
+        if (type(index) is not int or profile is None or
+                not -profile.baseline_bins<=index<profile.follow_up_bins or
+                period!=("baseline" if index<0 else "follow_up")):
+            raise workspace.EventLogWorkspaceError("choose a reviewed time profile bin and period")
+        if not isinstance(pin,str) or len(pin)!=64 or any(c not in "0123456789abcdef" for c in pin):
+            raise workspace.EventLogWorkspaceError("time profile evidence requires its exact review digest")
+    elif pin is not None or "relative_bin" in request:
+        raise workspace.EventLogWorkspaceError("select a time profile bin with its digest")
     after = _text(request["after"]) if request.get("after") is not None else None
     limit = _integer(request.get("limit", 30), 100)
     at = datetime.fromisoformat(parsed.intervention_at.replace("Z", "+00:00")).replace(tzinfo=None)
     window = timedelta(days=parsed.window_days) if parsed.window_days else None
 
     def run(conn):
-        groups, _, start, end, recent = _population(conn, log_id, parsed, at, window)
+        groups, first, start, end, recent, last = _population(conn, log_id, parsed, at, window)
+        members=groups[group]
+        if index is not None:
+            report,inventory=time_profile.build(groups,at,start,end,recent,parsed,first,last,_case_period)
+            if report["profile_sha256"]!=pin:
+                raise workspace.EventLogWorkspaceError("time profile evidence changed; rerun impact analysis")
+            members=inventory[group][index]
         total, page = 0, []
-        for row in groups[group]:
+        for row in members:
             key, started, ended, _ = row
             bucket, _ = _case_period(started, ended, at, start, end, recent, parsed.exclude_spanning)
             if bucket != period:
@@ -256,7 +296,8 @@ def cases(log_id: str, request: Any) -> dict[str, Any]:
             total += 1
             if len(page) <= limit and (after is None or key > after):
                 page.append(row)
-        return {"selected_cases": total, "unit": UNITS[parsed.metric],
+        return {**({"relative_bin":index,"profile_sha256":pin} if index is not None else {}),
+                "selected_cases": total, "unit": UNITS[parsed.metric],
                 "cases": [{"case_id": key, "value": value, "started_at": started.isoformat() + "Z",
                            "ended_at": ended.isoformat() + "Z"} for key, started, ended, value in page[:limit]],
                 "next_after": page[limit - 1][0] if len(page) > limit else None}
@@ -269,7 +310,7 @@ def analyze(log_id: str, spec: Any) -> dict[str, Any]:
     window = timedelta(days=parsed.window_days) if parsed.window_days else None
 
     def run(conn):
-        groups, first, start, end, recent_from = _population(conn, log_id, parsed, at, window)
+        groups, first, start, end, recent_from, last = _population(conn, log_id, parsed, at, window)
         periods, excluded = {}, {}
         for name, members in groups.items():
             before, after, left = _split(members, at, start, end, recent_from, parsed.exclude_spanning)
@@ -310,6 +351,8 @@ def analyze(log_id: str, spec: Any) -> dict[str, Any]:
         else:
             placebo = {"estimated": False, "reason": "no baseline cases"}
         result["placebo"] = placebo
+        if parsed.time_profile is not None:
+            result["time_profile"]=time_profile.build(groups,at,start,end,recent_from,parsed,first,last,_case_period)[0]
         change = result["change"]
         result["reading"] = _reading(parsed, change, result.get("control_adjusted"), placebo)
         result.update({

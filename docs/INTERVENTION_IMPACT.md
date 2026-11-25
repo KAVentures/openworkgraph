@@ -107,3 +107,36 @@ Markers are the owner's notes on the timeline. They are not events of the log, n
 - `POST /v1/event-logs/{log_id}/change-markers/{marker_id}/delete` removes one.
 
 All three are dashboard session only.
+
+## Time-resolved intervention profile
+
+Enable the optional profile to inspect fixed-width case-start bins around
+the declared intervention. Configure 1–90 days per bin, 1–12 baseline and
+follow-up bins each, an explicit negative baseline reference bin, and a
+minimum case count per cell. If the main comparison has a finite window,
+all selected bins must fit inside it. Bin -1 is immediately before the
+intervention, bin 0 begins at it; boundaries are inclusive at the start
+and exclusive at the end. The original before/after estimate and placebo
+remain unchanged. No post-hoc optimal date selection is performed.
+
+Each selected group has exact included/excluded case accounting and
+per-bin support, mean, median, change from the reference mean, and
+spanning-before-exclusion counts. If treated/control cohorts exist, the
+profile reports their per-bin mean gap and its change from the reference
+gap. Cells below the minimum support have null means/medians and dependent
+changes are withheld. Visible event-span and recent-exclusion overlap
+flags describe coverage limitations; they are not source completeness
+checks. Cohort definitions can depend on later observed events. No per-bin
+confidence intervals, significance testing, proof of parallel trends,
+causal effect or verified savings are claimed.
+
+Optional request field time_profile is an object containing bin_days,
+baseline_bins, follow_up_bins, reference_bin (default -1), minimum_cases
+(default 10). The existing impact/cases endpoint accepts relative_bin and
+expected_profile_sha256 together for exact pinned bin evidence. The digest
+covers the settings, selected group rows, metric values, timestamps and
+visible span. Changed relevant evidence refuses later pages. The dashboard
+includes bin drill-down, aggregate JSON and additional CSV profile rows.
+Regression cases cover fixed bins, control gaps, boundary exclusions,
+minimum support, pinned case pages and unchanged default analysis. Full
+native and browser acceptance remain outstanding.

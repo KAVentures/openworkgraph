@@ -4506,6 +4506,19 @@
     const sync=()=>{show(f.sla,metric.value==='sla_breach');show(f.activity,metric.value==='activity_count');};metric.onchange=sync;sync();
     const row=el('div',null,'row');row.style.alignItems='end';
     row.append(field('Change went live (UTC)',date),field('Measure',metric),...Object.values(f),field('Days on each side',windowDays),field('Leave out the last … days',recent),field('Change applies to',treatedActivity),field('…or to resource',treatedResource),run);
+    const profileOn=input('owgImpactProfileOn','checkbox');
+    const binDays=input('owgImpactBinDays','number'),beforeBins=input('owgImpactBeforeBins','number'),afterBins=input('owgImpactAfterBins','number');
+    const refBin=input('owgImpactReferenceBin','number'),minCases=input('owgImpactProfileMinCases','number');
+    for(const [c,min,max,value] of [[binDays,1,90,7],[beforeBins,1,12,4],[afterBins,1,12,4],[refBin,-12,-1,-1],[minCases,1,10000,10]]){
+      c.min=String(min);c.max=String(max);c.step='1';c.value=String(value);}
+    const profileFields=el('div',null,'row');
+    profileFields.append(field('Days per bin',binDays),field('Baseline bins',beforeBins),field('Follow-up bins',afterBins),
+      field('Baseline reference bin',refBin),field('Minimum cases per bin',minCases));
+    profileFields.hidden=true;
+    const profilePanel=el('div');profilePanel.append(field('Include time-resolved impact profile',profileOn),profileFields,
+      el('p','Equal-width case-start bins around the intervention; no bin-specific confidence intervals or causal inference.','muted'));
+    profileOn.onchange=()=>{profileFields.hidden=!profileOn.checked;};
+    const profileOut=el('div');
     const out=el('div');out.id='owgImpactResults';out.setAttribute('role','status');
     // Change markers: pick a saved date, or save this one with a label, so the change is recorded once.
     const markerPick=select('owgImpactMarker',[['','Pick a saved change']]);
@@ -4522,9 +4535,13 @@
       ...Object.entries(packet.report.groups).flatMap(([group,values])=>
         ['baseline','follow_up'].map(period=>[
           group,period,values[period].cases,values[period].mean,values[period].median,packet.report.unit
-        ]))
+        ])),
+      ...(packet.report.time_profile?[
+        [],['relative_bin','from_utc','before_utc','group','cases','mean','median','change_from_reference_mean','treated_minus_control_mean','control_adjusted_change_from_reference','profile_sha256'],
+        ...packet.report.time_profile.bins.flatMap(b=>Object.entries(b.groups).map(([g,s])=>[b.relative_bin,b.from_utc,b.before_utc,g,s.cases,s.mean,s.median,s.change_from_reference_mean,b.treated_minus_control_mean,b.control_adjusted_change_from_reference,packet.report.time_profile.profile_sha256]))
+      ]:[])
     ]);
-    box.append(markerRow,markerStatus,row,out,evidence,exports.node);
+    box.append(markerRow,markerStatus,row,profilePanel,out,profileOut,evidence,exports.node);
     const markersBase='/v1/event-logs/'+encodeURIComponent(state.logId)+'/change-markers';let markerList=[];
     const showMarkers=r=>{markerList=r.markers;
       setOptions(markerPick,[['',r.markers.length?'Pick a saved change':'No saved changes yet'],...r.markers.map(m=>[m.marker_id,m.marked_at.slice(0,10)+' — '+m.label+(m.within_log?'':' (outside this log)')])]);
@@ -4545,17 +4562,57 @@
     const markersGeneration=state.generation;
     getJSON(markersBase).then(r=>{if(markersGeneration===state.generation)showMarkers(r);}).catch(error=>{markerStatus.textContent=error.message;});
     const generation=state.generation,logId=state.logId;let turn=0;
-    const invalidate=()=>{turn++;lastReport=null;exports.enable(false);run.disabled=false;out.replaceChildren();evidence.replaceChildren();};
-    for(const control of [date,metric,sla,activity,windowDays,recent,treatedActivity,treatedResource]){
+    const invalidate=()=>{turn++;lastReport=null;exports.enable(false);run.disabled=false;out.replaceChildren();profileOut.replaceChildren();evidence.replaceChildren();};
+    for(const control of [date,metric,sla,activity,windowDays,recent,treatedActivity,treatedResource,profileOn,binDays,beforeBins,afterBins,refBin,minCases]){
       control.addEventListener('input',invalidate);control.addEventListener('change',invalidate);
     }
     markerPick.addEventListener('change',invalidate);
+    function showTimeProfile(profile,spec,t,unit){
+      const metricValue=v=>v==null?'—':unit==='seconds'?duration(v):Number(v).toLocaleString(undefined,{maximumFractionDigits:4});
+      function reviewBin(bin,group){
+        const panel=el('div'),status=el('p','Loading reviewed cases…','muted'),list=el('div'),next=button('Next bin case page','secondary');
+        panel.append(el('h4',group+' · relative bin '+bin.relative_bin),status,list,next);evidence.replaceChildren(panel);
+        let cursor=null;
+        async function load(after){
+          next.disabled=true;
+          try{
+            const data=await (await api('/v1/event-logs/'+encodeURIComponent(logId)+'/impact/cases',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({analysis:spec,group,period:bin.period,relative_bin:bin.relative_bin,expected_profile_sha256:profile.profile_sha256,after})})).json();
+            if(t!==turn||generation!==state.generation||!panel.isConnected)return;
+            if(data.profile_sha256!==profile.profile_sha256)throw Error('Profile changed; rerun impact analysis.');
+            cursor=data.next_after;status.textContent=data.selected_cases+' matching cases.';
+            list.replaceChildren(table(['Case','Started','Ended','Value'],data.cases.map(c=>{
+              const open=button(c.case_id,'secondary');open.onclick=()=>inspection.open(c.case_id);
+              return [open,c.started_at,c.ended_at,metricValue(c.value)];
+            })));next.disabled=cursor===null;
+          }catch(error){if(t===turn&&panel.isConnected){list.replaceChildren();status.textContent=error.message;}}
+        }
+        next.onclick=()=>load(cursor);load(null);
+      }
+      const names=Object.keys(profile.reference_group_cells);
+      const rows=profile.bins.flatMap(bin=>names.map(g=>{
+        const s=bin.groups[g],open=button(String(s.cases),'secondary');
+        open.disabled=!s.cases;open.setAttribute('aria-label','Review '+g+' bin '+bin.relative_bin+' cases');open.onclick=()=>reviewBin(bin,g);
+        return [bin.relative_bin+(bin.reference_bin?' (reference)':''),bin.from_utc,bin.before_utc,g,open,
+          metricValue(s.mean),metricValue(s.median),metricValue(s.change_from_reference_mean),
+          bin.inside_visible_event_span?'Inside visible span':'Boundary / outside span',
+          bin.recent_follow_up_exclusion_overlaps_bin?'Recent exclusion overlaps':'—',
+          s.baseline_spanning_intervention_cases_before_exclusion,s.minimum_support_met?'Supported':'Below minimum'];
+      }));
+      profileOut.replaceChildren(el('h4','Time-resolved intervention profile'),
+        el('p','Reference bin '+profile.reference_bin+' · minimum '+profile.minimum_cases_per_cell+' cases per cell · '+unit,'muted'),
+        table(['Relative bin','From UTC','Before UTC','Group','Cases','Mean','Median','Change vs reference','Visible span','Recent exclusion','Spanning before exclusion','Support'],rows),
+        ...(names.includes('control')?[table(['Relative bin','Treated minus control','Gap change vs reference'],profile.bins.map(b=>[b.relative_bin,metricValue(b.treated_minus_control_mean),metricValue(b.control_adjusted_change_from_reference)]))]:[]),
+        table(['Group','Selected','Included','Outside profile','Outside main window','Recent','Spanning excluded'],
+          Object.entries(profile.accounting).map(([g,a])=>[g,a.selected_group_cases,a.included_cases,a.excluded.outside_profile,a.excluded.outside_window,a.excluded.recent_possibly_running,a.excluded.spanning_intervention])),
+        ...profile.interpretation.map(x=>el('p',x,'muted')));
+    }
     run.onclick=async()=>{
       const t=++turn;
-      lastReport=null;exports.enable(false);evidence.replaceChildren();
+      lastReport=null;exports.enable(false);evidence.replaceChildren();profileOut.replaceChildren();
       let spec;try{spec=impactSpec({date:date.value,metric:metric.value,slaHours:sla.value,activity:activity.value,window:windowDays.value,recent:recent.value,treatedActivity:treatedActivity.value,treatedResource:treatedResource.value.trim()});}
       catch(error){out.replaceChildren(el('div',error.message,'muted'));return;}
       if(state.caseType)spec.case_type=state.caseType;
+      if(profileOn.checked)spec.time_profile={bin_days:Number(binDays.value),baseline_bins:Number(beforeBins.value),follow_up_bins:Number(afterBins.value),reference_bin:Number(refBin.value),minimum_cases:Number(minCases.value)};
       run.disabled=true;out.replaceChildren(el('div','Measuring…','muted'));
       try{
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(logId)+'/impact',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
@@ -4563,6 +4620,7 @@
         lastReport={format:'openworkgraph.intervention-impact-report.v1',settings:spec,report:r};
         exports.enable(true);
         const v=impactRows(r);
+        if(r.time_profile)showTimeProfile(r.time_profile,spec,t,r.unit);
         const rows=Object.entries(r.groups).map(([group,values],index)=>{
           const open=(period,count)=>{
             if(!count)return '0';
