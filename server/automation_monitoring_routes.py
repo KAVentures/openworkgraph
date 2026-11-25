@@ -264,3 +264,13 @@ async def triage_automation_incident(request: Request, incident_id: str):
     _require_dashboard(request)
     payload = await _json(request, 4096)
     return await run_in_threadpool(_channel_call, incidents.triage, incident_id, payload)
+
+@router.post("/v1/automation-monitoring/incidents/{incident_id}/evidence")
+async def review_incident_run_evidence(request: Request, incident_id: str):
+    from . import automation_incident_evidence as evidence
+    from .event_log_routes import _json_body
+    _require_dashboard(request)
+    spec = await _json_body(request, "incident evidence selection", strict=True, limit=8192)
+    _require_dashboard(request)
+    return await _respond(evidence.review, incident_id, spec)
+

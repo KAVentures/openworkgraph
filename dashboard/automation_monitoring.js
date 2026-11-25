@@ -185,6 +185,57 @@
         if(scope.value==='all'){const deployment=deployments.find(d=>d.deployment_id===i.deployment_id);box.appendChild(el('div','Deployment: '+(deployment?deployment.name:'Unavailable deployment'),'muted'));}
         box.appendChild(el('div',i.fingerprint.replace(/^step:/,'Step: ')+' · '+i.occurrences+(i.count_basis==='distinct_retained_run_ids'?' distinct retained runs':' occurrences')+' · first '+i.first_seen+' · last '+i.last_seen+(i.reopened_count?' · reopened '+i.reopened_count+'×':'')+(i.sample_refs.length?' · runs '+i.sample_refs.join(', '):''),'muted'));
         i.notes.forEach(n=>box.appendChild(el('div',n.at+' · '+n.status+' · '+n.note)));
+        if(i.count_basis==='distinct_retained_run_ids'&&i.run_membership_sha256){
+          const evidenceHost=el('div');
+          evidenceHost.setAttribute('aria-live','polite');
+          const inspect=button('Inspect retained run evidence','secondary');
+          inspect.setAttribute('aria-label','Inspect retained run evidence for incident '+i.incident_id);
+          let evidenceVersion=0;
+          const current=v=>v===evidenceVersion&&version===incidentVersion&&pick.value===selected&&box.isConnected;
+          async function evidencePage(offset,population){
+            const v=++evidenceVersion;inspect.disabled=true;
+            evidenceHost.replaceChildren(el('div','Loading retained run evidence…','muted'));
+            try{
+              const result=await api('/v1/automation-monitoring/incidents/'+encodeURIComponent(i.incident_id)+'/evidence',{
+                method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+                  expected_last_seen:i.last_seen,expected_review_revision:i.review_revision,
+                  expected_membership_sha256:i.run_membership_sha256,expected_population_sha256:population,
+                  offset,limit:20})});
+              if(!current(v))return;
+              const parts=[el('p',result.matching_runs+' matching retained runs · '+result.matching_steps+' reported steps. Current reports, not verified outcomes.','muted')];
+              const runList=el('div');
+              for(const r of result.rows){
+                const details=el('details');
+                details.appendChild(el('summary',r.run_id+' · '+r.status+' · '+r.started_at));
+                const issue=r.first_reported_issue;
+                details.appendChild(el('div',issue?'First reported issue: '+issue.activity+' · '+issue.status+' · step '+issue.step_id:'No matching problem step reported','muted'));
+                const load=button('Read exact retained report','secondary');
+                const exact=el('div');exact.setAttribute('aria-live','polite');
+                load.onclick=async()=>{
+                  load.disabled=true;
+                  try{
+                    const d=await api('/v1/automation-monitoring/deployments/'+encodeURIComponent(r.reference.deployment_id)+'/runs/detail?run_id='+encodeURIComponent(r.run_id)+'&expected_sha256='+encodeURIComponent(r.reference.run_sha256));
+                    if(!current(v)||!details.isConnected)return;
+                    exact.replaceChildren(el('p','Reported spec: '+(d.run.reported_spec_sha256||'Unknown')+' · '+d.attribution,'muted'),
+                      d.run.steps.length?table(['Position','Activity','Status','Reported time'],d.run.steps.map(s=>[s.seq+1,s.activity,s.status,s.at])):el('p','No steps reported.'));
+                  }catch(error){if(current(v)&&details.isConnected)exact.replaceChildren(el('p',error.message,'note'));}
+                  finally{if(current(v)&&details.isConnected)load.disabled=false;}
+                };
+                details.append(load,exact);runList.appendChild(details);
+              }
+              parts.push(runList);
+              const nav=el('div',null,'row');
+              if(offset>0){const previous=button('Previous evidence page','secondary');previous.onclick=()=>evidencePage(Math.max(0,offset-20),result.population_sha256);nav.appendChild(previous);}
+              if(result.next_offset!==null){const next=button('Next evidence page','secondary');next.onclick=()=>evidencePage(result.next_offset,result.population_sha256);nav.appendChild(next);}
+              parts.push(el('div',result.rows.length?'Showing '+(offset+1)+'–'+(offset+result.rows.length)+' of '+result.matching_runs:'No currently retained matching runs. Historical reviews are not erased.','muted'),nav);
+              evidenceHost.replaceChildren(...parts);
+            }catch(error){if(current(v))evidenceHost.replaceChildren(el('p',error.message,'note'));}
+            finally{if(current(v))inspect.disabled=false;}
+          }
+          inspect.onclick=()=>evidencePage(0,null);
+          box.append(inspect,evidenceHost);
+        }
+
         const note=input('owgMonitorIncidentNote_'+i.incident_id,'text','Note (optional)');note.maxLength=500;note.setAttribute('aria-label','Note for incident '+i.incident_id);box.appendChild(note);
         for(const [to,label] of [['acknowledged','Acknowledge'],['resolved','Resolve'],['open','Reopen']]){
           if(to===i.status)continue;
