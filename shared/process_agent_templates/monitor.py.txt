@@ -91,6 +91,7 @@ def report(spec, records, deployment_name):
     expected_routes={};expected_order=[];checkpoint=0;checkpoint_rows={};checkpoint_ready=False
     declared_actions=[];declared_preconditions=set();preconditions_seen=set()
     checkpoint_kind=None;checkpoint_attempt=None;initial_checked=False;completion_checked=False
+    expected_source_rules=[];source_checks={};source_number=0;source_key=None;source_consumed=set()
     if dependent:
         from owg_model.process_model import ProcessModel
         from owg_model.process_decision_tables import decision_order
@@ -125,6 +126,9 @@ def report(spec, records, deployment_name):
         if {k:v for k,v in expected_routes.items() if v}!=route_targets:
             _fail()
         declared_actions=[ident for ident in path if ident in nodes]
+        expected_source_rules=sorted(structural.get('non_table_structured_rule_ids',[]))
+        if first.get('declared_source_rule_ids')!=expected_source_rules or structural['unconfirmed_rule_ids']:
+            _fail()
         preconditions=first.get('declared_precondition_attempts')
         if (not isinstance(preconditions,list) or any(type(i) is not int or not 1<=i<=len(declared_actions) for i in preconditions)
             or preconditions!=sorted(set(preconditions))):
@@ -148,6 +152,30 @@ def report(spec, records, deployment_name):
             _fail()
         previous = stamp
         phase = row['phase']
+        if dependent and expected_source_rules and phase=='source_rule_checked':
+            number=row.get('checkpoint_number');purpose=row.get('checkpoint_purpose');attempt=row.get('checkpoint_attempt')
+            if type(number) is not int or purpose not in {'initial','precondition','action','completion'}:
+                _fail()
+            if purpose in {'initial','completion'}:
+                if attempt is not None or (purpose=='initial' and (attempts or source_number)):
+                    _fail()
+            elif type(attempt) is not int or attempt!=attempts+1 or attempt>len(declared_actions) or pending:
+                _fail()
+            key=(purpose,attempt)
+            if number==source_number+1:
+                if key in source_checks or (source_key is not None and len(source_checks[source_key])!=len(expected_source_rules)):
+                    _fail()
+                source_number=number;source_key=key;source_checks[key]=[]
+            if number!=source_number or key!=source_key or key in source_consumed:
+                _fail()
+            rows=source_checks[key]
+            if len(rows)>=len(expected_source_rules) or row.get('rule_id')!=expected_source_rules[len(rows)]:
+                _fail()
+            if row.get('status') not in {'matched','not_matched','unknown'} or row.get('record_association')!='customer_selected_not_independently_established':
+                _fail()
+            rows.append(row['status'])
+        elif dependent and phase=='source_rule_checked':
+            _fail()
         if dependent and expected_order and phase!='decision_table_checked':
             if checkpoint_rows and len(checkpoint_rows)!=len(expected_order):
                 _fail()
@@ -158,6 +186,14 @@ def report(spec, records, deployment_name):
                     _fail()
                 checkpoint_ready=False
         if dependent and phase in {'precondition_pending','attempt_pending'}:
+            if expected_source_rules:
+                initial=('initial',None)
+                key=('precondition' if phase=='precondition_pending' else 'action',attempts+1)
+                if (source_checks.get(initial)!=['matched']*len(expected_source_rules)
+                    or source_checks.get(key)!=['matched']*len(expected_source_rules) or key in source_consumed
+                    or source_key!=key):
+                    _fail()
+                source_consumed.add(key)
             if (attempts>=len(declared_actions) or row.get('activity_id')!=declared_actions[attempts]
                 or type(row.get('attempt')) is not int or row['attempt']!=attempts+1):
                 _fail()
@@ -282,6 +318,11 @@ def report(spec, records, deployment_name):
             if succeeded and dependent:
                 if attempts!=len(declared_actions) or preconditions_seen!=declared_preconditions:
                     _fail()
+                if expected_source_rules:
+                    required={('initial',None),('completion',None)}|{('action',i+1) for i in range(attempts)}|{('precondition',i) for i in declared_preconditions}
+                    if (set(source_checks)!=required or source_key!=('completion',None)
+                        or any(rows!=['matched']*len(expected_source_rules) for rows in source_checks.values())):
+                        _fail()
                 if expected_order and (not initial_checked or not completion_checked or not checkpoint_ready
                     or checkpoint_kind!='completion'):
                     _fail()
