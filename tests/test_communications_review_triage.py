@@ -130,6 +130,56 @@ def test_stale_model_falls_back_to_keywords_without_using_predictions(monkeypatc
         "keyword_ambiguous", "keyword_unclassified", "routine"]
 
 
+def test_diverse_order_rotates_declared_languages_and_keyword_groups(monkeypatch):
+    enabled()
+    monkeypatch.setattr(review, "_split", lambda _id: "train")
+    review.add_examples([
+        {"text":"refund English first", "language":"en"},
+        {"text":"refund English second", "language":"en"},
+        {"text":"cancel English", "language":"en"},
+        {"text":"refund Swedish", "language":"sv"},
+        {"text":"cancel Swedish", "language":"sv"},
+        {"text":"refund unknown"},
+    ])
+    priority = triage.queue(TAXONOMY)
+    result = triage.queue(TAXONOMY, order="diverse")
+    assert result["review_order"] == "diverse"
+    assert result["eligible_by_declared_language"] == {"en":3,"sv":2,"und":1}
+    assert len({row["language"] for row in result["examples"][:3]}) == 3
+    english = [row for row in result["examples"] if row["language"]=="en"]
+    assert len({row["keyword_intent"] for row in english[:2]}) == 2
+    assert {row["example_id"] for row in result["examples"]} == {row["example_id"] for row in priority["examples"]}
+    first = triage.queue(TAXONOMY, order="diverse", limit=2)
+    second = triage.queue(TAXONOMY, order="diverse", limit=4, offset=2)
+    assert first["examples"] + second["examples"] == result["examples"]
+    assert not result["language_inferred"] and not result["sampling_representativeness_verified"]
+    with pytest.raises(review.ReviewError, match="choose priority"):
+        triage.queue(TAXONOMY, order="other")
+
+
+def test_consent_revoked_during_ranking_refuses_copied_text(monkeypatch):
+    seed(monkeypatch)
+    original = mining.classify
+    def revoke(text, intents):
+        review.configure({"enabled":False})
+        return original(text, intents)
+    monkeypatch.setattr(mining,"classify",revoke)
+    with pytest.raises(review.ReviewError, match="turn on review examples"):
+        triage.queue(TAXONOMY,order="diverse")
+
+
+def test_deletion_during_ranking_refuses_old_population(monkeypatch):
+    examples = seed(monkeypatch)
+    selected = next(row["example_id"] for row in examples if row["split"]=="train")
+    original = mining.classify
+    def delete(text,intents):
+        review.delete([selected])
+        return original(text,intents)
+    monkeypatch.setattr(mining,"classify",delete)
+    with pytest.raises(review.ReviewError,match="changed during ranking"):
+        triage.queue(TAXONOMY)
+
+
 def test_local_http_route_requires_dashboard_session_and_opt_in(tmp_path):
     code = r"""
 from fastapi.testclient import TestClient
@@ -155,6 +205,8 @@ with TestClient(app) as client:
     assert body['labels_auto_applied'] is False
     assert body['review_texts_are_existing_redacted_opt_in_examples'] is True
     assert client.get(route+'?limit=10000',headers=owner).status_code == 422
+    assert client.get(route+'?order=other',headers=owner).status_code == 422
+    assert client.get(route+'?order=diverse',headers=owner).json()['review_order']=='diverse'
 """
     env = os.environ.copy()
     env.update({"WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"),

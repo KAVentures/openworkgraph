@@ -63,6 +63,13 @@ const path=require('node:path');
    assert.equal(queue.labels_auto_applied,false);
    assert.equal(queue.learned_predictions_used,false,'keyword-only until model trained');
    assert(!(await page.locator('#owgCommsReviewExamples').textContent()).includes('client.example'));
+   await page.locator('#owgCommsReviewDiverse').click();
+   await page.locator('#owgCommsReviewExamples').getByText(/Diverse order: rotate through declared language and keyword groups/).waitFor();
+   const diversity=await page.evaluate(async()=>await (await fetch('/v1/communications/review/triage?order=diverse&limit=20')).json());
+   assert.equal(diversity.review_order,'diverse');
+   assert.equal(diversity.language_inferred,false);
+   assert.equal(diversity.sampling_representativeness_verified,false);
+   assert.deepEqual(new Set(diversity.examples.map(x=>x.example_id)),new Set(queue.examples.map(x=>x.example_id)));
    await page.locator('#owgCommsReviewNormal').click();
    await page.locator('#owgCommsReviewExamples h3').getByText('Examples to label').waitFor();
    // Label one example in the UI, the rest through the same API.

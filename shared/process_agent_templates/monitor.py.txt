@@ -4,6 +4,8 @@ Imported journals remain customer reports, including their source-check claims.
 This module never connects to OWG, a model provider or a business tool.
 """
 import argparse
+from collections import Counter
+import hashlib
 from datetime import datetime, timezone
 import json
 import os
@@ -15,13 +17,16 @@ from runtime import validate_spec
 
 MAX_BYTES = 8 * 1024 * 1024
 MAX_RECORDS = 10000
+MAX_BATCH_JOURNALS = 100
+MAX_BATCH_BYTES = 64 * 1024 * 1024
+MAX_EXPORT_BYTES = 2 * 1024 * 1024
 _PHASES = {
     'started', 'catalog_checked', 'source_rule_checked', 'decision_table_checked', 'stopped_before_tools',
     'source_preflight', 'precondition_pending', 'precondition_not_established',
     'attempt_pending', 'tool_returned_expected_structure', 'tool_reported_failure',
     'uncertain', 'implementation_contract_or_intent_not_established',
     'transport_or_tool_inventory_unavailable', 'source_rules_not_established_at_completion',
-    'source_checked', 'finished',
+    'source_checked', 'finished', 'operator_stop_observed', 'operator_stop_active_at_completion',
 }
 _STOPS = {'implementation_contract_or_intent_not_established',
           'transport_or_tool_inventory_unavailable', 'source_rules_not_established_at_completion',
@@ -44,9 +49,13 @@ def _stamp(value):
         _fail()
 
 
-def read_journal(path):
+def _read_snapshot(path, limit=MAX_BYTES):
     with Path(path).open('rb') as stream:
-        content = stream.read(MAX_BYTES + 1)
+        content = stream.read(limit + 1)
+    return content
+
+
+def _decode_journal(content):
     if not content or len(content) > MAX_BYTES or not content.endswith(b'\n'):
         _fail()  # A torn trailing record must not become a completed run.
     lines = content.splitlines()
@@ -58,10 +67,14 @@ def read_journal(path):
         _fail()
 
 
+def read_journal(path):
+    return _decode_journal(_read_snapshot(path))
+
+
 def report(spec, records, deployment_name):
     validate_spec(spec)
     if (not isinstance(deployment_name, str) or not 1 <= len(deployment_name.strip()) <= 120
-            or any(ord(c) < 32 for c in deployment_name)):
+            or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in deployment_name)):
         raise ImplementationError('Use a short deployment label without control characters')
     if not isinstance(records, list) or not 1 <= len(records) <= MAX_RECORDS:
         _fail()
@@ -86,6 +99,15 @@ def report(spec, records, deployment_name):
             _fail()
         previous = stamp
         phase = row['phase']
+        if phase == 'operator_stop_observed':
+            if (row.get('future_tool_attempts_stopped') is not True
+                    or row.get('already_in_flight_requests_not_cancelled') is not True):
+                _fail()
+            blocked = True
+        elif phase == 'operator_stop_active_at_completion':
+            if row.get('in_flight_requests_not_cancelled') is not True:
+                _fail()
+            blocked = True
         if phase == 'attempt_pending':
             if (blocked or pending is not None or not isinstance(row.get('activity_id'), str) or row['activity_id'] not in nodes
                     or type(row.get('attempt')) is not int or row['attempt'] != attempts + 1
@@ -163,22 +185,203 @@ def report(spec, records, deployment_name):
                       'outcome': {'verified': None, 'source': 'customer_execution_journal'}}]}
 
 
+def _review_row(index, content, records, run):
+    phases = Counter(row['phase'] for row in records)
+    stop = bool(phases['operator_stop_observed'] or phases['operator_stop_active_at_completion'])
+    pending = phases['attempt_pending'] - sum(phases[p] for p in (
+        'tool_returned_expected_structure', 'tool_reported_failure', 'uncertain'))
+    # A precondition request can have been sent without a corresponding
+    # business attempt. Do not equate that with a write or a known failure.
+    precondition_unresolved = (
+        phases['precondition_pending'] > phases['precondition_not_established'] + phases['attempt_pending']
+    )
+    flags = []
+    if run['status'] == 'running':
+        flags.append('no_terminal_record')
+    if stop:
+        flags.append('operator_stop_reported_not_remote_cancellation')
+    if pending:
+        flags.append('attempt_without_recorded_result')
+    if phases['uncertain']:
+        flags.append('uncertain_tool_result')
+    if precondition_unresolved:
+        flags.append('precondition_request_without_recorded_disposition')
+    if run['status'] in {'failed', 'handed_to_human'}:
+        flags.append('reported_failure_or_handoff')
+    return {'selection_index': index, 'journal_sha256': hashlib.sha256(content).hexdigest(),
+            'journal_bytes': len(content), 'record_count': len(records),
+            'run_id': run['run_id'], 'reported_status': run['status'],
+            'started_at': run['started_at'], 'finished_at': run['finished_at'],
+            'recorded_attempt_count': phases['attempt_pending'],
+            'recorded_uncertain_attempt_count': phases['uncertain'] + pending,
+            'operator_stop_reported': stop, 'review_flags': flags,
+            'accepted_for_projection': True}
+
+
+def batch_report(spec, paths, deployment_name):
+    """Project explicitly selected journals, with an all-or-nothing report.
+
+    Review rows use 1-based selection indices, not filenames. Each input is
+    read once and the exact bytes used for projection are hashed. A corrupt,
+    duplicate or over-budget selection never produces a partial run report.
+    """
+    validate_spec(spec)
+    if (not isinstance(paths, (tuple, list)) or not 1 <= len(paths) <= MAX_BATCH_JOURNALS):
+        raise ImplementationError('Select 1 to 100 explicit journal files')
+    # Validate label independently so it cannot be mistaken for a file failure.
+    if (not isinstance(deployment_name, str) or not 1 <= len(deployment_name.strip()) <= 120
+            or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in deployment_name)):
+        raise ImplementationError('Use a short deployment label without control characters')
+    runs, rows, used, by_id = [], [], 0, {}
+    exhausted = False
+    for index, path in enumerate(paths, 1):
+        if exhausted or used >= MAX_BATCH_BYTES:
+            exhausted = True
+            rows.append({'selection_index': index, 'accepted_for_projection': False,
+                         'refusal': 'batch_byte_budget_exhausted'})
+            continue
+        limit = min(MAX_BYTES, MAX_BATCH_BYTES - used)
+        try:
+            content = _read_snapshot(path, limit)
+        except (OSError, ValueError, TypeError):
+            rows.append({'selection_index': index, 'accepted_for_projection': False,
+                         'refusal': 'journal_unreadable'})
+            continue
+        used += len(content)
+        if len(content) > limit:
+            exhausted = used > MAX_BATCH_BYTES
+            rows.append({'selection_index': index, 'accepted_for_projection': False,
+                         'refusal': 'journal_or_batch_byte_limit_exceeded'})
+            continue
+        try:
+            records = _decode_journal(content)
+            projected = report(spec, records, deployment_name)
+            run = projected['runs'][0]
+            row = _review_row(index, content, records, run)
+        except (ImplementationError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+            rows.append({'selection_index': index, 'accepted_for_projection': False,
+                         'journal_sha256': hashlib.sha256(content).hexdigest(),
+                         'journal_bytes': len(content), 'refusal': 'invalid_or_wrong_spec_journal'})
+            continue
+        rows.append(row)
+        runs.append(run)
+        by_id.setdefault(run['run_id'], []).append(row)
+    for duplicates in by_id.values():
+        if len(duplicates) > 1:
+            for row in duplicates:
+                row['accepted_for_projection'] = False
+                row['refusal'] = 'duplicate_execution_id'
+    refused = sum(not row['accepted_for_projection'] for row in rows)
+    status_counts = Counter(row['reported_status'] for row in rows if row['accepted_for_projection'])
+    review = {'format': 'openworkgraph.customer-journal-batch-review.v1',
+              'process_reference': reference(spec), 'spec_sha256': digest(spec),
+              'selected_journal_count': len(paths), 'accepted_journal_count': len(paths) - refused,
+              'refused_journal_count': refused, 'reported_status_counts': dict(sorted(status_counts.items())),
+              'journals_requiring_reconciliation': sum(bool(row.get('review_flags')) for row in rows
+                                                        if row['accepted_for_projection']),
+              'journals': rows, 'complete_selection_projectable': not refused,
+              'report_sha256': None, 'export_refusal': None,
+              'network_contacted': False, 'business_tools_called': False,
+              'business_outcomes_verified': False, 'remote_cancellation_verified': False,
+              'execution_authorized': False, 'journal_origin_independently_verified': False}
+    if refused:
+        review['export_refusal'] = 'one_or_more_selected_journals_refused'
+        return None, review
+    document = {'format': 'openworkgraph.automation-run-report.v1',
+                'deployment': {'name': deployment_name.strip(), 'runtime': 'openai-agents',
+                               'workflow_spec_sha256': digest(spec)},
+                'runs': sorted(runs, key=lambda run: (run['started_at'], run['run_id']))}
+    if len(_encoded(document)) > MAX_EXPORT_BYTES:
+        review['complete_selection_projectable'] = False
+        review['export_refusal'] = 'signed_report_sender_size_limit_exceeded'
+        return None, review
+    review['report_sha256'] = digest(document)
+    return document, review
+
+
+def compare_journals(spec, baseline_path, candidate_path, deployment_name):
+    """Compare two exact snapshots of one execution without importing either.
+
+    Only an exact byte-prefix extension establishes continuity relative to
+    the selected baseline. Equivalent JSON reserialization is not continuity.
+    The result never establishes authenticity of either local file.
+    """
+    validate_spec(spec)
+    snapshots = []
+    for index, path in enumerate((baseline_path, candidate_path), 1):
+        content = _read_snapshot(path)
+        records = _decode_journal(content)
+        run = report(spec, records, deployment_name)['runs'][0]
+        snapshots.append((content, _review_row(index, content, records, run)))
+    old, before = snapshots[0]
+    new, after = snapshots[1]
+    if before['run_id'] != after['run_id']:
+        relation = 'different_execution_identity'
+    elif old == new:
+        relation = 'identical_snapshot'
+    elif new.startswith(old):
+        relation = 'exact_append_only_extension'
+    elif old.startswith(new):
+        relation = 'candidate_is_earlier_snapshot'
+    else:
+        relation = 'divergent_journal_history'
+    accepted = relation in {'identical_snapshot', 'exact_append_only_extension'}
+    return {
+        'format': 'openworkgraph.customer-journal-snapshot-comparison.v1',
+        'process_reference': reference(spec), 'spec_sha256': digest(spec),
+        'baseline': before, 'candidate': after,
+        'relation': relation, 'candidate_retains_exact_baseline_bytes': accepted,
+        'additional_record_count': after['record_count'] - before['record_count'] if accepted else None,
+        'candidate_requires_reconciliation': bool(after['review_flags']),
+        'journal_origin_independently_verified': False,
+        'business_outcomes_verified': False, 'remote_cancellation_verified': False,
+        'report_imported': False, 'execution_authorized': False,
+        'network_contacted': False, 'business_tools_called': False,
+    }
+
+
+def _encoded(document):
+    return (json.dumps(document, indent=2, allow_nan=False) + '\n').encode('utf-8')
+
+
+def _write_new(path, document):
+    # Encode before exclusive creation. Never overwrite a selected journal,
+    # specification, existing report or other operator file.
+    payload = _encoded(document)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, 'wb') as stream:
+        stream.write(payload)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--journal', required=True)
+    parser.add_argument('--journal', required=True, action='append',
+                        help='Explicit local journal; repeat for a bounded batch')
     parser.add_argument('--deployment-name', required=True)
     parser.add_argument('--output', required=True, help='New local JSON file; existing files are never overwritten')
+    parser.add_argument('--review-only', action='store_true',
+                        help='Write a minimized selection/reconciliation review instead of an importable report')
+    parser.add_argument('--compare-to', help='Original baseline journal for a read-only comparison with one --journal candidate')
     args = parser.parse_args()
+    if args.compare_to is not None and (not args.review_only or len(args.journal) != 1):
+        parser.error('--compare-to requires --review-only and exactly one candidate --journal')
     spec = load_object(Path(__file__).parent / 'workflow.spec.json', limit=512 * 1024)
-    document = report(spec, read_journal(args.journal), args.deployment_name)
-    # Exclusive creation also protects the input journal/spec from accidental overwrite.
-    descriptor = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:
-        stream.write(json.dumps(document, indent=2, allow_nan=False) + '\n')
+    if args.compare_to is not None:
+        review = compare_journals(spec, args.compare_to, args.journal[0], args.deployment_name)
+        _write_new(args.output, review)
+        return 0 if review['candidate_retains_exact_baseline_bytes'] else 2
+    document, review = batch_report(spec, args.journal, args.deployment_name)
+    if args.review_only:
+        _write_new(args.output, review)
+        return 0 if review['complete_selection_projectable'] else 2
+    if document is None:
+        raise ImplementationError('The complete journal selection cannot be projected; run --review-only')
+    _write_new(args.output, document)
+    return 0
 
 
 if __name__ == '__main__':
     try:
-        main()
+        raise SystemExit(main())
     except (ImplementationError, OSError, ValueError, KeyError, TypeError, AttributeError, ImportError, RecursionError):
         raise SystemExit('Report not exported. Select a valid exact-spec journal and a new local output file.') from None

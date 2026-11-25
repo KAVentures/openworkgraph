@@ -30,6 +30,7 @@ from typing import Any
 from . import event_log_predictions as predictions
 from . import event_log_workspace as workspace
 from .event_log_analytics import _wilson
+from .event_log_prediction_snapshot_bounds import coverage_bounds, paired_time_score, outcome_bounds
 
 MAX_SNAPSHOT_CASES = 5000
 MAX_SNAPSHOTS_PER_LOG = 50
@@ -137,16 +138,23 @@ def evaluate(log_id: str, snapshot_id: str) -> dict[str, Any]:
     result = workspace._query(log_id, settings.case_type, lambda conn: {"_run": run(conn)})
     now, rows = result["_run"]
     current = {case_id: (complete, remaining, outcome) for case_id, complete, remaining, outcome in rows}
-    since = (now - snap_at).total_seconds() if now is not None else 0.0
-    finished, open_rows, missing = [], [], 0
+    since = max(0.0, (now - snap_at).total_seconds()) if now is not None else 0.0
+    horizon_valid = now is not None and now >= snap_at
+    finished, open_rows, missing_rows, inconsistent_rows = [], [], [], []
     for case_id, item in frozen.items():
         state = current.get(case_id)
         if state is None:
-            missing += 1
-        elif state[0] and state[1] is not None and state[1] >= 0:
+            missing_rows.append(item)
+        elif not horizon_valid or (state[0] and (state[1] is None or state[1] < 0)):
+            # A backfilled historical completion or regressed observation
+            # horizon is not prospective outcome evidence.
+            inconsistent_rows.append(item)
+        elif state[0]:
             finished.append((item, float(state[1]), state[2]))
         else:
             open_rows.append(item)
+    missing = len(missing_rows)
+    unresolved = open_rows + missing_rows + inconsistent_rows
     scored = len(finished)
     errors = [abs(item["median_remaining_seconds"] - actual) for item, actual, _ in finished]
     naive = [abs(item["naive_median_remaining_seconds"] - actual) for item, actual, _ in finished
@@ -158,12 +166,20 @@ def evaluate(log_id: str, snapshot_id: str) -> dict[str, Any]:
         "snapshot": _describe(sid, log_id), "evaluated_against": _iso(now), "seconds_since_snapshot": since,
         "snapshot_cases": len(frozen), "finished_cases": scored, "still_open_cases": len(open_rows),
         "cases_no_longer_in_log": missing,
+        "cases_with_inconsistent_observation": len(inconsistent_rows),
+        "observation_horizon_at_or_after_snapshot": horizon_valid,
+        "frozen_population_bounds": coverage_bounds(finished, open_rows,
+            missing + len(inconsistent_rows), since),
+        "paired_remaining_time": paired_time_score(finished),
+        "paired_outcome_bounds": outcome_bounds(finished, unresolved) if settings.outcome is not None else None,
         "open_share": round(len(open_rows) / len(frozen), 4) if frozen else None,
         "remaining_time": None, "outcome": None,
         "interpretation": ("Frozen estimates scored against what happened after the snapshot. Only finished cases "
                            "have a known remaining time; long cases are still open, so scores on finished cases "
                            "lean towards short ones. Estimates are not commitments, targets or ratings of anyone."),
-        "censoring_note": "still-open cases past their frozen 90th percentile are known misses; the rest are unknown",
+        "censoring_note": ("Still-open cases past their frozen 90th percentile are known misses conditional on "
+                           "complete observation; missing or inconsistent observations remain unknown. "
+                           "Bounds are finite-population limits, not confidence intervals."),
     }
     if scored:
         sorted_errors = sorted(errors)
