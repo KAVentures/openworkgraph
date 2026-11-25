@@ -95,32 +95,101 @@ def _layout_levels(by_id, outgoing, entry_id):
     return levels
 
 
-def _column_left(level):
-    return COLUMN_LEFT + COLUMN_STEP * level
+# Column gaps grow only where multiple flows need distinct vertical tracks.
+# All distances are integer DI coordinates to preserve portable rendering.
+MIN_GAP = COLUMN_STEP - COLUMN_WIDTH
+TRACK_STEP = 6
+TRACK_MARGIN = 16
 
 
-def _route(source, target, levels, positions, index):
-    sx, sy, sw, sh = positions[source]
-    tx, ty, tw, th = positions[target]
-    source_level, target_level = levels[source], levels[target]
-    start, end = (sx+sw, sy+sh//2), (tx, ty+th//2)
-    # Gap positions are derived from entire columns, not narrow gateway or
-    # event bounds. Vertical segments cannot pass through a task in the
-    # same column at another row or in a different responsibility lane.
-    right = _column_left(source_level) + COLUMN_WIDTH + 28
-    left = _column_left(target_level) - 28
-    if source == target:
-        # Use top and right ports, leaving the label beneath the node clear.
-        upper = sy - 18
-        return [start, (right,start[1]), (right,upper),
-                (sx+sw//2,upper), (sx+sw//2,sy)]
-    if target_level == source_level + 1:
-        middle = _column_left(source_level) + COLUMN_WIDTH + (COLUMN_STEP-COLUMN_WIDTH)//2
-        return [start, (middle,start[1]), (middle,end[1]), end]
-    # Non-adjacent, backward and same-column edges take individually
-    # assigned horizontal tracks above every activity and lane band.
-    track = 40 + index * 8
-    return [start, (right,start[1]), (right,track), (left,track), (left,end[1]), end]
+def _gap_layout(flows, levels):
+    """Allocate a distinct vertical track for every edge/gap occurrence.
+
+    Adjacent forward edges need one shared source/target gap track; all
+    other non-self edges need two. Backward edges can share a gap with
+    another edge but never its exact track. A gap before column zero is
+    reserved only when an edge actually approaches that column from the left.
+    """
+    uses = defaultdict(list)
+    for index, flow in enumerate(flows):
+        source, target = flow.attrib['sourceRef'], flow.attrib['targetRef']
+        a, b = levels[source], levels[target]
+        if source == target or b == a+1:
+            uses[a].append((index, 'source'))
+        else:
+            uses[a].append((index, 'source'))
+            uses[b-1].append((index, 'target'))
+    def width(gap):
+        n = len(uses[gap])
+        return max(MIN_GAP, 2*TRACK_MARGIN + TRACK_STEP*max(0,n-1))
+    lefts = {0: COLUMN_LEFT + (width(-1) if uses[-1] else 0)}
+    for level in range(1, max(levels.values())+1):
+        lefts[level] = lefts[level-1] + COLUMN_WIDTH + width(level-1)
+    tracks = {}
+    for gap, entries in uses.items():
+        if not entries:
+            continue
+        left = COLUMN_LEFT if gap == -1 else lefts[gap]+COLUMN_WIDTH
+        # Center the occupied tracks inside the available gap, keeping
+        # equal free margin on both sides even for narrow single edges.
+        occupied = TRACK_STEP*(len(entries)-1)
+        first = left + (width(gap)-occupied)//2
+        for i, identity in enumerate(entries):
+            tracks[identity] = first + i*TRACK_STEP
+    return lefts, tracks
+
+
+def _spread_ports(origin, size, count):
+    """Integer interior side offsets; duplicate only past physical capacity."""
+    if count <= 1:
+        return [origin+size//2] if count else []
+    low, high = origin+8, origin+size-8
+    return [low + (high-low)*i//(count-1) for i in range(count)]
+
+
+def _ports(flows, positions, by_id):
+    """Spread rectangular task ports, preserving gateway/event center ports.
+
+    Sort by the other endpoint's center to reduce local order inversions.
+    Exact shapes of diamonds and circles vary among renderers, so those
+    retain side-center attachment. No semantic ordering is inferred.
+    """
+    incoming, outgoing, loops = defaultdict(list), defaultdict(list), defaultdict(list)
+    def center(node):
+        x,y,w,h=positions[node]
+        return (y+h//2,x+w//2)
+    for i, flow in enumerate(flows):
+        a,b=flow.attrib['sourceRef'],flow.attrib['targetRef']
+        outgoing[a].append((center(b),i))
+        if a==b:loops[b].append(i)
+        else:incoming[b].append((center(a),i))
+    starts, ends = {}, {}
+    for node,(x,y,w,h) in positions.items():
+        rectangular=by_id[node].tag.removeprefix('{'+MODEL+'}') in {'task','manualTask'}
+        for items,dest,edge_x in ((outgoing[node],starts,x+w),(incoming[node],ends,x)):
+            ordered=sorted(items)
+            ys=_spread_ports(y,h,len(ordered)) if rectangular else [y+h//2]*len(ordered)
+            for (_,index),port_y in zip(ordered,ys):
+                dest[index]=(edge_x,port_y)
+        ordered=sorted(loops[node])
+        xs=_spread_ports(x,w,len(ordered)) if rectangular else [x+w//2]*len(ordered)
+        for index,port_x in zip(ordered,xs):
+            ends[index]=(port_x,y)
+    return starts,ends
+
+
+def _route(source, target, levels, positions, index, tracks, starts, ends):
+    start,end=starts[index],ends[index]
+    right=tracks[(index,'source')]
+    if source==target:
+        upper=positions[source][1]-18
+        return [start,(right,start[1]),(right,upper),(end[0],upper),end]
+    if levels[target]==levels[source]+1:
+        return [start,(right,start[1]),(right,end[1]),end]
+    left=tracks[(index,'target')]
+    # All non-adjacent horizontal tracks lie above all node rectangles.
+    track=40+index*8
+    return [start,(right,start[1]),(right,track),(left,track),(left,end[1]),end]
 
 
 def add_process_diagram(root: ET.Element, process: ET.Element, *, entry_id: str) -> None:
@@ -141,6 +210,7 @@ def add_process_diagram(root: ET.Element, process: ET.Element, *, entry_id: str)
             raise ValueError('Diagram transitions must reference existing activities')
         outgoing[source].append(target)
     levels = _layout_levels(by_id, outgoing, entry_id)
+    column_left, tracks = _gap_layout(flows, levels)
 
     # BPMN 2.0 lanes are actual semantic elements; DI must represent them
     # spatially as well. Layout is presentation-only; no lane is invented.
@@ -187,7 +257,7 @@ def add_process_diagram(root: ET.Element, process: ET.Element, *, entry_id: str)
             lane_bands[group] = (cursor, band_height)
             cursor += band_height + 22
         # Wide enough to enclose all nodes at the final level plus a margin.
-        lane_width = _column_left(max(levels.values())) + COLUMN_WIDTH + 90 - 20
+        lane_width = column_left[max(levels.values())] + COLUMN_WIDTH + 90 - 20
         # Draw lane rectangles before activity shapes so they are backgrounds.
         for lane_id, _ in lanes:
             y, height = lane_bands[lane_id]
@@ -203,7 +273,7 @@ def add_process_diagram(root: ET.Element, process: ET.Element, *, entry_id: str)
         kind = node.tag.removeprefix('{'+MODEL+'}')
         width, height = (50, 50) if kind in {'exclusiveGateway','parallelGateway','inclusiveGateway'} else ((36, 36) if kind.endswith('Event') else (180, 80))
         level = levels[node_id]
-        x = _column_left(level) + (COLUMN_WIDTH-width)//2
+        x = column_left[level] + (COLUMN_WIDTH-width)//2
         if lanes:
             group = lane_for.get(node_id)
             y = lane_bands[group][0] + 40 + 160 * rows[(group, level)] + (80-height)//2
@@ -219,9 +289,10 @@ def add_process_diagram(root: ET.Element, process: ET.Element, *, entry_id: str)
             label = ET.SubElement(shape, '{'+BPMNDI+'}BPMNLabel')
             ET.SubElement(label, '{'+DC+'}Bounds',
                           {'x': str(x+width//2-90), 'y': str(y+height+8), 'width':'180', 'height':'40'})
+    starts,ends = _ports(flows,positions,by_id)
     for index, flow in enumerate(flows):
         source, target = flow.attrib['sourceRef'], flow.attrib['targetRef']
-        points = _route(source, target, levels, positions, index)
+        points = _route(source, target, levels, positions, index, tracks, starts, ends)
         edge = ET.SubElement(plane, '{'+BPMNDI+'}BPMNEdge',
                              {'id': 'Edge_'+flow.attrib['id'], 'bpmnElement': flow.attrib['id']})
         last = None
