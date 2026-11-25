@@ -105,6 +105,47 @@ def test_changed_prerequisite_preserves_declared_impact_but_invalidates_current_
     assert graph(store)['current_basis']
 
 
+def test_reassessment_distinguishes_own_stale_pins_from_inherited_findings(store):
+    dep=ProcessDependencies(store)
+    a,b,c,d=[process(store,name) for name in "ABCD"]
+    for record in (a,b,c,d):
+        approve(store,record)
+    dep.save(person(),a["workflow_id"],body(a,b,c,access=2))
+    dep.save(person(),b["workflow_id"],body(b,d,access=2))
+    dep.save(person(),c["workflow_id"],body(c,d,access=2))
+    dep.save(person(),d["workflow_id"],body(d,access=2))
+    def rows():
+        result=graph(store)["graph"]["reassessment_worklist"]
+        return result,{row["workflow_id"]:row for row in result["processes"]}
+    first, indexed=rows()
+    assert first["all_declared_processes_current"] and first["review_needed_count"]==0
+    assert [indexed[x["workflow_id"]]["dependency_layer"] for x in (a,b,c,d)]==[3,2,2,1]
+    new=store.save(person(),write("D changed",expected=1),d["workflow_id"])["process"]
+    result,indexed=rows()
+    assert result["review_needed_count"]==4
+    assert indexed[a["workflow_id"]]["status"]=="upstream_reassessment_required"
+    assert indexed[a["workflow_id"]]["distinct_upstream_processes_with_direct_findings"]==3
+    assert indexed[b["workflow_id"]]["stale_prerequisite_links"]==[
+        {"link_id":"link_1","prerequisite":d["workflow_id"]}]
+    assert indexed[d["workflow_id"]]["direct_findings"]==[
+        "current_model_review_missing","root_pin_not_current"]
+    # Repair D only. Other processes' stale incoming links must not turn
+    # the now-current D declaration into a direct finding.
+    dep.save(person(),d["workflow_id"],body(new,revision=1,access=2))
+    store.review(person("bob"),d["workflow_id"],review(new))
+    result,indexed=rows()
+    assert indexed[d["workflow_id"]]["status"]=="current_declared_basis"
+    assert result["review_needed_count"]==3
+    assert indexed[a["workflow_id"]]["distinct_upstream_processes_with_direct_findings"]==2
+    dep.save(person(),b["workflow_id"],body(b,new,revision=1,access=2))
+    dep.save(person(),c["workflow_id"],body(c,new,revision=1,access=2))
+    result,indexed=rows()
+    assert result["all_declared_processes_current"]
+    assert result["review_needed_count"]==0
+    assert not result["execution_authorized"] and not result["model_reviews_propagated"]
+    assert "PRIVATE_REASON" not in json.dumps(result)
+
+
 def test_cross_root_cycle_refused_and_existing_map_groupings_remain_independent(store):
     dep=ProcessDependencies(store);a=process(store,'A');b=process(store,'B');c=process(store,'C')
     dep.save(person(),a['workflow_id'],body(a,b));dep.save(person(),b['workflow_id'],body(b,c))

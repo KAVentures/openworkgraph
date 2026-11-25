@@ -46,6 +46,29 @@ const path=require('node:path');
   await owner.getByRole('button',{name:'Remove member'}).click();await owner.locator('#accessConfirm').check();await owner.locator('#saveAccess').click();await owner.locator('#status').filter({hasText:'Access updated;'}).waitFor();
   await viewer.locator('#refresh').click();await viewer.locator('#inventory').getByText('No authorized publications.').waitFor();assert.equal(await viewer.locator('#detail').isHidden(),true);assert.equal(await viewer.locator('#table').textContent(),'');
   assert.equal(await viewer.evaluate(async({base,wid})=>(await fetch(base+'/v1/human/analyses/'+wid+'/export?revision=1',{headers:{Authorization:'Bearer bob'}})).status,{base,wid}),404);
+  // Portfolio comparison spans distinct explicitly authorized exact publications.
+  const second=await owner.evaluate(async({base,snapshot})=>{
+    const r=await fetch(base+'/v1/human/analyses',{method:'POST',headers:{Authorization:'Bearer alice','Content-Type':'application/json'},
+      body:JSON.stringify({title:'Portfolio second publication',snapshot,expected_revision:0,user_confirmed:true,organization_sharing_confirmed:true})});
+    if(!r.ok)throw new Error(await r.text());return r.json();
+  },{base,snapshot});
+  await owner.locator('#refresh').click();
+  await owner.locator('#inventory button').filter({hasText:'Second revision'}).click();
+  await owner.locator('#basis').filter({hasText:'Viewing revision 2 of 2'}).waitFor();
+  await owner.locator('#portfolioAdd').click();
+  await owner.locator('#inventory button').filter({hasText:'Portfolio second publication'}).click();
+  await owner.locator('#viewTitle').filter({hasText:'Portfolio second publication'}).waitFor();
+  await owner.locator('#portfolioAdd').click();
+  assert.equal(await owner.locator('#portfolioSelections input[type=radio]').count(),2);
+  await owner.locator('#portfolioRun').click();
+  await owner.locator('#portfolioResult').filter({hasText:'Numeric comparison withheld.'}).waitFor();
+  assert.match(await owner.locator('#portfolioResult').textContent(),/Group codes cannot be matched across exports/);
+  const [portfolioFile]=await Promise.all([owner.waitForEvent('download'),owner.locator('#portfolioDownload').click()]);
+  const portfolio=JSON.parse(await fs.readFile(await portfolioFile.path(),'utf8'));
+  assert.equal(portfolio.selections[1].view_id,second.view_id);
+  assert.equal(portfolio.incomparable_count,1);assert.equal(portfolio.case_identities_joined,false);
+  await owner.locator('#portfolioClear').click();assert.equal(await owner.locator('#portfolioResult').textContent(),'');
+  assert.equal(await owner.locator('#portfolioRun').isDisabled(),true);
   // A response authorized to the old identity cannot repopulate a new identity's DOM.
   let release,seen;const held=new Promise(r=>seen=r);
   await owner.route('**/v1/human/analyses/'+wid,async route=>{const response=await route.fetch();seen();await new Promise(r=>release=r);await route.fulfill({response});},{times:1});

@@ -37,4 +37,13 @@ async def object_binding_continuity(request: Request, log_id: str):
     return await run_in_threadpool(_respond, bindings.analyze, log_id, spec)
 
 
+@router.post("/v1/event-logs/{log_id}/object-state-check")
+async def object_state_check(request: Request, log_id: str):
+    from . import event_log_object_state_check as state
+    _require_dashboard(request)
+    spec = await _json_body(request, "object state check settings", strict=True, limit=16384)
+    _require_dashboard(request)
+    return await run_in_threadpool(_respond, state.analyze, log_id, spec)
+
+
 __all__ = ["router"]

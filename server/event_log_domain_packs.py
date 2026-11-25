@@ -34,8 +34,10 @@ from . import event_log_object_constraints as object_constraints
 from . import event_log_object_process_model as object_model
 from . import event_log_query as query
 from . import event_log_workspace as workspace
+from .event_log_domain_packs_operations import OPERATIONS_PACKS
 from .event_log_domain_packs_returns import RETURNS_REFUNDS_1_0_0
 from .event_log_domain_packs_claims import INSURANCE_CLAIMS_1_0_0
+from .event_log_domain_packs_service_governance import SERVICE_GOVERNANCE_PACKS
 
 FORMAT = "openworkgraph.domain-pack.v1"
 INSTALL_FORMAT = "openworkgraph.domain-pack-install.v1"
@@ -757,7 +759,8 @@ EMPLOYEE_ONBOARDING_1_0_0: dict[str, Any] = {
 }
 
 
-PACKS: dict[str, dict[str, dict[str, Any]]] = {"returns_refunds": {"1.0.0": RETURNS_REFUNDS_1_0_0},
+PACKS: dict[str, dict[str, dict[str, Any]]] = {**OPERATIONS_PACKS,
+                                              "returns_refunds": {"1.0.0": RETURNS_REFUNDS_1_0_0},
                                               "order_to_cash": {"1.0.0": ORDER_TO_CASH_1_0_0},
                                               "procure_to_pay": {"1.0.0": PROCURE_TO_PAY_1_0_0},
                                               "service_management": {"1.0.0": SERVICE_MANAGEMENT_1_0_0},
@@ -766,7 +769,8 @@ PACKS: dict[str, dict[str, dict[str, Any]]] = {"returns_refunds": {"1.0.0": RETU
                                               "employee_offboarding": {"1.0.0": EMPLOYEE_OFFBOARDING_1_0_0},
                                               "employee_onboarding": {"1.0.0": EMPLOYEE_ONBOARDING_1_0_0},
                                               "expense_reimbursement": {"1.0.0": EXPENSE_REIMBURSEMENT_1_0_0},
-                                              "insurance_claims": {"1.0.0": INSURANCE_CLAIMS_1_0_0}}
+                                              "insurance_claims": {"1.0.0": INSURANCE_CLAIMS_1_0_0},
+                                              **SERVICE_GOVERNANCE_PACKS}
 
 
 class _Strict(BaseModel):
@@ -921,7 +925,7 @@ def resolve(pack: dict[str, Any], mapping: dict[str, dict[str, str]], params: di
     # The claims pack explicitly discloses every unmapped optional intake/receipt
     # activity. Preserve the existing per-definition not_applicable contract
     # for previously shipped packs, whose consumers expect only omitted rules.
-    if pack["pack_id"] == "insurance_claims":
+    if pack["pack_id"] == "insurance_claims" or pack["pack_id"] in OPERATIONS_PACKS:
         reported_missing = {row["unmapped_role"] for row in out["not_applicable"]}
         for index, activity in enumerate(pack["activities"]):
             role = activity["role"]

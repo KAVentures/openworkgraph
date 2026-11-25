@@ -858,12 +858,8 @@ def process_catalog_script() -> Response:
     return FileResponse(ROOT / 'dashboard' / 'process_catalog.js', media_type='application/javascript')
 
 
-@app.post('/v1/process-catalog/import-bpmn')
-async def import_process_bpmn_draft(request: Request) -> Response:
-    from .local_source_routes import _require_dashboard
-    from shared.process_bpmn_import import BPMNImportError, MAX_BYTES, import_bpmn
-    from starlette.concurrency import run_in_threadpool
-    _require_dashboard(request)
+async def _bpmn_body(request: Request) -> bytes:
+    from shared.process_bpmn_import import MAX_BYTES
     content_type=request.headers.get('content-type','').split(';',1)[0].strip().lower()
     if content_type not in {'application/xml','text/xml','application/bpmn+xml'}:
         raise HTTPException(415,'BPMN import requires XML content')
@@ -872,11 +868,43 @@ async def import_process_bpmn_draft(request: Request) -> Response:
         if len(payload)+len(chunk)>MAX_BYTES:
             raise HTTPException(413,'BPMN exceeds the 128 KiB limit')
         payload.extend(chunk)
+    return bytes(payload)
+
+
+@app.post('/v1/process-catalog/import-bpmn')
+async def import_process_bpmn_draft(
+    request: Request, process_id: str | None = Query(default=None, min_length=1, max_length=200),
+    expected_source_sha256: str | None = Query(default=None, pattern=r'^[a-f0-9]{64}$'),
+) -> Response:
+    from .local_source_routes import _require_dashboard
+    from shared.process_bpmn_import import BPMNImportError, import_bpmn
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    if (process_id is None) != (expected_source_sha256 is None):
+        raise HTTPException(422, 'Supply both the inspected process and the BPMN file digest')
+    payload = await _bpmn_body(request)
     try:
-        result=await run_in_threadpool(import_bpmn,bytes(payload))
+        result = await run_in_threadpool(import_bpmn, payload, process_id=process_id,
+                                        expected_source_sha256=expected_source_sha256)
     except BPMNImportError as exc:
-        raise HTTPException(422,str(exc)) from None
-    return JSONResponse(result,headers={'Cache-Control':'no-store'})
+        raise HTTPException(422, str(exc)) from None
+    _require_dashboard(request)
+    return JSONResponse(result, headers={'Cache-Control':'no-store'})
+
+
+@app.post('/v1/process-catalog/import-bpmn/inspect')
+async def inspect_process_bpmn(request: Request) -> Response:
+    from .local_source_routes import _require_dashboard
+    from shared.process_bpmn_import import BPMNImportError, inspect_bpmn
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    payload = await _bpmn_body(request)
+    try:
+        result = await run_in_threadpool(inspect_bpmn, payload)
+    except BPMNImportError as exc:
+        raise HTTPException(422, str(exc)) from None
+    _require_dashboard(request)
+    return JSONResponse(result, headers={'Cache-Control':'no-store'})
 
 
 async def _dmn_body(request: Request) -> bytes:
@@ -1267,6 +1295,26 @@ async def link_rule_library_rule(request: Request, workflow_id: str = Query(patt
                              'content_sha256': record['content_sha256']},
                 'proposed_process_model': model, 'process_model_saved': False, 'evaluates_rules': False}
     return _rule_library_call(request, proposal)
+
+
+@app.post('/v1/process-catalog/rule-library/upgrade-review')
+async def review_rule_library_upgrade(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
+                                      revision: int = Query(ge=1)) -> Response:
+    """Preview or construct one exact-pin unsaved multi-rule upgrade proposal."""
+    from . import process_rule_library as library
+    from .local_source_routes import _require_dashboard
+    _require_dashboard(request)
+    value = await _process_json(request, maximum=16384)
+    if (not isinstance(value, dict) or not set(value) <= {'expected_content_sha256', 'selections'}
+            or not isinstance(value.get('expected_content_sha256'), str)
+            or ('selections' in value and not isinstance(value['selections'], list))):
+        raise HTTPException(422, 'Use an exact saved process digest and optional selected rule revisions')
+    record = _catalog_record(workflow_id, revision)
+    latest = _catalog_record(workflow_id)
+    if (value['expected_content_sha256'] != record['content_sha256']
+            or latest['revision'] != revision or latest['content_sha256'] != record['content_sha256']):
+        raise HTTPException(409, 'Saved process changed; reopen its latest revision before reviewing upgrades')
+    return _rule_library_call(request, library.upgrade_review, record, value.get('selections'))
 
 
 @app.get('/v1/process-catalog/rule-library/drift')

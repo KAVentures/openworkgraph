@@ -84,6 +84,17 @@ when no start event is supplied. All imported nodes must be reachable and able
 to reach a terminal. Multiple processes, ambiguous entries, duplicate IDs or
 transitions, disconnected fragments and invalid references are rejected.
 
+## Files with more than one process
+
+Choose **Inspect BPMN file**, select an independent process, then preview it.
+The preview uses the exact inspected file and includes only the selected
+process in the draft. Multi-process collaborations and processes that call
+another process in the file are listed with the reason they cannot be selected.
+
+`POST /v1/process-catalog/import-bpmn/inspect` returns the document SHA-256 and
+process choices. To preview a choice, send the same XML to the usual import
+endpoint with `process_id` and `expected_source_sha256` as query parameters.
+
 ## Review and save
 
 Preview displays the graph, unconfirmed rules, warnings, labels needing correction

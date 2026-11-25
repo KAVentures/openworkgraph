@@ -36,14 +36,14 @@ def cooccurrence(log_id: str, case_type: str | None = None, *, limit: int = 12, 
         raise EventLogWorkspaceError("min_support must be a whole number of cases from 1")
 
     def run(conn):
-        total = conn.execute("SELECT count(DISTINCT case_id) FROM ce").fetchone()[0]
+        total, total_activities = conn.execute("SELECT count(DISTINCT case_id), count(DISTINCT activity) FROM ce").fetchone()
         top = conn.execute("""SELECT activity, count(DISTINCT case_id) AS n FROM ce GROUP BY 1
             ORDER BY n DESC, 1 LIMIT ?""", [limit]).fetchall()
         names = [a for a, _ in top]
         pairs = conn.execute("""WITH s AS (SELECT DISTINCT case_id, activity FROM ce WHERE activity IN (SELECT unnest(?)))
             SELECT x.activity, y.activity, count(*) FROM s x JOIN s y ON x.case_id = y.case_id AND x.activity < y.activity
             GROUP BY 1, 2""", [names]).fetchall()
-        return {"total": total, "top": top, "pairs": pairs}
+        return {"total": total, "total_activities": total_activities, "top": top, "pairs": pairs}
 
     data = workspace._query_filtered(log_id, case_type, cohort, run)
     total, top = data["total"], data["top"]
@@ -71,14 +71,17 @@ def cooccurrence(log_id: str, case_type: str | None = None, *, limit: int = 12, 
                   "share_of_b": round(both.get((a, b), 0) / cases[b], 4), "lift": lift(a, b)}
                  for a, b in combinations(names, 2)]
     together = sorted((p for p in pair_rows if p["both"] >= min_support and (p["lift"] or 0) > 1),
-                      key=lambda p: (-p["lift"], -p["both"], p["a"], p["b"]))[:TOP_PAIRS]
+                      key=lambda p: (-p["lift"], -p["both"], p["a"], p["b"]))
     never = sorted((p for p in pair_rows if p["both"] == 0 and min(p["cases_a"], p["cases_b"]) >= min_support),
-                   key=lambda p: (-min(p["cases_a"], p["cases_b"]), p["a"], p["b"]))[:TOP_PAIRS]
+                   key=lambda p: (-min(p["cases_a"], p["cases_b"]), p["a"], p["b"]))
     return {
         "format": FORMAT, "log_id": log_id, "case_notion": data.get("case_notion"),
         "cases": total, "activities": [{"activity": a, "cases": cases[a], "share": round(cases[a] / total, 4)}
                                        for a in names],
-        "matrix": matrix, "go_together": together, "never_together": never,
+        "matrix": matrix, "go_together": together[:TOP_PAIRS], "never_together": never[:TOP_PAIRS],
+        "activities_in_scope": data["total_activities"], "activities_truncated": len(top) < data["total_activities"],
+        "qualifying_go_together_pairs": len(together), "qualifying_never_together_pairs": len(never),
+        "pair_list_limit": TOP_PAIRS, "cohort": data.get("cohort", {}),
         "min_support": min_support, "limit": limit,
         "method": ("activities compared by the cases they occur in, regardless of order; lift = cases with both × all "
                    "cases / (cases with A × cases with B)"),

@@ -8,6 +8,9 @@ queue. No label is changed automatically; suggestions are not ground truth.
 from __future__ import annotations
 
 from typing import Any
+from collections import Counter
+
+from shared.communications_review_order import diverse_order
 
 from shared import communications_learning as learning
 from shared import communications_mining as mining
@@ -21,13 +24,15 @@ PRIORITIES = ("model_keyword_disagreement", "model_uncertain", "keyword_ambiguou
               "keyword_unclassified", "routine")
 
 
-def queue(taxonomy: Any, *, limit: int = 20, offset: int = 0) -> dict[str, Any]:
+def queue(taxonomy: Any, *, limit: int = 20, offset: int = 0, order: str = 'priority') -> dict[str, Any]:
     """Return a bounded, deterministic, local-only triage view; never persist predictions."""
     intents = mining.parse_taxonomy(taxonomy)
     if type(limit) is not int or not 1 <= limit <= MAX_LIMIT:
         raise review.ReviewError(f"limit must be from 1 to {MAX_LIMIT}")
     if type(offset) is not int or not 0 <= offset <= MAX_OFFSET:
         raise review.ReviewError(f"offset must be from 0 to {MAX_OFFSET}")
+    if order not in ('priority', 'diverse'):
+        raise review.ReviewError('choose priority or diverse review order')
     with review._LOCK:
         data = review._load()  # Retention expiry is enforced by the existing store.
         review._require_enabled(data)
@@ -68,9 +73,24 @@ def queue(taxonomy: Any, *, limit: int = 20, offset: int = 0) -> dict[str, Any]:
             "priority": PRIORITIES[priority], "reasons": reasons,
         })
     ranked.sort(key=lambda row: (PRIORITIES.index(row["priority"]), row["created_at"], row["example_id"]))
+    if order == "diverse":
+        ranked = diverse_order(ranked)
+    page = ranked[offset:offset + limit]
+    # Revalidate the candidate population after inference: do not return
+    # previously copied text after an observed opt-out, deletion or label edit.
+    with review._LOCK:
+        latest = review._load()
+        review._require_enabled(latest)
+        if [e for e in latest["examples"] if e.get("labels") is None] != examples:
+            raise review.ReviewError("review examples changed during ranking; reload the queue")
     return {
         "format": FORMAT,
-        "examples": ranked[offset:offset + limit],
+        "examples": page,
+        "review_order": order,
+        "eligible_by_declared_language": dict(sorted(Counter(e["language"] for e in ranked).items())),
+        "page_by_declared_language": dict(sorted(Counter(e["language"] for e in page).items())),
+        "language_inferred": False,
+        "sampling_representativeness_verified": False,
         "total": len(ranked), "total_eligible": len(ranked),
         "flagged_examples": sum(bool(e["reasons"]) for e in ranked),
         "unlabelled_holdout_excluded": heldout, "selected_split": "train",

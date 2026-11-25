@@ -63,14 +63,19 @@
     const channelHost=el('div');channelHost.id='owgMonitorChannelPanel';const incidentHost=el('div');incidentHost.id='owgMonitorIncidentPanel';
     const releaseHost=el('div');releaseHost.id='owgMonitorReleasePanel';
     manage.append(mrow,arow,channelHost,incidentHost,releaseHost);show(manage,false);
+    const portfolio=el('div');portfolio.id='owgMonitorPortfolio';
+    const portfolioDays=input('owgMonitorPortfolioDays','number');portfolioDays.min='1';portfolioDays.max='365';portfolioDays.value='30';
+    const portfolioButton=button('Review all deployment evidence','secondary');portfolioButton.id='owgMonitorPortfolioShow';
+    const portfolioControls=el('div',null,'row');portfolioControls.style.alignItems='end';
+    portfolioControls.append(field('Portfolio recent days',portfolioDays),portfolioButton);
     const results=el('div');results.id='owgMonitorResults';
-    card.append(row,consentLabel,importButton,status,manage,results);
+    card.append(row,consentLabel,importButton,status,portfolioControls,portfolio,manage,results);
     const anchor=document.getElementById('owgPddCard')||document.getElementById('owgCommsCard')||document.getElementById('owgEventLogCard');
     if(anchor)anchor.insertAdjacentElement('afterend',card);else panel.appendChild(card);
 
-    let deployments=[],renderVersion=0,loadVersion=0,incidentVersion=0,releaseVersion=0;
+    let deployments=[],renderVersion=0,loadVersion=0,incidentVersion=0,releaseVersion=0,portfolioVersion=0;
     let incidentScope='selected',incidentStatus='',incidentSearch='';
-    const clearResults=()=>{renderVersion++;incidentVersion++;incidentScope='selected';incidentStatus='';incidentSearch='';results.replaceChildren();channelHost.replaceChildren();incidentHost.replaceChildren();releaseVersion++;releaseHost.replaceChildren();};
+    const clearResults=()=>{portfolioVersion++;portfolio.replaceChildren();renderVersion++;incidentVersion++;incidentScope='selected';incidentStatus='';incidentSearch='';results.replaceChildren();channelHost.replaceChildren();incidentHost.replaceChildren();releaseVersion++;releaseHost.replaceChildren();document.getElementById('owgMonitorRunEvidencePanel')?.replaceChildren();};
     const refresh=()=>{importButton.disabled=!(file.files&&file.files[0]&&consent.checked);};
     file.onchange=refresh;consent.onchange=refresh;
     async function load(select){
@@ -127,6 +132,16 @@
         parts.push(table(['Accepted','Refused','Highest sequence','Missing (retained)'],[[String(live.accepted_reports),String(live.refused_reports),String(live.highest_sequence),live.missing_count?live.missing_sequences.join(', ')+(live.missing_count>live.missing_sequences.length?' …':''):'none']]));
         if(live.missing_truncated)parts.push(el('p','Earlier missing sequence numbers were truncated from the 1,000-ID recovery window. The retained list cannot prove that all reports arrived, even when empty.','note'));
         if(live.versions.length)parts.push(el('h4','Versions seen'),table(['Version','Workflow spec','First seen','Last seen','Reports','Runs'],live.versions.map(v=>[v.version_label||'(none)',v.workflow_spec_sha256?v.workflow_spec_sha256.slice(0,12)+'…':'(none)',v.first_seen,v.last_seen,String(v.reports),String(v.runs)])));
+        const receipts=live.recent_sequence_receipts||[];
+        if(receipts.length){
+          const disposition={imported:'Accepted',refused_invalid:'Invalid report',refused_version_drift:'Specification mismatch',
+            refused_run_revision_conflict:'Conflicting run revision'};
+          parts.push(el('h4','Recent signed sequence dispositions'),
+            el('p','Highest '+receipts.length+' retained sequences, not execution or arrival order. Original refusal status is preserved even on an exact resend.','muted'),
+            table(['Sequence','Received','Disposition','Original HTTP status'],receipts.map(r=>[
+              r.sequence,r.received_at,disposition[r.outcome]||r.outcome,String(r.original_status)])));
+          if(live.receipt_list_truncated)parts.push(el('p',live.retained_receipt_count+' receipts retained; only the highest 50 are displayed.','muted'));
+        }
         const rotate=button('Rotate secret','secondary');rotate.id='owgMonitorChannelRotate';
         rotate.onclick=async()=>{if(!window.confirm('Replace the channel secret? The old one stops working immediately.'))return;try{const r=await api('/v1/automation-monitoring/channels/'+encodeURIComponent(live.channel_id)+'/rotate',{method:'POST'});await renderChannel(r.secret);}catch(error){status.textContent=error.message;}};
         const revoke=button('Revoke channel','secondary');revoke.id='owgMonitorChannelRevoke';
@@ -135,7 +150,7 @@
       }
       channelHost.replaceChildren(...parts);
     }
-    const KIND={run_failures:'Failed runs',run_handoffs:'Runs handed to a person',signature_rejected:'Rejected signatures',replay_conflict:'Reused sequence numbers',lost_reports:'Lost reports',version_drift:'Version drift'};
+    const KIND={run_failures:'Failed runs',run_handoffs:'Runs handed to a person',signature_rejected:'Rejected signatures',replay_conflict:'Reused sequence numbers',lost_reports:'Lost reports',version_drift:'Version drift',run_revision_conflict:'Conflicting run revisions'};
     async function renderIncidents(){
       const selected=pick.value;if(!selected)return;
       const version=++incidentVersion,requestedScope=incidentScope;
@@ -228,7 +243,7 @@
             })
           });
           if(version===releaseVersion&&pick.value===selected){
-            status.textContent='Release review saved locally.';await renderRelease();
+            status.textContent='Release review saved locally.';portfolioVersion++;portfolio.replaceChildren();await renderRelease();
           }
         }catch(error){
           if(version===releaseVersion&&pick.value===selected){feedback.textContent=error.message;save.disabled=!confirmation.checked;}
@@ -242,6 +257,154 @@
       parts.push(el('p','An attached design or matching hash does not establish what executed or what a provider returned. Deleting the deployment also removes this inventory.','muted'));
       releaseHost.replaceChildren(...parts);
     }
+    const flagText={
+      no_release_declaration:'No release declaration',release_pins_missing_or_changed:'Release pins missing or changed',
+      reported_spec_missing:'Reported specification missing',reviewed_design_missing:'Reviewed design missing',
+      reported_spec_design_mismatch:'Reported specification and design differ',artifact_digest_missing:'Artifact digest missing',
+      no_runs_claiming_current_spec:'No retained runs claim current specification',runs_claiming_other_spec:'Retained runs claim another specification',
+      runs_without_comparable_spec:'Retained runs lack comparable specification',no_recent_retained_runs:'No recent retained runs',
+      no_recent_runs_claiming_current_spec:'No recent runs claim current specification',recent_runs_claiming_other_spec:'Recent runs claim another specification',
+      recent_runs_without_comparable_spec:'Recent runs lack comparable specification'
+    };
+    portfolioDays.oninput=()=>{portfolioVersion++;portfolio.replaceChildren();};
+    async function renderPortfolio(){
+      const version=++portfolioVersion;
+      const days=Number(portfolioDays.value);
+      if(!Number.isInteger(days)||days<1||days>365){portfolio.replaceChildren(el('p','Choose 1–365 recent days.','note'));return;}
+      portfolio.replaceChildren(el('p','Loading retained deployment evidence…','muted'));
+      let data;
+      try{data=await api('/v1/automation-monitoring/portfolio?recent_days='+encodeURIComponent(days));}
+      catch(error){if(version===portfolioVersion)portfolio.replaceChildren(el('p',error.message,'note'));return;}
+      if(version!==portfolioVersion)return;
+      const parts=[el('h3','Deployment portfolio evidence'),
+        el('p',data.deployment_count+' retained deployments; '+data.deployments_with_review_flags+
+          ' with listed evidence gaps. Snapshot '+data.as_of+'. Recent window: '+data.recent_window.days+' days.','muted'),
+        el('p',data.interpretation,'note')];
+      if(data.deployments.length){
+        parts.push(table(['Deployment','Runtime','Declared stage','Current spec claims / all','Other / unknown','Recent claims / all','Most recent retained run start','Review flags'],
+          data.deployments.map(d=>[d.name,d.runtime,d.current_declaration?d.current_declaration.stage:'Undeclared',
+            d.runs.claiming_current_spec+' / '+d.runs.retained,d.runs.claiming_other_spec+' / '+d.runs.without_comparable_spec,
+            d.recent_runs.claiming_current_spec+' / '+d.recent_runs.retained,d.latest_retained_run_start||'None',
+            d.review_flags.map(f=>flagText[f]||f).join('; ')||'No listed evidence gaps'])));
+        const selected=document.createElement('select');selected.id='owgMonitorPortfolioPick';
+        setOptions(selected,data.deployments.map(d=>[d.deployment_id,d.name+' · '+d.runtime]));
+        const open=button('Open selected release inventory','secondary');
+        open.onclick=async()=>{
+          const ident=selected.value;
+          try{
+            await load(ident);
+            if(pick.value!==ident)throw new Error('Deployment no longer retained; refresh portfolio.');
+            await renderRelease();
+          }catch(error){status.textContent=error.message;}
+        };
+        const controls=el('div',null,'row');controls.append(field('Inspect deployment',selected),open);
+        parts.push(controls);
+      }else parts.push(el('p','No deployments retained.','muted'));
+      portfolio.replaceChildren(...parts);
+    }
+    // Review exact report evidence without invoking the customer runtime.
+    const evidenceButton=button('Explore retained runs','secondary');evidenceButton.id='owgMonitorRunEvidence';
+    const evidenceHost=el('div');evidenceHost.id='owgMonitorRunEvidencePanel';arow.appendChild(evidenceButton);manage.appendChild(evidenceHost);
+    let evidenceGeneration=0;
+    function openRunEvidence(){
+      const dep=pick.value;if(!dep)return;
+      const generation=++evidenceGeneration;
+      const root=el('div');evidenceHost.replaceChildren(root);
+      const active=()=>root.isConnected&&pick.value===dep&&generation===evidenceGeneration;
+      const path='/v1/automation-monitoring/deployments/'+encodeURIComponent(dep)+'/runs';
+      const post=(url,body)=>api(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      const selectField=(id,values)=>{const s=document.createElement('select');s.id=id;setOptions(s,values);return s;};
+      const runStatus=selectField('owgRunEvidenceStatus',[['','Any status'],...['succeeded','failed','handed_to_human','cancelled','running'].map(v=>[v,v])]);
+      const stepStatus=selectField('owgRunEvidenceStepStatus',[['','Any step status'],...['completed','failed','skipped','handed_to_human'].map(v=>[v,v])]);
+      const attribution=selectField('owgRunEvidenceAttribution',[['any','Any attribution'],['attached_design','Matches attached design digest'],['declared_other','Different declared digest'],['unknown','No declared digest']]);
+      const runId=input('owgRunEvidenceId','text','Exact run ID');runId.maxLength=128;
+      const stepId=input('owgRunEvidenceStep','text','Exact step ID');stepId.maxLength=128;
+      const from=input('owgRunEvidenceFrom','text','2026-01-01T00:00:00Z');
+      const before=input('owgRunEvidenceBefore','text','2026-02-01T00:00:00Z');
+      const searchButton=button('Search retained runs','secondary'),prev=button('Previous page','secondary'),next=button('Next page','secondary');
+      const message=el('p',null,'muted');message.setAttribute('role','status');
+      const list=el('div'),detailHost=el('div'),compareHost=el('div');
+      let serial=0,detailSerial=0,compareSerial=0,population=null,offset=0,nextOffset=null,left=null,right=null,selectedFilters=null;
+      const compareButton=button('Compare two pinned runs','secondary');compareButton.disabled=true;
+      const clearPins=button('Clear compared runs','secondary');
+      const pinsLabel=el('p','No comparison runs pinned.','muted');
+      function renderPins(){
+        pinsLabel.textContent='Left: '+(left?left.run_id:'none')+' · Right: '+(right?right.run_id:'none');
+        compareButton.disabled=!(left&&right&&(left.deployment_id!==right.deployment_id||left.run_id!==right.run_id));
+        compareSerial++;compareHost.replaceChildren();
+      }
+      clearPins.onclick=()=>{left=right=null;renderPins();};
+      function reset(){
+        serial++;detailSerial++;population=null;offset=0;nextOffset=null;selectedFilters=null;
+        prev.disabled=next.disabled=true;list.replaceChildren();detailHost.replaceChildren();left=right=null;renderPins();
+      }
+      function filterValues(){
+        const values={attribution:attribution.value};
+        for(const [key,node] of [['status',runStatus],['step_status',stepStatus],['run_id',runId],['step_id',stepId],['started_from',from],['started_before',before]])
+          if(node.value)values[key]=node.value;
+        return values;
+      }
+      for(const node of [runStatus,stepStatus,attribution,runId,stepId,from,before])node.addEventListener('input',()=>{reset();message.textContent='Filters changed; search again.';});
+      async function openDetail(ref){
+        const n=++detailSerial;detailHost.replaceChildren(el('p','Loading exact report…'));
+        try{
+          const data=await api(path+'/detail?'+new URLSearchParams({run_id:ref.run_id,expected_sha256:ref.run_sha256}));
+          if(!active()||n!==detailSerial)return;
+          if(data.reference.run_sha256!==ref.run_sha256||data.reference.deployment_id!==dep||data.reference.run_id!==ref.run_id)throw Error('Unexpected run evidence reference.');
+          const run=data.run,pinLeft=button('Use as left run','secondary'),pinRight=button('Use as right run','secondary');
+          pinLeft.onclick=()=>{left=data.reference;renderPins();};pinRight.onclick=()=>{right=data.reference;renderPins();};
+          detailHost.replaceChildren(el('h4','Reported run '+run.run_id),
+            el('p',run.status+' · '+data.attribution+' · SHA-256 '+data.reference.run_sha256),
+            el('p','Reported outcome verification: '+String(run.outcome_reported_verified)+' · Reported source: '+(run.outcome_source||'not supplied')),
+            el('p','Reported spec: '+(run.reported_spec_sha256||'unknown')+' · Attached design: '+(data.attached_design_sha256||'none')),
+            table(['Sequence','Step ID','Activity','Reported status','Reported time (UTC)'],run.steps.map(s=>[s.seq,s.step_id,s.activity,s.status,s.at])),
+            pinLeft,pinRight,el('p','No outcome or source-system state is independently verified.','muted'));
+        }catch(error){if(active()&&n===detailSerial)detailHost.replaceChildren(el('p',error.message,'note'));}
+      }
+      async function searchPage(page=0){
+        const n=++serial;detailSerial++;detailHost.replaceChildren();list.replaceChildren();prev.disabled=next.disabled=true;
+        message.textContent='Reading matching retained evidence…';
+        if(page===0){population=null;selectedFilters=filterValues();left=right=null;renderPins();}
+        try{
+          const data=await post(path+'/search',{...selectedFilters,offset:page,limit:30,...(population?{expected_population_sha256:population}:{})});
+          if(!active()||n!==serial)return;
+          if(data.deployment_id!==dep||(population&&data.population_sha256!==population))throw Error('Unexpected evidence population.');
+          population=data.population_sha256;offset=data.offset;nextOffset=data.next_offset;
+          message.textContent=data.matching_runs+' matching runs · '+data.matching_steps+' reported steps · snapshot '+population;
+          const summary=el('p',Object.entries(data.status_counts).map(([k,v])=>k+': '+v).join(' · '));
+          const grid=table(['Run ID','Start (UTC)','Status','Spec attribution','First reported issue','Steps','Evidence'],
+            data.rows.map(row=>[row.run_id,row.started_at,row.status,row.attribution,
+              row.first_reported_issue?row.first_reported_issue.step_id+' · '+row.first_reported_issue.status:'none reported',row.step_count,'']));
+          const body=grid.querySelector('tbody');
+          data.rows.forEach((row,i)=>{const open=button('Inspect','secondary');open.onclick=()=>openDetail(row.reference);body.rows[i].cells[6].appendChild(open);});
+          list.replaceChildren(summary,grid);prev.disabled=offset===0;next.disabled=nextOffset===null;
+        }catch(error){if(active()&&n===serial){reset();message.textContent=error.message;}}
+      }
+      searchButton.onclick=()=>searchPage(0);prev.onclick=()=>searchPage(Math.max(0,offset-30));next.onclick=()=>{if(nextOffset!==null)searchPage(nextOffset);};
+      compareButton.onclick=async()=>{
+        if(!left||!right)return;
+        const n=++compareSerial;compareHost.replaceChildren(el('p','Comparing exact reported step sequences…'));
+        try{
+          const data=await post('/v1/automation-monitoring/runs/compare',{left,right});
+          if(!active()||n!==compareSerial)return;
+          if(data.left.reference.run_sha256!==left.run_sha256||data.right.reference.run_sha256!==right.run_sha256)throw Error('Unexpected pinned comparison.');
+          const describe=step=>step?step.seq+' · '+step.step_id+' · '+step.activity+' · '+step.status+' · '+step.at:'—';
+          compareHost.replaceChildren(el('h4','Paired run evidence'),
+            el('p','Same declared spec: '+String(data.same_reported_spec)+' · Minimum step ID edits: '+data.minimum_step_id_edits+
+              ' · Matched status changes: '+data.matched_status_changes+' · Matched label changes: '+data.matched_activity_label_changes),
+            table(['Alignment','Left reported step','Right reported step','Status changed'],
+              data.alignment.map(a=>[a.kind,describe(a.left),describe(a.right),a.status_changed?'yes':''])),
+            el('p','One minimum insertion/deletion alignment on reported IDs; equal-cost alternatives may exist. This is not verified business-case equivalence.','muted'));
+        }catch(error){if(active()&&n===compareSerial)compareHost.replaceChildren(el('p',error.message,'note'));}
+      };
+      root.append(el('h3','Retained run evidence'),el('p','Filter exact imported reports. Dates are timezone-qualified, with an exclusive upper bound. Nothing is executed.','muted'),
+        field('Run status',runStatus),field('Exact run ID',runId),field('Exact step ID',stepId),field('Step status',stepStatus),
+        field('Started from',from),field('Started before',before),field('Spec attribution',attribution),
+        searchButton,prev,next,message,list,detailHost,pinsLabel,compareButton,clearPins,compareHost);
+      prev.disabled=next.disabled=true;
+    }
+    evidenceButton.onclick=openRunEvidence;
+    portfolioButton.onclick=renderPortfolio;
     releaseButton.onclick=()=>renderRelease().catch(error=>{status.textContent=error.message;});
     channelButton.onclick=()=>renderChannel().catch(error=>{status.textContent=error.message;});
     incidentButton.onclick=()=>{incidentScope='selected';incidentStatus='';incidentSearch='';renderIncidents();};

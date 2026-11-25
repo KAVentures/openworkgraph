@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from . import automation_incidents as incidents
+from . import automation_deployment_portfolio as deployment_portfolio
 from . import automation_monitoring as monitoring
 from . import automation_release_inventory as release_inventory
 from . import automation_report_channels as channels
@@ -58,6 +59,12 @@ async def _respond(operation: Callable[..., Any], *args: Any, **kwargs: Any) -> 
 def automation_monitoring_script() -> FileResponse:
     """Static dashboard client; it only calls the authenticated routes below."""
     return FileResponse(_SCRIPT, media_type="application/javascript")
+
+
+@router.get("/v1/automation-monitoring/portfolio")
+async def get_deployment_portfolio(request: Request, recent_days: int = Query(default=30, ge=1, le=365)):
+    _require_dashboard(request)
+    return await _respond(deployment_portfolio.portfolio, recent_days=recent_days)
 
 
 @router.get("/v1/automation-monitoring/deployments")
@@ -127,6 +134,35 @@ async def save_release_inventory(request: Request, deployment_id: str):
         raise HTTPException(exc.status, str(exc)) from None
     except monitoring.MonitoringError as exc:
         raise HTTPException(422, str(exc)) from None
+
+
+@router.post("/v1/automation-monitoring/deployments/{deployment_id}/runs/search")
+async def search_run_evidence(request: Request, deployment_id: str):
+    from . import automation_run_evidence as evidence
+    from .event_log_routes import _json_body
+    _require_dashboard(request)
+    spec = await _json_body(request, "run evidence filters", strict=True, limit=16384)
+    _require_dashboard(request)
+    return await _respond(evidence.search, deployment_id, spec)
+
+
+@router.get("/v1/automation-monitoring/deployments/{deployment_id}/runs/detail")
+async def get_run_evidence(request: Request, deployment_id: str,
+                           run_id: str = Query(min_length=1, max_length=128),
+                           expected_sha256: str | None = Query(default=None, pattern=r"^[a-f0-9]{64}$")):
+    from . import automation_run_evidence as evidence
+    _require_dashboard(request)
+    return await _respond(evidence.detail, deployment_id, run_id, expected_sha256)
+
+
+@router.post("/v1/automation-monitoring/runs/compare")
+async def compare_run_evidence(request: Request):
+    from . import automation_run_evidence as evidence
+    from .event_log_routes import _json_body
+    _require_dashboard(request)
+    spec = await _json_body(request, "pinned run comparison", strict=True, limit=16384)
+    _require_dashboard(request)
+    return await _respond(evidence.compare, spec)
 
 
 @router.get("/v1/automation-monitoring/deployments/{deployment_id}/monitor")

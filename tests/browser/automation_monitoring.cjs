@@ -66,6 +66,17 @@ const path=require('node:path');
    await page.locator('#owgMonitorReleasePanel').getByText(/Latest declaration: pilot_reported/).waitFor();
    assert.match(await page.locator('#owgMonitorReleasePanel').textContent(),/revision 1/);
    assert.match(await page.locator('#owgMonitorReleasePanel').textContent(),/matching hash does not establish what executed/i);
+   await page.locator('#owgMonitorPortfolioShow').click();
+   await page.locator('#owgMonitorPortfolio').getByRole('heading',{name:'Deployment portfolio evidence'}).waitFor();
+   assert.match(await page.locator('#owgMonitorPortfolio').textContent(),/pilot_reported/);
+   assert.match(await page.locator('#owgMonitorPortfolio').textContent(),/do not prove downtime/);
+   await page.locator('#owgMonitorPortfolioDays').fill('7');
+   assert.equal(await page.locator('#owgMonitorPortfolio').textContent(),'');
+   await page.locator('#owgMonitorPortfolioShow').click();
+   await page.locator('#owgMonitorPortfolio').getByText(/Recent window: 7 days/).waitFor();
+   await page.locator('#owgMonitorPortfolio').getByRole('button',{name:'Open selected release inventory'}).click();
+   await page.locator('#owgMonitorReleasePanel').getByText(/Latest declaration: pilot_reported/).waitFor();
+
 
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgMonitorCard'),{
