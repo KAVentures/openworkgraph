@@ -3427,6 +3427,16 @@ Results have three possible values: **Verified**, **Failed**, and **Inconclusive
 
 The dashboard can download a JSON report containing the input PNML SHA-256, coverage, property verdicts, limits and counterexamples. The local dashboard-session-only endpoint is `POST /v1/event-logs/petri-soundness` with the raw PNML body (at most 2 MB); returns JSON with `Cache-Control: no-store`. No net or report is retained by this operation, and no connector or business-action authorization is implied.
 
+### Compare completed behavior of two Petri-net revisions
+
+In **Structural and behavioral net validation**, expand **Compare two model revisions**. Replay the baseline model, select the candidate PNML file, and choose **Compare completed behavior**. The checker independently constructs bounded reachable marking graphs and compares their visible completed-trace languages using epsilon closure and a product of determinized marking subsets. Silent transitions do not consume activities; duplicate labels are handled nondeterministically. Only the exact final marking accepts a trace, including the empty trace where applicable.
+
+Two directional results distinguish candidate regressions (baseline traces removed) from expanded behavior (new traces allowed by the candidate). The first discovered distinguishing trace in each direction is shortest by number of visible activities. A complete comparison can prove equality or inclusion even when the language is infinite, as with a loop. If either marking graph is incomplete, neither inclusion is established. A product-search limit leaves unproved properties inconclusive; an already discovered distinguishing trace remains evidence of non-inclusion. The product is limited to 3,000 subset pairs and 500,000 counted exploration work units, in addition to the soundness checker's per-model bounds. Transition labels are bounded to 200 characters and long witness sequences are marked as truncated.
+
+**Download model comparison (JSON)** exports both submitted model digests, coverage, directional verdicts and witnesses. The owner-only, non-retained endpoint is `POST /v1/event-logs/petri-language-comparison` with `Content-Type: application/octet-stream`. Its body contains the unsigned four-byte big-endian length of the baseline, then exactly that many baseline bytes, then the candidate bytes. Each model is limited to 2 MB. Digests identify the exact submitted bytes (the dashboard encodes its current replayed baseline text as UTF-8 and sends the candidate file bytes unchanged).
+
+This is completed **visible trace language** equivalence, not branching-time equivalence, identical concurrency, absence of deadlocks, guaranteed termination, policy compliance, equal costs/timing or business-outcome equivalence. Use soundness and independent evidence alongside it; no result grants execution authority.
+
 ### Process trees (PTML) from PM4Py and ProM
 
 The file picker also accepts a **process tree** in PTML, as `pm4py.write_ptml` and ProM's Inductive
