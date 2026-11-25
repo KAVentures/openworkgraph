@@ -1417,10 +1417,42 @@
                   fmt(cc.case_volume_change_per_month)+'.')
               );
               analysis.appendChild(stats);
+              const sensitivity=adjusted.sensitivity;
+              if(sensitivity){
+                const decomposition=sensitivity.monthly_hours_change_decomposition;
+                const coverage=sensitivity.calendar_coverage;
+                const omitted=sensitivity.leave_one_period_out;
+                analysis.append(el('h5','Measurement sensitivity and volume effects'),
+                  el('p','Reported baseline minus after hours/month: '+fmt(decomposition.reported_baseline_minus_after_hours)+
+                    ' = effort per case '+fmt(decomposition.effort_per_case_component_hours)+
+                    ' + case volume '+fmt(decomposition.case_volume_component_hours)+' (rounded).'),
+                  el('p','Measured days: baseline '+coverage.baseline.measured_days+' of '+coverage.baseline.span_days+
+                    '; after '+coverage.after.measured_days+' of '+coverage.after.span_days+
+                    '. Unmeasured days are not treated as zero activity.'),
+                  el('p','Declared measurement sources: baseline '+Object.keys(coverage.baseline.source_kind_exposure).join(', ')+
+                    '; after '+Object.keys(coverage.after.source_kind_exposure).join(', ')+
+                    (sensitivity.declared_source_kind_sets_match?'.':'. Source composition differs; review comparability.'),'muted'));
+                if(omitted.scenario_count){
+                  analysis.append(el('p','Leave-one-period-out: '+omitted.scenario_count+' comparisons, effort change at after-volume '+
+                    omitted.scenario_range_hours_per_month.map(fmt).join(' to ')+' hours/month.'+
+                    (omitted.direction_differs_from_full_comparison?' Direction differs from the full comparison; review influential periods.':''),
+                    'muted'));
+                  const details=el('details');details.append(el('summary','Inspect omitted-period scenarios'));
+                  const list=el('ul');
+                  for(const scenario of omitted.scenarios){
+                    const measurement=r.measurements.find(m=>m.measurement_id===scenario.measurement_id);
+                    list.append(el('li',scenario.omitted_period+' '+(measurement?measurement.start+' – '+measurement.end:scenario.measurement_id)+
+                      ': '+fmt(scenario.effort_change_at_after_volume_hours_per_month)+' hours/month · '+scenario.direction.replaceAll('_',' ')));
+                  }
+                  details.append(list);analysis.append(details);
+                }
+                if(!omitted.baseline_period_omission_supported||!omitted.after_period_omission_supported)
+                  analysis.append(el('p','At least two periods on each side are needed for omission sensitivity on both sides.','muted'));
+              }
             }else{
               const reasons={
                 missing_periods:'Record both a baseline and an after period to compare.',
-                overlapping_periods:'Overlapping dates within one period type. Correct duplicate calendar coverage before interpreting adjusted results.',
+                overlapping_periods:'Overlapping dates within or across period types. Correct duplicate calendar coverage before interpreting adjusted results.',
                 zero_case_period:'At least one measurement has zero cases. Verify the case-exposure denominator before comparing.'
               };
               const warning=el('p',reasons[adjusted.status]||'Coverage-adjusted comparison unavailable.','muted');
