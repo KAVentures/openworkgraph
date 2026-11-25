@@ -427,6 +427,23 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         return _get("get_process_model_quality", f"/v1/process-intelligence/{_log(log_id)}/model-quality", params)
 
     @mcp.tool(annotations=_READ_ONLY)
+    def get_process_model(log_id: str, noise: float = 0.2, activities: float = 1.0,
+                          case_type: str | None = None) -> dict[str, Any]:
+        """The discovered process model of a shared log, to plan an automation or explain the process: its steps,
+        decisions, loops and parallel branches with the transitions between them, the observed share of cases on
+        each branch (unconfirmed rules, not business conditions), the same model as a process tree in PM4Py
+        notation, and how many cases it replays. Pick noise with get_process_model_quality first; activities keeps
+        the most frequent share of activities. A reviewable draft from recorded order, not the official or
+        approved process, and it authorizes nothing. Aggregates only, no case IDs or resources.
+        """
+        if isinstance(noise, bool) or not isinstance(noise, (int, float)) or not 0 <= noise < 1:
+            raise ToolError("noise must be a share from 0 up to (not including) 1")
+        if isinstance(activities, bool) or not isinstance(activities, (int, float)) or not 0 < activities <= 1:
+            raise ToolError("activities must be a share above 0 and at most 1")
+        return _get("get_process_model", f"/v1/process-intelligence/{_log(log_id)}/process-model",
+                    {"noise": float(noise), "activities": float(activities), "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_deviations(log_id: str, noise: float = 0.2, case_type: str | None = None) -> dict[str, Any]:
         """Exactly where the recorded cases of a shared log depart from its discovered process model, from optimal
         alignments: the steps cases took that the model does not allow there, the steps the model requires that

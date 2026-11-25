@@ -321,6 +321,12 @@ async def agent_compare_logs(request: Request, log_id: str):
                          comparison_case_type=body.get("comparison_case_type"),
                          baseline_filter=body.get("baseline_filter"), comparison_filter=body.get("comparison_filter"),
                          limit=body.get("limit", 25))
+@router.get("/v1/process-intelligence/{log_id}/process-model")
+async def agent_process_model(request: Request, log_id: str, noise: float = Query(default=0.2, ge=0, lt=1),
+                              activities: float = Query(default=1.0, gt=0, le=1),
+                              case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.process_model, log_id, case_type, noise, activities)
 
 
 @router.get("/v1/process-intelligence/{log_id}/model-deviations")

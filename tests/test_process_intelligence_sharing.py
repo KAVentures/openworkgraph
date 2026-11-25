@@ -225,6 +225,9 @@ with TestClient(app) as client:
     assert r.status_code == 200 and r.json()["kpis"]["comparison"]["cases"] == 6, r.text
     assert client.post(f"/v1/process-intelligence/{log_id}/compare-logs", json={"comparison_log_id": other, "x": 1},
                        headers=agent).status_code == 422
+    r = client.get(f"/v1/process-intelligence/{log_id}/process-model?noise=0", headers=agent)
+    assert r.status_code == 200 and r.json()["process_tree"].startswith(("->(", "X(", "*(", "+(", "'")), r.text
+    assert client.get(f"/v1/process-intelligence/{log_id}/process-model?activities=0", headers=agent).status_code == 422
     r = client.get(f"/v1/process-intelligence/{log_id}/signals", headers=agent)
     assert r.status_code == 200 and r.json()["signals"] == [], r.text
     r = client.get(f"/v1/process-intelligence/{log_id}/automation-candidates?limit=5", headers=agent)
@@ -286,7 +289,7 @@ PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_overv
                  "get_process_rework", "get_process_waiting_times", "get_process_drift", "get_stuck_process_cases",
                  "get_process_automation_candidates", "get_process_signals", "get_process_decision_rules",
                  "get_process_temporal_profile", "get_process_heuristics_net",
-                 "get_process_footprints", "get_process_model_quality", "compare_process_logs",
+                 "get_process_footprints", "get_process_model_quality", "compare_process_logs", "get_process_model",
                  "get_process_deviations", "list_process_reference_nets", "get_process_reference_deviations",
                  "get_process_funnel",
                  "get_process_trace_clusters", "check_process_compliance", "get_process_performance_spectrum",
@@ -352,4 +355,32 @@ def test_compare_logs_needs_both_shared_and_withholds_small_rows():
         sharing.compare_logs(before, after, comparison_filter={"activity": "Escalate"})
     with pytest.raises(workspace.EventLogWorkspaceError, match="limit"):
         sharing.compare_logs(before, after, limit=0)
+def test_process_model_returns_the_discovered_draft_without_case_ids():
+    rows = ["case,activity,time,who"]
+    for i in range(12):
+        decision = "Approve" if i % 3 else "Reject"
+        rows += [f"c{i},Receive,2024-03-{1 + i:02d}T08:00:00Z,clerk", f"c{i},{decision},2024-03-{1 + i:02d}T09:00:00Z,ana",
+                 f"c{i},Pay,2024-03-{1 + i:02d}T10:00:00Z,bot"]
+    log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="m", source_format="csv",
+                               mapping=MAPPING)["log_id"]
+    with pytest.raises(sharing.NotShared):
+        sharing.process_model(log)
+    sharing.set_share(log, "aggregates")
+    model = sharing.process_model(log, noise=0)
+    assert model["process_tree"] == "->( 'Receive', X( 'Approve', 'Reject' ), 'Pay' )"
+    labels = [a["label"] for a in model["model"]["activities"] if a["kind"] == "activity"]
+    assert labels == ["Receive", "Approve", "Reject", "Pay"]
+    assert model["quality"]["fitting_case_share"] == 1.0 and model["process_model_sha256"]
+    assert any("8 of 12 cases" in rule["text"] and rule["user_confirmed"] is False
+               for rule in model["model"]["business_rules"])
+    assert model["execution_authorized"] is False and model["observed_path_is_policy"] is False
+    text = str(model)
+    assert "c1" not in text.replace("Receive", "") and "clerk" not in text and "ana" not in text
+
+
+def test_process_tree_notation_round_trips_and_refuses_unwritable_labels():
+    assert sharing._tree_notation({"op": "loop", "children": [
+        {"op": "and", "children": [{"op": "activity", "activity": "A"}, {"op": "activity", "activity": "B"}]},
+        {"op": "tau"}]}) == "*( +( 'A', 'B' ), tau )"
+    assert sharing._tree_notation({"op": "seq", "children": [{"op": "activity", "activity": "O'Brien"}]}) is None
 
