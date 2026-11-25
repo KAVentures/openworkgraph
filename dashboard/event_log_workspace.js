@@ -980,7 +980,7 @@
         'ocel':'Includes objects linked to matching events, their timed attributes, and relationships between included objects.',
         'ocelxml':'Includes objects linked to matching events, their timed attributes, and relationships between included objects.',
         'jsonl':'One JSON object per line with case ID, activity, timestamp and resource (null when missing).',
-        'xlsx':'One Events worksheet with the exact CSV columns as text cells, a frozen header and a filter. At most 1,048,575 events.'
+        'xlsx':'Events worksheets with the exact CSV columns as text cells, a frozen header and a filter. Over 1,048,575 events, the rows continue on further worksheets.'
       }[formats.value];
     }
     formats.onchange=describeFormat;describeFormat();
