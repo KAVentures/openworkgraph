@@ -290,3 +290,58 @@ def test_shared_pool_staffing_is_effective_and_reported():
     assert before["shared_pools"]["Shared"]["resources"]==1
     assert after["shared_pools"]["Shared"]["resources"]==2
     assert after["shared_pools"]["Shared"]["activities"]==["Finish","Receive"]
+
+
+def decision_spec():
+    spec=proposal()
+    spec["decision_review"]={"currency":"SEK","default_resource_hour_cost":100,
+        "maximum_staffed_hour_cost":300,
+        "demand_weights":[{"arrival_rate_per_hour":.1,"weight":1},{"arrival_rate_per_hour":1.5,"weight":3}],
+        "service_share_thresholds":[.5,.9,1],"dedicated_hour_costs":{"Finish":120}}
+    return spec
+
+
+def test_capacity_decision_real_grid_reproducible_without_extra_runs(monkeypatch):
+    log=fixture_log()
+    spec=decision_spec()
+    original=sim.simulate
+    calls=[]
+    def counted(*args):
+        calls.append(1)
+        return original(*args)
+    monkeypatch.setattr(sim,"simulate",counted)
+    result=capacity.run_grid(log,spec)
+    assert len(calls)==12
+    review=result["decision_review"]
+    designs={d["design"]:d for d in review["designs"]}
+    assert designs["Baseline"]["staffed_hour_cost_decimal"]=="220"
+    assert designs["Two reviewers"]["staffed_hour_cost_decimal"]=="340"
+    assert designs["Baseline"]["within_budget"] and not designs["Two reviewers"]["within_budget"]
+    assert designs["Baseline"]["service_status_all_tested_rates"]=="overloaded"
+    assert not designs["Baseline"]["budget_and_service_demonstrated"]
+    assert not designs["Two reviewers"]["budget_and_service_demonstrated"]
+    assert review["normalized_demand_weights"]==[
+        {"arrival_rate_per_hour":.1,"weight":.25},{"arrival_rate_per_hour":1.5,"weight":.75}]
+    assert capacity.run_grid(log,result["inputs"])==result
+    assert len(calls)==24
+
+
+def test_invalid_cost_override_refused_before_simulation(monkeypatch):
+    spec=decision_spec()
+    spec["decision_review"]["pool_hour_costs"]={"Absent":200}
+    monkeypatch.setattr(sim,"simulate",lambda *args:pytest.fail("invalid decision simulated"))
+    with pytest.raises(workspace.EventLogWorkspaceError,match="does not match"):
+        capacity.run_grid(fixture_log(),spec)
+
+
+def test_shared_pool_cost_is_counted_once_per_resource():
+    spec=decision_spec()
+    spec["baseline"]["pools"]={"Shared":{"resources":1,"activities":["Receive","Finish"]}}
+    spec["designs"]=[{"label":"Two shared reviewers","pools":{"Shared":{"resources":2,
+        "activities":["Receive","Finish"]}}}]
+    spec["decision_review"]["dedicated_hour_costs"]={}
+    spec["decision_review"]["pool_hour_costs"]={"Shared":125}
+    result=capacity.run_grid(fixture_log(),spec)["decision_review"]
+    assert [d["staffed_hour_cost_decimal"] for d in result["designs"]]==["125","250"]
+    assert [len(d["cost_basis"]) for d in result["designs"]]==[1,1]
+    assert all(d["cost_basis"][0]["kind"]=="shared_pool" for d in result["designs"])
