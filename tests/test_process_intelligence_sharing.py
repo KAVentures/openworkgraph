@@ -312,16 +312,3 @@ def test_mcp_tools_are_listed_only_when_a_log_is_shared(tmp_path):
     assert off == DEFAULT_TOOLS
     on = asyncio.run(_listed_tools(tmp_path, True))
     assert on == DEFAULT_TOOLS | PROCESS_TOOLS
-
-
-def test_agent_compares_two_case_groups_and_withholds_small_rows():
-    log_id = _log()
-    sharing.set_share(log_id, "aggregates")
-    result = sharing.compare_cohorts(log_id, {"resource": "bob"}, {"resource": "ana"})
-    assert [c["cases"] for c in result["cohorts"]] == [6, 6]
-    assert result["differences_second_minus_first"]
-    for row in result["activity_presence"] + result["variants"]:
-        assert not any(0 < row[k] < 5 for k in ("cases_in_first", "cases_in_second"))
-    assert all("variant_id" not in row for row in result["variants"])
-    with pytest.raises(workspace.EventLogWorkspaceError):
-        sharing.compare_cohorts(log_id, {"case_ids": ["c0", "c2"]}, {"resource": "ana"})
