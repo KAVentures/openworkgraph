@@ -756,6 +756,46 @@ def model_quality(log_id: str, case_type: str | None = None, levels: str | None 
     return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
 
 
+def _tree_notation(node: dict[str, Any]) -> str | None:
+    """A process tree in PM4Py's notation: ->( ) sequence, X( ) choice, +( ) parallel, *( ) loop, tau.
+    PM4Py's notation has no escaping, so a label containing a single quote cannot be written: None."""
+    op = node.get("op")
+    if op == "activity":
+        label = str(node["activity"])
+        return None if "'" in label else "'" + label + "'"
+    if op == "tau":
+        return "tau"
+    parts = [_tree_notation(child) for child in node.get("children", [])]
+    if any(part is None for part in parts):
+        return None
+    return {"seq": "->", "xor": "X", "and": "+", "loop": "*"}[op] + "( " + ", ".join(parts) + " )"
+
+
+def process_model(log_id: str, case_type: str | None = None, noise: float = 0.2,
+                  activities: float = 1.0) -> dict[str, Any]:
+    """The discovered process model itself (aggregates level): steps, decisions, loops and transitions of the
+    reviewable draft, the observed share of cases per branch as unconfirmed rules, the process tree in PM4Py
+    notation, and how well the draft replays the log. Case IDs and resources are never included."""
+    require(log_id, "aggregates")
+    from . import event_log_model_discovery as discovery
+    result = discovery.discover(log_id, case_type, noise=max(0.0, min(float(noise), 0.95)),
+                                activities=max(0.01, min(float(activities), 1.0)))
+    model = result["process_model"]
+    tree = _tree_notation(result["tree"]) if result.get("tree") else None
+    keep = ("activities", "transitions", "business_rules", "entry_activity_id", "terminal_activity_ids",
+            "baseline_path", "supporting_case_count")
+    return {"format": FORMAT, "log_id": log_id, "case_notion": result.get("case_notion"),
+            "settings": result.get("settings"), "model": {k: model[k] for k in keep if k in model},
+            "process_tree": tree,
+            **({} if tree or not result.get("tree") else
+               {"process_tree_unavailable": "an activity label contains a single quote, which PM4Py's notation cannot carry"}),
+            "quality": result.get("quality"), "simplifications": result.get("simplifications"),
+            "discovery_method": result.get("discovery_method"),
+            "process_model_sha256": result.get("process_model_sha256"),
+            "interpretation": result.get("interpretation"),
+            "observed_path_is_policy": False, "execution_authorized": False}
+
+
 def model_deviations(log_id: str, case_type: str | None = None, noise: float = 0.2) -> dict[str, Any]:
     """Optimal alignments of the log on its discovered net: which steps are extra or skipped (aggregates)."""
     require(log_id, "aggregates")
