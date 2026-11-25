@@ -524,7 +524,11 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
         def record(phase, **details):
             journal.write(json.dumps({'phase': phase, 'at': datetime.now(timezone.utc).isoformat(), **details}) + '\n')
             journal.flush(); os.fsync(journal.fileno())
-        record('started', execution_id=execution_id, process_reference=reference(spec), spec_sha256=digest(spec))
+        dependency_route={}
+        if 'dependency_build_basis_sha256' in spec:
+            dependency_route={'dependency_route_activity_ids':list(prepared['plan']['activity_ids']),
+                'dependency_precondition_attempts':[i for i,action in enumerate(prepared['actions'],1) if action['precondition']]}
+        record('started', execution_id=execution_id, process_reference=reference(spec), spec_sha256=digest(spec), **dependency_route)
         dependency_check_number=0
         async def check_catalog(purpose='refresh',attempt=None):
             nonlocal dependency_check_number
