@@ -550,3 +550,23 @@ apply. A unique route is neither independent policy verification nor a tool
 mapping approval, execution authorization or business outcome attestation.
 Synthetic fixtures cover competing and unresolved alternatives, source
 expiry, no-model consent, dependent tables and parallel schedules.
+
+
+### Reviewed batch comparison
+
+The generated evaluate_sources.py command now supports three mutually
+exclusive planning modes: --model MODEL, --deterministic, and --paired-model MODEL.
+Supply --cases, --bindings, --output and --confirm-source-reads. The model
+and paired modes additionally require --confirm-model-rule-check-sharing.
+Deterministic-only batches never invoke a model.
+
+Paired evaluation runs one model and the deterministic planner on the
+same reviewed case and per-case source receipts. Both candidates are compared
+against customer expectations at the same final receipt-freshness boundary.
+The model saw minimized check results earlier, before inference; this is not
+a controlled timing or accuracy benchmark. The report separates both-match,
+model-only, deterministic-only and neither-match cases and summarizes them
+by case category. Incomplete deterministic search remains a review finding
+even if the clarification itself matches the expectation. No raw case data,
+model text or receipt values appear in the saved report. The eight-case
+and source-record limits still apply. No business execution is authorized.
