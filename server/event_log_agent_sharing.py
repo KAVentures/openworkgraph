@@ -1060,8 +1060,10 @@ def variants(log_id: str, case_type: str | None = None, limit: int = 20) -> dict
     listed = result["variants"]
     shown = [v for v in listed if v["cases"] >= AGENT_MIN_CELL_CASES]
     rare = result["distinct_variants"] - len(shown)
+    from . import event_log_variant_coverage as coverage
+    targets = coverage.coverage(log_id, case_type, 1)["coverage_targets"]
     return {"format": FORMAT, "log_id": log_id, "case_notion": result.get("case_notion"), "cases": result["cases"],
-            "distinct_variants": result["distinct_variants"],
+            "distinct_variants": result["distinct_variants"], "coverage_targets": targets,
             "variants": [{"rank": i + 1, "path": v["path"], "cases": v["cases"], "share": v["share"],
                           "median_duration_seconds": v.get("median_duration_seconds")} for i, v in enumerate(shown[:limit])],
             "shown_cases_share": round(sum(v["cases"] for v in shown[:limit]) / result["cases"], 4) if result["cases"] else 0.0,
