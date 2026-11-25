@@ -299,6 +299,76 @@ class DeclaredFactScenarioCases(unittest.TestCase):
         self.assertTrue(report['review_required'])
         self.assertEqual(report['cases'][1]['reason'],'batch_work_limit')
 
+    def revisions(self):
+        before,old_suite=self.fixture()
+        before['source_records_included']=False
+        old_suite['spec_sha256']=digest(before)
+        after=deepcopy(before)
+        after['revision']=2
+        after['content_sha256']='b'*64
+        after['process_model']['business_rules'][0]['predicate']['conditions'][0]['expected']=800
+        after['process_model_sha256']=digest(after['process_model'])
+        new_suite=deepcopy(old_suite)
+        new_suite.update(process_reference=reference(after),spec_sha256=digest(after))
+        return before,after,old_suite,new_suite
+
+    def test_revision_comparison_separates_regressions_and_intended_expectations(self):
+        from review_facts import compare_scenarios
+        before,after,old,new=self.revisions()
+        result=compare_scenarios(before,after,old,new,as_of_date='2026-06-01')
+        self.assertEqual(result['classification_counts'],{'regression':1,'stable_match':2})
+        self.assertEqual(result['cases'][0]['changed_rule_ids'],['current_source'])
+        self.assertTrue(result['cases'][0]['route_behavior_changed'])
+        self.assertTrue(result['review_required'])
+        new['cases'][0]['expected'].update(status='needs_clarification',accepted_routes=[])
+        result=compare_scenarios(before,after,old,new,as_of_date='2026-06-01')
+        self.assertEqual(result['classification_counts'],{'changed_expectation_matches':1,'stable_match':2})
+        self.assertTrue(result['review_required'])
+        self.assertFalse(result['historical_release_code_executed'])
+        self.assertNotIn('SYNTHETIC_PRIVATE_FACT',json.dumps(result))
+
+    def test_revision_comparison_refuses_different_facts_order_and_scope(self):
+        from review_facts import compare_scenarios
+        before,after,old,new=self.revisions()
+        for change in ('facts','order','scope','revision'):
+            candidate,suite=deepcopy(after),deepcopy(new)
+            if change=='facts':suite['cases'][0]['input']['credit']['score']=751
+            elif change=='order':suite['cases'].reverse()
+            elif change=='scope':candidate['organization_catalog_reference']={'organization_id':'other'}
+            else:candidate['revision']=before['revision']
+            suite.update(process_reference=reference(candidate),spec_sha256=digest(candidate))
+            with self.assertRaises(ImplementationError):
+                compare_scenarios(before,candidate,old,suite,as_of_date='2026-06-01')
+        with patch('review_facts.MAX_BATCH_WORK',1):
+            result=compare_scenarios(before,after,old,new,as_of_date='2026-06-01')
+        self.assertEqual(result['classification_counts'],{'comparison_incomplete':3})
+        self.assertIsNone(result['cases'][0]['route_behavior_changed'])
+
+    def test_release_pins_and_tampered_files(self):
+        import hashlib
+        from verify_release import create_manifest,REQUIRED_GENERATED_FILES,ReleaseIntegrityError
+        from review_facts import compare_releases
+        before,after,old,new=self.revisions()
+        with TemporaryDirectory() as directory:
+            roots=[];pins=[]
+            for name,spec in [('old',before),('new',after)]:
+                root=Path(directory)/name;root.mkdir()
+                files={key:'raise AssertionError("Historical code must not execute")\n' for key in REQUIRED_GENERATED_FILES}
+                files['workflow.spec.json']=json.dumps(spec)
+                manifest=create_manifest(files,spec)
+                for key,value in files.items():(root/key).write_bytes(value.encode())
+                (root/'release-manifest.json').write_bytes(manifest.encode())
+                roots.append(root);pins.append(hashlib.sha256(manifest.encode()).hexdigest())
+            report=compare_releases(*roots,*pins,old,new,as_of_date='2026-06-01')
+            self.assertTrue(report['release_file_integrity_checked'])
+            self.assertEqual(report['baseline']['manifest_sha256'],pins[0])
+            self.assertFalse(report['independent_signature_verified'])
+            with self.assertRaises(ReleaseIntegrityError):
+                compare_releases(*roots,'f'*64,pins[1],old,new,as_of_date='2026-06-01')
+            (roots[1]/'agent.py').write_text('changed')
+            with self.assertRaises(ReleaseIntegrityError):
+                compare_releases(*roots,*pins,old,new,as_of_date='2026-06-01')
+
     def test_cli_refuses_unconfirmed_review_and_existing_file(self):
         import review_facts
         spec,suite=self.fixture()
