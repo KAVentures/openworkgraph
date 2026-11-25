@@ -846,8 +846,10 @@
     dependencyScheduleHost.setAttribute('aria-live','polite');
     dependencyScheduleButton.onclick=async()=>{
       dependencyScheduleButton.disabled=true;
+      const generation=refreshGeneration;
       try{
         const r=await (await api('/v1/automation-pipeline/dependency-schedule')).json();
+        if(generation!==refreshGeneration)return;
         if(!Array.isArray(r.risk_candidates)||typeof r.active_ideas!=='number')
           throw new Error('Unexpected dependency schedule review');
         const name=id=>(latestIdeas.find(idea=>idea.idea_id===id)||{}).title||id;
@@ -859,16 +861,57 @@
             ' ('+finding.dependency_state.replaceAll('_',' ')+')';
           lines.appendChild(el('li',finding.kind.replaceAll('_',' ')+': '+path+'. '+basis+'.'));
         }
+        const wavesHost=el('section');wavesHost.append(el('h5','Prerequisite planning waves'));
+        const w=r.dependency_waves;
+        if(w){
+          wavesHost.append(el('p',w.layered_idea_count+' ideas assigned to '+w.wave_count+
+            ' precedence waves · '+w.blocked_idea_count+' blocked · '+w.cycle_or_downstream_idea_count+
+            ' unresolved solely by cycle precedence. These are not durations, dates or execution approvals.','muted'));
+          if(w.cycle_groups?.length){
+            const cycles=el('details');cycles.append(el('summary','Exact dependency cycles ('+w.cycle_groups.length+' groups)'));
+            cycles.append(el('p',w.exact_cycle_member_count+' cycle members and '+w.exact_cycle_downstream_count+
+              ' additional ideas depending on cycles, including ideas with separate state blockers.','muted'));
+            const cycleList=el('ul');
+            for(const group of w.cycle_groups)cycleList.append(el('li','Cycle group '+group.group+': '+group.idea_ids.map(name).join(', ')));
+            cycles.append(cycleList);wavesHost.append(cycles);
+          }
+          const choose=el('select');choose.setAttribute('aria-label','Dependency planning wave');
+          for(const group of w.waves){
+            const option=el('option','Wave '+group.wave+' ('+group.idea_ids.length+' ideas)');
+            option.value=String(group.wave);choose.append(option);
+          }
+          if(w.blocked_idea_count||w.cycle_or_downstream_idea_count){
+            const option=el('option','Blocked or unresolved ideas');option.value='blocked';choose.append(option);
+          }
+          const waveRows=el('ul');
+          const renderWave=()=>{
+            waveRows.replaceChildren();
+            const selected=w.ideas.filter(i=>choose.value==='blocked'?i.wave===null:String(i.wave)===choose.value);
+            for(const idea of selected){
+              const item=el('li',name(idea.idea_id)+' · '+idea.state.replaceAll('_',' ')+
+                ' · '+idea.status.replaceAll('_',' ')+'. Target '+(idea.target_quarter||'not set')+
+                '; latest declared target in unfinished chain '+(idea.latest_declared_target_in_unfinished_chain||'unknown')+'.');
+              if(idea.unfinished_prerequisite_ids.length)item.append(el('p','Unfinished prerequisites: '+idea.unfinished_prerequisite_ids.map(name).join(', '),'muted'));
+              if(idea.cycle_group!==null)item.append(el('p','Member of exact cycle group '+idea.cycle_group+'.','muted'));
+              if(idea.depends_on_cycle)item.append(el('p','Depends on a cyclic prerequisite.','muted'));
+              if(idea.direct_blockers.length)item.append(el('p','Direct blockers: '+idea.direct_blockers.map(b=>name(b.idea_id)+' ('+b.state.replaceAll('_',' ')+')').join(', '),'muted'));
+              waveRows.append(item);
+            }
+          };
+          if(choose.options.length){choose.addEventListener('change',renderWave);wavesHost.append(choose,waveRows);renderWave();}
+          else wavesHost.append(el('p','No active ideas.'));
+          wavesHost.append(el('p','Snapshot basis: '+w.portfolio_basis_sha256.slice(0,12)+'… · implementation states are reviewer declarations.','muted'));
+        }
         const caveat=r.risk_candidates_truncated||!r.review_complete?
-          'The review was truncated or reached a depth boundary: unlisted issues remain unknown.':
+          'The review has unresolved integrity findings or bounded risk paths; unlisted issues may remain unknown.':
           'No live source was queried. These are plan consistency candidates, not forecast delivery dates.';
         dependencyScheduleHost.replaceChildren(el('h4','Dependency schedule review'),
           el('p',r.active_ideas+' active ideas; '+r.active_ideas_with_dependencies+
             ' declare dependencies, '+r.active_ideas_with_target_quarter+
             ' have target quarters; '+r.risk_candidates.length+' candidates shown.','muted'),
           ...(r.risk_candidates.length?[lines]:[]),
-          el('p',caveat,'muted'),el('p',r.interpretation,'muted'));
-      }catch(e){dependencyScheduleHost.replaceChildren(el('p',e.message,'muted'));}
+          el('p',caveat,'muted'),el('p',r.interpretation,'muted'),wavesHost);
+      }catch(e){if(generation===refreshGeneration)dependencyScheduleHost.replaceChildren(el('p',e.message,'muted'));}
       finally{dependencyScheduleButton.disabled=false;}
     };
     card.append(row,resumeSection,auditSection,tools,planningFilters,status,counts,portfolioButton,portfolioHost,benefitOverlapButton,benefitOverlapHost,benefitReadinessButton,benefitReadinessHost,dependencyScheduleButton,dependencyScheduleHost,viewCount,list,comparison,detail);
@@ -1280,6 +1323,7 @@
 
     async function refresh(){
       clearCumulative('Portfolio review cleared; explicitly check again after the list refresh.');
+      if(dependencyScheduleHost.childNodes.length)dependencyScheduleHost.replaceChildren(el('p','Dependency review cleared; run it again after the portfolio refresh.','muted'));
       const generation=++refreshGeneration;
       const requested=filter.value;
       loadedState=currentView=null;shortlistLink.disabled=shortlistJson.disabled=true;
