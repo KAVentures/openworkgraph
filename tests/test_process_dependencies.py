@@ -146,6 +146,41 @@ def test_reassessment_distinguishes_own_stale_pins_from_inherited_findings(store
     assert "PRIVATE_REASON" not in json.dumps(result)
 
 
+def test_focused_build_basis_ignores_unrelated_consumer_pins_and_tracks_exact_closure(store):
+    dep=ProcessDependencies(store)
+    a,b,c,d=[process(store,name) for name in "ABCD"]
+    for record in (a,b,c,d):
+        approve(store,record)
+    dep.save(person(),a["workflow_id"],body(a,b,access=2))
+    dep.save(person(),b["workflow_id"],body(b,access=2))
+    dep.save(person(),c["workflow_id"],body(c,b,access=2))
+    dep.save(person(),d["workflow_id"],body(d,access=2))
+    def basis():
+        return graph(store,a["workflow_id"])["focused_build_basis"]
+    first=basis()
+    assert first["all_declared_prerequisites_current"]
+    assert [r["workflow_id"] for r in first["processes"]]==[b["workflow_id"],a["workflow_id"]]
+    assert first["process_count"]==2 and first["prerequisite_count"]==1
+    assert not first["execution_authorized"]
+    assert "PRIVATE_REASON" not in json.dumps(first)
+    store.save(person(),write("Unrelated D changed",expected=1),d["workflow_id"])
+    assert basis()["basis_sha256"]==first["basis_sha256"]
+    new=store.save(person(),write("B changed",expected=1),b["workflow_id"])["process"]
+    changed=basis()
+    assert not changed["all_declared_prerequisites_current"]
+    assert changed["basis_sha256"]!=first["basis_sha256"]
+    dep.save(person(),b["workflow_id"],body(new,revision=1,access=2))
+    store.review(person("bob"),b["workflow_id"],review(new))
+    dep.save(person(),a["workflow_id"],body(a,new,revision=1,access=2))
+    repaired=basis()
+    assert repaired["all_declared_prerequisites_current"]
+    assert repaired["basis_sha256"]!=first["basis_sha256"]
+    assert graph(store)["current_basis"] is False
+    # Repairing the unrelated incoming consumer must not change A's basis.
+    dep.save(person(),c["workflow_id"],body(c,new,revision=1,access=2))
+    assert basis()["basis_sha256"]==repaired["basis_sha256"]
+
+
 def test_cross_root_cycle_refused_and_existing_map_groupings_remain_independent(store):
     dep=ProcessDependencies(store);a=process(store,'A');b=process(store,'B');c=process(store,'C')
     dep.save(person(),a['workflow_id'],body(a,b));dep.save(person(),b['workflow_id'],body(b,c))
