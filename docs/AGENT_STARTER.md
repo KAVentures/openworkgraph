@@ -96,6 +96,34 @@ JSON Schema, refresh a tool listing, call a provider, invoke a model, perform
 human work or create an execution intent. Clarification-only cases are counted
 but not rehearsed. Unvisited activities remain visible.
 
+### Optional exact nested schema checks
+
+The metadata-only catalog does not contain nested constraints. To obtain an
+exact local schema bundle, explicitly inspect the same tool endpoint again:
+
+```sh
+python review_bindings.py --capture-schemas --catalog tool-catalog.json \
+  --output tool-schemas.json --confirm-local-schema-capture
+```
+
+This performs one metadata listing using the existing customer credential. It
+refuses changed or missing schemas and ambiguous tool names. No business tool
+is called. Raw descriptions, defaults and examples can contain private data;
+keep this bundle local, do not send it to a model or publish it. The known
+metadata credential is refused if it appears in the captured schemas. The
+bundle is bounded to 1 MiB and binds the exact catalog and specification hashes.
+
+Add `--schemas tool-schemas.json` to the offline rehearsal. Every action and
+write precondition must have a matching schema digest. The bounded draft
+2020-12 structural subset checks nested properties, required fields,
+additional properties, array items, scalar types, enum/const and numeric or
+length constraints. Unsupported keywords (including references, regex,
+formats, combinators and conditional schemas), invalid schemas, missing
+bundle entries or exhausted validation work are explicit blockers. No remote
+schema resolution is permitted. This is not unrestricted JSON Schema
+validation or a substitute for the service's current validation. The report
+includes the schema bundle digest, but never the schema or case values.
+
 The minimized report binds specification, suite, bindings and catalog hashes;
 it excludes raw case values, arguments, tool descriptions and exception text.
 Treat hashes and stable IDs as potentially sensitive. It creates a new file
