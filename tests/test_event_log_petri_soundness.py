@@ -202,3 +202,80 @@ print("ok")
     done = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1],
                           env=env, capture_output=True, text=True, timeout=180)
     assert done.returncode == 0 and done.stdout.strip().endswith("ok"), done.stderr + done.stdout
+
+
+def test_soundness_does_not_imply_guaranteed_termination():
+    net = model(["s", "p", "f"], ["enter", "loop", "finish"],
+                [("s", "enter"), ("enter", "p"), ("p", "loop"), ("loop", "p"),
+                 ("p", "finish"), ("finish", "f")])
+    result = soundness.analyze(net)
+    assert result["sound"] is True
+    assert result["all_maximal_executions_complete"] is False
+    assert result["infinite_execution_possible"] is True
+    assert result["shortest_completion_steps"] == 2
+    assert result["longest_execution_steps"] is None
+    assert result["completion_witness"]["transition_ids"] == ["enter", "finish"]
+    assert result["infinite_execution_witness"]["entry"]["transition_ids"] == ["enter"]
+    assert result["infinite_execution_witness"]["cycle_transition_ids"] == ["loop"]
+
+
+def test_complete_acyclic_net_with_different_execution_lengths():
+    net = model(["s", "p", "q", "f"], ["direct", "enter", "middle", "finish"],
+                [("s", "direct"), ("direct", "f"), ("s", "enter"), ("enter", "p"),
+                 ("p", "middle"), ("middle", "q"), ("q", "finish"), ("finish", "f")])
+    result = soundness.analyze(net)
+    assert result["sound"] is True
+    assert result["all_maximal_executions_complete"] is True
+    assert result["infinite_execution_possible"] is False
+    assert result["shortest_completion_steps"] == 1
+    assert result["longest_execution_steps"] == 3
+    assert result["infinite_execution_witness"] is None
+
+
+def test_multistep_cycle_witness_replays_back_to_same_marking():
+    net = model(["s", "p", "q", "f"], ["enter", "forward", "back", "finish"],
+                [("s", "enter"), ("enter", "p"), ("p", "forward"), ("forward", "q"),
+                 ("q", "back"), ("back", "p"), ("q", "finish"), ("finish", "f")])
+    result = soundness.analyze(net)
+    w = result["infinite_execution_witness"]
+    parsed = soundness._strict_net(net)
+    marking = parsed["initial"].copy()
+
+    def fire(t):
+        assert all(marking[p] >= n for p, n in parsed["pre"][t].items())
+        marking.subtract(parsed["pre"][t])
+        marking.update(parsed["post"][t])
+
+    for t in w["entry"]["transition_ids"]:
+        fire(t)
+    entry = +marking
+    for t in w["cycle_transition_ids"]:
+        fire(t)
+    assert +marking == entry
+    assert w["cycle_steps"] == 2
+
+
+def test_incomplete_exploration_does_not_prove_termination(monkeypatch):
+    monkeypatch.setattr(soundness, "MAX_STATES", 2)
+    result = soundness.analyze(SEQUENCE)
+    assert result["all_maximal_executions_complete"] is None
+    assert result["infinite_execution_possible"] is None
+    assert result["longest_execution_steps"] is None
+
+
+def test_deadlock_without_cycle_refutes_guaranteed_completion():
+    net = model(["s", "p", "q", "f"], ["left", "right", "join"],
+                [("s", "left"), ("left", "p"), ("s", "right"), ("right", "q"),
+                 ("p", "join"), ("q", "join"), ("join", "f")])
+    result = soundness.analyze(net)
+    assert result["all_maximal_executions_complete"] is False
+    assert result["infinite_execution_possible"] is False
+    assert result["shortest_completion_steps"] is None
+    assert result["longest_execution_steps"] is None
+
+
+def test_graph_search_is_iterative_and_witness_is_deterministic():
+    edges = [{i + 1: str(i)} for i in range(1500)] + [{}]
+    assert soundness._execution_graph(edges) == (None, list(range(1500, -1, -1)))
+    edges[-1][1499] = "back"
+    assert soundness._execution_graph(edges) == ((1499, ["1499", "back"]), None)
