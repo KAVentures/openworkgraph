@@ -254,6 +254,15 @@ and the upload may be at most 512 MB. `POST /v1/event-logs/parquet-to-csv` with 
 returns `rows`, `columns`, `csv` and `dates_have_no_offset`. Nothing is stored: the upload is copied
 to a temporary file in the data folder, read and removed.
 
+### Title rows and Excel's delimiter hint
+
+Report-style exports often put a title or an export date above the column names. Set the line that
+holds the column names with `header_row=` (1 to 50) on the import, append and preview routes; the
+lines above it are skipped and the setting is part of the import's recorded transform. A first line
+`sep=;` (Excel's delimiter hint) is skipped automatically and its delimiter is used. Timestamp format
+detection finds the column names below such lines by itself. The dashboard skips a `sep=` line when it
+reads the columns; choosing a header row in the dashboard is not available yet.
+
 ### Excel workbooks
 
 Choosing an `.xlsx` file in the dashboard converts its first worksheet to CSV

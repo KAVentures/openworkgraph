@@ -56,6 +56,8 @@ def transform(source_format: str, mapping: dict[str, Any] | None) -> dict[str, A
             "attribute_columns": list(dict.fromkeys(mapping.get("attribute_columns") or [])),
             "delimiter": mapping.get("delimiter") or ",",
         }
+        if (mapping.get("header_row") or 1) > 1:
+            declared["mapping"]["header_row"] = mapping["header_row"]
         if mapping.get("naive_timestamp_offset"):
             # An explicit decision changes what is stored, so it is part of the transform.
             declared["mapping"]["naive_timestamp_offset"] = mapping["naive_timestamp_offset"]

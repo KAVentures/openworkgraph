@@ -134,7 +134,8 @@
     return 'csv';
   }
   function csvHeader(text,delimiter){
-    const line=String(text||'').replace(/^﻿/,'');
+    // An Excel delimiter hint ("sep=;") on the first line is not the header; the import skips it too.
+    const line=String(text||'').replace(/^﻿/,'').replace(/^sep=[,;|\t]\r?\n/,'');
     const out=[];let cell='',quoted=false;
     for(let i=0;i<line.length;i++){
       const c=line[i];
