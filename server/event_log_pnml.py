@@ -84,9 +84,9 @@ def _emit(net: _Net, node: dict[str, Any], src: str, dst: str) -> None:
             _emit(net, child, a, b)
         net.silent_between(ends, [dst])
     elif op == "or":
-        # All branches start pending. A branch can be skipped or executed, but
-        # only execution (including a tau child) can set the selected flag.
-        # The flag persists until the final join, excluding the all-skip path.
+        # All branches start pending. Select at least one before allowing
+        # skips, so the all-skip deadlock is unreachable. Selection does not
+        # serialize child execution; the flag is held only for silent choices.
         # Unlike a subset-per-transition construction this is linear in arity.
         children = node["children"]
         if not children:
@@ -95,12 +95,12 @@ def _emit(net: _Net, node: dict[str, Any], src: str, dst: str) -> None:
         pending = [net.place() for _ in children]
         done = [net.place() for _ in children]
         net.silent_between([src], [none, *pending])
-        for child, start, finish in zip(children, pending, done):
-            completed = net.place()
-            net.transition(None, start, finish)  # skip
-            _emit(net, child, start, completed)
-            net.silent_between([completed, none], [finish, some])
-            net.silent_between([completed, some], [finish, some])
+        for child, ready, finish in zip(children, pending, done):
+            start = net.place()
+            net.silent_between([none, ready], [some, start])
+            net.silent_between([some, ready], [some, start])
+            net.silent_between([some, ready], [some, finish])  # skip
+            _emit(net, child, start, finish)
         net.silent_between([some, *done], [dst])
     elif op == "interleaved":
         # A single lock is held for the entire child, not just one activity.
