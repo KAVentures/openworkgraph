@@ -183,9 +183,18 @@ class ProcessDependencies:
             exact=bool(root and root['current_model']['revision']==revision
                 and basis['basis_sha256']==expected_basis)
             current=bool(exact and basis['all_declared_prerequisites_current'])
+            model_pin=None;process_reference=None
+            if current:
+                from shared.process_agent_project import process_model_digest
+                record=self.store._record(c,p,wid,revision)
+                if record['content_sha256']!=root['current_model']['content_sha256']:
+                    raise Error('Root model changed during dependency check')
+                model_pin=process_model_digest(record['process_model'])
+                process_reference={key:record[key] for key in ('workflow_id','revision','content_sha256')}
             response={'format':'openworkgraph.dependency-build-basis-status.v1',
                 'organization_id':p.organization_id,'workflow_id':wid,'requested_revision':revision,
                 'requested_basis_sha256':expected_basis,'current_exact_reviewed_basis':current,
+                'process_reference':process_reference,'process_model_sha256':model_pin,
                 'status':'current' if current else 'unavailable' if not basis else 'changed_or_unreviewed',
                 'checked_at':_now(),'read_only':True,'execution_authorized':False,
                 'business_outcomes_verified':False}
@@ -224,7 +233,7 @@ class ProcessDependencies:
                 'organization_catalog_reference':{'organization_id':p.organization_id}}
             archive=build_runtime_project(packet)
         # The existing manifest covers every file, including the new sidecar.
-        # No generated runtime semantics or spec fields are changed.
+        # Pin the dependency basis in the runtime spec, which the existing intent hashes.
         with ZipFile(BytesIO(archive)) as original:
             files={name:original.read(name).decode('utf-8') for name in original.namelist()
                    if name!='release-manifest.json'}
@@ -232,7 +241,7 @@ class ProcessDependencies:
         files['README.md'] += ('\n## Declared dependency build basis\n\n'
             'This starter was exported with a reviewed prerequisite closure. See dependency-build-basis.json. '
             'Recheck the exact basis against the authenticated shared process portal before use. '
-            'The runtime does not enforce this sidecar or execute prerequisite processes. '
+            'The runtime rechecks the pinned basis at existing catalog checkpoints; it does not execute prerequisites. '
             'The snapshot grants no business execution permissions.\n')
         from pathlib import Path
         files['check_dependency_basis.py']=(Path(__file__).resolve().parents[1]/
@@ -240,8 +249,13 @@ class ProcessDependencies:
         files['README.md'] += ('\nRun python check_dependency_basis.py --manifest-sha256 YOUR_INDEPENDENT_PIN '
             '--catalog-url YOUR_CATALOG_URL using the existing catalog-read credential. '
             'A nonzero exit code means the basis was not established. '
-            'This explicit preflight must be repeated as needed; it is not automatically invoked by execute.py.\n')
+            'This optional standalone preflight supplements automatic catalog checks during authorized execution.\n')
         spec=json.loads(files['workflow.spec.json'])
+        spec['dependency_build_basis_sha256']=basis['basis_sha256']
+        files['workflow.spec.json']=json.dumps(spec,indent=2,ensure_ascii=False)+'\n'
+        example=json.loads(files['shadow-cases.example.json'])
+        example['spec_sha256']=hashlib.sha256(json.dumps(spec,sort_keys=True,allow_nan=False).encode()).hexdigest()
+        files['shadow-cases.example.json']=json.dumps(example,indent=2)+'\n'
         files['release-manifest.json']=create_manifest(files,spec)
         out=BytesIO()
         with ZipFile(out,'w',compression=ZIP_DEFLATED) as bundle:
