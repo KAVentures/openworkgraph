@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from io import BytesIO, StringIO
 
 import pytest
@@ -48,5 +49,26 @@ def test_mapped_separator_label_does_not_merge_with_a_multi_activity_path():
     exported, meta = variants_export.variants_csv(log)
     exported_rows = list(csv.DictReader(StringIO(exported)))
     assert meta['variants'] == 2
+    exact, exact_meta = variants_export.variants_csv(log, exact_paths=True)
+    exact_rows = list(csv.DictReader(StringIO(exact)))
+    assert exact_meta == meta
+    assert {tuple(json.loads(row['path_json'])) for row in exact_rows} == {(literal,), ('A','B')}
     assert {(row['path'], int(row['steps']), int(row['cases'])) for row in exported_rows} == {
         (literal, 1, 6), ('A > B', 2, 6)}
+
+
+def test_exact_csv_disambiguates_identical_human_readable_paths():
+    rows = StringIO()
+    writer = csv.writer(rows)
+    writer.writerow(['case', 'activity', 'time'])
+    for case, steps in [('one',['Raw']), ('two',['A','B'])]:
+        for i, activity in enumerate(steps):
+            writer.writerow([case, activity, f'2024-03-01T0{i}:00:00Z'])
+    log = workspace.import_log(BytesIO(rows.getvalue().encode()), name='paths', source_format='csv',
+        mapping={'case_column':'case', 'activity_column':'activity', 'timestamp_column':'time'})['log_id']
+    made = mappings.create(log, {'name':'Combined', 'groups':[{'label':'A > B', 'activities':['Raw']}]})
+    mappings.apply_mapping(log, made['mapping_id'])
+    text, meta = variants_export.variants_csv(log, exact_paths=True)
+    result = list(csv.DictReader(StringIO(text)))
+    assert meta['variants'] == 2 and {row['path'] for row in result} == {'A > B'}
+    assert {tuple(json.loads(row['path_json'])) for row in result} == {('A > B',), ('A','B')}

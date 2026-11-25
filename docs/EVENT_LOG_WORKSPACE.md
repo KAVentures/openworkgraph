@@ -3470,3 +3470,12 @@ The dashboard-session endpoint `POST /v1/event-logs/{log_id}/activity-mappings/t
 accepts `{ "format": "openworkgraph.activity-mapping.v1", "mapping": { ... } }`.
 It validates and previews the definition against original event labels without
 changing the log or its saved mappings.
+
+### Exact variant paths in CSV
+
+The ordinary variant CSV retains its existing human-readable `path` column.
+For labels that contain the display separator, **Download variants with exact
+paths (CSV)** adds `path_json`, a JSON array of the exact activity labels. This
+is a variant summary, not an event-log re-import format. It honours the active
+case filter and the same 10,000-variant limit. The equivalent API request is
+`GET /v1/event-logs/{log_id}/variants.csv?exact_paths=true`.

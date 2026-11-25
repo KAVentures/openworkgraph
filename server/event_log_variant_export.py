@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import re
 from typing import Any
 
@@ -30,7 +31,7 @@ def _cell(value: Any) -> str:
 
 
 def variants_csv(log_id: str, case_type: str | None = None, *,
-                 cohort: dict[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
+                 cohort: dict[str, Any] | None = None, exact_paths: bool = False) -> tuple[str, dict[str, Any]]:
     def run(conn):
         rows = conn.execute(f"""WITH v AS (
               SELECT case_id, list(activity ORDER BY ts, event_id) AS path, count(*) AS steps,
@@ -47,12 +48,18 @@ def variants_csv(log_id: str, case_type: str | None = None, *,
         raise EventLogWorkspaceError("no cases in this selection")
     out = io.StringIO()
     writer = csv.writer(out, lineterminator="\n")
-    writer.writerow(["rank", "path", "steps", "cases", "share", "cumulative_share", "median_seconds", "p90_seconds"])
+    header = ["rank", "path", "steps", "cases", "share", "cumulative_share", "median_seconds", "p90_seconds"]
+    if exact_paths:
+        header.append("path_json")
+    writer.writerow(header)
     running = 0
     for rank, (path, steps, n, median, p90) in enumerate(rows[:MAX_VARIANTS], start=1):
         running += n
-        writer.writerow([rank, _cell(" > ".join(path)), steps, n, round(n / total, 6),
-                         round(running / total, 6), median, p90])
+        row = [rank, _cell(" > ".join(path)), steps, n, round(n / total, 6),
+               round(running / total, 6), median, p90]
+        if exact_paths:
+            row.append(json.dumps(path, ensure_ascii=True, separators=(",", ":")))
+        writer.writerow(row)
     return out.getvalue(), {"cases": total, "variants": data["distinct"], "written": min(len(rows), MAX_VARIANTS),
                             "truncated": len(rows) > MAX_VARIANTS}
 
