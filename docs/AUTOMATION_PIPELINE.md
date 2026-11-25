@@ -75,6 +75,10 @@ budgets totalled per currency and basis (rejected ideas excluded), modeled hours
 ideas waiting on a dependency, open ideas per target quarter and how many ideas have no
 planning yet. The CSV export includes the planning columns.
 
+## Quality, adoption and conditional value
+
+The [quality and adoption benefit review](AUTOMATION_QUALITY_BENEFIT.md) extends existing implemented-idea measurements with explicit case denominators, review-effort accounting and conditional costs. Quality gates remain separate from financial arithmetic, and no verified savings or implementation approval is inferred.
+
 ## API (dashboard session only)
 
 `GET /v1/automation-pipeline[?state=]`, `POST /v1/automation-pipeline`,

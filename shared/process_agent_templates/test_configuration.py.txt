@@ -3,6 +3,7 @@ import asyncio
 from copy import deepcopy
 from datetime import datetime,timezone
 import json
+import os
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -13,7 +14,7 @@ try:
     from agents.items import ModelResponse
     from agents.usage import Usage
     from openai.types.responses import ResponseOutputMessage,ResponseOutputText
-    from configure import inspect_tools,propose_bindings,case_fields,validate_catalog,write_new
+    from configure import inspect_tools,propose_bindings,case_fields,validate_catalog,write_new,audit_bindings
     from execute import ImplementationError,digest,load_object
     from test_execution import fixture
     SDK_AVAILABLE=True
@@ -65,6 +66,745 @@ class ConfigurationCases(unittest.IsolatedAsyncioTestCase):
                              {'name':'request_id','case_pointer':'/request_id'}],'rationale':'Use the declared conditional API'},
                 {'activity_id':'readback','tool_name':'read_case','operation_kind':'read',
                  'arguments':[{'name':'issue','case_pointer':'/issue'}],'rationale':'Inspect current state'}]}
+    def reviewed_audit_fixture(self):
+        spec, plan, case, bindings, _ = fixture()
+        catalog = deepcopy(self.catalog)
+        hashes = {row['name']: row['input_schema_sha256'] for row in catalog['tools']}
+        for row in bindings['bindings']:
+            row['tool_schema_sha256'] = hashes[row['tool_name']]
+            if row.get('precondition'):
+                row['precondition']['tool_schema_sha256'] = hashes[row['precondition']['tool_name']]
+        suite = {'format':'openworkgraph.reviewed-shadow-cases.v1',
+                 'process_reference':catalog['process_reference'], 'spec_sha256':digest(spec),
+                 'reviewed_by_customer':True, 'case_inputs_authorized':True,
+                 'cases':[
+                     {'id':'case_1','category':'normal','input':case,
+                      'expected':{'status':'proposal','accepted_routes':[plan['activity_ids']], 'review_confirmed':True}},
+                     {'id':'case_2','category':'exception','input':deepcopy(case),
+                      'expected':{'status':'proposal','accepted_routes':[plan['activity_ids']], 'review_confirmed':True}},
+                     {'id':'case_3','category':'missing_facts','input':{'text':'PRIVATE_AUDIT_INPUT'},
+                      'expected':{'status':'needs_clarification','accepted_routes':[], 'review_confirmed':True}}]}
+        return spec, catalog, suite, bindings
+
+    async def test_binding_audit_checks_exact_reviewed_routes_without_business_io(self):
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        report=audit_bindings(spec,catalog,suite,bindings)
+        self.assertEqual(report['reviewed_route_count'],2)
+        self.assertEqual(report['routes_with_clear_static_checks'],2)
+        self.assertEqual(report['clarification_only_cases_not_route_tested'],1)
+        self.assertIsNone(report['cases'][2]['all_reviewed_routes_clear'])
+        self.assertFalse(report['review_required'])
+        self.assertEqual(report['uncovered_nonhuman_activity_ids'],[])
+        self.assertEqual(report['missing_categories'],[])
+        self.assertEqual(report['bindings_sha256'],digest(bindings))
+        self.assertEqual(report['suite_sha256'],digest(suite))
+        self.assertEqual(report['catalog_sha256'],digest(catalog))
+        self.assertEqual(report['cases'][0]['routes'][0]['counts']['source_outcomes'],1)
+        self.assertEqual(report['cases'][0]['routes'][0]['counts']['actions'],2)
+        for key in ('execution_authorized','business_tools_called','business_outcomes_verified',
+                    'provider_semantics_or_permissions_verified','live_catalog_refreshed',
+                    'schema_constraints_fully_validated','case_values_and_tool_arguments_included'):
+            self.assertIs(report[key],False)
+        for secret in ('PRIVATE_AUDIT_INPUT','SYNTHETIC_PRIVATE_RECORD','SYNTHETIC_MCP_SECRET',
+                       'resolve_case','read_case','http://127.0.0.1'):
+            self.assertNotIn(secret,json.dumps(report))
+        self.assertFalse(self.tools.business_calls)
+
+    async def test_binding_audit_detects_uncovered_edges_even_with_every_activity_covered(self):
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        # Two valid route alternatives traverse the same known nodes across
+        # the suite, but the direct skip edge is not represented initially.
+        spec['process_model']['transitions'].append({'source':'resolve','target':'done'})
+        spec['process_model_sha256']=digest(spec['process_model'])
+        catalog['spec_sha256']=digest(spec)
+        suite['spec_sha256']=digest(spec)
+        report=audit_bindings(spec,catalog,suite,bindings)
+        self.assertEqual(report['uncovered_nonhuman_activity_ids'],[])
+        self.assertEqual(report['structural_transition_coverage']['total'],3)
+        self.assertEqual(report['structural_transition_coverage']['covered'],2)
+        self.assertEqual(report['structural_transition_coverage']['uncovered'],
+                         [{'source':'resolve','target':'done','rule_id':None}])
+        self.assertTrue(report['review_required'])
+        suite['cases'][1]['expected']['accepted_routes'].append(['resolve','done'])
+        reviewed=audit_bindings(spec,catalog,suite,bindings)
+        self.assertEqual(reviewed['reviewed_route_count'],3)
+        self.assertEqual(reviewed['structural_transition_coverage']['covered'],3)
+        self.assertEqual(reviewed['structural_transition_coverage']['uncovered'],[])
+        self.assertFalse(reviewed['review_required'])
+
+    async def test_binding_audit_finds_drift_bad_types_and_missing_input_on_selected_cases(self):
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        bindings['bindings'][0]['tool_schema_sha256']='f'*64
+        bindings['bindings'][0]['precondition'].pop('tool_schema_sha256')
+        suite['cases'][1]['input']['version']=True
+        report=audit_bindings(spec,catalog,suite,bindings)
+        self.assertEqual(report['routes_with_findings'],2)
+        self.assertEqual(report['finding_counts']['action:schema_pin_changed'],2)
+        self.assertEqual(report['finding_counts']['precondition:schema_pin_missing'],2)
+        self.assertEqual(report['finding_counts']['action:argument_type_mismatch'],1)
+        self.assertTrue(report['review_required'])
+        suite['cases'][1]['input'].pop('issue')
+        report=audit_bindings(spec,catalog,suite,bindings)
+        self.assertIn('action:argument_or_schema_reference_invalid',report['finding_counts'])
+        self.assertIn('offline_preparation_refused',report['finding_counts'])
+
+    async def test_binding_audit_review_disabled_mappings_and_missing_case_categories(self):
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        bindings['enabled']=False
+        bindings['bindings'][0]['authorized']=False
+        bindings['bindings'][0]['operation_kind']='unmapped'
+        bindings['bindings'][0]['argument_map'].pop('issue')
+        suite['cases'].pop(1)
+        report=audit_bindings(spec,catalog,suite,bindings)
+        self.assertEqual(report['missing_categories'],['exception'])
+        self.assertIn('action:required_argument_missing',report['finding_counts'])
+        self.assertIn('customer_bindings_disabled',report['finding_counts'])
+        self.assertIn('missing_authorized_tool_binding',report['finding_counts'])
+        self.assertTrue(report['review_required'])
+        self.assertFalse(bindings['enabled'])
+        self.assertFalse(bindings['bindings'][0]['authorized'])
+
+    async def test_binding_audit_refuses_wrong_endpoint_stale_catalog_and_duplicate_routes(self):
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        with self.assertRaises(ImplementationError):
+            audit_bindings(spec,catalog,suite,bindings|{'tool_server_url':'https://other.example/mcp'})
+        with self.assertRaises(ImplementationError):
+            audit_bindings(spec,catalog|{'inspected_at':'2000-01-01T00:00:00Z'},suite,bindings)
+        with self.assertRaises(ImplementationError):
+            audit_bindings(spec,catalog,suite|{'spec_sha256':'c'*64},bindings)
+        duplicate=deepcopy(suite)
+        duplicate['cases'][0]['expected']['accepted_routes'] *= 2
+        with self.assertRaises(ImplementationError):
+            audit_bindings(spec,catalog,duplicate,bindings)
+        extra=deepcopy(bindings)
+        extra['bindings'].append(deepcopy(extra['bindings'][0]))
+        with self.assertRaises(ImplementationError):
+            audit_bindings(spec,catalog,suite,extra)
+        self.assertFalse(self.tools.business_calls)
+
+    async def test_binding_audit_reports_historical_schema_drift_even_after_repinning(self):
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        previous=deepcopy(catalog)
+        previous['inspected_at']='2020-01-01T00:00:00Z'
+        before=previous['tools'][0]
+        before['input_schema_sha256']='a'*64
+        before['input_fields'].append({'name':'legacy_optional','type':'string','required':False})
+        before['input_fields'][1]['type']='number'
+        before['input_fields'][2]['required']=False
+        report=audit_bindings(spec,catalog,suite,bindings,previous_catalog=previous)
+        self.assertEqual(report['routes_with_clear_static_checks'],2)
+        self.assertTrue(report['review_required'])
+        drift=report['mapped_catalog_changes']
+        self.assertEqual(drift['previous_catalog_sha256'],digest(previous))
+        self.assertEqual(drift['mapped_contracts_requiring_review'],1)
+        changed=next(row for row in drift['mapped_contracts'] if row['schema_pin_review_required'])
+        self.assertEqual(changed['activity_id'],'resolve')
+        self.assertEqual(changed['status'],'schema_pin_changed')
+        self.assertEqual(changed['field_changes']['removed_field_count'],1)
+        self.assertEqual(changed['field_changes']['changed_type_count'],1)
+        self.assertEqual(changed['field_changes']['new_required_field_count'],1)
+        self.assertNotIn('legacy_optional',json.dumps(report))
+        self.assertFalse(drift['provider_tool_removal_verified'])
+        previous['tools'].pop(0)
+        missing=audit_bindings(spec,catalog,suite,bindings,previous_catalog=previous)
+        self.assertEqual(missing['mapped_catalog_changes']['mapped_contracts_requiring_review'],1)
+        self.assertIn('not_in_previous_projection',
+                      [r['status'] for r in missing['mapped_catalog_changes']['mapped_contracts']])
+        with self.assertRaises(ImplementationError):
+            audit_bindings(spec,catalog,suite,bindings,
+                           previous_catalog=previous|{'tool_server_url':'https://other.example/mcp'})
+        with self.assertRaises(ImplementationError):
+            audit_bindings(spec,catalog|{'omitted_tool_count':'PRIVATE_INVALID_COUNT'},suite,bindings)
+
+    async def test_execution_queue_prepares_distinct_cases_and_refuses_cross_case_collisions(self):
+        from configure import shortlist_case_batch, prepare_execution_queue, write_execution_queue
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        original=suite['cases'][0]['input']
+        first={**original,'issue':'PRIVATE_FIRST','request_id':'key-first','record_ref':'owg:r:'+'d'*32}
+        second={**original,'issue':'PRIVATE_SECOND','request_id':'key-second','record_ref':'owg:r:'+'e'*32}
+        batch={'format':'openworkgraph.selected-route-cases.v1','case_inputs_authorized':True,
+               'cases':[{'id':'case_11','input':first},{'id':'case_12','input':second}]}
+        saved=shortlist_case_batch(spec,suite,bindings,batch)
+        route=saved['cases'][0]['routes'][0]['route_sha256']
+        selection={'format':'openworkgraph.execution-queue-selection.v1','selections':[
+            {'case_id':'case_11','route_sha256':route},{'case_id':'case_12','route_sha256':route}]}
+        packets,manifest=prepare_execution_queue(spec,suite,bindings,batch,saved,selection)
+        self.assertEqual(manifest['case_count'],2)
+        self.assertEqual(manifest['batch_review_sha256'],digest(saved))
+        self.assertEqual(manifest['selection_sha256'],digest(selection))
+        self.assertFalse(manifest['execution_authorized'])
+        self.assertFalse(manifest['provider_collision_freedom_verified'])
+        self.assertNotIn('PRIVATE_',json.dumps(manifest))
+        for row in manifest['cases']:
+            packet=packets[row['case_id']]
+            self.assertEqual(row['case_sha256'],digest(packet['case.json']))
+            self.assertEqual(row['disabled_intent_sha256'],digest(packet['customer-intent.json']))
+            self.assertFalse(packet['customer-intent.json']['customer_authorization_confirmed'])
+        with TemporaryDirectory() as directory:
+            root=Path(directory)/'queue'
+            write_execution_queue(root,packets,manifest)
+            self.assertEqual(load_object(root/'queue-review.json'),manifest)
+            self.assertEqual(load_object(root/'case_12'/'case.json'),second)
+            with self.assertRaises(FileExistsError):
+                write_execution_queue(root,packets,manifest)
+            real_open=os.open
+            for fail_index in range(1,12):
+                calls=[]
+                def fail(*args,**kwargs):
+                    calls.append(1)
+                    if len(calls)==fail_index:
+                        raise OSError('synthetic failure')
+                    return real_open(*args,**kwargs)
+                failed=root.parent/('failed_'+str(fail_index))
+                with patch('os.open',side_effect=fail),self.assertRaises(OSError):
+                    write_execution_queue(failed,packets,manifest)
+                self.assertFalse(failed.exists())
+        for field in ('record_ref','request_id'):
+            colliding=deepcopy(batch)
+            colliding['cases'][1]['input'][field]=first[field]
+            current=shortlist_case_batch(spec,suite,bindings,colliding)
+            with self.assertRaisesRegex(ImplementationError,'share a declared write key or outcome target'):
+                prepare_execution_queue(spec,suite,bindings,colliding,current,selection)
+        with self.assertRaises(ImplementationError):
+            prepare_execution_queue(spec,suite,bindings,batch,saved,{**selection,'selections':selection['selections'][:1]*2})
+        with self.assertRaises(ImplementationError):
+            prepare_execution_queue(spec,suite,bindings,batch,{**saved,'status_counts':{}},selection)
+        self.assertFalse(self.tools.business_calls)
+
+    async def test_queue_collision_checker_matches_random_pairwise_oracle(self):
+        from configure import _queue_collision_check
+        from random import Random
+        rng=Random(20261124)
+        for _ in range(1000):
+            records=[(str(j),{(rng.choice(('write_key','outcome_target')),rng.randrange(40))
+                             for i in range(rng.randrange(9))}) for j in range(rng.randrange(1,21))]
+            collision=any(a&b for j,(_,a) in enumerate(records) for _,b in records[j+1:])
+            if collision:
+                with self.assertRaises(ImplementationError):
+                    _queue_collision_check(records)
+            else:
+                _queue_collision_check(records)
+
+    async def test_prepare_batch_selection_recomputes_exact_review_before_materializing(self):
+        from configure import shortlist_case_batch, prepare_batch_selection
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        original=suite['cases'][0]['input']
+        new={**original,'issue':'PRIVATE_NEW_CASE','record_ref':'owg:r:'+'d'*32}
+        batch={'format':'openworkgraph.selected-route-cases.v1','case_inputs_authorized':True,
+               'cases':[{'id':'case_11','input':new},{'id':'case_12','input':suite['cases'][2]['input']},
+                        {'id':'case_13','input':original},{'id':'case_14','input':deepcopy(original)},
+                        {'id':'case_15','input':{'issue':'missing'}}]}
+        saved=shortlist_case_batch(spec,suite,bindings,batch)
+        route=saved['cases'][0]['routes'][0]['route_sha256']
+        docs=prepare_batch_selection(spec,suite,bindings,batch,saved,'case_11',route)
+        review=docs['preparation-review.json']
+        self.assertTrue(review['batch_review_recomputed'])
+        self.assertEqual(review['batch_review_sha256'],digest(saved))
+        self.assertEqual(review['selected_batch_sha256'],digest(batch))
+        self.assertEqual(review['selected_batch_case_id'],'case_11')
+        self.assertEqual(review['selected_route_sha256'],route)
+        self.assertEqual(docs['case.json'],new)
+        self.assertEqual(docs['customer-intent.json']['case_sha256'],digest(new))
+        self.assertFalse(docs['customer-intent.json']['customer_authorization_confirmed'])
+        self.assertNotIn('PRIVATE_NEW_CASE',json.dumps(review))
+        for case_id,route_id in [('case_12',route),('case_13',route),('case_14',route),
+                                 ('case_15',route),('case_99',route),('case_11','f'*64)]:
+            with self.assertRaises(ImplementationError):
+                prepare_batch_selection(spec,suite,bindings,batch,saved,case_id,route_id)
+        changed=deepcopy(batch)
+        changed['cases'][0]['input']['issue']='changed'
+        with self.assertRaises(ImplementationError):
+            prepare_batch_selection(spec,suite,bindings,changed,saved,'case_11',route)
+        tampered=deepcopy(saved)
+        tampered['cases'][0]['status']='one_exact_reviewed_route_static_checks_clear'
+        with self.assertRaises(ImplementationError):
+            prepare_batch_selection(spec,suite,bindings,batch,tampered,'case_11',route)
+        with self.assertRaises(ImplementationError):
+            prepare_batch_selection(spec,suite,{**bindings,'enabled':False},batch,saved,'case_11',route)
+        self.assertFalse(self.tools.business_calls)
+
+    async def test_batch_route_triage_preserves_exact_cases_and_duplicate_inputs(self):
+        from configure import shortlist_case_batch, shortlist_reviewed_routes
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        original=suite['cases'][0]['input']
+        selected=[original,{**original,'issue':'PRIVATE_NEW_CASE'},deepcopy(original),
+                  suite['cases'][2]['input'],{'issue':'PRIVATE_MISSING_INPUT'}]
+        batch={'format':'openworkgraph.selected-route-cases.v1','case_inputs_authorized':True,
+               'cases':[{'id':'case_'+str(i+1),'input':case} for i,case in enumerate(selected)]}
+        report=shortlist_case_batch(spec,suite,bindings,batch)
+        self.assertEqual(report['selected_batch_sha256'],digest(batch))
+        self.assertEqual(report['selected_case_count'],5)
+        self.assertEqual(report['distinct_selected_input_count'],4)
+        self.assertEqual(report['case_route_check_count'],5)
+        self.assertEqual([row['duplicate_selected_input'] for row in report['cases']],
+                         [True,False,True,False,False])
+        self.assertEqual(report['status_counts'],{
+            'one_exact_reviewed_route_static_checks_clear':2,
+            'new_input_requires_route_review':2,'exact_input_requires_clarification':1})
+        for row,case in zip(report['cases'],selected):
+            independent=shortlist_reviewed_routes(spec,suite,bindings,case)
+            self.assertEqual(row['case_sha256'],digest(case))
+            self.assertEqual(row['status'],independent['status'])
+            self.assertEqual(row['routes_with_clear_offline_requirements'],
+                             independent['routes_with_clear_offline_requirements'])
+            self.assertEqual([option['route_sha256'] for option in row['routes']],
+                             [option['route_sha256'] for option in independent['routes']])
+        self.assertNotIn('PRIVATE_',json.dumps(report))
+        self.assertNotIn('SYNTHETIC_PRIVATE_RECORD',json.dumps(report))
+        self.assertFalse(report['execution_authorized'])
+        self.assertFalse(report['automatic_route_selected'])
+        self.assertFalse(self.tools.business_calls)
+        for invalid in ({**batch,'case_inputs_authorized':False},
+                        {**batch,'cases':[]},
+                        {**batch,'cases':batch['cases'][:1]*2},
+                        {**batch,'cases':[{'id':'PRIVATE_ID','input':{}}]},
+                        {**batch,'cases':[{'id':'case_1','input':{'x':'a'*65536}}]},
+                        {**batch,'cases':[{'id':'case_'+str(i),'input':{}} for i in range(21)]}):
+            with self.assertRaises(ImplementationError):
+                shortlist_case_batch(spec,suite,bindings,invalid)
+        # Bound the entire Cartesian workload before any route preparation.
+        synthetic=[{'expected':{'accepted_routes':[['start',str(i),'end'] for i in range(21)]}}]
+        large={**batch,'cases':[{'id':'case_'+str(i),'input':{}} for i in range(20)]}
+        with patch('evaluate.validate_suite',return_value=synthetic),patch('configure.shortlist_reviewed_routes') as check:
+            with self.assertRaises(ImplementationError):
+                shortlist_case_batch(spec,suite,bindings,large)
+            check.assert_not_called()
+
+    async def test_shortlist_distinguishes_exact_reviews_from_new_case_and_conflicts(self):
+        from configure import shortlist_reviewed_routes
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        selected=deepcopy(suite['cases'][0]['input'])
+        result=shortlist_reviewed_routes(spec,suite,bindings,selected)
+        self.assertEqual(result['status'],'one_exact_reviewed_route_static_checks_clear')
+        self.assertEqual(result['distinct_reviewed_route_count'],1)
+        self.assertEqual(result['exact_input_review_count'],2)
+        self.assertEqual(result['exact_input_reviewed_route_intersection_count'],1)
+        self.assertEqual(result['routes'][0]['exact_input_references'],
+            [{'case_id':'case_1','alternative':1},{'case_id':'case_2','alternative':1}])
+        self.assertTrue(result['review_required'])
+        for key in ('execution_authorized','automatic_route_selected','business_tools_called',
+                    'route_applicability_independently_verified','model_called'):
+            self.assertFalse(result[key])
+        new={**selected,'issue':'PRIVATE_NEW_CASE'}
+        result=shortlist_reviewed_routes(spec,suite,bindings,new)
+        self.assertEqual(result['status'],'new_input_requires_route_review')
+        self.assertEqual(result['routes_with_clear_offline_requirements'],1)
+        self.assertFalse(result['routes'][0]['supported_by_all_exact_reviews'])
+        self.assertNotIn('PRIVATE_',json.dumps(result))
+        disabled=shortlist_reviewed_routes(spec,suite,{**bindings,'enabled':False},selected)
+        self.assertEqual(disabled['status'],'reviewed_route_has_implementation_blockers')
+        self.assertIn('customer_bindings_disabled',disabled['routes'][0]['requirements'])
+        malformed=shortlist_reviewed_routes(spec,suite,bindings,{'issue':'missing data'})
+        self.assertEqual(malformed['routes_with_clear_offline_requirements'],0)
+        self.assertIn('offline_preparation_refused',malformed['routes'][0]['requirements'])
+        self.assertEqual(shortlist_reviewed_routes(spec,suite,bindings,suite['cases'][2]['input'])['status'],
+                         'exact_input_requires_clarification')
+        suite['cases'][2]['input']=selected
+        conflicted=shortlist_reviewed_routes(spec,suite,bindings,selected)
+        self.assertEqual(conflicted['status'],'conflicting_exact_input_reviews')
+        self.assertEqual(conflicted['exact_input_reviewed_route_intersection_count'],0)
+        self.assertFalse(self.tools.business_calls)
+        with self.assertRaises(ImplementationError):
+            shortlist_reviewed_routes(spec,suite,{**bindings,'process_reference':{}},selected)
+
+    async def test_shortlist_intersects_reviewed_alternatives_without_guessing(self):
+        from configure import shortlist_reviewed_routes
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        spec['process_model']['transitions'].append({'source':'resolve','target':'done'})
+        spec['process_model_sha256']=digest(spec['process_model'])
+        suite['spec_sha256']=digest(spec)
+        direct=['resolve','done']
+        suite['cases'][0]['expected']['accepted_routes'].append(direct)
+        selected=suite['cases'][0]['input']
+        result=shortlist_reviewed_routes(spec,suite,bindings,selected)
+        self.assertEqual(result['distinct_reviewed_route_count'],2)
+        self.assertEqual(result['status'],'one_exact_reviewed_route_static_checks_clear')
+        self.assertEqual(result['routes'][0]['activity_ids'],['resolve','readback','done'])
+        self.assertTrue(result['routes'][0]['supported_by_all_exact_reviews'])
+        suite['cases'][1]['expected']['accepted_routes'].append(direct)
+        self.assertEqual(shortlist_reviewed_routes(spec,suite,bindings,selected)['status'],
+                         'multiple_reviewed_alternatives')
+        suite['cases'][0]['expected']['accepted_routes']=[direct]
+        suite['cases'][1]['expected']['accepted_routes']=[['resolve','readback','done']]
+        self.assertEqual(shortlist_reviewed_routes(spec,suite,bindings,selected)['status'],
+                         'conflicting_exact_input_reviews')
+
+    async def test_route_inventory_randomized_intersection(self):
+        from configure import _reviewed_route_inventory
+        from random import Random
+        rng=Random(20261124)
+        pool=[['start',str(i),'end'] for i in range(8)]
+        for _ in range(1000):
+            cases=[{'id':f'case_{i}','input':{'v':rng.randrange(5)},
+                    'expected':{'accepted_routes':rng.sample(pool,rng.randrange(5))}}
+                   for i in range(rng.randrange(1,21))]
+            target={'v':rng.randrange(6)}
+            inventory,exact,common=_reviewed_route_inventory(cases,digest(target))
+            matches=[row for row in cases if row['input']==target]
+            self.assertEqual(exact,matches)
+            self.assertEqual(common,{tuple(route) for route in pool if matches and all(
+                route in row['expected']['accepted_routes'] for row in matches)})
+            self.assertEqual(set(inventory),{tuple(route) for row in cases for route in row['expected']['accepted_routes']})
+            for route,item in inventory.items():
+                self.assertEqual(item['references'],[
+                    {'case_id':row['id'],'alternative':i+1} for row in cases
+                    for i, candidate in enumerate(row['expected']['accepted_routes']) if tuple(candidate)==route])
+                self.assertEqual(item['exact_references'],[
+                    {'case_id':row['id'],'alternative':i+1} for row in matches
+                    for i, candidate in enumerate(row['expected']['accepted_routes']) if tuple(candidate)==route])
+
+    async def test_prepare_reviewed_case_creates_real_executor_inputs_and_disabled_intent(self):
+        from configure import prepare_reviewed_case, write_reviewed_case_directory
+        from execute import prepare, validate_intent, review_template
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        documents=prepare_reviewed_case(spec,suite,bindings,'case_1',1)
+        intent=documents['customer-intent.json']
+        review=documents['preparation-review.json']
+        self.assertFalse(intent['customer_authorization_confirmed'])
+        self.assertFalse(intent['source_reads_confirmed'])
+        self.assertIsNone(intent['expires_at'])
+        self.assertTrue(review['offline_requirements_clear'])
+        self.assertTrue(review['review_required'])
+        self.assertEqual(review['mapped_action_count'],2)
+        self.assertEqual(review['suite_sha256'],digest(suite))
+        self.assertEqual(review['disabled_intent_sha256'],digest(intent))
+        self.assertNotIn('SYNTHETIC_PRIVATE_RECORD',json.dumps(review))
+        self.assertFalse(self.tools.business_calls)
+        with TemporaryDirectory() as directory:
+            import stat
+            root=Path(directory)/'prepared'
+            write_reviewed_case_directory(root,documents)
+            plan,case,loaded_bindings,saved_intent=[load_object(root/name) for name in
+                ('plan.json','case.json','bindings.json','customer-intent.json')]
+            prepared=prepare(spec,plan,case,loaded_bindings)
+            self.assertEqual(saved_intent,review_template(spec,prepared,case,loaded_bindings))
+            with self.assertRaises(ImplementationError):
+                validate_intent(spec,prepared,case,loaded_bindings,saved_intent)
+            if os.name=='posix':
+                self.assertEqual(stat.S_IMODE(root.stat().st_mode),0o700)
+                for file in root.iterdir():
+                    self.assertEqual(stat.S_IMODE(file.stat().st_mode),0o600)
+            original=(root/'case.json').read_bytes()
+            with self.assertRaises(FileExistsError):
+                write_reviewed_case_directory(root,documents)
+            self.assertEqual((root/'case.json').read_bytes(),original)
+            oversized={**documents,'case.json':{'text':'a'*65536}}
+            with self.assertRaises(ImplementationError):
+                write_reviewed_case_directory(root.parent/'oversized',oversized)
+            self.assertFalse((root.parent/'oversized').exists())
+            real_open=os.open
+            for failure_index in range(1,6):
+                calls=[]
+                def fail_at(*args,**kwargs):
+                    calls.append(1)
+                    if len(calls)==failure_index:
+                        raise OSError('synthetic write failure')
+                    return real_open(*args,**kwargs)
+                failed=root.parent/('failed_'+str(failure_index))
+                with patch('os.open',side_effect=fail_at),self.assertRaises(OSError):
+                    write_reviewed_case_directory(failed,documents)
+                self.assertFalse(failed.exists())
+        disabled=deepcopy(bindings)
+        disabled['enabled']=False
+        packet=prepare_reviewed_case(spec,suite,disabled,'case_1',1)
+        self.assertIn('customer_bindings_disabled',packet['preparation-review.json']['requirements'])
+        self.assertFalse(packet['preparation-review.json']['offline_requirements_clear'])
+        for ident,alt in [('case_3',1),('unknown',1),('case_1',0),('case_1',2),('case_1',True)]:
+            with self.assertRaises(ImplementationError):
+                prepare_reviewed_case(spec,suite,bindings,ident,alt)
+
+    async def test_reuse_reviewed_route_for_new_case_rebinds_every_action_and_source_check(self):
+        from configure import prepare_reviewed_case, write_reviewed_case_directory
+        from execute import prepare, execute_approved
+        from test_execution import FakeTools, receipt
+        from datetime import timedelta
+        spec,catalog,suite,_=self.reviewed_audit_fixture()
+        # Existing fake transport has no pinned metadata schemas. Use the
+        # original synthetic executor fixture bindings for this integration.
+        bindings=fixture()[3]
+        original=deepcopy(suite)
+        new_case={'issue':'SYNTHETIC_NEW_CASE','version':3,
+                  'request_id':'synthetic-new-key','record_ref':'owg:r:'+'d'*32}
+        documents=prepare_reviewed_case(spec,suite,bindings,'case_1',1,new_case=new_case)
+        review=documents['preparation-review.json']
+        self.assertEqual(suite,original)
+        self.assertTrue(review['route_reused_for_new_case'])
+        self.assertFalse(review['selected_input_is_reviewed_reference_case'])
+        self.assertFalse(review['new_case_route_applicability_established'])
+        self.assertEqual(review['reviewed_reference_case_sha256'],digest(suite['cases'][0]['input']))
+        self.assertEqual(review['case_sha256'],digest(new_case))
+        self.assertNotEqual(review['case_sha256'],review['reviewed_reference_case_sha256'])
+        self.assertEqual(documents['case.json'],new_case)
+        self.assertNotIn('SYNTHETIC_PRIVATE_RECORD',json.dumps(documents))
+        self.assertNotIn('SYNTHETIC_NEW_CASE',json.dumps(review))
+        plan=documents['plan.json']
+        prepared=prepare(spec,plan,new_case,bindings)
+        self.assertEqual(prepared['requirements'],[])
+        self.assertEqual(prepared['actions'][0]['arguments']['issue'],new_case['issue'])
+        self.assertEqual(prepared['outcomes'][0]['resource_ref'],new_case['record_ref'])
+        intent=documents['customer-intent.json']
+        self.assertEqual(intent['case_sha256'],digest(new_case))
+        tools=FakeTools()
+        requests=[]
+        async def reader(base,token,request):
+            requests.append(deepcopy(request))
+            value=receipt(request)
+            if not tools.resolved:
+                value.update(operation_verified=False,availability='unknown',
+                             reason='provider_state_not_expected_operation')
+            return value
+        with TemporaryDirectory() as directory:
+            root=Path(directory)
+            write_reviewed_case_directory(root/'packet',documents)
+            with patch.dict('os.environ',{'OWG_EXECUTION_MCP_TOKEN':'SYNTHETIC_TOKEN',
+                                          'OWG_EXECUTION_SOURCE_READ_TOKEN':'SYNTHETIC_SOURCE'}):
+                with self.assertRaises(ImplementationError):
+                    await execute_approved(spec,plan,new_case,bindings,intent,
+                        journal_directory=root/'journal',client_factory=lambda *args:tools,receipt_reader=reader)
+                self.assertEqual(tools.calls,[])
+                self.assertEqual(requests,[])
+                self.assertFalse((root/'journal').exists())
+                # Synthetic operator review only; production preparation
+                # never sets these fields or manufactures an expiry.
+                reviewed={**intent,'customer_authorization_confirmed':True,'source_reads_confirmed':True,
+                          'expires_at':(datetime.now(timezone.utc)+timedelta(minutes=10)).isoformat()}
+                result=await execute_approved(spec,plan,new_case,bindings,reviewed,
+                    journal_directory=root/'journal',client_factory=lambda *args:tools,receipt_reader=reader)
+                self.assertTrue(result['all_tool_results_matched'])
+                self.assertTrue(result['all_declared_operations_verified'])
+                self.assertFalse(result['business_objective_verified'])
+                self.assertEqual([name for name,_ in tools.calls],['read_case','resolve_case','read_case'])
+                self.assertTrue(all(args['issue']==new_case['issue'] for _,args in tools.calls))
+                self.assertEqual(tools.calls[1][1]['request_id'],new_case['request_id'])
+                self.assertTrue(requests)
+                self.assertTrue(all(row['resource_ref']==new_case['record_ref'] for row in requests))
+                with self.assertRaises(ImplementationError):
+                    await execute_approved(spec,plan,suite['cases'][0]['input'],bindings,reviewed,
+                        journal_directory=root/'journal',client_factory=lambda *args:tools,receipt_reader=reader)
+                self.assertEqual(len(tools.calls),3)
+        for invalid in ({}, {'issue':'missing facts'}, {**new_case,'record_ref':'invalid'}, [], {'text':'x'*65536}):
+            with self.assertRaises(ImplementationError):
+                prepare_reviewed_case(spec,suite,bindings,'case_1',1,new_case=invalid)
+        with self.assertRaises(ImplementationError):
+            prepare_reviewed_case(spec,suite,bindings,'case_3',1,new_case=new_case)
+
+    async def test_prepare_reviewed_case_cli_reuses_executor_without_network(self):
+        import subprocess
+        import sys
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        with TemporaryDirectory() as directory:
+            root=Path(directory)
+            for name,value in [('workflow.spec.json',spec),('suite.json',suite),('bindings.json',bindings)]:
+                (root/name).write_text(json.dumps(value),encoding='utf-8')
+            for name in ('configure.py','evaluate.py','execute.py','runtime.py',
+                         'process_source_state.py','process_rule_conditions.py','monitor.py','run_queue.py'):
+                (root/name).write_bytes((Path(__file__).parent/name).read_bytes())
+            command=[sys.executable,'-c',
+                'import configure,runpy,socket; socket.socket=lambda *a,**k: (_ for _ in ()).throw(AssertionError("network")); runpy.run_path("configure.py",run_name="__main__")',
+                '--prepare-reviewed-case','--cases','suite.json','--bindings','bindings.json',
+                '--case-id','case_1','--alternative','1','--output','prepared']
+            denied=subprocess.run(command,cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertNotEqual(denied.returncode,0)
+            self.assertFalse((root/'prepared').exists())
+            result=subprocess.run(command+['--confirm-retain-case-inputs'],cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            self.assertFalse(json.loads(result.stdout)['execution_authorized'])
+            execute=[sys.executable,'execute.py','--plan','prepared/plan.json','--case','prepared/case.json',
+                     '--bindings','prepared/bindings.json']
+            result=subprocess.run(execute,cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            self.assertEqual(json.loads(result.stdout)['requirements'],[])
+            result=subprocess.run(execute+['--intent','prepared/customer-intent.json','--execute-approved'],
+                                  cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertNotEqual(result.returncode,0)
+            self.assertFalse((root/'execution-journal').exists())
+            shortlist=[sys.executable,'configure.py','--shortlist-reviewed-routes','--cases','suite.json',
+                       '--bindings','bindings.json','--case','prepared/case.json','--output','shortlist.json']
+            result=subprocess.run(shortlist,cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            self.assertEqual(json.loads((root/'shortlist.json').read_text())['status'],
+                             'one_exact_reviewed_route_static_checks_clear')
+            shortlist[-1]='ambiguous.json'
+            result=subprocess.run(shortlist+['--confirm-retain-case-inputs'],cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertNotEqual(result.returncode,0)
+            self.assertFalse((root/'ambiguous.json').exists())
+            batch={'format':'openworkgraph.selected-route-cases.v1','case_inputs_authorized':True,
+                   'cases':[{'id':'case_1','input':suite['cases'][0]['input']},
+                            {'id':'case_2','input':suite['cases'][2]['input']}]}
+            (root/'batch.json').write_text(json.dumps(batch),encoding='utf-8')
+            batch_command=[sys.executable,'configure.py','--shortlist-case-batch','--cases','suite.json',
+                           '--bindings','bindings.json','--case-batch','batch.json','--output','batch-review.json']
+            result=subprocess.run(batch_command,cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            report=load_object(root/'batch-review.json')
+            self.assertEqual(report['selected_case_count'],2)
+            self.assertEqual(report['cases'][1]['status'],'exact_input_requires_clarification')
+            self.assertFalse(report['execution_authorized'])
+            route=report['cases'][0]['routes'][0]['route_sha256']
+            pick=[sys.executable,'configure.py','--prepare-batch-selection','--cases','suite.json',
+                  '--bindings','bindings.json','--case-batch','batch.json','--batch-review','batch-review.json',
+                  '--case-id','case_1','--route-sha256',route,'--output','batch-prepared']
+            denied=subprocess.run(pick,cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertNotEqual(denied.returncode,0)
+            self.assertFalse((root/'batch-prepared').exists())
+            accepted=subprocess.run(pick+['--confirm-retain-case-inputs'],cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(accepted.returncode,0,accepted.stdout+accepted.stderr)
+            receipt=load_object(root/'batch-prepared'/'preparation-review.json')
+            self.assertEqual(receipt['batch_review_sha256'],digest(report))
+            self.assertTrue(receipt['batch_review_recomputed'])
+            self.assertFalse(receipt['execution_authorized'])
+            selection={'format':'openworkgraph.execution-queue-selection.v1','selections':[
+                {'case_id':'case_1','route_sha256':route}]}
+            (root/'selection.json').write_text(json.dumps(selection),encoding='utf-8')
+            queue=[sys.executable,'configure.py','--prepare-execution-queue','--cases','suite.json',
+                   '--bindings','bindings.json','--case-batch','batch.json','--batch-review','batch-review.json',
+                   '--queue-selection','selection.json','--confirm-retain-case-inputs','--output','queue']
+            result=subprocess.run(queue,cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            manifest=load_object(root/'queue'/'queue-review.json')
+            self.assertEqual(manifest['case_count'],1)
+            self.assertFalse(manifest['execution_authorized'])
+            self.assertFalse(load_object(root/'queue'/'case_1'/'customer-intent.json')['customer_authorization_confirmed'])
+            pin=json.loads(result.stdout)['queue_sha256']
+            self.assertEqual(pin,digest(manifest))
+            inspect=[sys.executable,'-c',
+                'import run_queue,runpy,socket; socket.socket=lambda *a,**k: (_ for _ in ()).throw(AssertionError("network")); runpy.run_path("run_queue.py",run_name="__main__")',
+                '--queue','queue','--queue-sha256',pin,'--inspect']
+            result=subprocess.run(inspect,cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            status=json.loads(result.stdout)
+            self.assertEqual(status['cases'][0]['status'],'waiting')
+            self.assertFalse((root/'queue'/'queue-state').exists())
+            self.assertFalse(status['business_outcomes_verified'])
+
+            new_case={**suite['cases'][0]['input'],'issue':'SYNTHETIC_NEW_CASE',
+                      'request_id':'new-case-idempotency-key','record_ref':'owg:r:'+'e'*32}
+            (root/'new-case.json').write_text(json.dumps(new_case),encoding='utf-8')
+            command[-1]='new-prepared'
+            result=subprocess.run(command+['--new-case','new-case.json','--confirm-retain-case-inputs'],
+                                  cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            self.assertTrue(json.loads(result.stdout)['route_reused_for_new_case'])
+            self.assertEqual(load_object(root/'new-prepared'/'case.json'),new_case)
+            review=load_object(root/'new-prepared'/'preparation-review.json')
+            self.assertFalse(review['new_case_route_applicability_established'])
+            self.assertEqual(review['reviewed_reference_case_sha256'],digest(suite['cases'][0]['input']))
+
+    async def test_paired_binding_review_detects_regressions_and_clear_but_changed_contracts(self):
+        from configure import compare_binding_configurations
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        same=compare_binding_configurations(spec,catalog,suite,bindings,deepcopy(bindings))
+        self.assertEqual(same['disposition_counts'],{'improved':0,'regressed':0,'unchanged_clear':2,'unchanged_findings':0})
+        self.assertFalse(same['review_required'])
+        changed=deepcopy(bindings)
+        changed['bindings'][0]['result_equals']=False
+        result=compare_binding_configurations(spec,catalog,suite,bindings,changed)
+        self.assertEqual(result['disposition_counts']['unchanged_clear'],2)
+        self.assertEqual(result['binding_changes']['changed_activity_ids'],['resolve'])
+        self.assertTrue(result['review_required'])
+        self.assertFalse(result['candidate_static_review_required'])
+        self.assertFalse(result['runtime_behavior_compatibility_verified'])
+        changed['bindings'][0]['tool_schema_sha256']='f'*64
+        regressed=compare_binding_configurations(spec,catalog,suite,bindings,changed)
+        self.assertEqual(regressed['disposition_counts']['regressed'],2)
+        self.assertEqual(regressed['routes_with_new_findings'],2)
+        for row in regressed['routes']:
+            self.assertIn({'code':'action:schema_pin_changed','activity_id':'resolve'},row['findings_added'])
+        improved=compare_binding_configurations(spec,catalog,suite,changed,bindings)
+        self.assertEqual(improved['disposition_counts']['improved'],2)
+        self.assertEqual(improved['routes_with_removed_findings'],2)
+        self.assertTrue(improved['review_required'])
+        for secret in ('PRIVATE_AUDIT_INPUT','SYNTHETIC_PRIVATE_RECORD','resolve_case','read_case','http://127.0.0.1'):
+            self.assertNotIn(secret,json.dumps(improved))
+        self.assertFalse(self.tools.business_calls)
+
+    async def test_paired_audit_delta_rejects_mismatched_bases_and_matches_randomized_oracle(self):
+        from configure import _paired_audit_delta
+        from random import Random
+        rng=Random(20261124)
+        basis={'process_reference':{'workflow_id':'synthetic'},'spec_sha256':'s',
+               'catalog_sha256':'c','suite_sha256':'t'}
+        universe=[(code,activity) for code in ('pin','missing','type','auth') for activity in ('a','b',None)]
+        for _ in range(100):
+            old,new=(set(rng.sample(universe,rng.randrange(len(universe)+1))) for _ in range(2))
+            def make(findings):
+                return {**basis,'cases':[{'case_id':'case_1','routes':[{
+                    'alternative':1,'route_sha256':'route','static_contract_checks_clear':not findings,
+                    'requires_separate_human_resolution':False,'counts':{'actions':2},
+                    'findings':[{'code':code,'activity_id':activity} for code,activity in findings]}]}]}
+            a,b=make(old),make(new)
+            delta=_paired_audit_delta(a,b)['routes'][0]
+            self.assertEqual({(f['code'],f['activity_id']) for f in delta['findings_added']},new-old)
+            self.assertEqual({(f['code'],f['activity_id']) for f in delta['findings_removed']},old-new)
+            self.assertEqual(delta['retained_finding_count'],len(old&new))
+            self.assertEqual(delta['disposition'],{
+                (False,True):'improved',(True,False):'regressed',
+                (True,True):'unchanged_clear',(False,False):'unchanged_findings'}[not old,not new])
+        for field in basis:
+            with self.assertRaises(ImplementationError):
+                _paired_audit_delta(a,{**b,field:'different'})
+        with self.assertRaises(ImplementationError):
+            _paired_audit_delta(a,{**b,'cases':[]})
+
+    async def test_paired_audit_detects_findings_replacement_without_binary_status_change(self):
+        from configure import compare_binding_configurations
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        old,new=deepcopy(bindings),deepcopy(bindings)
+        old['bindings'][0]['tool_schema_sha256']='f'*64
+        new['bindings'][0]['precondition'].pop('tool_schema_sha256')
+        result=compare_binding_configurations(spec,catalog,suite,old,new)
+        self.assertEqual(result['disposition_counts']['unchanged_findings'],2)
+        self.assertEqual(result['routes_with_new_findings'],2)
+        self.assertEqual(result['routes_with_removed_findings'],2)
+        for row in result['routes']:
+            self.assertIn({'code':'action:schema_pin_changed','activity_id':'resolve'},row['findings_removed'])
+            self.assertIn({'code':'precondition:schema_pin_missing','activity_id':'resolve'},row['findings_added'])
+
+    async def test_binding_audit_cli_replays_exact_inputs_and_reports_failure_exit(self):
+        import subprocess
+        import sys
+        spec,catalog,suite,bindings=self.reviewed_audit_fixture()
+        with TemporaryDirectory() as folder:
+            root=Path(folder)
+            for name,value in [('workflow.spec.json',spec),('catalog.json',catalog),
+                               ('cases.json',suite),('bindings.json',bindings)]:
+                (root/name).write_text(json.dumps(value),encoding='utf-8')
+            for name in ('configure.py','evaluate.py','execute.py','runtime.py',
+                         'process_source_state.py','process_rule_conditions.py'):
+                (root/name).write_bytes((Path(__file__).parent/name).read_bytes())
+            command=[sys.executable,'-c',
+                     'import configure,runpy,socket; socket.socket=lambda *a,**k: (_ for _ in ()).throw(AssertionError("network")); runpy.run_path("configure.py",run_name="__main__")',
+                     '--audit-bindings','--catalog','catalog.json','--cases','cases.json',
+                     '--bindings','bindings.json','--output','audit.json']
+            result=subprocess.run(command,cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            report=json.loads((root/'audit.json').read_text())
+            self.assertEqual(report['routes_with_clear_static_checks'],2)
+            bindings['enabled']=False
+            (root/'bindings.json').write_text(json.dumps(bindings),encoding='utf-8')
+            command[-1]='review.json'
+            result=subprocess.run(command,cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,2,result.stdout+result.stderr)
+            self.assertTrue(json.loads((root/'review.json').read_text())['review_required'])
+            command[-1]='forbidden.json'
+            result=subprocess.run(command+['--model','unused'],cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertNotEqual(result.returncode,0)
+            self.assertFalse((root/'forbidden.json').exists())
+            bindings['enabled']=True
+            (root/'baseline.json').write_text(json.dumps(bindings),encoding='utf-8')
+            command[-1]='paired.json'
+            result=subprocess.run(command+['--baseline-bindings','baseline.json'],cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,2,result.stdout+result.stderr)
+            paired=json.loads((root/'paired.json').read_text())
+            self.assertEqual(paired['format'],'openworkgraph.paired-binding-readiness.v1')
+            self.assertEqual(paired['disposition_counts']['regressed'],2)
+            self.assertTrue(paired['binding_changes']['other_binding_fields_changed'])
+            command[-1]='ambiguous.json'
+            result=subprocess.run(command+['--baseline-bindings','baseline.json','--previous-catalog','catalog.json'],
+                                  cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertNotEqual(result.returncode,0)
+            self.assertFalse((root/'ambiguous.json').exists())
+
     async def test_inspection_minimizes_metadata_and_never_calls_business_tools(self):
         self.assertEqual(len(self.catalog['tools']),2);self.assertEqual(self.catalog['omitted_tool_count'],1)
         self.assertFalse(self.tools.business_calls)

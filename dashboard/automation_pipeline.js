@@ -1518,6 +1518,96 @@
             parts.push(list);
             if(c.single_period_each)parts.push(el('div','Only one baseline and one after period: no range of variation yet.','muted'));
           }else if(r.measurements.length)parts.push(el('div','Record at least one baseline and one after period to compare.','muted'));
+          if(idea.state==='implemented'){
+            const launch=button('Review quality, adoption and cost','secondary');
+            launch.id='owgQualityBenefitOpen';
+            const scenarioHost=el('div');scenarioHost.id='owgQualityBenefitResult';
+            let invocation=0;
+            launch.onclick=async()=>{
+              const current=++invocation;scenarioHost.replaceChildren(el('p','Reading retained measurement snapshot…','muted'));
+              const active=()=>current===invocation&&generation===detailGeneration&&scenarioHost.isConnected;
+              const path='/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/quality-benefit';
+              try{
+                const inv=await(await api(path+'/inventory')).json();
+                if(!active())return;
+                if(inv.idea_revision!==idea.revision)throw Error('Idea changed; reopen it before comparing.');
+                const output=el('div'),message=el('p');message.setAttribute('role','status');
+                const numeric=(label,max,step='any')=>{const i=el('input');i.type='number';i.min='0';i.max=String(max);i.step=step;i.required=true;i.setAttribute('aria-label',label);return i;};
+                const label=(name,node)=>{const l=el('label',name+' ');l.appendChild(node);return l;};
+                const currency=el('input');currency.maxLength=3;currency.placeholder='SEK';currency.setAttribute('aria-label','Currency');
+                const hourly=numeric('Loaded labor cost per hour',1e12),investment=numeric('One-time cost',1e12),
+                  coverage=numeric('Minimum quality coverage percent',100),adoption=numeric('Minimum attempted adoption percent',100),
+                  failure=numeric('Maximum failure-rate increase percentage points',100);
+                const fields=el('div',null,'row');
+                fields.append(label('Currency',currency),label('Loaded labor cost per hour',hourly),label('One-time cost',investment),
+                  label('Minimum quality coverage (%)',coverage),label('Minimum after attempted adoption (%)',adoption),
+                  label('Maximum failure rate increase (percentage points)',failure));
+                const selections=[];
+                const periodHost=el('div');
+                for(const period of inv.measurements){
+                  const group=el('fieldset');group.appendChild(el('legend',period.period+' · '+period.start+' – '+period.end+' · '+period.cases+' cases'));
+                  const include=el('input');include.type='checkbox';
+                  const names=[['eligible_cases','Eligible cases'],['automation_attempted_cases','Cases with automation attempted'],
+                    ['automation_handoff_cases','Attempted cases handed to a human'],['quality_checked_cases','Quality checked cases'],
+                    ['quality_failed_cases','Checked cases failing quality'],['extra_review_hours','Additional review hours'],['nonlabor_cost','Nonlabor operating cost for period']];
+                  const inputs={};const controls=el('div');
+                  for(const [key,title] of names){const isCount=key.endsWith('_cases');const node=numeric(title,isCount?period.cases:1e12,isCount?'1':'any');node.disabled=true;inputs[key]=node;controls.appendChild(label(title,node));}
+                  const basis=el('select');basis.disabled=true;basis.setAttribute('aria-label','Review effort accounting basis');
+                  for(const [v,t] of [['','Choose basis'],['already_in_retained_effort','Review already included in retained effort'],['additional_to_retained_effort','Review effort additional to retained effort']]){
+                    const o=el('option',t);o.value=v;basis.appendChild(o);}
+                  include.onchange=()=>{Object.values(inputs).forEach(n=>n.disabled=!include.checked);basis.disabled=!include.checked;};
+                  group.append(label('Include measurement',include),controls,label('Review effort accounting basis',basis));periodHost.appendChild(group);
+                  selections.push({period,include,inputs,basis});
+                }
+                const run=button('Calculate quality and adoption scenario','secondary'),download=button('Download scenario JSON','secondary');download.disabled=true;
+                let serial=0,result=null;
+                const invalidate=()=>{serial++;result=null;output.replaceChildren();download.disabled=true;run.disabled=false;message.textContent='Inputs changed; calculate again.';};
+                for(const n of [fields,periodHost])n.addEventListener('input',invalidate);
+                for(const n of [fields,periodHost])n.addEventListener('change',invalidate);
+                download.onclick=()=>{if(!active()||!result)return;const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)],{type:'application/json'}));const a=el('a');a.href=url;a.download='owg-quality-benefit-scenario.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+                run.onclick=async()=>{
+                  invalidate();const ticket=serial;
+                  const selected=selections.filter(p=>p.include.checked);
+                  const required=[hourly,investment,coverage,adoption,failure,...selected.flatMap(p=>Object.values(p.inputs))];
+                  if(!/^[A-Z]{3}$/.test(currency.value)||required.some(n=>n.value===''||!n.checkValidity())||
+                      selected.some(p=>!p.basis.value)||!selected.some(p=>p.period.period==='baseline')||!selected.some(p=>p.period.period==='after')){
+                    message.textContent='Enter all values explicitly, including zeros, and select both a baseline and after period.';return;
+                  }
+                  const body={snapshot_sha256:inv.snapshot_sha256,currency:currency.value,labor_cost_per_hour:Number(hourly.value),
+                    one_time_cost:Number(investment.value),minimum_quality_coverage:Number(coverage.value)/100,
+                    minimum_after_adoption:Number(adoption.value)/100,maximum_quality_failure_rate_increase:Number(failure.value)/100,
+                    periods:selected.map(p=>({measurement_id:p.period.measurement_id,review_effort_basis:p.basis.value,
+                      ...Object.fromEntries(Object.entries(p.inputs).map(([k,v])=>[k,Number(v.value)]))}))};
+                  run.disabled=true;message.textContent='Calculating against selected measurement snapshot…';
+                  try{
+                    const data=await post(path,body);
+                    if(!active()||ticket!==serial)return;
+                    if(data.snapshot_sha256!==inv.snapshot_sha256||data.idea_id!==idea.idea_id)throw Error('Unexpected measurement snapshot.');
+                    result=data;download.disabled=false;message.textContent=data.all_declared_gates_met?'Entered evidence meets all selected review gates.':'One or more selected review gates are unmet or unknown.';
+                    const pct=v=>v===null?'Unknown':(v*100).toFixed(2)+'%';
+                    const table=el('table'),thead=el('thead'),tr=el('tr');['Metric','Baseline','After'].forEach(x=>tr.appendChild(el('th',x)));thead.appendChild(tr);table.appendChild(thead);
+                    const tbody=el('tbody');for(const [key,name] of [['cases','Cases'],['eligible','Eligible'],['attempts','Attempted'],['handoffs','Handoffs'],['checked','Quality checked'],['failed','Quality failures'],['quality_coverage','Quality coverage'],['quality_failure_rate','Failure among checked'],['attempted_share_of_eligible','Attempted adoption'],['handoff_share_of_attempts','Handoff share'],['non_handoff_share_of_eligible','Non-handoff share of eligible']]){
+                      const row=el('tr');const ratio=['quality_coverage','quality_failure_rate','attempted_share_of_eligible','handoff_share_of_attempts','non_handoff_share_of_eligible'].includes(key);
+                      for(const v of [name,ratio?pct(data.baseline[key]):data.baseline[key],ratio?pct(data.after[key]):data.after[key]])row.appendChild(el('td',String(v)));tbody.appendChild(row);
+                    }table.appendChild(tbody);
+                    const wrap=el('div',null,'table-wrap');wrap.appendChild(table);
+                    const money=data.financial_scenario;output.replaceChildren(el('h5','Pooled period evidence'),wrap,el('h5','Review gates'));
+                    for(const g of data.review_gates)output.appendChild(el('p',g.gate+' · '+g.status+' · observed '+pct(g.observed)+' · threshold '+pct(g.threshold)));
+                    output.append(el('h5','Conditional cost and effort scenario'),
+                      el('p','Retained effort change at after volume: '+money.retained_effort_change_hours_at_after_volume+' hours/month'),
+                      el('p','Including additional review effort: '+money.effort_change_with_extra_review_hours_at_after_volume+' hours/month'),
+                      el('p','Modeled net value change: '+money.modeled_net_monthly_value_change+' '+data.currency+'/month'),
+                      el('p','Modeled simple payback: '+(money.modeled_simple_payback_months===null?'No positive modeled payback':money.modeled_simple_payback_months+' months')),
+                      el('p',data.interpretation,'muted'));
+                  }catch(e){if(active()&&ticket===serial)message.textContent=e.message;}
+                  finally{if(active()&&ticket===serial)run.disabled=false;}
+                };
+                scenarioHost.replaceChildren(el('h5','Quality and adoption review'),
+                  el('p','Use comparable periods and consistent quality criteria. Enter every count and cost explicitly. Non-handoff does not prove successful completion. Financial arithmetic does not monetize quality.','muted'),fields,periodHost,run,download,message,output);
+              }catch(e){if(active())scenarioHost.replaceChildren(el('p',e.message));}
+            };
+            parts.push(launch,scenarioHost);
+          }
           parts.push(el('p',r.interpretation,'muted'));host.replaceChildren(...parts);
         };
         addMeasure.onclick=async()=>{

@@ -256,6 +256,23 @@ def _benefit(operation: Callable[..., Any], *args: Any) -> JSONResponse:
         raise HTTPException(404 if str(exc) in {"unknown idea", "unknown measurement"} else 422, str(exc)) from None
 
 
+@router.get("/v1/automation-pipeline/{idea_id}/quality-benefit/inventory")
+async def quality_benefit_inventory(request: Request, idea_id: str):
+    from . import automation_quality_benefit as quality
+    _require_dashboard(request)
+    return await run_in_threadpool(_benefit, quality.inventory, idea_id)
+
+
+@router.post("/v1/automation-pipeline/{idea_id}/quality-benefit")
+async def quality_benefit_scenario(request: Request, idea_id: str):
+    from . import automation_quality_benefit as quality
+    from .event_log_routes import _json_body
+    _require_dashboard(request)
+    spec = await _json_body(request, "quality and adoption scenario", strict=True, limit=65536)
+    _require_dashboard(request)
+    return await run_in_threadpool(_benefit, quality.analyze, idea_id, spec)
+
+
 @router.get("/v1/automation-pipeline/{idea_id}/realized-value")
 def realized_value(request: Request, idea_id: str):
     from . import automation_benefits
