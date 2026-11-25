@@ -87,18 +87,21 @@ def _case_review(spec,case,as_of_date,remaining_work):
         'rule_checks':rules,'decision_checks':tables,'candidate_examples':search['examples']}
 
 
-def review_scenarios(spec,suite,*,as_of_date):
-    """Compare bounded scenario results with customer-reviewed expectations."""
-    as_of_date=_as_of(as_of_date)
+def _validated_cases(spec,suite):
     if not isinstance(suite,dict) or len(json.dumps(suite,allow_nan=False).encode())>MAX_INPUT_BYTES:
         raise ImplementationError('Choose a bounded reviewed fact scenario suite')
     cases=validate_suite(spec,suite,allow_current_source_rules=True)
     if len(cases)>MAX_CASES:
         raise ImplementationError('Choose at most 50 reviewed scenarios')
-    # Validate all facts before evaluating any candidate. This is deliberately
-    # distinct from a live-source suite; the input object is the fact object.
     for case in cases:
         validate_facts(case['input'])
+    return cases
+
+
+def review_scenarios(spec,suite,*,as_of_date):
+    """Compare bounded scenario results with customer-reviewed expectations."""
+    as_of_date=_as_of(as_of_date)
+    cases=_validated_cases(spec,suite)
     rows=[];remaining=MAX_BATCH_WORK
     for case in cases:
         row=_case_review(spec,case,as_of_date,remaining)
@@ -127,16 +130,131 @@ def review_scenarios(spec,suite,*,as_of_date):
     return report
 
 
+def _expectation_key(expected):
+    return expected['status'],frozenset(tuple(path) for path in expected['accepted_routes'])
+
+
+def _route_key(row):
+    return (row['search_status'],frozenset((tuple(p['activity_ids']),p['status'])
+        for p in row['candidate_examples']))
+
+
+def _changed_ids(before,after,key):
+    a={row[key]:digest(row) for row in before}
+    b={row[key]:digest(row) for row in after}
+    return sorted(k for k in a.keys()|b.keys() if a.get(k)!=b.get(k))
+
+
+def compare_scenarios(before_spec,after_spec,before_suite,after_suite,*,as_of_date):
+    """Compare design behavior with one evaluator, never execute the two releases."""
+    as_of_date=_as_of(as_of_date)
+    if (before_spec['workflow_id']!=after_spec['workflow_id']
+            or type(before_spec['revision']) is not int or type(after_spec['revision']) is not int
+            or before_spec['revision']>=after_spec['revision']
+            or before_spec.get('organization_catalog_reference')!=after_spec.get('organization_catalog_reference')):
+        raise ImplementationError('Compare a baseline and newer revision of the same scoped workflow')
+    old_cases=_validated_cases(before_spec,before_suite)
+    new_cases=_validated_cases(after_spec,after_suite)
+    if len(old_cases)!=len(new_cases):
+        raise ImplementationError('Use the identical ordered case population for both revisions')
+    for old,new in zip(old_cases,new_cases):
+        if (old['id']!=new['id'] or old['category']!=new['category']
+                or digest(old['input'])!=digest(new['input'])):
+            raise ImplementationError('Both reviewed suites must contain identical ordered IDs, categories and case facts')
+    # Each revision receives the same independent work allowance, not a
+    # shared budget that could favor the one evaluated first.
+    old_report=review_scenarios(before_spec,before_suite,as_of_date=as_of_date)
+    new_report=review_scenarios(after_spec,after_suite,as_of_date=as_of_date)
+    rows=[]
+    for old,new,a,b in zip(old_cases,new_cases,old_report['cases'],new_report['cases']):
+        changed_expectation=_expectation_key(old['expected'])!=_expectation_key(new['expected'])
+        old_match,new_match=a['matches_reviewed_expectation'],b['matches_reviewed_expectation']
+        complete=a['search_complete'] and b['search_complete']
+        if not complete:
+            classification='comparison_incomplete'
+        elif changed_expectation:
+            classification='changed_expectation_matches' if new_match else 'changed_expectation_mismatch'
+        elif old_match and new_match:
+            classification='stable_match'
+        elif old_match:
+            classification='regression'
+        elif new_match:
+            classification='improvement'
+        else:
+            classification='persistent_mismatch'
+        behavior_changed=(_route_key(a)!=_route_key(b)) if complete else None
+        rows.append({'case_id':old['id'],'category':old['category'],
+            'classification':classification,'expectation_changed':changed_expectation,
+            'baseline_matches':old_match,'candidate_matches':new_match,
+            'baseline_search_status':a['search_status'],'candidate_search_status':b['search_status'],
+            'baseline_search_complete':a['search_complete'],'candidate_search_complete':b['search_complete'],
+            'route_behavior_changed':behavior_changed,
+            'changed_rule_ids':_changed_ids(a['rule_checks'],b['rule_checks'],'rule_id'),
+            'changed_decision_table_ids':_changed_ids(a['decision_checks'],b['decision_checks'],'table_id'),
+            'review_required':not complete or new_match is not True or behavior_changed is True
+                or changed_expectation})
+    groups={}
+    for row in rows:
+        groups.setdefault(row['category'],Counter())[row['classification']]+=1
+    result={'format':'openworkgraph.paired-declared-fact-revision-review.v1',
+        'baseline':{'process_reference':reference(before_spec),'spec_sha256':digest(before_spec),
+            'suite_sha256':digest(before_suite),'matching_case_count':old_report['matching_case_count'],
+            'search_work_count':old_report['search_work_count']},
+        'candidate':{'process_reference':reference(after_spec),'spec_sha256':digest(after_spec),
+            'suite_sha256':digest(after_suite),'matching_case_count':new_report['matching_case_count'],
+            'search_work_count':new_report['search_work_count']},
+        'as_of_date':as_of_date,'case_count':len(rows),
+        'classification_counts':dict(sorted(Counter(r['classification'] for r in rows).items())),
+        'by_category':{k:dict(sorted(v.items())) for k,v in sorted(groups.items())},
+        'changed_expectation_count':sum(r['expectation_changed'] for r in rows),
+        'changed_route_behavior_count':sum(r['route_behavior_changed'] is True for r in rows),
+        'cases':rows,'review_required':any(r['review_required'] for r in rows),
+        'identical_case_facts_and_date':True,'same_evaluator_used_for_both_revisions':True,
+        'historical_release_code_executed':False,'release_runtime_compatibility_verified':False,
+        'case_values_included':False,'source_reads_performed':False,'model_invoked':False,
+        'business_tools_called':False,'execution_plan_created':False,'execution_authorized':False,
+        'interpretation':'Finite declared-fact comparison of two saved designs under this evaluator. Changed expectations are not counted as regressions or improvements. Incomplete search cannot establish behavioral equivalence. Not a test of historical code, tool mappings, provider behavior or actual business outcomes.'}
+    return result
+
+
+def compare_releases(before_root,after_root,before_pin,after_pin,before_suite,after_suite,*,as_of_date):
+    from verify_release import _pinned_inventory,_pinned_spec
+    # Only read verified files, never import modules from either supplied root.
+    old_manifest=_pinned_inventory(before_root,before_pin)
+    new_manifest=_pinned_inventory(after_root,after_pin)
+    before=_pinned_spec(before_root,old_manifest)
+    after=_pinned_spec(after_root,new_manifest)
+    report=compare_scenarios(before,after,before_suite,after_suite,as_of_date=as_of_date)
+    report['baseline']['manifest_sha256']=before_pin
+    report['candidate']['manifest_sha256']=after_pin
+    report['release_file_integrity_checked']=True
+    report['independent_signature_verified']=False
+    return report
+
+
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--cases',required=True)
+    parser.add_argument('--cases',required=True,help='Current or candidate reviewed fact suite')
+    parser.add_argument('--baseline-release')
+    parser.add_argument('--candidate-release')
+    parser.add_argument('--baseline-manifest-sha256')
+    parser.add_argument('--candidate-manifest-sha256')
+    parser.add_argument('--baseline-cases')
     parser.add_argument('--as-of-date',required=True)
     parser.add_argument('--output',required=True)
     parser.add_argument('--confirm-declared-fact-review',action='store_true')
     args=parser.parse_args(argv)
     if not args.confirm_declared_fact_review or Path(args.output).exists():
         raise ImplementationError('Confirm local declared-fact review and select a new output file')
-    result=review_scenarios(load_spec(),load_object(args.cases,limit=MAX_INPUT_BYTES),as_of_date=args.as_of_date)
+    comparison=[args.baseline_release,args.candidate_release,args.baseline_manifest_sha256,
+                args.candidate_manifest_sha256,args.baseline_cases]
+    if any(v is not None for v in comparison):
+        if not all(comparison):
+            raise ImplementationError('Supply both release directories, independent manifest pins and both reviewed suites')
+        result=compare_releases(*comparison[:4],load_object(args.baseline_cases,limit=MAX_INPUT_BYTES),
+            load_object(args.cases,limit=MAX_INPUT_BYTES),as_of_date=args.as_of_date)
+    else:
+        result=review_scenarios(load_spec(),load_object(args.cases,limit=MAX_INPUT_BYTES),as_of_date=args.as_of_date)
     # Serialize before opening the output to avoid creating a partial report
     # because of an invalid or oversized result.
     raw=json.dumps(result,indent=2,ensure_ascii=False,allow_nan=False)
@@ -144,8 +262,9 @@ def main(argv=None):
         raise ImplementationError('Scenario report exceeds the bounded output size; narrow the suite')
     with Path(args.output).open('x',encoding='utf-8') as stream:
         stream.write(raw+'\n')
-    print(json.dumps({k:result[k] for k in ('case_count','matching_case_count',
-        'mismatching_case_count','unresolved_case_count','review_required')},sort_keys=True))
+    keys=('case_count','classification_counts','changed_expectation_count','changed_route_behavior_count','review_required') if any(comparison) else (
+        'case_count','matching_case_count','mismatching_case_count','unresolved_case_count','review_required')
+    print(json.dumps({k:result[k] for k in keys},sort_keys=True))
     return 2 if result['review_required'] else 0
 
 
