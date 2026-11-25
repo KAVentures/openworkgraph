@@ -58,3 +58,23 @@ labels require review. No model or keyword configuration is modified. Synthetic
 tests cover ties, unknown intents, overlap screening, paired arithmetic,
 missing denominators and work limits. Real independent multilingual quality
 remains to be demonstrated.
+
+## Learned probability reliability
+
+The same fixed full and overlap-screened holdouts and reviewer language groups
+also report per-trained-intent probability quality: Brier score, clipped log
+loss, 10-bin expected calibration error, tie-aware AUROC and non-interpolated
+average precision. The constant baseline is the intent's training prevalence
+(not held-out prevalence). Brier skill is one minus model Brier divided by
+baseline Brier; a negative value indicates worse scores than that baseline.
+The baseline is evaluated on exactly the model-scored rows. No score is imputed
+for missing or untrained intents; coverage is disclosed. Empty or single-class
+ranking metrics and zero-denominator skill are unavailable. Macro metrics use
+only trained intents with at least five scored positives and negatives and no
+missing scores, with per-metric support reported. Ten fixed probability bins
+include counts and positive labels; mean probabilities and rates are hidden
+for bins with fewer than five observations. Bin boundaries are lower-inclusive
+and upper-exclusive, except 1.0 belongs to the last bin. The log-loss clip is
+1e-15. These diagnostics do not tune thresholds, certify calibration, establish
+external quality or authorize deployment. The existing consent and model-basis
+checks apply, and the aggregate JSON export includes the same metrics.

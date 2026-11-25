@@ -221,12 +221,37 @@
             const rows=report.per_intent.map(i=>[i.intent,
               pct(i.keyword.accuracy_all),pct(i.learned.accuracy_all),pct(i.keyword.coverage),pct(i.learned.coverage),
               pct(i.keyword.recall_all_positives),pct(i.learned.recall_all_positives),i.paired.learned_only_correct,i.paired.keyword_only_correct]);
+            const reliability=report.probability_reliability;
+            const reliabilityView=[];
+            if(reliability){
+              const metrics=reliability.per_intent;
+              const fmt=v=>v===null?'—':Number(v).toFixed(3);
+              const chooser=el('select');chooser.setAttribute('aria-label','Probability reliability intent');
+              metrics.filter(x=>x.trained).forEach(x=>{const o=el('option',x.intent);o.value=x.intent;chooser.appendChild(o);});
+              const bins=el('div');
+              function drawBins(){
+                const m=metrics.find(x=>x.intent===chooser.value)?.metrics;
+                bins.replaceChildren(...(m?[table(['Probability interval','Scored','Positive labels','Mean probability','Observed rate'],
+                  m.bins.map(b=>[b.lower.toFixed(1)+'–'+b.upper.toFixed(1),b.count,b.positives,fmt(b.mean_probability),fmt(b.observed_positive_rate)]))]:[]));
+              }
+              chooser.onchange=drawBins;drawBins();
+              reliabilityView.push(el('h4','Learned probability reliability'),
+                el('p','Fixed holdout only. Macro support: '+reliability.macro_supported_intents+
+                  ' trained intents with at least five positive and five negative scores and no missing predictions. No threshold was fitted.','muted'),
+                table(['Intent','Scored / total','Brier','Training prior Brier','Brier skill','Log loss','ECE','AUROC','Average precision','Support'],
+                  metrics.map(x=>{const m=x.metrics;return m?[x.intent,m.scored_examples+' / '+m.holdout_examples,
+                    fmt(m.brier_score),fmt(m.training_prior_brier_score),fmt(m.brier_skill_against_training_prior),fmt(m.log_loss_clipped),
+                    fmt(m.ece_fixed_10_bins),fmt(m.auroc),fmt(m.average_precision),m.sufficient_scored_support&&!m.missing_probabilities?'Supported':'Limited']:
+                    [x.intent,'Not trained','—','—','—','—','—','—','—','—'];})),
+                el('p','Brier and log loss: lower is better. Negative Brier skill means worse than the training prevalence baseline. AUROC/AP are withheld for single-class samples. ECE uses ten fixed bins. Bin means are hidden below five observations. These are descriptive estimates, not deployment approval.','muted'),
+                field('Reliability bins for intent',chooser),bins);
+            }
             body.replaceChildren(el('p',report.message_count+' reviewed messages; '+report.declared_intents+' declared intents.'),
               el('p','Strict complete-message correctness: learned only '+pair.learned_only_correct+' · keyword only '+pair.keyword_only_correct+
                 ' · difference '+pct(pair.paired_correctness_difference)+' · exact paired p '+(pair.unadjusted_exact_mcnemar_p===null?'—':pair.unadjusted_exact_mcnemar_p.toPrecision(3))),
               table(['Intent','Keyword correct','Learned correct','Keyword coverage','Learned coverage','Keyword recall','Learned recall','Learned only correct','Keyword only correct'],rows),
               table(['Keyword result','Learned result','Messages'],pair.transitions.map(t=>[t.keyword,t.learned,t.count])),
-              el('p','Accuracy uses all cases, with abstentions not counted as correct. Recall counts positive abstentions in the denominator. Untrained intents are abstentions.','muted'));
+              el('p','Accuracy uses all cases, with abstentions not counted as correct. Recall counts positive abstentions in the denominator. Untrained intents are abstentions.','muted'),...reliabilityView);
           }
           select.onchange=draw;subset.onchange=draw;draw();
           const download=button('Download aggregate comparison JSON','secondary');
