@@ -631,3 +631,39 @@ The synthetic acceptance suites cover arbitrary numeric facts, missing values,
 dependency conflicts, effective-date expiry, changed suite pins, exhausted
 batch budgets and explicit local review. Actual customer-policy validity and
 source integration must still be independently validated.
+
+
+### Compare two released designs on identical declared facts
+
+For a policy/design upgrade, use a trusted current generated runtime (with
+requirements installed) and two extracted releases whose manifest digests
+were recorded independently:
+
+```sh
+python review_facts.py --baseline-release old-release --candidate-release new-release \
+  --baseline-manifest-sha256 OLD_SHA256 --candidate-manifest-sha256 NEW_SHA256 \
+  --baseline-cases old-reviewed.json --cases new-reviewed.json \
+  --as-of-date 2026-06-01 --output revision-review.json --confirm-declared-fact-review
+```
+
+Both releases must belong to the same workflow and organization scope, with
+the candidate at a newer revision. Each suite must be independently pinned
+to its own specification. Both suites must contain the same ordered case IDs,
+categories and exact fact objects. Only their reviewed route or clarification
+expectations may differ. The current evaluator validates both manifests and
+recomputes both designs at one explicit policy date with equal independent
+search budgets. Neither historical release's code is imported or executed.
+
+The minimized paired report separates stable matches, regressions,
+improvements, persistent mismatches, changed expectations and incomplete
+comparisons. It also detects changed route behavior even when both reviewed
+expectations match. Rule and table IDs with changed check results are
+diagnostic pointers, not a causal attribution. Changed expectations and
+behavior require review; incomplete search never establishes equivalence.
+The report retains manifest, specification and suite digests, not raw facts.
+
+This compares model declarations under the current evaluator, not historic
+runtime semantics, provider behavior, tool mappings, historical ground truth
+or actual operations. An unsigned manifest is not an independent signature.
+The portable graph model is included in all newly generated releases so a
+linear candidate can also compare an older decision-table or token-flow design.
