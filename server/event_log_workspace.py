@@ -32,10 +32,11 @@ from shared.event_log_formats import (
     CASE_TYPE, RESOURCE_PRESENCE_WHITESPACE, MAX_ATTRIBUTE_VALUE, MAX_ATTRIBUTES, MAX_OBJECT_ATTRIBUTE_VALUES,
     EventLogFormatError, EventRecord,
     ObjectRecord, ReadStats,
-    TRAILING_UNNAMED, TRAILING_VALUES, read_csv, read_csv_header, read_ocel_json, read_ocel_xml, read_xes, write_csv, write_ocel_json,
+    read_csv, read_csv_header, read_ocel_json, read_ocel_xml, read_xes, write_csv, write_ocel_json,
     write_ocel_xml, write_xes,
 )
 
+from shared.event_log_formats import TRAILING_UNNAMED, TRAILING_VALUES
 from .db import DATA_DIR
 from . import event_log_source_identity as source_identity
 from . import event_log_object_relationships as object_relationships
