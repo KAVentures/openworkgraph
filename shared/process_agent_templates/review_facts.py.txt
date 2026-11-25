@@ -378,6 +378,76 @@ def compare_releases(before_root,after_root,before_pin,after_pin,before_suite,af
     return report
 
 
+def review_effective_period(spec,suite,*,start,end):
+    """Review each declared effective-date interval with unchanged case facts."""
+    start,end=_as_of(start),_as_of(end)
+    if not start<end or (date.fromisoformat(end)-date.fromisoformat(start)).days>3660:
+        raise ImplementationError('Choose an ordered effective-date period of at most 3660 days')
+    cases=_validated_cases(spec,suite)
+    boundaries={start:[],end:[]}
+    for table in spec['process_model'].get('decision_tables',[]):
+        for key,kind in (('effective_from','effective_start'),('effective_until','effective_end')):
+            day=table.get(key)
+            if day is None:
+                continue
+            day=_as_of(day)
+            if start<=day<end:
+                boundaries.setdefault(day,[]).append({'table_id':table['id'],'kind':kind})
+    dates=sorted(boundaries)
+    if len(dates)>26:
+        raise ImplementationError('Too many effective-date boundaries; narrow the period')
+    remaining=MAX_BATCH_WORK
+    previous={}
+    intervals=[]
+    for lo,hi in zip(dates,dates[1:]):
+        details=[]
+        for case in cases:
+            row=_case_review(spec,case,lo,remaining)
+            remaining-=row['work_count']
+            old=previous.get(case['id'])
+            complete=row['search_complete']
+            match=row['matches_reviewed_expectation']
+            changes=None
+            changed_tables=[]
+            if old is not None:
+                if complete and old['search_complete']:
+                    changes=_route_key(old)!=_route_key(row)
+                changed_tables=_changed_ids(old['decision_checks'],row['decision_checks'],'table_id')
+            details.append({'case_id':case['id'],'category':case['category'],
+                'search_status':row['search_status'],'search_complete':complete,
+                'matches_fixed_expectation':match,'reason':row['reason'],
+                'route_behavior_changed_from_previous':changes,
+                'changed_decision_table_ids':changed_tables,
+                'decision_statuses':[{k:t[k] for k in ('table_id','status','selected_target_activity_id')}
+                                     for t in row['decision_checks']]})
+            previous[case['id']]=row
+        counts={'matching':sum(r['matches_fixed_expectation'] is True for r in details),
+                'mismatching':sum(r['matches_fixed_expectation'] is False for r in details),
+                'unresolved':sum(r['matches_fixed_expectation'] is None for r in details)}
+        intervals.append({'start':lo,'end_exclusive':hi,
+            'boundary_changes':sorted(boundaries[lo],key=lambda r:(r['table_id'],r['kind'])),
+            'counts':counts,'cases':details,
+            'review_required':bool(counts['mismatching'] or counts['unresolved'] or
+                any(r['route_behavior_changed_from_previous'] is True or r['changed_decision_table_ids']
+                    for r in details))})
+    result={'format':'openworkgraph.declared-effective-period-review.v1',
+        'process_reference':reference(spec),'spec_sha256':digest(spec),'suite_sha256':digest(suite),
+        'start':start,'end_exclusive':end,'case_count':len(cases),'interval_count':len(intervals),
+        'scenario_interval_count':len(cases)*len(intervals),
+        'search_work_count':MAX_BATCH_WORK-remaining,
+        'intervals':intervals,'review_required':any(r['review_required'] for r in intervals),
+        'all_interval_searches_complete':all(not i['counts']['unresolved'] for i in intervals),
+        'fixed_expectations_across_period':True,
+        'independent_date_specific_expectations_verified':False,
+        'historical_case_truth_verified':False,'case_values_included':False,
+        'source_reads_performed':False,'model_invoked':False,'business_tools_called':False,
+        'execution_authorized':False,
+        'interpretation':'The date is varied only at declared table effective-date boundaries. Facts and reviewed expectations are held fixed. A changed or expired policy may legitimately require different expectations; this is a review diagnostic, not historical truth or proof of complete policy coverage.'}
+    if len(json.dumps(result,allow_nan=False).encode())>MAX_REPORT_BYTES:
+        raise ImplementationError('Effective-period report exceeds the bounded output size; narrow the period or suite')
+    return result
+
+
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--cases',required=True,help='Current or candidate reviewed fact suite')
@@ -387,6 +457,7 @@ def main(argv=None):
     parser.add_argument('--candidate-manifest-sha256')
     parser.add_argument('--baseline-cases')
     parser.add_argument('--as-of-date',required=True)
+    parser.add_argument('--until-date',help='Exclusive end for single-revision effective-period review')
     parser.add_argument('--output',required=True)
     parser.add_argument('--confirm-declared-fact-review',action='store_true')
     parser.add_argument('--require-all-declared-items-covered',action='store_true',
@@ -396,7 +467,12 @@ def main(argv=None):
         raise ImplementationError('Confirm local declared-fact review and select a new output file')
     comparison=[args.baseline_release,args.candidate_release,args.baseline_manifest_sha256,
                 args.candidate_manifest_sha256,args.baseline_cases]
-    if any(v is not None for v in comparison):
+    if args.until_date is not None:
+        if any(v is not None for v in comparison) or args.require_all_declared_items_covered:
+            raise ImplementationError('Effective-period review cannot be combined with release comparison or strict item coverage')
+        result=review_effective_period(load_spec(),load_object(args.cases,limit=MAX_INPUT_BYTES),
+            start=args.as_of_date,end=args.until_date)
+    elif any(v is not None for v in comparison):
         if args.require_all_declared_items_covered:
             raise ImplementationError('Use single-revision review for the complete declared-item coverage requirement')
         if not all(comparison):
@@ -405,7 +481,7 @@ def main(argv=None):
             load_object(args.cases,limit=MAX_INPUT_BYTES),as_of_date=args.as_of_date)
     else:
         result=review_scenarios(load_spec(),load_object(args.cases,limit=MAX_INPUT_BYTES),as_of_date=args.as_of_date)
-    if not any(comparison):
+    if not any(comparison) and args.until_date is None:
         coverage=result['scenario_coverage']
         coverage['strict_coverage_requested']=args.require_all_declared_items_covered
         if args.require_all_declared_items_covered and not coverage['all_declared_items_have_reviewed_matching_support']:
@@ -419,6 +495,8 @@ def main(argv=None):
         stream.write(raw+'\n')
     keys=('case_count','classification_counts','changed_expectation_count','changed_route_behavior_count','review_required') if any(comparison) else (
         'case_count','matching_case_count','mismatching_case_count','unresolved_case_count','review_required')
+    if args.until_date is not None:
+        keys=('case_count','interval_count','scenario_interval_count','all_interval_searches_complete','review_required')
     print(json.dumps({k:result[k] for k in keys},sort_keys=True))
     return 2 if result['review_required'] else 0
 
