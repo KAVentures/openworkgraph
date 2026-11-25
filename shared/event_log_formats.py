@@ -189,6 +189,36 @@ def write_csv(events: Iterable[dict[str, Any]], out: IO[str], *, spreadsheet_rev
         writer.writerow([review_cell(value) for value in row] if spreadsheet_review else row)
 
 
+CSV_FIELDS = ("case_id", "activity", "timestamp", "resource")
+MAX_CSV_ATTRIBUTE_COLUMNS = 500
+
+
+def write_csv_attributes(events: Iterable[dict[str, Any]], names: list[str], out: IO[str]) -> None:
+    """Flat CSV with the four CSV fields, then one column per retained event attribute in ``names``.
+
+    Text values are written as stored; other JSON values (numbers, booleans, lists) as compact JSON.
+    A missing attribute is an empty cell. Importing the file with the extra columns kept gives the
+    same events and attribute values back.
+    """
+    if len(names) > MAX_CSV_ATTRIBUTE_COLUMNS:
+        raise EventLogFormatError(f"the log has more than {MAX_CSV_ATTRIBUTE_COLUMNS} distinct event attributes, "
+                                  "more than the CSV attribute export writes; use OCEL instead")
+    clash = sorted(set(names) & set(CSV_FIELDS))
+    if clash:
+        raise EventLogFormatError(f"an event attribute is named {clash[0]!r} like a CSV export column; use OCEL instead")
+    writer = csv.writer(out)
+    writer.writerow([*CSV_FIELDS, *names])
+
+    def cell(value: Any) -> str:
+        if value is None:
+            return ""
+        return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    for event in events:
+        attributes = event.get("attributes") or {}
+        writer.writerow([event["case_id"], event["activity"], _iso(event["timestamp"]), event.get("resource") or "",
+                         *(cell(attributes.get(name)) for name in names)])
+
+
 def write_jsonl(events: Iterable[dict[str, Any]], out: IO[str]) -> None:
     """JSON Lines for one case notion: one object per event with the CSV export's four fields.
 
@@ -592,5 +622,5 @@ def detect_format(head: bytes) -> str:
 __all__ = [
     "CASE_TYPE", "EventLogFormatError", "EventRecord", "ObjectRecord", "ReadStats",
     "detect_format", "parse_timestamp", "read_csv", "read_ocel_json", "read_ocel_xml", "read_xes",
-    "write_csv", "write_jsonl", "write_ocel_json", "write_ocel_xml", "write_xes",
+    "write_csv", "write_csv_attributes", "write_jsonl", "write_ocel_json", "write_ocel_xml", "write_xes",
 ]

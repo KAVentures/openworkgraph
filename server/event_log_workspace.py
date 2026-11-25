@@ -32,7 +32,7 @@ from shared.event_log_formats import (
     CASE_TYPE, RESOURCE_PRESENCE_WHITESPACE, MAX_ATTRIBUTE_VALUE, MAX_ATTRIBUTES, MAX_OBJECT_ATTRIBUTE_VALUES,
     EventLogFormatError, EventRecord,
     ObjectRecord, ReadStats,
-    read_csv, read_csv_header, read_ocel_json, read_ocel_xml, read_xes, write_csv, write_jsonl, write_ocel_json,
+    read_csv, read_csv_header, read_ocel_json, read_ocel_xml, read_xes, write_csv, write_csv_attributes, write_jsonl, write_ocel_json,
     write_ocel_xml, write_xes,
 )
 
@@ -1055,6 +1055,12 @@ def _case_export_rows(log_id, case_type, *, include_trace_attributes=False):
             conn.close()
 
 
+def _event_attribute_names(conn, source: str, params: list[Any]) -> list[str]:
+    """Sorted distinct event attribute names of the events in ``source`` (a parenthesised query)."""
+    return [row[0] for row in conn.execute(f"""SELECT DISTINCT unnest(json_keys(attributes)) AS name
+        FROM {source} source WHERE attributes IS NOT NULL ORDER BY name""", params).fetchall()]
+
+
 def _group_export_cursor(cursor):
     """Read an ordered event projection one case at a time."""
     current, bucket, trace_attributes = None, [], {}
@@ -1143,6 +1149,21 @@ def export_log(log_id: str, export_format: str, out: IO[str], case_type: str | N
     elif export_format in ("csv", "csv-review"):
         write_csv((event for _, events in case_events(log_id, case_type) for event in events), out,
                   spreadsheet_review=export_format == "csv-review")
+    elif export_format == "csv-attributes":
+        with _LOCK:
+            conn = _connect()
+            try:
+                _check_log(conn, log_id)
+                names = _event_attribute_names(conn, f"({_CASE_EVENTS})", [log_id, _case_type(conn, log_id, case_type)])
+            finally:
+                conn.close()
+        rows = _case_export_rows(log_id, case_type)
+        try:
+            write_csv_attributes((event for _, events, _ in rows for event in events), names, out)
+        except EventLogFormatError as exc:
+            raise EventLogWorkspaceError(str(exc)) from None
+        finally:
+            rows.close()
     elif export_format == "jsonl":
         write_jsonl((event for _, events in case_events(log_id, case_type) for event in events), out)
     elif export_format in ("ocel", "ocelxml"):
@@ -1155,7 +1176,7 @@ def export_log(log_id: str, export_format: str, out: IO[str], case_type: str | N
                 conn.close()
         (write_ocel_json if export_format == "ocel" else write_ocel_xml)(objects, events, out)
     else:
-        raise EventLogWorkspaceError("export format must be csv, jsonl, xes, ocel or ocelxml")
+        raise EventLogWorkspaceError("export format must be csv, csv-attributes, jsonl, xes, ocel or ocelxml")
 
 
 __all__ = [
