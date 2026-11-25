@@ -509,9 +509,11 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                **({'dependent_decision_routes':dependency_routes,
                    'declared_activity_ids':prepared['plan']['activity_ids'],
                    'declared_plan_sha256':digest(prepared['plan']),
+                   'declared_source_rule_ids':[r['rule_id'] for r in prepared['source_rules']],
                    'declared_precondition_attempts':[i+1 for i,a in enumerate(prepared['actions']) if a['precondition']]}
                   if dependency_contract else {}))
         decision_checkpoint=0
+        source_checkpoint=0
         async def check_catalog():
             if not spec.get('organization_catalog_reference'):
                 return
@@ -570,6 +572,8 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                 raise ImplementationError('Current '+policy+' decision route or effective date not established')
 
         async def check_source_rules(purpose,attempt=None):
+            nonlocal source_checkpoint
+            source_checkpoint+=1
             # Deliberately do not reuse dashboard reports, caller facts or a
             # prior receipt. The customer has reviewed these as invariants;
             # every action and the final route check require fresh reads.
@@ -585,6 +589,8 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                     status='unknown'
                 summary={'rule_id':request['rule_id'],'status':status,
                     'record_association':'customer_selected_not_independently_established'}
+                if dependency_contract:
+                    summary.update(checkpoint_number=source_checkpoint,checkpoint_purpose=purpose,checkpoint_attempt=attempt)
                 result['source_rule_checks'].append(summary);record('source_rule_checked',**summary)
                 passed=passed and status=='matched'
             ensure_current(intent,now,stop_marker)
@@ -642,7 +648,10 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                         await check_catalog()
                         ensure_current(intent, now, stop_marker)
                         if action['precondition']:
-                            await check_decisions('precondition',index+1)
+                            if dependency_contract:
+                                await check_source_rules('precondition',index+1)
+                            else:
+                                await check_decisions('precondition',index+1)
                             condition = action['precondition']
                             record('precondition_pending', activity_id=action['activity_id'], attempt=index+1)
                             try:
