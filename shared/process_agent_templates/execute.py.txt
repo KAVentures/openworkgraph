@@ -76,6 +76,21 @@ def pointer(document, path):
     return result
 
 
+def resolve_source_record(case, path, *, allow_missing=False):
+    """Validate declaration syntax even if its case record is not available."""
+    if (not isinstance(path,str) or (path and not path.startswith('/')) or len(path)>500
+        or re.search(r'~(?![01])',path)):
+        raise ImplementationError('Source record bindings require bounded JSON Pointers')
+    try:
+        ref=pointer(case,path)
+    except ImplementationError:
+        if allow_missing:return None
+        raise
+    if not isinstance(ref,str) or re.fullmatch(r'owg:r:[a-f0-9]{32}',ref) is None:
+        raise ImplementationError('Source bindings require an exact observed record reference')
+    return ref
+
+
 def endpoint(value, *, source=False):
     if not isinstance(value, str) or len(value) > 2048 or any(ord(c) < 32 for c in value):
         raise ImplementationError('Configure the customer tool and source endpoints before execution')
@@ -132,7 +147,7 @@ def predicate_value(row, case):
     return row.get('result_equals')
 
 
-def source_rule_bindings(spec,checks,case,bindings):
+def source_rule_bindings(spec,checks,case,bindings,*,allow_missing=False):
     """Explicit customer-reviewed current-state invariants, never inferred grants."""
     rows=bindings.get('source_rule_checks',[])
     if not isinstance(rows,list) or len(rows)>40:
@@ -163,9 +178,8 @@ def source_rule_bindings(spec,checks,case,bindings):
             raise ImplementationError('Only supported current-source fact paths can use this implementation')
         if row['rule_id'] not in required:
             continue
-        ref=pointer(case,row['resource_ref_pointer'])
-        if not isinstance(ref,str) or re.fullmatch(r'owg:r:[a-f0-9]{32}',ref) is None:
-            raise ImplementationError('Source rule bindings require a selected observed record reference')
+        ref=resolve_source_record(case,row['resource_ref_pointer'],allow_missing=allow_missing)
+        if ref is None:continue
         mapped[row['rule_id']]={'rule_id':row['rule_id'],'source_type':row['source_type'],
             'resource_ref':ref,'predicate':predicate.model_dump()}
     return [mapped[rule_id] for rule_id in sorted(required) if rule_id in mapped],required-set(mapped)
