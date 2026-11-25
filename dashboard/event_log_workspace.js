@@ -508,7 +508,7 @@
         reuseRow.hidden=false;
       }catch(_){/* a convenience only */}
     }
-    timeFormat.onchange=()=>{const fmt=timeFormat.value;if(fmt&&!fmt.includes('%z')&&!naiveOffset.value.trim())naiveOffset.value=localOffset();};
+    timeFormat.onchange=()=>{const fmt=timeFormat.value;if(fmt&&!fmt.includes('%z')&&!fmt.startsWith('unix-')&&!naiveOffset.value.trim())naiveOffset.value=localOffset();};
     consent.onchange=refreshImport;name.oninput=refreshImport;
     card.appendChild(agentRunsSection());
     function saveParams(target){
@@ -8125,7 +8125,7 @@
       wrap.append(el('h4','Rejected rows kept for review'),
         el('div',Number(r.rows_kept).toLocaleString()+' rows kept ('+reasonText(r.reasons)+'). '+r.note,'muted'),
         batchesStatus,batchesHost,batchesFirst,batchesNext,pageHost,firstPage,nextPage,
-        el('div','Batch and row range apply to release and discard. Leave them blank to include all kept rows. For release, leave the assumed offset blank if the format includes %z.','muted'),row,message,
+        el('div','Batch and row range apply to release and discard. Leave them blank to include all kept rows. For release, leave the assumed offset blank if the format includes %z or is unix-seconds or unix-milliseconds.','muted'),row,message,
         decisionStatus,decisionHost,decisionFirst,decisionNext);
       for(const control of [offset,timeFormat,batch,rowStart,rowEnd])control.addEventListener('input',()=>{
         previewGeneration++;reviewed=null;release.disabled=true;
