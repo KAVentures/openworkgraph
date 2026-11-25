@@ -507,6 +507,7 @@ async def preview_event_log_import(
     keep_rejected: bool = Query(default=False),
     naive_timestamp_offset: str = Query(default="", max_length=6),
     timestamp_format: str = Query(default="", max_length=64),
+    encoding: str = Query(default="", pattern="^(|utf-8|windows-1252|utf-16)$"),
     identity: dict = Depends(_source_identity_mapping),
 ):
     _require_dashboard(request)
@@ -521,7 +522,7 @@ async def preview_event_log_import(
                "timestamp_column": timestamp_column, "resource_column": resource_column,
                "attribute_columns": attribute_column[:64], "delimiter": "\t" if delimiter == "t" else delimiter,
                "keep_rejected": keep_rejected, "naive_timestamp_offset": naive_timestamp_offset,
-               "timestamp_format": timestamp_format, **identity}
+               "timestamp_format": timestamp_format, **({"encoding": encoding} if encoding else {}), **identity}
     return await run_in_threadpool(_respond, preview.preview_csv, bytes(body), mapping, partial=partial)
 
 
@@ -539,6 +540,7 @@ async def import_event_log(
     keep_rejected: bool = Query(default=False),
     naive_timestamp_offset: str = Query(default="", max_length=6),
     timestamp_format: str = Query(default="", max_length=64),
+    encoding: str = Query(default="", pattern="^(|utf-8|windows-1252|utf-16)$"),
     identity: dict = Depends(_source_identity_mapping),
 ):
     _require_dashboard(request)
@@ -559,7 +561,8 @@ async def import_event_log(
                    "delimiter": "\t" if delimiter == "t" else delimiter,
                    **({"keep_rejected": True} if keep_rejected else {}),
                    **({"naive_timestamp_offset": naive_timestamp_offset} if naive_timestamp_offset else {}),
-                   **({"timestamp_format": timestamp_format} if timestamp_format else {})}
+                   **({"timestamp_format": timestamp_format} if timestamp_format else {}),
+                   **({"encoding": encoding} if encoding else {})}
         mapping.update(identity)
         return _respond(workspace.import_log, spool, name=name, source_format=format, mapping=mapping)
 
@@ -577,6 +580,7 @@ async def append_event_log(
     keep_rejected: bool = Query(default=False),
     naive_timestamp_offset: str = Query(default="", max_length=6),
     timestamp_format: str = Query(default="", max_length=64),
+    encoding: str = Query(default="", pattern="^(|utf-8|windows-1252|utf-16)$"),
     identity: dict = Depends(_source_identity_mapping),
 ):
     _require_dashboard(request)
@@ -596,7 +600,8 @@ async def append_event_log(
                    "delimiter": "\t" if delimiter == "t" else delimiter,
                    **({"keep_rejected": True} if keep_rejected else {}),
                    **({"naive_timestamp_offset": naive_timestamp_offset} if naive_timestamp_offset else {}),
-                   **({"timestamp_format": timestamp_format} if timestamp_format else {})}
+                   **({"timestamp_format": timestamp_format} if timestamp_format else {}),
+                   **({"encoding": encoding} if encoding else {})}
         mapping.update(identity)
         try:
             result = await run_in_threadpool(workspace.append_log, log_id, spool, source_format=format, mapping=mapping)

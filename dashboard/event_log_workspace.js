@@ -85,7 +85,23 @@
     finally{reader.cancel().catch(()=>{});}
     return new Blob(parts).slice(0,bytes);
   }
-  const headText=async(file,bytes)=>(await headBlob(file,bytes)).text();
+  // Decode the first bytes of a CSV in its declared encoding (utf-8, windows-1252 or utf-16 with a byte-order mark).
+  function decodeHead(bytes,encoding){
+    const view=new Uint8Array(bytes);
+    const label=encoding==='utf-16'?(view[0]===0xFE&&view[1]===0xFF?'utf-16be':'utf-16le'):encoding==='windows-1252'?'windows-1252':'utf-8';
+    return new TextDecoder(label).decode(view);
+  }
+  // The encoding a CSV head most likely uses: a UTF-16 or UTF-8 byte-order mark, else UTF-8 when it decodes
+  // strictly (a character cut at the end of the sample is allowed), else Windows-1252.
+  function guessEncoding(bytes){
+    const view=new Uint8Array(bytes);
+    if((view[0]===0xFF&&view[1]===0xFE)||(view[0]===0xFE&&view[1]===0xFF))return 'utf-16';
+    try{new TextDecoder('utf-8',{fatal:true}).decode(view,{stream:true});return 'utf-8';}catch(_){return 'windows-1252';}
+  }
+  const headText=async(file,bytes,encoding='utf-8')=>{
+    const blob=await headBlob(file,bytes);
+    return encoding==='utf-8'?blob.text():decodeHead(await blob.arrayBuffer(),encoding);
+  };
   // The first records of a CSV text (quoted cells may hold delimiters and line breaks).
   function csvRecords(text,delimiter,limit){
     const line=String(text||'').replace(/^\uFEFF/,''),records=[];let row=[],cell='',quoted=false;
@@ -206,6 +222,7 @@
     const mapping=el('div',null,'row');mapping.id='owgEventLogMapping';mapping.style.alignItems='end';
     const cols={case:select('owgEventLogCase',[]),activity:select('owgEventLogActivity',[]),time:select('owgEventLogTime',[]),resource:select('owgEventLogResource',[])};
     const delimiter=select('owgEventLogDelimiter',[[',','Comma'],[';','Semicolon'],['t','Tab'],['|','Pipe']]);
+    const encoding=select('owgEventLogEncoding',[['utf-8','UTF-8'],['windows-1252','Windows-1252 (Western European)'],['utf-16','UTF-16 (Excel Unicode text)']]);
     const extras=select('owgEventLogAttributes',[]);extras.multiple=true;extras.size=3;
     extras.title='Only the columns you choose are stored, for example a lifecycle (start/complete) or end-time column.';
     // Times written without an offset (always the case for Excel dates) are read with this offset.
@@ -213,7 +230,7 @@
     naiveOffset.title='For timestamps without a time zone, e.g. +01:00 or -05:00. Leave empty to reject such rows.';
     // Times such as 03/04/2024 14:05 need a declared format; the dashboard suggests one from the first rows.
     const timeFormat=select('owgEventLogTimeFormat',[['','ISO 8601 (2024-03-04T14:05:00Z)']]);
-    mapping.append(field('Case column',cols.case),field('Activity column',cols.activity),field('Timestamp column (with timezone)',cols.time),field('Timestamp format',timeFormat),field('Resource column',cols.resource),field('Extra columns to keep (optional)',extras),field('Delimiter',delimiter),field('Offset for times without one',naiveOffset));
+    mapping.append(field('Case column',cols.case),field('Activity column',cols.activity),field('Timestamp column (with timezone)',cols.time),field('Timestamp format',timeFormat),field('Resource column',cols.resource),field('Extra columns to keep (optional)',extras),field('Delimiter',delimiter),field('Text encoding',encoding),field('Offset for times without one',naiveOffset));
     const identity=el('fieldset');identity.id='owgEventLogIdentity';identity.append(el('legend','Supplied source-event IDs (optional)'));
     const useIdentity=input('owgEventLogUseIdentity','checkbox');
     const identityFields=el('div',null,'row');identityFields.style.alignItems='end';
@@ -281,7 +298,7 @@
       columnReadSequence++;clearImportPreview();readingColumns=false;columnsReady=true;
       const transfer=new DataTransfer();transfer.items.add(new File([csv],'selected-salesforce-cases.csv',{type:'text/csv'}));
       file.files=transfer.files;salesforceStagedFile=file.files[0];
-      name.value='Selected Salesforce cases';format.value='csv';delimiter.value=',';
+      name.value='Selected Salesforce cases';format.value='csv';delimiter.value=',';encoding.value='utf-8';
       // The projection has a fixed, reviewed four-column schema; use it directly
       // so a delayed column read cannot overwrite another chosen file's mapping.
       const options=['case_id','activity','timestamp','source_event_id'].map(x=>[x,x]);
@@ -323,6 +340,7 @@
       q.set('case_column',cols.case.value);q.set('activity_column',cols.activity.value);q.set('timestamp_column',cols.time.value);q.set('resource_column',cols.resource.value);
       if(!(useIdentity.checked&&jsonColumn.value))[...extras.selectedOptions].forEach(o=>{if(![cols.case.value,cols.activity.value,cols.time.value,cols.resource.value].includes(o.value))q.append('attribute_column',o.value);});
       q.set('delimiter',delimiter.value);if(keep.checked)q.set('keep_rejected','true');
+      if(encoding.value!=='utf-8')q.set('encoding',encoding.value);
       if(naiveOffset.value.trim())q.set('naive_timestamp_offset',naiveOffset.value.trim());
       if(timeFormat.value)q.set('timestamp_format',timeFormat.value);
       if(useIdentity.checked)for(const [key,value] of Object.entries({event_id_column:eventId.value,source_namespace:sourceNamespace.value,source_namespace_column:sourceColumn.value,case_namespace:caseNamespace.value,case_namespace_column:caseColumn.value,attributes_json_column:jsonColumn.value}))if(value)q.set(key,value);
@@ -395,7 +413,7 @@
       const sep=selectedDelimiter==='t'?'\t':selectedDelimiter;
       readingColumns=true;status('Reading file columns…');refreshImport();
       try{
-        const text=await headText(chosen,65536);
+        const text=await headText(chosen,65536,encoding.value);
         const columns=csvHeader(text,sep);
         if(sequence!==columnReadSequence||file.files?.[0]!==chosen||format.value!=='csv'||(delimiter.value==='t'?'\t':delimiter.value)!==sep)return;
         setMappingColumns(columns);
@@ -430,7 +448,7 @@
         const r=await (await api(url,{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream'}})).json();
         if(!current())return;
         const transfer=new DataTransfer();transfer.items.add(new File([r.csv],chosen.name.replace(/\.(xlsx|sqlite3?|db|jsonl|ndjson|parquet)$/i,'')+(database?'-'+r.sheet:'')+'.csv',{type:'text/csv'}));
-        file.files=transfer.files;expectedFile=file.files[0];format.value='csv';delimiter.value=',';
+        file.files=transfer.files;expectedFile=file.files[0];format.value='csv';delimiter.value=',';encoding.value='utf-8';
         stagedSheet=r.sheet;
         setOptions(sheetSelect,r.sheets.map(n=>[n,n]));sheetSelect.value=stagedSheet;sheetField.hidden=r.sheets.length<2;
         if(r.dates_have_no_offset&&!naiveOffset.value.trim())naiveOffset.value=localOffset();
@@ -460,14 +478,16 @@
           void convertWorkbook(chosen);return;
         }
         format.value=detectFormat(chosen.name);
-        if(chosen.name.toLowerCase().endsWith('.tsv'))delimiter.value='t';
-        else if(format.value==='csv'){
+        if(format.value==='csv'){
           // Semicolon, tab and pipe exports are common (for example from spreadsheets in many locales).
           // A newer file or a delimiter chosen by hand while this read runs starts its own column read.
-          const before=delimiter.value;status('Reading file columns…');
-          void headText(chosen,65536).then(guessDelimiter,()=>null).then(guess=>{
-            if(file.files?.[0]!==chosen||delimiter.value!==before)return;
-            if(guess&&format.value==='csv')delimiter.value=guess;
+          const before=delimiter.value+'|'+encoding.value;status('Reading file columns…');
+          void headBlob(chosen,65536).then(blob=>blob.arrayBuffer()).then(bytes=>{
+            const detected=guessEncoding(bytes),tsv=/\.tsv(\.gz)?$/i.test(chosen.name);
+            return {encoding:detected,delimiter:tsv?'t':guessDelimiter(decodeHead(bytes,detected))};
+          },()=>null).then(guess=>{
+            if(file.files?.[0]!==chosen||delimiter.value+'|'+encoding.value!==before)return;
+            if(guess&&format.value==='csv'){delimiter.value=guess.delimiter;encoding.value=guess.encoding;}
             void readColumns();
           });
           return;
@@ -478,6 +498,7 @@
     format.onchange=()=>{clearWorkbook();consent.checked=false;readColumns();};
     sheetSelect.onchange=()=>{if(workbook)void convertWorkbook(workbook,sheetSelect.value);};
     delimiter.onchange=()=>{consent.checked=false;readColumns();};
+    encoding.onchange=()=>{consent.checked=false;readColumns();};
     // Suggest a timestamp format from the first rows of the chosen time column (sent to this computer only).
     let formatSequence=0;
     async function detectTimeFormat(){
@@ -486,7 +507,7 @@
       if(!chosen||format.value!=='csv'||!column)return;
       try{
         const q=new URLSearchParams({column,delimiter:selectedDelimiter});
-        const r=await (await api('/v1/event-logs/timestamp-formats?'+q,{method:'POST',body:await headText(chosen,256*1024),headers:{'Content-Type':'text/plain'}})).json();
+        const r=await (await api('/v1/event-logs/timestamp-formats?'+q,{method:'POST',body:await headText(chosen,256*1024,encoding.value),headers:{'Content-Type':'text/plain'}})).json();
         if(sequence!==formatSequence||file.files?.[0]!==chosen||format.value!=='csv'||delimiter.value!==selectedDelimiter||cols.time.value!==column)return;
         setOptions(timeFormat,[['','ISO 8601 (2024-03-04T14:05:00Z)'],...r.candidates.map(c=>[c.pattern,c.pattern+' \u2014 '+c.order+': '+c.first_value+' reads as '+c.first_value_reads_as])]);
         if(r.suggested){
