@@ -1221,9 +1221,10 @@ async def event_log_object_relationship_trace(request: Request, log_id: str):
 
 
 @router.get("/v1/event-logs/{log_id}/object-flattening")
-def event_log_object_flattening(request: Request, log_id: str):
+def event_log_object_flattening(request: Request, log_id: str,
+                                object_type: str | None = Query(default=None, min_length=1, max_length=200)):
     _require_dashboard(request)
-    return _respond(object_diagnostics.flattening, log_id)
+    return _respond(object_diagnostics.flattening, log_id, object_type)
 
 
 @router.get("/v1/event-logs/{log_id}/object-attributes")

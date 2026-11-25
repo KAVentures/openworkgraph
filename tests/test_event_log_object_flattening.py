@@ -85,14 +85,30 @@ def test_case_logs_flatten_without_loss_or_copies():
     assert all(a["repetitions_differ_by"] == [] for a in case["divergence"]["by_activity"])
 
 
+def test_selected_flattening_preserves_other_type_divergence_evidence():
+    log = _ocel(_with_checks())
+    all_types = diagnostics.flattening(log)
+    selected = diagnostics.flattening(log, 'order')
+    assert selected['selected_object_type'] == 'order'
+    assert selected['object_type_count'] == 3 and selected['object_types_truncated'] is False
+    assert selected['object_types'] == [_by_type(all_types)['order']]
+    assert selected['divergence_explanation_complete'] is True
+    with pytest.raises(workspace.EventLogWorkspaceError, match='no retained events'):
+        diagnostics.flattening(log, 'missing')
+
+
 def test_divergence_explanation_stops_at_its_work_budget(monkeypatch):
     monkeypatch.setattr(diagnostics, "MAX_DIVERGENCE_ROWS", 2)
-    result = diagnostics.flattening(_ocel(_with_checks()))
+    log = _ocel(_with_checks())
+    result = diagnostics.flattening(log)
     assert result["divergence_explanation_complete"] is False
     assert result["divergence_explanation_unknown_reason"] == "divergence_work_budget"
     assert result["divergence_links_examined"] > 2
     (check,) = _by_type(result)["order"]["divergence"]["by_activity"]
     assert check["repetitions"] == 3 and check["repetitions_differ_by"] == []   # counted, not explained
+    selected = diagnostics.flattening(log, 'item')
+    assert selected['divergence_explanation_complete'] is True
+    assert selected['divergence_links_examined'] == 0
 
 
 def test_real_http_route_requires_a_dashboard_session(tmp_path):
@@ -117,6 +133,9 @@ with TestClient(app) as client:
     assert result.status_code == 200 and result.headers["cache-control"] == "no-store", result.text
     item = [t for t in result.json()["object_types"] if t["object_type"] == "item"][0]
     assert item["convergence"]["extra_event_rows"] == 1
+    selected = client.get(path, headers=headers, params={"object_type": "item"})
+    assert selected.status_code == 200 and selected.json()["object_types"] == [item]
+    assert client.get(path, headers=headers, params={"object_type": "missing"}).status_code == 422
     assert client.get("/v1/event-logs/log_0000000000000000/object-flattening", headers=headers).status_code in (404, 422)
 '''
     env = os.environ.copy()

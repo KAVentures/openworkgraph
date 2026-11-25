@@ -4933,9 +4933,10 @@
     const attrOut=el('div');attrOut.id='owgEventLogObjectAttributesBox';
     box.append(row,out,flatOut,attrOut,shared);
     let graph=null,flat=null,attrs=null,mapTurn=0;
+    const flatCache=new Map(),attrCache=new Map();
     const renderAttrs=()=>{
       const type=attrs&&(attrs.object_types||[]).find(t=>t.object_type===pick.value);
-      if(!type){attrOut.replaceChildren();return;}
+      if(!type){attrOut.replaceChildren(...(attrs?[el('p','No timed object attributes are recorded for this type.','muted')]:[]));return;}
       const list=el('ul');list.id='owgEventLogObjectAttributes';attributeChangeSummary(type).forEach(x=>list.appendChild(el('li',x)));
       attrOut.replaceChildren(el('h4','Attributes of '+type.object_type+' over time'),list,
         ...(attrs.stored_value_comparison_complete===false?[el('p','How many events see another value than the stored one is unknown within the analysis limits for this log.','muted')]:[]),
@@ -5003,18 +5004,39 @@
       const links=(graph.relations||[]).filter(r=>r.from_type===type.object_type);
       if(graph.relations_calculation_complete===false)parts.push(el('p','Inter-object link counts are unknown within the analysis limits for this log. Lifecycle maps and case evidence remain available.','muted'));
       if(links.length)parts.push(table(['Linked to','Share of observed '+type.object_type+' objects','Mean links per linked object','Most linked'],links.map(r=>[r.to_type,pct(r.share_of_from_objects),r.mean_linked_per_object,r.max_linked_per_object])));
-      renderFlat();renderAttrs();parts.push(inspection.node);out.replaceChildren(...parts);
+      parts.push(inspection.node);out.replaceChildren(...parts);
+    };
+    const loadDetails=(selected,ticket,type)=>{
+      const active=()=>current()&&ticket===mapTurn&&pick.value===selected;
+      const query='?'+new URLSearchParams({object_type:selected});
+      flat=flatCache.get(selected)||null;attrs=attrCache.get(selected)||null;
+      if(type&&Number(type.event_links)===0){flatOut.replaceChildren();}
+      else if(flat){renderFlat();}
+      else{
+        flatOut.replaceChildren(el('p','Loading flattening context…','muted'));
+        getJSON(logPath('object-flattening').replace(/\?.*$/,'')+query).then(result=>{
+          if(!active())return;flatCache.set(selected,result);flat=result;renderFlat();
+        }).catch(error=>{if(active())flatOut.replaceChildren(el('p',error.message,'muted'));});
+      }
+      if(attrs){renderAttrs();}
+      else{
+        attrOut.replaceChildren(el('p','Loading object attribute context…','muted'));
+        getJSON(logPath('object-attributes').replace(/\?.*$/,'')+query).then(result=>{
+          if(!active())return;attrCache.set(selected,result);attrs=result;renderAttrs();
+        }).catch(error=>{if(active())attrOut.replaceChildren(el('p',error.message,'muted'));});
+      }
     };
     const selectMap=async()=>{
       const ticket=++mapTurn,selected=pick.value;
       if(!graph||!current())return;
       const type=(state.objectTypes||[]).find(t=>t.object_type===selected);
+      loadDetails(selected,ticket,type);
       if(type&&Number(type.event_links)===0){
         out.replaceChildren(el('p','This object type has no retained events, so there is no lifecycle map.','muted'));
-        renderFlat();renderAttrs();return;
+        return;
       }
       if((graph.object_types||[]).some(t=>t.object_type===selected)){render();return;}
-      out.replaceChildren(el('p','Loading the selected object type map…','muted'));renderFlat();renderAttrs();
+      out.replaceChildren(el('p','Loading the selected object type map…','muted'));
       try{
         const query=new URLSearchParams({object_type:selected});
         const selectedGraph=await getJSON(logPath('object-map').replace(/\?.*$/,'')+'?'+query);
@@ -5051,8 +5073,6 @@
         ...((g.object_types||[]).length>1||state.objectTypes.length>1||g.log&&(g.log.object_relationships||['ocel','ocelxml'].includes(g.log.source_format))?[objectRuleSection(g),objectModelSection()]:[]));
       selectMap();
     }).catch(error=>{if(current())out.replaceChildren(el('div',error.message,'muted'));});
-    getJSON(logPath('object-flattening').replace(/\?.*$/,'')).then(f=>{if(current()){flat=f;renderFlat();}}).catch(()=>{});
-    getJSON(logPath('object-attributes').replace(/\?.*$/,'')).then(a=>{if(current()){attrs=a;renderAttrs();}}).catch(()=>{});
     return box;
   }
 
