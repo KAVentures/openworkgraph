@@ -121,16 +121,30 @@ def test_case_checks_use_dependency_order():
     assert second['approval_table']['proposed_branch_agrees'] is False
 
 
-def test_dependencies_survive_bpmn_round_trip_and_block_generated_projects():
+def test_dependencies_survive_bpmn_round_trip_and_generate_disabled_runtime_contract():
     from shared.process_bpmn_import import import_bpmn
     from shared.process_agent_project import build_runtime_spec
     packet = {'workflow_id': 'loan', 'revision': 1, 'content_sha256': 'b' * 64, 'process_model': model().model_dump()}
     imported = ProcessModel.model_validate(import_bpmn(process_bpmn(packet).encode())['process_model'])
     [approval] = [t for t in imported.decision_tables if t.id == 'approval_table']
     assert approval.required_decisions[0].table_id == 'credit_table'
-    with pytest.raises(ValueError, match='dependent decision'):
-        build_runtime_spec(dict(deepcopy(packet), format='openworkgraph.versioned-process-export.v1',
-                                execution_authorization=False))
+    from io import BytesIO
+    from zipfile import ZipFile
+    import json
+    from shared.process_agent_project import build_runtime_project
+    saved=dict(deepcopy(packet),format='openworkgraph.versioned-process-export.v1',execution_authorization=False)
+    spec=build_runtime_spec(saved)
+    assert spec['decision_table_contract']=='openworkgraph.current-source-dependent-decision.v1'
+    assert spec['execution_authorization'] is False and spec['live_business_tools']==[]
+    with ZipFile(BytesIO(build_runtime_project(saved))) as archive:
+        bindings=json.loads(archive.read('tool-bindings.example.json'))
+        assert bindings['enabled'] is False
+        rows={r['table_id']:r for r in bindings['decision_table_checks']}
+        assert rows['approval_table']['dependency_semantics_reviewed'] is False
+        assert 'dependency_semantics_reviewed' not in rows['credit_table']
+        assert 'def check_decision_batch' in archive.read('decision_runtime.py').decode()
+        assert 'DependentDecisionExecution' in archive.read('test_decisions.py').decode()
+
 
 
 def test_dmn_export_refuses_dependencies_instead_of_dropping_them():
