@@ -11243,6 +11243,114 @@
   }
 
   // What usually happens next in open cases, learned from completed cases and checked by a temporal backtest.
+  function nextActivityLandmarksPanel(post,getSettings,valid,inspection){
+    const panel=document.createElement('details');panel.id='owgNextLandmarks';
+    const dates=input('owgNextLandmarkDates','text','2026-01-01, 2026-02-01');
+    const days=input('owgNextLandmarkDays','number');days.min='1';days.max='365';days.value='30';
+    const support=input('owgNextLandmarkSupport','number');support.min='1';support.max='10000';support.value='5';
+    const training=input('owgNextLandmarkTraining','number');training.min='1';training.max='10000';training.value='10';
+    const run=button('Evaluate historical cutoffs','secondary');run.id='owgNextLandmarkRun';
+    const notice=el('p',null,'muted');notice.setAttribute('role','status');
+    const summary=el('div'),detail=el('div'),evidence=el('div');
+    let report=null,turn=0,pageTurn=0;
+    const active=t=>valid()&&panel.isConnected&&t===turn;
+    const share=v=>v==null?'—':pct(v);
+    const bounds=b=>b?share(b.lower)+' – '+share(b.upper):'—';
+    const pp=v=>v==null?'—':(v>0?'+':'')+(100*v).toFixed(1)+' pp';
+    const delta=b=>pp(b.lower)+' – '+pp(b.upper);
+    const name=x=>x.case_ends?'(case ends)':x.activity;
+    const predicted=list=>list.length?list.map(x=>name(x)+' '+share(x.probability)).join(', '):'Abstained';
+    const downloads=exportButtons('owg-next-activity-landmarks',()=>report,r=>[
+      ['cutoff','observed_until','training_cases','open_at_cutoff','ambiguous_open_membership','membership_sensitive_top1_lower','membership_sensitive_top1_upper','predicted','resolved_predictions','top1_hits','top1_lower','top1_upper','top3_lower','top3_upper','paired_last_lower','paired_last_upper','review_sha256'],
+      ...r.landmarks.map(l=>[l.cutoff,l.observed_until,l.training_cases,l.open_at_cutoff,l.ambiguous_open_membership,l.top1.membership_sensitive_hit_share_bounds.lower,l.top1.membership_sensitive_hit_share_bounds.upper,l.top1.predicted,l.top1.resolved_predictions,l.top1.hits,
+        l.top1.whole_population_hit_share_bounds.lower,l.top1.whole_population_hit_share_bounds.upper,
+        l.top3.whole_population_hit_share_bounds.lower,l.top3.whole_population_hit_share_bounds.upper,
+        l.paired_vs_last_activity.paired_hit_share_change_bounds.lower,l.paired_vs_last_activity.paired_hit_share_change_bounds.upper,r.review_sha256])]);
+    function clear(){++turn;++pageTurn;report=null;summary.replaceChildren();detail.replaceChildren();evidence.replaceChildren();downloads.enable(false);run.disabled=false;}
+    for(const c of [dates,days,support,training])c.addEventListener('input',()=>{clear();notice.textContent='Settings changed; evaluate again.';});
+    function browse(landmark,status){
+      const t=turn,p=++pageTurn,identity=report;
+      if(!identity)return;
+      const heading=el('h5','Open cases at '+landmark.cutoff);heading.tabIndex=-1;
+      const progress=el('p',null,'muted');progress.setAttribute('role','status');
+      const rows=el('div'),prev=button('Previous page','secondary'),next=button('Next page','secondary');
+      evidence.replaceChildren(heading,progress,rows,prev,next);heading.focus();
+      let offset=0,following=null,seq=0;
+      async function load(start){
+        const n=++seq,live=()=>active(t)&&p===pageTurn&&n===seq;
+        prev.disabled=next.disabled=true;progress.textContent='Loading reviewed cases…';
+        try{
+          const result=await post('/landmarks/evidence',{settings:identity.inputs,expected_review_sha256:identity.review_sha256,
+            cutoff:landmark.cutoff,status,offset:start,limit:50});
+          if(!live())return;
+          offset=start;following=result.next_offset;
+          progress.textContent=result.total+' cases in this selection.';
+          rows.replaceChildren(table(['Case','Last known activity','Model top 3','Current-activity baseline','Recorded next activity','Outcome / abstention','Evidence'],
+            result.cases.map(c=>[c.case_id,c.last_activity,predicted(c.model),predicted(c.last_activity_baseline),
+              c.actual_next_activity??'Unresolved', [c.outcome_reason,c.abstention_reason].filter(Boolean).join(' · ')||'Resolved',
+              predictionCaseButton(inspection,c.case_id)])));
+        }catch(error){if(live()){progress.textContent=error.message;rows.replaceChildren();following=null;}}
+        finally{if(live()){prev.disabled=offset===0;next.disabled=following===null;}}
+      }
+      prev.onclick=()=>load(Math.max(0,offset-50));next.onclick=()=>load(following);load(0);
+    }
+    function show(l){
+      ++pageTurn;evidence.replaceChildren();
+      const scoreRows=[['History model top 1',l.top1],['History model top 3',l.top3],
+        ['Overall top 1',l.overall_baseline],['Current activity top 1',l.last_activity_baseline]];
+      const actions=el('div',null,'row');
+      for(const status of ['all','resolved','unresolved','abstained']){
+        const b=button('Review '+status+' cases','secondary');b.onclick=()=>browse(l,status);actions.append(b);
+      }
+      detail.replaceChildren(el('h4','Landmark '+l.cutoff),
+        el('p','Training: '+l.training_cases+' cases; '+l.training_cases_excluded_ambiguous_timestamps+' excluded for ambiguous timestamps. Observed through '+l.observed_until+
+          (l.observation_window_shortened_by_log_end?' (shortened at log end).':'.'),'muted'),
+        el('p','Open population: '+l.open_population_size_bounds.lower+' – '+l.open_population_size_bounds.upper+
+          ' cases. '+l.ambiguous_open_membership+' mixed completion ties are excluded from prediction.','muted'),
+        table(['Estimator','Predicted','Resolved','Hits','Resolved accuracy','Definitely-open bounds','Membership-sensitive bounds'],
+          scoreRows.map(([label,s])=>[label,s.predicted,s.resolved_predictions,s.hits,share(s.resolved_accuracy),bounds(s.whole_population_hit_share_bounds),bounds(s.membership_sensitive_hit_share_bounds)])),
+        ...(l.ambiguous_open_membership?[el('h5','Uncertain membership examples'),
+          table(['Case','Last visible timestamp','Tied activities'],l.ambiguous_membership_examples.map(r=>[
+            r.case_id,r.last_event_at,r.last_timestamp_activities.join(' · ')])),
+          el('p',l.ambiguous_membership_examples_truncated?'Showing the first 100 examples; the full count is included in the bounds.':'All uncertain membership cases shown.','muted')]:[]),
+        table(['Paired comparison','Common predictions','Resolved pairs','Hit-share difference bounds'],
+          [['Overall',l.paired_vs_overall],['Current activity',l.paired_vs_last_activity]].map(([label,s])=>
+            [label,s.paired_predictions,s.paired_resolved,delta(s.paired_hit_share_change_bounds)])),
+        el('h5','Top prediction calibration'),table(['Probability bin','Predicted','Resolved','Mean probability','Observed hit-share bounds'],
+          l.calibration.bins.map(b=>[share(b.lower)+' – '+share(b.upper),b.predicted,b.resolved,share(b.mean_top1_probability),bounds(b.observed_hit_share_bounds)])),
+        el('h5','Outcome and abstention accounting'),table(['Outcome','Cases'],Object.entries(l.outcomes)),
+        table(['Abstention','Cases'],Object.entries(l.abstentions)),actions);
+    }
+    run.onclick=async()=>{
+      clear();const t=turn;run.disabled=true;notice.textContent='Evaluating historical landmarks…';
+      try{
+        const settings=getSettings();
+        if(!settings.end_activities.length)throw Error('Set completion labels in the next-activity controls first.');
+        const cutoffs=dates.value.split(',').map(x=>x.trim()).filter(Boolean).map(x=>/^\d{4}-\d{2}-\d{2}$/.test(x)?x+'T00:00:00Z':x);
+        const packet={format:'openworkgraph.next-activity-landmarks.v1',cutoffs,horizon_days:Number(days.value),
+          min_support:Number(support.value),minimum_training_cases:Number(training.value),...settings};
+        const r=await post('/landmarks',packet);if(!active(t))return;
+        report=r;
+        const picker=select('owgNextLandmarkPicker',r.landmarks.map((l,i)=>[String(i),l.cutoff]));
+        picker.onchange=()=>show(r.landmarks[Number(picker.value)]);
+        const assumptions=el('ul');r.assumptions.forEach(a=>assumptions.append(el('li',a)));
+        summary.replaceChildren(table(['Cutoff','Open cases','Training cases','Prediction coverage','Top 1 hit-share bounds','Top 3 hit-share bounds'],
+          r.landmarks.map(l=>[l.cutoff,l.open_at_cutoff+(l.ambiguous_open_membership?' (+ '+l.ambiguous_open_membership+' uncertain)':''),l.training_cases,share(l.top1.prediction_coverage),
+            bounds(l.top1.whole_population_hit_share_bounds),bounds(l.top3.whole_population_hit_share_bounds)])),
+          el('p',r.distinct_open_cases_across_landmarks+' distinct open cases; '+r.repeated_open_cases_across_landmarks+
+            ' appear at multiple landmarks. No pooled independent accuracy is reported.','muted'),
+          field('Inspect landmark',picker),assumptions);
+        show(r.landmarks[0]);downloads.enable(true);notice.textContent='Historical evaluation complete. This is not prospective validation.';
+      }catch(error){if(active(t))notice.textContent=error.message;}
+      finally{if(active(t))run.disabled=false;}
+    };
+    panel.append(el('summary','Historical as-of next-activity validation'),
+      el('p','Evaluate open cases at explicit historical cutoffs. Learn only from earlier visible completions; score the first subsequent event. Uses the entire selected case notion, not the global filter.','muted'),
+      field('UTC dates or timestamps (comma-separated)',dates),field('Observation horizon (days)',days),
+      field('Minimum matching steps',support),field('Minimum training cases',training),run,notice,downloads.node,summary,detail,evidence);
+    return {panel,clear};
+  }
+
   function nextActivitySection(activityNames,inspection){
     const box=section('Next activity in open cases');box.id='owgNextActivity';
     box.appendChild(el('div','Estimate what usually comes next in each open case, from completed cases that had the same recent activities. Check the backtest before relying on it.','muted'));
@@ -11262,8 +11370,12 @@
     const historyText=list=>list.length?list.map(value=>JSON.stringify(value)).join(' → '):'All completed-case steps';
     let turn=0,selection=0;
     const current=t=>generation===state.generation&&box.isConnected&&t===turn;
+    const landmarks=nextActivityLandmarksPanel(post,()=>({
+      end_activities:ends.value.split(',').map(x=>x.trim()).filter(Boolean),history:Number(history.value),
+      ...(state.caseType?{case_type:state.caseType}:{})}),()=>generation===state.generation&&box.isConnected,inspection);
+    box.append(landmarks.panel);
     for(const control of [ends,history,exact])control.addEventListener('input',()=>{
-      ++turn;run.disabled=false;out.replaceChildren();evidence.replaceChildren();
+      ++turn;run.disabled=false;out.replaceChildren();evidence.replaceChildren();landmarks.clear();
     });
     function inspect(t,settings,snapshot,prediction){
       const selected=++selection,active=()=>current(t)&&selected===selection;

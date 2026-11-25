@@ -2448,6 +2448,26 @@ async def event_log_next_activity(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/next-activity/landmarks")
+async def event_log_next_activity_landmarks(request: Request, log_id: str):
+    from . import event_log_next_activity_landmarks as landmarks
+    _require_dashboard(request)
+    spec = await _json_body(request, "next-activity landmark settings", strict=True, limit=32768)
+    response = await run_in_threadpool(_respond, landmarks.review, log_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/next-activity/landmarks/evidence")
+async def event_log_next_activity_landmark_evidence(request: Request, log_id: str):
+    from . import event_log_next_activity_landmarks as landmarks
+    _require_dashboard(request)
+    spec = await _json_body(request, "next-activity landmark evidence", strict=True, limit=32768)
+    response = await run_in_threadpool(_respond, landmarks.evidence, log_id, spec)
+    _require_dashboard(request)
+    return response
+
+
 @router.post("/v1/event-logs/{log_id}/next-activity/training-evidence")
 async def event_log_next_activity_training_evidence(request: Request, log_id: str):
     from . import event_log_next_activity as next_activity
