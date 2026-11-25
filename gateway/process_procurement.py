@@ -131,6 +131,12 @@ class SharedProcurement:
             raise Error("Current active independently reviewed shared design required",409)
         return packet
 
+    def _design_review_pin(self,c,p,wid,revision):
+        state=self.store._review_state(c,p,wid,revision)
+        if state["status"]!="reviewed_design" or state["reviews_truncated"]:
+            raise Error("Complete current independent design review required",409)
+        return digest(state)
+
     def _assessment(self,packet,text):
         try:
             return _summary(operation(packet,"assess",loads(text)))
@@ -159,7 +165,9 @@ class SharedProcurement:
                 raise Error("Procurement or process access changed; reload",409)
             packet=self._packet(c,p,wid,body.process_revision)
             summary=self._assessment(packet,body.bundle)
+            review_pin=self._design_review_pin(c,p,wid,body.process_revision)
             return self._append(c,p,wid,previous,{"summary":summary,"state":"submitted","submitted_by_actor_id":p.actor_id,
+                        "design_review_sha256":review_pin,
                         "submitted_access_revision":meta["access_revision"],"decision_actor_id":None})
 
     def decide(self,p,wid,body):
@@ -174,13 +182,17 @@ class SharedProcurement:
                 raise Error("Procurement or process access changed; resubmit exact evidence",409)
             if current["state"]!="submitted":raise Error("Submit new evidence before a new decision",409)
             if current["submitted_by_actor_id"]==p.actor_id:raise Error("A different authenticated actor must review",403)
-            packet=self._packet(c,p,wid,current["summary"]["process_reference"]["revision"])
+            revision=current["summary"]["process_reference"]["revision"]
+            packet=self._packet(c,p,wid,revision)
+            review_pin=self._design_review_pin(c,p,wid,revision)
+            if current.get("design_review_sha256")!=review_pin:
+                raise Error("Design review history changed; resubmit exact evidence",409)
             summary=self._assessment(packet,body.bundle)
             if (summary["assessment_sha256"]!=body.expected_assessment_sha256 or digest(summary)!=digest(current["summary"])):
                 raise Error("Assessment evidence changed; resubmit and review",409)
             if body.decision=="approve_rehearsal_review" and not summary["eligible_for_rehearsal_review"]:
                 raise Error("Holdout checks do not allow positive rehearsal review",422)
-            return self._append(c,p,wid,previous,{"summary":summary,"state":body.decision,
+            return self._append(c,p,wid,previous,{"summary":summary,"state":body.decision,"design_review_sha256":review_pin,
                         "submitted_by_actor_id":current["submitted_by_actor_id"],"submitted_access_revision":meta["access_revision"],
                         "decision_actor_id":p.actor_id})
 
@@ -192,6 +204,11 @@ class SharedProcurement:
         if item:
             info=self.catalog.resolve(c,p,item["summary"]["process_reference"])
             if not info.get("active_latest_independently_reviewed_model"):blockers.append("design_not_current_reviewed")
+            else:
+                try:
+                    pin=self._design_review_pin(c,p,wid,item["summary"]["process_reference"]["revision"])
+                    if item.get("design_review_sha256")!=pin:blockers.append("design_review_history_changed")
+                except Error:blockers.append("design_review_history_changed")
             if item["submitted_access_revision"]!=meta["access_revision"]:blockers.append("process_access_changed")
             if item["revision"]!=latest:blockers.append("historical_procurement_revision")
             if not item["summary"]["eligible_for_rehearsal_review"]:blockers.append("holdout_checks_not_met")
@@ -245,6 +262,7 @@ class SharedProcurement:
                     "organization_id":p.organization_id,"process_reference":summary["process_reference"],
                     "spec_sha256":summary["spec_sha256"],"procurement_revision":current["revision"],
                     "access_revision":view["access_revision"],"approval_sha256":current["content_sha256"],
+                    "design_review_sha256":current["design_review_sha256"],
                     "assessment_sha256":summary["assessment_sha256"],"nomination_sha256":summary["nomination_sha256"],
                     "selection_receipt_sha256":receipt["receipt_sha256"],
                     "candidate_id":receipt["rehearsal_candidate_id"],

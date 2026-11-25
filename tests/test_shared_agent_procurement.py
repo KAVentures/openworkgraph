@@ -178,3 +178,18 @@ def test_shared_handoff_rejects_retain_and_access_change(submitted):
     grant(gov.store,wid,members=[],expected=2)
     with pytest.raises(ProcessCollaborationError,match="Current authenticated"):
         gov.check_handoff(person("reader"),wid,request)
+
+
+def test_reapproved_design_does_not_revive_old_procurement_approval(submitted):
+    gov,wid,body,bundle,process=submitted
+    gov.decide(person("bob"),wid,decision(gov,wid,bundle))
+    assert gov.detail(person(),wid)["current_approved_rehearsal_review"]
+    gov.store.review(person("bob"),wid,review(process,"changes_requested",1))
+    assert not gov.detail(person(),wid)["current_approved_rehearsal_review"]
+    gov.store.review(person("bob"),wid,review(process,"reviewed_design",2))
+    view=gov.detail(person(),wid)
+    assert not view["current_approved_rehearsal_review"]
+    assert "design_review_history_changed" in view["blockers"]
+    gov.submit(person(),wid,body.model_copy(update={"expected_procurement_revision":2}))
+    gov.decide(person("bob"),wid,decision(gov,wid,bundle))
+    assert gov.detail(person(),wid)["current_approved_rehearsal_review"]
