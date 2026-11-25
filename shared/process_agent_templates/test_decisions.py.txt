@@ -462,6 +462,24 @@ class DependentDecisionContracts(unittest.TestCase):
         self.assertEqual(result[1]['selected_target_activity_id'],'hold')
         self.assertFalse(result[1]['route_matches'])
 
+    def test_separate_record_binding_wrong_identity_and_stale_dependency_fail_closed(self):
+        from decision_runtime import check_decision_batch
+        spec,plan,case,bindings=dependent_fixture()
+        case['downstream_record']='owg:r:'+'e'*32
+        bindings['decision_table_checks'][1]['resource_ref_pointer']='/downstream_record'
+        routes=[{'table_id':'second_decision','target_activity_ids':['readback']}]
+        requests,missing=decision_bindings(spec,routes,case,bindings)
+        self.assertEqual(missing,[])
+        self.assertNotEqual(requests[0]['resource_ref'],requests[1]['resource_ref'])
+        now=datetime.now(timezone.utc)
+        receipts={r['table_id']:receipt(r,when=now) for r in requests}
+        self.assertTrue(all(r['route_matches'] for r in check_decision_batch(spec,requests,receipts,now=now)))
+        wrong=dict(receipts);wrong['second_decision']=wrong['source_decision']
+        self.assertEqual(check_decision_batch(spec,requests,wrong,now=now)[1]['status'],'unknown')
+        stale=dict(receipts);stale['source_decision']=receipt(requests[0],when=now-timedelta(seconds=121))
+        checked=check_decision_batch(spec,requests,stale,now=now)
+        self.assertEqual([r['status'] for r in checked],['unknown','dependency_unresolved'])
+
     def test_missing_prerequisite_binding_and_explicit_review(self):
         spec,plan,case,bindings=dependent_fixture()
         routes=[{'table_id':'second_decision','target_activity_ids':['readback']}]
@@ -504,6 +522,14 @@ class DependentDecisionExecution(unittest.IsolatedAsyncioTestCase):
         row=next(r for r in tampered if r['phase']=='decision_table_checked' and r['table_id']=='second_decision')
         row['required_decision_table_ids']=[]
         with self.assertRaises(ImplementationError):report(self.data[0],tampered,'Tampered dependency journal')
+        omitted=deepcopy(journal)
+        omitted.pop(next(i for i,r in enumerate(omitted) if r['phase']=='decision_table_checked' and r['table_id']=='second_decision'))
+        with self.assertRaises(ImplementationError):report(self.data[0],omitted,'Missing checkpoint table')
+        omitted=deepcopy(journal)
+        first_batch=[i for i,r in enumerate(omitted) if r['phase']=='decision_table_checked' and r['checkpoint_number']==1]
+        for i in reversed(first_batch):omitted.pop(i)
+        with self.assertRaises(ImplementationError):report(self.data[0],omitted,'Missing whole checkpoint')
+
 
     async def test_dependency_changes_after_precondition_stop_write(self):
         original=self.tools.call_tool
