@@ -822,6 +822,33 @@ async def export_event_log_matching_cases(request: Request, log_id: str,
                         headers={"Cache-Control": "no-store"}, background=BackgroundTask(os.unlink, filename))
 
 
+@router.post("/v1/event-logs/{log_id}/export/matching-cases.xlsx")
+async def export_event_log_matching_cases_xlsx(request: Request, log_id: str):
+    """The matching-case CSV export's rows as an Excel workbook. Not stored."""
+    import shutil
+    from . import event_log_xlsx_export as xlsx_export
+    _require_dashboard(request)
+    spec = await _json_body(request, "matching-case export settings", strict=True, limit=32768)
+
+    def prepare():
+        folder = tempfile.mkdtemp(prefix="owg-xlsx-matching-", dir=str(DATA_DIR))
+        try:
+            xlsx_export.write_matching(log_id, spec, Path(folder) / "events.xlsx")
+        except BaseException:
+            shutil.rmtree(folder, ignore_errors=True)
+            raise
+        return folder
+
+    try:
+        folder = await run_in_threadpool(prepare)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return FileResponse(str(Path(folder) / "events.xlsx"),
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        filename=f"{log_id}-matching-cases.xlsx", headers={"Cache-Control": "no-store"},
+                        background=BackgroundTask(shutil.rmtree, folder, ignore_errors=True))
+
+
 def _anonymized(log_id: str, case_type: str | None, cohort: dict[str, Any], min_cases: int, time_mode: str,
                 resource_mode: str, activity_mode: str, summary_only: bool) -> dict[str, Any]:
     from . import event_log_anonymized_export as anonymized

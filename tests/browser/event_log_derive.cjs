@@ -112,6 +112,10 @@ const path=require('node:path');
    const objectExport=JSON.parse(await fs.readFile(await ocelFile.path(),'utf8'));
    assert.deepEqual(objectExport.objects.map(object=>object.id),['item-1','item-2','order-1']);
    assert.deepEqual(objectExport.events.map(event=>event.id),['event-1']);
+   await page.locator('#owgDeriveExportFormat').selectOption('xlsx');
+   const [xlsxFile]=await Promise.all([page.waitForEvent('download'),page.locator('#owgDeriveExport').click()]);
+   assert.match(xlsxFile.suggestedFilename(),/matching-cases\.xlsx$/);
+   assert.equal((await fs.readFile(await xlsxFile.path())).subarray(0,2).toString(),'PK');
 
    await page.getByRole('button',{name:'Preview copy',exact:true}).click();
    await page.locator('#owgDerivePreview').getByText('The copy would also retain 1 supplied object relationship.',{exact:false}).waitFor();
