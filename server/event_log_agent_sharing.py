@@ -1281,14 +1281,28 @@ def batching(log_id: str, case_type: str | None = None, gap_seconds: int = 60, m
     return {**bt.batching(log_id, spec), "format": FORMAT, "log_id": log_id}
 
 
-def handovers(log_id: str, case_type: str | None = None, limit: int = 50) -> dict[str, Any]:
+def _checked_case_filter(log_id: str, case_type: str | None, case_filter: Any) -> dict[str, Any] | None:
+    """An agent-supplied case filter, refused unless it is a non-empty object matching at least
+    AGENT_MIN_FILTERED_CASES cases, so a narrow filter cannot describe one case."""
+    if case_filter is None:
+        return None
+    if not isinstance(case_filter, dict) or not case_filter:
+        raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+    if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
+        raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
+    return case_filter
+
+
+def handovers(log_id: str, case_type: str | None = None, limit: int = 50,
+              case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
     """How work passes between people (aggregates level): handover of work, ping-pong (subcontracting) and
     working together, between pseudonymous resources. Names are never returned, a resource or pair seen in
     fewer than AGENT_MIN_CELL_CASES cases is withheld and matrix cells below that many events are blanked."""
     require(log_id, "aggregates")
     from . import event_log_organization as org
     limit = max(1, min(int(limit), 200))
-    full = org.organization(log_id, case_type, names="pseudonymous", limit=limit)
+    full = org.organization(log_id, case_type, names="pseudonymous", limit=limit,
+                            cohort=_checked_case_filter(log_id, case_type, case_filter))
     keep = AGENT_MIN_CELL_CASES
 
     def kept(rows: list[dict[str, Any]], key: str) -> tuple[list[dict[str, Any]], int]:
@@ -1322,7 +1336,8 @@ def handovers(log_id: str, case_type: str | None = None, limit: int = 50) -> dic
     }
 
 
-def roles(log_id: str, case_type: str | None = None, threshold: float = 0.65) -> dict[str, Any]:
+def roles(log_id: str, case_type: str | None = None, threshold: float = 0.65,
+          case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
     """Roles mined from which activities resources perform (aggregates level). Members are only counted, never
     listed, and activities a role did fewer than AGENT_MIN_CELL_CASES times are left out of its mix."""
     require(log_id, "aggregates")
@@ -1330,7 +1345,8 @@ def roles(log_id: str, case_type: str | None = None, threshold: float = 0.65) ->
     threshold = float(threshold)
     if not 0 < threshold < 1:
         raise EventLogWorkspaceError("threshold must be between 0 and 1")
-    full = rl.roles(log_id, case_type, threshold=threshold, names="pseudonymous")
+    full = rl.roles(log_id, case_type, threshold=threshold, names="pseudonymous",
+                    cohort=_checked_case_filter(log_id, case_type, case_filter))
     keep = AGENT_MIN_CELL_CASES
     out, hidden = [], 0
     for role in full["roles"]:

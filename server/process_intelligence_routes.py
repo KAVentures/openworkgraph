@@ -552,13 +552,29 @@ async def agent_batching(request: Request, log_id: str, gap_seconds: int = Query
 
 @router.get("/v1/process-intelligence/{log_id}/handovers")
 async def agent_handovers(request: Request, log_id: str, limit: int = Query(default=50, ge=1, le=200),
-                          case_type: str | None = Query(default=None, max_length=200)):
+                          case_type: str | None = Query(default=None, max_length=200),
+                          case_filter: str | None = Query(default=None, max_length=8192)):
     _require_agent_access(request)
-    return await _answer(sharing.handovers, log_id, case_type, limit)
+    return await _answer(sharing.handovers, log_id, case_type, limit, _json_case_filter(case_filter))
+
+
+def _json_case_filter(raw: str | None) -> dict[str, Any] | None:
+    """A case filter sent as a JSON query parameter; anything but a JSON object is a 422."""
+    if raw is None:
+        return None
+    import json
+    try:
+        chosen = json.loads(raw)
+    except ValueError:
+        raise HTTPException(422, "case_filter must be a JSON object") from None
+    if not isinstance(chosen, dict):
+        raise HTTPException(422, "case_filter must be a JSON object")
+    return chosen
 
 
 @router.get("/v1/process-intelligence/{log_id}/roles")
 async def agent_roles(request: Request, log_id: str, threshold: float = Query(default=0.65, gt=0, lt=1),
-                      case_type: str | None = Query(default=None, max_length=200)):
+                      case_type: str | None = Query(default=None, max_length=200),
+                      case_filter: str | None = Query(default=None, max_length=8192)):
     _require_agent_access(request)
-    return await _answer(sharing.roles, log_id, case_type, threshold)
+    return await _answer(sharing.roles, log_id, case_type, threshold, _json_case_filter(case_filter))
