@@ -7670,7 +7670,7 @@
       const n=pickers.length+1,pick=select('owgFunnelStep'+n,options);
       const exact=input('owgFunnelExact'+n,'text','Exact activity label (optional)');exact.maxLength=400;
       const lookup=activityLabelLookup(exact,{id:part=>'owgFunnelStep'+n+part,subject:'funnel step '+n+' activity'});
-      exact.addEventListener('input',lookup.reset);
+      exact.addEventListener('input',()=>{lookup.reset();exact.dispatchEvent(new Event('change',{bubbles:true}));});
       pick.addEventListener('change',()=>{exact.value='';lookup.reset();});
       if(activityNames[n-1])pick.value=activityNames[n-1];
       pickers.push({pick,exact});
