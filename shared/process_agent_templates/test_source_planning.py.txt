@@ -6,6 +6,7 @@ import os
 import unittest
 from unittest.mock import patch
 
+from test_execution import SOURCE_RULE_DEPENDENCIES
 from execute import ImplementationError,digest
 from plan_sources import propose_with_sources
 try:
@@ -201,6 +202,7 @@ class SourcePlanningCases(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.reads),reads);self.assertEqual(len(self.model_calls),models)
 
 
+@unittest.skipUnless(SOURCE_RULE_DEPENDENCIES,'Install requirements.txt for structured fact evaluation')
 class DeterministicSourceRoutes(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         from test_execution import fixture,ImplementationCases
@@ -239,6 +241,7 @@ class DeterministicSourceRoutes(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report['plan']['status'],'needs_clarification')
 
 
+@unittest.skipUnless(SOURCE_RULE_DEPENDENCIES,'Install requirements.txt for structured fact evaluation')
 class BoundedRouteSearch(unittest.TestCase):
     def test_supported_unresolved_and_excluded_alternatives(self):
         from route_candidates import _search
