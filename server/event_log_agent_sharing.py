@@ -731,9 +731,42 @@ def data_quality(log_id: str) -> dict[str, Any]:
                      "reason_counts_can_overlap": True},
             "diagnostics": current.get("diagnostics"), "completeness": current.get("completeness"),
             "integrity": {k: v for k, v in (result.get("integrity") or {}).items() if k in ("status", "reason")},
-            "batch_trend": trends,
+            "batch_trend": trends, "stray_dates": _stray_dates(log_id),
             "caveat": ("Quality describes the supplied rows. Whether the source system holds events that were not "
                        "exported is unknown; check rejected rows and shared timestamps before trusting orderings.")}
+
+
+STRAY_MIN_GAP_DAYS = 365
+
+
+def _stray_dates(log_id: str) -> dict[str, Any]:
+    """Events dated far outside the bulk of the log (beyond the 1st-99th percentile span, and at least a year,
+    either side), which stretch timelines and week-by-week analyses. Counts and the suggested filter only; the
+    stray dates themselves are not returned."""
+    def run(conn):
+        low, high = conn.execute("SELECT quantile_disc(ts, 0.01), quantile_disc(ts, 0.99) FROM ce").fetchone()
+        if low is None:
+            return {"stray": None}
+        from datetime import timedelta
+        gap = max(high - low, timedelta(days=STRAY_MIN_GAP_DAYS))
+        before, after = low - gap, high + gap
+        row = conn.execute("""SELECT count(*) FILTER (WHERE ts < ?), count(DISTINCT case_id) FILTER (WHERE ts < ?),
+              count(*) FILTER (WHERE ts > ?), count(DISTINCT case_id) FILTER (WHERE ts > ?) FROM ce""",
+                           [before, before, after, after]).fetchone()
+        return {"stray": {"bulk_from": low.date().isoformat(), "bulk_to": high.date().isoformat(),
+                          "far_before": before.date().isoformat(), "far_after": after.date().isoformat(),
+                          "events_far_before": row[0], "cases_far_before": row[1],
+                          "events_far_after": row[2], "cases_far_after": row[3]}}
+    found = workspace._query(log_id, None, run)["stray"]
+    if not found:
+        return {"events_far_before": 0, "events_far_after": 0}
+    if found["events_far_before"] or found["events_far_after"]:
+        found["suggested_case_filter"] = {
+            **({"started_from": found["far_before"] + "T00:00:00Z"} if found["events_far_before"] else {}),
+            **({"started_before": found["far_after"] + "T00:00:00Z"} if found["events_far_after"] else {})}
+        found["note"] = ("A few events lie far outside the dates of the rest of the log, usually placeholder or "
+                         "mistyped dates. They stretch timelines; tools that take a case_filter can leave them out.")
+    return found
 
 
 def footprints(log_id: str, case_type: str | None = None, noise: float = 0.2) -> dict[str, Any]:
