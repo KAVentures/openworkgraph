@@ -93,6 +93,9 @@ import hashlib,json
 from runtime import load_spec,check_plan,validate_spec
 spec=load_spec();plan={'revision':1,'content_sha256':'a'*64,'activity_ids':['fork','A1','B1','A2','B2','join','close']}
 checks=check_plan(plan,spec)
+from configure import _reviewed_edge_indices
+assert _reviewed_edge_indices(spec,plan['activity_ids'])==set(range(7))
+assert _reviewed_edge_indices(spec,['fork','A1','A2','B1','B2','join','close'])==set(range(7))
 assert checks['all_produced_branch_tokens_consumed'] and not checks['execution_permitted']
 assert set(checks['requires_tool_mapping_ids'])=={'A1','A2','B1','B2','close'}
 missing={**plan,'activity_ids':['fork','A1','A2','join','close']}
