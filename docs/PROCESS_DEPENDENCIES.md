@@ -211,3 +211,35 @@ disclosure, deep chains and complete reachable populations.
 `tests/browser/process_dependencies.cjs` checks user-visible path displays,
 the downloaded report and HTML-safe rendering. These are structural checks,
 not customer validation of true business dependency semantics.
+
+
+## Organization reassessment worklist
+
+The dependency graph includes a prerequisite-first worklist derived from the
+same resolved graph and declaration revisions. Direct findings include an
+unavailable/archived process, missing independent current model review,
+missing dependency declaration, stale root pin, or stale prerequisite link.
+Stale links belong to the consumer declaration: a prerequisite whose own
+model and declaration have been repaired is not still a direct finding merely
+because another consumer retains its old revision.
+
+Each process is classified as direct reassessment required, upstream
+reassessment required (no local findings but at least one affected
+prerequisite), or current declared basis. The worklist lists the precise
+stale link IDs, immediate affected prerequisites and the count of distinct
+upstream processes with direct findings. Shared prerequisites are counted
+once, including diamond-shaped dependency graphs. Layers follow the
+longest declared prerequisite chain, not a duration or an implementation
+schedule. The dashboard supports filtering and opening available processes
+for explicit review. The existing graph fingerprint, authenticated access,
+audit and export checks also apply to this additive worklist.
+
+Review the prerequisite model and its declaration first, then refresh and
+review consumer pins as appropriate. Model approvals are never inherited or
+automatically propagated, and no link is updated without the existing
+explicit save flow. This does not verify completeness of business dependency
+discovery, actual operational impacts or authority to execute.
+
+Regression tests exercise a diamond, a changed leaf, repair of the leaf
+without silently repairing incoming links, and complete consumer repair;
+the browser acceptance checks filtering and stale-link guidance.
