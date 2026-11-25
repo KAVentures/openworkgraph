@@ -243,3 +243,22 @@ discovery, actual operational impacts or authority to execute.
 Regression tests exercise a diamond, a changed leaf, repair of the leaf
 without silently repairing incoming links, and complete consumer repair;
 the browser acceptance checks filtering and stale-link guidance.
+
+
+## Selected-process build basis
+
+Focus a process in the dependency graph to see the entire declared prerequisite
+closure, including the selected process, in prerequisite-first order. The portal
+shows each model and dependency declaration revision, reassessment findings and
+a deterministic SHA-256 of the exact minimized basis. The focused graph API and
+existing authenticated graph download include this same basis. An unrelated
+consumer's stale incoming pin or a disconnected process does not invalidate
+the selected closure. All actual prerequisite links and their pinned models
+remain included; a missing declaration, unavailable model, changed pin or
+withdrawn independent review requires reassessment.
+
+The digest is a comparison key, not a signature or an executable authorization.
+Compare it against a freshly requested focused graph before relying on a saved
+snapshot. The existing export still checks the full graph fingerprint, and a
+corrupt or oversized organization scan withholds the focused result as well.
+No new grants, subprocess execution or automatic review inheritance are added.
