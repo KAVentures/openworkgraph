@@ -7685,12 +7685,12 @@
       const chosen=pickers.map(p=>p.value).filter(Boolean);
       if(chosen.length<2){statusLine.textContent='Choose at least two steps.';out.replaceChildren();return;}
       if(evidenceStep.value&&(Number(evidenceStep.value)>chosen.length||(evidenceStep.value==='1'&&evidenceStatus.value==='dropped'))){statusLine.textContent='Choose a valid evidence step; drop-off requires step 2 or later.';out.replaceChildren();return;}
-      const generation=state.generation,version=++revision,current=()=>generation===state.generation&&version===revision;
-      run.disabled=true;statusLine.textContent='Following cases…';out.replaceChildren();
+      const generation=state.generation;run.disabled=true;statusLine.textContent='Following cases…';out.replaceChildren();
+      const version=++revision,current=()=>generation===state.generation&&version===revision;
       try{
         const params={step:chosen};if(windowPick.value)params.within_hours=windowPick.value;
         if(evidenceStep.value){params.evidence_step=evidenceStep.value;params.evidence_status=evidenceStatus.value;params.evidence_page=true;}
-        const basePath=logPath('funnel',params),r=await getJSON(basePath);
+        const basePath=logPath('funnel',params),r=await getJSON(basePath).catch(error=>{if(!current())return null;throw error;});
         if(!current())return;
         const first=r.steps[0],last=r.steps[r.steps.length-1];
         statusLine.textContent=Number(last.cases).toLocaleString()+' of '+Number(first.cases).toLocaleString()+' cases that reached '+first.activity+' went on to reach '+last.activity+' ('+pct(r.completed.share_of_first_step)+'), in a median '+hrs(r.completed.hours_first_to_last.median)+'.'+(r.largest_drop?' The largest drop is before step '+r.largest_drop.to_step+' ('+Number(r.largest_drop.cases).toLocaleString()+' cases).':'');
@@ -7727,8 +7727,8 @@
           showEvidence(r.evidence);
         }
         out.appendChild(el('div',r.caveat,'muted'));
-      }catch(error){if(current())statusLine.textContent=error.message;}
-      finally{if(current())run.disabled=false;}};
+      }catch(error){statusLine.textContent=error.message;}
+      finally{run.disabled=false;}};
     return box;
   }
 
