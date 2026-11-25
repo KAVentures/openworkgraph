@@ -531,6 +531,24 @@ class DependentDecisionExecution(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ImplementationError):report(self.data[0],omitted,'Missing whole checkpoint')
 
 
+    async def test_model_free_dependent_route_proposal(self):
+        import sys
+        from plan_sources import propose_with_sources
+        spec,plan,case,bindings=self.data
+        with patch.dict(sys.modules,{'agent':None,'agents':None}):
+            result=await propose_with_sources(case,bindings,spec=spec,deterministic=True,
+                source_reads_confirmed=True,source_state_reader=self.source)
+        self.assertEqual(result['plan']['status'],'proposal')
+        self.assertEqual(result['plan']['activity_ids'],plan['activity_ids'])
+        self.assertEqual(result['source_planning']['source_receipt_request_count'],1)
+        self.assertFalse(result['source_planning']['model_invoked'])
+        self.assertFalse(self.tools.calls)
+        self.mutation={'source_state_verified':False}
+        result=await propose_with_sources(case,bindings,spec=spec,deterministic=True,
+            source_reads_confirmed=True,source_state_reader=self.source)
+        self.assertEqual(result['plan']['status'],'needs_clarification')
+        self.assertFalse(self.tools.calls)
+
     async def test_dependency_changes_after_precondition_stop_write(self):
         original=self.tools.call_tool
         async def change(*args):
