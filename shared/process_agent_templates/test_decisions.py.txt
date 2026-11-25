@@ -693,6 +693,47 @@ class DependentDecisionExecution(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ImplementationError):
                 report(self.data[0],variant,'Modified dependency journal')
 
+    async def test_missing_alternative_record_does_not_abort_read_only_planning(self):
+        from plan_sources import propose_with_sources
+        from evaluate_sources import evaluate_current_sources
+        from execute import reference
+        spec,plan,case,bindings=self.data
+        bindings['decision_table_checks'][1]['resource_ref_pointer']='/downstream_record'
+        self.state='merged'
+        report=await propose_with_sources(case,bindings,spec=spec,deterministic=True,
+            source_reads_confirmed=True,source_state_reader=self.source)
+        self.assertEqual(report['plan']['status'],'proposal')
+        self.assertEqual(report['plan']['activity_ids'],['choose','hold'])
+        self.assertEqual(report['source_planning']['unbound_decision_table_ids'],['second_decision'])
+        self.assertEqual(report['source_planning']['source_receipt_request_count'],1)
+        self.assertFalse(report['execution_permitted'])
+        suite={'format':'openworkgraph.reviewed-shadow-cases.v1','process_reference':reference(spec),
+            'spec_sha256':digest(spec),'reviewed_by_customer':True,'case_inputs_authorized':True,
+            'cases':[{'id':'case_1','category':'normal','input':case,'expected':{'status':'proposal',
+                'accepted_routes':[['choose','hold']],'review_confirmed':True}}]}
+        reviewed,summary=await evaluate_current_sources(spec,suite,bindings,deterministic=True,
+            source_reads_confirmed=True,source_state_reader=self.source)
+        self.assertEqual(reviewed['matching_case_count'],1)
+        self.assertEqual(summary['source_receipt_request_count'],1)
+        # The same missing input is blocking when its dependent route is viable.
+        self.state='open'
+        report=await propose_with_sources(case,bindings,spec=spec,deterministic=True,
+            source_reads_confirmed=True,source_state_reader=self.source)
+        self.assertEqual(report['plan']['status'],'needs_clarification')
+        self.assertFalse(self.tools.calls)
+        with self.assertRaises(ImplementationError):
+            prepare(spec,plan,case,bindings)
+        # Missing is not the same as a malformed or fabricated record reference.
+        case['downstream_record']='invalid-record'
+        with self.assertRaises(ImplementationError):
+            await propose_with_sources(case,bindings,spec=spec,deterministic=True,
+                source_reads_confirmed=True,source_state_reader=self.source)
+        case.pop('downstream_record')
+        bindings['decision_table_checks'][1]['resource_ref_pointer']='/bad~9pointer'
+        with self.assertRaises(ImplementationError):
+            await propose_with_sources(case,bindings,spec=spec,deterministic=True,
+                source_reads_confirmed=True,source_state_reader=self.source)
+
     async def test_model_free_dependent_route_proposal(self):
         import sys
         from plan_sources import propose_with_sources
