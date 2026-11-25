@@ -711,16 +711,23 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         return _get("get_process_signals", f"/v1/process-intelligence/{_log(log_id)}/signals", {})
 
     @mcp.tool(annotations=_READ_ONLY)
-    def get_process_rework(log_id: str, limit: int = 20, case_type: str | None = None) -> dict[str, Any]:
+    def get_process_rework(log_id: str, limit: int = 20, case_type: str | None = None,
+                           case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Rework in a shared log: the share of cases that repeat an activity, which activities are repeated most
         and how often, the most common loop patterns (self-loop, short loop, longer return), and how long cases
         with rework take compared with cases without (median difference with a 95% interval). Association, not
-        cause. Aggregates only.
+        cause. case_filter (the same keys as insight cohorts) narrows the cases; logs above 200,000 cases need one.
+        Aggregates only.
         """
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise ToolError("limit must be 1 to 100")
-        return _get("get_process_rework", f"/v1/process-intelligence/{_log(log_id)}/rework",
-                    {"limit": limit, "case_type": case_type})
+        params: dict[str, Any] = {"limit": limit, "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_process_rework", f"/v1/process-intelligence/{_log(log_id)}/rework", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_waiting_times(log_id: str, case_type: str | None = None) -> dict[str, Any]:

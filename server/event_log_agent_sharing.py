@@ -1207,13 +1207,21 @@ def similar_cases(log_id: str, case_id: str, case_type: str | None = None, limit
             "format": FORMAT, "log_id": log_id}
 
 
-def rework(log_id: str, case_type: str | None = None, limit: int = 20) -> dict[str, Any]:
-    """Repeated activities, loop patterns and how cases with rework compare (aggregates level)."""
+def rework(log_id: str, case_type: str | None = None, limit: int = 20,
+           case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Repeated activities, loop patterns and how cases with rework compare (aggregates level). An optional case
+    filter narrows the cases, which also lets agents analyse logs above the rework case limit."""
     require(log_id, "aggregates")
     from . import event_log_rework as rw
     spec: dict[str, Any] = {"limit": max(1, min(int(limit), 100))}
     if case_type:
         spec["case_type"] = case_type
+    if case_filter is not None:
+        if not isinstance(case_filter, dict) or not case_filter:
+            raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+        if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
+            raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
+        spec["cohort"] = case_filter
     result = rw.rework(log_id, spec)
     keep = AGENT_MIN_CELL_CASES
     comparison = result.get("comparison")
