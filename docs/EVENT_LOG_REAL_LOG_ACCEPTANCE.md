@@ -93,6 +93,12 @@ definition, a brute-force count reproduced the occurrence counts and mean times 
 pairs exactly. Under PM4Py's unbounded definition 45 of the 50 pairs differ, because BPI 2012 has
 long cases with repeated work items.
 
+The heuristics net on BPI Challenge 2012 (dependency threshold 0) matches the heuristics-miner
+dependency measure computed from PM4Py's directly-follows counts. For all 85 activity-to-activity
+arrows, the transition count and the dependency, (|a→b| − |b→a|) / (|a→b| + |b→a| + 1) and
+|a→a| / (|a→a| + 1) for self-loops, are equal. The other 12 arrows are start and end markers, which
+PM4Py's graph does not have.
+
 ## What was found and changed
 
 | Finding | Cause | Change |
