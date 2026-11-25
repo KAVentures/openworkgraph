@@ -213,10 +213,45 @@ def test_dependency_starter_export_requires_exact_current_basis_and_covers_sidec
         manifest_pin=sha256(archive.read("release-manifest.json")).hexdigest()
         archive.extractall(tmp_path)
     verify_directory(tmp_path,expected_manifest_sha256=manifest_pin)
+    assert dep.check_build_basis(person(),a["workflow_id"],a["revision"],basis["basis_sha256"])["current_exact_reviewed_basis"]
+    assert not dep.check_build_basis(person(),a["workflow_id"],a["revision"],first["basis_sha256"])["current_exact_reviewed_basis"]
+    import subprocess
+    import sys
+    code="""
+import asyncio,sys
+from pathlib import Path
+from check_dependency_basis import check
+from verify_release import ReleaseIntegrityError
+calls=[]
+async def reader(url,token,parameters):
+    assert url.endswith('/dependencies/build-status')
+    assert token=='SYNTHETIC_TOKEN'
+    calls.append(parameters)
+    return {'format':'openworkgraph.dependency-build-basis-status.v1',
+        'organization_id':'acme','workflow_id':sys.argv[2],'requested_revision':parameters['revision'],
+        'requested_basis_sha256':parameters['basis_sha256'],'status':'current',
+        'current_exact_reviewed_basis':True,'read_only':True,'execution_authorized':False,
+        'business_outcomes_verified':False}
+async def run():
+    assert await check(Path('.'),sys.argv[1],'https://catalog.example',reader=reader,token='SYNTHETIC_TOKEN')
+    async def foreign(*args):
+        return dict(await reader(*args),organization_id='foreign')
+    assert not await check(Path('.'),sys.argv[1],'https://catalog.example',reader=foreign,token='SYNTHETIC_TOKEN')
+    before=len(calls)
+    try:await check(Path('.'),'f'*64,'https://catalog.example',reader=reader,token='SYNTHETIC_TOKEN')
+    except ReleaseIntegrityError:pass
+    else:raise AssertionError('Wrong manifest pin accepted')
+    assert len(calls)==before
+asyncio.run(run())
+"""
+    run=subprocess.run([sys.executable,'-S','-c',code,manifest_pin,a["workflow_id"]],
+        cwd=tmp_path,capture_output=True,text=True,timeout=20)
+    assert run.returncode==0,run.stdout+run.stderr
     (tmp_path/"dependency-build-basis.json").write_text("{}")
     with pytest.raises(ValueError):
         verify_directory(tmp_path,expected_manifest_sha256=manifest_pin)
     store.save(person(),write("Changed prerequisite",expected=1),b["workflow_id"])
+    assert not dep.check_build_basis(person(),a["workflow_id"],a["revision"],basis["basis_sha256"])["current_exact_reviewed_basis"]
     with pytest.raises(Error):
         dep.build_bundle(person(),a["workflow_id"],a["revision"],basis["basis_sha256"])
 
