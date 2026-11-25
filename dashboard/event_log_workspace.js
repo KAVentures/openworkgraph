@@ -6190,6 +6190,14 @@
           finally{tree.disabled=false;}
         };
         out.appendChild(tree);
+        // The same tree as PM4Py prints it: paste it into pm4py's parse() or into "Check against a Petri net".
+        const notation=node=>node.op==='activity'?"'"+node.activity+"'":node.op==='tau'?'tau':
+          ({seq:'->',xor:'X',and:'+',loop:'*'})[node.op]+'( '+node.children.map(notation).join(', ')+' )';
+        const notationBox=document.createElement('details');notationBox.id='owgDiscoveryNotationBox';
+        const notationText=el('pre',notation(r.tree));notationText.id='owgDiscoveryNotation';
+        notationText.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%';
+        notationBox.append(el('summary','Process tree in PM4Py notation'),notationText);
+        out.appendChild(notationBox);
         const petri=button('Download Petri net (PNML)','secondary');petri.id='owgDiscoveryPnml';
         petri.onclick=async()=>{
           try{

@@ -2150,6 +2150,11 @@ keeps the block structure that the PNML and BPMN exports flatten:
 Identifiers are UUIDs derived from each node's position, so the same tree gives the same file.
 The `X-OWG-Process-Tree` header counts nodes and activities.
 
+**Process tree in PM4Py notation** (under the download) shows the same tree as PM4Py prints it, for
+example `->( 'Receive', X( tau, 'Approve' ), 'Close' )`. It can be pasted into
+`pm4py.objects.process_tree.utils.generic.parse`. Labels are written as they are, so a label
+containing a single quote may need editing before PM4Py's parser accepts it.
+
 Place and transition identifiers are generated (`p0`, `t0`, …); activity names appear only as
 transition names. Tests replay every trace up to six steps and check that the net accepts exactly
 the traces the process tree accepts.

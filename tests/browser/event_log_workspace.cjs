@@ -258,6 +258,8 @@ const path=require('node:path');
    const ptmlText=await fs.readFile(await ptmlDownload.path(),'utf8');
    assert.match(ptmlText,/<processTree /);assert.match(ptmlText,/<manualTask [^>]*name="Approve"/);assert.match(ptmlText,/<automaticTask /);
    await page.locator('#owgDiscoveryStatus').filter({hasText:'Process tree downloaded (nodes='}).waitFor();
+   await page.locator('#owgDiscoveryNotationBox summary').click();
+   assert.match(await page.locator('#owgDiscoveryNotation').textContent(),/^->\( .*X\( tau, 'Approve' \), 'Close' \)$/);
    // The same draft downloads as a PNML workflow net with the skip as a silent transition.
    const [pnmlDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#owgDiscoveryPnml').click()]);
    assert.match(pnmlDownload.suggestedFilename(),/-discovered\.pnml$/);
