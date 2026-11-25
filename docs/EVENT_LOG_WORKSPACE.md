@@ -164,6 +164,18 @@ dashboard then lists both with how the first value would read, and you choose.
 Quarantined rows are released with ISO parsing only, so re-import a file that
 needs a format.
 
+### XES and OCEL times without an offset
+
+XES and OCEL times should carry a UTC offset, but some tools write them without one. PM4Py, for
+example, writes the times of a log without time zones as `2024-03-04T14:05:00`. Such a file used to
+import no events. Now it is refused with a hint until you choose the offset those times use: the same
+**Offset for times without one** as for CSV (`naive_timestamp_offset=` on the import and append
+routes). Times that carry an offset are read as written, and times that are not ISO 8601 are still
+rejected. The offset also applies to the times of OCEL object attribute values. The import reports
+`timestamps_with_assumed_offset`, or `timestamps_without_offset` when no offset was chosen, and the
+offset is part of the import's recorded transform. The dashboard looks at the first times of an XES
+or OCEL file and proposes this computer's offset when some have none.
+
 ### Reusing an earlier mapping
 
 When a CSV file's header has every column an earlier import mapped (case,
