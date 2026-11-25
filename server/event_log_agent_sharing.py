@@ -347,6 +347,12 @@ def brief(log_id: str, case_type: str | None = None, sla_hours: float | None = N
     markers = cm.markers(log_id)["markers"]
     result["owner_change_markers"] = [{"label": m["label"], "marked_at": m["marked_at"], "within_log": m["within_log"]}
                                       for m in markers[-10:]]
+    stray = _stray_dates(log_id)
+    if stray.get("events_far_before") or stray.get("events_far_after"):
+        result["data_warnings"] = [{"kind": "stray_dates", "cases_far_before": stray.get("cases_far_before", 0),
+                                    "cases_far_after": stray.get("cases_far_after", 0),
+                                    "suggested_case_filter": stray.get("suggested_case_filter"),
+                                    "note": stray.get("note")}]
     result["parts_unavailable"] = parts_unavailable
     result["next_tools"] = [
         {"tool": "get_process_insights", "for": "every ranked finding with the case filter that reproduces it"},
