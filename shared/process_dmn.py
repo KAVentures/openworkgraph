@@ -129,7 +129,8 @@ def condition_to_test(condition: RuleCondition) -> str:
 
 def unary_test_to_condition(path: str, text: str) -> RuleCondition | None:
     """One FEEL simple unary test as an OWG condition; ``-`` means any value."""
-    text = " ".join(text.split())
+    # Do not collapse whitespace within quoted FEEL literals.
+    text = text.strip()
     if text in ("", "-"):
         return None
     if len(text) > 2000:
@@ -184,9 +185,15 @@ def export_dmn(packet: dict[str, Any]) -> str:
             conditions=[c for row in table.rows for c in rules_by_id[row.rule_id].predicate.conditions]
             if not dep_paths <= {c.path for c in conditions}:
                 raise DMNError("Every exported dependency needs an exact input reference")
+            deps={d.fact_path:d for d in table.required_decisions}
+            by_id={t.id:t for t in model.decision_tables}
             for condition in conditions:
                 if any(_paths_overlap(condition.path,p) and condition.path!=p for p in dep_paths):
                     raise DMNError("Dependency input paths cannot overlap other fact paths")
+                if condition.path in deps:
+                    upstream=by_id[deps[condition.path].table_id]
+                    mapping={row.target_activity_id:row.target_activity_id for row in upstream.rows}
+                    _translate_dependency_condition(condition,{'fact_path':condition.path,'output_mapping':mapping})
     rules = {r.id: r for r in model.business_rules}
     labels = {a.id: a.label for a in model.activities}
     ET.register_namespace("", DMN)
@@ -227,7 +234,14 @@ def export_dmn(packet: dict[str, Any]) -> str:
                 path = dep_names.get(condition.path) or _pointer_to_path(condition.path)
                 if path in entries:
                     raise DMNError("A row with two conditions on the same fact cannot be written as one DMN entry")
-                entries[path] = condition_to_test(condition)
+                test=condition_to_test(condition)
+                try:
+                    restored=unary_test_to_condition(path,test)
+                except (ValueError,DMNError):
+                    raise DMNError("A condition cannot be represented exactly in the supported DMN unary-test subset") from None
+                if (restored is None or restored.operator!=condition.operator or restored.expected!=condition.expected):
+                    raise DMNError("A condition cannot be represented exactly in the supported DMN unary-test subset")
+                entries[path] = test
                 if path not in paths:
                     paths.append(path)
             per_row.append(entries)
@@ -318,6 +332,8 @@ def _unsupported(decision: ET.Element, *, allow_dependencies=False) -> str | Non
     outputs = _child(table, "output")
     if len(outputs) != 1:
         return "A decision table needs exactly one output naming the next step"
+    if outputs[0].get('typeRef') not in (None,'string'):
+        return 'The next-step output must be a scalar string'
     if (_child(outputs[0], "defaultOutputEntry") or _child(outputs[0], "outputValues") or
             any(_child(column, "inputValues") for column in _child(table, "input"))):
         return "Default outputs and separately declared input or output domains are unsupported"
@@ -378,7 +394,7 @@ def _dependency_graph(decisions,profile):
                     raise DMNError('Decision dependencies require a unique named scalar output used as an exact input expression')
                 if profile:
                     fact_path=requirement.get(FACT_PATH)
-                    if not fact_path or _path_to_pointer(_pointer_to_path(fact_path))!=fact_path:
+                    if not fact_path or not fact_path.startswith('/') or _path_to_pointer(_pointer_to_path(fact_path))!=fact_path:
                         raise DMNError('OWG dependency profile requires an exact simple fact path')
                 else:
                     fact_path='/dmn_dependencies/'+name
@@ -478,7 +494,7 @@ def _propose(model_value: dict[str, Any], decision: ET.Element, decision_activit
             raise DMNError("Every rule needs one entry per input and one output entry")
         target_label = _parse_literal(_text_of(out[0]))
         if not isinstance(target_label, str) or target_label not in targets:
-            raise DMNError("Every output entry must name one of the decision's next steps by its label")
+            raise DMNError("Every output entry must name an exact next step using the document output convention")
         target = targets[target_label]
         if target in seen_targets:
             raise DMNError("Each next step may appear in only one rule, as in OWG decision tables")
@@ -655,6 +671,11 @@ def import_dmn_batch(raw: bytes, model_value: dict[str, Any], assignments: Any, 
         if any(d['index'] not in mapping for d in graph[index]):
             raise DMNError(f"DMN table {index+1}: map every required decision dependency")
     value=ProcessModel.model_validate(model_value).model_dump()
+    # Do not silently remove dependencies when importing an unrelated table.
+    existing_by_target={t['decision_activity_id']:t for t in value.get('decision_tables',[])}
+    for index,target in mapping.items():
+        if existing_by_target.get(target,{}).get('required_decisions') and not graph[index]:
+            raise DMNError(f'DMN table {index+1}: replacing a dependent table requires its dependency declaration')
     # Clear selected tables' old links in the private draft only. Rebuild in
     # dependency order; keep stable table IDs and invalidate downstream review.
     replaced={t['id'] for t in value.get('decision_tables',[]) if t['decision_activity_id'] in used_targets}
