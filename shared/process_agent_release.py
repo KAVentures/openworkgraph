@@ -15,12 +15,16 @@ import json
 from pathlib import Path
 import re
 import sys
+import stat
+from zipfile import ZipFile, BadZipFile, ZIP_STORED, ZIP_DEFLATED
 
 FORMAT = "openworkgraph.customer-runtime-file-manifest.v1"
 MANIFEST_NAME = "release-manifest.json"
 MAX_FILES = 100
 MAX_FILE_BYTES = 4 * 1024 * 1024
 MAX_MANIFEST_BYTES = 256 * 1024
+MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
+MAX_TOTAL_EXPANDED_BYTES = 64 * 1024 * 1024
 REQUIRED_GENERATED_FILES = frozenset({
     "workflow.spec.json", "verify_release.py", "execute.py", "runtime.py",
     "agent.py", "README.md", "AGENTS.md", "test_execution.py",
@@ -119,6 +123,22 @@ def verify_directory(root: Path | str, expected_manifest_sha256: str | None = No
         raw = source.read(MAX_MANIFEST_BYTES + 1)
     if len(raw) > MAX_MANIFEST_BYTES:
         raise ReleaseIntegrityError("Release manifest is too large")
+    return _verify_inventory(raw, lambda name: _directory_file(root, name), expected_manifest_sha256)[0]
+
+
+def _directory_file(root, name):
+    path = root
+    for part in name.split('/'):
+        path = path / part
+        if path.is_symlink():
+            raise ReleaseIntegrityError('Generated file inventory contains a symbolic link')
+    if not path.is_file():
+        raise ReleaseIntegrityError('Generated file missing or changed: ' + name)
+    with path.open('rb') as source:
+        return source.read(MAX_FILE_BYTES + 1)
+
+
+def _verify_inventory(raw, read_file, expected_manifest_sha256):
     actual_manifest_sha256 = _hash(raw)
     if expected_manifest_sha256 is not None and (
         not _HEX.fullmatch(expected_manifest_sha256) or expected_manifest_sha256 != actual_manifest_sha256
@@ -147,15 +167,7 @@ def verify_directory(root: Path | str, expected_manifest_sha256: str | None = No
     for name, digest in hashes.items():
         if not _safe_name(name) or not isinstance(digest, str) or not _HEX.fullmatch(digest):
             raise ReleaseIntegrityError("Invalid or unsafe inventory path/digest")
-        path = root
-        for part in name.split("/"):
-            path = path / part
-            if path.is_symlink():
-                raise ReleaseIntegrityError("Generated file inventory contains a symbolic link")
-        if not path.is_file():
-            raise ReleaseIntegrityError("Generated file missing or changed: " + name)
-        with path.open("rb") as source:
-            data = source.read(MAX_FILE_BYTES + 1)
+        data = read_file(name)
         if len(data) > MAX_FILE_BYTES or _hash(data) != digest:
             raise ReleaseIntegrityError("Generated file missing or changed: " + name)
         if name == "workflow.spec.json":
@@ -178,7 +190,7 @@ def verify_directory(root: Path | str, expected_manifest_sha256: str | None = No
     model_hash = _canonical_model_hash(spec.get("process_model"))
     if manifest["process_model_sha256"] != model_hash or spec.get("process_model_sha256") != model_hash:
         raise ReleaseIntegrityError("The exported process model does not match its release identity")
-    return {
+    result = {
         "format": "openworkgraph.customer-runtime-file-verification.v1",
         "manifest_sha256": actual_manifest_sha256,
         "workflow_reference": reference,
@@ -191,6 +203,103 @@ def verify_directory(root: Path | str, expected_manifest_sha256: str | None = No
                            "To detect forged replacement, compare its SHA-256 to a digest pinned "
                            "outside the archive. This does not verify remote deployment or business results."),
     }
+    return result, manifest, spec
+
+
+def _archive_snapshot(path, expected_manifest_sha256):
+    """Read and verify a closed generated ZIP inventory without extracting it.
+
+    A trusted verifier must be used. Pins are independent of the ZIP, not
+    fetched from it. Member payloads are read only within bounded sizes.
+    """
+    if not isinstance(expected_manifest_sha256, str) or not _HEX.fullmatch(expected_manifest_sha256):
+        raise ReleaseIntegrityError("Archive review requires an independently pinned manifest digest")
+    path = Path(path)
+    if path.is_symlink() or not path.is_file():
+        raise ReleaseIntegrityError("Select a regular runtime ZIP file")
+    try:
+        with path.open("rb") as source:
+            # Bound the central directory and entire archive before ZipFile
+            # parses metadata. One descriptor, no extraction or temp writes.
+            raw = source.read(MAX_ARCHIVE_BYTES + 1)
+        if len(raw) > MAX_ARCHIVE_BYTES:
+            raise ReleaseIntegrityError("Runtime ZIP exceeds the archive byte limit")
+        from io import BytesIO
+        with ZipFile(BytesIO(raw)) as archive:
+            entries = archive.infolist()
+            if not 2 <= len(entries) <= MAX_FILES + 1:
+                raise ReleaseIntegrityError("Runtime ZIP exceeds the member count limit")
+            members, aliases = {}, set()
+            total = 0
+            for member in entries:
+                name = member.filename
+                # Reject NUL truncation, directory entries, traversal, case
+                # aliases, Windows device names and nonregular Unix types.
+                if (member.orig_filename != name or member.is_dir()
+                        or (name != MANIFEST_NAME and not _safe_name(name))):
+                    raise ReleaseIntegrityError("Unsafe runtime ZIP member path")
+                for part in name.split("/"):
+                    stem=part.split(".")[0].upper()
+                    if part.endswith(".") or stem in {"CON","PRN","AUX","NUL",
+                        *("COM"+str(i) for i in range(1,10)),
+                        *("LPT"+str(i) for i in range(1,10))}:
+                        raise ReleaseIntegrityError("Unsafe cross-platform runtime ZIP member path")
+                folded=name.casefold()
+                if folded in aliases:
+                    raise ReleaseIntegrityError("Duplicate or case-aliased runtime ZIP member")
+                aliases.add(folded)
+                mode=(member.external_attr >> 16) & 0xffff
+                if stat.S_IFMT(mode) not in (0,stat.S_IFREG) or member.external_attr & 0x10:
+                    raise ReleaseIntegrityError("Nonregular runtime ZIP member")
+                if member.flag_bits & 1 or member.compress_type not in (ZIP_STORED,ZIP_DEFLATED):
+                    raise ReleaseIntegrityError("Encrypted or unsupported runtime ZIP compression")
+                cap=MAX_MANIFEST_BYTES if name==MANIFEST_NAME else MAX_FILE_BYTES
+                if member.file_size>cap:
+                    raise ReleaseIntegrityError("Runtime ZIP member exceeds the expanded byte limit")
+                total+=member.file_size
+                if total>MAX_TOTAL_EXPANDED_BYTES:
+                    raise ReleaseIntegrityError("Runtime ZIP exceeds the total expanded byte limit")
+                members[name]=member
+            if MANIFEST_NAME not in members:
+                raise ReleaseIntegrityError("Release manifest is missing from runtime ZIP")
+            # A path cannot be both a regular file and an ancestor.
+            for name in aliases:
+                parts=name.split("/")
+                if any("/".join(parts[:i]) in aliases for i in range(1,len(parts))):
+                    raise ReleaseIntegrityError("Conflicting runtime ZIP member paths")
+            def read(name,cap=MAX_FILE_BYTES):
+                if name not in members:
+                    raise ReleaseIntegrityError("Generated file missing or changed: "+name)
+                with archive.open(members[name]) as stream:
+                    data=stream.read(cap+1)
+                if len(data)>cap or len(data)!=members[name].file_size:
+                    raise ReleaseIntegrityError("Runtime ZIP member has inconsistent size")
+                return data
+            result,manifest,spec=_verify_inventory(read(MANIFEST_NAME,MAX_MANIFEST_BYTES),
+                read,expected_manifest_sha256)
+            if set(members)!=(set(manifest["files"])|{MANIFEST_NAME}):
+                raise ReleaseIntegrityError("Runtime ZIP has untracked members; review a clean generated archive")
+        return {**result,"archive_sha256":_hash(raw),"archive_bytes":len(raw),
+                "archive_inventory_closed":True,"archive_extracted":False,
+                "execution_authorized":False},manifest,spec
+    except (BadZipFile,RuntimeError,NotImplementedError,OSError,EOFError) as exc:
+        raise ReleaseIntegrityError("Runtime ZIP could not be checked") from None
+
+
+def verify_archive(path, expected_manifest_sha256):
+    """Return exact generated archive verification, with no extraction."""
+    return _archive_snapshot(path,expected_manifest_sha256)[0]
+
+
+def compare_archives(baseline_path,candidate_path,baseline_manifest_sha256,candidate_manifest_sha256):
+    """Compare two independently pinned generated archives before extraction."""
+    left,before,old_spec=_archive_snapshot(baseline_path,baseline_manifest_sha256)
+    right,after,new_spec=_archive_snapshot(candidate_path,candidate_manifest_sha256)
+    result=_compare_verified(before,after,old_spec,new_spec,baseline_manifest_sha256,candidate_manifest_sha256)
+    return {**result,"baseline_archive_sha256":left["archive_sha256"],
+            "candidate_archive_sha256":right["archive_sha256"],
+            "archive_bytes_changed":left["archive_sha256"]!=right["archive_sha256"],
+            "both_archive_inventories_closed":True,"archives_extracted":False}
 
 
 def _pinned_inventory(root: Path | str, pin: str) -> dict:
@@ -297,6 +406,11 @@ def compare_directories(baseline_root: Path | str, candidate_root: Path | str,
     """
     before = _pinned_inventory(baseline_root, baseline_manifest_sha256)
     after = _pinned_inventory(candidate_root, candidate_manifest_sha256)
+    return _compare_verified(before,after,_pinned_spec(baseline_root,before),
+        _pinned_spec(candidate_root,after),baseline_manifest_sha256,candidate_manifest_sha256)
+
+
+def _compare_verified(before,after,old_spec,new_spec,baseline_manifest_sha256,candidate_manifest_sha256):
     for inventory in (before, after):
         ref = inventory["workflow_reference"]
         if (not isinstance(ref, dict) or set(ref) != {"workflow_id", "revision", "content_sha256"}
@@ -318,7 +432,7 @@ def compare_directories(baseline_root: Path | str, candidate_root: Path | str,
                  else "same_revision_different_content")
     spec_changed = before["workflow_spec_sha256"] != after["workflow_spec_sha256"]
     model_changed = before["process_model_sha256"] != after["process_model_sha256"]
-    model_delta = _structural_changes(_pinned_spec(baseline_root, before), _pinned_spec(candidate_root, after))
+    model_delta = _structural_changes(old_spec,new_spec)
     return {
         "format": "openworkgraph.customer-runtime-release-comparison.v1",
         "baseline": {"manifest_sha256": baseline_manifest_sha256, "workflow_reference": old_ref,
@@ -352,13 +466,30 @@ def compare_directories(baseline_root: Path | str, candidate_root: Path | str,
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Verify generated OWG runtime file integrity (offline, read-only)")
-    parser.add_argument("--root", default=".", help="Extracted runtime project directory")
+    source=parser.add_mutually_exclusive_group()
+    source.add_argument("--root", default=".", help="Extracted runtime project directory")
+    source.add_argument("--archive", help="Verify generated ZIP directly, without extraction")
     parser.add_argument("--manifest-sha256", default=None,
                         help="SHA-256 pinned separately from this unsigned exported ZIP")
-    parser.add_argument("--compare-root", default=None, help="Candidate extracted release directory")
+    candidate=parser.add_mutually_exclusive_group()
+    candidate.add_argument("--compare-root", default=None, help="Candidate extracted release directory")
+    candidate.add_argument("--compare-archive", default=None, help="Candidate generated ZIP (requires --archive)")
     parser.add_argument("--compare-manifest-sha256", default=None,
                         help="Separately pinned candidate manifest SHA-256")
     args = parser.parse_args(argv)
+    if args.archive is not None:
+        if args.compare_root is not None or (args.compare_manifest_sha256 is not None and args.compare_archive is None):
+            parser.error("Archive comparison requires --archive and --compare-archive")
+        try:
+            result=(compare_archives(args.archive,args.compare_archive,args.manifest_sha256,args.compare_manifest_sha256)
+                    if args.compare_archive is not None else verify_archive(args.archive,args.manifest_sha256))
+        except (ReleaseIntegrityError,OSError,ValueError,RecursionError) as exc:
+            print("Archive review FAILED: "+(str(exc) if isinstance(exc,ReleaseIntegrityError) else "local archive could not be checked"),file=sys.stderr)
+            return 2
+        print(json.dumps(result,sort_keys=True,indent=2,allow_nan=False))
+        return 0
+    if args.compare_archive is not None:
+        parser.error("--compare-archive requires --archive")
     if args.compare_root is not None:
         try:
             comparison = compare_directories(args.root, args.compare_root,

@@ -143,3 +143,33 @@ digest before interpreting these changes. The single-release verifier also
 uses the same verified specification bytes for parsing rather than reopening
 the spec after hashing it. The check is not a filesystem lock; use dedicated
 directories that are not being modified during review.
+
+## Inspect unopened generated runtime archives
+
+Use a trusted current verifier obtained separately from the archive and the
+manifest SHA-256 from an independent trusted record. No extraction is needed:
+
+```sh
+python /trusted/verify_release.py --archive runtime.zip --manifest-sha256 MANIFEST_PIN
+python /trusted/verify_release.py --archive baseline.zip --manifest-sha256 BASELINE_PIN \\
+  --compare-archive candidate.zip --compare-manifest-sha256 CANDIDATE_PIN
+```
+
+Archive review requires pins, unlike optional-pin directory inspection. The
+verifier accepts a closed generated inventory only: every member must appear
+in the pinned manifest except the manifest itself. It refuses extra files,
+missing files, duplicate or case-aliased names, unsafe paths, Windows device
+names, directory/symlink/special-file entries, conflicting ancestor paths,
+encrypted or unsupported compression, oversized archives and members. ZIP
+and expanded totals are bounded to 64 MiB, with the existing file/manifest
+bounds. No extracted file or candidate code is executed. The ZIP container
+hash is reported separately from manifest and generated file hashes; a
+repack can change container bytes without changing reviewed file contents.
+Comparison uses the same structural and exact file delta engine as directory
+review. No signature, actual deployment, customer bindings or dependency
+compatibility is verified. Use a trusted verifier, not one shipped in an
+unreviewed candidate. This is not a general-purpose safe extraction utility.
+
+Tests exercise deterministic exported ZIPs, standalone CLI, member attacks,
+byte budgets, pin mismatches, missing and changed members, and upgrade deltas.
+Full generated runtime and platform CI remain required.
