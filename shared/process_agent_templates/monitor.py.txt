@@ -13,7 +13,7 @@ from pathlib import Path
 import re
 
 from execute import ImplementationError, _pairs, _constant, digest, load_object, reference
-from runtime import validate_spec
+from runtime import validate_spec, check_plan
 
 MAX_BYTES = 8 * 1024 * 1024
 MAX_RECORDS = 10000
@@ -96,7 +96,20 @@ def report(spec, records, deployment_name):
                                 or not spec.get('organization_catalog_reference')):
         _fail()
     dependency_checks=0;dependency_initial=False;dependency_completion=False
-    precondition_attempts=set()
+    precondition_attempts=set();expected_actions=[];expected_preconditions=set()
+    if dependency_required:
+        route=first.get('dependency_route_activity_ids')
+        declared=first.get('dependency_precondition_attempts')
+        try:
+            check_plan({'revision':spec['revision'],'content_sha256':spec['content_sha256'],
+                'activity_ids':route},spec)
+        except (ValueError,TypeError,KeyError):
+            _fail()
+        expected_actions=[node for node in route if node in nodes]
+        if (not isinstance(declared,list) or any(type(i) is not int or not 1<=i<=len(expected_actions) for i in declared)
+            or declared!=sorted(set(declared))):
+            _fail()
+        expected_preconditions=set(declared)
     for index, row in enumerate(records[1:], 1):
         if (not isinstance(row, dict) or not isinstance(row.get('phase'), str)
                 or row['phase'] not in _PHASES or row['phase'] == 'started' or ended):
@@ -140,10 +153,14 @@ def report(spec, records, deployment_name):
                 or prior.get('dependency_check_attempt')!=row['attempt']):
                 _fail()
             if purpose=='precondition':
-                if (row['attempt'] in precondition_attempts or not isinstance(row.get('activity_id'),str)
-                    or row['activity_id'] not in nodes):
+                if (row['attempt'] in precondition_attempts or row['attempt'] not in expected_preconditions
+                    or not isinstance(row.get('activity_id'),str) or row['activity_id'] not in nodes
+                    or row['attempt']>len(expected_actions) or row['activity_id']!=expected_actions[row['attempt']-1]):
                     _fail()
                 precondition_attempts.add(row['attempt'])
+            elif (row['attempt']>len(expected_actions) or row.get('activity_id')!=expected_actions[row['attempt']-1]
+                  or (row['attempt'] in expected_preconditions and row['attempt'] not in precondition_attempts)):
+                _fail()
         if phase == 'operator_stop_observed':
             if (row.get('future_tool_attempts_stopped') is not True
                     or row.get('already_in_flight_requests_not_cancelled') is not True):
@@ -205,7 +222,8 @@ def report(spec, records, deployment_name):
                    ('declared_route_checks_satisfied', 'all_tool_results_matched', 'all_declared_operations_verified')):
                 _fail()
             succeeded = row['declared_route_checks_satisfied']
-            if dependency_required and succeeded and (not dependency_initial or not dependency_completion):
+            if dependency_required and succeeded and (not dependency_initial or not dependency_completion
+                    or attempts!=len(expected_actions) or precondition_attempts!=expected_preconditions):
                 _fail()
             if (row['all_tool_results_matched'] and (pending or any(s['status'] != 'completed' for s in steps))
                     or succeeded and (blocked or not row['all_tool_results_matched'])):
