@@ -23,7 +23,7 @@ Alias = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$")]
 CaseId = Annotated[str, Field(pattern=r"^case_[0-9]{1,4}$")]
 Cost = Annotated[StrictInt, Field(ge=0, le=10**12)]
 Duration = Annotated[StrictInt, Field(ge=0, le=86_400_000)]
-CRITICAL = frozenset(("invalid_or_stale_plan", "invalid_route", "unresolved_review_bypassed"))
+CRITICAL = frozenset(("invalid_or_stale_plan", "invalid_route", "unresolved_review_bypassed", "expected_clarification"))
 CATEGORIES = ("normal", "exception", "missing_facts")
 
 
