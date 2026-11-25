@@ -1307,7 +1307,7 @@
     const section=el('section');section.appendChild(el('h4','AI workforce procurement'));
     section.appendChild(el('p','Compare portable shadow evaluations, freeze a repeated trial, or review its full scheduled population. Files are inspected only on this computer and are not retained. Model identities, measurements and business outcomes remain unverified.'));
     const mode=el('select');mode.id='owgCatalogProcurementMode';
-    for(const [value,label] of [['compare','Compare completed shadow reports'],['freeze','Freeze a repeated trial plan'],['review','Review a frozen trial and captures']]){
+    for(const [value,label] of [['compare','Compare completed shadow reports'],['freeze','Freeze a repeated trial plan'],['review','Review a frozen trial and captures'],['nominate','Nominate a candidate before holdout'],['assess','Assess the held-out trial'],['decide','Record a pinned rehearsal decision']]){
       const option=el('option',label);option.value=value;mode.appendChild(option);
     }
     const modeLabel=el('label','Procurement operation ');modeLabel.htmlFor=mode.id;modeLabel.appendChild(mode);
@@ -1323,7 +1323,8 @@
       documentFile.value='';planFile.value='';planLabel.hidden=mode.value!=='review';
       hint.textContent=mode.value==='compare'?'Choose an existing comparison request (see AGENT_PROCUREMENT.md).':
         mode.value==='freeze'?'Choose a confirmed design JSON with exact reference report, candidates, gates and repeats (see AGENT_PROCUREMENT_TRIALS.md).':
-        'Choose the frozen plan and a capture ledger. Failed and missing scheduled slots remain in the denominator.';
+        mode.value==='review'?'Choose the frozen plan and a capture ledger. Failed and missing scheduled slots remain in the denominator.':
+        'Choose the exact selection bundle (see AGENT_PROCUREMENT_SELECTION.md). Nomination and decision require a current saved revision and explicit confirmation in the document.';
       clearProcurementReview();
     });
     const output=el('div');output.id='owgCatalogProcurementResult';output.setAttribute('aria-live','polite');
@@ -1339,7 +1340,9 @@
       const envelope=await request('/v1/process-catalog/procurement/'+operation+'?'+query,payload);
       if(generation!==procurementGeneration||record!==selected||!output.isConnected)return;
       const result=envelope.result;
-      output.appendChild(el('h5',operation==='freeze'?'Frozen trial plan · '+result.scheduled_attempts+' attempts':'Candidate procurement comparison'));
+      const selectionMode=['nominate','assess','decide'].includes(operation);
+      const heading={nominate:'Frozen candidate nomination',assess:'Held-out selection assessment',decide:'Rehearsal decision receipt'};
+      output.appendChild(el('h5',selectionMode?heading[operation]:operation==='freeze'?'Frozen trial plan · '+result.scheduled_attempts+' attempts':'Candidate procurement comparison'));
       output.appendChild(el('p','Exact saved revision '+envelope.revision+'. '+(envelope.references_latest_revision_at_inspection?
         'Latest saved revision at inspection.':'Historical revision; current revision '+envelope.latest_revision_at_inspection+'. Evaluate the current design before substitution.')));
       if(operation==='freeze'){
@@ -1347,6 +1350,24 @@
         const list=el('ul');
         for(const c of result.basis.candidates)list.appendChild(el('li',c.candidate_id+' · '+c.provider+' / '+c.model+' / '+c.runtime));
         output.appendChild(list);
+      }else if(selectionMode){
+        output.appendChild(el('p','Candidate: '+result.candidate.candidate_id+' · baseline: '+result.baseline_candidate_id));
+        if(operation==='decide'){
+          output.appendChild(el('p','Disposition: '+result.request.decision.replaceAll('_',' ')+'. No deployment changed.'));
+          const prerequisites=el('ul');for(const item of result.remaining_prerequisites)prerequisites.appendChild(el('li',item));
+          output.appendChild(el('h6','Remaining prerequisites'),prerequisites);
+        }else{
+          for(const [name,data] of [['Discovery',result.discovery],['Holdout',result.holdout]]){
+            if(!data)continue;
+            const box=el('section');box.appendChild(el('h6',name+' · '+(data.all_required_checks_pass?'all checks pass':'not eligible')));
+            box.appendChild(el('p',data.distinct_cases+' distinct cases · '+data.repeats+' repeats · '+data.paired_attempts+' paired attempts'));
+            const checks=el('ul');for(const [key,value] of Object.entries(data.checks))checks.appendChild(el('li',key.replaceAll('_',' ')+': '+value));
+            box.appendChild(checks);output.appendChild(box);
+          }
+          if(operation==='assess')output.appendChild(el('p',result.eligible_for_rehearsal_review?'Eligible for explicit rehearsal decision.':'Holdout did not meet every requirement; retain baseline or defer.'));
+          else output.appendChild(el('p','Retain this exact nomination before inspecting holdout results. The artifact does not prove chronology.'));
+        }
+        output.appendChild(el('p','Reviewer aliases, independent sampling, provider identity and business outcomes are not independently verified.'));
       }else{
         const rate=v=>v==null?'unknown':(100*v).toFixed(1)+'%';
         for(const c of result.candidates){
@@ -1386,7 +1407,7 @@
       }
       output.appendChild(button('Download minimized procurement JSON',()=>{
         const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)+'\n'],{type:'application/json'}));
-        const link=el('a');link.href=url;link.download=operation==='freeze'?'owg-procurement-plan.json':'owg-procurement-review.json';
+        const link=el('a');link.href=url;link.download=selectionMode?'owg-procurement-'+operation+'.json':operation==='freeze'?'owg-procurement-plan.json':'owg-procurement-review.json';
         link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
       }));
       output.appendChild(el('p','No model or business tool was called; reported identity, measurements and outcomes remain unverified. This review grants no execution or substitution permission.'));

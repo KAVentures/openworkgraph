@@ -51,9 +51,45 @@ const path=require('node:path');
   assert(!(await page.locator('#owgCatalogProcurementResult').textContent()).includes('PRIVATE_'));
   await page.getByRole('button',{name:'Clear procurement review',exact:true}).click();
   assert.equal(await page.locator('#owgCatalogProcurementResult').textContent(),'');
+  const configs=['current','other'].map((id,i)=>({candidate_id:id,provider:'provider',model:id,runtime:'cli',configuration_sha256:String(i+1).repeat(64)}));
+  const design={format:'openworkgraph.procurement-trial-design.v1',reference_report:report,baseline_candidate_id:'current',candidates:configs,
+    repeats:2,schedule_seed:1,currency:'USD',gates:{minimum_match_basis_points:0,require_all_categories:false},confirmed:true};
+  const submit=async(mode,value)=>{
+    await page.getByLabel('Procurement operation',{exact:true}).selectOption(mode);
+    await page.getByLabel('Procurement JSON document',{exact:true}).setInputFiles({name:'bundle.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(value))});
+    const response=page.waitForResponse(r=>new URL(r.url()).pathname==='/v1/process-catalog/procurement/'+mode);
+    await page.getByRole('button',{name:'Inspect procurement evidence against saved revision',exact:true}).click();
+    const res=await response;assert.equal(res.status(),200,await res.text());
+    await page.locator('#owgCatalogProcurementResult h5').first().waitFor();
+    return (await res.json()).result;
+  };
+  const discovery=await submit('freeze',design);
+  const held=JSON.parse(JSON.stringify(design));held.reference_report.suite_sha256='e'.repeat(64);
+  held.reference_report.cases[0].case_sha256='f'.repeat(64);
+  const holdout=await submit('freeze',held);
+  function complete(p){
+    return {format:'openworkgraph.procurement-trial-captures.v1',plan_sha256:p.plan_sha256,captures:configs.flatMap((c,i)=>[1,2].map(rep=>({
+      candidate_id:c.candidate_id,repeat:rep,configuration_sha256:c.configuration_sha256,
+      report:{...p.basis.reference_report,results_sha256:String(i*2+rep+2).repeat(64)},
+      attempts:[{case_id:'case_1',status:'completed',cost_microunits:100,elapsed_ms:500}]
+    })))};
+  }
+  const common={discovery_plan:discovery,discovery_captures:complete(discovery),holdout_plan:holdout};
+  const nomination=await submit('nominate',{...common,request:{candidate_id:'other',nominator_alias:'a',confirmed:true,
+    policy:{minimum_discovery_cases:1,minimum_holdout_cases:1,minimum_candidate_match_basis_points:0,require_all_categories:false}}});
+  const bundle={...common,holdout_captures:complete(holdout),nomination};
+  const assessed=await submit('assess',bundle);
+  assert(assessed.eligible_for_rehearsal_review);
+  await page.locator('#owgCatalogProcurementResult').getByText('Eligible for explicit rehearsal decision.',{exact:true}).waitFor();
+  const receipt=await submit('decide',{...bundle,request:{decision:'select_for_substitution_rehearsal',reviewer_alias:'b',confirmed:true,
+    expected_assessment_sha256:assessed.assessment_sha256,expected_nomination_sha256:assessed.nomination_sha256}});
+  assert.equal(receipt.rehearsal_candidate_id,'other');
+  await page.locator('#owgCatalogProcurementResult').getByText('Rehearsal decision receipt',{exact:true}).waitFor();
+
 
   await page.getByLabel('Business goal',{exact:true}).fill('Revised draft only');
   assert.equal(await page.locator('#owgCatalogShadowResult').textContent(),'');
+  assert.equal(await page.locator('#owgCatalogProcurementResult').textContent(),'');
   await page.getByRole('button',{name:'Inspect report against saved revision',exact:true}).click();
   await page.locator('#owgCatalogShadowResult h4').waitFor();
   await page.getByLabel('Choose shadow evaluation report',{exact:true}).setInputFiles({name:'wrong-spec.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify({...report,spec_sha256:'c'.repeat(64)}))});

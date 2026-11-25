@@ -10,6 +10,7 @@ from starlette.concurrency import run_in_threadpool
 
 from shared import agent_procurement as single
 from shared import agent_procurement_trials as trials
+from shared import agent_procurement_selection as selection
 from .local_auth import dashboard_session_valid
 from .local_process_catalog import catalog
 
@@ -58,9 +59,15 @@ def _inspect(operation, workflow_id, revision, payload):
             result=single.compare(packet,document)
         elif operation=="freeze":
             result=trials.freeze(packet,document)
-        else:
+        elif operation=="review":
             result=trials.review(packet,single.loads(payload["plan"]),document)
+        else:
+            if operation in ("nominate","decide") and catalog.get(workflow_id)["revision"]!=revision:
+                raise HTTPException(409,"Open the latest saved process revision before nomination or decision")
+            result=selection.operation(packet,operation,document)
         latest=catalog.get(workflow_id)["revision"]
+        if operation in ("nominate","decide") and latest!=revision:
+            raise HTTPException(409,"Saved process revision changed during review; reopen the latest revision")
     except LookupError:
         raise HTTPException(404,"Saved process revision not found") from None
     except (ValueError,KeyError,TypeError,RecursionError,OverflowError):
@@ -76,7 +83,7 @@ def _inspect(operation, workflow_id, revision, payload):
 
 
 @router.post("/v1/process-catalog/procurement/{operation}")
-async def inspect_procurement(request: Request, operation: Literal["compare","freeze","review"],
+async def inspect_procurement(request: Request, operation: Literal["compare","freeze","review","nominate","assess","decide"],
                               workflow_id: str = Query(pattern=r"^[A-Za-z0-9_-]{1,80}$"),
                               revision: int = Query(ge=1,le=2**31-1)):
     _require_dashboard(request)

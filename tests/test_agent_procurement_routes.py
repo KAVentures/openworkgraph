@@ -54,8 +54,48 @@ with TestClient(app) as client:
     assert reviewed.status_code==200,reviewed.text
     assert reviewed.json()['result']['candidates'][0]['status_counts']['not_recorded']==2
     assert reviewed.json()['result']['pareto']['candidate_ids']==[]
+    held=deepcopy(design)
+    held['reference_report']['suite_sha256']='e'*64
+    held['reference_report']['cases'][0]['case_sha256']='f'*64
+    holdout=client.post(base+'freeze',params=params,json={'document':json.dumps(held)},headers=h).json()['result']
+    def complete(p):
+        rows=[]
+        for cid in ('current','other'):
+            for repeat in (1,2):
+                r=deepcopy(p['basis']['reference_report'])
+                r['results_sha256']=digest([cid,repeat,p['plan_sha256']])
+                rows.append({'candidate_id':cid,'repeat':repeat,'configuration_sha256':digest(cid),'report':r,
+                             'attempts':[{'case_id':'case_1','status':'completed','cost_microunits':100,'elapsed_ms':500}]})
+        return {'format':'openworkgraph.procurement-trial-captures.v1','plan_sha256':p['plan_sha256'],'captures':rows}
+    bundle={'discovery_plan':plan,'discovery_captures':complete(plan),'holdout_plan':holdout,
+            'request':{'candidate_id':'other','nominator_alias':'a','confirmed':True,
+                       'policy':{'minimum_discovery_cases':1,'minimum_holdout_cases':1,
+                                 'minimum_candidate_match_basis_points':0,'require_all_categories':False}}}
+    def selection(action,value,headers=h):
+        return client.post(base+action,params=params,json={'document':json.dumps(value)},headers=headers)
+    assert selection('nominate',bundle,bearer).status_code==403
+    nominated=selection('nominate',bundle)
+    assert nominated.status_code==200,nominated.text
+    nomination=nominated.json()['result']
+    assess_bundle={k:v for k,v in bundle.items() if k!='request'}
+    assess_bundle.update(holdout_captures=complete(holdout),nomination=nomination)
+    assessed=selection('assess',assess_bundle)
+    assert assessed.status_code==200,assessed.text
+    a=assessed.json()['result']
+    assert a['eligible_for_rehearsal_review']
+    decision={**assess_bundle,'request':{'decision':'select_for_substitution_rehearsal','reviewer_alias':'b',
+              'expected_nomination_sha256':a['nomination_sha256'],'expected_assessment_sha256':a['assessment_sha256'],
+              'confirmed':True}}
+    decided=selection('decide',decision)
+    assert decided.status_code==200,decided.text
+    assert decided.json()['result']['rehearsal_candidate_id']=='other'
+    assert not decided.json()['result']['execution_authorized']
+    assert decided.headers['cache-control']=='no-store'
     updated=client.post('/v1/process-catalog',headers=h,json={'workflow_id':saved['workflow_id'],'title':'Updated','expected_revision':1,'user_confirmed':True,'process_model':model()})
     assert updated.status_code==200,updated.text
+    assert selection('nominate',bundle).status_code==409
+    assert selection('decide',decision).status_code==409
+    assert selection('assess',assess_bundle).json()['references_latest_revision_at_inspection'] is False
     historical=client.post(base+'compare',params=params,json=body,headers=h).json()
     assert historical['references_latest_revision_at_inspection'] is False
     assert client.post(base+'compare',params={**params,'revision':2},json=body,headers=h).status_code==422
