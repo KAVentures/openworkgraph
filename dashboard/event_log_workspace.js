@@ -5765,6 +5765,167 @@
     return {scenario:doc.submitted_scenario,source:source||'Unknown source'};
   }
 
+  const CAPACITY_FORMAT='openworkgraph.simulation-capacity-grid.v1';
+  const CAPACITY_REPORT='openworkgraph.simulation-capacity-report.v1';
+  const capacityStatus={met_in_all_runs:'Met in every tested run',not_met_in_all_runs:'Known miss in at least one run',
+    overloaded:'Overloaded in at least one run',indeterminate:'Not demonstrated — unresolved arrivals'};
+  function capacityCSV(report){
+    const rows=[['design','arrivals_per_hour','status','seed','post_warmup_arrivals','completed_on_time',
+      'completed_late','abandoned','unresolved','target_share_lower','target_share_upper','overloaded',
+      'completed_case_p90_seconds_or_paired_change','calibration_and_inputs_sha256']];
+    for(const cell of report.cells)for(const r of cell.runs)rows.push([
+      cell.design,cell.arrival_rate_per_hour,cell.status,r.seed,r.post_warmup_arrivals,r.completed_on_time,
+      r.completed_late,r.abandoned,r.unresolved,r.target_share_lower,r.target_share_upper,r.overloaded,
+      r.cycle_time_seconds_completed_only.p90,report.calibration_and_inputs_sha256]);
+    for(const comparison of report.paired_comparisons||[])for(const pair of comparison.pairs)rows.push([
+      comparison.design,comparison.arrival_rate_per_hour,'paired_change_vs_baseline',pair.seed,'','','','','',
+      pair.target_share_change_bounds.lower,pair.target_share_change_bounds.upper,'',
+      pair.completed_case_p90_change_seconds,report.calibration_and_inputs_sha256]);
+    return rows;
+  }
+  function capacityPanel(cal, getContext, isCurrent){
+    const panel=document.createElement('details');panel.id='owgCapacityPanel';
+    const demand=input('owgCapacityDemand','text','0.5, 1, 2');
+    const rate=Number(cal.arrivals_per_hour);
+    demand.value=rate>0?[rate*.5,rate,rate*1.5,rate*2].map(n=>Number(n.toPrecision(5))).join(', '):'0.5, 1, 2';
+    const activity=select('owgCapacityActivity',Object.keys(cal.activities||{}).map(a=>[a,a]));
+    const staffing=input('owgCapacityStaffing','text','2, 3');
+    const fillStaff=()=>{const n=cal.activities[activity.value]?.resources||1;
+      staffing.value=[Math.min(1000,n+1),Math.min(1000,n+2)].filter((v,i,a)=>a.indexOf(v)===i).join(', ');};
+    activity.onchange=fillStaff;fillStaff();
+    const target=input('owgCapacityTarget','number');target.min='.001';target.max='525600';target.step='any';target.value='240';
+    const share=input('owgCapacityShare','number');share.min='1';share.max='100';share.step='any';share.value='90';
+    const reps=input('owgCapacityReps','number');reps.min='2';reps.max='8';reps.step='1';reps.value='3';
+    const cases=input('owgCapacityCases','number');cases.min='50';cases.max='3000';cases.step='1';cases.value='300';
+    const seed=input('owgCapacitySeed','number');seed.min='0';seed.max='2147483640';seed.step='1';seed.value='1';
+    const basis=select('owgCapacityBasis',TIME_BASES);
+    const dist=select('owgCapacityDist',[['exponential','Variable (exponential)'],['fixed','Fixed']]);
+    const prepare=button('Prepare capacity grid','secondary');prepare.id='owgCapacityPrepare';
+    const file=input('owgCapacityFile','file');file.accept='.json,application/json';
+    const draft=document.createElement('textarea');draft.id='owgCapacityInputs';draft.rows=10;draft.style.width='100%';
+    const run=button('Run reviewed capacity grid','secondary');run.id='owgCapacityRun';run.disabled=true;
+    const status=el('p',null,'muted');status.setAttribute('role','status');status.setAttribute('aria-live','polite');
+    const out=el('div');out.id='owgCapacityResults';
+    let latest=null,busy=false,readTurn=0;
+    const current=()=>panel.isConnected&&isCurrent();
+    const exports=exportButtons('owg-capacity-stress-test',()=>latest,capacityCSV);
+    const inputs=button('Download reviewed inputs','secondary');inputs.disabled=true;
+    inputs.onclick=()=>{if(latest)download('owg-capacity-inputs.json',JSON.stringify(latest.inputs,null,2),'application/json');};
+    const clearResult=()=>{latest=null;out.replaceChildren();exports.enable(false);inputs.disabled=true;};
+    const sync=()=>{run.disabled=busy||!draft.value.trim();prepare.disabled=busy;file.disabled=busy;draft.disabled=busy;};
+    function numbers(value,what){
+      const parts=value.split(',').map(x=>x.trim());
+      if(!parts.length||parts.some(x=>!x||!Number.isFinite(Number(x))))throw Error('Enter comma-separated '+what+'.');
+      return parts.map(Number);
+    }
+    prepare.onclick=()=>{
+      try{
+        const rates=numbers(demand.value,'demand rates'),counts=numbers(staffing.value,'staffing counts');
+        if(rates.length<2||rates.length>8||rates.some(x=>x<.001||x>10000)||new Set(rates).size!==rates.length)
+          throw Error('Enter 2–8 distinct demand rates between 0.001 and 10000 per hour.');
+        if(!activity.value||counts.length<1||counts.length>3||counts.some(x=>!Number.isInteger(x)||x<1||x>1000)||new Set(counts).size!==counts.length)
+          throw Error('Enter 1–3 distinct whole staffing counts between 1 and 1000.');
+        const caseCount=Number(cases.value),repCount=Number(reps.value),firstSeed=Number(seed.value),
+          minutes=Number(target.value),percent=Number(share.value);
+        if(!Number.isInteger(caseCount)||caseCount<50||caseCount>3000||!Number.isInteger(repCount)||repCount<2||repCount>8||
+          !Number.isInteger(firstSeed)||firstSeed<0||firstSeed>2147483648-repCount+1||
+          !(minutes>=.001&&minutes<=525600)||!(percent>=1&&percent<=100))
+          throw Error('Review cases, seeds, replications and target bounds.');
+        if((counts.length+1)*rates.length>24||(counts.length+1)*rates.length*repCount*caseCount>100000)
+          throw Error('Reduce the experiment to at most 24 cells and 100,000 simulated cases.');
+        const baseline={cases:caseCount,seed:firstSeed,activity_time_basis:basis.value,distribution:dist.value,...getContext()};
+        const designs=counts.map(n=>{
+          const overrides=Object.create(null);overrides[activity.value]={resources:n};
+          return {label:String(n)+' resources',activities:overrides};
+        });
+        draft.value=JSON.stringify({format:CAPACITY_FORMAT,baseline,designs,arrival_rates_per_hour:rates,
+          replications:repCount,target:{cycle_time_minutes:minutes,minimum_completion_share:percent/100}},null,2);
+        readTurn++;clearResult();status.textContent='Review the exact inputs below. Nothing has run yet.';sync();
+      }catch(error){status.textContent=error.message;}
+    };
+    draft.oninput=()=>{readTurn++;clearResult();status.textContent='Inputs changed; run again to review results.';sync();};
+    file.onchange=async()=>{
+      const turn=++readTurn,selected=file.files[0];draft.value='';clearResult();sync();
+      if(!selected)return;
+      try{
+        if(selected.size>2*1024*1024)throw Error('Choose JSON of at most 2 MiB.');
+        const doc=JSON.parse(await selected.text());
+        if(!current()||turn!==readTurn)return;
+        const packet=doc?.format===CAPACITY_REPORT?doc.inputs:doc;
+        if(packet?.format!==CAPACITY_FORMAT)throw Error('Choose OWG capacity inputs or a capacity report.');
+        draft.value=JSON.stringify(packet,null,2);status.textContent='Loaded for review. Rerunning recalibrates from the selected log.';sync();
+      }catch(error){if(current()&&turn===readTurn)status.textContent=error.message;}
+    };
+    function showReport(report){
+      const grid=table(['Design','Demand / hour','Target status','Worst run target share (bounds)','Completed-case p90 range','Overloaded runs'],
+        report.cells.map(c=>[
+          c.design,c.arrival_rate_per_hour,capacityStatus[c.status]||c.status,
+          pct(c.worst_replication_target_share_bounds.lower)+' – '+pct(c.worst_replication_target_share_bounds.upper),
+          c.completed_case_p90_seconds_across_replications?
+            duration(c.completed_case_p90_seconds_across_replications.min)+' – '+duration(c.completed_case_p90_seconds_across_replications.max):'—',
+          c.overloaded_replications+' / '+c.replications]));
+      const envelope=table(['Design','Tested rates meeting target','Other tested rates','Highest tested rate meeting target'],
+        report.tested_envelope.map(e=>[e.design,e.tested_rates_meeting_target.join(', ')||'None',
+          e.tested_rates_not_demonstrated.join(', ')||'None',e.highest_tested_rate_meeting_target??'—']));
+      const pp=x=>(x>0?'+':'')+(x*100).toFixed(2)+' pp';
+      const signedTime=x=>(x<0?'−':x>0?'+':'')+duration(Math.abs(x));
+      const comparisons=table(['Design','Demand / hour','On-time share change bounds vs baseline','Completed-case p90 change range','Comparable cycle runs'],
+        (report.paired_comparisons||[]).map(c=>[
+          c.design,c.arrival_rate_per_hour,pp(c.target_share_change_bounds_across_tested_seeds.lower)+' – '+
+            pp(c.target_share_change_bounds_across_tested_seeds.upper),
+          c.completed_case_p90_change_seconds_across_replications?
+            signedTime(c.completed_case_p90_change_seconds_across_replications.min)+' – '+
+            signedTime(c.completed_case_p90_change_seconds_across_replications.max):'Withheld',
+          c.comparable_cycle_replications+' / '+c.replications]));
+      const cellSelect=select('owgCapacityCell',report.cells.map((c,i)=>[String(i),c.design+' · '+c.arrival_rate_per_hour+'/h']));
+      const details=el('div');
+      const draw=()=>{
+        const c=report.cells[Number(cellSelect.value)];if(!c)return;
+        details.replaceChildren(table(['Seed','Arrivals','On time','Late','Abandoned','Unresolved','Target share bounds','Highest offered loads'],
+          c.runs.map(r=>[r.seed,r.post_warmup_arrivals,r.completed_on_time,r.completed_late,r.abandoned,r.unresolved,
+            pct(r.target_share_lower)+' – '+pct(r.target_share_upper),r.highest_offered_load_activities.map(a=>
+              a.activity+(a.pool?' ('+a.pool+')':'')+': '+pct(a.offered_load)).join(', ')])));
+      };
+      cellSelect.onchange=draw;draw();
+      const assumptions=el('ul');for(const text of report.assumptions||[])assumptions.append(el('li',text));
+      out.replaceChildren(el('p','Calibrated once from '+report.log.name+' · '+report.case_notion+
+        '. '+Number(report.simulated_cases).toLocaleString()+' simulated cases across '+report.cells.length+' cells.','muted'),
+        grid,el('h4','Tested operating envelope'),envelope,
+        el('p','No extrapolation to untested demand, staffing recommendation or production capacity guarantee.','note'),
+        ...(report.tested_envelope.some(e=>e.nonmonotonic_tested_pattern)?
+          [el('p','At least one design passed a higher tested rate but did not pass a lower rate. Inspect individual runs; do not assume monotonic behavior.','note')]:[]),
+        el('h4','Paired changes against baseline'),comparisons,
+        el('p','Target-share differences are percentage-point bounds across the tested seeds. Cycle-time differences are withheld unless every pair has complete, stable completion populations.','muted'),
+        el('h4','Inspect every replication'),field('Design and demand',cellSelect),details,el('h4','Assumptions'),assumptions);
+    }
+    run.onclick=async()=>{
+      if(busy)return;
+      let packet;
+      try{if(new TextEncoder().encode(draft.value).length>65536)throw Error('Inputs must fit within 64 KiB.');
+        packet=JSON.parse(draft.value);if(packet?.format!==CAPACITY_FORMAT)throw Error('Invalid capacity grid format.');
+      }catch(error){status.textContent=error.message;return;}
+      busy=true;clearResult();sync();status.textContent='Running bounded capacity grid locally…';
+      try{
+        const report=await(await api(logPath('simulation/capacity-grid'),{method:'POST',
+          headers:{'Content-Type':'application/json'},body:JSON.stringify(packet)})).json();
+        if(!current())return;
+        showReport(report);latest=report;exports.enable(true);inputs.disabled=false;
+        status.textContent='Capacity grid complete. Inspect the seed-level evidence before using the model.';
+      }catch(error){if(current())status.textContent=error.message;}
+      finally{busy=false;if(current())sync();}
+    };
+    const controls=el('div',null,'row');controls.style.alignItems='end';
+    controls.append(field('Demand rates (cases/hour)',demand),field('Activity to vary',activity),
+      field('Alternative staffing counts',staffing),field('Cycle target (minutes)',target),
+      field('Minimum on-time arrivals (%)',share),field('Replications',reps),field('Cases per run',cases),
+      field('First seed',seed),field('Measured time basis',basis),field('Activity-time distribution',dist),prepare);
+    panel.append(el('summary','Demand and capacity stress testing'),
+      el('p','Test a grid of staffing designs and explicit arrival rates using one calibration. Targets count every post-warm-up arrival. This uses complete-path routing and fixed or exponential activity times.','muted'),
+      controls,field('Import capacity inputs or report JSON',file),field('Review or edit exact capacity inputs',draft),
+      run,status,exports.node,inputs,out);
+    return panel;
+  }
+
   function simulationSection(){
     const box=section('What-if simulation');
     box.appendChild(el('div','Simulate cases flowing through the process with the times and staffing you set. Start from values measured in this log, change them, and compare. Results are model outputs under the listed assumptions, not forecasts.','muted'));
@@ -6081,6 +6242,7 @@
           el('p','Select two to four candidate staffing levels. The same observed paths, input calibration, random seed and sample count are used across every run. This is hypothetical process modeling, not a staffing recommendation, forecast or employee performance score.','muted'),
           portfolioChoices,compareToolbar,portfolioResult);
         form.append(portfolioPanel);
+        form.append(capacityPanel(cal,()=>days.value?{calendar:simCalendar({days:days.value,from:from.value,to:to.value,timezone:zone.value,holidays:holidays.value})}:{},active));
         comparePortfolio.onclick=async()=>{
           try{
             const caseCount=Number(portfolioCases.value);

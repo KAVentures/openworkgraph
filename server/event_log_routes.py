@@ -58,6 +58,7 @@ from . import event_log_signal_overview as signal_overview
 from . import event_log_signal_timeline as signal_timeline
 from . import event_log_simulation as simulation
 from . import event_log_simulation_portfolio as simulation_portfolio
+from . import event_log_simulation_capacity as simulation_capacity
 from . import event_log_trace_clusters as trace_clusters
 from . import event_log_waiting as waiting
 from . import event_log_workspace as workspace
@@ -3127,6 +3128,17 @@ async def event_log_simulation_portfolio(request: Request, log_id: str,
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/simulation/capacity-grid")
+async def event_log_simulation_capacity(request: Request, log_id: str,
+                                       case_type: str | None = Query(default=None, max_length=200)):
+    """Bounded, reproducible demand-by-design stress grid on local calibrated paths."""
+    _require_dashboard(request)
+    spec = await _json_body(request, "capacity grid", strict=True, limit=65536)
+    result = await run_in_threadpool(_respond, simulation_capacity.run_grid, log_id, spec, case_type)
+    _require_dashboard(request)
+    return result
 
 
 @router.post("/v1/event-logs/{log_id}/simulation/validation")
