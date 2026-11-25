@@ -282,3 +282,26 @@ audit records the root, revision, basis and manifest digests and process
 count. This is an export-time snapshot, not live runtime enforcement or
 authorization: recheck before relying on it. Ordinary agent-project exports
 remain unchanged, and prerequisite processes are not executed automatically.
+
+
+### Live dependency preflight
+
+The exported dependency-aware starter includes a standalone checker:
+```sh
+python check_dependency_basis.py --manifest-sha256 INDEPENDENT_PIN --catalog-url YOUR_CATALOG_URL
+```
+Use a trusted copy of the checker and set the existing
+`OWG_EXECUTION_CATALOG_READ_TOKEN` to a separately authorized catalog-read
+credential. The checker verifies the pinned archive inventory and root
+specification before any network request, then queries the authenticated
+`dependencies/build-status` endpoint with the exact revision and basis
+digest. The response is minimized to the requested reference and current
+status; the checker refuses a different organization, revision, digest or
+authorizing response. Exit code zero means the live read returned a matching
+current reviewed basis; exit code two means that was not established.
+No business tools are called, and no credential is printed.
+
+This is a point-in-time preflight for explicit use by operators or external
+orchestrators, not an atomic lock on later model changes. It is not
+automatically invoked by the generated executor. Ordinary runtime
+permissions, source checks and exact root review requirements are unchanged.
