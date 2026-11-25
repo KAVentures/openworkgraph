@@ -54,7 +54,7 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 | Tool | Answers |
 | --- | --- |
 | `list_process_logs` | Shared logs: id, name, level, size, case notions, whether agents may tag cases. |
-| `get_process_overview` | Cases, events, durations, KPIs (optionally an SLA), top variants, top insights with their case filters, and completed cases per week for the last 52 weeks (median withheld under 5 cases). |
+| `get_process_overview` | Cases, events, durations, KPIs (optionally an SLA), top variants, top insights with their case filters, and completed cases per week for the last 52 weeks (median withheld under 5 cases). Optional `automation_resources` adds the share of events done by those declared bots or systems. |
 | `get_process_overview_for_cases` | The overview of only the cases matching a case filter (same keys as insight cohorts, e.g. `{"attribute": "region=EU"}` or `{"activity": "Escalate"}`), next to the whole log: case count and share, durations, KPIs and top variants. Refused when fewer than 5 cases match. | aggregates |
 | `get_process_variants` | The most common paths with cases, share and median duration, and how much of the log they cover. Variants followed by fewer than 5 cases are withheld and counted. | aggregates |
 | `get_process_map` | The process map: activities, which directly follows which (counts and gaps), start and end activities, with optional activity and path sliders. Activities and transitions in fewer than 5 cases are withheld. | aggregates |

@@ -148,9 +148,10 @@ async def agent_performance_spectrum(request: Request, log_id: str, segment: lis
 
 @router.get("/v1/process-intelligence/{log_id}/overview")
 async def agent_overview(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
-                         sla_hours: float | None = Query(default=None, gt=0, le=100000)):
+                         sla_hours: float | None = Query(default=None, gt=0, le=100000),
+                         automation_resource: list[str] | None = Query(default=None, max_length=50)):
     _require_agent_access(request)
-    return await _answer(sharing.overview, log_id, case_type, sla_hours)
+    return await _answer(sharing.overview, log_id, case_type, sla_hours, automation_resource)
 
 
 @router.post("/v1/process-intelligence/{log_id}/overview-for-cases")

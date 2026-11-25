@@ -63,16 +63,23 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"sla_hours": sla_hours, "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
-    def get_process_overview(log_id: str, case_type: str | None = None, sla_hours: float | None = None) -> dict[str, Any]:
+    def get_process_overview(log_id: str, case_type: str | None = None, sla_hours: float | None = None,
+                             automation_resources: list[str] | None = None) -> dict[str, Any]:
         """Overview of a shared process: case counts, durations, KPIs, top variants and automatic insights.
 
         Use when asked how a process performs, where time goes or what to look at first.
         case_type picks the case notion (object type) for object-centric logs; sla_hours adds
         SLA breach rates. Insights include a case filter (cohort) describing their cases. completed_per_week
         gives the last 52 weeks of completed cases and their median duration (withheld for weeks under 5 cases).
+        automation_resources names resources that are bots or systems (as the user describes them); the KPIs
+        then include the share of events they performed. The names are not echoed back.
         """
+        if automation_resources is not None and (not isinstance(automation_resources, list)
+                                                 or len(automation_resources) > 50
+                                                 or any(not isinstance(r, str) or not r for r in automation_resources)):
+            raise ToolError("automation_resources must be a list of up to 50 resource names")
         return _get("get_process_overview", f"/v1/process-intelligence/{_log(log_id)}/overview",
-                    {"case_type": case_type, "sla_hours": sla_hours})
+                    {"case_type": case_type, "sla_hours": sla_hours, "automation_resource": automation_resources})
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_overview_for_cases(log_id: str, case_filter: dict[str, Any], case_type: str | None = None,

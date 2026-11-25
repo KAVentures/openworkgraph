@@ -251,21 +251,30 @@ def _top(items: list[Any], n: int) -> list[Any]:
     return list(items or [])[:n]
 
 
-def overview(log_id: str, case_type: str | None = None, sla_hours: float | None = None) -> dict[str, Any]:
+def overview(log_id: str, case_type: str | None = None, sla_hours: float | None = None,
+             automation_resources: list[str] | None = None) -> dict[str, Any]:
     require(log_id, "aggregates")
     from . import event_log_analytics as analytics
     from . import event_log_insights as insights
     sla = int(sla_hours * 3600) if sla_hours else None
     summary = workspace.summary(log_id, case_type)
     variants = workspace.variants(log_id, case_type, 5)
-    kpis = analytics.kpis(log_id, case_type, sla)
+    if automation_resources is not None and (not isinstance(automation_resources, list)
+                                             or len(automation_resources) > 50
+                                             or any(not isinstance(r, str) or not r or len(r) > 200
+                                                    for r in automation_resources)):
+        raise EventLogWorkspaceError("automation_resources must be up to 50 resource names")
+    kpis = analytics.kpis(log_id, case_type, sla, automation_resources or None)
+    automation = kpis.get("automation")
     found = insights.insights(log_id, {"case_type": case_type, "limit": 5, **({"sla_seconds": sla} if sla else {})})
     return {
         "format": FORMAT, "log_id": log_id, "case_notion": summary["case_notion"],
         "cases": summary["cases"], "events": summary["events"], "activities": summary["activities"],
         "first_event_at": summary["first_event_at"], "last_event_at": summary["last_event_at"],
         "case_duration_seconds": summary["case_duration_seconds"],
-        "kpis": {k: kpis.get(k) for k in ("throughput_seconds", "rework_rate", "sla") if k in kpis},
+        "kpis": {**{k: kpis.get(k) for k in ("throughput_seconds", "rework_rate", "sla") if k in kpis},
+                 **({"automation": {k: automation[k] for k in ("events", "automated_events", "automation_rate")}}
+                    if automation else {})},
         "completed_per_week": [
             {"week_starting": w["week_starting"], "cases": w["cases"],
              "median_throughput_seconds": w["median_throughput_seconds"] if w["cases"] >= AGENT_MIN_CELL_CASES else None}

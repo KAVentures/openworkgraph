@@ -320,3 +320,13 @@ def test_agent_overview_weekly_trend_withholds_small_weeks():
     assert sum(w["cases"] for w in weeks) == 12
     for week in weeks:
         assert (week["median_throughput_seconds"] is None) == (week["cases"] < 5)
+
+
+def test_agent_overview_automation_rate_from_declared_resources():
+    log_id = _log()
+    sharing.set_share(log_id, "aggregates")
+    assert "automation" not in sharing.overview(log_id)["kpis"]
+    automation = sharing.overview(log_id, automation_resources=["bot"])["kpis"]["automation"]
+    assert automation == {"events": 36, "automated_events": 12, "automation_rate": round(12 / 36, 6)}
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        sharing.overview(log_id, automation_resources="bot")
