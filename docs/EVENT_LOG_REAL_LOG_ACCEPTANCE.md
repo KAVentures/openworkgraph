@@ -28,6 +28,7 @@ invent; it is not a failure. The exit code is 1 when any call answered with a se
 | --- | --- | --- | --- | --- |
 | BPI Challenge 2012 | 4TU.ResearchData, doi:10.4121/uuid:3926db30-f712-4394-aebc-75976070e91f | 262,200 | 13,087 | Loan applications; lifecycle transitions |
 | BPI Challenge 2017 | 4TU.ResearchData, doi:10.4121/uuid:5f3067df-f10b-45da-b98b-86ae4c7a310b | 1,202,267 | 31,509 | Loan applications; 26 activities |
+| BPI Challenge 2019 | 4TU.ResearchData, doi:10.4121/uuid:d06aff4b-79f0-45e6-8ec8-e19730c248f1 | 1,595,923 | 251,734 | Purchase-to-pay; uncompressed XES of 728 MB |
 
 ## Results (2026-11-25)
 
@@ -45,6 +46,11 @@ Machine: 4 vCPUs (Intel Xeon 2.1 GHz), 15 GB RAM, Python 3.13, DuckDB 1.5.6, `ma
 Slowest answered calls on BPI 2017: OCEL SQLite export 84.7 s, trace clusters 54.6 s (with and
 without a filter), HTML report 35.7 s, model change 28.2 s, story 16.1 s, quality report 15.5 s.
 Everything else answered in under 15 s; most analyses in under 2 s.
+
+BPI Challenge 2019 (GET routes only, `--no-post`): imported in 84.2 s with 0 rejected events, and
+102 calls with **no server errors**. The median answered call took 1.2 s and the 90th percentile 7.3 s.
+Calls over 20 s were the OCEL SQLite export (134 s, before #1393), the HTML report (76 s), the story
+(42 s) and the quality report and overview (30 s each).
 
 ## Independent cross-check with PM4Py
 
