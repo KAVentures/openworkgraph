@@ -13,7 +13,7 @@ def load_spec():
 def validate_spec(spec):
     tables = spec['process_model'].get('decision_tables')
     if tables:
-        if spec.get('decision_table_contract') not in {'openworkgraph.current-source-unique-decision.v1','openworkgraph.current-source-ordered-decision.v1'}:
+        if spec.get('decision_table_contract') not in {'openworkgraph.current-source-unique-decision.v1','openworkgraph.current-source-ordered-decision.v1','openworkgraph.current-source-dependent-decision.v1'}:
             raise ValueError('Decision tables require the exported current-source UNIQUE contract or ordered FIRST contract')
         from owg_model.process_model import ProcessModel
         from owg_model.process_decision_tables import runtime_contract
