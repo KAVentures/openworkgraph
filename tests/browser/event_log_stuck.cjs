@@ -37,6 +37,14 @@ const path=require('node:path');
    assert.match(text,/1 of 3 judged open cases look stuck/,text);
    assert.match(text,/lateReceive/,text);
    assert.match(text,/not a finding that anyone did anything wrong/);
+   // The whole worklist downloads as CSV, most overdue first.
+   const [csvDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#owgStuckCsv').click()]);
+   assert.match(csvDownload.suggestedFilename(),/-stuck-cases\.csv$/);
+   const csvLines=(await fs.readFile(await csvDownload.path(),'utf8')).trim().split(/\r?\n/);
+   assert.equal(csvLines[0],'case_id,latest_activity,idle_seconds,usual_wait_seconds,stuck_after_seconds,times_stuck_threshold,events_so_far,case_age_seconds,as_of');
+   assert.equal(csvLines.length,2,csvLines.join('|'));assert.match(csvLines[1],/^late,Receive,/);
+   await out.getByText(/Downloaded every stuck case \(stuck=1, judged=3, not judged=/).waitFor();
+   await page.locator('#owgStuckRun').click();await out.getByText('1 of 3 judged open cases look stuck.').waitFor();
    await out.getByRole('button',{name:'Open case late'}).click();
    const events=page.locator('#owgEventLogCaseEvents');
    await events.getByRole('heading',{name:'Case late'}).waitFor();
@@ -69,6 +77,6 @@ const path=require('node:path');
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    await page.setViewportSize({width:390,height:844});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2));
    assert.deepEqual(errors,[]);
-   console.log('Stuck cases browser acceptance passed: one stuck case against the usual wait, where it waits, caveat, WCAG audit, mobile width.');
+   console.log('Stuck cases browser acceptance passed: one stuck case against the usual wait, where it waits, caveat, CSV worklist, WCAG audit, mobile width.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

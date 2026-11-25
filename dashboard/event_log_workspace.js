@@ -4459,13 +4459,32 @@
     const pctInput=select('owgStuckPercentile',[['0.9','Longer than 90% of past waits'],['0.95','Longer than 95%'],['0.75','Longer than 75%']]);
     const run=button('Find stuck cases','secondary');run.id='owgStuckRun';
     const out=el('div');out.id='owgStuckResults';out.setAttribute('role','status');
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities that end a case (comma-separated or JSON array)',ends),field('Stuck when idle',pctInput),run);
+    const csvRun=button('Download all stuck cases (CSV)','secondary');csvRun.id='owgStuckCsv';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities that end a case (comma-separated or JSON array)',ends),field('Stuck when idle',pctInput),run,csvRun);
     box.append(row,out);
     const generation=state.generation;
     let revision=0;
     const invalidate=()=>{revision++;run.disabled=false;out.replaceChildren();};
     ends.addEventListener('input',invalidate);
     pctInput.addEventListener('change',invalidate);
+    const stuckSpec=()=>{
+      const raw=ends.value.trim();
+      const endActivities=/^\[\s*(?:"|\])/.test(raw)?JSON.parse(raw):raw.split(',').map(x=>x.trim()).filter(Boolean);
+      const spec={end_activities:endActivities,percentile:Number(pctInput.value),cohort:globalCohort()};
+      if(state.caseType)spec.case_type=state.caseType;
+      return spec;
+    };
+    // The whole worklist, not only the rows shown, for a spreadsheet or a follow-up queue.
+    csvRun.onclick=async()=>{
+      const logId=state.logId;
+      try{
+        csvRun.disabled=true;
+        const response=await api('/v1/event-logs/'+encodeURIComponent(logId)+'/stuck-cases.csv',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(stuckSpec())});
+        download(logId+'-stuck-cases.csv',await response.text(),'text/csv');
+        out.replaceChildren(el('div','Downloaded every stuck case ('+(response.headers.get('X-OWG-Stuck-Cases')||'').replace(/; /g,', ').replace(/_/g,' ')+'), most overdue first.','muted'));
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{csvRun.disabled=false;}
+    };
     run.onclick=async()=>{
       const ticket=++revision,logId=state.logId,caseType=state.caseType;
       const current=()=>box.isConnected&&generation===state.generation&&ticket===revision&&
