@@ -109,7 +109,7 @@ def test_end_time_attribute_with_offsets_and_bad_values():
 
 def test_settings_validation_and_cohorts():
     log = _lifecycle_log()
-    for bad in ({"mode": "fast"}, {"mode": "end_attribute"}, {"end_attribute": "bad\x01name"}, {"lifecycle_attribute": ""}):
+    for bad in ({"mode": "fast"}, {"mode": "end_attribute"}, {"end_attribute": "bad\x01name"}, {"end_attribute": "bad\n"}, {"lifecycle_attribute": ""}):
         with pytest.raises(workspace.EventLogWorkspaceError):
             waiting.waiting_time(log, **bad)
     only = waiting.waiting_time(log, cohort={"activity": "Close"})
