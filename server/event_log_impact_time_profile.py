@@ -30,7 +30,7 @@ def _gap(a,b):
     return round(a-b,6)
 
 
-def build(groups,at,start,end,recent,settings,visible_first,visible_last,period_fn):
+def build(log_id,groups,at,start,end,recent,settings,visible_first,visible_last,period_fn):
     """Build a complete selected-group profile and its exact case inventory."""
     profile=settings.time_profile
     width=timedelta(days=profile.bin_days)
@@ -43,7 +43,7 @@ def build(groups,at,start,end,recent,settings,visible_first,visible_last,period_
     def feed(value):
         digest.update(json.dumps(value,ensure_ascii=True,sort_keys=True,
                                  separators=(",",":"),allow_nan=False).encode()+b"\n")
-    feed([FORMAT,settings.model_dump(mode="json"),_stamp(visible_first),_stamp(visible_last),
+    feed([FORMAT,log_id,settings.model_dump(mode="json"),_stamp(visible_first),_stamp(visible_last),
           _stamp(recent) if recent is not None else None])
     for name,rows in sorted(groups.items()):
         for row in rows:

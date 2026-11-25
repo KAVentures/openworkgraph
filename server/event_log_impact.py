@@ -283,7 +283,7 @@ def cases(log_id: str, request: Any) -> dict[str, Any]:
         groups, first, start, end, recent, last = _population(conn, log_id, parsed, at, window)
         members=groups[group]
         if index is not None:
-            report,inventory=time_profile.build(groups,at,start,end,recent,parsed,first,last,_case_period)
+            report,inventory=time_profile.build(log_id,groups,at,start,end,recent,parsed,first,last,_case_period)
             if report["profile_sha256"]!=pin:
                 raise workspace.EventLogWorkspaceError("time profile evidence changed; rerun impact analysis")
             members=inventory[group][index]
@@ -352,7 +352,7 @@ def analyze(log_id: str, spec: Any) -> dict[str, Any]:
             placebo = {"estimated": False, "reason": "no baseline cases"}
         result["placebo"] = placebo
         if parsed.time_profile is not None:
-            result["time_profile"]=time_profile.build(groups,at,start,end,recent_from,parsed,first,last,_case_period)[0]
+            result["time_profile"]=time_profile.build(log_id,groups,at,start,end,recent_from,parsed,first,last,_case_period)[0]
         change = result["change"]
         result["reading"] = _reading(parsed, change, result.get("control_adjusted"), placebo)
         result.update({
