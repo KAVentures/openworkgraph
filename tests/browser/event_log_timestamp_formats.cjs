@@ -82,6 +82,17 @@ const path=require('node:path');
    summary=await summaryOf('ambiguous');
    assert.equal(summary.first_event_at,'2024-01-02T10:00:00Z');
    assert.equal(summary.last_event_at,'2024-04-03T10:00:00Z');
+   // Unix seconds: suggested as UTC, with no offset filled in.
+   await page.locator('#owgEventLogName').fill('');
+   await page.locator('#owgEventLogNaiveOffset').fill('');
+   await page.locator('#owgEventLogFile').setInputFiles({name:'unix.csv',mimeType:'text/csv',buffer:Buffer.from('case,activity,time\nu1,Receive,1709561100\nu1,Pay,1709564700.5\n')});
+   await page.locator('#owgEventLogStatus').filter({hasText:'Times look like 1709561100, read as 2024-03-04 14:05:00 UTC with format unix-seconds.'}).waitFor();
+   assert.equal(await page.locator('#owgEventLogTimeFormat').inputValue(),'unix-seconds');
+   assert.equal(await page.locator('#owgEventLogNaiveOffset').inputValue(),'');
+   await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Imported 2 events'}).waitFor();
+   summary=await summaryOf('unix');
+   assert.equal(summary.first_event_at,'2024-03-04T14:05:00Z');
    // Date and time in separate columns: both preselected, the format detected from the joined value.
    await page.locator('#owgEventLogName').fill('split');
    await page.locator('#owgEventLogNaiveOffset').fill('');
@@ -108,6 +119,6 @@ const path=require('node:path');
    const audit=await page.evaluate(async()=>window.axe.run({include:[['#owgEventLogTimeFormat'],['#owgEventLogImportPreviewExamples']]},{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Event-log timestamp format browser acceptance passed: day-first format suggested with an offset, ambiguous dates left to the user, ISO files unchanged.');
+   console.log('Event-log timestamp format browser acceptance passed: day-first format suggested with an offset, ambiguous dates left to the user, Unix seconds read as UTC, separate date and time columns joined, ISO files unchanged.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
