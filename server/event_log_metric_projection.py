@@ -20,11 +20,20 @@ def summarize_projected(
     source_rows: Sequence[Mapping[str, Any]],
     numeric_fields: set[str],
 ) -> dict[str, Any]:
-    """Summarize an explicit numeric projection; never return source rows.
+    """Summarize an explicit numeric projection without returning row values."""
+    aggregate, _ = evaluate_projected(definition, source_rows, numeric_fields)
+    return aggregate
 
-    Only names in the caller's approved numeric field set can enter the
-    evaluator. Unsupported types fail closed rather than being coerced from
-    private object/text values. Missing values are represented as null.
+
+def evaluate_projected(
+    definition: Mapping[str, Any],
+    source_rows: Sequence[Mapping[str, Any]],
+    numeric_fields: set[str],
+) -> tuple[dict[str, Any], list[Decimal | None]]:
+    """Return a summary and ordered numeric values from the same evaluation.
+
+    The caller selects the allowlist. The evaluator rejects unsupported types,
+    checks every field and preserves missing values as null.
     """
     if (
         not isinstance(numeric_fields, set)
@@ -73,7 +82,7 @@ def summarize_projected(
     with localcontext() as context:
         context.prec = 100
         mean = str(total / count) if count else None
-    return {
+    aggregate = {
         "definition_sha256": metrics.validate(definition, numeric_fields),
         "rows": len(projected),
         "non_null": count,
@@ -83,3 +92,4 @@ def summarize_projected(
         "min": str(min(present)) if count else None,
         "max": str(max(present)) if count else None,
     }
+    return aggregate, values

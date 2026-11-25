@@ -1294,7 +1294,7 @@
     results.appendChild(qualitySection());
     results.appendChild(attributeProfileSection(inspection));
     results.appendChild(caseFilterSection(names));
-    results.appendChild(cohortMetricSection(names));
+    results.appendChild(cohortMetricSection(names,inspection));
 
     const variantBox=section('Most common variants');
     variantBox.appendChild(table(['Path','Cases','Share','Median time','Evidence'],(variants.variants||[]).map(v=>{
@@ -1719,9 +1719,9 @@
   }
 
   // R9: read-only, bounded metrics for selected saved logs.
-  function cohortMetricSection(activityNames){
+  function cohortMetricSection(activityNames,inspection){
     const box=section('Cohort metrics');box.id='owgCohortMetricSection';
-    box.appendChild(el('p','Calculate descriptive metrics or combine two approved case metrics across matching cases. Division by zero and missing values are excluded from numeric summaries. Aggregate results only; maximum 1,000 cases.','muted'));
+    box.appendChild(el('p','Calculate descriptive metrics or combine two approved case metrics across matching cases. Division by zero and missing values are excluded from numeric summaries. Calculate an aggregate or review the individual values for up to 1,000 matching cases.','muted'));
     const metric=select('owgCohortMetricField',[
       ['duration_seconds','Case duration (seconds)'],['event_count','Events per case'],
       ['resource_count','Distinct resources per case'],['duration_hours','Case duration (hours)']
@@ -1792,7 +1792,7 @@
         if(!isCurrent())return;
         await loadSaved();
         if(!isCurrent())return;
-        savedPicker.value=item.metric_id;
+        savedPicker.value=item.metric_id;invalidate();
         savedStatus.textContent='Saved '+item.name+' for this log.';
       }catch(error){if(isCurrent())savedStatus.textContent=error.message;}
       finally{saveButton.disabled=false;}
@@ -1806,7 +1806,7 @@
         await api(path+'/'+encodeURIComponent(id)+'/delete',{method:'POST'});
         if(!isCurrent())return;
         await loadSaved();
-        if(isCurrent())savedStatus.textContent='Saved expression deleted.';
+        if(isCurrent()){invalidate();savedStatus.textContent='Saved expression deleted.';}
       }catch(error){if(isCurrent())savedStatus.textContent=error.message;}
       finally{deleteButton.disabled=false;}
     };
@@ -1820,33 +1820,67 @@
     });
     const filters=cohortFields('owgCohortMetricFilter','Choose matching cases',activityNames);
     const run=button('Calculate cohort metric','secondary');run.id='owgCohortMetricRun';
+    const review=button('Review cohort metric cases','secondary');review.id='owgCohortMetricReview';
     const out=el('div');out.id='owgCohortMetricResult';out.setAttribute('role','status');out.setAttribute('aria-live','polite');
-    const controls=el('div',null,'row');controls.append(field('Metric',metric),field('Calculation',operation),otherWrap,run);
-    box.append(controls,field('Saved expression',savedPicker),field('Name to save',savedName),saveButton,deleteButton,savedStatus,filters.node,out);
+    const cases=el('div');cases.id='owgCohortMetricCases';
+    const controls=el('div',null,'row');controls.append(field('Metric',metric),field('Calculation',operation),otherWrap,run,review);
+    box.append(controls,field('Saved expression',savedPicker),field('Name to save',savedName),saveButton,deleteButton,savedStatus,filters.node,out,cases);
     let turn=0;
-    run.onclick=async()=>{
+    function invalidate(){
+      turn++;run.disabled=review.disabled=false;out.replaceChildren();cases.replaceChildren();
+    }
+    for(const control of [metric,other,operation,savedPicker])control.addEventListener('change',invalidate);
+    filters.node.addEventListener('input',invalidate);
+    filters.node.addEventListener('change',invalidate);
+
+    function showCaseValues(values,caseNotion,isCurrent){
+      const sort=select('owgCohortMetricCaseOrder',[
+        ['highest','Highest values first'],['lowest','Lowest values first'],['missing','Missing values']
+      ]);
+      const previous=button('Previous case page','secondary'),next=button('Next case page','secondary');
+      const status=el('p',null,'muted');status.setAttribute('role','status');
+      const list=el('div'),pageSize=25;
+      const ordered=values.filter(item=>item.value!==null);
+      const series={highest:ordered.slice().reverse(),lowest:ordered,missing:values.filter(item=>item.value===null)};
+      let page=0;
+      function render(){
+        const rows=series[sort.value],offset=page*pageSize;
+        const selection=rows.slice(offset,offset+pageSize);
+        status.textContent=selection.length?'Showing '+(offset+1)+'–'+(offset+selection.length)+' of '+rows.length+' cases.':
+          'No cases in this view.';
+        previous.disabled=page===0;next.disabled=offset+pageSize>=rows.length;
+        list.replaceChildren();
+        if(selection.length)list.append(table(['Case','Metric value','Evidence'],selection.map(item=>{
+          const open=button('Open case','secondary');open.setAttribute('aria-label','Open metric case '+item.case_id);
+          open.onclick=()=>{if(isCurrent())inspection.open(item.case_id,caseNotion);};
+          return [item.case_id,item.value??'Missing',open];
+        })));
+      }
+      sort.onchange=()=>{page=0;render();};
+      previous.onclick=()=>{page--;render();};
+      next.onclick=()=>{page++;render();};
+      cases.replaceChildren(el('h4','Case values'),field('Case value order',sort),previous,next,status,list);
+      render();
+    }
+
+    async function evaluate(includeCaseValues){
       const t=++turn,generation=state.generation,logId=state.logId,caseType=state.caseType;
-      run.disabled=true;out.replaceChildren(el('div','Calculating…','muted'));
+      const current=()=>t===turn&&generation===state.generation&&logId===state.logId&&caseType===state.caseType;
+      run.disabled=review.disabled=true;out.replaceChildren(el('div','Calculating…','muted'));cases.replaceChildren();
       try{
         const cohort=filters.read();
         if(filterOn())applyActiveCohort(cohort);
-        const first=metric.value==='duration_hours'
-          ?{divide:[{field:'duration_seconds'},{literal:3600}]}
-          :{field:metric.value};
-        const expression=operation.value==='single'
-          ?first:{[operation.value]:[first,{field:other.value}]};
         const savedId=savedPicker.value;
         const endpoint='/v1/event-logs/'+encodeURIComponent(logId)+(savedId
           ?'/cohort-metric-definitions/'+encodeURIComponent(savedId)+'/evaluate':'/cohort-metric');
         const url=new URL(endpoint,window.location.origin);
         if(caseType)url.searchParams.set('case_type',caseType);
-        const payload=savedId?{cohort}:{definition:{version:1,expression},cohort};
+        if(includeCaseValues)url.searchParams.set('include_case_values','true');
+        const payload=savedId?{cohort}:{definition:currentDefinition(),cohort};
         const response=await api(url.pathname+url.search,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
         const data=await response.json();
-        if(t!==turn||generation!==state.generation||logId!==state.logId||caseType!==state.caseType)return;
+        if(!current())return;
         const selected=savedId?savedEntries.find(entry=>entry.metric_id===savedId):null;
-        // Never present a result as the selected saved revision if it changed
-        // between the picker load and evaluation. Re-select and recalculate.
         if(savedId&&(!selected||!data.saved_metric||
            data.saved_metric.metric_id!==savedId||
            data.saved_metric.definition_sha256!==selected.definition_sha256)){
@@ -1858,13 +1892,17 @@
         out.replaceChildren(
           el('div',String(m.rows??0)+' matching cases; '+String(m.null??0)+' missing values.','muted'),
           table(['Average','Minimum','Maximum','Sum','Values'],[[m.mean??'—',m.min??'—',m.max??'—',m.sum??'—',String(m.non_null??0)]]),
-          el('div','Complete cohort: '+(data.complete_cohort?'yes':'no')+'. No raw cases returned.','muted'),
+          el('div',includeCaseValues?'Aggregate and case values use the same matching cases.':
+            'Complete cohort: '+(data.complete_cohort?'yes':'no')+'. No raw cases returned.','muted'),
           ...(selected?[el('div','Saved definition SHA-256: '+selected.definition_sha256,'muted')]:[])
         );
+        if(includeCaseValues)showCaseValues(data.case_values,data.case_notion,current);
       }catch(error){
-        if(t===turn&&generation===state.generation)out.replaceChildren(el('div',error.message,'muted'));
-      }finally{if(t===turn)run.disabled=false;}
-    };
+        if(current())out.replaceChildren(el('div',error.message,'muted'));
+      }finally{if(current())run.disabled=review.disabled=false;}
+    }
+    run.onclick=()=>evaluate(false);
+    review.onclick=()=>evaluate(true);
     return box;
   }
 
