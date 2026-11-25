@@ -34,6 +34,7 @@
   FILTERED.add('heuristics-net');
   FILTERED.add('footprints');
   FILTERED.add('model-quality');
+  FILTERED.add('model-discovery.ptml');
   FILTERED.add('similar-cases');
   FILTERED.add('model-change');
   FILTERED.add('model-comparison');
@@ -6714,6 +6715,25 @@
           finally{draft.disabled=false;}
         };
         out.appendChild(draft);
+        const tree=button('Download process tree (PTML)','secondary');tree.id='owgDiscoveryPtml';
+        tree.onclick=async()=>{
+          try{
+            tree.disabled=true;
+            const response=await api(logPath('model-discovery.ptml',{noise:String(r.settings.noise),activities:String(r.settings.activities)}));
+            download(state.logId+'-discovered.ptml',await response.text(),'application/xml');
+            statusLine.textContent='Process tree downloaded ('+(response.headers.get('X-OWG-Process-Tree')||'').replace(/; /g,', ')+'). It opens with pm4py.read_ptml and in ProM.';
+          }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
+          finally{tree.disabled=false;}
+        };
+        out.appendChild(tree);
+        // The same tree as PM4Py prints it: paste it into pm4py's parse() or into "Check against a Petri net".
+        const notation=node=>node.op==='activity'?"'"+node.activity+"'":node.op==='tau'?'tau':
+          ({seq:'->',xor:'X',and:'+',loop:'*'})[node.op]+'( '+node.children.map(notation).join(', ')+' )';
+        const notationBox=document.createElement('details');notationBox.id='owgDiscoveryNotationBox';
+        const notationText=el('pre',notation(r.tree));notationText.id='owgDiscoveryNotation';
+        notationText.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%';
+        notationBox.append(el('summary','Process tree in PM4Py notation'),notationText);
+        out.appendChild(notationBox);
         const petri=button('Download Petri net (PNML)','secondary');petri.id='owgDiscoveryPnml';
         petri.onclick=async()=>{
           try{

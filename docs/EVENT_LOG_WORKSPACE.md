@@ -2170,6 +2170,23 @@ format. The process tree is translated block by block:
 The net has one source place, marked with one token, and one sink place. The sink is declared in
 `finalmarkings`, as PM4Py and ProM read it. Silent transitions carry the ProM `$invisible$` flag.
 
+**Download process tree (PTML)** saves the discovered tree itself, in the PTML format that
+`pm4py.read_ptml` and ProM's process-tree plug-ins read
+(`GET /v1/event-logs/{log_id}/model-discovery.ptml`, same parameters as the PNML export). It
+keeps the block structure that the PNML and BPMN exports flatten:
+
+- activities become `manualTask` and skips become `automaticTask`;
+- `seq`, `xor` and `and` become `sequence`, `xor` and `and`;
+- a loop becomes `xorLoop` with its body, its redo part and a silent exit.
+
+Identifiers are UUIDs derived from each node's position, so the same tree gives the same file.
+The `X-OWG-Process-Tree` header counts nodes and activities.
+
+**Process tree in PM4Py notation** (under the download) shows the same tree as PM4Py prints it, for
+example `->( 'Receive', X( tau, 'Approve' ), 'Close' )`. It can be pasted into
+`pm4py.objects.process_tree.utils.generic.parse`. Labels are written as they are, so a label
+containing a single quote may need editing before PM4Py's parser accepts it.
+
 Place and transition identifiers are generated (`p0`, `t0`, …); activity names appear only as
 transition names. Tests replay every trace up to six steps and check that the net accepts exactly
 the traces the process tree accepts.

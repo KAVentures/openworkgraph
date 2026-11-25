@@ -3152,6 +3152,23 @@ def event_log_model_discovery(request: Request, log_id: str, case_type: str | No
     return _respond(model_discovery.discover, log_id, case_type, noise=noise, activities=activities, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/model-discovery.ptml")
+def event_log_model_discovery_ptml(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                                   noise: float = Query(default=0.2, ge=0, lt=1),
+                                   activities: float = Query(default=1.0, gt=0, le=1),
+                                   cohort: dict[str, Any] = Depends(_case_filter)):
+    """The discovered process tree as PTML, for PM4Py and ProM."""
+    from . import event_log_ptml as ptml
+    _require_dashboard(request)
+    try:
+        xml, meta = ptml.discovered_ptml(log_id, case_type, noise=noise, activities=activities, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(xml, media_type="application/xml", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-discovered.ptml"',
+        "X-OWG-Process-Tree": f"nodes={meta['nodes']}; activities={meta['activities']}"})
+
+
 @router.get("/v1/event-logs/{log_id}/model-discovery.pnml")
 def event_log_model_discovery_pnml(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                                    noise: float = Query(default=0.2, ge=0, lt=1),
