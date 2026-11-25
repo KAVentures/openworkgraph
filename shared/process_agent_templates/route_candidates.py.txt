@@ -32,8 +32,9 @@ def _search(spec,rule_checks,table_checks,*,max_work=MAX_WORK,max_states=MAX_STA
     token=spec.get('control_flow_contract')=='openworkgraph.parallel-node-firing-plan.v1'
     if token:
         from owg_model.process_model import ProcessModel
-        from owg_model.process_parallel import EdgeTokenModel
-        automaton=EdgeTokenModel(ProcessModel.model_validate(model))
+        from owg_model.process_parallel import EdgeTokenModel, replay_node_ids
+        portable_model=ProcessModel.model_validate(model)
+        automaton=EdgeTokenModel(portable_model)
         initial=automaton.initial
         def moves(mark):
             for node,following,emitted in automaton.firings(mark):
@@ -84,7 +85,7 @@ def _search(spec,rule_checks,table_checks,*,max_work=MAX_WORK,max_states=MAX_STA
     # interchangeable, even if their terminal or final token state matches.
     start=(initial,(),frozenset())
     queue=deque([start]);seen={start}
-    complete=True;limit_reasons=set();work=0;pruned=0
+    complete=True;limit_reasons=set();work=0;pruned=0;replay_work=0
     candidates={};replay_cache={}
     while queue and complete:
         marking,path,pending=queue.popleft()
@@ -103,23 +104,28 @@ def _search(spec,rule_checks,table_checks,*,max_work=MAX_WORK,max_states=MAX_STA
                 # table visits, so certify only that same structural contract.
                 if token:
                     if next_path not in replay_cache:
+                        # Charge replay against the same finite work allowance
+                        # as the route search; never start an unbounded replay.
+                        allowance=max_work-work
+                        if allowance<=0:
+                            complete=False;limit_reasons.add('token_replay_work_limit');break
                         replay_issues=set()
                         try:
-                            check=check_plan({'revision':spec['revision'],'content_sha256':spec['content_sha256'],
-                                'activity_ids':list(next_path)},spec)
+                            replay=replay_node_ids(next_path,portable_model,max_work=allowance)
                         except ValueError:
-                            replay_issues.add('structural_replay_unresolved')
+                            # No work count is returned on a failed replay.
+                            # Conservatively charge its entire allowance.
+                            replay_work+=allowance;work+=allowance
+                            complete=False;limit_reasons.add('token_replay_incomplete');break
+                        replay_work+=replay['work_count'];work+=replay['work_count']
+                        # The executor considers the union of viable histories.
+                        # Do not ignore an unresolved language rule or a
+                        # contradicted predicate on an alternative replay.
+                        union_issues=classify(replay['transition_indices'])
+                        if union_issues is None:
+                            replay_issues.add('structural_replay_route_conflict')
                         else:
-                            for r in check.get('decision_table_routes',[]):
-                                row=table_status.get(r['table_id'],{})
-                                if row.get('status') not in SELECTED or not all(
-                                    v==row.get('selected_target_activity_id') for v in r['target_activity_ids']):
-                                    replay_issues.add('decision_replay_unresolved:'+r['table_id'])
-                            for rid in check.get('non_table_structured_rule_ids',check.get('unevaluated_structured_rule_ids',[])):
-                                if rule_status.get(rid)!='matched':
-                                    replay_issues.add('structured_replay_unresolved:'+rid)
-                            for rid in check['unconfirmed_rule_ids']:
-                                replay_issues.add('rule_unconfirmed:'+rid)
+                            replay_issues.update(union_issues)
                         replay_cache[next_path]=frozenset(replay_issues)
                     blocked|=replay_cache[next_path]
                 # For duplicate schedules, any unresolved history withholds a
@@ -146,7 +152,8 @@ def _search(spec,rule_checks,table_checks,*,max_work=MAX_WORK,max_states=MAX_STA
     else:status='no_supported_route'
     return {'format':'openworkgraph.deterministic-route-search.v1',
         'status':status,'search_complete':complete,'limit_reasons':sorted(limit_reasons),
-        'work_count':work,'states_seen':len(seen),'excluded_transition_count':pruned,
+        'work_count':work,'token_replay_work_count':replay_work,
+        'graph_search_work_count':work-replay_work,'states_seen':len(seen),'excluded_transition_count':pruned,
         'supported_schedule_count':len(supported),'unresolved_schedule_count':len(unresolved),
         'examples':[{'activity_ids':list(p),'status':'unresolved' if candidates[p] else 'supported',
                      'requirements':sorted(candidates[p])} for p in (supported+unresolved)[:MAX_EXAMPLES]],
