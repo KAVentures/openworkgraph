@@ -244,4 +244,71 @@ class PairedEvaluationCases(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(report['review_required'])
         self.assertEqual(summary['source_receipt_request_count'],1)
 
+class DeclaredFactScenarioCases(unittest.TestCase):
+    def fixture(self):
+        from test_execution import fixture,ImplementationCases
+        helper=ImplementationCases();helper.data=fixture()
+        spec,plan,case,bindings,_=helper.invariant_fixture()
+        rule=spec['process_model']['business_rules'][0]
+        rule['predicate']['conditions'][0].update(path='/credit/score',operator='gte',expected=700)
+        spec['process_model_sha256']=digest(spec['process_model'])
+        suite={'format':'openworkgraph.reviewed-shadow-cases.v1','process_reference':reference(spec),
+            'spec_sha256':digest(spec),'reviewed_by_customer':True,'case_inputs_authorized':True,
+            'cases':[]}
+        for i,(facts,status) in enumerate([({'credit':{'score':750}},'proposal'),
+                    ({'credit':{'score':650}},'needs_clarification'),({},'needs_clarification')],1):
+            facts['private']='SYNTHETIC_PRIVATE_FACT'
+            suite['cases'].append({'id':f'case_{i}','category':'normal' if i==1 else 'missing_facts',
+                'input':facts,'expected':{'status':status,'review_confirmed':True,
+                    'accepted_routes':[plan['activity_ids']] if status=='proposal' else []}})
+        return spec,suite
+
+    def test_review_arbitrary_declared_facts_without_model_source_or_executable_plan(self):
+        from review_facts import review_scenarios
+        import sys
+        spec,suite=self.fixture()
+        with patch.dict(sys.modules,{'agent':None,'agents':None}):
+            report=review_scenarios(spec,suite,as_of_date='2026-06-01')
+        self.assertEqual(report['matching_case_count'],3)
+        self.assertEqual([r['search_status'] for r in report['cases']],
+            ['unique_supported_route','no_supported_route','unresolved_routes'])
+        self.assertEqual(report['suite_sha256'],digest(suite))
+        self.assertFalse(report['execution_plan_created'])
+        self.assertFalse(report['facts_authoritativeness_verified'])
+        self.assertFalse(report['model_invoked'])
+        self.assertFalse(report['source_reads_performed'])
+        self.assertNotIn('SYNTHETIC_PRIVATE_FACT',json.dumps(report))
+        self.assertNotIn('750',json.dumps(report['cases']))
+        self.assertNotIn('650',json.dumps(report['cases']))
+
+    def test_invalid_date_stale_suite_and_incomplete_work_budget(self):
+        from review_facts import review_scenarios
+        spec,suite=self.fixture()
+        for date in ('2026-02-30','2026-6-01',''):
+            with self.assertRaises(ImplementationError):
+                review_scenarios(spec,suite,as_of_date=date)
+        with self.assertRaises(ImplementationError):
+            review_scenarios(spec,{**suite,'spec_sha256':'f'*64},as_of_date='2026-06-01')
+        with patch('review_facts.MAX_BATCH_WORK',1):
+            report=review_scenarios(spec,suite,as_of_date='2026-06-01')
+        self.assertEqual(report['unresolved_case_count'],3)
+        self.assertEqual(report['search_work_count'],1)
+        self.assertTrue(report['review_required'])
+        self.assertEqual(report['cases'][1]['reason'],'batch_work_limit')
+
+    def test_cli_refuses_unconfirmed_review_and_existing_file(self):
+        import review_facts
+        spec,suite=self.fixture()
+        with TemporaryDirectory() as directory:
+            out=Path(directory)/'report.json'
+            args=['--cases','suite.json','--as-of-date','2026-06-01','--output',str(out)]
+            with self.assertRaises(ImplementationError):
+                review_facts.main(args)
+            self.assertFalse(out.exists())
+            with patch('review_facts.load_spec',return_value=spec),patch('review_facts.load_object',return_value=suite),patch('builtins.print'):
+                self.assertEqual(review_facts.main(args+['--confirm-declared-fact-review']),0)
+            self.assertEqual(json.loads(out.read_text())['matching_case_count'],3)
+            with self.assertRaises(ImplementationError):
+                review_facts.main(args+['--confirm-declared-fact-review'])
+
 if __name__=='__main__':unittest.main()
