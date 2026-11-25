@@ -7698,6 +7698,94 @@
     return box;
   }
 
+  function temporalModelQualityPanel(replayScored,valid){
+    const panel=document.createElement('details');panel.id='owgTemporalModelQuality';
+    const dates=input('owgTemporalModelDates','text','2026-01-01, 2026-02-01, 2026-03-01, 2026-04-01');
+    const ends=input('owgTemporalModelEnds','text','["Done"]');
+    const levels=input('owgTemporalModelLevels','text','0, 0.1, 0.2, 0.4');levels.value='0, 0.1, 0.2, 0.4';
+    const minimum=input('owgTemporalModelMinimum','number');minimum.min='1';minimum.max='50000';minimum.value='10';
+    const run=button('Evaluate temporal model quality','secondary');run.id='owgTemporalModelRun';
+    const notice=el('p',null,'muted');notice.setAttribute('role','status');
+    const results=el('div'),evidence=el('div');
+    let report=null,turn=0,pageTurn=0;
+    const active=t=>valid()&&panel.isConnected&&t===turn;
+    const share=x=>x==null?'—':pct(x);
+    const base='/v1/event-logs/'+encodeURIComponent(state.logId)+'/model-quality/temporal';
+    const post=async(path,spec)=>(await api(base+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+    const downloads=exportButtons('owg-temporal-model-quality',()=>report,r=>[
+      ['noise','population','eligible_cases','fitness','precision','f_score','label_event_coverage','coverage_adjusted_fitness','coverage_adjusted_f_score','simplicity','fitting_share','pnml_sha256'],
+      ...r.candidates.flatMap(c=>[['train',c.training],['validation',c.validation]].map(([k,s])=>
+        [c.noise,k,r.windows.find(w=>w.name===k).eligible_cases,s.fitness,s.precision,s.f_score,s.activity_event_label_coverage,s.coverage_adjusted_fitness,s.coverage_adjusted_f_score,s.simplicity,s.fitting_case_share,c.pnml_sha256])),
+      [r.selection.noise,'test',r.windows[2].eligible_cases,r.test.fitness,r.test.precision,r.test.f_score,r.test.activity_event_label_coverage,r.test.coverage_adjusted_fitness,r.test.coverage_adjusted_f_score,r.test.simplicity,r.test.fitting_case_share,r.selection.pnml_sha256]]);
+    function clear(){++turn;++pageTurn;report=null;results.replaceChildren();evidence.replaceChildren();downloads.enable(false);run.disabled=false;}
+    for(const c of [dates,ends,levels,minimum])c.addEventListener('input',()=>{clear();notice.textContent='Settings changed; evaluate again.';});
+    function browse(status){
+      const t=turn,p=++pageTurn,r=report;if(!r)return;
+      const heading=el('h5','Test cases: '+status);heading.tabIndex=-1;
+      const progress=el('p',null,'muted');progress.setAttribute('role','status');
+      const rows=el('div'),prev=button('Previous page','secondary'),next=button('Next page','secondary');
+      evidence.replaceChildren(heading,progress,rows,prev,next);heading.focus();
+      let offset=0,following=null,seq=0;
+      async function load(start){
+        const n=++seq,live=()=>active(t)&&p===pageTurn&&n===seq;
+        prev.disabled=next.disabled=true;progress.textContent='Loading exact test population…';
+        try{
+          const page=await post('/evidence',{settings:r.inputs,expected_review_sha256:r.review_sha256,status,offset:start,limit:50});
+          if(!live())return;
+          offset=start;following=page.next_offset;progress.textContent=page.total+' test cases in this selection.';
+          rows.replaceChildren(table(['Case','First event','Last visible event','Events','Fit','Exclusion','Visible path'],
+            page.cases.map(c=>[c.case_id,c.first_at,c.last_at,c.events,c.fits_selected_net==null?'Unknown':c.fits_selected_net?'Fitting':'Deviating',
+              c.exclusion_reason||'—',c.path?c.path.join(' → '):'Not scored'])));
+        }catch(error){if(live()){progress.textContent=error.message;rows.replaceChildren();following=null;}}
+        finally{if(live()){prev.disabled=offset===0;next.disabled=following===null;}}
+      }
+      prev.onclick=()=>load(Math.max(0,offset-50));next.onclick=()=>load(following);load(0);
+    }
+    run.onclick=async()=>{
+      clear();const t=turn;run.disabled=true;notice.textContent='Discovering training models and evaluating held-out windows…';
+      try{
+        const boundaries=dates.value.split(',').map(x=>x.trim()).filter(Boolean).map(x=>/^\d{4}-\d{2}-\d{2}$/.test(x)?x+'T00:00:00Z':x);
+        const endLabels=JSON.parse(ends.value);
+        const noise=levels.value.split(',').map(x=>x.trim()).filter(Boolean).map(Number);
+        const r=await post('',{format:'openworkgraph.temporal-model-quality.v1',boundaries,end_activities:endLabels,
+          noise_levels:noise,minimum_cases:Number(minimum.value),...(state.caseType?{case_type:state.caseType}:{})});
+        if(!active(t))return;
+        report=r;
+        const score=r.test,b=score.whole_assigned_case_fitting_share_bounds;
+        const save=button('Download selected training PNML','secondary');save.onclick=()=>{if(active(t))download('owg-temporal-selected.pnml',r.selection.pnml,'application/xml');};
+        const replay=button('Open selected net in replay','secondary');replay.onclick=async()=>{try{
+          if(active(t))await replayScored(r.selection.pnml,'temporal training net at noise '+r.selection.noise);
+        }catch(error){if(active(t))notice.textContent=error.message;}};
+        const actions=el('div',null,'row');for(const status of ['all','fitting','deviating','unknown']){
+          const inspect=button('Inspect '+status+' test cases','secondary');inspect.onclick=()=>browse(status);actions.append(inspect);}
+        const assumptions=el('ul');r.assumptions.forEach(a=>assumptions.append(el('li',a)));
+        results.replaceChildren(
+          table(['Window','Start UTC','End UTC (exclusive)','Assigned','Eligible','Excluded','Reasons'],
+            r.windows.map(w=>[w.name,w.start,w.end_exclusive,w.assigned_cases,w.eligible_cases,w.excluded_cases,
+              Object.entries(w.exclusion_reasons).map(([k,n])=>k+': '+n).join(', ')||'—'])),
+          el('p',r.cases_outside_windows+' cases started outside the requested windows.','muted'),
+          el('h4','Candidate selection on validation only'),
+          el('p','Unknown labels reduce the selection score: token fitness × event label coverage, harmonically combined with precision. Original token metrics remain visible. This is a selection heuristic, not an alignment score.','muted'),
+          table(['Noise','Training fitness','Validation token fitness','Validation precision','Validation F-score','Validation label coverage','Adjusted selection score','Validation simplicity'],
+            r.candidates.map(c=>[share(c.noise)+(c.noise===r.selection.noise?' (selected)':''),share(c.training.fitness),
+              share(c.validation.fitness),share(c.validation.precision),share(c.validation.f_score),share(c.validation.activity_event_label_coverage),share(c.validation.coverage_adjusted_f_score),share(c.validation.simplicity)])),
+          el('h4','Final test: selected training net only'),
+          table(['Token fitness','Precision','F-score','Label coverage','Adjusted F-score','Fitting cases','All-assigned fitting share bounds'],[
+            [share(score.fitness),share(score.precision),share(score.f_score),share(score.activity_event_label_coverage),share(score.coverage_adjusted_f_score),score.fitting_cases_exact,share(b.lower)+' – '+share(b.upper)]]),
+          el('p','Do not tune settings against this test period after inspecting it. Repeated reviews are not a sealed holdout.','note'),
+          save,replay,actions,assumptions);
+        downloads.enable(true);notice.textContent='Temporal evaluation complete.';
+      }catch(error){if(active(t))notice.textContent=error.message;}
+      finally{if(active(t))run.disabled=false;}
+    };
+    panel.append(el('summary','Temporal train / validation / test model quality'),
+      el('p','Discover on earlier cases, choose noise on validation, and evaluate only the chosen model on later cases. Entire selected case notion; no retrospective cohort filter.','muted'),
+      field('Four UTC boundaries (comma-separated)',dates),field('Exact completion labels (JSON array)',ends),
+      field('Noise levels (comma-separated)',levels),field('Minimum eligible cases in each window',minimum),
+      run,notice,downloads.node,results,evidence);
+    return panel;
+  }
+
   function modelQualitySection(replayScored){
     const box=section('Model quality');box.id='owgModelQuality';
     box.appendChild(el('div','How good the discovered model is at several noise levels: fitness (can it replay the cases), precision (does it allow little that no case did), their balance (F-score), generalization (is each part backed by many cases) and simplicity (how tangled it is). Use it to choose the noise setting of model discovery.','muted'));
@@ -7710,6 +7798,7 @@
     box.append(row,statusLine,out);
     const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
     const generation=state.generation;let revision=0;
+    box.append(temporalModelQualityPanel(replayScored,()=>generation===state.generation&&box.isConnected));
     const current=t=>generation===state.generation&&box.isConnected&&t===revision;
     levels.onchange=coverage.onchange=()=>{revision++;run.disabled=false;out.replaceChildren();statusLine.textContent='Settings changed. Score the models again.';};
     run.onclick=async()=>{
