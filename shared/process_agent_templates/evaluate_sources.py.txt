@@ -123,19 +123,29 @@ async def evaluate_current_sources(spec,suite,bindings,*,model=None,source_reads
     results=_aggregate_results(spec,suite,plans)
     report=evaluation_report(spec,suite,results,rows)
     mode='paired_model_and_deterministic' if paired else 'deterministic' if deterministic else 'selected_model'
+    if deterministic or paired:
+        deterministic_rows=local_rows if paired else rows
+        incomplete_count=sum(not row['deterministic_search_complete'] for row in deterministic_rows)
+        report['deterministic_incomplete_search_count']=incomplete_count
+        report['review_required']=report['review_required'] or bool(incomplete_count)
     if paired:
         from collections import Counter
         alternative=_aggregate_results(spec,suite,local_plans)
         local_report=evaluation_report(spec,suite,alternative,local_rows)
+        categories={}
+        for row in pairs:
+            categories.setdefault(row['category'],Counter())[row['classification']]+=1
         report['paired_planning']={
             'format':'openworkgraph.paired-current-source-planning.v1',
             'deterministic_results_sha256':digest(alternative),
             'model_matching_case_count':report['matching_case_count'],
             'deterministic_matching_case_count':local_report['matching_case_count'],
             'classification_counts':dict(sorted(Counter(row['classification'] for row in pairs).items())),
-            'cases':pairs,'same_case_inputs':True,'same_per_case_source_receipts':True,
+            'cases':pairs,'by_category':{k:dict(sorted(v.items())) for k,v in sorted(categories.items())},
+            'same_case_inputs':True,'same_per_case_source_receipts':True,
             'same_final_per_case_consumer_clock':True,'independent_ground_truth_verified':False,
-            'model_superiority_established':False,'execution_authorized':False}
+            'model_superiority_established':False,'execution_authorized':False,
+            'interpretation':'The model sees minimized checks before inference; the deterministic candidate is computed at final comparison time. Both are checked against the same retained receipts at that final boundary. This is descriptive finite-case agreement, not a latency, accuracy or cost benchmark.'}
         report['review_required']=report['review_required'] or local_report['review_required']
     if deterministic or paired:
         report['planning_mode']=mode
@@ -148,6 +158,8 @@ async def evaluate_current_sources(spec,suite,bindings,*,model=None,source_reads
         'planning_mode':mode,'model_invoked':not deterministic,
         'historical_case_facts_verified':False,'case_association_verified':False,
         'business_tools_called':False,'execution_authorized':False,'source_outcomes_verified':False}
+    if deterministic or paired:
+        summary['deterministic_incomplete_search_count']=report['deterministic_incomplete_search_count']
     if paired:
         summary['paired_classification_counts']=report['paired_planning']['classification_counts']
         summary['deterministic_matching_case_count']=report['paired_planning']['deterministic_matching_case_count']
