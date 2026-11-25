@@ -1697,7 +1697,70 @@
         };
         const grid=el('div',null,'row');grid.style.alignItems='end';
         grid.append(field('Period',kind),field('From',start),field('To',end),field('Cases handled',cases),field('Minutes per case',minutes),field('Source',source),field('Reference',ref),addMeasure);
-        value.append(grid,measStatus,host);box.appendChild(value);
+        const effortPanel=el('details');effortPanel.append(el('summary','Derive effort from a retained event log'),
+          el('p','Use a numeric event attribute that records additive work effort. Never use elapsed case time. All cases starting during the selected UTC dates must finish during the period with the exact completion activity; missing or shared effort evidence blocks recording.','muted'));
+        const effortLog=select('owgRetainedEffortLog',[['','Choose retained log']]);
+        const loadLogs=button('Load local logs','secondary');
+        const notion=input('owgRetainedEffortType','text','case');notion.value='case';notion.maxLength=200;
+        const terminal=input('owgRetainedEffortCompletion','text','Exact stored activity');terminal.maxLength=200;
+        const effortActivity=input('owgRetainedEffortActivity','text','Exact stored effort activity');effortActivity.maxLength=200;
+        const attr=input('owgRetainedEffortAttribute','text','Exact event attribute');attr.maxLength=120;
+        const unit=select('owgRetainedEffortUnit',[['seconds','Seconds'],['minutes','Minutes'],['hours','Hours']]);
+        const confirm=input('owgRetainedEffortConsent','checkbox');
+        const effortStatus=el('div',null,'muted');effortStatus.setAttribute('role','status');
+        const effortPreview=button('Preview retained effort','secondary'),effortSave=button('Record reviewed measurement','secondary');
+        effortSave.disabled=true;
+        let effortSnapshot=null,effortTurn=0;
+        const currentEffort=()=>generation===detailGeneration&&effortPanel.isConnected;
+        const clearEffort=()=>{effortTurn++;effortSnapshot=null;effortSave.disabled=true;effortStatus.replaceChildren();};
+        for(const control of [kind,start,end,effortLog,notion,terminal,effortActivity,attr,unit]){
+          control.addEventListener('input',()=>{confirm.checked=false;clearEffort();});
+          control.addEventListener('change',()=>{confirm.checked=false;clearEffort();});
+        }
+        confirm.addEventListener('change',clearEffort);
+        loadLogs.onclick=async()=>{
+          clearEffort();const turn=effortTurn;loadLogs.disabled=true;
+          try{
+            const data=await (await api('/v1/event-logs')).json();
+            if(!currentEffort()||turn!==effortTurn)return;
+            effortLog.replaceChildren(el('option','Choose retained log'));effortLog.options[0].value='';
+            for(const log of data.logs||[]){const opt=el('option',log.name+' · '+log.events+' events');opt.value=log.log_id;effortLog.appendChild(opt);}
+            confirm.checked=false;
+          }catch(e){if(currentEffort()&&turn===effortTurn)effortStatus.textContent=e.message;}
+          finally{loadLogs.disabled=false;}
+        };
+        const effortSpec=()=>({expected_revision:idea.revision,log_id:effortLog.value,case_type:notion.value,
+          period:kind.value,start:start.value,end:end.value,completion_activity:terminal.value,
+          effort_activity:effortActivity.value,effort_attribute:attr.value,unit:unit.value,effort_semantics_confirmed:confirm.checked});
+        const effortBase='/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/retained-effort';
+        effortPreview.onclick=async()=>{
+          clearEffort();const turn=effortTurn;const spec=effortSpec();
+          if(!spec.effort_semantics_confirmed){effortStatus.textContent='Confirm the attribute measures additive work effort.';return;}
+          effortPreview.disabled=true;effortStatus.textContent='Checking complete retained cohort…';
+          try{
+            const result=await post(effortBase+'/preview',spec);
+            if(!currentEffort()||turn!==effortTurn)return;
+            effortStatus.replaceChildren(el('p',result.counts.started_cases+' started cases; '+result.counts.complete_cases+' complete. '+result.counts.effort_events+' effort-event links.'),
+              el('p',Object.entries(result.counts).map(([key,count])=>key.replaceAll('_',' ')+': '+count).join(' · ')),
+              el('p',result.recordable?result.total_hours+' reported effort hours · '+result.minutes_per_case+' minutes/case':('Blocked: '+result.blockers.join(', '))),
+              el('p','Retained log revision '+result.log_revision+' · '+result.preview_sha256),el('p',result.interpretation));
+            if(result.recordable){effortSnapshot={spec,digest:result.preview_sha256};effortSave.disabled=false;}
+          }catch(e){if(currentEffort()&&turn===effortTurn)effortStatus.textContent=e.message;}
+          finally{effortPreview.disabled=false;}
+        };
+        effortSave.onclick=async()=>{
+          const snap=effortSnapshot;
+          if(!snap||!currentEffort()||JSON.stringify(effortSpec())!==JSON.stringify(snap.spec))return;
+          const turn=++effortTurn;effortSave.disabled=true;effortSnapshot=null;
+          try{const result=await post(effortBase+'/record',{...snap.spec,expected_preview:snap.digest});
+            if(currentEffort()){draw(result);if(turn===effortTurn)effortStatus.textContent='Retained effort measurement recorded. Preview again before another save.';}
+          }catch(e){if(currentEffort()&&turn===effortTurn)effortStatus.textContent=e.message;}
+        };
+        const effortFields=el('div',null,'row');effortFields.append(loadLogs,field('Retained log',effortLog),field('Case type',notion),
+          field('Final completion activity',terminal),field('Effort-bearing activity',effortActivity),field('Numeric event attribute',attr),field('Effort unit',unit));
+        effortPanel.append(effortFields,el('p','Uses the Period, From and To controls above.'),
+          field('I confirm the selected attribute measures additive effort, not elapsed or waiting time',confirm),effortPreview,effortSave,effortStatus);
+        value.append(grid,measStatus,effortPanel,host);box.appendChild(value);
         api('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/realized-value').then(r=>r.json()).then(r=>{if(generation===detailGeneration)draw(r);}).catch(e=>{measStatus.textContent=e.message;});
       }
       // These selections are navigation hints only, never an authorization or a source read.

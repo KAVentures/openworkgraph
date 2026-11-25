@@ -297,6 +297,36 @@ def realized_value(request: Request, idea_id: str):
     return _benefit(automation_benefits.report, idea_id)
 
 
+@router.post("/v1/automation-pipeline/{idea_id}/retained-effort/preview")
+async def preview_retained_effort(request: Request, idea_id: str):
+    from . import automation_retained_effort as effort
+    from .event_log_routes import _json_body
+    from .event_log_workspace import EventLogWorkspaceError
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    body = await _json_body(request, "retained effort measurement", strict=True, limit=16384)
+    _require_dashboard(request)
+    try:
+        return await run_in_threadpool(_benefit, effort.preview, idea_id, body)
+    except EventLogWorkspaceError:
+        raise HTTPException(422, "retained log or case notion unavailable") from None
+
+
+@router.post("/v1/automation-pipeline/{idea_id}/retained-effort/record")
+async def record_retained_effort(request: Request, idea_id: str):
+    from . import automation_retained_effort as effort
+    from .event_log_routes import _json_body
+    from .event_log_workspace import EventLogWorkspaceError
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    body = await _json_body(request, "retained effort measurement", strict=True, limit=16384)
+    _require_dashboard(request)
+    try:
+        return await run_in_threadpool(_benefit, effort.record, idea_id, body)
+    except EventLogWorkspaceError:
+        raise HTTPException(422, "retained log or case notion unavailable") from None
+
+
 @router.post("/v1/automation-pipeline/{idea_id}/measurements")
 async def record_measurement(request: Request, idea_id: str):
     from . import automation_benefits

@@ -324,3 +324,7 @@ No provider read, execution, persistence of the supplied document, or durable
 review occurs. Use a separately consented fresh check for current source state.
 
 The source-check review also distinguishes a matching historical expectation from the latest saved process status. An old pinned expectation may still exist even after a newer revision removes it; that does not make the old design current. Current design and run status are local snapshots, not a cross-store transaction.
+
+## Derive effort from retained event logs
+
+[Retained-log effort measurements](AUTOMATION_RETAINED_EFFORT.md) preview an exact case-start cohort using a reviewed additive event attribute, refuse incomplete or shared effort evidence and record a pinned measurement in the existing benefit store. Elapsed case time is never treated as labor effort.
