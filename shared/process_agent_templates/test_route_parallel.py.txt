@@ -27,6 +27,13 @@ class ParallelRouteSearch(unittest.TestCase):
         self.assertEqual(result['supported_schedule_count'],2)
         self.assertTrue(result['search_complete'])
         self.assertIsNone(result['unique_activity_ids'])
+        self.assertGreater(result['token_replay_work_count'],0)
+        self.assertEqual(result['work_count'],result['graph_search_work_count']+result['token_replay_work_count'])
+        bounded=_search(spec,[],[],max_work=result['work_count']-1)
+        self.assertFalse(bounded['search_complete'])
+        self.assertIsNone(bounded['unique_activity_ids'])
+        self.assertLessEqual(bounded['work_count'],result['work_count']-1)
+
         from owg_model.process_parallel import replay_node_ids
         from review_facts import _scenario_coverage
         from unittest.mock import patch
@@ -41,7 +48,7 @@ class ParallelRouteSearch(unittest.TestCase):
             'search_complete':True,'search_status':'unique_supported_route',
             'matches_reviewed_expectation':True,'decision_checks':[]}
         with patch('owg_model.process_parallel.replay_node_ids',return_value={
-                'transition_indices':list(range(6)),'guaranteed_transition_indices':list(range(5))}):
+                'transition_indices':list(range(6)),'guaranteed_transition_indices':list(range(5)),'work_count':replay['work_count']}):
             coverage=_scenario_coverage(spec,[case],[row])
         self.assertFalse(coverage['all_declared_items_have_reviewed_matching_support'])
         omitted=model['transitions'][5]
@@ -49,5 +56,18 @@ class ParallelRouteSearch(unittest.TestCase):
                   (e['source_activity_id'],e['target_activity_id'])==(omitted['source'],omitted['target']))
         self.assertEqual(item['possible_reviewed_matching_cases'],1)
         self.assertEqual(item['reviewed_matching_cases'],0)
+        with patch('review_facts.MAX_COVERAGE_REPLAY_WORK',1):
+            bounded_coverage=_scenario_coverage(spec,[case],[row])
+        self.assertTrue(bounded_coverage['coverage_replay_budget_exhausted'])
+        self.assertEqual(bounded_coverage['coverage_replay_work_count'],1)
+        self.assertEqual(bounded_coverage['route_replay_unknown_case_ids'],['case_1'])
+        self.assertFalse(bounded_coverage['all_declared_items_have_reviewed_matching_support'])
+        # A failed replay cannot be silently treated as a finished search.
+        with patch('owg_model.process_parallel.replay_node_ids',side_effect=ValueError('bounded')):
+            bounded=_search(spec,[],[],max_work=100)
+        self.assertFalse(bounded['search_complete'])
+        self.assertEqual(bounded['work_count'],100)
+        self.assertIn('token_replay_incomplete',bounded['limit_reasons'])
+
 
 
