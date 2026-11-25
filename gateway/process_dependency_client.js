@@ -117,7 +117,19 @@
           if(row.direct_findings.length)item.append(el('p',row.direct_findings.map(v=>v.replaceAll('_',' ')).join('; ')));
           list.append(item);
         }
-        section.append(list);output.append(section);
+        section.append(list);
+        const root=basis.processes.find(row=>row.workflow_id===basis.root_workflow_id);
+        const build=button('Download dependency-aware starter ZIP','dependencyBuildExport',()=>work(async ok=>{
+          const revision=root.current_model.revision;
+          const result=await call('/v1/human/processes/'+encodeURIComponent(basis.root_workflow_id)+'/dependencies/build?'+
+            new URLSearchParams({revision:String(revision),basis_sha256:basis.basis_sha256}),undefined,{archive:true});
+          if(!ok())return;
+          const url=URL.createObjectURL(new Blob([result.bytes],{type:'application/zip'}));
+          const link=el('a');link.href=url;link.download='owg-dependency-starter-r'+revision+'.zip';link.click();URL.revokeObjectURL(url);
+          notice.textContent='Downloaded starter and pinned prerequisite snapshot. This is not execution approval.';
+        }));
+        build.disabled=!basis.all_declared_prerequisites_current||!root?.current_model.revision;
+        section.append(build);output.append(section);
       }
       if(graph.impact){
         const groups=[
