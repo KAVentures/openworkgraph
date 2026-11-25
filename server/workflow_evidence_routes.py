@@ -1297,6 +1297,26 @@ async def link_rule_library_rule(request: Request, workflow_id: str = Query(patt
     return _rule_library_call(request, proposal)
 
 
+@app.post('/v1/process-catalog/rule-library/upgrade-review')
+async def review_rule_library_upgrade(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
+                                      revision: int = Query(ge=1)) -> Response:
+    """Preview or construct one exact-pin unsaved multi-rule upgrade proposal."""
+    from . import process_rule_library as library
+    from .local_source_routes import _require_dashboard
+    _require_dashboard(request)
+    value = await _process_json(request, maximum=16384)
+    if (not isinstance(value, dict) or not set(value) <= {'expected_content_sha256', 'selections'}
+            or not isinstance(value.get('expected_content_sha256'), str)
+            or ('selections' in value and not isinstance(value['selections'], list))):
+        raise HTTPException(422, 'Use an exact saved process digest and optional selected rule revisions')
+    record = _catalog_record(workflow_id, revision)
+    latest = _catalog_record(workflow_id)
+    if (value['expected_content_sha256'] != record['content_sha256']
+            or latest['revision'] != revision or latest['content_sha256'] != record['content_sha256']):
+        raise HTTPException(409, 'Saved process changed; reopen its latest revision before reviewing upgrades')
+    return _rule_library_call(request, library.upgrade_review, record, value.get('selections'))
+
+
 @app.get('/v1/process-catalog/rule-library/drift')
 def rule_library_drift(request: Request) -> Response:
     """Latest saved designs that use an outdated or locally edited library rule."""

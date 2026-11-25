@@ -17,3 +17,30 @@ The same result is available under the local authenticated dashboard session via
 Only already redacted, explicitly kept texts are shown to the human dashboard. The queue is read-only aside from the existing store's retention expiry cleanup. It does not infer identity, detect language automatically, create new saved examples, transmit messages, enable recording, train a classifier, or approve customer decisions. All displayed text remains **untrusted data**, not instructions.
 
 The holdout remains separate, and evaluation still uses its recorded manual labels only. Triage ordering is not a performance metric: improving human labelling throughput does not establish multilingual accuracy or held-out model quality. A clean or low-priority item may still be misclassified. Independent language-specific holdout results and real customer validation remain required before accuracy claims.
+
+
+## Diverse training review order
+
+Choose **Review diverse training examples** to rotate through declared
+languages and, within each language, keyword-intent groups. The ordering
+preserves the existing priority within each group and returns every eligible
+training example once. Unknown language remains a separate group; language
+is not inferred. The review view reports the language counts for the current
+page. Use previous/next to inspect the remaining training population. Label
+or delete actions restart paging; changes in the live population may otherwise
+change offsets. This is a review-order heuristic, not representative sampling,
+automatic labeling, or a quality guarantee.
+
+The API adds `order=diverse` to the existing authenticated triage endpoint;
+the default remains `order=priority`. Holdout examples are not candidates.
+The service rechecks opt-in and the unlabelled population after ranking,
+refusing a result if it observes a consent revocation or changed population.
+The dashboard ignores outdated overlapping review requests. These checks
+are not a guarantee against consent changes after a response is returned.
+
+Validation includes deterministic language and keyword rotation, unchanged
+candidate coverage, bounded paging, revocation and deletion during ranking,
+authenticated HTTP and browser review mode. The exact standalone ordering
+module was also checked locally against 500 randomized populations for
+determinism, completeness, per-stratum priority preservation and language
+rotation.

@@ -67,3 +67,43 @@ repair by deletion, zero-case refusal, missing periods and unverified
 source declarations. The existing browser acceptance test
 `tests/browser/automation_realized_value.cjs` also checks the new panel
 and wording.
+
+
+## Measurement sensitivity and case-volume effects
+
+The coverage-aware comparison additionally refuses shared calendar dates
+between baseline and after periods, including historical baselines recorded
+before the idea was declared implemented. The original equal-weight report
+remains available for backward compatibility and is not a substitute for
+the coverage-aware comparison.
+
+For valid nonoverlapping periods with positive case denominators, the
+comparison reports an arithmetic decomposition of the baseline-minus-after
+monthly hours into two components. Let e be pooled minutes per case and v
+be pooled monthly case volume, with b and a denoting baseline and after.
+
+- Effort component: (e_b - e_a) * (v_b + v_a) / 120.
+- Volume component: (v_b - v_a) * (e_b + e_a) / 120.
+
+These sum to the change in monthly hours before rounding. They average
+the two possible arithmetic decomposition orders and do not identify causal
+effects. The original effort-at-after-volume comparison remains unchanged.
+
+Calendar coverage reports the inclusive span, measured days and unmeasured
+days within each side, plus exposure by declared source kind. Unmeasured days
+are not imputed as zero effort. Different source-kind sets are flagged for
+comparability review; matching sets are not proof of consistent measurement.
+
+The leave-one-period-out review recomputes the effort-at-after-volume
+comparison after dropping each baseline or after period in turn, whenever
+at least one period remains on that side. The dashboard exposes the range,
+individual omitted-period scenarios and any change in direction from the
+full comparison. This is a descriptive influence analysis, not a statistical
+confidence interval or an estimate of realized savings. A single period on
+either side does not support omission analysis on that side.
+
+No new source reads, execution, persistence, currency estimates, or
+portfolio aggregation occur. The existing coverage-aware response contains
+an additive sensitivity object; invalid comparisons return null. Regression
+tests cover opposing effort and volume effects, measured-date gaps, source
+composition, influence-driven reversals and historical cross-period overlap.

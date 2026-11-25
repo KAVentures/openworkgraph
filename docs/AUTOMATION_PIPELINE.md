@@ -79,6 +79,10 @@ planning yet. The CSV export includes the planning columns.
 
 The [budget scenario planner](AUTOMATION_BUDGET_SCENARIO.md) evaluates selected opportunity combinations against a single budget currency/basis, explicit reviewer priorities and prerequisite closure. It does not sum benefits or approve implementation.
 
+## Quality, adoption and conditional value
+
+The [quality and adoption benefit review](AUTOMATION_QUALITY_BENEFIT.md) extends existing implemented-idea measurements with explicit case denominators, review-effort accounting and conditional costs. Quality gates remain separate from financial arithmetic, and no verified savings or implementation approval is inferred.
+
 ## API (dashboard session only)
 
 `GET /v1/automation-pipeline[?state=]`, `POST /v1/automation-pipeline`,
@@ -295,3 +299,28 @@ seasonality can contribute. No money is estimated and ideas are never added toge
 
 `GET …/{id}/realized-value`, `POST …/{id}/measurements`,
 `POST …/{id}/measurements/{measurement_id}/delete` (dashboard session only).
+
+
+### Reconcile an original source-check download
+
+Open the same idea and exported project, select **Check selected source state**,
+then **Review a previous download**. Select the unchanged original JSON file
+(up to 64 KiB). OWG compares its exact byte digest with the retained export
+metadata before parsing the receipt. Reformatting or altering even whitespace
+will fail the comparison; a file from another project is also refused.
+
+The dashboard distinguishes the historical reported operation result from the
+current idea revision, the retained process expectation and, if selected during
+export, the locally retained run snapshot. Changed or unavailable associations
+are explicitly reported. A matching checksum proves consistency with the
+locally retained export, not independently authenticated provenance, current
+provider state, run/case identity, agent causality or business success.
+
+The dashboard-session-only POST
+`/v1/automation-pipeline/{idea_id}/projects/{project_id}/source-check-review`
+accepts the original JSON bytes. It returns minimized historical status and
+local association checks, without returning the receipt or record identifier.
+No provider read, execution, persistence of the supplied document, or durable
+review occurs. Use a separately consented fresh check for current source state.
+
+The source-check review also distinguishes a matching historical expectation from the latest saved process status. An old pinned expectation may still exist even after a newer revision removes it; that does not make the old design current. Current design and run status are local snapshots, not a cross-store transaction.

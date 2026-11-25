@@ -53,3 +53,39 @@ describe this log. They are not commitments, targets or ratings of anyone.
 | `GET /v1/event-logs/{log_id}/prediction-snapshots` | List snapshots |
 | `GET /v1/event-logs/{log_id}/prediction-snapshots/{snapshot_id}/evaluation` | Score a snapshot against the log as it is now |
 | `POST /v1/event-logs/{log_id}/prediction-snapshots/{snapshot_id}/delete` | Delete a snapshot |
+
+
+## Full frozen-population coverage and paired quality
+
+The evaluation now includes a separate set of finite-population bounds over
+every predicted frozen case, even before any has completed. Known range
+membership includes completed cases and open cases that have exceeded their
+frozen upper bound. Other open, missing, or inconsistent cases have unknown
+membership. The lower coverage bound treats every unknown as outside; the
+upper treats every unknown as inside. These are rounded identification bounds
+conditional on complete observation through the selected log/cohort horizon,
+not statistical confidence intervals. The eventual mean absolute error has a
+lower bound: completed absolute errors plus the minimum possible open-case
+errors given elapsed time, divided by the full frozen population. Unknown
+missing observations contribute zero to the bound, not a claim of zero actual
+error. No finite upper error bound is asserted until every case has finished.
+
+A backfilled completion before the snapshot or a regressed observation horizon
+is reported separately as inconsistent evidence, not a prospective completion.
+Cases excluded by changed cohort membership are counted as missing. These
+checks cannot independently certify source completeness, detect all backfills
+or prove that case identities are stable.
+
+The paired remaining-time comparison uses only finished cases with both frozen
+estimates and reports exact better/worse/tied case counts. The paired outcome
+comparison uses cases with both frozen probabilities: for unresolved outcomes,
+both possible binary labels are considered, giving bounds on eventual Brier
+score and the model-minus-baseline difference. Negative differences favor the
+model. Missing paired probabilities are counted separately, and no missing
+outcome is imputed. These fields supplement, rather than replace, the original
+finished-case scores and Wilson interval. They are not guarantees of future
+performance.
+
+Regression coverage includes exhaustive binary-label assignments, paired
+baseline gaps, range boundaries, missing observations, an all-open population,
+and real retained-log append/backfill integration.

@@ -182,3 +182,97 @@ def exports(idea_id: str,project_id: str) -> dict[str,Any]:
                           'WHERE project_id=? ORDER BY created_at DESC,export_id',[project_id]).fetchall()
     return {'exports':[dict(zip(('export_id','idea_revision','created_at','document_sha256'),row)) for row in rows],
             'max_exports':MAX_EXPORTS_PER_PROJECT,'receipt_body_persisted':False,'source_read_performed':False,**FALSE_CLAIMS}
+
+
+MAX_REVIEW_BYTES = 64 * 1024
+
+
+def review_export(idea_id: str, project_id: str, content: bytes) -> dict[str, Any]:
+    """Reconcile an explicitly supplied original download against retained metadata.
+
+    Compare exact bytes before interpreting receipt data. No source calls or
+    persistence of supplied documents; report historical state separately
+    from the current local run association.
+    """
+    if not isinstance(content, bytes) or not 1 <= len(content) <= MAX_REVIEW_BYTES:
+        raise pipeline.PipelineError('select an original source-check document of at most 64 KiB')
+    digest = sha256(content).hexdigest()
+    export_id = 'source_export_' + digest
+    with pipeline._LOCK, closing(pipeline._connect()) as conn:
+        idea, reference, spec = _context(conn, idea_id, project_id)
+        metadata = conn.execute(
+            'SELECT idea_revision,created_at,document_sha256 FROM project_source_exports '
+            'WHERE project_id=? AND export_id=?', [project_id, export_id]).fetchone()
+    if metadata is None or metadata[2] != digest:
+        raise pipeline.PipelineError('document does not match a retained export for this project')
+    try:
+        document = json.loads(content)
+        if (not isinstance(document, dict)
+                or document.get('format') != 'openworkgraph.project-source-check-export.v1'
+                or document.get('idea_id') != idea_id or document.get('project_id') != project_id
+                or document.get('idea_revision_at_check') != metadata[0]
+                or document.get('checked_at') != metadata[1]
+                or document.get('process_reference') != reference or document.get('spec_sha256') != spec
+                or document.get('receipt_body_persisted') is not False
+                or any(document.get(k) is not False for k in FALSE_CLAIMS)):
+            raise ValueError('invalid document')
+        receipt = document['receipt']
+        if (not isinstance(receipt, dict)
+                or receipt.get('format') != 'openworkgraph.source-operation-receipt.v1'
+                or type(receipt.get('operation_verified')) is not bool
+                or receipt.get('read_only') is not True
+                or any(receipt.get(k) is not False for k in (
+                    'business_objective_verified', 'customer_outcome_verified',
+                    'agent_caused_operation_verified', 'agent_execution_authorized'))):
+            raise ValueError('invalid receipt')
+        run = document.get('run_reference')
+        run_reference = (RunReference.model_validate({
+            'deployment_id': run['deployment_id'], 'run_id': run['run_id']}) if run is not None else None)
+        expected = CheckRequest.model_validate({
+            'expected_revision': metadata[0], 'terminal_activity_id': document['terminal_activity_id'],
+            'expected_operation': receipt['expected_operation'], 'resource_ref': receipt['resource_ref']})
+    except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
+        raise pipeline.PipelineError('retained document has invalid source-check structure') from None
+    try:
+        _expectation(_model(reference), expected)
+        expectation_status = 'retained_expectation_matches'
+    except pipeline.PipelineError:
+        expectation_status = 'retained_expectation_unavailable_or_changed'
+    # Only compare current locally retained monitoring metadata. A matching
+    # declared run still does not independently identify the observed record.
+    with pipeline._LOCK, closing(pipeline._connect()) as conn:
+        current_idea, current_reference, current_spec = _context(conn, idea_id, project_id)
+        current_metadata = conn.execute(
+            'SELECT idea_revision,created_at,document_sha256 FROM project_source_exports '
+            'WHERE project_id=? AND export_id=?', [project_id, export_id]).fetchone()
+        if current_metadata != metadata or current_reference != reference or current_spec != spec:
+            raise pipeline.PipelineError('retained export reference changed during review')
+        if run_reference is None:
+            run_status = 'no_run_selected_at_export'
+        else:
+            try:
+                current_run = _run(conn, project_id, spec, run_reference)
+            except pipeline.PipelineError:
+                run_status = 'run_attribution_unavailable_or_changed'
+            else:
+                run_status = ('retained_run_snapshot_matches' if current_run == run
+                              else 'retained_run_snapshot_changed')
+    process_status = pipeline._process_status(reference)
+    return {
+        'format': 'openworkgraph.project-source-check-review.v1',
+        'project_id': project_id, 'export_id': export_id, 'document_sha256': digest,
+        'exported_at': metadata[1], 'idea_revision_at_export': metadata[0],
+        'current_idea_revision': current_idea['revision'],
+        'idea_revision_matches_export': current_idea['revision'] == metadata[0],
+        'exact_retained_export_bytes_match': True,
+        'process_expectation_status': expectation_status, 'run_attribution_status': run_status,
+        'current_process_reference_status': process_status['status'],
+        'process_reference_is_current': process_status['reference_is_current'],
+        'latest_process_revision': process_status['latest_revision'],
+        'historical_source_operation_reported_verified': receipt['operation_verified'],
+        'historical_source_availability': receipt.get('availability'),
+        'historical_source_checked_at': receipt.get('verified_at'),
+        'source_read_performed': False, 'current_source_state_verified': False,
+        'receipt_body_persisted': False, 'receipt_body_returned': False,
+        'review_persisted': False, **FALSE_CLAIMS,
+    }

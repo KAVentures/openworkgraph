@@ -17,7 +17,7 @@ from zipfile import ZipFile
 import pytest
 
 from shared.process_agent_project import build_runtime_project
-from shared.process_agent_release import ReleaseIntegrityError, verify_directory
+from shared.process_agent_release import ReleaseIntegrityError, verify_directory, compare_directories, create_manifest
 from shared.process_model import ProcessModel
 
 
@@ -169,3 +169,193 @@ def test_release_verification_does_not_claim_authorized_runtime(tmp_path):
     assert manifest["generated_files_verified_as_remote_deployment"] is False
     assert manifest["remote_business_outcomes_verified"] is False
     assert json.loads((tmp_path / "workflow.spec.json").read_text())["execution_authorization"] is False
+
+
+def _pin(root):
+    return hashlib.sha256((root / "release-manifest.json").read_bytes()).hexdigest()
+
+
+def _reinventory(root, mutate=None):
+    path = root / "workflow.spec.json"
+    spec = json.loads(path.read_text(encoding="utf-8"))
+    if mutate:
+        mutate(spec)
+        path.write_text(json.dumps(spec, indent=2, ensure_ascii=False)+"\n", encoding="utf-8")
+    files = {str(p.relative_to(root)).replace(os.sep, "/"): p.read_bytes().decode("utf-8")
+             for p in root.rglob("*") if p.is_file() and p.name != "release-manifest.json"}
+    (root / "release-manifest.json").write_bytes(create_manifest(files, spec).encode("utf-8"))
+    return _pin(root)
+
+
+def test_compare_exact_release_file_deltas_and_distinct_design_identity(tmp_path):
+    old, new = tmp_path/"old", tmp_path/"new"
+    _extract(old)
+    _extract(new)
+    old_pin = _pin(old)
+    original = compare_directories(old, new, old_pin, _pin(new))
+    assert not original["requires_review_before_upgrade"]
+    assert original["revision_direction"] == "same_revision_same_content"
+    assert original["generated_file_changes"]["unchanged_count"] == verify_directory(old)["verified_generated_file_count"]
+    # Simulate customer-reviewed candidate generator output, retaining the
+    # same saved design. The comparison must not mistake code drift for a
+    # new model revision, or silently cover external configuration.
+    (new/"agent.py").write_bytes((new/"agent.py").read_bytes()+b"\n# candidate")
+    (new/"AGENTS.md").write_bytes((new/"AGENTS.md").read_bytes()+b"\nCandidate notes")
+    (new/"extra.txt").write_text("new generated file", encoding="utf-8")
+    (new/"LICENSE").unlink()
+    new_pin = _reinventory(new)
+    result = compare_directories(old, new, old_pin, new_pin)
+    changes = result["generated_file_changes"]
+    assert [x["path"] for x in changes["added"]] == ["extra.txt"]
+    assert [x["path"] for x in changes["removed"]] == ["LICENSE"]
+    assert [x["path"] for x in changes["changed"]] == ["AGENTS.md", "agent.py"]
+    assert not result["specification_bytes_changed"] and not result["process_model_changed"]
+    assert result["requires_review_before_upgrade"]
+    assert result["both_generated_inventories_verified_against_pins"]
+    for claim in ("dependency_compatibility_verified", "runtime_behavior_compatibility_verified",
+                  "execution_authorized", "independent_signature_verified",
+                  "customer_managed_files_compared", "remote_deployment_verified", "business_outcomes_verified"):
+        assert result[claim] is False
+    (new/"customer-bindings.json").write_text("PRIVATE_CUSTOMER_CONFIGURATION", encoding="utf-8")
+    assert compare_directories(old, new, old_pin, new_pin) == result
+    assert "PRIVATE_CUSTOMER_CONFIGURATION" not in json.dumps(result)
+
+
+def test_comparison_classifies_revision_upgrade_rollback_and_reused_revision(tmp_path):
+    old, new = tmp_path/"old", tmp_path/"new"
+    _extract(old)
+    _extract(new)
+    old_pin = _pin(old)
+    def upgrade(spec):
+        spec["revision"] += 1
+        spec["content_sha256"] = "c"*64
+        spec["process_model"]["goal"] = "Changed synthetic goal"
+        spec["process_model_sha256"] = hashlib.sha256(
+            json.dumps(spec["process_model"], sort_keys=True, allow_nan=False).encode()).hexdigest()
+    new_pin = _reinventory(new, upgrade)
+    result = compare_directories(old, new, old_pin, new_pin)
+    assert result["revision_direction"] == "newer_revision"
+    assert result["specification_bytes_changed"] and result["process_model_changed"]
+    assert result["design_changes"]["other_changed_model_fields"] == ["goal"]
+    assert not result["design_changes"]["model_field_values_returned"]
+    assert compare_directories(new, old, new_pin, old_pin)["revision_direction"] == "older_revision"
+    reused = _reinventory(new, lambda spec: spec.update(revision=3))
+    assert compare_directories(old, new, old_pin, reused)["revision_direction"] == "same_revision_different_content"
+    foreign = _reinventory(new, lambda spec: spec.update(workflow_id="foreign"))
+    with pytest.raises(ReleaseIntegrityError, match="same saved workflow"):
+        compare_directories(old, new, old_pin, foreign)
+
+
+def test_comparison_requires_both_pins_and_refuses_tampered_candidate(tmp_path):
+    old, new = tmp_path/"old", tmp_path/"new"
+    _extract(old)
+    _extract(new)
+    old_pin, new_pin = _pin(old), _pin(new)
+    for a,b in ((None,new_pin),(old_pin,None),("bad",new_pin)):
+        with pytest.raises(ReleaseIntegrityError, match="Both releases"):
+            compare_directories(old,new,a,b)
+    (new/"agent.py").write_bytes(b"changed")
+    with pytest.raises(ReleaseIntegrityError, match="missing or changed"):
+        compare_directories(old,new,old_pin,new_pin)
+    forged = _reinventory(new)
+    with pytest.raises(ReleaseIntegrityError, match="independently pinned digest"):
+        compare_directories(old,new,old_pin,new_pin)
+    assert compare_directories(old,new,old_pin,forged)["generated_files_changed"]
+
+
+def test_generated_standalone_compare_cli_outputs_json_and_requires_pins(tmp_path):
+    old, new = tmp_path/"old", tmp_path/"new"
+    _extract(old)
+    _extract(new)
+    command = [sys.executable, "-S", str(old/"verify_release.py"), "--root", str(old),
+               "--manifest-sha256", _pin(old), "--compare-root", str(new),
+               "--compare-manifest-sha256", _pin(new)]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["both_generated_inventories_verified_against_pins"]
+    refused = subprocess.run(command[:-2], capture_output=True, text=True, timeout=20)
+    assert refused.returncode == 2
+    assert not refused.stdout
+
+
+def test_structural_comparison_exact_ids_order_and_changed_fields(tmp_path):
+    old, new = tmp_path/"old", tmp_path/"new"
+    _extract(old)
+    _extract(new)
+    old_pin = _pin(old)
+    def change(spec):
+        model = spec["process_model"]
+        model["activities"][0]["label"] = "PRIVATE_NEW_LABEL"
+        model["activities"].append({"id":"escalate","label":"PRIVATE_NEW_ACTIVITY"})
+        model["transitions"] = [{"source":"receive","target":"escalate"},
+                                {"source":"escalate","target":"approve"}]
+        model["business_rules"] = [{"id":"rule1","text":"PRIVATE_RULE"}]
+        model["outcome_expectations"] = [{"terminal_activity_id":"approve","operation":"updated"}]
+        spec["control_flow_contract"] = "synthetic_candidate_contract"
+        spec["process_model_sha256"] = hashlib.sha256(
+            json.dumps(model,sort_keys=True,allow_nan=False).encode()).hexdigest()
+    pin = _reinventory(new, change)
+    report = compare_directories(old,new,old_pin,pin)["design_changes"]
+    groups = report["keyed_model_changes"]
+    assert groups["activities"]["added"] == [{"id":"escalate"}]
+    assert groups["activities"]["changed"] == [{"id":"receive","changed_fields":["label"]}]
+    assert groups["transitions"]["removed"] == [{"source":"receive","target":"approve"}]
+    assert groups["transitions"]["added"] == [{"source":"escalate","target":"approve"},
+                                             {"source":"receive","target":"escalate"}]
+    assert groups["business_rules"]["added"] == [{"id":"rule1"}]
+    assert groups["outcome_expectations"]["added"] == [{"terminal_activity_id":"approve","operation":"updated"}]
+    assert report["changed_runtime_contract_fields"] == ["control_flow_contract"]
+    assert "PRIVATE_" not in json.dumps(report)
+    assert not report["structural_changes_establish_compatibility"]
+    def reorder(spec):
+        spec["process_model"]["activities"].reverse()
+        spec["process_model_sha256"] = hashlib.sha256(
+            json.dumps(spec["process_model"],sort_keys=True,allow_nan=False).encode()).hexdigest()
+    reordered = _reinventory(new,reorder)
+    assert compare_directories(old,new,old_pin,reordered)["design_changes"]["keyed_model_changes"]["activities"]["retained_identity_order_changed"]
+
+
+def test_structural_inventory_refuses_duplicate_identity(tmp_path):
+    old,new=tmp_path/"old",tmp_path/"new"
+    _extract(old)
+    _extract(new)
+    def duplicate(spec):
+        model=spec["process_model"]
+        model["activities"].append(dict(model["activities"][0]))
+        spec["process_model_sha256"]=hashlib.sha256(json.dumps(model,sort_keys=True,allow_nan=False).encode()).hexdigest()
+    with pytest.raises(ReleaseIntegrityError,match="duplicate model inventory identity"):
+        compare_directories(old,new,_pin(old),_reinventory(new,duplicate))
+
+
+def test_structural_comparison_distinguishes_boolean_and_numeric_json_values():
+    from shared.process_agent_release import _structural_changes
+    before = {"process_model":{"activities":[{"id":"a","value":True}],
+                              "extra":1}, "runtime_extra":1}
+    after = {"process_model":{"activities":[{"id":"a","value":1}],
+                             "extra":1.0}, "runtime_extra":True}
+    delta = _structural_changes(before, after)
+    assert delta["keyed_model_changes"]["activities"]["changed"] == [
+        {"id":"a","changed_fields":["value"]}]
+    assert delta["other_changed_model_fields"] == ["extra"]
+    assert delta["changed_runtime_contract_fields"] == ["runtime_extra"]
+
+
+def test_randomized_structural_delta_against_set_oracle():
+    import random
+    from shared.process_agent_release import _structural_changes
+    rng = random.Random(20261124)
+    values = [True, 1, 1.0, False, 0, None, "x", {"x":True}, {"x":1}]
+    for _ in range(1000):
+        a = rng.sample(list("abcdefghijk"), rng.randrange(12))
+        b = rng.sample(list("abcdefghijk"), rng.randrange(12))
+        av = {key:rng.choice(values) for key in a}
+        bv = {key:rng.choice(values) for key in b}
+        old = {"process_model":{"activities":[{"id":k,"value":av[k]} for k in a]}}
+        new = {"process_model":{"activities":[{"id":k,"value":bv[k]} for k in b]}}
+        delta = _structural_changes(old,new)["keyed_model_changes"]["activities"]
+        assert {v["id"] for v in delta["added"]} == set(b)-set(a)
+        assert {v["id"] for v in delta["removed"]} == set(a)-set(b)
+        assert {v["id"] for v in delta["changed"]} == {
+            k for k in set(a)&set(b) if json.dumps(av[k],sort_keys=True)!=json.dumps(bv[k],sort_keys=True)}
+        assert delta["retained_identity_order_changed"] == (
+            [k for k in a if k in b]!=[k for k in b if k in a])

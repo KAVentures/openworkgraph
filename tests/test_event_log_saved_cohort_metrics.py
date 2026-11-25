@@ -81,19 +81,19 @@ def test_saved_metric_evaluation_is_log_scoped_and_rejects_deleted(monkeypatch, 
         "name": "Events", "definition": {"version": 1, "expression": {"field": "event_count"}}
     })
     calls = []
-    def summarize(log_id, spec, case_type=None):
-        calls.append((log_id, spec, case_type))
+    def summarize(log_id, spec, case_type=None, *, include_case_values=False):
+        calls.append((log_id, spec, case_type, include_case_values))
         return {"metric": {"sum": "2"}, "raw_cases_returned": False}
     monkeypatch.setattr(saved.cohort_metrics, "summarize", summarize)
     with pytest.raises(workspace.EventLogWorkspaceError, match="unknown"):
         saved.evaluate(other, item["metric_id"], {})
     assert not calls
-    result = saved.evaluate(first, item["metric_id"], {"activity": "Review"}, "case")
+    result = saved.evaluate(first, item["metric_id"], {"activity": "Review"}, "case", include_case_values=True)
     assert result["saved_metric"] == {"metric_id": item["metric_id"], "name": "Events",
                                       "definition_sha256": item["definition_sha256"]}
     assert len(result["saved_metric"]["definition_sha256"]) == 64
     assert calls[0][1]["cohort"] == {"activity": "Review"}
-    assert calls[0][2] == "case"
+    assert calls[0][2:] == ("case", True)
     saved.delete(first, item["metric_id"])
     with pytest.raises(workspace.EventLogWorkspaceError, match="unknown"):
         saved.evaluate(first, item["metric_id"], {})
@@ -113,14 +113,14 @@ def test_saved_metric_evaluation_api_requires_session_and_rechecks_revocation(mo
         monkeypatch.setattr(event_log_routes, "dashboard_session_valid", lambda token: False)
         return {"metric": {"sum": "1"}}
     monkeypatch.setattr(saved, "evaluate", revoke)
-    assert client.post(path, headers=headers, json={"cohort": {}}).status_code == 403
+    assert client.post(path + "?include_case_values=true", headers=headers, json={"cohort": {}}).status_code == 403
 
 
 def test_dashboard_evaluates_saved_revision_and_clears_it_on_manual_edit():
     from pathlib import Path
     source = (Path(__file__).resolve().parents[1] / "dashboard" / "event_log_workspace.js").read_text(encoding="utf-8")
     assert "'/evaluate':'/cohort-metric'" in source
-    assert "const payload=savedId?{cohort}:{definition:{version:1,expression},cohort};" in source
+    assert "const payload=savedId?{cohort}:{definition:currentDefinition(),cohort};" in source
     assert "control.addEventListener('change',()=>{savedPicker.value='';});" in source
 
 
