@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock,patch
 
 from evaluate import compare
 from evaluate_sources import evaluate_current_sources
+from test_execution import SOURCE_RULE_DEPENDENCIES
 from execute import ImplementationError,digest,reference
 import test_source_planning as planning_tests
 
@@ -164,6 +165,7 @@ class SourceEvaluationCases(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.model_calls,[])
 
 
+@unittest.skipUnless(SOURCE_RULE_DEPENDENCIES,'Install requirements.txt for structured fact evaluation')
 class DeterministicEvaluationCases(unittest.IsolatedAsyncioTestCase):
     asyncSetUp=planning_tests.DeterministicSourceRoutes.asyncSetUp
     source=planning_tests.DeterministicSourceRoutes.source
@@ -244,6 +246,7 @@ class PairedEvaluationCases(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(report['review_required'])
         self.assertEqual(summary['source_receipt_request_count'],1)
 
+@unittest.skipUnless(SOURCE_RULE_DEPENDENCIES,'Install requirements.txt for structured fact evaluation')
 class DeclaredFactScenarioCases(unittest.TestCase):
     def fixture(self):
         from test_execution import fixture,ImplementationCases
