@@ -61,6 +61,27 @@ def test_an_applied_mapping_reaches_every_analysis_and_is_reported():
     assert {a["activity"] for a in listed["original_activities"]} >= {"Type name", "Type address"}
 
 
+def test_duplicate_mapping_entries_and_identity_labels_report_actual_changes():
+    log = _log()
+    duplicate = {"name": "Duplicate entries", "groups": [
+        {"label": "Enter data", "activities": ["Type name", "Type name", "Type address"]},
+        {"label": "Enter data", "activities": ["Type name"]}], "collapse_repeats": True}
+    made = mappings.create(log, duplicate)
+    assert made["mapped_activities"] == 2
+    assert made["groups"] == duplicate["groups"]
+    mappings.apply_mapping(log, made["mapping_id"])
+    result = workspace.variants(log)
+    assert result["activity_mapping"]["events_relabeled"] == 4
+    assert result["activity_mapping"]["repeats_collapsed"] == 1
+    assert {tuple(v["path"]): v["cases"] for v in result["variants"]} == {
+        ("Open form", "Enter data", "Submit", "Approve"): 2,
+        ("Open form", "Enter data", "Submit", "Reject"): 1}
+    identity = mappings.create(log, {"name": "Identity", "groups": [
+        {"label": "Type name", "activities": ["Type name", "Type address"]}]})
+    mappings.apply_mapping(log, identity["mapping_id"])
+    assert workspace.variants(log)["activity_mapping"]["events_relabeled"] == 2
+
+
 def test_without_collapsing_repeats_each_event_keeps_its_place():
     log = _log()
     keep = mappings.create(log, {**ENTER, "collapse_repeats": False, "name": "Keep"})
