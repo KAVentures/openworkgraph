@@ -8142,7 +8142,7 @@
         const r=await (await api('/v1/event-logs/petri-soundness',{method:'POST',headers:{'Content-Type':'application/xml'},body:net.body})).json();
         if(lastNet!==net||state.generation!==net.generation)return;
         const verdict=v=>v===true?'Verified':v===false?'Failed':'Inconclusive';
-        soundStatus.textContent='Soundness: '+verdict(r.sound)+'. '+number(r.reachable_markings)+' reachable markings found. '+(r.complete?'Complete exploration.':'Exploration stopped at '+r.limit.replaceAll('_',' ')+'.');
+        soundStatus.textContent='Soundness: '+verdict(r.sound)+'. '+Number(r.reachable_markings).toLocaleString()+' reachable markings found. '+(r.complete?'Complete exploration.':'Exploration stopped at '+r.limit.replaceAll('_',' ')+'.');
         soundOut.appendChild(table(['Property','Result'],[
           ['Workflow-net structure',verdict(r.workflow_net_structure)],
           ['Final marking reachable',verdict(r.final_reachable)],
