@@ -10673,6 +10673,8 @@
       if(values.metric==='sla_breach_rate'){if(!(hours>0))throw new Error('Enter the SLA in hours.');when.sla_seconds=Math.round(hours*3600);}
       return {name,when};
     }
+    if(['contains_activity','lacks_activity'].includes(values.condition)&&
+       (!values.activity||Array.from(values.activity).length>200))throw new Error('Choose an activity label of 1 to 200 characters.');
     const when={kind:'cases',condition:values.condition};
     const minimum=Number(values.minimumCases??1);
     if(!Number.isInteger(minimum)||minimum<1||minimum>1000000000)throw new Error('Enter a whole number of matching cases from 1 to 1,000,000,000.');
@@ -10775,6 +10777,33 @@
       show(fields.hours,k?metric.value==='sla_breach_rate':['duration_over','open_longer_than'].includes(condition.value));
       show(fields.activity,!k&&['contains_activity','lacks_activity'].includes(condition.value));show(fields.ends,!k&&condition.value==='open_longer_than');};
     kind.onchange=condition.onchange=metric.onchange=sync;sync();
+    const activityExact=input('owgSignalActivityExact','text','Exact activity label (optional)');activityExact.maxLength=400;
+    const activityLookup=activityLabelLookup(activityExact,{id:part=>'owgSignalActivity'+part,subject:'signal activity'});
+    const activityNote=el('div','An exact label overrides the suggestion; matching is literal.','muted');
+    fields.activity.append(field('Exact signal activity',activityExact),activityLookup.wrap,activityNote);
+    let activitySuggestion=activity.value,addedActivity=null;
+    activityExact.addEventListener('input',()=>{
+      activityLookup.reset();
+      if(addedActivity){addedActivity.remove();addedActivity=null;}
+      const value=activityExact.value;
+      if(value&&Array.from(value).length<=200){
+        if(!Array.from(activity.options).some(option=>option.value===value)){
+          addedActivity=document.createElement('option');addedActivity.value=value;addedActivity.textContent=value;activity.appendChild(addedActivity);
+        }
+        activity.value=value;activityNote.textContent='An exact label overrides the suggestion; matching is literal.';
+      }else{
+        activity.value=value?'':activitySuggestion;
+        activityNote.textContent=value?'Activity labels must have at most 200 characters.':'An exact label overrides the suggestion; matching is literal.';
+      }
+      activity.dispatchEvent(new Event('input',{bubbles:true}));
+    });
+    activity.addEventListener('change',()=>{
+      const selected=activity.value;
+      if(addedActivity){addedActivity.remove();addedActivity=null;}
+      if(Array.from(activity.options).some(option=>option.value===selected))activitySuggestion=selected;
+      activity.value=activitySuggestion;activityExact.value='';activityLookup.reset();
+      activityNote.textContent='An exact label overrides the suggestion; matching is literal.';
+    });
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Name',name),scopeField,field('Watch',kind),...Object.values(fields),preview,add);
     const rules=el('div');rules.id='owgSignalRules';
     const message=el('div',null,'muted');message.id='owgSignalStatus';message.setAttribute('role','status');
