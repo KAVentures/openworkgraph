@@ -924,10 +924,11 @@ def resolve(pack: dict[str, Any], mapping: dict[str, dict[str, str]], params: di
             continue
         if resolved["object_type"] in modelled:
             arcs.append(resolved)
-    # The claims pack explicitly discloses every unmapped optional intake/receipt
-    # activity. Preserve the existing per-definition not_applicable contract
-    # for previously shipped packs, whose consumers expect only omitted rules.
-    if pack["pack_id"] == "insurance_claims":
+    # These packs explicitly disclose every unmapped optional activity, even
+    # when several roles occur in one omitted definition. Preserve the existing
+    # per-definition contract for previously shipped packs.
+    if pack["pack_id"] in {"insurance_claims", "manufacturing_quality",
+                           "supplier_qualification", "financial_close"}:
         reported_missing = {row["unmapped_role"] for row in out["not_applicable"]}
         for index, activity in enumerate(pack["activities"]):
             role = activity["role"]
