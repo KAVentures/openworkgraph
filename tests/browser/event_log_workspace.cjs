@@ -1153,7 +1153,7 @@ const path=require('node:path');
    await page.addScriptTag({content:axeSource});
    const arithmeticAxe=await page.evaluate(()=>axe.run(document.querySelector('#owgEventLogAnalysis'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(arithmeticAxe.violations,[]);
-   await page.locator('#owgPredictEnds').fill('Close');await page.locator('#owgPredictOutcome').selectOption('duration_over');
+   await page.locator('#owgPredictEnds').fill('Close');await page.locator('#owgPredictAddEnd').click();await page.locator('#owgPredictOutcome').selectOption('duration_over');
    await page.locator('#owgPredictHours').fill('5');await page.locator('#owgPredictRun').click();
    await page.locator('#owgPredictResults').getByText('open cases;').waitFor();
    const predictText=await page.locator('#owgPredictResults').textContent();
