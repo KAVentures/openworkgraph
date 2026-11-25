@@ -26,10 +26,11 @@ from typing import Any
 
 from . import event_log_cohorts as cohorts
 from . import event_log_workspace as workspace
+from .event_log_json_path import attribute_pointer
 
 MAX_ACTIVITIES = 100
 MAX_TRANSITIONS = 25
-_ATTRIBUTE = re.compile(r"^[^\"\\\x00-\x1f]{1,120}$")
+_ATTRIBUTE = re.compile(r"^[^\x00-\x1f]{1,120}$")
 _OFFSET = r"([zZ]|[+-][0-9]{2}:?[0-9]{2})$"
 MODES = ("auto", "lifecycle", "end_attribute")
 
@@ -70,8 +71,8 @@ def _hotspot_cases(conn, page: _HotspotPage, clock: dict[str, Any] | None) -> di
 
 def _path(name: str) -> str:
     if not _ATTRIBUTE.match(name or ""):
-        raise workspace.EventLogWorkspaceError("Attribute names are 1–120 characters without quotes or backslashes")
-    return '$."' + name + '"'
+        raise workspace.EventLogWorkspaceError("Attribute names are 1–120 characters without control characters")
+    return attribute_pointer(name)
 
 
 def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto",

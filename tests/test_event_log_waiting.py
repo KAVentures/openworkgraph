@@ -4,6 +4,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 import os
+import csv
+import io
 from pathlib import Path
 import subprocess
 import sys
@@ -107,7 +109,7 @@ def test_end_time_attribute_with_offsets_and_bad_values():
 
 def test_settings_validation_and_cohorts():
     log = _lifecycle_log()
-    for bad in ({"mode": "fast"}, {"mode": "end_attribute"}, {"end_attribute": 'x"y'}, {"lifecycle_attribute": ""}):
+    for bad in ({"mode": "fast"}, {"mode": "end_attribute"}, {"end_attribute": "bad\x01name"}, {"lifecycle_attribute": ""}):
         with pytest.raises(workspace.EventLogWorkspaceError):
             waiting.waiting_time(log, **bad)
     only = waiting.waiting_time(log, cohort={"activity": "Close"})
@@ -179,3 +181,32 @@ def test_csv_attribute_columns_are_kept_and_bounded():
     plain = workspace.import_log(BytesIO(text.encode()), name="w", source_format="csv", mapping={
         "case_column": "case", "activity_column": "activity", "timestamp_column": "time"})
     assert plain["events"] == 1
+
+
+@pytest.mark.parametrize("attribute", ['finish"time', r'finish\time', 'finish/time', 'finish~time', 'finish.time'])
+def test_end_time_uses_literal_attribute_name(attribute):
+    data = io.StringIO(newline="")
+    writer = csv.writer(data)
+    writer.writerow(["case", "activity", "time", attribute])
+    writer.writerow(["a", "Work", _at(0, 0), _at(0, 2)])
+    log = workspace.import_log(BytesIO(data.getvalue().encode()), name="literal", source_format="csv", mapping={
+        "case_column": "case", "activity_column": "activity", "timestamp_column": "time",
+        "attribute_columns": [attribute]})["log_id"]
+    result = waiting.waiting_time(log, end_attribute=attribute)
+    assert result["available"]
+    assert result["activities"][0]["processing"]["median_seconds"] == 7200
+
+
+def test_lifecycle_uses_literal_attribute_name():
+    attribute = 'stage/"~\\name'
+    data = io.StringIO(newline="")
+    writer = csv.writer(data)
+    writer.writerow(["case", "activity", "time", attribute])
+    writer.writerow(["a", "Work", _at(0, 0), "start"])
+    writer.writerow(["a", "Work", _at(0, 2), "complete"])
+    log = workspace.import_log(BytesIO(data.getvalue().encode()), name="literal", source_format="csv", mapping={
+        "case_column": "case", "activity_column": "activity", "timestamp_column": "time",
+        "attribute_columns": [attribute]})["log_id"]
+    result = waiting.waiting_time(log, lifecycle_attribute=attribute)
+    assert result["available"] and result["mode_used"] == "lifecycle"
+    assert result["activities"][0]["processing"]["median_seconds"] == 7200
