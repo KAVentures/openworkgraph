@@ -89,3 +89,29 @@ performance.
 Regression coverage includes exhaustive binary-label assignments, paired
 baseline gaps, range boundaries, missing observations, an all-open population,
 and real retained-log append/backfill integration.
+
+## Prospective model comparison and proper scores
+
+The snapshot evaluation also returns `paired_remaining_time_population`.
+For each frozen valid model/naive median pair, the absolute-error difference
+is bounded across all possible nonnegative completion times (or times at
+least the elapsed observation horizon for a still-open case). This difference
+is monotone between the two medians and constant outside; its extrema are
+attainable at the censoring boundary or beyond both medians. Thus even with
+unfinished cases, the paired mean difference has finite sharp identification
+bounds. Negative favors OWG. Better/worse/tied case count bounds are separate
+marginal bounds, not necessarily simultaneously attainable. Missing pairs
+are excluded and counted. A resolved sign applies only to that frozen paired
+population, conditional on complete observation, not to future cases.
+
+`proper_remaining_time_scores` reports pinball loss at the frozen 10th, 50th
+and 90th percentiles, and the central 80% interval score (width plus ten times
+the distance outside the interval). Lower is better; narrow but inaccurate
+intervals are penalized, as are very wide intervals. Completed scores and
+whole eligible-population lower bounds are distinct. For still-open cases
+the minimum possible penalty increases when the censoring time passes the
+prediction or interval upper end. Unknown cases contribute only the minimum
+possible score (zero pinball or interval width), not an imputed completion.
+Upper bounds remain unknown until all eligible cases are observed. Invalid
+estimates and absent pairs are disclosed. No new stored data, threshold
+selection, execution authorization, or statistical confidence claim is added.

@@ -11694,6 +11694,32 @@
             if(paired)parts.push(el('div','Paired time comparison: '+paired.paired_cases+' finished cases with both estimates · '+
               duration(paired.model_mae_seconds)+' OWG vs '+duration(paired.baseline_mae_seconds)+' naive error · '+
               paired.model_better_cases+' better, '+paired.baseline_better_cases+' worse, '+paired.tied_cases+' tied.'));
+            const pop=e.paired_remaining_time_population;
+            if(pop&&pop.paired_cases){
+              const signed=v=>v===null?'—':(v<0?'−':v>0?'+':'')+duration(Math.abs(v));
+              parts.push(el('div','Whole paired population: '+pop.paired_cases+' valid pairs, '+pop.cases_without_valid_pair+
+                ' without a valid pair. Eventual OWG minus naive mean absolute error: '+
+                signed(pop.eventual_mean_absolute_error_difference_lower_seconds)+' to '+
+                signed(pop.eventual_mean_absolute_error_difference_upper_seconds)+
+                ' (negative favors OWG). Model better in '+pop.model_better_cases_lower+'–'+pop.model_better_cases_upper+
+                ' cases; baseline better in '+pop.baseline_better_cases_lower+'–'+pop.baseline_better_cases_upper+
+                '. These are identification bounds, not confidence intervals.'));
+            }
+            const proper=e.proper_remaining_time_scores;
+            if(proper&&proper.interval_80.eligible_cases){
+              const it=proper.interval_80;
+              parts.push(el('div','80% interval score (lower is better): '+(it.finished_mean_interval_score_seconds===null?'no finished scores':duration(it.finished_mean_interval_score_seconds))+
+                '; population minimum '+duration(it.eventual_mean_interval_score_lower_seconds)+
+                (it.eventual_mean_interval_score_upper_seconds===null?', upper bound unknown':' (all eligible cases finished)')+
+                '. Mean frozen range width '+duration(it.mean_frozen_width_seconds)+
+                '; '+it.finished_early_misses+' early misses, '+it.finished_late_misses+' late misses, '+it.censored_known_late_misses+' open known late misses. '+it.ineligible_cases+' ineligible cases.'));
+              const quantiles=el('ul');
+              for(const q of proper.quantiles)quantiles.appendChild(el('li','P'+Math.round(q.quantile*100)+
+                ' pinball loss: '+(q.finished_mean_pinball_seconds===null?'—':duration(q.finished_mean_pinball_seconds))+
+                ' finished; population minimum '+(q.eventual_mean_pinball_lower_seconds===null?'—':duration(q.eventual_mean_pinball_lower_seconds))+
+                ' ('+q.eligible_cases+' eligible, '+q.ineligible_cases+' ineligible).'));
+              parts.push(quantiles);
+            }
             const ob=e.paired_outcome_bounds;
             if(ob)parts.push(el('div','Paired outcome risk: '+ob.known_outcome_cases+' known and '+ob.unknown_outcome_cases+
               ' unknown outcomes. Eventual OWG minus base-rate Brier difference between '+
