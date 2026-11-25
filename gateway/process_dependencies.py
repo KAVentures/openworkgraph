@@ -234,6 +234,13 @@ class ProcessDependencies:
             'Recheck the exact basis against the authenticated shared process portal before use. '
             'The runtime does not enforce this sidecar or execute prerequisite processes. '
             'The snapshot grants no business execution permissions.\n')
+        from pathlib import Path
+        files['check_dependency_basis.py']=(Path(__file__).resolve().parents[1]/
+            'shared/process_agent_templates/check_dependency_basis.py.txt').read_text(encoding='utf-8')
+        files['README.md'] += ('\nRun python check_dependency_basis.py --manifest-sha256 YOUR_INDEPENDENT_PIN '
+            '--catalog-url YOUR_CATALOG_URL using the existing catalog-read credential. '
+            'A nonzero exit code means the basis was not established. '
+            'This explicit preflight must be repeated as needed; it is not automatically invoked by execute.py.\n')
         spec=json.loads(files['workflow.spec.json'])
         files['release-manifest.json']=create_manifest(files,spec)
         out=BytesIO()
