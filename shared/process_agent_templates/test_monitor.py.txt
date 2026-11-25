@@ -43,6 +43,39 @@ class MonitoringCases(unittest.TestCase):
             self.assertNotIn(secret, json.dumps(value))
         self.assertNotIn('done', [s['step_id'] for s in run['steps']])
 
+    def test_dependency_bound_journal_requires_exact_scoped_checks(self):
+        self.spec['organization_catalog_reference']={'organization_id':'synthetic-org'}
+        self.spec['dependency_build_basis_sha256']='d'*64
+        self.start['spec_sha256']=digest(self.spec)
+        def check(number,purpose,attempt=None,current=True):
+            return self.row('catalog_checked',current_independent_design_review=current,
+                dependency_build_basis_sha256='d'*64,dependency_check_number=number,
+                dependency_check_purpose=purpose,dependency_check_attempt=attempt)
+        rows=[self.start,check(1,'initial'),check(2,'refresh'),check(3,'precondition',1),
+            self.row('precondition_pending',activity_id='resolve',attempt=1),
+            check(4,'action',1),*self.attempt(),check(5,'action',2),
+            *self.attempt('readback',2),check(6,'completion'),self.finish()]
+        self.assertEqual(report(self.spec,rows,'Run')['runs'][0]['status'],'succeeded')
+        for purpose in ('initial','precondition','action','completion'):
+            variant=deepcopy(rows)
+            i=next(i for i,r in enumerate(variant) if r.get('dependency_check_purpose')==purpose)
+            variant.pop(i)
+            for number,r in enumerate((r for r in variant if r['phase']=='catalog_checked'),1):
+                r['dependency_check_number']=number
+            with self.subTest(purpose=purpose),self.assertRaises(ImplementationError):
+                report(self.spec,variant,'Missing checkpoint')
+        for field,value in [('dependency_build_basis_sha256','e'*64),('dependency_check_attempt',2),
+                            ('dependency_check_number',7),('dependency_check_purpose','refresh'),
+                            ('current_independent_design_review',False)]:
+            variant=deepcopy(rows);variant[5][field]=value
+            with self.subTest(field=field),self.assertRaises(ImplementationError):
+                report(self.spec,variant,'Changed checkpoint')
+        early=[self.start,check(1,'initial',current=False),
+            self.row('stopped_before_tools',reason='unavailable')]
+        self.assertEqual(report(self.spec,early,'Stopped')['runs'][0]['status'],'handed_to_human')
+        failed=deepcopy(rows);failed[-2]['current_independent_design_review']=False;failed[-1]=self.finish(False)
+        self.assertEqual(report(self.spec,failed,'Changed basis')['runs'][0]['status'],'handed_to_human')
+
     def test_interrupted_attempt_stays_running_with_unknown_tool_result(self):
         value = report(self.spec, [self.start, self.row('attempt_pending', activity_id='resolve', attempt=1)], 'Run')
         run = value['runs'][0]
