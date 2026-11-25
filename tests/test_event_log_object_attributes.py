@@ -184,6 +184,32 @@ def test_object_browser_finds_zero_event_objects_and_pins_pages():
         attributes.browse_objects(log, 'order', 'id0', after=first['next_after'], revision=first['log_revision'])
 
 
+def test_object_event_history_keeps_raw_events_qualifiers_and_revision():
+    doc = _orders()
+    doc['events'] = [{'id': f'e{n:03}', 'type': f'Activity {n:03}', 'time': '2024-01-01T00:00:00Z',
+                      'relationships': [{'objectId': 'o1', 'qualifier': 'b'}, {'objectId': 'o1', 'qualifier': 'a'}]}
+                     for n in range(115)]
+    log = _import(doc)['log_id']
+    first = attributes.object_events(log, 'order', 'o1', limit=50)
+    second = attributes.object_events(log, 'order', 'o1', offset=50, limit=50, revision=first['log_revision'])
+    third = attributes.object_events(log, 'order', 'o1', offset=100, limit=50, revision=first['log_revision'])
+    assert first['total_events'] == 115 and third['next_offset'] is None
+    assert [e['event_id'] for page in (first, second, third) for e in page['events']] == [f'e{n:03}' for n in range(115)]
+    assert first['events'][0] == {'event_id': 'e000', 'activity': 'Activity 000',
+                                 'timestamp': '2024-01-01T00:00:00Z', 'qualifiers': ['a', 'b']}
+    assert attributes.object_events(log, 'order', 'o2')['events'] == []
+    with pytest.raises(workspace.EventLogWorkspaceError, match='selected type'):
+        attributes.object_events(log, 'item', 'o1')
+    with pytest.raises(workspace.EventLogWorkspaceError, match='first page'):
+        attributes.object_events(log, 'order', 'o1', offset=50)
+    newer = {'objectTypes': [], 'eventTypes': [], 'objects': [{'id': 'new', 'type': 'order'}],
+             'events': [{'id': 'new-event', 'type': 'New', 'time': '2024-02-01T00:00:00Z',
+                         'relationships': [{'objectId': 'new', 'qualifier': ''}]}]}
+    workspace.append_log(log, BytesIO(json.dumps(newer).encode()), source_format='ocel')
+    with pytest.raises(workspace.EventLogWorkspaceError, match='changed'):
+        attributes.object_events(log, 'order', 'o1', offset=50, revision=first['log_revision'])
+
+
 @pytest.mark.parametrize("fmt", ["ocel", "ocelxml"])
 def test_exports_round_trip_the_history_and_the_stored_value(fmt):
     log = _import(_orders())["log_id"]
@@ -271,6 +297,12 @@ with TestClient(app) as client:
     browser = client.get(browser_path, params={"object_type": "order"}, headers=headers)
     assert browser.status_code == 200 and browser.headers["cache-control"] == "no-store"
     assert browser.json()["objects"] == [{"object_id": "o1", "linked_events": 1, "timed_values": 2}]
+    event_path = "/v1/event-logs/" + made.json()["log_id"] + "/object-event-history"
+    assert client.get(event_path, params={"object_type": "order", "object_id": "o1"}, headers=bearer).status_code in (401, 403)
+    events = client.get(event_path, params={"object_type": "order", "object_id": "o1"}, headers=headers)
+    assert events.status_code == 200 and events.headers["cache-control"] == "no-store"
+    assert events.json()['events'][0]['qualifiers'] == ['']
+    assert client.get(event_path, params={"object_type": "other", "object_id": "o1"}, headers=headers).status_code == 422
     assert client.get(path + "?object_id=nope", headers=headers).status_code == 422
     assert client.get("/v1/event-logs/log_0000000000000000/object-attributes", headers=headers).status_code in (404, 422)
 '''
