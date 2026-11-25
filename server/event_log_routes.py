@@ -1600,6 +1600,22 @@ def event_log_unusual_cases(request: Request, log_id: str, limit: int = Query(de
     return _respond(unusual.unusual_cases, log_id, case_type, limit=limit, cohort=cohort, signal=signal, offset=offset)
 
 
+@router.get("/v1/event-logs/{log_id}/unusual-cases.csv")
+def event_log_unusual_cases_csv(request: Request, log_id: str, signal: str | None = Query(default=None, max_length=32),
+                                case_type: str | None = Query(default=None, max_length=200),
+                                cohort: dict = Depends(_case_filter)):
+    """Every unusual case, not only one page, as a CSV worklist."""
+    from . import event_log_unusual_cases as unusual
+    _require_dashboard(request)
+    try:
+        text, meta = unusual.unusual_cases_csv(log_id, case_type, cohort=cohort, signal=signal)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(text, media_type="text/csv; charset=utf-8", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-unusual-cases.csv"',
+        "X-OWG-Unusual-Cases": f"rows={meta['rows']}; unusual={meta['unusual_cases']}; cases={meta['cases']}"})
+
+
 @router.get("/v1/event-logs/{log_id}/due-dates")
 def event_log_due_dates(request: Request, log_id: str, due_activity: str = Query(min_length=1, max_length=500),
                         due_attribute: str | None = Query(default=None, max_length=200),
