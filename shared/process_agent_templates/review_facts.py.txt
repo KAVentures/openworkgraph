@@ -1,0 +1,155 @@
+"""Offline business-fact scenarios for the exact reviewed workflow.
+
+Case input is a caller-declared fact object, never authenticated source data.
+No models, source reads, business tools, execution plans or grants are created.
+"""
+from __future__ import annotations
+
+import argparse
+from collections import Counter
+from datetime import date
+import json
+from pathlib import Path
+import re
+
+from evaluate import validate_suite
+from execute import ImplementationError, digest, load_object, reference
+from process_rule_conditions import evaluate_predicate, validate_facts
+from route_candidates import _search
+from runtime import load_spec, validate_spec
+
+FORMAT='openworkgraph.declared-fact-route-review.v1'
+MAX_INPUT_BYTES=262144
+MAX_REPORT_BYTES=2*1024*1024
+MAX_CASES=50
+MAX_BATCH_WORK=500000
+
+
+def _as_of(value):
+    if type(value) is not str or not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}',value):
+        raise ImplementationError('Choose an explicit scenario date as YYYY-MM-DD')
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        raise ImplementationError('Choose a valid scenario date') from None
+    return value
+
+
+def _fact_checks(spec,facts,as_of_date):
+    """Use the shared rule/decision evaluators, not caller-provided statuses."""
+    validate_spec(spec)
+    validate_facts(facts)
+    model=spec['process_model']
+    table_rule_ids={row['rule_id'] for table in model.get('decision_tables',[]) for row in table['rows']}
+    table_activities={table['decision_activity_id'] for table in model.get('decision_tables',[])}
+    external_rule_ids={e.get('rule_id') for e in model['transitions'] if e['source'] not in table_activities}
+    rules=[]
+    for rule in model['business_rules']:
+        if not rule.get('predicate') or (rule['id'] in table_rule_ids and rule['id'] not in external_rule_ids):
+            continue
+        status=evaluate_predicate(rule['predicate'],facts)['status'] if rule['user_confirmed'] else 'unconfirmed'
+        rules.append({'rule_id':rule['id'],'status':status})
+    tables=[]
+    if model.get('decision_tables'):
+        from owg_model.process_model import ProcessModel
+        from owg_model.process_decision_tables import evaluate_decisions
+        for row in evaluate_decisions(ProcessModel.model_validate(model),facts,as_of_date):
+            tables.append({k:row[k] for k in ('table_id','status','selected_target_activity_id')})
+    return rules,tables
+
+
+def _case_review(spec,case,as_of_date,remaining_work):
+    rules,tables=_fact_checks(spec,case['input'],as_of_date)
+    if remaining_work<=0:
+        return {'case_id':case['id'],'category':case['category'],'search_status':'batch_work_limit',
+            'search_complete':False,'work_count':0,'expected_status':case['expected']['status'],
+            'matches_reviewed_expectation':None,'reason':'batch_work_limit','review_required':True,
+            'rule_checks':rules,'decision_checks':tables,'candidate_examples':[]}
+    search=_search(spec,rules,tables,max_work=min(remaining_work,25000))
+    expected=case['expected'];selected=search['unique_activity_ids']
+    matched=None
+    if not search['search_complete']:
+        reason='search_incomplete'
+    elif selected is not None:
+        matched=expected['status']=='proposal' and selected in expected['accepted_routes']
+        reason='matches_reviewed_expectation' if matched else (
+            'expected_clarification' if expected['status']=='needs_clarification' else 'unexpected_route')
+    else:
+        matched=expected['status']=='needs_clarification'
+        reason='matches_reviewed_expectation' if matched else 'unexpected_clarification'
+    return {'case_id':case['id'],'category':case['category'],'search_status':search['status'],
+        'search_complete':search['search_complete'],'work_count':search['work_count'],
+        'expected_status':expected['status'],'matches_reviewed_expectation':matched,
+        'reason':reason,'review_required':matched is not True,
+        'supported_schedule_count':search['supported_schedule_count'],
+        'unresolved_schedule_count':search['unresolved_schedule_count'],
+        'limit_reasons':search['limit_reasons'],
+        'rule_checks':rules,'decision_checks':tables,'candidate_examples':search['examples']}
+
+
+def review_scenarios(spec,suite,*,as_of_date):
+    """Compare bounded scenario results with customer-reviewed expectations."""
+    as_of_date=_as_of(as_of_date)
+    if not isinstance(suite,dict) or len(json.dumps(suite,allow_nan=False).encode())>MAX_INPUT_BYTES:
+        raise ImplementationError('Choose a bounded reviewed fact scenario suite')
+    cases=validate_suite(spec,suite,allow_current_source_rules=True)
+    if len(cases)>MAX_CASES:
+        raise ImplementationError('Choose at most 50 reviewed scenarios')
+    # Validate all facts before evaluating any candidate. This is deliberately
+    # distinct from a live-source suite; the input object is the fact object.
+    for case in cases:
+        validate_facts(case['input'])
+    rows=[];remaining=MAX_BATCH_WORK
+    for case in cases:
+        row=_case_review(spec,case,as_of_date,remaining)
+        remaining-=row['work_count']
+        rows.append(row)
+    categories={}
+    for row in rows:
+        categories.setdefault(row['category'],Counter())[row['reason']]+=1
+    report={'format':FORMAT,'process_reference':reference(spec),
+        'spec_sha256':digest(spec),'suite_sha256':digest(suite),'as_of_date':as_of_date,
+        'case_count':len(rows),'matching_case_count':sum(r['matches_reviewed_expectation'] is True for r in rows),
+        'mismatching_case_count':sum(r['matches_reviewed_expectation'] is False for r in rows),
+        'unresolved_case_count':sum(r['matches_reviewed_expectation'] is None for r in rows),
+        'search_work_count':MAX_BATCH_WORK-remaining,
+        'reason_counts':dict(sorted(Counter(r['reason'] for r in rows).items())),
+        'by_category':{k:dict(sorted(v.items())) for k,v in sorted(categories.items())},
+        'cases':rows,'review_required':any(r['review_required'] for r in rows),
+        'facts_authoritativeness_verified':False,'historical_case_truth_verified':False,
+        'business_policy_compliance_verified':False,'model_invoked':False,
+        'source_reads_performed':False,'business_tools_called':False,
+        'execution_plan_created':False,'execution_authorized':False,
+        'case_values_included':False,
+        'interpretation':'Caller-declared hypothetical facts at an explicit date. Derived route candidates are design diagnostics, not current-source proposals or authorization. Incomplete search is unknown even if a clarification was expected.'}
+    if len(json.dumps(report,allow_nan=False).encode())>MAX_REPORT_BYTES:
+        raise ImplementationError('Scenario report exceeds the bounded output size; narrow the suite')
+    return report
+
+
+def main(argv=None):
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--cases',required=True)
+    parser.add_argument('--as-of-date',required=True)
+    parser.add_argument('--output',required=True)
+    parser.add_argument('--confirm-declared-fact-review',action='store_true')
+    args=parser.parse_args(argv)
+    if not args.confirm_declared_fact_review or Path(args.output).exists():
+        raise ImplementationError('Confirm local declared-fact review and select a new output file')
+    result=review_scenarios(load_spec(),load_object(args.cases,limit=MAX_INPUT_BYTES),as_of_date=args.as_of_date)
+    # Serialize before opening the output to avoid creating a partial report
+    # because of an invalid or oversized result.
+    raw=json.dumps(result,indent=2,ensure_ascii=False,allow_nan=False)
+    if len(raw.encode('utf-8'))>MAX_REPORT_BYTES:
+        raise ImplementationError('Scenario report exceeds the bounded output size; narrow the suite')
+    with Path(args.output).open('x',encoding='utf-8') as stream:
+        stream.write(raw+'\n')
+    print(json.dumps({k:result[k] for k in ('case_count','matching_case_count',
+        'mismatching_case_count','unresolved_case_count','review_required')},sort_keys=True))
+    return 2 if result['review_required'] else 0
+
+
+if __name__=='__main__':
+    try:raise SystemExit(main())
+    except (ImplementationError,ValueError,TypeError,OSError,RecursionError):
+        raise SystemExit('Declared-fact review refused; check exact suite, date, bounds and output path.') from None
