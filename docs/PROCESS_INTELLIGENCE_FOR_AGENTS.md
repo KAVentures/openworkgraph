@@ -76,7 +76,7 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 | `get_process_heuristics_net` | The heuristics-miner model: arrows whose dependency is at or above `dependency_threshold`, splits and joins marked AND or XOR, and self- and two-step loops (aggregates level). See "Heuristics net" in EVENT_LOG_WORKSPACE.md. |
 | `get_process_object_map` | The object-centric map for logs with several object types: per type its activities, which follows which for the same object, start and end activities; how often objects of two types share events; activities touching several types. Anything seen for fewer than 5 objects is withheld. | aggregates |
 | `get_process_footprints` | Footprint matrices (→, ←, ||, #) from the recorded cases and from the discovered model, the share of cells that agree, and the orderings only the log has (with case counts) or only the model allows (aggregates level). See "Footprints" in EVENT_LOG_WORKSPACE.md. |
-| `get_process_data_quality` | How far the log can be trusted: accepted and rejected rows by reason over all imports and appends, duplicates, shared timestamps, events without resource, future-dated events, single-event cases, attribute coverage, content integrity and the per-batch trend. Also counts events dated far outside the bulk of the log (`stray_dates`) and suggests a case filter that leaves them out. | aggregates |
+| `get_process_data_quality` | How far the log can be trusted: accepted and rejected rows by reason over all imports and appends, duplicates, shared timestamps, events without resource, future-dated events, single-event cases, attribute coverage, content integrity and the per-batch trend. | aggregates |
 | `get_process_model_quality` | Fitness, precision, their F-score, generalization and simplicity of the discovered net at several noise levels (default 0, 0.1, 0.2, 0.3, 0.5), and the level with the best F-score, to choose a noise level before asking for the model (aggregates level). See "Model quality" in EVENT_LOG_WORKSPACE.md. |
 | `get_process_deviations` | Optimal alignments of the cases on the discovered net at a noise level: alignment fitness, the steps cases took that the model does not allow there and the steps it requires that cases skipped (with case counts), and the step-by-step explanation of the most common non-fitting variants (aggregates level). See "Step-by-step explanation (alignments)" in EVENT_LOG_WORKSPACE.md. |
 | `list_process_reference_nets` | The reference process models (Petri nets) the owner saved for the log, by id and name; the nets themselves are not returned. | aggregates |
@@ -112,6 +112,9 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 All tools except `tag_process_cases` are read-only. All are idempotent. Their answers repeat that
 durations are elapsed time between recorded events, that associations are not causes, and that
 nothing authorizes an action.
+
+`get_process_data_quality` also returns `stray_dates`: events dated far outside the bulk of the log (placeholder or
+mistyped dates) and a `suggested_case_filter` that leaves only those cases out.
 
 ## HTTP
 
