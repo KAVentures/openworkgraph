@@ -22,3 +22,11 @@ No model or seed is selected using the holdouts, no causal or completion
 claim is made, and no execution or source-system action occurs. Existing
 single-cutoff validation remains unchanged. Full CI and browser acceptance
 remain required.
+
+Each split also includes separate observed duration, simulated range and
+within-split seed spread per metric. Spread is withheld with fewer than
+two resolved seeds or any unresolved seed. Observed cutoff, case counts
+and duration summaries must agree across seeds or the review refuses.
+The dashboard exposes the number of simulated cases per run, validates
+distinct shares/seeds before submission, and displays seed sensitivity
+separately from changes across observed periods.
