@@ -1,7 +1,7 @@
 """Current-record declared route invariants. No caller facts, tool access or grants."""
 from datetime import datetime, timezone
 
-from execute import ImplementationError, pointer
+from execute import ImplementationError, resolve_source_record
 from process_source_state import SOURCE_PATHS, SOURCE_TYPES, facts_from_receipt
 
 
@@ -27,7 +27,7 @@ def _dependent(spec):
     return spec.get('decision_table_contract')=='openworkgraph.current-source-dependent-decision.v1'
 
 
-def decision_bindings(spec, routes, case, bindings):
+def decision_bindings(spec, routes, case, bindings, *, allow_missing=False):
     """A reviewed table uses ONE selected record snapshot for every competing row."""
     from owg_model.process_model import ProcessModel
     model=ProcessModel.model_validate(spec['process_model'])
@@ -73,10 +73,8 @@ def decision_bindings(spec, routes, case, bindings):
         # require its case-specific record reference on this route.
         if table.id not in needed:
             continue
-        ref=pointer(case,row['resource_ref_pointer'])
-        import re
-        if not isinstance(ref,str) or re.fullmatch(r'owg:r:[a-f0-9]{32}',ref) is None:
-            raise ImplementationError('Select an exact observed record reference for the entire table')
+        ref=resolve_source_record(case,row['resource_ref_pointer'],allow_missing=allow_missing)
+        if ref is None:continue
         mapped[table.id]={'table_id':table.id,'source_type':row['source_type'],'resource_ref':ref}
     requests=[];missing=[]
     if not _dependent(spec):
