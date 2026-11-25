@@ -1,0 +1,82 @@
+"""Verify a pinned dependency-aware release and recheck its live catalog basis.
+
+Explicit read-only preflight; this does not invoke or wrap the executor.
+Use only a trusted copy of this script and an independently recorded manifest pin.
+"""
+import argparse
+import asyncio
+import hashlib
+import json
+import os
+from pathlib import Path
+from urllib.parse import quote
+
+from execute import ImplementationError, endpoint, _read_json
+from verify_release import _pinned_inventory, _pinned_spec, _unique
+
+
+def load_basis(root, pin):
+    manifest = _pinned_inventory(root, pin)
+    spec = _pinned_spec(root, manifest)
+    expected = manifest['files'].get('dependency-build-basis.json')
+    path = Path(root) / 'dependency-build-basis.json'
+    if not expected or path.is_symlink() or not path.is_file():
+        raise ImplementationError('Dependency-aware release sidecar is required')
+    with path.open('rb') as source:
+        raw = source.read(2097153)
+    if len(raw) > 2097152 or hashlib.sha256(raw).hexdigest() != expected:
+        raise ImplementationError('Dependency sidecar changed or exceeds its bound')
+    basis = json.loads(raw, object_pairs_hook=_unique)
+    if (basis.get('format') != 'openworkgraph.focused-dependency-build-basis.v1'
+            or basis.get('root_workflow_id') != spec['workflow_id']
+            or basis.get('organization_id') != spec.get('organization_catalog_reference', {}).get('organization_id')
+            or basis.get('all_declared_prerequisites_current') is not True
+            or basis.get('execution_authorized') is not False):
+        raise ImplementationError('Dependency sidecar does not match this root specification')
+    roots = [r for r in basis['processes'] if r['workflow_id'] == spec['workflow_id']]
+    if (len(roots) != 1 or roots[0]['current_model']['revision'] != spec['revision']
+            or roots[0]['current_model']['content_sha256'] != spec['content_sha256']):
+        raise ImplementationError('Dependency root revision differs from the specification')
+    digest = basis['basis_sha256']
+    if not isinstance(digest, str) or len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest):
+        raise ImplementationError('Invalid dependency basis pin')
+    return spec, digest
+
+
+async def check(root, pin, catalog_url, *, reader=_read_json, token=None):
+    spec, digest = load_basis(root, pin)
+    base = endpoint(catalog_url)
+    token = token if token is not None else os.environ.get('OWG_EXECUTION_CATALOG_READ_TOKEN')
+    if not token:
+        raise ImplementationError('A separate catalog-read credential is required')
+    state = await reader(base + '/v1/human/processes/' + quote(spec['workflow_id'], safe='') + '/dependencies/build-status',
+                         token, {'revision': spec['revision'], 'basis_sha256': digest})
+    return bool(isinstance(state, dict)
+                and state.get('format') == 'openworkgraph.dependency-build-basis-status.v1'
+                and state.get('organization_id') == spec['organization_catalog_reference']['organization_id']
+                and state.get('workflow_id') == spec['workflow_id']
+                and type(state.get('requested_revision')) is int
+                and state['requested_revision'] == spec['revision']
+                and state.get('requested_basis_sha256') == digest
+                and state.get('status') == 'current'
+                and state.get('current_exact_reviewed_basis') is True
+                and state.get('read_only') is True
+                and state.get('execution_authorized') is False
+                and state.get('business_outcomes_verified') is False)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--manifest-sha256', required=True)
+    parser.add_argument('--catalog-url', required=True)
+    args = parser.parse_args()
+    try:
+        current = asyncio.run(check(Path(__file__).resolve().parent, args.manifest_sha256, args.catalog_url))
+    except Exception:
+        current = False
+    print(json.dumps({'current_exact_reviewed_basis': current, 'execution_authorized': False}))
+    return 0 if current else 2
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
