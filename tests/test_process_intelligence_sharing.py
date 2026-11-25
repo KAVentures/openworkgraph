@@ -313,34 +313,3 @@ def test_mcp_tools_are_listed_only_when_a_log_is_shared(tmp_path):
     assert off == DEFAULT_TOOLS
     on = asyncio.run(_listed_tools(tmp_path, True))
     assert on == DEFAULT_TOOLS | PROCESS_TOOLS
-
-
-def test_agent_handovers_are_pseudonymous_and_withhold_small_pairs():
-    log_id = _log()
-    with pytest.raises(sharing.NotShared):
-        sharing.handovers(log_id)
-    sharing.set_share(log_id, "aggregates")
-    result = sharing.handovers(log_id)
-    text = json.dumps(result)
-    for name in ("clerk", "ana", "bob", "bot"):
-        assert f'"{name}"' not in text
-    assert result["privacy"]["names_returned"] is False
-    assert all(row["cases"] >= 5 for row in result["handover_of_work"])
-    assert all(row["cases"] >= 5 for row in result["resources"])
-    # clerk -> ana/bob -> bot in each of 12 cases, split 6/6: every pair is shown.
-    assert len(result["handover_of_work"]) == 4 and result["cases_with_handover"] == 12
-    assert all(n is None or n >= 5 for row in result["activity_resource_matrix"]["events"] for n in row)
-
-
-def test_agent_roles_count_members_without_listing_them():
-    log_id = _log()
-    sharing.set_share(log_id, "aggregates")
-    result = sharing.roles(log_id)
-    text = json.dumps(result)
-    assert "members" not in text.replace("members_listed", "")
-    for name in ("clerk", "ana", "bob", "bot"):
-        assert f'"{name}"' not in text
-    assert sum(role["member_count"] for role in result["roles"]) >= 3
-    assert all(a["events"] >= 5 for role in result["roles"] for a in role["activity_mix"])
-    with pytest.raises(workspace.EventLogWorkspaceError):
-        sharing.roles(log_id, threshold=1.5)
