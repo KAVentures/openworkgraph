@@ -138,6 +138,18 @@ def report(spec, records, deployment_name):
                     or row.get('policy_document_verified') is not False):
                 _fail()
             table=tables[row['table_id']];first_policy=table.get('hit_policy','UNIQUE')=='FIRST'
+            if spec.get('decision_table_contract')=='openworkgraph.current-source-dependent-decision.v1':
+                required=sorted(d['table_id'] for d in table.get('required_decisions',[]))
+                unresolved=row.get('unresolved_required_decision_table_ids')
+                if (row.get('required_decision_table_ids')!=required or not isinstance(unresolved,list)
+                    or any(not isinstance(d,str) or d not in required for d in unresolved)
+                    or len(unresolved)!=len(set(unresolved))
+                    or row.get('check_purpose') not in {'visited_route','prerequisite_output'}
+                    or bool(unresolved)!=(row.get('status')=='dependency_unresolved')
+                    or (row.get('route_matches') and (unresolved or row.get('selected_target_activity_id') not in
+                        {r['target_activity_id'] for r in table['rows']}))):
+                    _fail()
+
             if first_policy:
                 if row.get('hit_policy')!='FIRST' or row.get('row_precedence')!='declared_row_order':_fail()
                 selected=next((r for r in table['rows'] if r['id']==row.get('selected_row_id')),None)
