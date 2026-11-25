@@ -164,4 +164,72 @@ class SourceEvaluationCases(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.model_calls,[])
 
 
+class DeterministicEvaluationCases(unittest.IsolatedAsyncioTestCase):
+    asyncSetUp=planning_tests.DeterministicSourceRoutes.asyncSetUp
+    source=planning_tests.DeterministicSourceRoutes.source
+    suite=SourceEvaluationCases.suite
+
+    async def test_model_free_batch_reads_each_case_once_and_minimizes_report(self):
+        import sys
+        suite=self.suite(2)
+        suite['cases'][1]['category']='missing_facts'
+        suite['cases'][1]['expected']={'status':'needs_clarification','accepted_routes':[],'review_confirmed':True}
+        async def source(*args):
+            value=await self.source(*args)
+            if len(self.reads)==2:value['source_state_verified']=False
+            return value
+        with patch.dict(sys.modules,{'agent':None,'agents':None}):
+            report,summary=await evaluate_current_sources(self.spec,suite,self.bindings,
+                deterministic=True,source_reads_confirmed=True,source_state_reader=source)
+        self.assertEqual(report['matching_case_count'],2)
+        self.assertEqual(summary['source_receipt_request_count'],2)
+        self.assertFalse(report['model_invoked'])
+        self.assertFalse(report['execution_authorized'])
+        self.assertEqual(report['cases'][0]['deterministic_search_status'],'unique_supported_route')
+        self.assertEqual(report['cases'][1]['deterministic_search_status'],'unresolved_routes')
+        self.assertNotIn(self.case['approved_record'],json.dumps(report))
+
+    async def test_modes_and_consent_refused_before_reads(self):
+        for options in ({'paired':True,'model':'unused'},{'deterministic':True,'model':'unused'},
+                        {'deterministic':True,'paired':True},{'deterministic':True,'source_reads_confirmed':False}):
+            values={'source_reads_confirmed':True,**options}
+            with self.assertRaises(ImplementationError):
+                await evaluate_current_sources(self.spec,self.suite(),self.bindings,
+                    source_state_reader=self.source,**values)
+        self.assertEqual(self.reads,[])
+
+
+@unittest.skipUnless(planning_tests.SDK_AVAILABLE,'Install requirements.txt for paired planning evaluation')
+class PairedEvaluationCases(unittest.IsolatedAsyncioTestCase):
+    asyncSetUp=SourceEvaluationCases.asyncSetUp
+    source=SourceEvaluationCases.source
+    model=SourceEvaluationCases.model
+    suite=SourceEvaluationCases.suite
+    evaluate=SourceEvaluationCases.evaluate
+
+    async def test_paired_same_snapshot_disagreement_and_review_flag(self):
+        # Use the actual SDK model stub; the second plan deliberately asks
+        # for clarification even though the reviewed source route is unique.
+        suite=self.suite()
+        local_only={**self.plan,'status':'needs_clarification','activity_ids':[],
+                    'missing_business_inputs':['Synthetic question']}
+        report,summary=await self.evaluate(suite,paired=True,model=self.model(local_only))
+        paired=report['paired_planning']
+        self.assertEqual(paired['classification_counts'],{'deterministic_only':1})
+        self.assertEqual(paired['deterministic_matching_case_count'],1)
+        self.assertEqual(paired['model_matching_case_count'],0)
+        self.assertTrue(report['review_required'])
+        self.assertTrue(paired['same_per_case_source_receipts'])
+        self.assertEqual(summary['source_receipt_request_count'],1)
+        self.assertEqual(len(self.model_calls),1)
+        self.assertEqual(len(self.reads),1)
+        self.assertNotIn('Synthetic question',json.dumps(report))
+        self.assertNotIn(self.case['approved_record'],json.dumps(report))
+
+    async def test_paired_stale_receipts_cannot_favor_local_planner(self):
+        report,summary=await self.evaluate(paired=True,model=self.model(advance=True))
+        self.assertEqual(report['paired_planning']['classification_counts'],{'neither_matches':1})
+        self.assertTrue(report['review_required'])
+        self.assertEqual(summary['source_receipt_request_count'],1)
+
 if __name__=='__main__':unittest.main()
