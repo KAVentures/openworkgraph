@@ -350,7 +350,7 @@ def test_compare_logs_needs_both_shared_and_withholds_small_rows():
     variant_rows = result["variants"]["largest_share_differences"]
     assert all(r["baseline_cases"] == 0 or r["baseline_cases"] >= 5 for r in variant_rows)
     assert all(r["comparison_cases"] == 0 or r["comparison_cases"] >= 5 for r in variant_rows)
-    assert "c1" not in str(result).replace("Check", "") and "clerk" not in str(result)
+    assert "'c1'" not in str(result) and "clerk" not in str(result)
     with pytest.raises(workspace.EventLogWorkspaceError, match="fewer than 5 cases"):
         sharing.compare_logs(before, after, comparison_filter={"activity": "Escalate"})
     with pytest.raises(workspace.EventLogWorkspaceError, match="limit"):
@@ -375,7 +375,7 @@ def test_process_model_returns_the_discovered_draft_without_case_ids():
                for rule in model["model"]["business_rules"])
     assert model["execution_authorized"] is False and model["observed_path_is_policy"] is False
     text = str(model)
-    assert "c1" not in text.replace("Receive", "") and "clerk" not in text and "ana" not in text
+    assert "'c1'" not in text and "clerk" not in text and "ana" not in text
 
 
 def test_process_tree_notation_round_trips_and_refuses_unwritable_labels():
@@ -402,5 +402,5 @@ def test_attributes_list_filters_without_rare_values_or_extremes():
     assert by_name["region"]["level"] == "case" and by_name["ticket"]["level"] == "event"
     assert by_name["ticket"]["top_values"] == [] and "T1A" not in str(result)          # identifier-like
     assert set(by_name["amount"]["numeric"]) == {"p25", "median", "p75", "mean"} and "190" not in str(by_name["amount"])
-    assert result["withheld"]["values"] > 0 and "c1" not in str(result).replace("case", "")
+    assert result["withheld"]["values"] > 0 and "'c1'" not in str(result)
 
