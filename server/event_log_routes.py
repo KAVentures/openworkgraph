@@ -1241,9 +1241,10 @@ def event_log_object_attribute_history(request: Request, log_id: str,
         object_id: str = Query(min_length=1, max_length=200),
         offset: int = Query(default=0, ge=0, le=2_147_483_647),
         limit: int = Query(default=50, ge=1, le=100),
-        revision: int | None = Query(default=None, ge=0, le=2_147_483_647)):
+        revision: int | None = Query(default=None, ge=0, le=2_147_483_647),
+        attribute: str | None = Query(default=None, min_length=1, max_length=200)):
     _require_dashboard(request)
-    return _respond(object_attributes.object_history, log_id, object_type, object_id, offset, limit, revision)
+    return _respond(object_attributes.object_history, log_id, object_type, object_id, offset, limit, revision, attribute)
 
 
 @router.get("/v1/event-logs/{log_id}/object-browser")
