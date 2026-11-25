@@ -43,6 +43,10 @@ for an explicitly declared FIRST policy. FIRST uses the earliest established
 match only when every earlier row is known not matched; later unknown/matching
 rows cannot change that hit. All competing rows use one current record snapshot
 and UTC effective dates. Other statuses require clarification.
+When a decision depends on other tables, use only the supplied current-source
+selected target for that decision. Never fill a required decision from case
+facts, model guesses, or an earlier run. An unresolved prerequisite requires
+clarification even if a downstream row would otherwise match.
 Table declarations and source-document hashes do not verify policy authority.
 If a branch depends on missing business facts or an unconfirmed rule, return
 needs_clarification with missing_business_inputs. Do not invent rule outcomes.
