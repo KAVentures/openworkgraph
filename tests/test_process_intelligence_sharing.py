@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import subprocess
 import sys
@@ -302,7 +303,8 @@ PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_overv
                  "get_process_signal_scorecard",
                  "get_process_breakdown",
                  "find_similar_process_cases",
-                 "get_process_cooccurrence", "get_process_work_in_progress", "get_process_batching"}
+                 "get_process_cooccurrence", "get_process_work_in_progress", "get_process_batching",
+                 "get_process_handovers"}
 
 
 def test_mcp_tools_are_listed_only_when_a_log_is_shared(tmp_path):
@@ -311,3 +313,20 @@ def test_mcp_tools_are_listed_only_when_a_log_is_shared(tmp_path):
     assert off == DEFAULT_TOOLS
     on = asyncio.run(_listed_tools(tmp_path, True))
     assert on == DEFAULT_TOOLS | PROCESS_TOOLS
+
+
+def test_agent_handovers_are_pseudonymous_and_withhold_small_pairs():
+    log_id = _log()
+    with pytest.raises(sharing.NotShared):
+        sharing.handovers(log_id)
+    sharing.set_share(log_id, "aggregates")
+    result = sharing.handovers(log_id)
+    text = json.dumps(result)
+    for name in ("clerk", "ana", "bob", "bot"):
+        assert f'"{name}"' not in text
+    assert result["privacy"]["names_returned"] is False
+    assert all(row["cases"] >= 5 for row in result["handover_of_work"])
+    assert all(row["cases"] >= 5 for row in result["resources"])
+    # clerk -> ana/bob -> bot in each of 12 cases, split 6/6: every pair is shown.
+    assert len(result["handover_of_work"]) == 4 and result["cases_with_handover"] == 12
+    assert all(n is None or n >= 5 for row in result["activity_resource_matrix"]["events"] for n in row)
