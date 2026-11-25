@@ -145,3 +145,57 @@ print("ok")
     done = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1], env=env,
                           capture_output=True, text=True, timeout=120)
     assert done.returncode == 0 and done.stdout.strip().endswith("ok"), f"stdout={done.stdout}\nstderr={done.stderr}"
+
+
+def test_unix_seconds_and_milliseconds_import_as_utc_without_an_offset_decision():
+    rows = ["c1,Receive,1709561100", "c1,Approve,1709561160.250000", "c2,Receive, 1709564700 ",
+            "c2,Approve,-1709564700", "c3,Receive,1.7e9", "c3,Approve,17095611000", "c4,Receive,2024-03-04T14:05:00Z",
+            "c4,Approve,1709561100.1234567", "c5,Receive,"]
+    result = _import(rows, timestamp_format="unix-seconds")
+    assert result["events"] == 3            # sign, exponent, 11 digits, 7 decimals, ISO and empty are rejected
+    events = {(c, e["activity"]): e["timestamp"] for c, evs in workspace.case_events(result["log_id"]) for e in evs}
+    assert events[("c1", "Receive")].isoformat() == "2024-03-04T14:05:00+00:00"
+    assert events[("c1", "Approve")].isoformat() == "2024-03-04T14:06:00.250000+00:00"
+    assert events[("c2", "Receive")].isoformat() == "2024-03-04T15:05:00+00:00"
+    report = quality.quality(result["log_id"])["reports"][0]
+    assert report["transform"]["mapping"]["timestamp_format"] == "unix-seconds"
+    assert report["rows"]["rejected_by_reason"]["unparseable_timestamp"] == 5
+    ms = _import(["c1,Receive,1709561100123", "c1,Approve,1709561100123.5", "c1,Close,17095611001234"],
+                 timestamp_format="unix-milliseconds")
+    assert ms["events"] == 2
+    stamps = sorted(e["timestamp"].isoformat() for _, evs in workspace.case_events(ms["log_id"]) for e in evs)
+    assert stamps == ["2024-03-04T14:05:00.123000+00:00", "2024-03-04T14:05:00.123500+00:00"]
+
+
+def test_unix_formats_validate_and_carry_their_own_offset():
+    for name in ("unix-seconds", "unix-milliseconds"):
+        assert formats.validate(name) == name and formats.has_offset(name)
+    for bad in ("unix", "unix-minutes", "UNIX-SECONDS", "unix-seconds "):
+        with pytest.raises(formats.TimestampFormatError):
+            formats.validate(bad)
+    # An offset decision is not needed; one given anyway does not shift Unix times.
+    shifted = _import(["c1,Receive,1709561100"], timestamp_format="unix-seconds", naive_timestamp_offset="+05:00")
+    assert workspace.summary(shifted["log_id"])["first_event_at"] == "2024-03-04T14:05:00Z"
+
+
+def test_detect_offers_unix_time_for_plausible_values_only():
+    seconds = formats.detect(["1709561100", "1709564700.5"])
+    assert seconds["suggested"] == "unix-seconds" and seconds["candidates"][0]["order"] == "unix-time"
+    assert seconds["candidates"][0]["first_value_reads_as"] == "2024-03-04 14:05:00 UTC"
+    ms = formats.detect(["1709561100123", "1709564700000"])
+    assert [c["pattern"] for c in ms["candidates"]] == ["unix-milliseconds"]
+    # Short numbers, mixed lengths and signs are not offered as Unix time.
+    for values in (["12345"], ["1709561100", "2024-03-04"], ["-1709561100"], ["1709561100", "1709561100123"]):
+        assert not any(c["order"] == "unix-time" for c in formats.detect(values)["candidates"]), values
+
+
+def test_quarantined_rows_release_with_a_unix_format(tmp_path):
+    from server import event_log_quarantine as quarantine
+    text = "case,activity,time\nc1,Receive,2024-03-04T14:00:00Z\nc1,Approve,1709561100\n"
+    log = workspace.import_log(BytesIO(text.encode()), name="q", source_format="csv",
+                               mapping={**MAPPING, "keep_rejected": True})["log_id"]
+    with pytest.raises(workspace.EventLogWorkspaceError, match="leave the assumed offset blank"):
+        quarantine.release(log, {"timestamp_format": "unix-seconds", "naive_timestamp_offset": "+01:00"})
+    result = quarantine.release(log, {"timestamp_format": "unix-seconds"})
+    assert result["decision"]["rows_released"] == 1 and result["decision"]["timestamp_format"] == "unix-seconds"
+    assert workspace.summary(log)["last_event_at"] == "2024-03-04T14:05:00Z"
