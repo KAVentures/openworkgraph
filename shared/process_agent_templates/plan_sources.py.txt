@@ -139,24 +139,23 @@ async def _propose_with_source_context(case,bindings,*,model=None,spec=None,sour
     context=SourcePlanningContext(spec,case,requests,receipts,clock or (lambda:datetime.now(timezone.utc)),
         decision_requests,decision_receipts)
     # Importing the SDK/model path happens only after consent and input checks.
-    if deterministic:
-        from route_candidates import deterministic_proposal
-        report=deterministic_proposal(spec,case,context)
-    else:
+    if not deterministic:
         from agent import propose
         report=await propose(case,model=model,spec=spec,source_rule_context=context)
     catalog_current=await check_catalog()
-    if deterministic and catalog_current:
-        # Recheck expiry after the catalog call; a stale alternative can now
-        # be unresolved even when the formerly selected route still matches.
-        report=deterministic_proposal(spec,case,context)
+    checked_at=context.clock()
+    if deterministic:
+        from route_candidates import deterministic_proposal
+        # Use the same final consumer clock for search and final route checks.
+        # Preserve the real clock on the context for later independent evaluation.
+        report=deterministic_proposal(spec,case,context,checked_at=checked_at)
     if not catalog_current:
         report['plan'].update(status='needs_clarification',missing_business_inputs=['Current independent process review is unavailable'])
     used=report.get('shadow_check',{}).get('unevaluated_structured_rule_ids',[])
     table_rules={row['rule_id'] for table in tables for row in table['rows']}
     used=[rule_id for rule_id in used if rule_id not in table_rules or rule_id in non_table_rules]
-    final_checks=context.check_rules([rule_id for rule_id in structured if rule_id not in table_rules or rule_id in non_table_rules],spec,case)
-    final_tables=context.check_tables(report.get('shadow_check',{}).get('decision_table_routes',[]),spec,case) if tables else []
+    final_checks=context.check_rules([rule_id for rule_id in structured if rule_id not in table_rules or rule_id in non_table_rules],spec,case,checked_at=checked_at)
+    final_tables=context.check_tables(report.get('shadow_check',{}).get('decision_table_routes',[]),spec,case,checked_at=checked_at) if tables else []
     if any(not row['route_matches'] for row in final_tables):
         report['plan'].update(status='needs_clarification',missing_business_inputs=['Current decision route, prerequisite or effective date is not established'])
     if any(row['rule_id'] in used and row['status']!='matched' for row in final_checks):
