@@ -528,28 +528,22 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
             if not current:
                 raise ImplementationError('Shared process changed, lost review, was archived or is unavailable')
             ensure_current(intent, now, stop_marker)
-        async def check_decisions(purpose,attempt=None):
+        async def check_decisions(purpose,attempt=None,*,snapshot=None,checked_at=None):
             nonlocal decision_checkpoint
             if not prepared.get('decision_tables'):return
             from decision_runtime import check_decision_receipt, check_decision_batch, _dependent
             if _dependent(spec):
-                # Read each exact record/type once per checkpoint; never carry
-                # source results across actions or across the final check.
-                receipts={};selected_records={}
-                for request in prepared['decision_tables']:
-                    ensure_current(intent,now,stop_marker)
-                    key=(request['resource_ref'],request['source_type'])
-                    if key not in selected_records:
-                        try:selected_records[key]=await source_state_reader(endpoint(bindings['source_api_url'],source=True),source_token,request)
-                        except Exception:selected_records[key]=None
-                    receipts[request['table_id']]=selected_records[key]
-                ensure_current(intent,now,stop_marker)
-                summaries=check_decision_batch(spec,prepared['decision_tables'],receipts,now=now)
+                if snapshot is None or checked_at is None:
+                    raise ImplementationError('Dependent decision checks require a complete checkpoint snapshot')
+                receipts={request['table_id']:snapshot[(request['resource_ref'],request['source_type'])]
+                          for request in prepared['decision_tables']}
+                summaries=check_decision_batch(spec,prepared['decision_tables'],receipts,now=checked_at)
                 decision_checkpoint+=1
                 for summary in summaries:
                     summary['checkpoint_number']=decision_checkpoint
                     summary['checkpoint_purpose']=purpose
                     summary['checkpoint_attempt']=attempt
+                    summary['checkpoint_checked_at']=checked_at.isoformat()
                     result.setdefault('decision_table_checks',[]).append(summary)
                     record('decision_table_checked',**summary)
                 ensure_current(intent,now,stop_marker)
@@ -577,6 +571,42 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
             # Deliberately do not reuse dashboard reports, caller facts or a
             # prior receipt. The customer has reviewed these as invariants;
             # every action and the final route check require fresh reads.
+            if dependency_contract:
+                # All ordinary rules and decision tables use one receipt per
+                # exact record/type and one freshness boundary, after reads.
+                # These snapshots are local to one checkpoint, not atomic
+                # across distinct records or with any business tool.
+                snapshot={}
+                for request in prepared['source_rules']+prepared.get('decision_tables',[]):
+                    ensure_current(intent,now,stop_marker)
+                    key=(request['resource_ref'],request['source_type'])
+                    if key not in snapshot:
+                        try:
+                            snapshot[key]=await source_state_reader(endpoint(bindings['source_api_url'],source=True),
+                                source_token,request)
+                        except Exception:
+                            snapshot[key]=None
+                ensure_current(intent,now,stop_marker)
+                checked_at=(now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+                passed=True
+                for request in prepared['source_rules']:
+                    from process_rule_conditions import evaluate_predicate
+                    key=(request['resource_ref'],request['source_type'])
+                    try:
+                        facts=facts_from_receipt(snapshot[key],*key,now=checked_at)
+                        status=evaluate_predicate(request['predicate'],facts)['status'] if facts else 'unknown'
+                    except Exception:
+                        status='unknown'
+                    summary={'rule_id':request['rule_id'],'status':status,
+                        'record_association':'customer_selected_not_independently_established',
+                        'checkpoint_number':source_checkpoint,'checkpoint_purpose':purpose,
+                        'checkpoint_attempt':attempt,'checkpoint_checked_at':checked_at.isoformat()}
+                    result['source_rule_checks'].append(summary);record('source_rule_checked',**summary)
+                    passed=passed and status=='matched'
+                ensure_current(intent,now,stop_marker)
+                if not passed:raise ImplementationError('Fresh source rule invariant was false or unknown')
+                await check_decisions(purpose,attempt,snapshot=snapshot,checked_at=checked_at)
+                return
             passed=True
             for request in prepared['source_rules']:
                 from process_rule_conditions import evaluate_predicate
@@ -589,8 +619,6 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                     status='unknown'
                 summary={'rule_id':request['rule_id'],'status':status,
                     'record_association':'customer_selected_not_independently_established'}
-                if dependency_contract:
-                    summary.update(checkpoint_number=source_checkpoint,checkpoint_purpose=purpose,checkpoint_attempt=attempt)
                 result['source_rule_checks'].append(summary);record('source_rule_checked',**summary)
                 passed=passed and status=='matched'
             ensure_current(intent,now,stop_marker)
