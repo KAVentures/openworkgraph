@@ -4118,6 +4118,109 @@
       examples:r.arcs.examples.slice(0,5).map(e=>e.event_id+' ('+e.activity+', '+e.object_type+': '+e.objects+')')};
   }
 
+  function objectLifecycleReviewPanel(spec,types,post,url,valid){
+    const panel=document.createElement('details');panel.id='owgObjectLifecycleReview';
+    const type=select('owgLifecycleReviewType',types.map(t=>[t.object_type,t.object_type]));
+    const run=button('Review lifecycle population','secondary');run.id='owgLifecycleReviewRun';
+    const notice=el('p',null,'muted');notice.setAttribute('role','status');
+    const summary=el('div'),pages=el('div'),trace=el('div');
+    const exportSummary=button('Download lifecycle coverage JSON','secondary');exportSummary.disabled=true;
+    let ticket=0,listTicket=0,traceTicket=0,review=null;
+    const active=t=>valid()&&panel.isConnected&&t===ticket;
+    const base=()=>({model:spec.model,object_type:type.value,max_variants:spec.max_variants||200});
+    const clear=()=>{++ticket;++listTicket;++traceTicket;review=null;summary.replaceChildren();pages.replaceChildren();trace.replaceChildren();
+      exportSummary.disabled=true;run.disabled=false;type.disabled=false;};
+    type.onchange=()=>{clear();notice.textContent='Choose Review to inspect this object type.';};
+    const page=(view,status,variant,object)=>{
+      const t=ticket,identity=review;
+      if(!identity)return;
+      const isTrace=view==='object';
+      const lane=isTrace?++traceTicket:++listTicket;
+      const isLive=()=>active(t)&&(isTrace?lane===traceTicket:lane===listTicket);
+      const container=isTrace?trace:pages;
+      if(!isTrace){++traceTicket;trace.replaceChildren();}
+      const title=el('h5',view==='variants'?'Replayed lifecycle variants':view==='objects'?'Objects in reviewed population':'Object '+object);
+      title.tabIndex=-1;
+      const statusText=el('p',null,'muted');statusText.setAttribute('role','status');
+      const body=el('div'),prev=button('Previous page','secondary'),next=button('Next page','secondary');
+      container.replaceChildren(title,statusText,body,prev,next);title.focus();
+      let offset=0,following=null,sequence=0;
+      async function load(start){
+        if(!isLive())return;
+        const request=++sequence;
+        const live=()=>isLive()&&request===sequence;
+        if(!isTrace){++traceTicket;trace.replaceChildren();}
+        prev.disabled=next.disabled=true;statusText.textContent='Loading source-bound evidence…';
+        try{
+          const packet={...base(),view,status,offset:start,limit:50,expected_review_sha256:identity.review_sha256,
+            ...(variant?{variant_sha256:variant}:{}),...(object?{object_id:object}:{})};
+          const data=await post(url,packet);
+          if(!live())return;
+          offset=start;following=data.next_offset;
+          if(view==='variants'){
+            statusText.textContent=data.total+' replayed variants in this selection.';
+            body.replaceChildren(table(['Activity sequence','Objects','Status','Token fitness','Missing','Remaining','Evidence'],
+              data.variants.map(v=>{
+                const inspect=button('Review objects','secondary');inspect.onclick=()=>{if(live())page('objects','all',v.variant_sha256);};
+                return [v.path.join(' → '),v.objects,v.status,Number(v.fitness).toFixed(3),v.missing,v.remaining,inspect];
+              })));
+          }else if(view==='objects'){
+            statusText.textContent=data.total+' registered objects in this selection.';
+            body.replaceChildren(table(['Object','Visible events','Status','Unknown reason','Token fitness','Evidence'],
+              data.objects.map(o=>{
+                const inspect=button('Inspect object','secondary');inspect.setAttribute('aria-label','Inspect object '+o.object_id);
+                inspect.onclick=()=>{if(live())page('object',status,variant,o.object_id);};
+                return [o.object_id,o.events,o.status,o.unknown_reason||'—',o.fitness==null?'—':Number(o.fitness).toFixed(3),inspect];
+              })));
+          }else{
+            statusText.textContent=data.total_events+' visible events · '+data.status+(data.unknown_reason?' · '+data.unknown_reason:'');
+            const diag=data.token_replay;
+            body.replaceChildren(...(diag?[table(['Produced','Consumed','Missing','Remaining','Fitness'],[
+              [diag.produced,diag.consumed,diag.missing,diag.remaining,Number(diag.fitness).toFixed(3)]]),
+              table(['Diagnostic','Activity','Tokens'],['missing_by_activity','remaining_by_activity','unmodelled_activities'].flatMap(key=>
+                Object.entries(diag[key]).map(([activity,n])=>[key,activity,n]))),
+              el('p','Token counts are per-activity replay diagnostics, not attribution to a particular event.','muted')]:
+              [el('p','This object was not replayed in the reviewed population. Unknown is not a fitting or failing result.','muted')]),
+              table(['Event','Activity','Timestamp (UTC)','Tied time'],data.events.map(e=>
+                [e.event_id,e.activity,e.timestamp,e.timestamp_tied?'Yes':'No'])));
+          }
+        }catch(error){if(live()){statusText.textContent=error.message;body.replaceChildren();following=null;}}
+        finally{if(live()){prev.disabled=offset===0;next.disabled=following===null;}}
+      }
+      prev.onclick=()=>load(Math.max(0,offset-50));next.onclick=()=>load(following);load(0);
+    };
+    run.onclick=async()=>{
+      clear();const t=ticket;run.disabled=type.disabled=true;notice.textContent='Reviewing exact lifecycle population…';
+      try{
+        const result=await post(url,base());if(!active(t))return;
+        review=result;
+        const variants=button('Browse replayed variants','secondary');variants.onclick=()=>page('variants','all');
+        const all=button('All objects','secondary');all.onclick=()=>page('objects','all');
+        const fitting=button('Fitting objects','secondary');fitting.onclick=()=>page('objects','fitting');
+        const deviations=button('Deviating objects','secondary');deviations.onclick=()=>page('objects','deviating');
+        const unknown=button('Unknown objects','secondary');unknown.onclick=()=>page('objects','unknown');
+        summary.replaceChildren(table(['Registered objects','Fitting','Deviating','Unknown','Replayed variants'],[
+          [result.registered_objects,result.fitting_objects,result.deviating_objects,result.unknown_objects,result.replayed_variants]]),
+          el('p','Fitting share across all registered objects: '+(result.fitting_share_bounds.lower==null?'—':
+            pct(result.fitting_share_bounds.lower)+' – '+pct(result.fitting_share_bounds.upper)),'note'),
+          el('p',result.ambiguous_order_objects+' objects have different activities at an identical timestamp. Event-ID ordering is deterministic, not verified chronology.','muted'),
+          el('p','Order-sensitive fitting bounds: '+(result.order_sensitive_fitting_share_bounds.lower==null?'—':
+            pct(result.order_sensitive_fitting_share_bounds.lower)+' – '+pct(result.order_sensitive_fitting_share_bounds.upper))+
+            '. All ambiguous replayed objects are treated as uncertain in these bounds; alternate orders were not replayed.','note'),
+          table(['Unknown reason','Objects'],Object.entries(result.unknown_reasons)),
+          variants,all,fitting,deviations,unknown);
+        exportSummary.disabled=false;notice.textContent='Review complete. Evidence pages require the same projected source and model.';
+      }catch(error){if(active(t))notice.textContent=error.message;}
+      finally{if(active(t))run.disabled=type.disabled=false;}
+    };
+    exportSummary.onclick=()=>{if(review)download('owg-object-lifecycle-review.json',
+      JSON.stringify({review,submitted_model:spec.model},null,2),'application/json');};
+    panel.append(el('summary','Exact lifecycle population and object evidence'),
+      el('p','Inspect the same bounded replay population, including registered objects with no visible events. Changes to the selected projected source or model invalidate evidence pages. This is projection-based replay, not full object-binding conformance.','muted'),
+      field('Object type',type),run,notice,exportSummary,summary,pages,trace);
+    return panel;
+  }
+
   function objectModelSection(){
     const box=el('div');box.id='owgObjectModel';
     box.append(el('h4','Object process model'),el('div','Discover one lifecycle model per object type and which object types each activity involves, then check every object and event of the log against it. Edit the arcs to state what you expect. This checks lifecycles and arcs separately; use object rules to check that objects move together. Results describe recorded links, not verified business relationships.','muted'));
@@ -4312,7 +4415,7 @@
         const v=objectModelText(r);
         out.replaceChildren(el('div',v.summary,'note'),table(['Object type','Objects','Fitting','Token fitness','Unknown','Missing tokens at'],v.lifecycles),
           ...(v.issues.length?[]:[el('div','Every checked event matches its arcs.','muted')]),
-          el('div',r.interpretation,'muted'),issueList);
+          el('div',r.interpretation,'muted'),objectLifecycleReviewPanel(spec,spec.model.types,post,path('conformance/lifecycle-review'),()=>current(t)),issueList);
         showIssues(t,spec,r.arcs.issues_by_arc);
       }catch(error){if(current(t))out.replaceChildren(el('div',error.message,'muted'));}
       finally{if(current(t)){busy=false;syncModel();}}
