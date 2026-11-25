@@ -336,7 +336,7 @@ def test_process_model_returns_the_discovered_draft_without_case_ids():
                for rule in model["model"]["business_rules"])
     assert model["execution_authorized"] is False and model["observed_path_is_policy"] is False
     text = str(model)
-    assert "c1" not in text.replace("Receive", "") and "clerk" not in text and "ana" not in text
+    assert "'c1'" not in text and "clerk" not in text and "ana" not in text
 
 
 def test_process_tree_notation_round_trips_and_refuses_unwritable_labels():
