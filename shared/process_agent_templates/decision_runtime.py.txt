@@ -98,6 +98,8 @@ def check_decision_receipt(spec, request, receipt, *, now=None):
     from owg_model.process_decision_tables import evaluate_table
     model=ProcessModel.model_validate(spec['process_model'])
     table=next(t for t in model.decision_tables if t.id==request['table_id'])
+    if table.required_decisions:
+        raise ImplementationError('Dependent decisions require the complete current-source dependency batch')
     current=now or datetime.now(timezone.utc)
     if current.tzinfo is None:raise ImplementationError('Decision checks need an aware current clock')
     current=current.astimezone(timezone.utc)
