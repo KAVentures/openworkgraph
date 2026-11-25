@@ -273,7 +273,7 @@ async def _listed_tools(tmp_path: Path, enabled: bool) -> set[str]:
 PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_overview_for_cases", "get_process_root_cause",
                  "explain_process_case", "get_slowest_process_cases", "tag_process_cases",
                  "get_process_rework", "get_process_waiting_times", "get_process_drift", "get_stuck_process_cases",
-                 "get_process_automation_candidates", "get_process_signals", "get_process_decision_rules",
+                 "get_process_automation_candidates", "get_process_signals", "preview_process_signal", "get_process_decision_rules",
                  "get_process_temporal_profile", "get_process_heuristics_net",
                  "get_process_footprints", "get_process_model_quality",
                  "get_process_deviations", "list_process_reference_nets", "get_process_reference_deviations",
@@ -311,3 +311,17 @@ def test_mcp_tools_are_listed_only_when_a_log_is_shared(tmp_path):
     assert off == DEFAULT_TOOLS
     on = asyncio.run(_listed_tools(tmp_path, True))
     assert on == DEFAULT_TOOLS | PROCESS_TOOLS
+
+
+def test_agent_previews_a_draft_signal_without_saving_or_case_ids():
+    log_id = _log()
+    sharing.set_share(log_id, "aggregates")
+    rule = {"name": "Slow cases", "when": {"kind": "cases", "condition": "duration_over", "seconds": 86400}}
+    result = sharing.preview_signal(log_id, rule)
+    assert result["saved"] is False and result["signal"]["matching_cases"] == 6
+    assert "evidence_cases" not in result["signal"]
+    assert sharing.signals(log_id)["signals"] == []
+    sharing.set_share(log_id, "cases")
+    assert sharing.preview_signal(log_id, rule)["signal"]["evidence_cases"]
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        sharing.preview_signal(log_id, {**rule, "cohort": {"case_ids": ["c0"]}})

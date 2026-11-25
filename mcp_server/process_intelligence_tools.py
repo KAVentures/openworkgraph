@@ -711,6 +711,26 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         return _get("get_process_signals", f"/v1/process-intelligence/{_log(log_id)}/signals", {})
 
     @mcp.tool(annotations=_READ_ONLY)
+    def preview_process_signal(log_id: str, rule: dict[str, Any]) -> dict[str, Any]:
+        """Try a draft monitoring rule on a shared log once, to propose a signal to the owner: would it trigger
+        now, and on what value or how many cases. rule has "name" and "when", for example {"kind": "kpi",
+        "metric": "median_throughput_seconds", "operator": "above", "threshold": 86400} or {"kind": "cases",
+        "condition": "duration_over", "seconds": 604800, "minimum_cases": 10}; optional "case_type" and "cohort"
+        (a case filter of at least 5 cases). Nothing is saved and the owner's signals are untouched; example case
+        IDs only at the cases level.
+        """
+        if not isinstance(rule, dict):
+            raise ToolError("rule must be an object with name and when")
+        runtime_module.authorize_tool("preview_process_signal")
+        try:
+            result = runtime_module.secure_post(f"/v1/process-intelligence/{_log(log_id)}/signals/preview",
+                                                {"rule": rule})
+        except Exception as exc:
+            raise ToolError(str(exc) or "process intelligence request failed") from None
+        result["interpretation"] = _NOTE
+        return runtime_module.core._finish("preview_process_signal", result)
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_rework(log_id: str, limit: int = 20, case_type: str | None = None) -> dict[str, Any]:
         """Rework in a shared log: the share of cases that repeat an activity, which activities are repeated most
         and how often, the most common loop patterns (self-loop, short loop, longer return), and how long cases
