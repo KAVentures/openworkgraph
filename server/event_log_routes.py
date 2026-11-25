@@ -3213,6 +3213,17 @@ async def event_log_simulation_capacity(request: Request, log_id: str,
     return result
 
 
+@router.post("/v1/event-logs/{log_id}/simulation/temporal-sensitivity")
+async def event_log_simulation_temporal_sensitivity(request: Request, log_id: str,
+                                          case_type: str | None = Query(default=None, max_length=200)):
+    from . import event_log_simulation_temporal as temporal
+    _require_dashboard(request)
+    spec = await _json_body(request, "temporal validation settings", strict=True, limit=16384)
+    result = await run_in_threadpool(_respond, temporal.review, log_id, spec, case_type)
+    _require_dashboard(request)
+    return result
+
+
 @router.post("/v1/event-logs/{log_id}/simulation/validation")
 async def event_log_simulation_validation(request: Request, log_id: str,
                                           case_type: str | None = Query(default=None, max_length=200)):

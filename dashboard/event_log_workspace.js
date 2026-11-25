@@ -5942,6 +5942,43 @@
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
       finally{run.disabled=false;}
     };
+    const multi=el('details');multi.append(el('summary','Temporal sensitivity across cutoffs and seeds'));
+    const shares=input('owgSimTemporalShares','text'),seeds=input('owgSimTemporalSeeds','text'),tolerance=input('owgSimTemporalTolerance','number');
+    shares.value='0.2, 0.3, 0.4';seeds.value='1, 2';tolerance.value='20';tolerance.min='0';tolerance.max='1000';tolerance.step='any';
+    const compare=button('Review all specified splits and seeds','secondary'),multiOut=el('div');multiOut.setAttribute('role','status');
+    let multiTurn=0;
+    const reset=()=>{multiTurn++;multiOut.replaceChildren();compare.disabled=false;};
+    for(const c of [shares,seeds,tolerance,dist,basis,holdoutRouting])c.addEventListener('input',reset);
+    compare.onclick=async()=>{
+      const turn=++multiTurn,generation=state.generation;
+      const active=()=>turn===multiTurn&&generation===state.generation&&multi.isConnected;
+      const parse=x=>x.split(',').map(v=>v.trim()).map(v=>v===''?NaN:Number(v));
+      const cuts=parse(shares.value),randomSeeds=parse(seeds.value),max=Number(tolerance.value);
+      if(cuts.length<2||cuts.length>4||cuts.some(x=>!Number.isFinite(x)||x<.05||x>.5)||
+          randomSeeds.length<1||randomSeeds.length>2||randomSeeds.some(x=>!Number.isInteger(x)||x<0||x>2147483647)||
+          !tolerance.value||!Number.isFinite(max)||max<0||max>1000){
+        multiOut.replaceChildren(el('p','Choose 2–4 shares, 1–2 integer seeds and an error tolerance between 0 and 1000%.','note'));return;}
+      compare.disabled=true;multiOut.replaceChildren(el('p','Checking every specified split and seed…','muted'));
+      try{
+        const r=await (await api(logPath('simulation/temporal-sensitivity'),{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({holdout_shares:cuts,seeds:randomSeeds,cases:500,distribution:dist.value,activity_time_basis:basis.value,routing:holdoutRouting.value,max_absolute_relative_error:max/100})})).json();
+        if(!active())return;
+        const percent=v=>v==null?'—':(v*100).toFixed(2)+'%';
+        const download=button('Download complete temporal review JSON','secondary');download.onclick=()=>{
+          if(!active())return;const url=URL.createObjectURL(new Blob([JSON.stringify(r,null,2)],{type:'application/json'}));
+          const a=el('a');a.href=url;a.download='owg-simulation-temporal-review.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+        multiOut.replaceChildren(el('p',r.run_count+' simulations · '+r.distinct_cutoffs+' distinct cutoffs'),
+          table(['Metric','Within','Outside','Unresolved','Error range','Status'],Object.entries(r.metric_summary).map(([k,v])=>[k,v.within,v.outside,v.unresolved,percent(v.minimum_relative_error)+' – '+percent(v.maximum_relative_error),v.status.replaceAll('_',' ')])),
+          table(['Holdout','Seed','Cutoff','Calibration cases','Held-out cases','Spanning excluded','Median error','P90 error','Mean error','Stopped routes'],
+            r.runs.map(x=>[percent(x.holdout_share),x.seed,x.cutoff,x.cases.calibration,x.cases.held_out,x.cases.spanning_cutoff_left_out,
+              ...['p50','p90','mean'].map(k=>percent(x.cycle_time_seconds.relative_error[k])),x.routes_stopped_at_path_limit])),
+          ...r.interpretation.map(x=>el('p',x,'muted')),download);
+      }catch(error){if(active())multiOut.replaceChildren(el('p',error.message,'note'));}
+      finally{if(active())compare.disabled=false;}
+    };
+    multi.append(el('p','Use the same distribution, measured time basis and routing selected above. No best split or seed is selected.','muted'),
+      field('Holdout shares, comma separated',shares),field('Seeds, comma separated',seeds),field('Maximum absolute relative error (%)',tolerance),compare,multiOut);
+    wrap.append(multi);
     return wrap;
   }
 
