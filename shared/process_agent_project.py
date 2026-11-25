@@ -106,7 +106,7 @@ def build_runtime_project(packet: dict) -> bytes:
     spec = build_runtime_spec(packet)
     model = ProcessModel.model_validate(spec['process_model'])
     files = {name: (_TEMPLATES / (name + '.txt')).read_text(encoding='utf-8')
-             for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'monitor.py', 'test_monitor.py', 'send_report.py', 'stop.py', 'configure.py', 'test_configuration.py', 'evaluate.py', 'test_evaluation.py', 'plan_sources.py', 'test_source_planning.py', 'evaluate_sources.py', 'test_source_evaluation.py', 'check_runtime.py')}
+             for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'monitor.py', 'test_monitor.py', 'send_report.py', 'stop.py', 'configure.py', 'test_configuration.py', 'evaluate.py', 'test_evaluation.py', 'plan_sources.py', 'test_source_planning.py', 'evaluate_sources.py', 'test_source_evaluation.py', 'check_runtime.py', 'route_candidates.py')}
     files['owg_report_signing.py'] = (Path(__file__).parent/'automation_report_signing.py').read_text(encoding='utf-8')
     for name in ('process_source_state.py','process_rule_conditions.py'):
         files[name]=(Path(__file__).parent/name).read_text(encoding='utf-8')
@@ -467,6 +467,15 @@ def build_runtime_project(packet: dict) -> bytes:
             "the entire required closure is read and evaluated in dependency order with a single UTC check clock. "
             "Missing, stale, ambiguous or disagreeing decisions stop further actions. Reads are not atomic.\n"
         )
+    files['README.md'] += (
+        "\n## Deterministic current-source route planning (no model)\n\n"
+        "Run python plan_sources.py --case case.json --bindings tool-bindings.json "
+        "--deterministic --confirm-source-reads. No model-sharing consent or provider model credential is needed; "
+        "case data stays in the local runtime, although explicitly selected source references are read via OWG. "
+        "The bounded graph/token search proposes only a unique supported schedule, refuses competing or unresolved "
+        "routes and reports search limits. Distinct parallel schedules are not assumed interchangeable. "
+        "A proposal never approves tool mappings or business actions. Review and authorize implementation separately.\n"
+    )
     files['verify_release.py'] = Path(release_integrity.__file__).read_text(encoding='utf-8')
     files['release-manifest.json'] = create_manifest(files, spec)
     memory = BytesIO()
