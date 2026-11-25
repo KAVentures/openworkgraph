@@ -3,6 +3,7 @@ import json
 
 from shared.process_dependencies import Saved, MAX_REVISIONS, MAX_ROOTS, MAX_PROCESSES, MAX_LINKS, content_digest, topology, impact
 from shared.process_dependency_reassessment import reassessment
+from shared.process_dependency_build_basis import focused_basis
 from .process_collaboration import ProcessCollaborationError as Error, _now
 from .process_hierarchies import ProcessHierarchies
 
@@ -162,12 +163,15 @@ class ProcessDependencies:
             result['graph']=graph;result['current_basis']=bool(items) and all(n['current_declared_basis'] for n in nodes)
             result['status']='empty' if not items else 'current_declared_basis' if result['current_basis'] else 'needs_reassessment'
             if focus:
-                try:result['impact']=impact(graph,focus)
+                try:
+                    result['impact']=impact(graph,focus)
+                    result['focused_build_basis']=focused_basis(p.organization_id,graph,items,focus)
                 except ValueError:raise Error('Selected process is absent from the declared dependency graph',404) from None
             evidence.append([{key:value for key,value in node.items() if key!='title'} for node in nodes])
         result['fingerprint']=content_digest({'organization_id':p.organization_id,'records_and_resolutions':evidence,'blockers':result['blockers']})
         if len(json.dumps(result,allow_nan=False).encode())>MAX_RESPONSE_BYTES:
             result.update(status='withheld',graph=None,impact=None,current_basis=False,blockers=[{'code':'response_byte_limit'}])
+            result.pop('focused_build_basis',None)
         return result
 
     def graph(self,p,focus=None,*,expected_fingerprint=None,exporting=False):
