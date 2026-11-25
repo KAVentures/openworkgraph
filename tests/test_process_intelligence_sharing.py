@@ -311,3 +311,14 @@ def test_mcp_tools_are_listed_only_when_a_log_is_shared(tmp_path):
     assert off == DEFAULT_TOOLS
     on = asyncio.run(_listed_tools(tmp_path, True))
     assert on == DEFAULT_TOOLS | PROCESS_TOOLS
+
+
+def test_agent_brief_lists_owner_change_markers_without_notes():
+    import json
+    from server import event_log_change_markers as markers
+    log_id = _log()
+    markers.add(log_id, {"marked_at": "2024-03-05T00:00:00+00:00", "label": "New form", "note": "private detail"})
+    sharing.set_share(log_id, "aggregates")
+    result = sharing.brief(log_id)
+    assert [m["label"] for m in result["owner_change_markers"]] == ["New form"]
+    assert "private detail" not in json.dumps(result)
