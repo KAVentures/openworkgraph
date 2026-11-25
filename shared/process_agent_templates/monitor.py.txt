@@ -247,7 +247,7 @@ def report(spec, records, deployment_name):
                     or row.get('unresolved_required_decision_table_ids')!=unresolved
                     or row.get('check_purpose')!=('visited_route' if targets else 'prerequisite_output')
                     or bool(unresolved)!=(row.get('status')=='dependency_unresolved')
-                    or (target is not None and target not in {r['target_activity_id'] for r in table['rows']})
+                    or (target is not None and (not isinstance(target,str) or target not in {r['target_activity_id'] for r in table['rows']}))
                     or (target is not None)!=(row.get('status')==selected_status)
                     or row['route_matches']!=expected_match or (unresolved and target is not None)):
                     _fail()
