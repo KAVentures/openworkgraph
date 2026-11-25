@@ -331,9 +331,10 @@ rules then test that path, for example `/decisions/credit eq "good"`.
 - The per-rule list in a case check still evaluates each rule against the supplied facts
   only; the decision-table results carry the dependency-aware outcome.
 - BPMN export keeps the declaration in the table's documentation, and BPMN import reads it
-  back. DMN export and generated agent projects refuse designs with dependent tables for
-  now (DMN outputs are step labels, while dependencies pass step IDs); use supplied-case
-  checks instead.
+  back. DMN export still refuses designs with dependent tables (DMN outputs are
+  step labels, while dependencies pass step IDs). Generated SDK projects use a
+  distinct dependent current-source runtime contract; arbitrary caller facts
+  are not accepted as runtime decision evidence.
 
 In the catalog editor, each decision table has **Add required decision** (choose the
 other table and a fact path). Changing or removing a dependency clears table
@@ -421,3 +422,52 @@ ANY, PRIORITY and other hit policies; several outputs; rows whose OWG predicate
 matches ANY of several conditions or tests one fact twice; and fact paths that are not
 simple identifiers. The DMN file is untrusted data. DOCTYPE and entities are rejected,
 size is bounded, and nothing is evaluated or executed.
+
+
+## Dependent current-source agent runtime (R17/R21)
+
+Generated projects with required decisions use
+`openworkgraph.current-source-dependent-decision.v1`. Independent UNIQUE and
+FIRST designs retain their previous contracts. Example bindings remain
+disabled. Each dependent table additionally requires
+`dependency_semantics_reviewed: true`; every table in the transitive closure
+requires an explicit, separately reviewed current-source record binding,
+including a prerequisite whose graph node is not visited.
+
+A table's supported conditions may refer to the three authenticated source
+fields or the exact declared dependency paths. Dependency paths must be
+outside the /source namespace. The runtime computes prerequisite selected
+target IDs in dependency order and injects them into a private copy of the
+table's own receipt-derived facts. No caller or model value can supply a
+dependency. Even a purely dependency-based table needs a valid current
+receipt under this conservative contract. Arbitrary domain facts such as
+credit scores, unsupported source fields, and unreviewed tables remain
+blocked. DMN interchange of dependencies remains out of scope.
+
+The planner and source-aware shadow evaluation use the same dependency
+closure engine. A missing, stale, ambiguous, unconfirmed or unresolved
+prerequisite withholds the downstream selection; a disagreeing visited
+decision rejects the route. A prerequisite-only check selects an output but
+does not claim that the prerequisite activity was executed.
+
+The customer executor recomputes the entire required closure before tools,
+before write preconditions, before mapped actions and at completion. Each
+distinct record/type is read once per decision checkpoint, and all receipts
+are revalidated against a common UTC consumer clock. No checkpoint is reused
+across actions. Reads are non-atomic and cannot undo an already attempted
+operation. The existing exact intent, review, source consent, conditional
+write, idempotency and independent terminal outcome checks still apply.
+
+The journal records the declared required table IDs and route targets,
+numbered checks in dependency order, unresolved prerequisite IDs and
+selected targets. The monitor validates closure, order, consistency and
+checkpoint presence before reported attempts and successful completion.
+The journal remains a customer assertion, not signed provider evidence or
+proof that the declared route was complete. Source values and references
+are not included in decision check rows.
+
+Generated synthetic tests cover mixed FIRST/UNIQUE dependencies, unvisited
+prerequisites, separate source identity, stale receipts, missing bindings,
+source namespace conflicts, write-precondition drift, omitted journal
+checks and source-aware SDK shadow evaluation. Real provider and customer
+acceptance remain separate.
