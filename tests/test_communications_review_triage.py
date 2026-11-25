@@ -292,3 +292,40 @@ def test_labelled_basis_change_during_ranking_refuses_stale_queue(monkeypatch):
     monkeypatch.setattr(mining,"classify",change)
     with pytest.raises(review.ReviewError,match="changed during ranking"):
         triage.queue(TAXONOMY)
+
+
+@pytest.mark.parametrize("order",["priority","diverse"])
+def test_priority_filters_preserve_requested_value_and_partition_full_queue(monkeypatch,order):
+    seed(monkeypatch)
+    whole=triage.queue(TAXONOMY,order=order)
+    assert whole["filters"]["priority"] is None
+    assert whole["matching_count"]==whole["total_eligible"]==3
+    assert whole["eligible_facets"]["priority"]=={
+        "keyword_ambiguous":1,"keyword_unclassified":1,"routine":1}
+    ids=[]
+    for priority in triage.PRIORITIES:
+        page=triage.queue(TAXONOMY,order=order,priority=priority)
+        assert page["filters"]["priority"]==priority
+        expected=[r for r in whole["examples"] if r["priority"]==priority]
+        assert page["matching_count"]==len(expected)
+        assert {r["example_id"] for r in page["examples"]}=={r["example_id"] for r in expected}
+        assert page["eligible_facets"]==whole["eligible_facets"]
+        assert page["matching_facets"]["priority"]==({priority:len(expected)} if expected else {})
+        ids.extend(r["example_id"] for r in page["examples"])
+    assert sorted(ids)==sorted(r["example_id"] for r in whole["examples"])
+
+
+def test_priority_and_language_intersection_and_pinned_page(monkeypatch):
+    enabled()
+    monkeypatch.setattr(review,"_split",lambda _: "train")
+    review.add_examples([{"text":"refund A","language":"en"},{"text":"refund B","language":"en"},
+        {"text":"refund C","language":"sv"},{"text":"unmatched D","language":"en"}])
+    first=triage.queue(TAXONOMY,priority="routine",language="en",limit=1)
+    assert first["matching_count"]==2 and first["next_offset"]==1
+    next_page=triage.queue(TAXONOMY,priority="routine",language="en",limit=1,offset=1,
+                          expected_queue_sha256=first["queue_sha256"])
+    assert next_page["examples"][0]["example_id"]!=first["examples"][0]["example_id"]
+    assert next_page["next_offset"] is None
+    with pytest.raises(review.ReviewError,match="queue changed"):
+        triage.queue(TAXONOMY,priority="keyword_unclassified",language="en",
+                     expected_queue_sha256=first["queue_sha256"])

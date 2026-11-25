@@ -93,7 +93,7 @@ def queue(taxonomy: Any, *, limit: int = 20, offset: int = 0, order: str = 'prio
             reasons.append("keyword_ambiguous")
         elif keyword == "unclassified":
             reasons.append("keyword_unclassified")
-        priority = next((i for i, kind in enumerate(PRIORITIES) if kind in reasons), len(PRIORITIES) - 1)
+        priority_index = next((i for i, kind in enumerate(PRIORITIES) if kind in reasons), len(PRIORITIES) - 1)
         ranked.append({
             "example_id": example["example_id"], "text": example["text"],
             "language": example["language"], "labels": None, "split": "train",
@@ -101,7 +101,7 @@ def queue(taxonomy: Any, *, limit: int = 20, offset: int = 0, order: str = 'prio
             "source": example["source"], "keyword_intent": keyword,
             "keyword_matching_intents": sorted(scores),
             "learned_primary_intent": model_label,
-            "priority": PRIORITIES[priority], "reasons": reasons,
+            "priority": PRIORITIES[priority_index], "reasons": reasons,
         })
     ranked.sort(key=lambda row: (PRIORITIES.index(row["priority"]), row["created_at"], row["example_id"]))
     all_facets=_facets(ranked)
