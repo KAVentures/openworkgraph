@@ -35,6 +35,7 @@ from . import event_log_object_process_model as object_model
 from . import event_log_query as query
 from . import event_log_workspace as workspace
 from .event_log_domain_packs_operations import OPERATIONS_PACKS
+from .event_log_domain_packs_finance_lifecycle import FINANCE_LIFECYCLE_PACKS
 from .event_log_domain_packs_returns import RETURNS_REFUNDS_1_0_0
 from .event_log_domain_packs_claims import INSURANCE_CLAIMS_1_0_0
 from .event_log_domain_packs_service_governance import SERVICE_GOVERNANCE_PACKS
@@ -770,7 +771,8 @@ PACKS: dict[str, dict[str, dict[str, Any]]] = {**OPERATIONS_PACKS,
                                               "employee_onboarding": {"1.0.0": EMPLOYEE_ONBOARDING_1_0_0},
                                               "expense_reimbursement": {"1.0.0": EXPENSE_REIMBURSEMENT_1_0_0},
                                               "insurance_claims": {"1.0.0": INSURANCE_CLAIMS_1_0_0},
-                                              **SERVICE_GOVERNANCE_PACKS}
+                                              **SERVICE_GOVERNANCE_PACKS,
+                                              **FINANCE_LIFECYCLE_PACKS}
 
 
 class _Strict(BaseModel):
