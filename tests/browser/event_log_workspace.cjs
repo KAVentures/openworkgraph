@@ -445,7 +445,7 @@ const path=require('node:path');
    assert.match(kpi,/33\.3%/,'rework and SLA breach both cover the 20 slow cases');
    await page.locator('#owgEventLogKpiCohortResource').fill('ann');
    await page.locator('#owgEventLogKpiRun').click();
-   await page.waitForFunction(()=>/\b20\b/.test(document.querySelector('#owgEventLogKpiRun').parentElement.parentElement.querySelector('table tbody tr td').textContent));
+   await page.waitForFunction(()=>/\b20\b/.test(document.querySelector('#owgEventLogKpiRun').parentElement.parentElement.querySelector('table tbody tr td')?.textContent||''));
    const [kpiCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogKpiCsv').click()]);
    const kpiText=await fs.readFile(await kpiCsv.path(),'utf8');
    assert.match(kpiText,/^metric,value\r\ncases,20\r\n/);assert.match(kpiText,/rework_rate,1\r\n/);
