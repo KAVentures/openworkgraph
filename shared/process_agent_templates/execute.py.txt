@@ -525,7 +525,9 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
             journal.write(json.dumps({'phase': phase, 'at': datetime.now(timezone.utc).isoformat(), **details}) + '\n')
             journal.flush(); os.fsync(journal.fileno())
         record('started', execution_id=execution_id, process_reference=reference(spec), spec_sha256=digest(spec))
-        async def check_catalog():
+        dependency_check_number=0
+        async def check_catalog(purpose='refresh',attempt=None):
+            nonlocal dependency_check_number
             if not spec.get('organization_catalog_reference'):
                 return
             ensure_current(intent, now, stop_marker)
@@ -535,7 +537,13 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
             except Exception:
                 current = False
             result['catalog_current_at_last_check'] = bool(current)
-            record('catalog_checked', current_independent_design_review=bool(current))
+            fields={}
+            if 'dependency_build_basis_sha256' in spec:
+                dependency_check_number+=1
+                fields={'dependency_build_basis_sha256':spec['dependency_build_basis_sha256'],
+                        'dependency_check_number':dependency_check_number,
+                        'dependency_check_purpose':purpose,'dependency_check_attempt':attempt}
+            record('catalog_checked', current_independent_design_review=bool(current),**fields)
             if not current:
                 raise ImplementationError('Shared process changed, lost review, was archived or is unavailable')
             ensure_current(intent, now, stop_marker)
@@ -579,7 +587,7 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
             if not passed:raise ImplementationError('Fresh source rule invariant was false or unknown')
             await check_decisions()
         try:
-            await check_catalog()
+            await check_catalog('initial')
             await check_source_rules()
         except ImplementationError:
             result.update(stopped_before_tools=True, all_tool_results_matched=False, all_declared_operations_verified=False)
@@ -633,7 +641,7 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                             await check_decisions()
                             condition = action['precondition']
                             if 'dependency_build_basis_sha256' in spec:
-                                await check_catalog()
+                                await check_catalog('precondition',index+1)
                             record('precondition_pending', activity_id=action['activity_id'], attempt=index+1)
                             try:
                                 ensure_current(intent, now, stop_marker)
@@ -649,7 +657,7 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                         await check_source_rules()
                         ensure_current(intent, now, stop_marker)
                         if 'dependency_build_basis_sha256' in spec:
-                            await check_catalog()
+                            await check_catalog('action',index+1)
                         record('attempt_pending', activity_id=action['activity_id'], attempt=index+1,
                                arguments_sha256=digest(action['arguments']))
                         status = 'uncertain'
@@ -697,7 +705,7 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
             result['source_checks'].append(summary); record('source_checked', **summary)
         if 'dependency_build_basis_sha256' in spec:
             try:
-                await check_catalog()
+                await check_catalog('completion')
             except ImplementationError:
                 result['implementation_contract_or_intent_not_established']=True
                 record('implementation_contract_or_intent_not_established')
