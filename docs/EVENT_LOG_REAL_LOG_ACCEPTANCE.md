@@ -61,6 +61,10 @@ cost from OWG equals PM4Py's (`alignments.petri_net`, standard cost function: 1 
 move, 0 for synchronous and silent moves). There were no mismatches on either net, and both found the same
 4 deviating variants on the noise 0.5 net and none on the noise 0.2 net.
 
+The directly-follows graph also matches. On BPI Challenge 2017 (1.2M events), the process map's 178
+directly-follows counts and its start and end activity counts equal PM4Py's `discover_dfg`. This is
+on the same events, ordered by time and then by OWG's event order for ties.
+
 OWG replays the 2,000 most frequent variants (10,721 of 13,087 cases, disclosed as
 `cases_excluded`); PM4Py replays every case, which explains the small precision and share
 differences. Both nets are permissive on this log (precision below 0.1): BPI 2012 interleaves offer,
