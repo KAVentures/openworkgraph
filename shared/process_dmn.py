@@ -2,7 +2,7 @@
 
 OWG decision tables route an exclusive decision by structured predicates over case
 facts. This module writes them as DMN decision tables and reads DMN decision tables
-back, limited to the subset that maps exactly in both directions:
+back, limited to the reviewed declaration subset that maps between the models:
 
 - inputs are simple FEEL paths (``amount``, ``customer.tier``), which become OWG
   JSON pointers (``/amount``, ``/customer/tier``);
@@ -10,7 +10,8 @@ back, limited to the subset that maps exactly in both directions:
   a literal (``5``, ``"gold"``, ``true``), ``> 5``, ``>= 5``, ``< 5``, ``<= 5``,
   ``not(5)``, a list ``"a","b"``, ``not("a","b")``, ``null`` and ``not(null)``;
 - there is exactly one output column, whose entry is the label of the target step
-  as a string literal;
+  as a string literal (or stable activity IDs in the explicit OWG dependent profile);
+- local requiredDecision references to named scalar outputs, imported as a dependency-closed batch;
 - the hit policy is UNIQUE or FIRST.
 
 Anything else (full FEEL, ranges, functions, several outputs, other hit policies)
@@ -216,8 +217,8 @@ def export_dmn(packet: dict[str, Any]) -> str:
         dep_names={d.fact_path:table_names[d.table_id] for d in table.required_decisions}
         if dependent:
             _sub(decision,"variable",id="Variable_"+table.id,name=table_names[table.id],typeRef="string")
-            for dependency in table.required_decisions:
-                requirement=_sub(decision,"informationRequirement",id="Requirement_"+table.id+"_"+dependency.table_id)
+            for dependency_index,dependency in enumerate(table.required_decisions,1):
+                requirement=_sub(decision,"informationRequirement",id=f"Requirement_{table_index}_{dependency_index}")
                 requirement.set(FACT_PATH,dependency.fact_path)
                 _sub(requirement,"requiredDecision",href="#Decision_"+dependency.table_id)
         dmn_table = _sub(decision, "decisionTable", id="Table_" + table.id, hitPolicy=table.hit_policy)
@@ -403,6 +404,11 @@ def _dependency_graph(decisions,profile):
             dep_names={r['input_name'] for r in graph[index]}
             dep_paths=[r['fact_path'] for r in graph[index]]
             ordinary=[_path_to_pointer(p) for p in paths if p not in dep_names] if dep_paths else []
+            if profile:
+                decision_names={d.get('name') for d in decisions}
+                if any(p.split('.')[0] in decision_names for p in paths if p not in dep_names):
+                    raise DMNError('An OWG decision output reference needs an explicit local dependency')
+
             if any(_paths_overlap(a,b) for i,a in enumerate(dep_paths) for b in dep_paths[i+1:]+ordinary):
                 raise DMNError('Decision dependency paths overlap other inputs')
         except (DMNError,ValueError,TypeError):
