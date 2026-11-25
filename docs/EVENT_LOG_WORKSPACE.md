@@ -1807,6 +1807,21 @@ under the chosen case notion and the source's activity mapping.
   `{"name": "Q1", "events_from": "2024-01-01T00:00:00Z", "events_before":
   "2024-04-01T00:00:00Z"}` saves the whole log's first quarter. The response's
   `time_window` reports the cases with events in it and the events left out.
+* **Activity trim (optional):** `trim_from_activity` and/or `trim_to_activity`
+  (the dashboard's *Keep events from the first … until …* fields) keep each
+  matching case's events from the first occurrence of one activity to the last
+  (`trim_mode: "longest"`, the default) or the next (`"first"`) occurrence of
+  another, both included: the endpoints trim of other process-mining tools.
+  Leave one out to trim only the start or only the end of each case. With the
+  same activity at both ends, `"first"` keeps one cycle up to its next
+  occurrence. Activity names are those of the analysis, after any activity
+  mapping. The events in between are kept whatever their activity. A matching
+  case without the endpoints is left out. A time window applies first, so the
+  endpoints are looked for inside it. The response's `activity_trim` reports the
+  cases with the endpoints and the events left out. The same fields work for
+  the matching-case export (`POST /v1/event-logs/{log_id}/export/matching-cases`)
+  and the preview. In a flat export of an object-centric log, a case keeps only
+  its own segment, even when it shares events with other cases.
 * **The new log:** counts against the 50-log limit. It can be analysed,
   exported, compared with the source (see *Comparing two logs*) or deleted like
   any other log.

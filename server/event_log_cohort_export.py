@@ -22,6 +22,9 @@ class ExportSpec(BaseModel):
     case_type: str | None = Field(default=None, min_length=1, max_length=200)
     events_from: str | None = Field(default=None, min_length=10, max_length=40)
     events_before: str | None = Field(default=None, min_length=10, max_length=40)
+    trim_from_activity: str | None = Field(default=None, min_length=1, max_length=500)
+    trim_to_activity: str | None = Field(default=None, min_length=1, max_length=500)
+    trim_mode: Literal["longest", "first"] = "longest"
 
 
 def export_matching_cases(log_id: str, spec: Any, out: IO[str], *,
@@ -32,9 +35,11 @@ def export_matching_cases(log_id: str, spec: Any, out: IO[str], *,
         raise workspace.EventLogWorkspaceError("Invalid matching-case export settings") from None
     chosen = cohorts.parse_cohort(settings.cohort)
     start, end = derived._window(settings.events_from, settings.events_before)
+    trim = derived.activity_trim(settings)
     if (settings.case_id is None and not settings.include_unfiltered
-            and not any(key != "label" for key in chosen) and start is None and end is None):
-        raise workspace.EventLogWorkspaceError("Choose a case filter or a time window before exporting matching cases")
+            and not any(key != "label" for key in chosen) and start is None and end is None and trim is None):
+        raise workspace.EventLogWorkspaceError(
+            "Choose a case filter or a time window, or an activity trim, before exporting matching cases")
 
     def run(conn):
         cohorts.restrict(conn, chosen, log_id)
@@ -44,9 +49,9 @@ def export_matching_cases(log_id: str, spec: Any, out: IO[str], *,
             raise workspace.EventLogWorkspaceError("No cases match the filter")
         is_ocel = export_format in ("ocel", "ocelxml")
         is_source_csv = export_format in ("sourcecsv", "sourcecsv-review")
-        has_window = start is not None or end is not None
+        has_window = start is not None or end is not None or trim is not None
         if is_ocel or is_source_csv or has_window:
-            derived._select_original_events(conn, log_id, start, end)
+            derived._select_original_events(conn, log_id, start, end, trim)
         if is_ocel:
             objects, events = workspace._ocel_export_projection(conn, log_id, matching=True)
             writer = write_ocel_json if export_format == "ocel" else write_ocel_xml
@@ -64,6 +69,10 @@ def export_matching_cases(log_id: str, spec: Any, out: IO[str], *,
         # Filters see the analysis mapping. Export writes the original rows
         # for the matching cases, restricted to the optional event window.
         window_join = "SEMI JOIN dv_events ON source.event_id = dv_events.event_id" if has_window else ""
+        if trim is not None:
+            # A trimmed case keeps only its own segment, also when its events are shared with other cases.
+            window_join = ("SEMI JOIN dv_case_events ON source.case_id = dv_case_events.case_id"
+                           " AND source.event_id = dv_case_events.event_id")
         is_xes = export_format in ("xes", "xes-attributes")
         include_attributes = export_format == "xes-attributes"
         fields = "source.*" if is_xes else "source.case_id, source.activity, source.ts, source.resource"

@@ -990,9 +990,15 @@
     const windowFrom=input('owgDeriveEventsFrom','datetime-local'),windowBefore=input('owgDeriveEventsBefore','datetime-local');
     const windowRow=el('div',null,'row');windowRow.style.alignItems='end';
     windowRow.append(field('Only events from (optional, local time)',windowFrom),field('Only events before (optional)',windowBefore));
+    // Optional activity trim: keep each case's events between two activities (endpoints trim).
+    const trimChoices=activityNames.slice(0,500).map(a=>[a,a]);
+    const trimFrom=select('owgDeriveTrimFrom',[['','case start'],...trimChoices]),trimTo=select('owgDeriveTrimTo',[['','case end'],...trimChoices]);
+    const trimMode=select('owgDeriveTrimMode',[['longest','to its last occurrence'],['first','to its next occurrence']]);
+    const trimRow=el('div',null,'row');trimRow.style.alignItems='end';
+    trimRow.append(field('Keep events from the first',trimFrom),field('until',trimTo),field('End activity',trimMode));
     const exportRow=el('div',null,'row');exportRow.style.alignItems='end';
     exportRow.append(field('Matching case export format',formats),download);
-    box.append(filter.node,windowRow,row,previewStatus,exportRow,formatNote,out);
+    box.append(filter.node,windowRow,trimRow,row,previewStatus,exportRow,formatNote,out);
     const generation=state.generation;
     function selectedCases(){
       const cohort=filter.read();delete cohort.label;
@@ -1003,14 +1009,17 @@
       const cases=selectedCases(),window={};
       if(windowFrom.value)window.events_from=new Date(windowFrom.value).toISOString();
       if(windowBefore.value)window.events_before=new Date(windowBefore.value).toISOString();
+      if(trimFrom.value)window.trim_from_activity=trimFrom.value;
+      if(trimTo.value)window.trim_to_activity=trimTo.value;
+      if(trimFrom.value||trimTo.value)window.trim_mode=trimMode.value;
       if(!Object.keys(cases.cohort).length&&!Object.keys(window).length){
-        throw new Error('Choose which cases to '+action+'. Or set a time window.');
+        throw new Error('Choose which cases to '+action+'. Or set a time window or an activity trim.');
       }
       return {...cases,...window};
     }
     let revision=0;
     const clearPreview=()=>{revision++;preview.disabled=false;previewStatus.textContent='';};
-    for(const control of [filter.node,windowRow]){
+    for(const control of [filter.node,windowRow,trimRow]){
       control.addEventListener('input',clearPreview);control.addEventListener('change',clearPreview);
     }
     const relationshipCountText=(count,prefix)=>count?' '+prefix+Number(count).toLocaleString()+
@@ -1027,7 +1036,7 @@
         const n=value=>Number(value).toLocaleString();
         previewStatus.textContent=n(result.cases)+' of '+n(result.source_cases)+' cases match. The copy would retain '+
           n(result.events)+' events and '+n(result.objects)+' linked objects'+
-          (result.trimmed?' across '+n(result.kept_cases)+' matching cases with events in the window.':'.')+
+          (result.trimmed||result.trimmed_by_activity?' across '+n(result.kept_cases)+' matching cases'+(result.trimmed?' with events in the window':'')+(result.trimmed_by_activity?(result.trimmed?' and':'')+' with the trim activities':'')+'.':'.')+
           relationshipCountText(result.object_relationships,'The copy would also retain ');
       }catch(error){if(current())previewStatus.textContent=error.message;}
       finally{if(current())preview.disabled=false;}
@@ -1065,8 +1074,9 @@
         const pick=document.getElementById('owgEventLogPick');setOptions(pick,state.logs.map(l=>[l.log_id,l.name+' · '+Number(l.events).toLocaleString()+' events']));pick.value=state.logId;
         const open=button('Open '+r.log.name,'secondary');open.id='owgDeriveOpen';
         open.onclick=()=>refreshLogs(r.log.log_id,r.derived_from.case_notion).then(()=>status('Opened '+r.log.name+'. Select Analyse to explore it.')).catch(error=>status(error.message));
+        const cut=r.activity_trim?' Only events between the trim activities were kept: '+Number(r.activity_trim.cases_with_endpoints).toLocaleString()+' cases have them; '+Number(r.activity_trim.events_left_out).toLocaleString()+' events outside were left out.':'';
         const trimmed=r.time_window?' Only events in the time window were kept: '+Number(r.time_window.cases_with_events_in_window).toLocaleString()+' cases have events in it; '+Number(r.time_window.events_outside_left_out).toLocaleString()+' events outside it were left out.':'';
-        out.replaceChildren(el('div','Saved '+r.log.name+': '+Number(r.derived_from.cases_matched).toLocaleString()+' of '+Number(r.derived_from.cases_in_source).toLocaleString()+' cases, '+Number(r.copied.events).toLocaleString()+' events.'+trimmed+relationshipCountText(r.copied.object_relationships,'Retained ')),open);
+        out.replaceChildren(el('div','Saved '+r.log.name+': '+Number(r.derived_from.cases_matched).toLocaleString()+' of '+Number(r.derived_from.cases_in_source).toLocaleString()+' cases, '+Number(r.copied.events).toLocaleString()+' events.'+trimmed+cut+relationshipCountText(r.copied.object_relationships,'Retained ')),open);
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
       finally{run.disabled=false;}
     };
