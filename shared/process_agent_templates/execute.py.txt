@@ -502,7 +502,12 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
         def record(phase, **details):
             journal.write(json.dumps({'phase': phase, 'at': datetime.now(timezone.utc).isoformat(), **details}) + '\n')
             journal.flush(); os.fsync(journal.fileno())
-        record('started', execution_id=execution_id, process_reference=reference(spec), spec_sha256=digest(spec))
+        dependency_contract=spec.get('decision_table_contract')=='openworkgraph.current-source-dependent-decision.v1'
+        dependency_routes=[{'table_id':r['table_id'],'target_activity_ids':r['target_activity_ids']}
+                           for r in prepared.get('decision_tables',[])] if dependency_contract else []
+        record('started', execution_id=execution_id, process_reference=reference(spec), spec_sha256=digest(spec),
+               **({'dependent_decision_routes':dependency_routes} if dependency_contract else {}))
+        decision_checkpoint=0
         async def check_catalog():
             if not spec.get('organization_catalog_reference'):
                 return
@@ -518,6 +523,7 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                 raise ImplementationError('Shared process changed, lost review, was archived or is unavailable')
             ensure_current(intent, now, stop_marker)
         async def check_decisions():
+            nonlocal decision_checkpoint
             if not prepared.get('decision_tables'):return
             from decision_runtime import check_decision_receipt, check_decision_batch, _dependent
             if _dependent(spec):
@@ -533,7 +539,9 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                     receipts[request['table_id']]=selected_records[key]
                 ensure_current(intent,now,stop_marker)
                 summaries=check_decision_batch(spec,prepared['decision_tables'],receipts,now=now)
+                decision_checkpoint+=1
                 for summary in summaries:
+                    summary['checkpoint_number']=decision_checkpoint
                     result.setdefault('decision_table_checks',[]).append(summary)
                     record('decision_table_checked',**summary)
                 ensure_current(intent,now,stop_marker)
