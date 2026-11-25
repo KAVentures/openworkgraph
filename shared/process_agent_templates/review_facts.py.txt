@@ -107,7 +107,7 @@ def _scenario_coverage(spec,cases,rows):
     tables={t['id']:t for t in model.get('decision_tables',[])}
     token=spec.get('control_flow_contract')=='openworkgraph.parallel-node-firing-plan.v1'
     # A token order is not an adjacency path. Replay returns the union of
-    # viable histories, so count possible transitions separately.
+    # viable histories and their intersection; strict coverage uses only guaranteed edges.
     paths={}
     if token:
         from owg_model.process_model import ProcessModel
@@ -118,12 +118,15 @@ def _scenario_coverage(spec,cases,rows):
         if key not in paths:
             if token:
                 try:
-                    indices=replay_node_ids(path,graph)['transition_indices']
-                    paths[key]={(model['transitions'][i]['source'],model['transitions'][i]['target']) for i in indices}
+                    replay=replay_node_ids(path,graph)
+                    def edge_set(indices):
+                        return {(model['transitions'][i]['source'],model['transitions'][i]['target']) for i in indices}
+                    paths[key]=(edge_set(replay['transition_indices']),edge_set(replay['guaranteed_transition_indices']))
                 except ValueError:
                     paths[key]=None
             else:
-                paths[key]=set(zip(path,path[1:]))
+                exact=set(zip(path,path[1:]))
+                paths[key]=(exact,exact)
         return paths[key]
     activity_counts={k:Counter() for k in activities}
     transition_counts={k:Counter() for k in edges}
@@ -142,16 +145,20 @@ def _scenario_coverage(spec,cases,rows):
             if found is None:
                 replay_unknown.append(case['id'])
             else:
-                expected_edges.update(found)
-        actual_edges=route_edges(actual_path) if actual_path else set()
-        if actual_edges is None:
-            replay_unknown.append(case['id']);actual_edges=set()
+                expected_edges.update(found[0])
+        actual=route_edges(actual_path) if actual_path else (set(),set())
+        if actual is None:
+            replay_unknown.append(case['id']);actual=(set(),set())
+        possible_edges,actual_edges=actual
         actual_nodes=set(actual_path or [])
         for ident in expected_nodes:activity_counts[ident]['reviewed_expected_cases']+=1
         for ident in actual_nodes:
             activity_counts[ident]['unique_supported_cases']+=1
             if reviewed_match:activity_counts[ident]['reviewed_matching_cases']+=1
         for edge in expected_edges:transition_counts[edge]['reviewed_expected_cases']+=1
+        for edge in possible_edges:
+            transition_counts[edge]['possible_supported_cases']+=1
+            if reviewed_match:transition_counts[edge]['possible_reviewed_matching_cases']+=1
         for edge in actual_edges:
             transition_counts[edge]['unique_supported_cases']+=1
             if reviewed_match:transition_counts[edge]['reviewed_matching_cases']+=1
@@ -176,7 +183,7 @@ def _scenario_coverage(spec,cases,rows):
         return {k:counter[k] for k in names}
     columns=('reviewed_expected_cases','unique_supported_cases','reviewed_matching_cases')
     activity_rows=[{'activity_id':ident,**counts(c,columns)} for ident,c in sorted(activity_counts.items())]
-    transition_rows=[{'source_activity_id':source,'target_activity_id':target,**counts(c,columns)}
+    transition_rows=[{'source_activity_id':source,'target_activity_id':target,**counts(c,columns+('possible_supported_cases','possible_reviewed_matching_cases'))}
                      for (source,target),c in sorted(transition_counts.items())]
     decision_rows=[]
     for tid,c in sorted(table_counts.items()):
@@ -196,13 +203,13 @@ def _scenario_coverage(spec,cases,rows):
         'decision_rows_without_reviewed_match':[{'table_id':t['table_id'],'row_id':r['row_id']}
             for t in decision_rows for r in t['rows'] if not r['reviewed_matching_route_cases']]}
     return {'format':'openworkgraph.declared-scenario-coverage.v1',
-        'case_count':len(cases),'transition_basis':'possible_transitions_in_complete_token_replays' if token else 'exact_adjacent_transitions',
+        'case_count':len(cases),'transition_basis':'guaranteed_transitions_in_all_complete_token_replays' if token else 'exact_adjacent_transitions',
         'route_replay_unknown_case_ids':sorted(set(replay_unknown)),
         'incomplete_search_case_ids':[r['case_id'] for r in rows if not r['search_complete']],
         'activities':activity_rows,'transitions':transition_rows,'decision_tables':decision_rows,'coverage_gaps':gaps,
         'all_declared_items_have_reviewed_matching_support':not any(gaps.values()) and not replay_unknown and all(r['search_complete'] for r in rows),
         'exhaustive_business_domain_coverage_verified':False,'execution_authorized':False,
-        'interpretation':'Distinct scenario counts, not visits. Only complete unique supported routes matching reviewed expectations contribute matching-route coverage. Decision rows evaluated in isolation do not establish route coverage. Token replay transition counts are possible support, not guaranteed traversal.'}
+        'interpretation':'Distinct scenario counts, not visits. Only complete unique supported routes matching reviewed expectations contribute matching-route coverage. Decision rows evaluated in isolation do not establish route coverage. Token transition coverage uses the intersection of all complete structural replays; possible support is reported separately.'}
 
 
 def review_scenarios(spec,suite,*,as_of_date):
