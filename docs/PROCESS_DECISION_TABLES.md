@@ -570,3 +570,27 @@ by case category. Incomplete deterministic search remains a review finding
 even if the clarification itself matches the expectation. No raw case data,
 model text or receipt values appear in the saved report. The eight-case
 and source-record limits still apply. No business execution is authorized.
+
+
+### Dependent execution journal integrity
+
+For the dependent runtime, the initial journal row declares the exact
+activity sequence, its reported plan digest, visited decision routes,
+prerequisite closure and the mapped-action positions requiring preconditions.
+The monitor reconstructs the graph-valid route and its decision visits from
+the specification, checks the required closure, and verifies that recorded
+attempts follow the declared non-human business activity sequence.
+
+Each decision checkpoint identifies its purpose (initial, precondition,
+action or completion), its checkpoint number and, where applicable, the
+mapped-action position. A successful report requires an initial checkpoint,
+the appropriate fresh checkpoint for each recorded precondition and action,
+and a completion checkpoint. Missing initial checks cannot be concealed by
+renumbering the remaining checks; a reported success cannot omit a declared
+action. Incomplete or failed executions remain distinguishable from success.
+
+These checks are internal journal-consistency checks. The route, plan digest
+and precondition declarations are still customer assertions, not independent
+proof of the authorized intent or provider operations. The monitor does not
+reconstruct private case inputs or tool arguments and does not establish
+business outcomes from journal text.
