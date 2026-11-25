@@ -318,6 +318,33 @@ def overview_for_cases(log_id: str, case_filter: Any, case_type: str | None = No
     }
 
 
+def compare_cohorts(log_id: str, first: Any, second: Any, case_type: str | None = None,
+                    sla_hours: float | None = None) -> dict[str, Any]:
+    """Two case filters side by side with bootstrap and risk-difference intervals (aggregates level). Each must
+    match at least AGENT_MIN_FILTERED_CASES cases; activity and variant rows where either side has 1 to
+    AGENT_MIN_CELL_CASES - 1 cases are withheld and counted."""
+    require(log_id, "aggregates")
+    from . import event_log_cohorts as cohorts
+    for name, case_filter in (("first", first), ("second", second)):
+        if not isinstance(case_filter, dict) or not any(k != "label" for k in cohorts.parse_cohort(case_filter)):
+            raise EventLogWorkspaceError(f"{name} must be a case filter that filters something")
+        if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
+            raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match {name}; widen it")
+    sla = int(sla_hours * 3600) if sla_hours else None
+    result = cohorts.benchmark(log_id, [first, second], case_type, sla)
+
+    def small(*counts: int) -> bool:
+        return any(0 < n < AGENT_MIN_CELL_CASES for n in counts)
+    activities = [row for row in result["activity_presence"] if not small(row["cases_in_first"], row["cases_in_second"])]
+    variants = [{k: v for k, v in row.items() if k != "variant_id"} for row in result["variants"]
+                if not small(row["cases_in_first"], row["cases_in_second"])]
+    return {**{k: v for k, v in result.items() if k not in ("activity_presence", "variants")},
+            "activity_presence": activities, "variants": variants,
+            "withheld": {"activities": len(result["activity_presence"]) - len(activities),
+                         "variants": len(result["variants"]) - len(variants), "min_cases": AGENT_MIN_CELL_CASES},
+            "format": FORMAT, "log_id": log_id}
+
+
 def brief(log_id: str, case_type: str | None = None, sla_hours: float | None = None) -> dict[str, Any]:
     """One bounded briefing for an agent starting on a log: the overview, how well the discovered model fits
     at its best noise level, where cases depart from it, how many cases stand out, and which tools to call

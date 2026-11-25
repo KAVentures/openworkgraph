@@ -56,6 +56,7 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 | `list_process_logs` | Shared logs: id, name, level, size, case notions, whether agents may tag cases. |
 | `get_process_overview` | Cases, events, durations, KPIs (optionally an SLA), top variants, top insights with their case filters. |
 | `get_process_overview_for_cases` | The overview of only the cases matching a case filter (same keys as insight cohorts, e.g. `{"attribute": "region=EU"}` or `{"activity": "Escalate"}`), next to the whole log: case count and share, durations, KPIs and top variants. Refused when fewer than 5 cases match. | aggregates |
+| `compare_process_cohorts` | Two case filters side by side: case counts, duration difference with a bootstrap interval, rework and SLA rate differences with intervals, activities more common in one group, and variant shares. Each group needs 5 cases; rows where a group has 1 to 4 cases are withheld. | aggregates |
 | `get_process_variants` | The most common paths with cases, share and median duration, and how much of the log they cover. Variants followed by fewer than 5 cases are withheld and counted. | aggregates |
 | `get_process_map` | The process map: activities, which directly follows which (counts and gaps), start and end activities, with optional activity and path sliders. Activities and transitions in fewer than 5 cases are withheld. | aggregates |
 | `get_process_duration_distribution` | Cases per duration band and the median, p90 and p95 duration (not the single shortest or longest case). | aggregates |

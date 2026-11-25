@@ -98,6 +98,30 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         return runtime_module.core._finish("get_process_overview_for_cases", result)
 
     @mcp.tool(annotations=_READ_ONLY)
+    def compare_process_cohorts(log_id: str, first: dict[str, Any], second: dict[str, Any],
+                                case_type: str | None = None, sla_hours: float | None = None) -> dict[str, Any]:
+        """Compare two groups of cases of a shared log, each given as a case filter (the same keys as insight
+        cohorts and get_process_overview_for_cases): case counts, duration difference with a bootstrap interval,
+        rework and SLA rate differences with intervals, which activities occur more in one group, and how their
+        variants differ. Each group needs at least 5 cases; rows where a group has 1 to 4 cases are withheld.
+        Differences describe the groups; they are not caused by the filter. Aggregates only.
+        """
+        if not isinstance(first, dict) or not isinstance(second, dict):
+            raise ToolError("first and second must be case filters (objects)")
+        payload: dict[str, Any] = {"first": first, "second": second}
+        if case_type is not None:
+            payload["case_type"] = case_type
+        if sla_hours is not None:
+            payload["sla_hours"] = sla_hours
+        runtime_module.authorize_tool("compare_process_cohorts")
+        try:
+            result = runtime_module.secure_post(f"/v1/process-intelligence/{_log(log_id)}/compare-cohorts", payload)
+        except Exception as exc:
+            raise ToolError(str(exc) or "process intelligence request failed") from None
+        result["interpretation"] = _NOTE
+        return runtime_module.core._finish("compare_process_cohorts", result)
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_trace_clusters(log_id: str, k: int | None = None, max_k: int = 8,
                                    case_type: str | None = None) -> dict[str, Any]:
         """Groups of cases of a shared log with similar behaviour (trace clustering): each cluster's cases and
