@@ -68,14 +68,16 @@
     const portfolioButton=button('Review all deployment evidence','secondary');portfolioButton.id='owgMonitorPortfolioShow';
     const portfolioControls=el('div',null,'row');portfolioControls.style.alignItems='end';
     portfolioControls.append(field('Portfolio recent days',portfolioDays),portfolioButton);
+    const rolloutButton=button('Review version rollout evidence','secondary');rolloutButton.id='owgMonitorRollout';
+    const rolloutHost=el('div');rolloutHost.id='owgMonitorRolloutPanel';portfolioControls.append(rolloutButton);
     const results=el('div');results.id='owgMonitorResults';
-    card.append(row,consentLabel,importButton,status,portfolioControls,portfolio,manage,results);
+    card.append(row,consentLabel,importButton,status,portfolioControls,portfolio,rolloutHost,manage,results);
     const anchor=document.getElementById('owgPddCard')||document.getElementById('owgCommsCard')||document.getElementById('owgEventLogCard');
     if(anchor)anchor.insertAdjacentElement('afterend',card);else panel.appendChild(card);
 
     let deployments=[],renderVersion=0,loadVersion=0,incidentVersion=0,releaseVersion=0,portfolioVersion=0;
     let incidentScope='selected',incidentStatus='',incidentSearch='';
-    const clearResults=()=>{portfolioVersion++;portfolio.replaceChildren();renderVersion++;incidentVersion++;incidentScope='selected';incidentStatus='';incidentSearch='';results.replaceChildren();channelHost.replaceChildren();incidentHost.replaceChildren();releaseVersion++;releaseHost.replaceChildren();document.getElementById('owgMonitorRunEvidencePanel')?.replaceChildren();};
+    const clearResults=()=>{portfolioVersion++;portfolio.replaceChildren();rolloutHost.replaceChildren();renderVersion++;incidentVersion++;incidentScope='selected';incidentStatus='';incidentSearch='';results.replaceChildren();channelHost.replaceChildren();incidentHost.replaceChildren();releaseVersion++;releaseHost.replaceChildren();document.getElementById('owgMonitorRunEvidencePanel')?.replaceChildren();};
     const refresh=()=>{importButton.disabled=!(file.files&&file.files[0]&&consent.checked);};
     file.onchange=refresh;consent.onchange=refresh;
     async function load(select){
@@ -403,6 +405,95 @@
         searchButton,prev,next,message,list,detailHost,pinsLabel,compareButton,clearPins,compareHost);
       prev.disabled=next.disabled=true;
     }
+    function openRolloutReview(){
+      const root=el('div');rolloutHost.replaceChildren(root);const active=()=>root.isConnected;
+      if(deployments.length<2){root.append(el('p','Retain at least two deployments with distinct version claims first.','note'));return;}
+      const selectField=(id,values)=>{const s=document.createElement('select');s.id=id;setOptions(s,values);return s;};
+      const options=[['','Choose deployment'],...deployments.map(d=>[d.deployment_id,d.name+' · '+d.runtime])];
+      const baseline=selectField('owgRolloutBaseline',options),candidate=selectField('owgRolloutCandidate',options);
+      const baselineDigest=input('owgRolloutBaselineDigest','text','Exact 64-character SHA-256'),candidateDigest=input('owgRolloutCandidateDigest','text','Exact 64-character SHA-256');
+      baselineDigest.maxLength=candidateDigest.maxLength=64;
+      const start=input('owgRolloutStart','text','2026-01-01T00:00:00Z'),end=input('owgRolloutEnd','text','2026-02-01T00:00:00Z');
+      const minimum=input('owgRolloutMinimum','number');minimum.min='1';minimum.max='50000';minimum.step='1';
+      const share=input('owgRolloutShare','number'),decrease=input('owgRolloutDecrease','number'),unknown=input('owgRolloutUnknown','number');
+      for(const n of [share,decrease,unknown]){n.min='0';n.max='100';n.step='any';}
+      const review=button('Review exact version cohorts','secondary'),download=button('Download review JSON','secondary');download.disabled=true;
+      const message=el('p',null,'muted');message.setAttribute('role','status');
+      const summary=el('div'),list=el('div'),detail=el('div');
+      const side=selectField('owgRolloutEvidenceSide',[['candidate','Candidate'],['baseline','Baseline']]);
+      const attr=selectField('owgRolloutEvidenceAttribution',[['exact','Exact version'],['unknown','Unhashed'],['other','Other version'],['all','All']]);
+      const outcome=selectField('owgRolloutEvidenceStatus',[['','Any status'],...['succeeded','failed','handed_to_human','cancelled','running'].map(v=>[v,v])]);
+      const prev=button('Previous evidence page','secondary'),next=button('Next evidence page','secondary');
+      const evidenceControls=el('div');evidenceControls.hidden=true;evidenceControls.append(field('Evidence cohort',side),field('Version attribution',attr),field('Reported status',outcome),prev,next);
+      let basis=null,population=null,latest=null,serial=0,detailSerial=0;
+      const invalidate=()=>{serial++;detailSerial++;basis=population=latest=null;download.disabled=true;review.disabled=false;evidenceControls.hidden=true;
+        summary.replaceChildren();list.replaceChildren();detail.replaceChildren();prev.disabled=next.disabled=true;message.textContent='Review inputs and calculate again.';};
+      for(const n of [baselineDigest,candidateDigest,start,end,minimum,share,decrease,unknown])n.oninput=invalidate;
+      for(const [node,digest] of [[baseline,baselineDigest],[candidate,candidateDigest]])node.onchange=()=>{
+        digest.value=deployments.find(d=>d.deployment_id===node.value)?.reported_spec_sha256||'';invalidate();};
+      const range=b=>b?pct(b.lower)+' – '+pct(b.upper):'Unavailable';
+      const post=body=>api('/v1/automation-monitoring/rollout-review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      async function openDetail(ref){
+        const ticket=++detailSerial;detail.replaceChildren(el('p','Reading pinned run report…'));
+        try{
+          const r=await api('/v1/automation-monitoring/deployments/'+encodeURIComponent(ref.deployment_id)+'/runs/detail?'+new URLSearchParams({run_id:ref.run_id,expected_sha256:ref.run_sha256}));
+          if(!active()||ticket!==detailSerial)return;
+          if(r.reference.run_sha256!==ref.run_sha256||r.reference.run_id!==ref.run_id||r.reference.deployment_id!==ref.deployment_id)throw Error('Unexpected run reference.');
+          detail.replaceChildren(el('h4','Exact reported run '+r.run.run_id),el('p',r.run.status+' · '+ref.run_sha256),
+            table(['Sequence','Step ID','Activity','Reported status','Reported time'],r.run.steps.map(x=>[x.seq,x.step_id,x.activity,x.status,x.at])),
+            el('p','Reported evidence only; not independent outcome verification.','muted'));
+        }catch(e){if(active()&&ticket===detailSerial)detail.replaceChildren(el('p',e.message,'note'));}
+      }
+      function draw(r){
+        const entries=['baseline','candidate'].map(k=>[k,r.cohorts[k]]);
+        summary.replaceChildren(el('h4','Version-attributed rollout review'),
+          el('p',r.all_declared_gates_met?'All declared evidence gates met; not rollout approval.':'At least one declared evidence gate is unmet or unresolved.','note'),
+          table(['Cohort','Deployment','All runs','Exact version','Other version','Unhashed','Attributed success bounds','Unhashed sensitivity bounds'],entries.map(([k,c])=>[k,c.name,c.all_retained_runs_in_window,c.attributed_runs,c.other_version_runs,c.unhashed_runs,range(c.attributed_eventual_success_share_bounds),range(c.possible_version_success_share_with_unhashed_bounds)])),
+          el('p','Candidate minus baseline reported success share: '+range(r.candidate_minus_baseline_attributed_success_share_bounds)+'; sensitivity including possible unhashed attribution: '+range(r.candidate_minus_baseline_with_unhashed_sensitivity_bounds)+'.'),
+          el('p','Same reported runtime: '+String(r.same_reported_runtime)+'. Exact selected spec matches current declaration: '+entries.map(([k,c])=>k+' '+String(c.selected_spec_matches_current_declaration)).join('; ')+'.'),
+          table(['Cohort','Attribution','Succeeded','Failed','Handoff','Cancelled','Running'],entries.flatMap(([k,c])=>Object.entries(c.status_counts_by_attribution).map(([a,v])=>[k,a,v.succeeded,v.failed,v.handed_to_human,v.cancelled,v.running]))),
+          table(['Declared gate','Status','Observed','Threshold'],r.review_gates.map(g=>[g.gate,g.status,typeof g.observed==='object'?range(g.observed):String(g.observed),String(g.threshold)])),
+          el('p','Population SHA-256: '+r.population_sha256,'muted'));
+        const notes=el('ul');r.interpretation.forEach(t=>notes.append(el('li',t)));summary.append(notes);
+        const p=r.evidence_page;
+        const grid=table(['Run ID','Start','Status','Attribution','Spec digest','Inspect'],p.rows.map(x=>[x.run_id,x.started_at,x.status,x.attribution,x.reported_spec_sha256||'Unknown','']));
+        p.rows.forEach((x,i)=>{const b=button('Inspect exact report','secondary');b.onclick=()=>openDetail(x.reference);grid.querySelector('tbody').rows[i].cells[5].append(b);});
+        list.replaceChildren(el('p',p.matching_runs+' matching evidence runs; showing '+p.rows.length+' at offset '+p.offset+'.'),grid);
+        prev.disabled=p.offset===0;next.disabled=p.next_offset===null;
+        prev.onclick=()=>loadPage(Math.max(0,p.offset-30));next.onclick=()=>{if(p.next_offset!==null)loadPage(p.next_offset);};
+      }
+      async function loadPage(offset=0){
+        if(!basis)return;const ticket=++serial;detailSerial++;detail.replaceChildren();list.replaceChildren();review.disabled=true;download.disabled=true;prev.disabled=next.disabled=true;
+        message.textContent='Reading exact retained version cohorts…';
+        try{
+          const r=await post({...basis,evidence_side:side.value,evidence_attribution:attr.value,evidence_status:outcome.value||null,
+                             offset,limit:30,...(population?{expected_population_sha256:population}:{})});
+          if(!active()||ticket!==serial)return;
+          if(population&&r.population_sha256!==population)throw Error('Unexpected rollout population.');
+          population=r.population_sha256;latest=r;draw(r);evidenceControls.hidden=false;download.disabled=false;message.textContent='Retained rollout evidence reviewed.';
+        }catch(e){if(active()&&ticket===serial){invalidate();message.textContent=e.message;}}
+        finally{if(active()&&ticket===serial)review.disabled=false;}
+      }
+      review.onclick=()=>{
+        invalidate();const nums=[minimum,share,decrease,unknown];
+        if(!baseline.value||!candidate.value||baseline.value===candidate.value||
+          ![baselineDigest,candidateDigest].every(n=>/^[a-f0-9]{64}$/.test(n.value))||baselineDigest.value===candidateDigest.value||
+          !start.value||!end.value||nums.some(n=>n.value===''||!n.checkValidity())){message.textContent='Select distinct deployments and digests, enter a common time window and every explicit threshold.';return;}
+        basis={baseline:{deployment_id:baseline.value,spec_sha256:baselineDigest.value},candidate:{deployment_id:candidate.value,spec_sha256:candidateDigest.value},
+          started_from:start.value,started_before:end.value,minimum_attributed_runs:Number(minimum.value),minimum_candidate_success_share:Number(share.value)/100,
+          maximum_success_share_decrease:Number(decrease.value)/100,maximum_unknown_attribution_share:Number(unknown.value)/100};
+        loadPage();
+      };
+      for(const n of [side,attr,outcome])n.onchange=()=>{if(basis&&population)loadPage();};
+      download.onclick=()=>{if(!latest||!active())return;const url=URL.createObjectURL(new Blob([JSON.stringify(latest,null,2)],{type:'application/json'}));
+        try{const a=el('a');a.href=url;a.download='owg-rollout-evidence-review.json';a.click();}finally{URL.revokeObjectURL(url);}};
+      root.append(el('h3','Version rollout evidence review'),el('p','Compare distinct retained deployments and exact reported specification digests in a common start window. All inputs are explicit. Gates are not approval, and no runtime is contacted.','muted'),
+        field('Baseline deployment',baseline),field('Baseline version SHA-256',baselineDigest),field('Candidate deployment',candidate),field('Candidate version SHA-256',candidateDigest),
+        field('Started from (inclusive UTC)',start),field('Started before (exclusive UTC)',end),field('Minimum exact-version runs per cohort',minimum),
+        field('Minimum candidate reported success (%)',share),field('Maximum candidate decrease (percentage points)',decrease),field('Maximum unhashed share (%)',unknown),
+        review,download,message,summary,evidenceControls,list,detail);
+    }
+    rolloutButton.onclick=openRolloutReview;
     evidenceButton.onclick=openRunEvidence;
     portfolioButton.onclick=renderPortfolio;
     releaseButton.onclick=()=>renderRelease().catch(error=>{status.textContent=error.message;});
