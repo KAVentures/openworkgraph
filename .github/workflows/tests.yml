@@ -174,6 +174,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_derive_window.cjs
       - name: Verify unusual cases are listed with their reasons
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_unusual_cases.cjs
+      - name: Verify semicolon and tab CSV files are split without a manual delimiter choice
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_csv_delimiter.cjs
       - name: Verify the owner sees the disk used by saved logs
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_storage.cjs
       - name: Verify due-date adherence is reported

@@ -70,6 +70,13 @@ mapping, `naive_timestamp_offset=+01:00` in the API). That choice is recorded
 with the import. XML with a `DOCTYPE` or entity declaration is refused before
 parsing.
 
+### Delimiters
+
+When you choose a CSV or text file, the dashboard reads its first rows on this computer and picks the
+delimiter (comma, semicolon, tab or pipe) that splits the header into the most columns, with the next
+rows splitting into the same number. Quoted cells may contain the delimiter. Comma wins ties, and a
+`.tsv` file is always read as tab-separated. You can still change **Delimiter** before importing.
+
 ### Compressed files
 
 Any import or appended file may be gzip-compressed, as public logs such as the BPI Challenge

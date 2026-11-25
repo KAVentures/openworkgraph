@@ -81,6 +81,30 @@
     return new Blob(parts).slice(0,bytes);
   }
   const headText=async(file,bytes)=>(await headBlob(file,bytes)).text();
+  // The first records of a CSV text (quoted cells may hold delimiters and line breaks).
+  function csvRecords(text,delimiter,limit){
+    const line=String(text||'').replace(/^\uFEFF/,''),records=[];let row=[],cell='',quoted=false;
+    for(let i=0;i<line.length&&records.length<limit;i++){
+      const c=line[i];
+      if(quoted){if(c==='"'&&line[i+1]==='"'){cell+='"';i++;}else if(c==='"')quoted=false;else cell+=c;}
+      else if(c==='"')quoted=true;
+      else if(c===delimiter){row.push(cell);cell='';}
+      else if(c==='\n'||c==='\r'){if(c==='\r'&&line[i+1]==='\n')i++;row.push(cell);records.push(row);row=[];cell='';}
+      else cell+=c;
+    }
+    return records;
+  }
+  // The delimiter that splits the header into the most columns, with the next complete rows splitting the same way.
+  // Comma wins ties; a file with one column keeps the comma. Returns the delimiter select's value.
+  function guessDelimiter(text){
+    let best=',',width=1;
+    for(const [value,sep] of [[',',','],[';',';'],['t','\t'],['|','|']]){
+      const [header,...rows]=csvRecords(text,sep,6);
+      if(!header||header.length<2||rows.some(row=>row.length!==header.length))continue;
+      if(header.length>width){best=value;width=header.length;}
+    }
+    return best;
+  }
   function detectFormat(name){
     const lower=String(name||'').toLowerCase().replace(/\.gz$/,'');
     if(lower.endsWith('.xes'))return 'xes';
@@ -432,6 +456,17 @@
         }
         format.value=detectFormat(chosen.name);
         if(chosen.name.toLowerCase().endsWith('.tsv'))delimiter.value='t';
+        else if(format.value==='csv'){
+          // Semicolon, tab and pipe exports are common (for example from spreadsheets in many locales).
+          // A newer file or a delimiter chosen by hand while this read runs starts its own column read.
+          const before=delimiter.value;status('Reading file columns…');
+          void headText(chosen,65536).then(guessDelimiter,()=>null).then(guess=>{
+            if(file.files?.[0]!==chosen||delimiter.value!==before)return;
+            if(guess&&format.value==='csv')delimiter.value=guess;
+            void readColumns();
+          });
+          return;
+        }
       }
       void readColumns();
     };
