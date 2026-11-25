@@ -609,5 +609,5 @@ def detect_format(head: bytes) -> str:
 __all__ = [
     "CASE_TYPE", "EventLogFormatError", "EventRecord", "ObjectRecord", "ReadStats",
     "detect_format", "parse_timestamp", "read_csv", "read_ocel_json", "read_ocel_xml", "read_xes",
-    "ocel_json_document", "write_csv", "write_ocel_json", "write_ocel_xml", "write_xes",
+    "write_csv", "write_ocel_json", "write_ocel_xml", "write_xes",
 ]
