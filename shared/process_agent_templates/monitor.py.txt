@@ -92,6 +92,7 @@ def report(spec, records, deployment_name):
     declared_actions=[];declared_preconditions=set();preconditions_seen=set()
     checkpoint_kind=None;checkpoint_attempt=None;initial_checked=False;completion_checked=False
     expected_source_rules=[];source_checks={};source_number=0;source_key=None;source_consumed=set()
+    checkpoint_times={};last_checkpoint_time=None
     if dependent:
         from owg_model.process_model import ProcessModel
         from owg_model.process_decision_tables import decision_order
@@ -152,9 +153,24 @@ def report(spec, records, deployment_name):
             _fail()
         previous = stamp
         phase = row['phase']
+        if dependent and phase in {'source_rule_checked','decision_table_checked'}:
+            purpose=row.get('checkpoint_purpose');attempt=row.get('checkpoint_attempt')
+            if not isinstance(purpose,str) or (attempt is not None and type(attempt) is not int):
+                _fail()
+            key=(purpose,attempt)
+            checked_at=_stamp(row.get('checkpoint_checked_at'))
+            if key in checkpoint_times:
+                if checkpoint_times[key]!=checked_at:
+                    _fail()
+            else:
+                if last_checkpoint_time is not None and checked_at<last_checkpoint_time:
+                    _fail()
+                checkpoint_times[key]=checked_at;last_checkpoint_time=checked_at
+            if phase=='decision_table_checked' and row.get('checked_on_utc')!=checked_at.date().isoformat():
+                _fail()
         if dependent and expected_source_rules and phase=='source_rule_checked':
             number=row.get('checkpoint_number');purpose=row.get('checkpoint_purpose');attempt=row.get('checkpoint_attempt')
-            if type(number) is not int or purpose not in {'initial','precondition','action','completion'}:
+            if type(number) is not int or not isinstance(purpose,str) or purpose not in {'initial','precondition','action','completion'}:
                 _fail()
             if purpose in {'initial','completion'}:
                 if attempt is not None or (purpose=='initial' and (attempts or number!=1)):
