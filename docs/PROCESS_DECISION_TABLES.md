@@ -594,3 +594,40 @@ and precondition declarations are still customer assertions, not independent
 proof of the authorized intent or provider operations. The monitor does not
 reconstruct private case inputs or tool arguments and does not establish
 business outcomes from journal text.
+
+
+## Offline declared-fact scenario review
+
+Generated SDK releases include review_facts.py for local review of hypothetical
+or explicitly supplied business facts, distinct from authenticated source
+planning. Use the existing exact-spec reviewed shadow suite with each input
+object containing the scenario's facts, and run:
+
+```sh
+python review_facts.py --cases reviewed-cases.json --as-of-date 2026-06-01 \
+  --output fact-review.json --confirm-declared-fact-review
+```
+
+The explicit scenario date governs policy effective dates. The shared predicate
+evaluator supports bounded JSON facts, including business fields unavailable
+to current-source adapters; the shared decision evaluator handles required
+decisions and refuses supplied values that conflict with derived dependency
+paths. The same deterministic route search evaluates complete schedules,
+distinguishes excluded routes from unresolved alternatives and compares
+unique candidates with reviewed expectations.
+
+The report has its own format (openworkgraph.declared-fact-route-review.v1)
+and is not an executable planner result or current-source review. It includes
+only rule/table identifiers, status codes, bounded candidate activity sequences,
+case IDs, hashes, scenario date and aggregate agreement counts. No case values,
+model calls, source reads or business operations are included. A 50-case,
+256 KiB suite limit, bounded per-case search and shared 500,000-work budget
+apply; incomplete searches remain unknown rather than agreement or mismatch.
+Review flags and exit status reflect unknown and mismatching cases.
+The command creates a new report only. Hypothetical facts never establish
+policy authority, actual record state, historical truth or permission to act.
+
+The synthetic acceptance suites cover arbitrary numeric facts, missing values,
+dependency conflicts, effective-date expiry, changed suite pins, exhausted
+batch budgets and explicit local review. Actual customer-policy validity and
+source integration must still be independently validated.
