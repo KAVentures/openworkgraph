@@ -100,17 +100,6 @@ without limit; a damaged archive is refused. The dashboard picks the format from
 report's digests describe the decompressed bytes, so the same log compressed or not counts as the same
 file.
 
-### Separate date and time columns
-
-Some exports, such as SAP and other ERP change documents, put the date and the time of day in two
-columns ("Posting Date" and "Time"). Choose the date column as the timestamp column and the other as
-**Time-of-day column** (`time_column=` on the import, append, preview and format-detection routes).
-Each row is read as the date, a space and the time, so a declared format covers both, for example
-`%d.%m.%Y %H:%M:%S`. A row without a time keeps only its date, which a format with a time rejects
-rather than reading as midnight. A row without a date has no timestamp. The time column is recorded
-in the import's transform. The dashboard preselects both when a file has a column named like a date
-and another named like a time.
-
 ### Timestamp formats
 
 ISO 8601 times (`2024-03-04T14:05:00Z`, `2024-03-04 14:05:00+01:00`) need no
@@ -168,6 +157,17 @@ Columns are matched by name, and source event identity settings stay separate.
 header, optional `other_headers` with columns for up to three other delimiters,
 and optional `preferred_log_id`. Each match includes its
 `missing_attribute_columns`.
+
+### Separate date and time columns
+
+Some exports, such as SAP and other ERP change documents, put the date and the time of day in two
+columns ("Posting Date" and "Time"). Choose the date column as the timestamp column and the other as
+**Time-of-day column** (`time_column=` on the import, append, preview and format-detection routes).
+Each row is read as the date, a space and the time, so a declared format covers both, for example
+`%d.%m.%Y %H:%M:%S`. A row without a time keeps only its date, which a format with a time rejects
+rather than reading as midnight. A row without a date has no timestamp. The time column is recorded
+in the import's transform. The dashboard preselects both when a file has a column named like a date
+and another named like a time.
 
 ### Preview a CSV mapping
 
