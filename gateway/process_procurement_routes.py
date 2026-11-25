@@ -3,7 +3,7 @@ from fastapi import Depends,Path,Query,Request
 from fastapi.responses import Response
 from starlette.concurrency import run_in_threadpool
 
-from .process_procurement import SharedProcurement,Submit,Decision,Remove
+from .process_procurement import SharedProcurement,Submit,Decision,Remove,Handoff
 from shared.agent_procurement import MAX_BYTES
 
 
@@ -37,6 +37,12 @@ def add_routes(router,store,human,body,response):
         await run_in_threadpool(response,procurement.preflight,p,workflow_id,"review")
         return await run_in_threadpool(response,procurement.decide,p,workflow_id,
                                        await body(request,Decision,maximum=MAX_BYTES*2+65536))
+
+    @router.post(base+"/check-handoff")
+    async def check_handoff(request:Request,workflow_id:str=Path(pattern=ident),p=Depends(human)):
+        await run_in_threadpool(response,store.require_scope,p,"org:process:read")
+        return await run_in_threadpool(response,procurement.check_handoff,p,workflow_id,
+                                       await body(request,Handoff,maximum=MAX_BYTES*2+65536))
 
     @router.post(base+"/delete")
     async def delete(request:Request,workflow_id:str=Path(pattern=ident),p=Depends(human)):

@@ -50,3 +50,25 @@ costs, case independence and business outcomes are not independently
 verified. Approval is for further rehearsal review, not purchasing,
 execution, production rollout, or a change to any deployment. Portfolio
 does not sum savings or compare incomparable process populations.
+
+
+## Bind the approved organization assessment to local substitution
+
+After creating the local selection decision and its receipt with
+AGENT_PROCUREMENT_SELECTION.md, open the approved shared assessment.
+Use **Check current shared approval for this selection**, choose the exact
+local selection decision bundle and supply its receipt_sha256. Explicitly
+confirm sending the selected bundle to the organization Gateway. It
+recomputes the local decision, requires the current approved shared
+assessment and exact approval/access/revision pins, and checks candidate,
+configuration, nomination, assessment and specification identity.
+
+API: POST .../procurement/check-handoff. Fields:
+expected_procurement_revision, expected_access_revision,
+expected_approval_sha256 (the shared artifact content_sha256),
+expected_selection_receipt_sha256, bundle (the local selection decision
+JSON string), user_confirmed. Requires delegated process read access.
+The response is a minimized point-in-time handoff check. It does not
+persist the bundle or create a new approval. It is not signed, cannot
+authenticate an offline copy and must be refreshed before relying on
+current shared approval. No execution or production rollout permission.

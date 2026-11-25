@@ -80,6 +80,31 @@
      })));
     }
    }
+   if(item&&view.current_approved_rehearsal_review){
+    const file=el('input');file.type='file';file.accept='.json,application/json';file.setAttribute('aria-label','Exact local selection decision bundle');
+    const pin=el('input');pin.type='text';pin.maxLength=64;pin.setAttribute('aria-label','Local selection receipt SHA-256');
+    const consent=el('input');consent.type='checkbox';const resultHost=el('div');
+    const reset=()=>{consent.checked=false;resultHost.replaceChildren();};file.onchange=reset;pin.oninput=reset;
+    detailHost.append(el('h4','Check approved local substitution handoff'),
+      el('p','Checks the exact local selection against the current authenticated shared decision. This is a point-in-time check, not a transferable approval or execution grant.'),
+      label('Exact local selection decision bundle',file),label('Local selection receipt SHA-256',pin),
+      label('I confirm this exact bundle may be inspected by the organization Gateway',consent),
+      button('Check current shared approval for this selection',()=>work(async current=>{
+       resultHost.replaceChildren();
+       if(!consent.checked||!file.files?.[0]||file.files[0].size>8*1024*1024||!/^[a-f0-9]{64}$/.test(pin.value))throw Error('Choose the exact decision bundle, receipt hash and confirm.');
+       const expectedPin=pin.value;const selectedFile=file.files[0];const bundle=await selectedFile.text();
+       if(!current()||file.files?.[0]!==selectedFile||pin.value!==expectedPin||!consent.checked)return;
+       const result=await call(path()+'/check-handoff',{expected_procurement_revision:item.revision,
+          expected_access_revision:view.access_revision,expected_approval_sha256:item.content_sha256,
+          expected_selection_receipt_sha256:expectedPin,bundle,user_confirmed:true});
+       if(!current()||file.files?.[0]!==selectedFile||pin.value!==expectedPin||!consent.checked)return;
+       resultHost.append(el('p','Current shared rehearsal approval matched at '+result.checked_at+'. No execution authorized.'),
+        button('Download point-in-time handoff check',()=>{
+         const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)],{type:'application/json'}));
+         const a=el('a');a.href=url;a.download='owg-shared-procurement-handoff.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+        }));consent.checked=false;
+      })),resultHost);
+   }
    if(item&&view.permissions.delete){
     const confirm=el('input');confirm.type='checkbox';
     detailHost.append(label('Confirm deletion of all shared procurement revisions',confirm),button('Delete procurement history',()=>work(async current=>{

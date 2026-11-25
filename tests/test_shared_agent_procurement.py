@@ -5,7 +5,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from gateway.process_procurement import SharedProcurement,Submit,Decision,Remove,namespace
+from gateway.process_procurement import SharedProcurement,Submit,Decision,Remove,Handoff,namespace
 from gateway.process_collaboration import SharedProcessWrite,ProcessMember,ProcessDeleteWrite,ProcessCollaborationError
 from shared.agent_procurement import digest
 from shared.agent_procurement_trials import freeze
@@ -133,3 +133,48 @@ def test_http_auth_and_portal(tmp_path):
         assert response.json()["items"]==[]
         assert "procurementInventory" in client.get("/processes").text
         assert "owgSharedProcurement" in client.get("/process-procurement-client.js").text
+
+
+def handoff_inputs(submitted):
+    from shared.agent_procurement_selection import operation
+    gov,wid,body,bundle,process=submitted
+    gov.decide(person("bob"),wid,decision(gov,wid,bundle))
+    item=gov.detail(person(),wid)["artifact"]
+    packet={k:process[k] for k in ("workflow_id","revision","content_sha256","process_model")}
+    packet.update(format="openworkgraph.versioned-process-export.v1",execution_authorization=False,
+                  organization_catalog_reference={"organization_id":"acme"})
+    value={**bundle,"request":{"decision":"select_for_substitution_rehearsal","reviewer_alias":"reviewer",
+           "expected_assessment_sha256":item["summary"]["assessment_sha256"],
+           "expected_nomination_sha256":item["summary"]["nomination_sha256"],"confirmed":True}}
+    receipt=operation(packet,"decide",value)
+    request=Handoff(expected_procurement_revision=item["revision"],expected_access_revision=item["submitted_access_revision"],
+                    expected_approval_sha256=item["content_sha256"],expected_selection_receipt_sha256=receipt["receipt_sha256"],
+                    bundle=json.dumps(value),user_confirmed=True)
+    return gov,wid,request,packet,value
+
+
+def test_shared_handoff_matches_exact_approved_selection(submitted):
+    gov,wid,request,packet,value=handoff_inputs(submitted)
+    checked=gov.check_handoff(person("reader"),wid,request)
+    assert checked["current_shared_rehearsal_approval_at_inspection"]
+    assert checked["selection_receipt_sha256"]==request.expected_selection_receipt_sha256
+    assert checked["candidate_id"]=="cheap"
+    assert not checked["execution_authorized"] and not checked["result_is_transferable_authorization"]
+    assert "PRIVATE_ALIAS" not in json.dumps(checked)
+    assert checked["handoff_check_sha256"]==digest({k:v for k,v in checked.items() if k!="handoff_check_sha256"})
+    with pytest.raises(ProcessCollaborationError):gov.check_handoff(person(org="foreign"),wid,request)
+    with pytest.raises(ProcessCollaborationError):gov.check_handoff(person("reader"),wid,request.model_copy(update={"expected_selection_receipt_sha256":"f"*64}))
+    with pytest.raises(ProcessCollaborationError):gov.check_handoff(person("reader"),wid,request.model_copy(update={"user_confirmed":False}))
+    assert gov.detail(person(),wid)["latest_revision"]==2
+
+
+def test_shared_handoff_rejects_retain_and_access_change(submitted):
+    from shared.agent_procurement_selection import operation
+    gov,wid,request,packet,value=handoff_inputs(submitted)
+    value["request"]["decision"]="retain_baseline"
+    alternate=operation(packet,"decide",value)
+    with pytest.raises(ProcessCollaborationError,match="does not match"):
+        gov.check_handoff(person("reader"),wid,request.model_copy(update={"bundle":json.dumps(value),"expected_selection_receipt_sha256":alternate["receipt_sha256"]}))
+    grant(gov.store,wid,members=[],expected=2)
+    with pytest.raises(ProcessCollaborationError,match="Current authenticated"):
+        gov.check_handoff(person("reader"),wid,request)

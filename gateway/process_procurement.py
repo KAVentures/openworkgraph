@@ -49,6 +49,15 @@ class Decision(Strict):
     user_confirmed: StrictBool
 
 
+class Handoff(Strict):
+    expected_procurement_revision: Annotated[StrictInt,Field(ge=1,le=MAX_REVISIONS)]
+    expected_access_revision: AccessRevision
+    expected_approval_sha256: Hash
+    expected_selection_receipt_sha256: Hash
+    bundle: Bundle
+    user_confirmed: StrictBool
+
+
 class Remove(Strict):
     expected_procurement_revision: Revision
     expected_access_revision: AccessRevision
@@ -197,6 +206,59 @@ class SharedProcurement:
                 "authenticated_gateway_actor_decisions":True,"real_world_identity_independently_verified":False,
                 "raw_trial_bundles_retained":False,"business_outcomes_verified":False,
                 "provider_cost_verified":False,"execution_authorized":False,"production_rollout_authorized":False}
+
+    def check_handoff(self,p,wid,body):
+        """Check a portable local selection against the CURRENT shared decision.
+
+        A successful check is an observation of catalog state at inspection,
+        not a transferable credential, authorization or durable approval.
+        """
+        self.store.require_scope(p,"org:process:read")
+        if not body.user_confirmed:
+            raise Error("Explicit confirmation of selection bundle inspection required",422)
+        with self.catalog.reading(p) as c:
+            view=self.view(c,p,wid)
+            current=view["artifact"]
+            if not current or not view["current_approved_rehearsal_review"]:
+                raise Error("Current authenticated shared rehearsal approval required",409)
+            if (view["latest_revision"]!=body.expected_procurement_revision or
+                view["access_revision"]!=body.expected_access_revision or
+                current["content_sha256"]!=body.expected_approval_sha256):
+                raise Error("Shared procurement approval or access changed; reload",409)
+            packet=self._packet(c,p,wid,current["summary"]["process_reference"]["revision"])
+            try:
+                selection_bundle=loads(body.bundle)
+                receipt=operation(packet,"decide",selection_bundle)
+            except (ValueError,TypeError,KeyError,OverflowError,RecursionError):
+                raise Error("Invalid or incompatible selection decision bundle",422) from None
+            summary=current["summary"]
+            if (receipt["receipt_sha256"]!=body.expected_selection_receipt_sha256 or
+                receipt["rehearsal_candidate_id"]!=summary["candidate"]["candidate_id"] or
+                receipt["assessment_sha256"]!=summary["assessment_sha256"] or
+                receipt["nomination_sha256"]!=summary["nomination_sha256"] or
+                receipt["process_reference"]!=summary["process_reference"] or
+                receipt["spec_sha256"]!=summary["spec_sha256"] or
+                receipt["candidate"]!=summary["candidate"] or
+                receipt["baseline_candidate_id"]!=summary["baseline_candidate_id"]):
+                raise Error("Local selection does not match the exact shared approval",409)
+            result={"format":"openworkgraph.shared-procurement-handoff-check.v1",
+                    "organization_id":p.organization_id,"process_reference":summary["process_reference"],
+                    "spec_sha256":summary["spec_sha256"],"procurement_revision":current["revision"],
+                    "access_revision":view["access_revision"],"approval_sha256":current["content_sha256"],
+                    "assessment_sha256":summary["assessment_sha256"],"nomination_sha256":summary["nomination_sha256"],
+                    "selection_receipt_sha256":receipt["receipt_sha256"],
+                    "candidate_id":receipt["rehearsal_candidate_id"],
+                    "candidate_configuration_sha256":receipt["candidate"]["configuration_sha256"],
+                    "baseline_candidate_id":receipt["baseline_candidate_id"],
+                    "checked_at":_now(),"current_shared_rehearsal_approval_at_inspection":True,
+                    "authenticated_gateway_reviewer_separation_at_inspection":True,
+                    "independent_evidence_authenticity_verified":False,"execution_authorized":False,
+                    "production_rollout_authorized":False,"result_is_transferable_authorization":False}
+        self.db.audit(organization_id=p.organization_id,principal_id=p.audit_id,
+                      action="process.procurement.handoff.checked",details={"workflow_id":wid,
+                        "procurement_revision":result["procurement_revision"],"approval_sha256":result["approval_sha256"],
+                        "selection_receipt_sha256":result["selection_receipt_sha256"]})
+        return {**result,"handoff_check_sha256":digest(result)}
 
     def detail(self,p,wid,revision=None):
         with self.catalog.reading(p) as c:result=self.view(c,p,wid,revision)
