@@ -2058,6 +2058,14 @@ their definitions for review, and **Check object rules** evaluates them against 
 **Update loaded rule set** saves edits to the loaded revision. Deleting a saved set leaves the
 current draft available. Deleting its log also deletes its saved sets.
 
+Use **Transfer object rule definitions** to download the editor's rule set as a
+JSON file. In another log, preview the file to see which exact object types,
+activity labels, or supplied relationship qualifiers are absent. The preview
+checks label presence only. Load the definitions into the editor, then save as
+a new rule set or check the rules explicitly. The JSON contains the name and
+definitions. The preview endpoint is
+`POST /v1/event-logs/{log_id}/object-rule-sets/template/preview`.
+
 Choose a second retained object log and select **Compare object rules** to evaluate the same draft
 against both whole logs. The comparison shows violating and activated counts, the violation rate,
 and the percentage-point change from the baseline. A rate change requires a complete result and

@@ -3843,15 +3843,67 @@
     }
     const savedCurrent=()=>generation===state.generation&&box.isConnected;
     const savedBase=base+'/object-rule-sets';
-    let sets=[],loaded=null,savedBusy=false;
+    const templateFormat='openworkgraph.object-rule-set.v1';
+    const transfer=document.createElement('details');transfer.id='owgObjectRuleTransfer';
+    const transferStatus=el('p',null,'muted');transferStatus.setAttribute('role','status');
+    const transferChecks=el('div');
+    const templateFile=input('owgObjectRuleTemplateFile','file');templateFile.accept='.json,application/json';
+    const previewFile=button('Preview rule set file','secondary');previewFile.id='owgObjectRulePreviewTemplate';previewFile.disabled=true;
+    const applyFile=button('Load previewed object rules','secondary');applyFile.id='owgObjectRuleApplyTemplate';applyFile.disabled=true;
+    const downloadDraft=button('Download object rule definitions','secondary');downloadDraft.id='owgObjectRuleDownloadTemplate';
+    transfer.append(el('summary','Transfer object rule definitions'),field('Object rule set JSON',templateFile),
+      previewFile,applyFile,downloadDraft,transferStatus,transferChecks);
+    savedStatus.after(transfer);
+    let sets=[],loaded=null,savedBusy=false,templateTurn=0,previewed=null;
     function syncSaved(){
       const selected=sets.find(entry=>entry.set_id===savedPick.value);
       savedPick.disabled=savedBusy||!sets.length;
       loadSet.disabled=deleteSet.disabled=savedBusy||!selected;
       const canSave=!savedBusy&&rules.length>0&&Boolean(savedName.value.trim());
-      saveSet.disabled=!canSave;
+      saveSet.disabled=downloadDraft.disabled=!canSave;
       updateSet.disabled=!canSave||!loaded||!selected||loaded.set_id!==selected.set_id;
+      applyFile.disabled=savedBusy||!previewed;
     }
+    function clearTemplate(){
+      templateTurn++;previewed=null;applyFile.disabled=true;
+      transferStatus.textContent='';transferChecks.replaceChildren();
+      previewFile.disabled=!templateFile.files?.length;
+    }
+    templateFile.onchange=clearTemplate;
+    previewFile.onclick=async()=>{
+      clearTemplate();
+      const file=templateFile.files?.[0],ticket=templateTurn;
+      if(!file)return;
+      if(file.size>128*1024){transferStatus.textContent='Choose a JSON file of at most 128 KiB.';return;}
+      const active=()=>savedCurrent()&&ticket===templateTurn;
+      previewFile.disabled=true;transferStatus.textContent='Checking labels in this log…';
+      try{
+        const result=await(await api(savedBase+'/template/preview',{
+          method:'POST',headers:{'Content-Type':'application/json'},body:file
+        })).json();
+        if(!active())return;
+        previewed=result.definition;
+        const labels=values=>values.length?values.map(value=>JSON.stringify(value)).join(', '):'—';
+        transferChecks.append(table(['Rule','Missing object types','Missing activities','Missing qualifiers'],
+          result.label_checks.map(check=>[check.description,labels(check.missing_object_types),
+            labels(check.missing_activities),labels(check.missing_qualifiers)])));
+        transferStatus.textContent=result.definition.name+' · '+result.definition.rules.length+
+          ' rules. Review the labels, then load the definitions into the editor.';
+        syncSaved();
+      }catch(error){if(active())transferStatus.textContent=error.message;}
+      finally{if(active())previewFile.disabled=false;}
+    };
+    applyFile.onclick=()=>{
+      if(!previewed)return;
+      const definition=previewed;
+      loaded=null;savedPick.value='';savedName.value=definition.name;
+      rules.splice(0,rules.length,...definition.rules);
+      templateFile.value='';clearTemplate();drawPending();
+      transferStatus.textContent='Loaded into the editor. Save as a new rule set to keep it with this log.';
+    };
+    downloadDraft.onclick=()=>download('owg-object-rules.json',JSON.stringify({
+      format:templateFormat,definition:{name:savedName.value.trim(),rules}
+    },null,2),'application/json');
     async function refreshSaved(preferred=savedPick.value){
       const data=await getJSON(savedBase);
       if(!savedCurrent())return;

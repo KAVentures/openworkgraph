@@ -12,6 +12,8 @@ from . import event_log_object_constraints as constraints
 from . import event_log_workspace as workspace
 
 MAX_SETS = 30
+TEMPLATE_FORMAT = "openworkgraph.object-rule-set.v1"
+MAX_TEMPLATE_BYTES = 128 * 1024
 
 
 class _NewSet(constraints.RuleSet):
@@ -69,6 +71,44 @@ def listing(log_id: str) -> dict[str, Any]:
 
 def get(log_id: str, set_id: str) -> dict[str, Any]:
     return _with_log(log_id, lambda conn: _read(conn, log_id, set_id))
+
+
+def preview_template(log_id: str, document: Any) -> dict[str, Any]:
+    if (not isinstance(document, dict) or set(document) != {"format", "definition"}
+            or document["format"] != TEMPLATE_FORMAT):
+        raise workspace.EventLogWorkspaceError("choose an OWG object rule set file")
+    settings, name, encoded = _parse(_NewSet, document["definition"])
+    try:
+        name.encode("utf-8")
+        encoded.encode("utf-8")
+    except UnicodeEncodeError:
+        raise workspace.EventLogWorkspaceError("rule definitions must use valid Unicode") from None
+    rules = json.loads(encoded)["rules"]
+
+    def run(conn):
+        types = {rule[key] for rule in rules for key in ("object_type", "related_type") if key in rule}
+        activities = {rule[key] for rule in rules
+                      for key in ("activity", "via_activity", "required_activity") if key in rule}
+        qualifiers = {rule["qualifier"] for rule in rules if "qualifier" in rule}
+        present_types = {row[0] for row in conn.execute("""SELECT DISTINCT object_type FROM objects
+            WHERE log_id = ? AND list_contains(?, object_type)""", [log_id, sorted(types)]).fetchall()}
+        present_activities = {row[0] for row in conn.execute("""SELECT DISTINCT activity FROM events
+            WHERE log_id = ? AND list_contains(?, activity)""", [log_id, sorted(activities)]).fetchall()}
+        present_qualifiers = {row[0] for row in conn.execute("""SELECT DISTINCT qualifier FROM object_relationships
+            WHERE log_id = ? AND list_contains(?, qualifier)""", [log_id, sorted(qualifiers)]).fetchall()}
+        checks = []
+        for rule, parsed in zip(rules, settings.rules):
+            checks.append({
+                "description": constraints.describe(parsed),
+                "missing_object_types": sorted({rule[key] for key in ("object_type", "related_type")
+                                                if key in rule and rule[key] not in present_types}),
+                "missing_activities": sorted({rule[key] for key in ("activity", "via_activity", "required_activity")
+                                              if key in rule and rule[key] not in present_activities}),
+                "missing_qualifiers": [rule["qualifier"]] if "qualifier" in rule
+                and rule["qualifier"] not in present_qualifiers else [],
+            })
+        return {"format": TEMPLATE_FORMAT, "definition": {"name": name, "rules": rules}, "label_checks": checks}
+    return _with_log(log_id, run)
 
 
 def save(log_id: str, spec: Any) -> dict[str, Any]:
