@@ -100,6 +100,25 @@
         filter.onchange=drawWorklist;
         section.append(label('Filter reassessment worklist',filter),count,list);drawWorklist();output.append(section);
       }
+      const basis=graph.focused_build_basis;
+      if(basis){
+        const section=el('section');section.id='dependencyFocusedBuildBasis';
+        section.append(el('h4','Selected process prerequisite basis'),
+          el('p',basis.all_declared_prerequisites_current?
+            'All declared prerequisites and this process have a current reviewed design and declaration.':
+            basis.review_needed_count+' of '+basis.process_count+' processes in this prerequisite closure need reassessment.'),
+          el('p','Unrelated consumers do not affect this focused basis. It is not execution approval.'),
+          el('p','Exact basis SHA-256: '+basis.basis_sha256));
+        const list=el('ul');
+        for(const row of basis.processes){
+          const node=data.nodes.find(n=>n.workflow_id===row.workflow_id);
+          const item=el('li',(node?.available?node.title:row.workflow_id)+' · '+row.status.replaceAll('_',' ')+
+            ' · model r'+(row.current_model.revision??'unknown')+' · dependency r'+(row.declaration?.revision??'unassessed'));
+          if(row.direct_findings.length)item.append(el('p',row.direct_findings.map(v=>v.replaceAll('_',' ')).join('; ')));
+          list.append(item);
+        }
+        section.append(list);output.append(section);
+      }
       if(graph.impact){
         const groups=[
           ['Prerequisites',graph.impact.prerequisites,'prerequisites',' → '],
