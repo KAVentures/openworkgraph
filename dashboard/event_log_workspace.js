@@ -10793,6 +10793,8 @@
     const deliveryRefresh=button('Refresh delivery status','secondary');deliveryRefresh.id='owgSignalDeliveryRefresh';
     const deliveryRemove=button('Remove webhook and erase queued alerts','secondary');deliveryRemove.id='owgSignalDeliveryRemove';deliveryRemove.disabled=true;
     const deliveryResume=button('Resume paused webhook','secondary');deliveryResume.id='owgSignalDeliveryResume';deliveryResume.disabled=true;
+    const deliveryPause=button('Pause webhook without deleting queue','secondary');deliveryPause.id='owgSignalDeliveryPause';deliveryPause.disabled=true;
+    const deliveryQueue=el('div');deliveryQueue.id='owgSignalDeliveryQueue';
     const deliveryStatus=el('p','No external delivery is enabled by default.','muted');
     deliveryStatus.id='owgSignalDeliveryStatus';deliveryStatus.setAttribute('role','status');
     const deliverySecret=input('owgSignalDeliverySecret','password');deliverySecret.readOnly=true;deliverySecret.autocomplete='off';
@@ -10805,7 +10807,7 @@
     deliveryPanel.append(deliveryHeading,deliveryNote,field('HTTPS webhook receiver',deliveryUrl),
       field('I authorize OWG to send external signal attention notifications',deliveryConsent),
       field('I reviewed the outbound disclosure: only counts and opaque notification IDs, no saved work or case evidence',countsConsent),
-      deliveryEnable,deliveryRefresh,deliveryResume,deliveryRemove,deliveryStatus,secretPane);
+      deliveryEnable,deliveryRefresh,deliveryPause,deliveryResume,deliveryRemove,deliveryStatus,deliveryQueue,secretPane);
     const transitionHeading=el('h4','Signal state changes');
     const transitionNote=el('p','Locally recorded triggered and cleared transitions from explicit or scheduled evaluations. Repeated unchanged results do not create alerts. This is not live source monitoring or a notification feed. Up to 5,000 transitions are retained per log.','muted');
     const transitionRefresh=button('Refresh signal changes','secondary');transitionRefresh.id='owgSignalTransitionRefresh';
@@ -10854,10 +10856,12 @@
     rules.after(signalPackControls(selectedLogId,refresh));
     const inboxBase=()=>'/v1/event-logs/'+encodeURIComponent(selectedLogId)+'/signal-inbox';
     const deliveryBase=()=>'/v1/schedules/signal-delivery/'+encodeURIComponent(selectedLogId);
-    let deliveryRequestId=0,hasDelivery=false;
+    let deliveryRequestId=0,hasDelivery=false,deliveryChannel=null,deliveryMutation=false;
     const deliverySync=()=>{
       deliveryEnable.disabled=hasDelivery||!deliveryConsent.checked||!countsConsent.checked||!deliveryUrl.value.trim();
-      deliveryRemove.disabled=!hasDelivery;
+      deliveryRemove.disabled=!hasDelivery||deliveryMutation;
+      deliveryPause.disabled=deliveryMutation||!deliveryChannel?.enabled;
+      deliveryResume.disabled=deliveryMutation||!deliveryChannel||deliveryChannel.enabled!==false;
     };
     deliveryConsent.onchange=countsConsent.onchange=deliveryUrl.oninput=deliverySync;
     const refreshDelivery=async()=>{
@@ -10865,7 +10869,8 @@
       const value=await getJSON(deliveryBase());
       if(generation!==state.generation||requestId!==deliveryRequestId)return;
       hasDelivery=value.configured===true;
-      deliveryResume.disabled=!hasDelivery||value.enabled!==false;
+      deliveryChannel=hasDelivery?value:null;
+      renderDeliveryQueue(value);
       deliveryStatus.textContent=hasDelivery
         ?'Counts-only webhook: '+(value.enabled?'enabled':'paused')+' for '+value.recipient_host+
           '; '+value.pending_notifications+' pending, '+value.delivered_notifications+
@@ -10873,6 +10878,47 @@
           ' No source facts or identities are included.'
         :'External alerts are disabled. Create an explicit saved-signal schedule first, then review the two delivery acknowledgements.';
       deliverySync();
+    };
+    const renderDeliveryQueue=value=>{
+      deliveryQueue.replaceChildren();
+      if(!value.configured)return;
+      deliveryQueue.append(el('h4','Pending external notifications'),
+        el('p','These are queued counts, not current signal evaluations. Delivery may already have reached a receiver after an unacknowledged attempt. Pause before dismissing a group. Dismissal does not acknowledge or clear signals.','muted'),
+        el('p',(value.dismissed_state_keys||0)+' exact states dismissed in this channel (limit '+(value.max_dismissed_state_keys||2000)+').'));
+      const groups=value.pending_groups||[];
+      if(!groups.length)deliveryQueue.append(el('p','No queued notification groups.'));
+      for(const group of groups){
+        const item=el('div');item.append(el('p',group.notification_id+' · '+group.unreviewed_signal_states_at_queue+
+          ' states at queue time · '+group.attempts+' attempts · queued '+group.created_at+' · next eligible retry '+group.next_attempt_at+
+          (group.previous_delivery_may_have_arrived?' · previous receipt possible':'')));
+        const discard=button('Dismiss this pending notification','secondary');
+        discard.setAttribute('aria-label','Dismiss '+group.notification_id);
+        discard.disabled=value.enabled||deliveryMutation;
+        discard.onclick=async()=>{
+          if(generation!==state.generation||deliveryMutation||deliveryChannel?.channel_id!==value.channel_id||deliveryChannel.enabled)return;
+          if(!window.confirm('Dismiss this exact pending group? These exact states will not be queued again in this channel. Their local review status is unchanged; earlier deliveries cannot be recalled.'))return;
+          await deliveryControl('/dismiss',{expected_channel_id:value.channel_id,notification_id:group.notification_id,
+            expected_queue_sha256:group.expected_queue_sha256,confirm_dismiss:true});
+        };
+        item.append(discard);deliveryQueue.append(item);
+      }
+    };
+    async function deliveryControl(suffix,body){
+      if(deliveryMutation||generation!==state.generation)return;
+      deliveryMutation=true;deliverySync();deliveryQueue.querySelectorAll('button').forEach(b=>b.disabled=true);
+      try{
+        await api(deliveryBase()+suffix,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+        if(generation===state.generation)await refreshDelivery();
+      }catch(error){
+        if(generation===state.generation){deliveryStatus.textContent=error.message;deliveryQueue.replaceChildren(el('p','Refresh delivery status before another queue action.','muted'));deliveryChannel=null;}
+      }finally{
+        deliveryMutation=false;
+        if(generation===state.generation){deliverySync();if(deliveryChannel)renderDeliveryQueue(deliveryChannel);}
+      }
+    }
+    deliveryPause.onclick=async()=>{
+      if(!deliveryChannel?.enabled||deliveryMutation)return;
+      await deliveryControl('/pause',{expected_channel_id:deliveryChannel.channel_id});
     };
     deliveryEnable.onclick=async()=>{
       if(!deliveryConsent.checked||!countsConsent.checked||hasDelivery||generation!==state.generation)return;
@@ -10903,14 +10949,9 @@
       finally{if(generation===state.generation)deliverySync();}
     };
     deliveryResume.onclick=async()=>{
-      if(generation!==state.generation||!hasDelivery)return;
+      if(generation!==state.generation||!deliveryChannel||deliveryChannel.enabled||deliveryMutation)return;
       if(!window.confirm('Resume outbound counts-only notification delivery to the previously approved webhook?'))return;
-      deliveryResume.disabled=true;
-      try{
-        await api(deliveryBase()+'/resume',{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({confirm_external_delivery:true})});
-        if(generation===state.generation)await refreshDelivery();
-      }catch(error){deliveryStatus.textContent=error.message;}
+      await deliveryControl('/resume',{confirm_external_delivery:true,expected_channel_id:deliveryChannel.channel_id});
     };
     deliveryRefresh.onclick=()=>refreshDelivery().catch(error=>{deliveryStatus.textContent=error.message;});
     const transitionBase=()=>'/v1/event-logs/'+encodeURIComponent(selectedLogId)+'/signal-history';
