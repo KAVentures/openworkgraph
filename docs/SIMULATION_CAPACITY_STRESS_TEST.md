@@ -88,3 +88,8 @@ Regression includes explicit unequal demand weights, exact threshold/cost
 boundaries, cost ties, robust pairwise witness, incomplete grid rejection,
 shared pools and real retained-log calibration. Native/browser acceptance
 and customer-cost validation remain separate gates.
+
+Cost arithmetic uses a private high-precision decimal context covering the
+entire accepted finite numeric range, including very small positive rates.
+Budget comparisons and dominance cost differences do not depend on the
+caller's decimal context or silently round away such costs.

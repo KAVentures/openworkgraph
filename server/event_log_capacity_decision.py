@@ -6,7 +6,7 @@ decision metric is a conditional description of the declared experiment.
 """
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, Context
 from fractions import Fraction
 from itertools import combinations
 import math
@@ -17,6 +17,13 @@ from .event_log_workspace import EventLogWorkspaceError
 FORMAT = "openworkgraph.capacity-decision-review.v1"
 MAX_COST_OVERRIDES = 120
 MAX_THRESHOLDS = 8
+# All accepted numeric costs originate from finite binary64 or bounded
+# integers. 400 decimal digits cover the smallest subnormal (5e-324),
+# the largest permitted staffed totals and resource-count multiplication.
+# Use a private context per operation rather than the caller's precision.
+def _cost_context():
+    return Context(prec=400)
+
 REQUIRED = {"currency", "default_resource_hour_cost", "maximum_staffed_hour_cost",
             "demand_weights", "service_share_thresholds"}
 OPTIONAL = {"dedicated_hour_costs", "pool_hour_costs"}
@@ -93,6 +100,7 @@ def effective_basis(model):
 
 def _cost(basis, spec):
     rows=[]
+    ctx=_cost_context()
     for kind, entries, overrides in (
         ("dedicated_activity",basis["dedicated_activities"],spec["dedicated_hour_costs"]),
         ("shared_pool",{k:v["resources"] for k,v in basis["shared_pools"].items()},spec["pool_hour_costs"])):
@@ -101,9 +109,11 @@ def _cost(basis, spec):
                 raise EventLogWorkspaceError("Invalid effective resource basis")
             rate=_d(overrides.get(name,spec["default_resource_hour_cost"]))
             rows.append({"kind":kind,"name":name,"resources":count,
-                         "unit_hour_cost_decimal":str(rate),"staffed_hour_cost_decimal":str(rate*count),
+                         "unit_hour_cost_decimal":str(rate),"staffed_hour_cost_decimal":str(ctx.multiply(rate,Decimal(count))),
                          "explicit_override":name in overrides})
-    total=sum((_d(r["staffed_hour_cost_decimal"]) for r in rows),Decimal(0))
+    total=Decimal(0)
+    for row in rows:
+        total=ctx.add(total,_d(row["staffed_hour_cost_decimal"]))
     return {"staffed_resources":sum(r["resources"] for r in rows),
             "staffed_hour_cost_decimal":str(total),"cost_basis":rows,
             "within_budget":total<=_d(spec["maximum_staffed_hour_cost"])}
@@ -220,7 +230,7 @@ def review(cells, costs, spec, target_share):
                                   "matched_rate_seed_cells":len(diffs),
                                   "minimum_service_advantage_lower_bound":float(min(diffs)),
                                   "maximum_service_advantage_lower_bound":float(max(diffs)),
-                                  "staffed_hour_cost_advantage_decimal":str(r["cost"]-l["cost"])})
+                                  "staffed_hour_cost_advantage_decimal":str(_cost_context().subtract(r["cost"],l["cost"]))})
     sensitivity=[]
     for threshold in spec["service_share_thresholds"]:
         rows=[]

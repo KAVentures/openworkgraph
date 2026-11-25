@@ -109,3 +109,31 @@ def test_cost_exact_decimal_boundary_and_no_pool_double_count():
     s["dedicated_hour_costs"]={"X":.2}
     with pytest.raises(EventLogWorkspaceError,match="does not match"):
         decision.preflight(plan,s)
+
+
+def test_cost_does_not_round_away_small_positive_amounts():
+    from decimal import Decimal, localcontext
+    plan=[("A",1,{"activities":{"large":{"resources":1},"small":{"resources":1}},"pools":{}})]
+    s=normalized()
+    s.update(default_resource_hour_cost=1000000000,maximum_staffed_hour_cost=1000000000,
+             dedicated_hour_costs={"small":5e-324})
+    with localcontext() as ctx:
+        ctx.prec=6
+        c=decision.preflight(plan,s)["A"]
+    assert not c["within_budget"]
+    with localcontext() as ctx:
+        ctx.prec=400
+        assert Decimal(c["staffed_hour_cost_decimal"])==Decimal("1000000000")+Decimal("5e-324")
+
+
+def test_dominance_cost_advantage_independent_of_decimal_context():
+    from decimal import Decimal,localcontext
+    a=grid("A",[run(1,9)],[run(1,9)])
+    b=grid("B",[run(1,9)],[run(1,9)])
+    ca,cb=cost(100),cost(100)
+    cb["staffed_hour_cost_decimal"]="100.000000000000000000000000000001"
+    with localcontext() as ctx:
+        ctx.prec=2
+        r=decision.review(a+b,{"A":ca,"B":cb},normalized(),.8)
+    assert len(r["robust_dominance_witnesses"])==1
+    assert Decimal(r["robust_dominance_witnesses"][0]["staffed_hour_cost_advantage_decimal"])==Decimal("1e-30")
