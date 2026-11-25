@@ -765,3 +765,14 @@ across the suite, caching each distinct node sequence. An unresolved coverage
 replay remains visible by case ID and requires review even when strict item
 coverage is not requested. These bounds count enumerated firings, not wall
 clock time or all internal computation.
+
+
+A reusable binding set may contain declarations for decisions or ordinary
+structured rules that the selected route does not use. Preparation still
+validates declaration identity, uniqueness, confirmation and supported
+predicate semantics, but resolves case-specific record pointers only for
+visited decisions, their transitive prerequisites and the selected
+route's ordinary invariants. An unused downstream record is therefore
+not required for an otherwise valid short branch. A missing record on a
+required prerequisite or selected route remains blocking. Broad source
+planning still considers all candidate decisions and rules.
