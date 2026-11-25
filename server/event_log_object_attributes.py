@@ -140,6 +140,47 @@ def object_events(log_id: str, object_type: str, object_id: str, offset: int = 0
             conn.close()
 
 
+def event_objects(log_id: str, object_type: str, object_id: str, event_id: str, revision: int,
+                  after: str | None = None, limit: int = 50) -> dict[str, Any]:
+    """Page distinct objects linked to an event from a reviewed object's event history."""
+    if (not all(isinstance(s, str) and 1 <= len(s) <= 200 for s in (object_type, object_id, event_id)) or
+            type(revision) is not int or revision < 0 or
+            (after is not None and (not isinstance(after, str) or not 1 <= len(after) <= 200)) or
+            type(limit) is not int or not 1 <= limit <= 100):
+        raise workspace.EventLogWorkspaceError('invalid event object evidence request')
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            current = _revision(conn, log_id)
+            if revision != current:
+                raise workspace.EventLogWorkspaceError('the retained log has changed; restart the object event history')
+            focal = conn.execute('''SELECT 1 FROM event_objects eo JOIN objects o
+                ON o.log_id=eo.log_id AND o.object_id=eo.object_id
+                WHERE eo.log_id=? AND eo.event_id=? AND eo.object_id=? AND o.object_type=? LIMIT 1''',
+                                 [log_id, event_id, object_id, object_type]).fetchone()
+            if not focal:
+                raise workspace.EventLogWorkspaceError('the event is not linked to the selected object and type')
+            total = conn.execute('''SELECT count(DISTINCT eo.object_id) FROM event_objects eo JOIN objects o
+                ON o.log_id=eo.log_id AND o.object_id=eo.object_id
+                WHERE eo.log_id=? AND eo.event_id=?''', [log_id, event_id]).fetchone()[0]
+            after_clause = ' AND eo.object_id > ?' if after is not None else ''
+            rows = conn.execute('''SELECT eo.object_id, o.object_type, list(DISTINCT eo.qualifier ORDER BY eo.qualifier)
+                FROM event_objects eo JOIN objects o ON o.log_id=eo.log_id AND o.object_id=eo.object_id
+                WHERE eo.log_id=? AND eo.event_id=?''' + after_clause + '''
+                GROUP BY eo.object_id, o.object_type ORDER BY eo.object_id LIMIT ?''',
+                [log_id, event_id, *([after] if after is not None else []), limit + 1]).fetchall()
+            more = len(rows) > limit
+            rows = rows[:limit]
+            return {'object_type': object_type, 'object_id': object_id, 'event_id': event_id,
+                    'log_revision': current, 'total_objects': total,
+                    'next_after': rows[-1][0] if more else None,
+                    'objects': [{'object_id': obj, 'object_type': kind, 'qualifiers': qualifiers}
+                                for obj, kind, qualifiers in rows]}
+        finally:
+            conn.close()
+
+
 def attribute_changes(log_id: str, object_type: str | None = None, object_id: str | None = None) -> dict[str, Any]:
     with workspace._LOCK:
         conn = workspace._connect()
@@ -262,4 +303,4 @@ def _iso(stamp) -> str | None:
     return None if stamp is None else stamp.isoformat() + "Z"
 
 
-__all__ = ["attribute_changes", "object_history", "browse_objects", "object_events"]
+__all__ = ["attribute_changes", "object_history", "browse_objects", "object_events", "event_objects"]
