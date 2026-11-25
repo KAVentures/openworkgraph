@@ -308,15 +308,21 @@ def evaluate(conn, log_id: str, rule) -> dict[str, Any]:
                           "limits": {"relation_pairs": MAX_RELATION_PAIRS}}
     units, activated, violated = conn.execute(
         "SELECT count(*), count(*) FILTER (WHERE activated), count(*) FILTER (WHERE violated) FROM oc").fetchone()
-    examples = [{"unit": u, "detail": d} for u, d in conn.execute(
-        "SELECT unit, detail FROM oc WHERE violated ORDER BY unit LIMIT ?", [MAX_EXAMPLES]).fetchall()]
+    # Keep the legacy display string while also returning the literal keys.
+    # A delimiter in either key makes the old synchronization string ambiguous.
+    example_rows = conn.execute("""SELECT unit, detail, event_id, object_id FROM oc WHERE violated
+        ORDER BY unit, event_id NULLS FIRST, object_id NULLS FIRST LIMIT ?""", [MAX_EXAMPLES]).fetchall()
+    examples = [{"unit": unit, "detail": detail} for unit, detail, _, _ in example_rows]
+    exact_examples = [{"event_id": event, "object_id": obj, "detail": detail}
+                      for _, detail, event, obj in example_rows]
     return summary | {
         "complete": True, "units": units, "activated": activated, "vacuously_satisfied": units - activated,
         "violating": violated, "satisfied": activated - violated,
         "violation_rate": violated / activated if activated else None,
         "violation_rate_ci95": (list(_wilson(violated, activated, 1.959964))
                                 if activated and not isinstance(rule,SuppliedObjectCardinality) else None),
-        "violating_examples": examples, "examples_truncated": violated > len(examples),
+        "violating_examples": examples, "violating_examples_exact": exact_examples,
+        "examples_truncated": violated > len(examples),
     }
 
 

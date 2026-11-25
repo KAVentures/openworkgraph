@@ -4013,6 +4013,15 @@
       ['Rule','Complete','Units','Activated','Violating retained shape','Satisfied retained shape','Relationship digest','Object ID/type digest','Append revision','Basis','Independently verified','Source completeness','Relationship validity','Business compliance','Execution authorized'],
       ...r.results.map(res=>[res.description,res.complete,res.units??'',res.activated??'',res.violating??'',res.satisfied??'',res.relationship_basis?r.supplied_relationship_basis?.relationships_sha256||'':'',res.relationship_basis?r.supplied_relationship_basis?.object_index_sha256||'':'',res.relationship_basis?r.supplied_relationship_basis?.revision??'':'',res.relationship_basis||'recorded_event_links',false,res.source_completeness||'unknown',res.relationship_validity||'unknown',res.business_compliance||'unknown',false])]);
     show(exports.node,false);box.append(exports.node);
+    const recordedExports=exportButtons('owgObjectRuleRecordedExport',()=>last,r=>[
+      ['template','activity','required_activity','via_activity','object_type','related_type','min','max','complete','unknown_reason','unit','units','activated','violating','satisfied','violation_rate','activity_in_log','required_activity_in_log','object_type_in_log','related_type_in_log','basis','log_id','log_name','log_revision'],
+      ...r.results.map(res=>[res.rule.template,res.rule.activity??'',res.rule.required_activity??'',res.rule.via_activity??'',
+        res.rule.object_type,res.rule.related_type??'',res.rule.min??'',res.rule.max??'',res.complete,res.unknown_reason??'',res.unit,
+        res.units??'',res.activated??'',res.violating??'',res.satisfied??'',res.violation_rate??'',res.activity_in_log??'',
+        res.required_activity_in_log??'',res.object_type_in_log??'',res.related_type_in_log??'',res.relationship_basis||'recorded_event_links',r.log.log_id,r.log.name,r.log_revision])]);
+    const recordedButtons=recordedExports.node.querySelectorAll('button');
+    recordedButtons[0].textContent='Download object rules JSON';recordedButtons[1].textContent='Download object rules CSV';
+    show(recordedExports.node,false);box.append(recordedExports.node);
     const comparisonExports=exportButtons('owgObjectRuleComparison',()=>lastComparison,r=>[
       ['Rule','Side','Log','Log ID','Append revision','Complete','Unknown reason','Unit','Activated','Violating','Violation rate','Rate change (percentage points)','Relationship digest','Object ID/type digest'],
       ...r.baseline.results.flatMap((_,i)=>[['Baseline',r.baseline],['Comparison',r.comparison]].map(([side,report])=>{
@@ -4030,7 +4039,7 @@
     }
     function resetResults(){
       requestVersion++;last=lastComparison=null;message.textContent='';out.replaceChildren();clearReview();
-      for(const group of [exports,comparisonExports]){group.enable(false);show(group.node,false);}
+      for(const group of [exports,recordedExports,comparisonExports]){group.enable(false);show(group.node,false);}
     }
     function drawPending(){
       resetResults();busy=comparing=false;
@@ -4061,7 +4070,11 @@
         const r=await post('/object-constraints',{rules});
         if(!current(turn))return;
         const examples=res=>{
-          const shown=res.violating_examples.slice(0,5),text=shown.map(e=>e.unit+' ('+e.detail+')').join(', ');
+          const exact=Array.isArray(res.violating_examples_exact)?res.violating_examples_exact:null;
+          const shown=(exact||res.violating_examples).slice(0,5),text=shown.map(e=>{
+            const unit=exact?[e.event_id!==null?'event '+JSON.stringify(e.event_id):'',e.object_id!==null?'object '+JSON.stringify(e.object_id):''].filter(Boolean).join(' · '):e.unit;
+            return unit+' ('+e.detail+')';
+          }).join(', ');
           return text+(res.violating>shown.length?'; showing '+shown.length+' of '+res.violating+' retained violations':'');
         };
         const rows=r.results.map(res=>{
@@ -4080,8 +4093,13 @@
         });
         out.replaceChildren(el('div',r.rules_with_violations+' of '+r.results.length+' object rules have violations.','muted'),
           table(['Rule','Applies to','Violating','Violation rate (95% CI)','Examples','Evidence'],rows),el('div',r.interpretation,'muted'));
+        last=r;
+        if(r.results.some(result=>result.rule.template!=='supplied_object_cardinality')){
+          show(recordedExports.node,true);recordedExports.enable(true);
+          out.appendChild(el('p','Object-rule JSON includes up to 50 violation example identifiers per rule; CSV contains rule labels and aggregate counts.','muted'));
+        }
         if(r.supplied_relationship_basis){
-          const basis=r.supplied_relationship_basis;last=r;show(exports.node,true);exports.enable(true);
+          const basis=r.supplied_relationship_basis;show(exports.node,true);exports.enable(true);
           out.append(el('p','Supplied retained graph: '+basis.retained_relationships+' assertions; digest '+basis.relationships_sha256+'; object ID/type digest '+basis.object_index_sha256+'; append revision '+basis.revision+'. This pins the retained assertion set and object population, not source completeness or verified business compliance.','muted'));
         }
       }catch(error){if(current(turn))out.replaceChildren(el('div',error.message,'muted'));}

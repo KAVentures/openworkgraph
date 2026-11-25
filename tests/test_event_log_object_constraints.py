@@ -232,3 +232,27 @@ with TestClient(app) as client:
                 "WORKFLOW_OBSERVER_CONFIG": str(tmp_path / "config.json")})
     result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+
+def test_synchronization_examples_preserve_literal_event_and_object_keys():
+    doc = {'objectTypes': [], 'eventTypes': [],
+           'objects': [{'id': 'z', 'type': 'order'}, {'id': 'y / z', 'type': 'order'},
+                       {'id': 'i1', 'type': 'item'}, {'id': 'i2', 'type': 'item'}],
+           'events': [
+               {'id': 's1', 'type': 'Link', 'time': '2024-01-01T00:00:00Z',
+                'relationships': [{'objectId': 'z', 'qualifier': ''}, {'objectId': 'i1', 'qualifier': ''}]},
+               {'id': 's2', 'type': 'Link', 'time': '2024-01-01T00:00:00Z',
+                'relationships': [{'objectId': 'y / z', 'qualifier': ''}, {'objectId': 'i2', 'qualifier': ''}]},
+               {'id': 'x / y', 'type': 'Ship', 'time': '2024-01-01T01:00:00Z',
+                'relationships': [{'objectId': 'z', 'qualifier': ''}]},
+               {'id': 'x', 'type': 'Ship', 'time': '2024-01-01T01:00:00Z',
+                'relationships': [{'objectId': 'y / z', 'qualifier': ''}]}]}
+    log = _ocel(doc)
+    rule = {'template': 'synchronization', 'activity': 'Ship', 'object_type': 'order',
+            'related_type': 'item', 'required_activity': 'Pick'}
+    [result] = _check(log, rule)
+    assert [example['unit'] for example in result['violating_examples']] == ['x / y / z', 'x / y / z']
+    exact = {(example['event_id'], example['object_id']) for example in result['violating_examples_exact']}
+    assert exact == {('x / y', 'z'), ('x', 'y / z')}
+    evidence = constraints.violations(log, {'rule': rule})
+    assert {(item['event_id'], item['object_id']) for item in evidence['violations']} == exact
