@@ -375,6 +375,37 @@ async def event_log_petri_soundness(request: Request):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/petri-language-comparison")
+async def event_log_petri_language_comparison(request: Request):
+    """Compare two exact PNML byte streams, with no storage or external execution.
+
+    Binary body: four-byte unsigned big-endian baseline length, baseline bytes,
+    then candidate bytes. Each model is independently limited to 2 MB.
+    """
+    from . import event_log_petri_language as language
+    from . import event_log_petri_replay as replay
+    _require_dashboard(request)
+    if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/octet-stream":
+        raise HTTPException(415, "send two framed PNML byte streams")
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > 4 + 2 * replay.MAX_BYTES:
+            raise HTTPException(413, "the model pair is too large")
+        data.extend(chunk)
+    if len(data) < 4:
+        raise HTTPException(422, "missing baseline length")
+    size = int.from_bytes(data[:4], "big")
+    if size > replay.MAX_BYTES or len(data) - 4 - size > replay.MAX_BYTES:
+        raise HTTPException(413, "each model must be at most 2 MB")
+    if size < 1 or size >= len(data) - 4:
+        raise HTTPException(422, "both models must be nonempty")
+    try:
+        result = await run_in_threadpool(language.compare, bytes(data[4:4+size]), bytes(data[4+size:]))
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/ptml-to-pnml")
 async def convert_ptml_process_tree(request: Request):
     """Convert a PTML process tree (ProM, PM4Py) to a PNML workflow net for replay. Nothing is stored."""
