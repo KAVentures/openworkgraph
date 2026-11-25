@@ -231,6 +231,16 @@ def require(log_id: Any, level: str) -> None:
                          "aggregates; the owner can share it at the cases level instead")
 
 
+def check_answer_size(log_id: str, result: Any) -> None:
+    """Refuse an aggregates-level answer that describes fewer than AGENT_MIN_FILTERED_CASES cases, for example
+    one about a small object type inside a larger object-centric log."""
+    cases = result.get("cases") if isinstance(result, dict) else None
+    if (isinstance(cases, int) and not isinstance(cases, bool) and 0 < cases < AGENT_MIN_FILTERED_CASES
+            and _level(log_id) == "aggregates"):
+        raise NotAllowed(f"this selection has fewer than {AGENT_MIN_FILTERED_CASES} cases, too few to describe "
+                         "as aggregates; pick a larger case type or ask the owner to share at the cases level")
+
+
 def _case_count(log_id: str) -> int:
     with workspace._LOCK:
         conn = workspace._connect()

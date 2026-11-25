@@ -321,3 +321,14 @@ def test_agents_get_no_aggregates_from_a_log_with_fewer_than_five_cases():
         sharing.overview(log_id)
     sharing.set_share(log_id, "cases")
     assert sharing.overview(log_id)["cases"] == 3
+
+
+def test_aggregate_answers_about_fewer_than_five_cases_are_refused():
+    log_id = _log()
+    sharing.set_share(log_id, "aggregates")
+    with pytest.raises(sharing.NotAllowed):
+        sharing.check_answer_size(log_id, {"cases": 3})
+    sharing.check_answer_size(log_id, {"cases": 12})
+    sharing.check_answer_size(log_id, {"cases": [{"case_id": "c0"}]})
+    sharing.set_share(log_id, "cases")
+    sharing.check_answer_size(log_id, {"cases": 3})
