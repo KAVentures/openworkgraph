@@ -103,12 +103,12 @@ async def _propose_with_source_context(case,bindings,*,model=None,spec=None,sour
     non_table_rules=[edge['rule_id'] for edge in spec['process_model']['transitions']
         if edge.get('rule_id') in structured and edge['source'] not in table_decisions]
     requests,_missing=source_rule_bindings(spec,{'unevaluated_structured_rule_ids':structured,
-        'non_table_structured_rule_ids':non_table_rules},case,bindings)
+        'non_table_structured_rule_ids':non_table_rules},case,bindings,allow_missing=True)
     decision_requests=[]
     if tables:
         from decision_runtime import decision_bindings
         decision_requests,_missing_tables=decision_bindings(spec,
-            [{'table_id':table['id'],'target_activity_ids':[]} for table in tables],case,bindings)
+            [{'table_id':table['id'],'target_activity_ids':[]} for table in tables],case,bindings,allow_missing=True)
     if not requests and not decision_requests:raise ImplementationError('Bind at least one confirmed supported current-source rule or table')
     source_base=endpoint(bindings.get('source_api_url'),source=True)
     token=os.environ.get('OWG_EXECUTION_SOURCE_READ_TOKEN','')
@@ -163,6 +163,7 @@ async def _propose_with_source_context(case,bindings,*,model=None,spec=None,sour
     report.update(execution_permitted=False,source_outcome_verified=False,
         source_planning={'format':'openworkgraph.current-source-planning.v1',
             'source_receipt_request_count':len(selected_records),'rule_checks':final_checks,
+            'unbound_rule_ids':sorted(_missing),'unbound_decision_table_ids':sorted(_missing_tables) if tables else [],
             **({'decision_table_checks':final_tables} if tables else {}),
             'process_reference':reference(spec),'bindings_sha256':digest(bindings),
             'source_values_sent_to_model':False,'source_receipts_included':False,
