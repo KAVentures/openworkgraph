@@ -37,6 +37,7 @@ from . import event_log_workspace as workspace
 from .event_log_domain_packs_operations import OPERATIONS_PACKS
 from .event_log_domain_packs_returns import RETURNS_REFUNDS_1_0_0
 from .event_log_domain_packs_claims import INSURANCE_CLAIMS_1_0_0
+from .event_log_domain_packs_service_governance import SERVICE_GOVERNANCE_PACKS
 
 FORMAT = "openworkgraph.domain-pack.v1"
 INSTALL_FORMAT = "openworkgraph.domain-pack-install.v1"
@@ -768,7 +769,8 @@ PACKS: dict[str, dict[str, dict[str, Any]]] = {**OPERATIONS_PACKS,
                                               "employee_offboarding": {"1.0.0": EMPLOYEE_OFFBOARDING_1_0_0},
                                               "employee_onboarding": {"1.0.0": EMPLOYEE_ONBOARDING_1_0_0},
                                               "expense_reimbursement": {"1.0.0": EXPENSE_REIMBURSEMENT_1_0_0},
-                                              "insurance_claims": {"1.0.0": INSURANCE_CLAIMS_1_0_0}}
+                                              "insurance_claims": {"1.0.0": INSURANCE_CLAIMS_1_0_0},
+                                              **SERVICE_GOVERNANCE_PACKS}
 
 
 class _Strict(BaseModel):
