@@ -1,0 +1,30 @@
+"""Token-flow route search tests for releases containing the portable model."""
+import unittest
+from execute import digest
+
+
+class ParallelRouteSearch(unittest.TestCase):
+    def test_parallel_schedules_remain_distinct(self):
+        from owg_model.process_model import ProcessModel
+        from route_candidates import _search
+        model=ProcessModel.model_validate({'goal':'Parallel synthetic review',
+            'baseline_path':['Start','A','B','Done'],'baseline_source':'user_declared',
+            'baseline_coverage':'user_declared_design',
+            'activities':[{'id':'start','label':'Start','kind':'start'},
+                {'id':'split','label':'Fork','kind':'parallel_split'},
+                {'id':'a','label':'A'},{'id':'b','label':'B'},
+                {'id':'join','label':'Join','kind':'parallel_join'},
+                {'id':'done','label':'Done','kind':'end'}],
+            'transitions':[{'source':a,'target':b} for a,b in [('start','split'),('split','a'),('split','b'),
+                ('a','join'),('b','join'),('join','done')]],
+            'entry_activity_id':'start','terminal_activity_ids':['done']}).model_dump()
+        spec={'revision':1,'workflow_id':'parallel','content_sha256':'a'*64,'process_model':model,
+            'process_model_sha256':digest(model),'execution_authorization':False,'live_business_tools':[],
+            'control_flow_contract':'openworkgraph.parallel-node-firing-plan.v1',
+            'execution_schedule':'serial_token_valid_node_order'}
+        result=_search(spec,[],[])
+        self.assertEqual(result['status'],'competing_supported_routes')
+        self.assertEqual(result['supported_schedule_count'],2)
+        self.assertTrue(result['search_complete'])
+        self.assertIsNone(result['unique_activity_ids'])
+
