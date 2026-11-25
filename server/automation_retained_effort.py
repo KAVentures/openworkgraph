@@ -84,7 +84,7 @@ def _number(attributes,key):
         value=json.loads(attributes).get(key)
     except (ValueError,AttributeError):
         return None,"invalid"
-    if value is None:
+    if value is None or (type(value) is str and not value.strip()):
         return None,"missing"
     if type(value) not in (str,int,float) or len(str(value))>80:
         return None,"invalid"
@@ -132,33 +132,38 @@ def preview(idea_id,value):
                 raise benefits.BenefitError("selected stored activity is unavailable in this case notion")
         # Count shared events across the entire selected case notion, not just
         # the period cohort. Do not allocate one event's effort to two cases.
-        rows=conn.execute("""WITH cohort AS (
+        cursor=conn.execute("""WITH cohort AS (
               SELECT case_id FROM effort_ce GROUP BY case_id
               HAVING min(ts)>=? AND min(ts)<?),
             multiplicity AS (SELECT event_id,count(DISTINCT case_id) AS n
               FROM effort_ce GROUP BY event_id)
-            SELECT e.case_id,e.event_id,e.activity,e.ts,e.attributes,m.n
+            SELECT e.case_id,e.event_id,e.activity,e.ts,
+                CASE WHEN e.activity=? THEN e.attributes ELSE '{}' END,m.n
             FROM effort_ce e JOIN cohort c USING(case_id)
             JOIN multiplicity m USING(event_id)
-            ORDER BY e.case_id,e.ts,e.event_id""",[lo,hi]).fetchall()
+            ORDER BY e.case_id,e.ts,e.event_id""",[lo,hi,spec.effort_activity])
+        def stream():
+            while True:
+                batch=cursor.fetchmany(1000)
+                if not batch:
+                    break
+                yield from batch
         from itertools import groupby
         shared_ids=set()
         with localcontext() as ctx:
             ctx.prec=80
-            for case_id,group in groupby(rows,key=lambda r:r[0]):
-                case=list(group)
+            for case_id,group in groupby(stream(),key=lambda r:r[0]):
                 totals["started_cases"]+=1
-                finished=case[-1][2]==spec.completion_activity and case[-1][3]<hi
-                totals["complete_cases" if finished else "incomplete_cases"]+=1
-                effort=[r for r in case if r[2]==spec.effort_activity]
-                if not effort:
-                    totals["cases_without_effort_activity"]+=1
-                for _,ident,activity,stamp,attrs,multiplicity in case:
+                has_effort=False
+                last_activity,last_stamp=None,None
+                for _,ident,activity,stamp,attrs,multiplicity in group:
+                    last_activity,last_stamp=activity,stamp
                     # Digest the full ordered activity sequence and relevant
                     # numeric evidence, but never return event/case IDs.
                     if activity!=spec.effort_activity:
                         _hash(digest,[case_id,ident,activity,stamp.isoformat(),multiplicity])
                         continue
+                    has_effort=True
                     n,state=_number(attrs,spec.effort_attribute)
                     _hash(digest,[case_id,ident,activity,stamp.isoformat(),multiplicity,state,str(n) if n is not None else None])
                     totals["effort_events"]+=1
@@ -168,6 +173,10 @@ def preview(idea_id,value):
                         totals[state+"_effort_events"]+=1
                     else:
                         raw_total+=n
+                finished=last_activity==spec.completion_activity and last_stamp<hi
+                totals["complete_cases" if finished else "incomplete_cases"]+=1
+                if not has_effort:
+                    totals["cases_without_effort_activity"]+=1
             totals["shared_effort_events"]=len(shared_ids)
             hours=raw_total/{"seconds":Decimal(3600),"minutes":Decimal(60),"hours":Decimal(1)}[spec.unit]
     blockers=[]
