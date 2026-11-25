@@ -304,7 +304,7 @@ PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_overv
                  "get_process_breakdown",
                  "find_similar_process_cases",
                  "get_process_cooccurrence", "get_process_work_in_progress", "get_process_batching",
-                 "get_process_handovers"}
+                 "get_process_handovers", "get_process_roles"}
 
 
 def test_mcp_tools_are_listed_only_when_a_log_is_shared(tmp_path):
@@ -330,3 +330,17 @@ def test_agent_handovers_are_pseudonymous_and_withhold_small_pairs():
     # clerk -> ana/bob -> bot in each of 12 cases, split 6/6: every pair is shown.
     assert len(result["handover_of_work"]) == 4 and result["cases_with_handover"] == 12
     assert all(n is None or n >= 5 for row in result["activity_resource_matrix"]["events"] for n in row)
+
+
+def test_agent_roles_count_members_without_listing_them():
+    log_id = _log()
+    sharing.set_share(log_id, "aggregates")
+    result = sharing.roles(log_id)
+    text = json.dumps(result)
+    assert "members" not in text.replace("members_listed", "")
+    for name in ("clerk", "ana", "bob", "bot"):
+        assert f'"{name}"' not in text
+    assert sum(role["member_count"] for role in result["roles"]) >= 3
+    assert all(a["events"] >= 5 for role in result["roles"] for a in role["activity_mix"])
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        sharing.roles(log_id, threshold=1.5)
