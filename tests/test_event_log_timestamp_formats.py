@@ -159,4 +159,3 @@ print("ok")
     done = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1], env=env,
                           capture_output=True, text=True, timeout=120)
     assert done.returncode == 0 and done.stdout.strip().endswith("ok"), f"stdout={done.stdout}\nstderr={done.stderr}"
-
