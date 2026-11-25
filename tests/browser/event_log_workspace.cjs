@@ -258,6 +258,12 @@ const path=require('node:path');
    const pnmlText=await fs.readFile(await pnmlDownload.path(),'utf8');
    assert.match(pnmlText,/<pnml>/);assert.match(pnmlText,/<text>Approve<\/text>/);assert.match(pnmlText,/\$invisible\$/);
    await page.locator('#owgDiscoveryStatus').filter({hasText:'Petri net downloaded (places='}).waitFor();
+   // And as BPMN 2.0 with diagram interchange, marked as an unreviewed draft.
+   const [bpmnDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#owgDiscoveryBpmn').click()]);
+   assert.match(bpmnDownload.suggestedFilename(),/-discovered\.bpmn$/);
+   const bpmnText=await fs.readFile(await bpmnDownload.path(),'utf8');
+   assert.match(bpmnText,/name="Approve"/);assert.match(bpmnText,/BPMNShape/);assert.match(bpmnText,/Unreviewed draft discovered/);
+   await page.locator('#owgDiscoveryStatus').filter({hasText:'BPMN downloaded (tasks='}).waitFor();
    const [snapshotResponse]=await Promise.all([
      page.waitForResponse(r=>r.url().endsWith('/model-discovery-draft')&&r.request().method()==='POST'),
      page.locator('#owgDiscoveryDraft').click()

@@ -27,6 +27,7 @@
   FILTERED.add('anonymized-export');
   FILTERED.add('anonymized-export.csv');
   FILTERED.add('model-discovery.pnml');
+  FILTERED.add('model-discovery.bpmn');
   FILTERED.add('temporal-profile');
   FILTERED.add('heuristics-net');
   FILTERED.add('footprints');
@@ -6702,6 +6703,17 @@
           finally{petri.disabled=false;}
         };
         out.appendChild(petri);
+        const bpmnFile=button('Download BPMN','secondary');bpmnFile.id='owgDiscoveryBpmn';
+        bpmnFile.onclick=async()=>{
+          try{
+            bpmnFile.disabled=true;
+            const response=await api(logPath('model-discovery.bpmn',{noise:String(r.settings.noise),activities:String(r.settings.activities)}));
+            download(state.logId+'-discovered.bpmn',await response.text(),'application/xml');
+            statusLine.textContent='BPMN downloaded ('+(response.headers.get('X-OWG-BPMN')||'').replace(/; /g,', ')+'). It opens in Camunda Modeler, bpmn.io and other BPMN 2.0 designers as an unreviewed draft.';
+          }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
+          finally{bpmnFile.disabled=false;}
+        };
+        out.appendChild(bpmnFile);
       }catch(error){if(generation===state.generation)statusLine.textContent=error.message;}
       finally{run.disabled=false;}
     };

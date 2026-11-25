@@ -2161,6 +2161,25 @@ case-filter parameters. It returns `application/xml` with an `X-OWG-Petri-Net` h
 places, transitions and silent transitions. Dashboard session only. Like the discovered draft, the
 net is a candidate model for review, not a verified workflow.
 
+### BPMN export of the discovered model
+
+`GET /v1/event-logs/{log_id}/model-discovery.bpmn` takes the same parameters as the PNML export.
+It returns BPMN 2.0 XML with diagram interchange (shapes and edges) for Camunda Modeler, bpmn.io,
+Signavio and other BPMN designers. The dashboard's **Download BPMN** button sits next to the
+Petri net download.
+
+The file uses the same writer and layout as the process catalog's BPMN export:
+
+- activities become tasks;
+- choices and loops become exclusive gateways;
+- concurrent branches become diverging and converging parallel gateways;
+- the model gets start and end events.
+
+Observed branch shares stay on their sequence flows as unconfirmed rule text. The process
+documentation names the log, case notion, discovery settings and model digest, and marks the file
+as an unreviewed, non-executable draft. The `X-OWG-BPMN` header counts tasks, gateways and flows.
+OWG's own BPMN import reads the file back into an editable draft.
+
 ## Process map with abstraction sliders
 
 `GET /v1/event-logs/{log_id}/process-map?activities=0.8&paths=0.5` (dashboard session only)
