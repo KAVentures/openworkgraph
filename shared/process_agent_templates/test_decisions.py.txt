@@ -642,6 +642,14 @@ class DeclaredDependencyScenarioCases(unittest.TestCase):
                     'accepted_routes':[path] if path else [],'review_confirmed':True}})
         report=review_scenarios(spec,suite,as_of_date='2026-06-01')
         self.assertEqual(report['matching_case_count'],4)
+        coverage=report['scenario_coverage']
+        tables={t['table_id']:t for t in coverage['decision_tables']}
+        self.assertEqual(tables['second_decision']['evaluated_cases'],4)
+        self.assertEqual(tables['second_decision']['unique_route_visit_cases'],1)
+        unvisited=next(r for r in tables['second_decision']['rows'] if r['target_activity_id']=='hold')
+        self.assertEqual(unvisited['selected_cases'],1)
+        self.assertEqual(unvisited['reviewed_matching_route_cases'],0)
+        self.assertFalse(coverage['all_declared_items_have_reviewed_matching_support'])
         rows=report['cases']
         self.assertEqual(rows[0]['search_status'],'unique_supported_route')
         self.assertEqual(rows[2]['search_status'],'unresolved_routes')
