@@ -1,9 +1,10 @@
 """Human process roles, strict parser and bounded dependency manifests."""
-from fastapi import Depends, Path, Query, Request
+from fastapi import Depends, HTTPException, Path, Query, Request
 from fastapi.responses import Response
 from starlette.concurrency import run_in_threadpool
 from shared.process_dependencies import Save, Remove
 from .process_dependencies import ProcessDependencies
+from .process_collaboration import ProcessCollaborationError
 
 
 def add_routes(router,store,human,body,response):
@@ -24,6 +25,18 @@ def add_routes(router,store,human,body,response):
         result=response(dependencies.graph,p,focus,expected_fingerprint=fingerprint,exporting=True)
         result.headers['Content-Disposition']='attachment; filename="owg-process-dependency-graph.json"'
         return result
+
+    @router.get(base+'/build')
+    def build(workflow_id:str=Path(pattern=ID),revision:int=Query(ge=1),
+              basis_sha256:str=Query(pattern=r'^[a-f0-9]{64}$'),p=Depends(human)):
+        try:
+            archive=dependencies.build_bundle(p,workflow_id,revision,basis_sha256)
+        except ProcessCollaborationError as exc:
+            raise HTTPException(exc.status,str(exc)) from None
+        except ValueError:
+            raise HTTPException(409,'The reviewed root cannot be exported as a dependency-aware starter') from None
+        return Response(archive,media_type='application/zip',headers={'Cache-Control':'no-store',
+            'Content-Disposition':f'attachment; filename="owg-dependency-starter-r{revision}.zip"'})
 
     @router.get(base)
     def detail(workflow_id:str=Path(pattern=ID),revision:int|None=Query(default=None,ge=1,le=20),p=Depends(human)):
