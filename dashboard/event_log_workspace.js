@@ -10552,19 +10552,116 @@
     const message=el('div',null,'muted');message.id='owgClusterStatus';message.setAttribute('role','status');
     const out=el('div');out.id='owgClusterResults';
     const review=el('div');review.id='owgClusterCaseReview';
+    let lastReport=null;
+    const exports=exportButtons('owgClusterReport',()=>lastReport,value=>{
+      const report=value.report,scope=JSON.stringify(value.request.cohort||{});
+      const headers=['log_id','case_notion','case_scope_json','cluster','cluster_key','cluster_cases','cluster_share',
+        'cluster_variants','median_throughput_seconds','mean_throughput_seconds','mean_events_per_case',
+        'top_variants_json','more_common_activities_json','less_common_activities_json',
+        'cases_in_scope','variants_in_scope','variants_clustered','variants_assigned_to_nearest',
+        'activities_in_log','activities_in_features','cluster_method','choice','silhouette'];
+      const rows=report.clusters.map(cluster=>[report.log.log_id,report.case_notion,scope,cluster.cluster,cluster.cluster_key,
+        cluster.cases,cluster.share,cluster.variants,cluster.median_throughput_seconds,cluster.mean_throughput_seconds,
+        cluster.mean_events_per_case,JSON.stringify(cluster.top_variants),JSON.stringify(cluster.more_common_activities),
+        JSON.stringify(cluster.less_common_activities),report.cases,report.variants,report.variants_clustered,
+        report.variants_assigned_to_nearest,report.activities_in_log,report.activities_in_features,report.method,report.k_chosen_by,report.silhouette]);
+      return [headers,...rows];
+    });
+    exports.node.querySelector('#owgClusterReportJson').setAttribute('aria-label','Download cluster report JSON');
+    exports.node.querySelector('#owgClusterReportCsv').setAttribute('aria-label','Download cluster report CSV');
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Number of clusters',k),run);
-    box.append(row,message,out,review);
+    box.append(row,message,out,exports.node,review);
     const generation=state.generation,endpoint='/v1/event-logs/'+encodeURIComponent(state.logId)+'/trace-clusters';
     const number=n=>Number(n).toLocaleString();
-    let reviewTurn=0;
+    let reviewTurn=0,reportTurn=0;
+    k.addEventListener('input',()=>{
+      ++reportTurn;++reviewTurn;lastReport=null;exports.enable(false);run.disabled=false;out.replaceChildren();review.replaceChildren();
+      message.textContent='Settings changed. Find clusters again.';
+    });
     const request=async(suffix,spec)=>(await api(endpoint+suffix,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
-    function inspect(settings,cluster){
+    function inspect(settings,cluster,caseNotion){
       const turn=++reviewTurn,current=()=>generation===state.generation&&turn===reviewTurn;
       const title=el('h4','Cases in cluster '+cluster.cluster);title.tabIndex=-1;
       const status=el('div');status.setAttribute('role','status');
       const rows=el('div'),nav=el('div',null,'row');
       const previous=button('Previous case page','secondary'),next=button('Next case page','secondary');
-      nav.append(previous,next);review.replaceChildren(title,status,rows,nav);title.focus();
+      const download=button('Download cluster cases (CSV)','secondary');
+      download.setAttribute('aria-label','Download cases in cluster '+cluster.cluster+' as CSV');
+      const downloadNext=button('Download next case file','secondary');downloadNext.disabled=true;
+      downloadNext.setAttribute('aria-label','Download next cases in cluster '+cluster.cluster+' as CSV');
+      const exportStatus=el('div',null,'muted');exportStatus.setAttribute('role','status');
+      nav.append(previous,next,download,downloadNext);
+      const tagging=document.createElement('details');tagging.id='owgClusterTagging';tagging.appendChild(el('summary','Tag cases matching this cluster'));
+      if(!cluster.cohort){
+        tagging.appendChild(el('p','This cluster has too many or too-long variant paths for a case-tag filter. Use the case list instead.','muted'));
+      }else{
+        const tag=input('owgClusterTagName','text','Tag name');tag.maxLength=60;
+        const note=input('owgClusterTagNote','text','Optional tag note');note.maxLength=500;
+        const preview=button('Preview cluster tag','secondary'),apply=button('Apply cluster tag','secondary');apply.disabled=true;
+        const tagStatus=el('div',null,'muted');tagStatus.id='owgClusterTagStatus';tagStatus.setAttribute('role','status');
+        const examples=el('div');examples.id='owgClusterTagPreview';
+        const tagRow=el('div',null,'row');tagRow.style.alignItems='end';tagRow.append(field('Tag',tag),field('Tag note',note),preview,apply);
+        tagging.append(el('p','These paths are re-evaluated in the original case scope; cases may have changed since clustering. Preview the selection. Applying an existing tag replaces its notes for matching cases.','muted'),tagRow,tagStatus,examples);
+        let selection=null,tagTurn=0;
+        const reset=()=>{++tagTurn;selection=null;apply.disabled=true;preview.disabled=false;tagStatus.textContent='';examples.replaceChildren();};
+        tag.addEventListener('input',reset);note.addEventListener('input',reset);
+        const postTag=async(suffix,spec)=>(await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/case-tags'+suffix,
+          {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        preview.onclick=async()=>{
+          const ticket=++tagTurn,active=()=>current()&&ticket===tagTurn;
+          selection=null;apply.disabled=true;examples.replaceChildren();
+          const name=tag.value.trim();if(!name){tagStatus.textContent='Enter a tag.';return;}
+          const paths={variants:cluster.cohort.variants};
+          const cohort=settings.cohort&&Object.keys(settings.cohort).length?{all_of:[settings.cohort,paths]}:paths;
+          const spec={tag:name,note:note.value.trim(),case_type:caseNotion,cohort};
+          if(new TextEncoder().encode(JSON.stringify(spec)).length>262000){tagStatus.textContent='The cluster paths exceed the case-tag request limit. Use the case list instead.';return;}
+          preview.disabled=true;tagStatus.textContent='Checking matching cases…';
+          try{
+            const result=await postTag('/preview',spec);if(!active())return;
+            selection={spec,digest:result.selection_sha256};apply.disabled=!result.matched_cases;
+            tagStatus.textContent=number(result.matched_cases)+' matching cases. '+number(result.already_tagged)+' already have this tag.'+
+              (result.already_tagged?' Applying it will replace their tag notes.':'');
+            examples.replaceChildren(result.examples.length?table(['Sample case','Current tag','Current note'],result.examples.map(item=>[
+              item.case_id,item.already_tagged?'Already tagged':'New assignment',item.note||'—'
+            ])):el('div','No matching cases.','muted'));
+          }catch(error){if(active())tagStatus.textContent=error.message;}
+          finally{if(active())preview.disabled=false;}
+        };
+        apply.onclick=async()=>{
+          if(!selection||!current())return;
+          const chosen=selection,ticket=++tagTurn,active=()=>current()&&ticket===tagTurn;
+          selection=null;preview.disabled=apply.disabled=tag.disabled=note.disabled=true;tagStatus.textContent='Applying tag…';
+          try{
+            const result=await postTag('',{...chosen.spec,expected_selection_sha256:chosen.digest});
+            if(!active())return;
+            document.querySelectorAll('#owgCaseTags').forEach(node=>node.dispatchEvent(new CustomEvent('owg-tags-changed')));
+            ++reportTurn;++reviewTurn;lastReport=null;exports.enable(false);out.replaceChildren();review.replaceChildren();run.disabled=false;
+            message.textContent='Tagged '+number(result.tagged)+' cases “'+result.tag+'”. Find clusters again; reanalyse other views if their filters use this tag.';
+          }catch(error){if(active())tagStatus.textContent=error.message;}
+          finally{if(active()){preview.disabled=tag.disabled=note.disabled=false;}}
+        };
+      }
+      review.replaceChildren(title,status,rows,nav,exportStatus,tagging);title.focus();
+      let exportAfter=null,exportPage=0,exportWritten=0;
+      async function downloadPage(cursor){
+        if(!current())return;download.disabled=downloadNext.disabled=true;exportStatus.textContent='Preparing cluster cases…';
+        try{
+          const response=await api(endpoint+'/cases.csv',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({...settings,cluster_key:cluster.cluster_key,...(cursor?{after:cursor}:{})})});
+          const blob=await response.blob();if(!current())return;
+          const page=cursor?exportPage+1:1;
+          downloadBlob(blob,'cluster-'+cluster.cluster+'-cases-'+page+'.csv');
+          const info=response.headers.get('X-OWG-Cluster-Cases')||'';
+          const written=/written=(\d+)/.exec(info),total=/total=(\d+)/.exec(info);
+          exportPage=page;exportWritten=(cursor?exportWritten:0)+(written?Number(written[1]):0);
+          exportAfter=response.headers.get('X-OWG-Next-Cursor');
+          exportStatus.textContent='Downloaded '+exportWritten.toLocaleString()+' of '+(total?Number(total[1]).toLocaleString():'the matching')+' cases'+
+            (exportAfter?'. Download the next file for more.':'.')+' Formula-like values are protected for spreadsheets.';
+        }catch(error){if(current())exportStatus.textContent=error.message;}
+        finally{if(current()){download.disabled=false;downloadNext.disabled=exportAfter===null;}}
+      }
+      download.onclick=()=>downloadPage(null);
+      downloadNext.onclick=()=>{if(exportAfter!==null)downloadPage(exportAfter);};
       const cursors=[null];let index=0,following=null;
       async function load(page){
         previous.disabled=next.disabled=true;status.textContent='Loading cases…';
@@ -10588,17 +10685,19 @@
     }
     const shares=list=>list.map(a=>a.activity+' ('+pct(a.case_share_in_cluster)+' vs '+pct(a.case_share_in_log)+')').join('; ')||'—';
     run.onclick=async()=>{
-      ++reviewTurn;review.replaceChildren();out.replaceChildren();
+      const ticket=++reportTurn,current=()=>generation===state.generation&&box.isConnected&&ticket===reportTurn;
+      ++reviewTurn;lastReport=null;exports.enable(false);review.replaceChildren();out.replaceChildren();
       try{
         message.textContent='Clustering…';run.disabled=true;
         const body={};if(k.value)body.k=Number(k.value);if(state.caseType)body.case_type=state.caseType;
         if(filterOn())body.cohort=globalCohort();
         const r=await request('',body);
-        if(generation!==state.generation)return;
+        if(!current())return;
         if(!r.cases){message.textContent='No cases match this selection.';return;}
+        lastReport={format:'openworkgraph.trace-cluster-report.v1',request:body,report:r};exports.enable(true);
         const rows=r.clusters.map(c=>{
           const open=button('Inspect cases','secondary');open.setAttribute('aria-label','Inspect cases in cluster '+c.cluster);
-          open.onclick=()=>inspect(body,c);
+          open.onclick=()=>{if(current())inspect(body,c,r.case_notion);};
           return ['Cluster '+c.cluster,number(c.cases)+' ('+pct(c.share)+')',number(c.variants),
           c.median_throughput_seconds===null?'—':duration(c.median_throughput_seconds),c.mean_events_per_case===null?'—':c.mean_events_per_case.toFixed(1),
           (c.top_variants[0]||{activities:[]}).activities.join(' → '),shares(c.more_common_activities),shares(c.less_common_activities),open];
@@ -10606,9 +10705,10 @@
         const how=r.k_chosen_by==='silhouette'?r.k+' clusters chosen by silhouette ('+(r.silhouette===null?'—':r.silhouette.toFixed(2))+')':r.k+' clusters as requested';
         out.replaceChildren(el('div',Number(r.cases).toLocaleString()+' cases, '+Number(r.variants).toLocaleString()+' variants; '+how+'.'+(r.variants_assigned_to_nearest?' '+Number(r.variants_assigned_to_nearest).toLocaleString()+' rare variants joined their nearest cluster.':''),'muted'),
           table(['Cluster','Cases','Variants','Median throughput','Events per case','Most common variant','More common than in the log','Less common than in the log','Evidence'],rows),
+          el('div','Features use '+number(r.activities_in_features)+' of '+number(r.activities_in_log)+' activities. '+number(r.variants_clustered)+' variants were clustered; '+number(r.variants_assigned_to_nearest)+' were assigned to their nearest cluster. The report lists up to five top variants and six contrasting activities per side.','muted'),
           el('div',r.interpretation,'muted'));
         message.textContent='';
-      }catch(error){if(generation===state.generation)message.textContent=error.message;}finally{run.disabled=false;}
+      }catch(error){if(current())message.textContent=error.message;}finally{if(current())run.disabled=false;}
     };
     return box;
   }

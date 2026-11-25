@@ -884,6 +884,38 @@ by literal case key, with an optional `limit` of 1–100 (default 50). Send the 
 `next_after` as `after` to continue. If the cluster changes, rerun the report to get
 its current key. This route requires a dashboard session.
 
+From **Inspect cases**, **Tag cases matching this cluster** can mark the cases
+whose current paths match that cluster, within the case scope used to build it.
+Preview the count and sample before applying; existing tag notes on matching
+cases will be replaced. The preview is checked again at save time, so changes to
+the matching cases or existing notes require another preview. The selected paths
+are re-evaluated on the current log, not a frozen report-time case list. When a
+cluster cannot fit the bounded variant filter, request size, or 100,000-case
+tagging limit, tagging is not available; inspect or download its case list instead. Tagging does not change
+stored events and the cluster report must be run again afterward.
+
+**Download cluster report JSON** includes the original request, the complete
+returned cluster summary, settings and case notion. The CSV gives one row per
+cluster with the same coverage counts and the displayed top variants and
+contrasting activities. These are the returned top five variants and up to six
+contrasting activities per side, not a list of every variant or activity. Both
+report downloads reflect the last completed analysis and are cleared when its
+settings change. CSV text is escaped for spreadsheet review.
+
+From **Inspect cases**, **Download cluster cases (CSV)** recomputes the selected
+cluster with its original settings and scope, then downloads case keys, duration,
+event count and first/last activity. Each file contains up to 50,000 cases in
+case-key order. When more cases remain, download subsequent files using the next
+page control; the dashboard reports progress. A continuation cursor is bound to
+the log, cluster and settings. Formula-like text is escaped for spreadsheet review.
+The cluster key detects a
+change in the cluster's variant composition and counts since the report, but it
+does not freeze case membership before the first download. For a multi-file
+export, a streaming digest of all exported case rows is checked on every later
+page; changed membership or exported values require starting again. Pages are
+recomputed from the current log, and no case list is retained by this check.
+This download requires a dashboard session.
+
 Clusters describe the structure of the imported log. They are not process types,
 causes, or a judgement of how any case was handled.
 
