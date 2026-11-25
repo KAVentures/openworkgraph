@@ -70,6 +70,26 @@ mapping, `naive_timestamp_offset=+01:00` in the API). That choice is recorded
 with the import. XML with a `DOCTYPE` or entity declaration is refused before
 parsing.
 
+### Delimiters
+
+When you choose a CSV or text file, the dashboard reads its first rows on this computer and picks the
+delimiter (comma, semicolon, tab or pipe) that splits the header into the most columns, with the next
+rows splitting into the same number. Quoted cells may contain the delimiter. Comma wins ties, and a
+`.tsv` file is always read as tab-separated. You can still change **Delimiter** before importing.
+
+### Text encodings
+
+CSV files are read as UTF-8 unless the mapping names another `encoding` (`encoding=` on the import,
+append and preview routes): `windows-1252`, the Western European "ANSI" encoding that spreadsheets and
+older systems often save, or `utf-16`, which Excel's "Unicode text" export uses (with a byte-order
+mark). Such a file is converted to UTF-8 in a temporary file under the workspace folder before the
+normal CSV import reads it, and the copy is removed afterwards. Decoding is strict: a byte that is
+not valid in the named encoding refuses the file with its offset rather than being replaced. A
+non-default encoding is part of the import's recorded transform; the content digest still describes
+the original bytes. A file that is not valid UTF-8 and names no encoding is refused with a hint (and
+the line, where the parser reports it). The dashboard chooses **Text encoding** from the file's first
+bytes: a UTF-16 or UTF-8 byte-order mark, UTF-8 when they decode strictly, otherwise Windows-1252.
+
 ### Compressed files
 
 Any import or appended file may be gzip-compressed, as public logs such as the BPI Challenge
