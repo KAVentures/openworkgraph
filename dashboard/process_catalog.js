@@ -1146,6 +1146,7 @@
     }
     function invalidate(){
       sourceGeneration++;
+      resetReview();
       output.replaceChildren(el('p','Documents changed. Run clarification again before recording any answer.'));
     }
     function appendDocument(values={}){
@@ -1328,7 +1329,6 @@
         reviewOutput.append(prev,next,revisionDownload,notes);
       }catch(error){if(ticket===reviewSerial){resetReview();reviewOutput.replaceChildren(el('p',error.message,'note'));}}
     }
-    sources.addEventListener('input',resetReview);
     revisionPanel.append(previous,oldFile,compareButton,reviewOutput);
     section.append(sources,add,button('Find open questions across sources',()=>locked(run)),output,revisionPanel);
     host.append(section);
