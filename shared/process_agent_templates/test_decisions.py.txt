@@ -555,6 +555,12 @@ class DependentDecisionExecution(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(records[0]['declared_source_rule_ids'],['invariant_a','invariant_b'])
         checks=[r for r in records if r['phase']=='source_rule_checked']
         self.assertEqual(len(checks),10)
+        self.assertEqual(len(self.reads),5) # one exact record for both rules and both tables
+        for purpose,attempt in [('initial',None),('precondition',1),('action',1),('action',2),('completion',None)]:
+            same=[r for r in records if r['phase'] in {'source_rule_checked','decision_table_checked'}
+                and (r['checkpoint_purpose'],r['checkpoint_attempt'])==(purpose,attempt)]
+            self.assertEqual(len(same),4)
+            self.assertEqual(len({r['checkpoint_checked_at'] for r in same}),1)
         self.assertEqual([r['rule_id'] for r in checks[:2]],['invariant_a','invariant_b'])
         self.assertEqual(report(self.data[0],records,'Complete mixed journal')['runs'][0]['status'],'succeeded')
         for purpose in ('initial','precondition','action','completion'):
@@ -567,18 +573,62 @@ class DependentDecisionExecution(unittest.IsolatedAsyncioTestCase):
         wrong[0]['declared_source_rule_ids']=[]
         with self.assertRaises(ImplementationError):
             report(self.data[0],wrong,'Omitted declaration')
+        wrong=deepcopy(records)
+        row=next(r for r in wrong if r['phase']=='decision_table_checked')
+        row['checkpoint_checked_at']='2000-01-01T00:00:00+00:00'
+        with self.assertRaises(ImplementationError):
+            report(self.data[0],wrong,'Different checkpoint clock')
+        wrong=deepcopy(records)
+        row=next(r for r in wrong if r['phase']=='decision_table_checked')
+        row['checked_on_utc']='2000-01-01'
+        with self.assertRaises(ImplementationError):
+            report(self.data[0],wrong,'Different policy date')
+
 
     async def test_invariant_drift_before_precondition_stops_even_the_precondition_read(self):
         self.add_invariants()
         original=self.source
         async def change(base,token,request):
             value=await original(base,token,request)
-            if request.get('rule_id')=='invariant_a' and len(self.reads)>3:
+            if request.get('rule_id')=='invariant_a' and len(self.reads)>1:
                 return receipt(request,'merged')
             return value
         self.source=change
         result=await self.run_case()
         self.assertFalse(result['declared_route_checks_satisfied'])
+        self.assertFalse(self.tools.calls)
+
+    async def test_shared_receipt_cannot_mix_incompatible_rule_and_table_states(self):
+        self.add_invariants()
+        spec,plan,case,bindings=self.data
+        # The rule now requires the opposite state from the decision route.
+        rule=next(r for r in spec['process_model']['business_rules'] if r['id']=='invariant_a')
+        rule['predicate']['conditions'][0]['expected']='merged'
+        spec['process_model_sha256']=digest(spec['process_model'])
+        original=self.source
+        async def alternating(base,token,request):
+            value=await original(base,token,request)
+            return receipt(request,'merged' if request.get('rule_id')=='invariant_a' else 'open')
+        self.source=alternating
+        result=await self.run_case()
+        self.assertTrue(result['stopped_before_tools'])
+        self.assertFalse(self.tools.calls)
+        self.assertEqual(len(self.reads),1)
+
+    async def test_separate_record_staleness_at_shared_boundary_stops_tools(self):
+        self.add_invariants()
+        self.data[2]['other_ref']='owg:r:'+'e'*32
+        self.data[3]['decision_table_checks'][1]['resource_ref_pointer']='/other_ref'
+        original=self.source
+        async def stale(base,token,request):
+            value=await original(base,token,request)
+            if request['resource_ref']==self.data[2]['record_ref']:
+                return receipt(request,when=datetime.now(timezone.utc)-timedelta(seconds=121))
+            return value
+        self.source=stale
+        result=await self.run_case()
+        self.assertTrue(result['stopped_before_tools'])
+        self.assertEqual(len(self.reads),2)
         self.assertFalse(self.tools.calls)
 
     async def test_monitor_refuses_route_and_checkpoint_scope_tampering(self):
