@@ -68,7 +68,8 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
 
         Use when asked how a process performs, where time goes or what to look at first.
         case_type picks the case notion (object type) for object-centric logs; sla_hours adds
-        SLA breach rates. Insights include a case filter (cohort) describing their cases.
+        SLA breach rates. Insights include a case filter (cohort) describing their cases. completed_per_week
+        gives the last 52 weeks of completed cases and their median duration (withheld for weeks under 5 cases).
         """
         return _get("get_process_overview", f"/v1/process-intelligence/{_log(log_id)}/overview",
                     {"case_type": case_type, "sla_hours": sla_hours})

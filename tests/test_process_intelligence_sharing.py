@@ -311,3 +311,12 @@ def test_mcp_tools_are_listed_only_when_a_log_is_shared(tmp_path):
     assert off == DEFAULT_TOOLS
     on = asyncio.run(_listed_tools(tmp_path, True))
     assert on == DEFAULT_TOOLS | PROCESS_TOOLS
+
+
+def test_agent_overview_weekly_trend_withholds_small_weeks():
+    log_id = _log()
+    sharing.set_share(log_id, "aggregates")
+    weeks = sharing.overview(log_id)["completed_per_week"]
+    assert sum(w["cases"] for w in weeks) == 12
+    for week in weeks:
+        assert (week["median_throughput_seconds"] is None) == (week["cases"] < 5)

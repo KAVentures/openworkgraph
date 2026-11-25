@@ -266,6 +266,10 @@ def overview(log_id: str, case_type: str | None = None, sla_hours: float | None 
         "first_event_at": summary["first_event_at"], "last_event_at": summary["last_event_at"],
         "case_duration_seconds": summary["case_duration_seconds"],
         "kpis": {k: kpis.get(k) for k in ("throughput_seconds", "rework_rate", "sla") if k in kpis},
+        "completed_per_week": [
+            {"week_starting": w["week_starting"], "cases": w["cases"],
+             "median_throughput_seconds": w["median_throughput_seconds"] if w["cases"] >= AGENT_MIN_CELL_CASES else None}
+            for w in kpis.get("completed_per_week") or []],
         "top_variants": [{"path": v["path"], "cases": v["cases"], "share": v.get("share")}
                          for v in _top(variants.get("variants"), 5)],
         "variants_total": variants.get("distinct_variants"),
