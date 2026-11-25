@@ -8133,8 +8133,56 @@
     const soundBox=document.createElement('details');soundBox.append(el('summary','Structural and behavioral net validation'),
       el('div','Check whether the model itself can reach completion, deadlock, leave tokens behind, loop indefinitely or contain transitions that can never fire. This check is independent of recorded cases.','muted'),
       soundRun,soundStatus,soundOut);box.appendChild(soundBox);
+    const compareFile=input('owgPetriCompareFile','file');compareFile.accept='.pnml,application/xml,text/xml';
+    const compareRun=button('Compare completed behavior','secondary');compareRun.id='owgPetriCompareRun';compareRun.disabled=true;
+    const compareStatus=el('div',null,'muted');compareStatus.id='owgPetriCompareStatus';compareStatus.setAttribute('role','status');compareStatus.setAttribute('aria-live','polite');
+    const compareOut=el('div');compareOut.id='owgPetriCompareResults';
+    const compareBox=document.createElement('details');compareBox.append(el('summary','Compare two model revisions'),
+      el('div','Use the net just replayed as the baseline. Select a candidate PNML file to check whether completed visible activity sequences are added or removed. This does not compare timing, costs or business outcomes.','muted'),
+      field('Candidate Petri net (.pnml)',compareFile),compareRun,compareStatus,compareOut);
+    soundBox.appendChild(compareBox);
+    let compareBusy=false,compareRevision=0;
+    const clearCompare=()=>{compareRevision++;compareStatus.textContent='';compareOut.replaceChildren();compareRun.disabled=compareBusy||!lastNet||!compareFile.files?.length;};
+    compareFile.onchange=clearCompare;
+    compareRun.onclick=async()=>{
+      const net=lastNet,chosen=compareFile.files?.[0],revision=compareRevision;
+      if(!net||!chosen||compareBusy||net.generation!==state.generation)return;
+      const stillCurrent=()=>lastNet===net&&state.generation===net.generation&&compareRevision===revision;
+      compareBusy=true;compareRun.disabled=true;compareOut.replaceChildren();compareStatus.textContent='Exploring both model languages…';
+      try{
+        const baseline=new TextEncoder().encode(net.body);
+        if(baseline.byteLength>2*1024*1024||chosen.size>2*1024*1024)throw new Error('Each model must be at most 2 MB.');
+        const head=new Uint8Array(4);new DataView(head.buffer).setUint32(0,baseline.byteLength);
+        const body=new Blob([head,baseline,chosen],{type:'application/octet-stream'});
+        const r=await (await api('/v1/event-logs/petri-language-comparison',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body})).json();
+        if(!stillCurrent())return;
+        const verdict=v=>v===true?'Verified':v===false?'Failed':'Inconclusive';
+        compareStatus.textContent='Completed behavior equivalence: '+verdict(r.equivalent)+'. '+Number(r.product_states).toLocaleString()+' paired states examined.'+(r.complete?' Complete comparison.':' Stopped: '+r.limit.replaceAll('_',' ')+'.');
+        compareOut.appendChild(table(['Property','Result'],[
+          ['Candidate preserves baseline traces',verdict(r.candidate_preserves_baseline_language)],
+          ['Candidate introduces no new traces',verdict(r.candidate_introduces_no_new_language)],
+          ['Baseline marking graph',r.baseline.complete?'Complete':'Incomplete: '+r.baseline.limit],
+          ['Candidate marking graph',r.candidate.complete?'Complete':'Incomplete: '+r.candidate.limit]
+        ]));
+        const examples=[['Removed from candidate',r.removed_trace],['Added by candidate',r.added_trace]].filter(([,w])=>w!==null);
+        if(examples.length){
+          compareOut.appendChild(el('h4','Shortest discovered distinguishing traces'));
+          compareOut.appendChild(table(['Difference','Visible activities','Length'],examples.map(([kind,w])=>[
+            kind,(w.activities.join(' → ')||'(empty trace)')+(w.truncated?' … (prefix only)':''),String(w.length)
+          ])));
+        }
+        compareOut.appendChild(el('div',r.caveat,'muted'));
+        const download=button('Download model comparison (JSON)','secondary');download.onclick=()=>{
+          if(!stillCurrent())return;
+          const url=URL.createObjectURL(new Blob([JSON.stringify(r,null,2)],{type:'application/json'}));
+          const link=document.createElement('a');link.href=url;link.download='petri-language-'+r.candidate.pnml_sha256.slice(0,12)+'.json';
+          document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+        };compareOut.appendChild(download);
+      }catch(error){if(stillCurrent())compareStatus.textContent=error.message;}
+      finally{compareBusy=false;compareRun.disabled=!lastNet||lastNet.generation!==state.generation||!compareFile.files?.length;}
+    };
     let soundBusy=false;
-    const clearSound=()=>{soundStatus.textContent='';soundOut.replaceChildren();soundRun.disabled=true;};
+    const clearSound=()=>{soundStatus.textContent='';soundOut.replaceChildren();soundRun.disabled=true;clearCompare();};
     soundRun.onclick=async()=>{
       const net=lastNet;if(!net||soundBusy||net.generation!==state.generation)return;
       soundBusy=true;soundRun.disabled=true;soundOut.replaceChildren();soundStatus.textContent='Exploring reachable markings…';
@@ -8193,6 +8241,7 @@
         const r=await (await api(logPath('petri-net-replay',{}),{method:'POST',headers:{'Content-Type':'application/xml'},body})).json();
         if(generation!==state.generation)return;
         lastNet={body,label,generation,cohort};
+        compareRun.disabled=compareBusy||!compareFile.files?.length;
         const f=r.fitness;
         statusLine.textContent='Fitness '+pct(f.log)+' on '+label+': '+Number(f.fitting_cases).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases ('+pct(f.fitting_case_share)+') replay without missing or remaining tokens.'+(r.precision.precision!==null?' Precision '+pct(r.precision.precision)+'.':'')+' The net has '+r.net.places+' places and '+r.net.transitions+' transitions ('+r.net.silent_transitions+' silent).'+(r.cases_excluded?' '+Number(r.cases_excluded).toLocaleString()+' cases beyond the length or variant limit were left out.':'');
         if(!r.net.final_marking_declared)out.appendChild(el('div','The file declares no final marking, so cases are expected to end with one token on each place nothing consumes from.','muted'));
