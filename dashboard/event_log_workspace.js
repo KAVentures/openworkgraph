@@ -7382,6 +7382,11 @@
     const start=button('Explore from the start','secondary');start.id='owgPathsStart';
     const back=button('Back one step','secondary');back.id='owgPathsBack';back.disabled=true;
     const row=el('div',null,'row');row.style.alignItems='center';row.append(start,back,anywhereLabel);
+    const exact=input('owgPathsExact','text','Exact next activity');exact.maxLength=400;
+    const lookup=activityLabelLookup(exact,{id:part=>'owgPathsExact'+part,subject:'path activity'});
+    exact.addEventListener('input',lookup.reset);
+    const goExact=button('Go to exact activity','secondary');goExact.id='owgPathsExactGo';
+    row.append(field('Exact next activity',exact),lookup.wrap,goExact);
     const trail=el('div');trail.id='owgPathsTrail';
     const statusLine=el('div',null,'muted');statusLine.id='owgPathsStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgPathsResults';
@@ -7438,7 +7443,7 @@
         const t=table(['Next','Cases','Share','From previous (median)','To case end (median)','Actions'],r.next.map(x=>[x.is_end?'Case ends here':x.activity,Number(x.cases).toLocaleString(),pct(x.share),x.hours_from_previous?hrs(x.hours_from_previous.median):'—',x.hours_to_case_end?hrs(x.hours_to_case_end.median):'—','']));
         t.querySelectorAll('tbody tr').forEach((tr,i)=>{const x=r.next[i];
           const bar=el('div');bar.setAttribute('aria-hidden','true');bar.style.cssText='height:4px;background:currentColor;opacity:.35;margin-top:4px;width:'+Math.round((x.share||0)*100)+'%';tr.cells[2].appendChild(bar);
-          if(!x.is_end){const go=button('Go to '+x.activity,'secondary');go.onclick=()=>{path=[...path,x.activity];show();};tr.cells[5].appendChild(go);}
+          if(!x.is_end){const go=button('Go to '+x.activity,'secondary');go.disabled=path.length>=30;go.onclick=()=>{path=[...path,x.activity];show();};tr.cells[5].appendChild(go);}
           const inspect=button('Inspect cases','secondary');
           inspect.setAttribute('aria-label',x.is_end?'Inspect cases ending here':'Inspect cases continuing to '+x.activity);
           inspect.onclick=()=>showCases(url,x,current);tr.cells[5].appendChild(inspect);
@@ -7446,6 +7451,12 @@
         out.appendChild(t);
       }catch(error){if(current())statusLine.textContent=error.message;}
       finally{if(current()){start.disabled=false;back.disabled=!path.length;}}};
+    goExact.onclick=()=>{
+      const value=exact.value;
+      if(!value||Array.from(value).length>200){statusLine.textContent='Enter an exact activity label of 1 to 200 characters.';return;}
+      if(path.length>=30){statusLine.textContent='A path can contain at most 30 activities. Go back before adding another.';return;}
+      path=[...path,value];show();
+    };
     start.onclick=()=>{path=[];anchored=0;anywhere.checked=false;show();};
     back.onclick=()=>{path=path.slice(0,-1);anchored=Math.min(anchored,path.length);if(!path.length)anywhere.checked=false;show();};
     anywhere.onchange=()=>{anchored=anywhere.checked?path.length:0;if(path.length)show();else if(anywhere.checked){anywhere.checked=false;statusLine.textContent='Choose a first step from the start, then look for it anywhere.';}};
