@@ -41,6 +41,17 @@ class SourcePlanningContext:
     def check_tables(self,routes,spec,case):
         if digest(spec)!=self.spec_digest or digest(case)!=self.case_digest:
             raise ImplementationError('Planning inputs changed after source reads')
+        from decision_runtime import check_decision_receipt, check_decision_batch, _dependent, _required_tables
+        if _dependent(spec):
+            from owg_model.process_model import ProcessModel
+            needed=_required_tables(ProcessModel.model_validate(spec['process_model']),[r['table_id'] for r in routes])
+            targets={r['table_id']:r['target_activity_ids'] for r in routes}
+            requests=[{**r,'target_activity_ids':targets.get(r['table_id'],[])}
+                      for r in self.decision_requests if r['table_id'] in needed]
+            checked={r['table_id']:r for r in check_decision_batch(spec,requests,self.decision_receipts,now=self.clock())}
+            return [checked.get(r['table_id'],{'table_id':r['table_id'],'status':'unbound',
+                    'route_matches':False,'selected_target_activity_id':None,'execution_authorized':False})
+                    for r in routes]
         from decision_runtime import check_decision_receipt
         requests={row['table_id']:row for row in self.decision_requests}
         checked_at=self.clock();results=[]
@@ -132,7 +143,7 @@ async def _propose_with_source_context(case,bindings,*,model,spec=None,source_re
     final_checks=context.check_rules([rule_id for rule_id in structured if rule_id not in table_rules or rule_id in non_table_rules],spec,case)
     final_tables=context.check_tables(report.get('shadow_check',{}).get('decision_table_routes',[]),spec,case) if tables else []
     if any(not row['route_matches'] for row in final_tables):
-        report['plan'].update(status='needs_clarification',missing_business_inputs=['Current UNIQUE decision route or effective date is not established'])
+        report['plan'].update(status='needs_clarification',missing_business_inputs=['Current decision route, prerequisite or effective date is not established'])
     if any(row['rule_id'] in used and row['status']!='matched' for row in final_checks):
         report['plan'].update(status='needs_clarification',missing_business_inputs=['Fresh source invariants are false, unknown or no longer fresh'])
     report.update(execution_permitted=False,source_outcome_verified=False,
