@@ -8127,10 +8127,52 @@
       return inspect;
     };
     let lastNet=null;
+    const soundRun=button('Validate net soundness','secondary');soundRun.id='owgPetriSoundnessRun';soundRun.disabled=true;
+    const soundStatus=el('div',null,'muted');soundStatus.id='owgPetriSoundnessStatus';soundStatus.setAttribute('role','status');soundStatus.setAttribute('aria-live','polite');
+    const soundOut=el('div');soundOut.id='owgPetriSoundnessResults';
+    const soundBox=document.createElement('details');soundBox.append(el('summary','Structural and behavioral net validation'),
+      el('div','Check whether the model itself can reach completion, deadlock, leave tokens behind or contain transitions that can never fire. This check is independent of recorded cases.','muted'),
+      soundRun,soundStatus,soundOut);box.appendChild(soundBox);
+    let soundBusy=false;
+    const clearSound=()=>{soundStatus.textContent='';soundOut.replaceChildren();soundRun.disabled=true;};
+    soundRun.onclick=async()=>{
+      const net=lastNet;if(!net||soundBusy||net.generation!==state.generation)return;
+      soundBusy=true;soundRun.disabled=true;soundOut.replaceChildren();soundStatus.textContent='Exploring reachable markings…';
+      try{
+        const r=await (await api('/v1/event-logs/petri-soundness',{method:'POST',headers:{'Content-Type':'application/xml'},body:net.body})).json();
+        if(lastNet!==net||state.generation!==net.generation)return;
+        const verdict=v=>v===true?'Verified':v===false?'Failed':'Inconclusive';
+        soundStatus.textContent='Soundness: '+verdict(r.sound)+'. '+number(r.reachable_markings)+' reachable markings found. '+(r.complete?'Complete exploration.':'Exploration stopped at '+r.limit.replaceAll('_',' ')+'.');
+        soundOut.appendChild(table(['Property','Result'],[
+          ['Workflow-net structure',verdict(r.workflow_net_structure)],
+          ['Final marking reachable',verdict(r.final_reachable)],
+          ['Completion possible from every marking',verdict(r.option_to_complete)],
+          ['Proper completion',verdict(r.proper_completion)],
+          ['No dead transitions',verdict(r.no_dead_transitions)],
+          ['At most one token per place',verdict(r.one_safe)]
+        ]));
+        if(r.dead_transition_ids?.length)soundOut.appendChild(el('div','Unreachable transition IDs: '+r.dead_transition_ids.join(', ')));
+        const witnesses=Object.entries(r.witnesses).filter(([,w])=>w!==null);
+        if(witnesses.length){soundOut.appendChild(el('h4','Counterexamples'));
+          soundOut.appendChild(table(['Property','Transition ID sequence','Reached marking'],witnesses.map(([kind,w])=>[
+            kind.replaceAll('_',' '),(w.transition_ids.join(' → ')||'(initial marking)')+(w.truncated?' … (prefix of '+w.steps+' steps)':''),
+            w.marking.map(p=>p.place_id+': '+p.tokens).join(', ')||'(empty)'
+          ])));}
+        soundOut.appendChild(el('div',r.caveat,'muted'));
+        const download=button('Download validation report (JSON)','secondary');download.onclick=()=>{
+          if(lastNet!==net||state.generation!==net.generation)return;
+          const url=URL.createObjectURL(new Blob([JSON.stringify(r,null,2)],{type:'application/json'}));
+          const link=document.createElement('a');link.href=url;link.download='petri-soundness-'+r.pnml_sha256.slice(0,12)+'.json';
+          document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+        };soundOut.appendChild(download);
+      }catch(error){if(lastNet===net&&state.generation===net.generation)soundStatus.textContent=error.message;}
+      finally{soundBusy=false;soundRun.disabled=!lastNet||lastNet.generation!==state.generation;}
+    };
+
     const replay=async(body,label)=>{
       if(sectionGeneration!==state.generation||run.disabled)return;
       const generation=sectionGeneration,cohort=globalCohort();
-      run.disabled=own.disabled=happy.disabled=align.disabled=alertSave.disabled=true;aligned.replaceChildren();alertMessage.textContent='';lastNet=null;statusLine.textContent='Replaying on '+label+'…';out.replaceChildren();
+      run.disabled=own.disabled=happy.disabled=align.disabled=alertSave.disabled=true;aligned.replaceChildren();alertMessage.textContent='';lastNet=null;clearSound();statusLine.textContent='Replaying on '+label+'…';out.replaceChildren();
       try{
         const r=await (await api(logPath('petri-net-replay',{}),{method:'POST',headers:{'Content-Type':'application/xml'},body})).json();
         if(generation!==state.generation)return;
@@ -8152,7 +8194,7 @@
           ])));out.appendChild(more);}
         out.appendChild(el('div',r.caveat,'muted'));
       }catch(error){statusLine.textContent=error.message;}
-      finally{run.disabled=own.disabled=happy.disabled=false;align.disabled=alertSave.disabled=saveRun.disabled=!lastNet;}};
+      finally{run.disabled=own.disabled=happy.disabled=false;align.disabled=alertSave.disabled=saveRun.disabled=!lastNet;soundRun.disabled=!lastNet||soundBusy;}};
     alertSave.onclick=async()=>{
       if(!lastNet)return;
       if(lastNet.body.length>60000){alertMessage.textContent='This net is too large to keep with a signal (over 60,000 characters).';return;}
