@@ -1,0 +1,54 @@
+const {chromium}=require('playwright');
+const assert=require('node:assert/strict');
+const fs=require('node:fs/promises');
+const {spawn}=require('node:child_process');
+const {tmpdir}=require('node:os');
+const path=require('node:path');
+(async()=>{
+ const scratch=await fs.mkdtemp(path.join(tmpdir(),'owg-object-rule-exact-'));
+ const base='http://127.0.0.1:8787';
+ const server=spawn(process.env.OWG_BROWSER_PYTHON||'python',['-m','uvicorn','process_logs_app:app','--app-dir','tests/browser','--host','127.0.0.1','--port','8787'],{env:{...process.env,OWG_BROWSER_TEST_DIR:scratch},stdio:['ignore','pipe','pipe']});
+ let browser,logs='';for(const stream of [server.stdout,server.stderr])stream.on('data',c=>logs=(logs+c).slice(-10000));
+ try{
+  let ready=false;for(let i=0;i<100;i++){if(server.exitCode!==null)throw Error(logs);try{await fs.access(path.join(scratch,'session.txt'));if((await fetch(base+'/')).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,200));}assert.ok(ready,logs);
+  browser=await chromium.launch({...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE}:{}),headless:true,args:['--no-sandbox']});
+  const page=await browser.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
+  const session=(await fs.readFile(path.join(scratch,'session.txt'),'utf8')).trim();
+  await page.goto(base+'/#session='+session);await page.locator('[role=tab][data-tab=evidence]').click();
+  const rare='  rare, 雪😀  ',required='Required, 雪',objects=[{id:'order1',type:'order',attributes:[]},{id:'item1',type:'item',attributes:[]}],events=[];
+  for(let i=0;i<70;i++)for(let j=0;j<2;j++)events.push({id:`c${i}_${j}`,type:`Action${String(i).padStart(3,'0')}`,time:'2024-01-01T00:00:00Z',attributes:[],relationships:[{objectId:'order1',qualifier:''},{objectId:'item1',qualifier:''}]});
+  events.push({id:'required',type:required,time:'2024-01-01T01:00:00Z',attributes:[],relationships:[{objectId:'item1',qualifier:''}]},
+              {id:'rare',type:rare,time:'2024-01-01T02:00:00Z',attributes:[],relationships:[{objectId:'order1',qualifier:''}]});
+  const data={objectTypes:[],eventTypes:[],objects,events};
+  await page.locator('#owgEventLogFile').setInputFiles({name:'objects.jsonocel',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(data))});
+  await page.locator('#owgEventLogStatus').filter({hasText:'File mapping ready.'}).waitFor();await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
+  await page.locator('#owgEventLogStatus').filter({hasText:'Imported'}).waitFor();
+  const log=await page.locator('#owgEventLogPick').inputValue();
+  await page.evaluate(async({log,rare,session})=>{
+    const url='/v1/event-logs/'+encodeURIComponent(log)+'/activity-mappings',headers={'Content-Type':'application/json','Authorization':'OWG-Session '+session};
+    const created=await fetch(url,{method:'POST',headers,body:JSON.stringify({name:'Mapped label',groups:[{label:'Mapped rare',activities:[rare]}]})});
+    if(!created.ok)throw Error(await created.text());const m=await created.json();
+    const applied=await fetch(url+'/applied',{method:'POST',headers,body:JSON.stringify({mapping_id:m.mapping_id})});if(!applied.ok)throw Error(await applied.text());
+  },{log,rare,session});
+  await page.locator('#owgEventLogCaseType').selectOption('order');await page.locator('#owgEventLogAnalyze').click();
+  await page.locator('#owgObjectRules').waitFor();
+  assert.equal(await page.locator('#owgObjectRuleActivity option').filter({hasText:rare}).count(),0);
+  await page.locator('#owgObjectRuleTemplate').selectOption('event_cardinality');await page.locator('#owgObjectRuleType').selectOption('order');
+  await page.locator('#owgObjectRuleExactActivity').fill(rare);await page.locator('#owgObjectRuleMin').fill('1');await page.locator('#owgObjectRuleMax').fill('1');await page.locator('#owgObjectRuleAdd').click();
+  await page.locator('#owgObjectRuleTemplate').selectOption('synchronization');await page.locator('#owgObjectRuleRelated').selectOption('item');
+  await page.locator('#owgObjectRuleExactRequired').fill(required);await page.locator('#owgObjectRuleAdd').click();
+  await page.locator('#owgObjectRuleTemplate').selectOption('object_cardinality');await page.locator('#owgObjectRuleExactVia').fill(rare);await page.locator('#owgObjectRuleAdd').click();
+  const [response]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/object-constraints')&&r.request().method()==='POST'),page.locator('#owgObjectRuleRun').click()]);
+  assert.equal(response.status(),200);const body=response.request().postDataJSON();
+  assert.equal(body.rules[0].activity,rare);assert.equal(body.rules[1].activity,rare);assert.equal(body.rules[1].required_activity,required);assert.equal(body.rules[2].via_activity,rare);
+  const result=await response.json();assert.equal(result.results[0].units,1);assert.equal(result.results[0].violating,0);assert.equal(result.results[1].violating,0);assert.equal(result.results[2].violating,1);
+  await page.locator('#owgObjectRuleTemplate').selectOption('event_cardinality');await page.locator('#owgObjectRuleExactActivity').fill('x'.repeat(201));await page.locator('#owgObjectRuleAdd').click();
+  await page.locator('#owgObjectRuleStatus').getByText('Activity labels must have at most 200 characters.').waitFor();
+  await page.locator('#owgObjectRuleActivity').selectOption('Action000');assert.equal(await page.locator('#owgObjectRuleExactActivity').inputValue(),'');
+  await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
+  const audit=await page.evaluate(()=>window.axe.run(document.querySelector('#owgObjectRules'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
+  assert.deepEqual(audit.violations.map(v=>v.id),[]);await page.setViewportSize({width:390,height:844});
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2));assert.deepEqual(errors,[]);
+  console.log('Object rule browser passed: raw omitted labels, mapping separation, all three rule types, bounds and accessibility.');
+ }finally{if(browser)await browser.close();server.kill('SIGTERM');await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);if(server.exitCode===null)server.kill('SIGKILL');await fs.rm(scratch,{recursive:true,force:true});}
+})().catch(e=>{console.error(e);process.exit(1);});
