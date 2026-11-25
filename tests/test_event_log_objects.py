@@ -78,6 +78,18 @@ def test_single_event_objects_start_and_end_with_that_event():
     assert item["start_activities"] == {"place": 2} and item["end_activities"] == {"place": 1, "ship": 1}
 
 
+def test_shared_activity_count_discloses_results_beyond_the_map_limit():
+    doc = {"objectTypes": [], "eventTypes": [],
+           "objects": [{"id": "o", "type": "order"}, {"id": "i", "type": "item"}],
+           "events": [{"id": f"e{n:03}", "type": f"Activity {n:03}", "time": "2024-01-01T00:00:00Z",
+                       "relationships": [{"objectId": "o", "qualifier": ""}, {"objectId": "i", "qualifier": ""}]}
+                      for n in range(60)]}
+    graph = objects.object_graph(_ocel(doc))
+    assert graph["shared_activity_count"] == 60
+    assert len(graph["activities_touching_several_types"]) == 50
+    assert graph["activities_touching_several_types"][0]["activity"] == "Activity 000"
+
+
 def test_flat_logs_have_one_type_and_no_relations():
     log_id = workspace.import_log(BytesIO(_claims_csv().encode()), name="c", source_format="csv", mapping={
         "case_column": "case", "activity_column": "activity", "timestamp_column": "time"})["log_id"]

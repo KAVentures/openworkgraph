@@ -4978,10 +4978,28 @@
           drawing.id='owgEventLogObjectGraph';parts.push(drawing);
         }catch(_){parts.push(el('div','Map unavailable for this object type; transitions are listed below.','muted'));}
       }
-      parts.push(selection,table(['From','To','Transitions','Objects','Median gap','Evidence'],type.transitions.slice(0,25).map(t=>{
-        const inspect=button('Inspect transition','secondary');inspect.onclick=()=>chooseEdge(t);
-        return [t.from,t.to,Number(t.transition_count).toLocaleString(),Number(t.case_count).toLocaleString(),duration(t.median_elapsed_gap_seconds),inspect];
-      })));
+      const transitionSearch=input('owgObjectMapTransitionSearch','search');
+      const transitionPage=el('div');transitionPage.id='owgObjectMapTransitions';
+      const transitionStatus=el('div',null,'muted');transitionStatus.id='owgObjectMapTransitionStatus';transitionStatus.setAttribute('role','status');
+      const previous=button('Previous transitions','secondary'),next=button('Next transitions','secondary');
+      const transitionNav=el('div',null,'row');transitionNav.append(previous,next);
+      let transitionOffset=0;
+      function renderTransitions(){
+        const query=transitionSearch.value.toLocaleLowerCase();
+        const matches=type.transitions.filter(t=>t.from.toLocaleLowerCase().includes(query)||t.to.toLocaleLowerCase().includes(query));
+        const page=matches.slice(transitionOffset,transitionOffset+25);
+        transitionStatus.textContent=(matches.length?'Showing '+(transitionOffset+1).toLocaleString()+'–'+(transitionOffset+page.length).toLocaleString()+' of ':'Showing 0 of ')+matches.length.toLocaleString()+' matching retained transitions. '+type.transitions.length.toLocaleString()+' of '+type.transition_types.toLocaleString()+' total transition types are retained in this bounded map.';
+        transitionPage.replaceChildren(page.length?table(['From','To','Transitions','Objects','Median gap','Evidence'],page.map(t=>{
+          const inspect=button('Inspect transition','secondary');inspect.setAttribute('aria-label','Inspect transition from '+JSON.stringify(t.from)+' to '+JSON.stringify(t.to));inspect.onclick=()=>chooseEdge(t);
+          return [t.from,t.to,Number(t.transition_count).toLocaleString(),Number(t.case_count).toLocaleString(),duration(t.median_elapsed_gap_seconds),inspect];
+        })):el('p','No matching retained transitions.','muted'));
+        previous.disabled=transitionOffset===0;next.disabled=transitionOffset+25>=matches.length;
+      }
+      transitionSearch.oninput=()=>{transitionOffset=0;renderTransitions();};
+      previous.onclick=()=>{transitionOffset=Math.max(0,transitionOffset-25);renderTransitions();};
+      next.onclick=()=>{transitionOffset+=25;renderTransitions();};
+      renderTransitions();
+      parts.push(selection,field('Search retained transitions by activity',transitionSearch),transitionStatus,transitionPage,transitionNav);
       const links=(graph.relations||[]).filter(r=>r.from_type===type.object_type);
       if(graph.relations_calculation_complete===false)parts.push(el('p','Inter-object link counts are unknown within the analysis limits for this log. Lifecycle maps and case evidence remain available.','muted'));
       if(links.length)parts.push(table(['Linked to','Share of observed '+type.object_type+' objects','Mean links per linked object','Most linked'],links.map(r=>[r.to_type,pct(r.share_of_from_objects),r.mean_linked_per_object,r.max_linked_per_object])));
@@ -4998,7 +5016,21 @@
       graph=g;setOptions(pick,(g.object_types||[]).map(t=>[t.object_type,t.object_type+' ('+Number(t.objects).toLocaleString()+')']));
       if(state.caseType)pick.value=state.caseType;
       const touching=g.activities_touching_several_types||[];
-      shared.replaceChildren(el('p','Showing '+g.object_types.length+' of '+g.object_type_count+' object types.','muted'),...(touching.length?[el('h4','Activities shared by several object types'),table(['Activity','Object types','Events'],touching.slice(0,15).map(a=>[a.activity,a.object_types.join(', '),Number(a.events).toLocaleString()]))]:[]),
+      const sharedRows=el('div');sharedRows.id='owgObjectMapSharedActivities';
+      const sharedStatus=el('div',null,'muted');sharedStatus.setAttribute('role','status');
+      const sharedPrevious=button('Previous shared activities','secondary'),sharedNext=button('Next shared activities','secondary');
+      const sharedNav=el('div',null,'row');sharedNav.append(sharedPrevious,sharedNext);
+      let sharedOffset=0;
+      const renderShared=()=>{
+        const page=touching.slice(sharedOffset,sharedOffset+15),total=g.shared_activity_count??touching.length;
+        sharedStatus.textContent='Showing '+(sharedOffset+1).toLocaleString()+'–'+(sharedOffset+page.length).toLocaleString()+' of '+touching.length.toLocaleString()+' retained shared activities. '+touching.length.toLocaleString()+' of '+total.toLocaleString()+' total shared activities are included.';
+        sharedRows.replaceChildren(table(['Activity','Object types','Events'],page.map(a=>[a.activity,a.object_types.join(', '),Number(a.events).toLocaleString()])));
+        sharedPrevious.disabled=sharedOffset===0;sharedNext.disabled=sharedOffset+15>=touching.length;
+      };
+      sharedPrevious.onclick=()=>{sharedOffset=Math.max(0,sharedOffset-15);renderShared();};
+      sharedNext.onclick=()=>{sharedOffset+=15;renderShared();};
+      if(touching.length)renderShared();
+      shared.replaceChildren(el('p','Showing '+g.object_types.length+' of '+g.object_type_count+' object types.','muted'),...(touching.length?[el('h4','Activities shared by several object types'),sharedStatus,sharedRows,sharedNav]:[]),
         ...((g.object_types||[]).length>1||state.objectTypes.length>1||g.log&&(g.log.object_relationships||['ocel','ocelxml'].includes(g.log.source_format))?[objectRuleSection(g),objectModelSection()]:[]));
       render();
     }).catch(error=>{if(current())out.replaceChildren(el('div',error.message,'muted'));});
