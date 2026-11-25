@@ -4014,11 +4014,13 @@
       ...r.results.map(res=>[res.description,res.complete,res.units??'',res.activated??'',res.violating??'',res.satisfied??'',res.relationship_basis?r.supplied_relationship_basis?.relationships_sha256||'':'',res.relationship_basis?r.supplied_relationship_basis?.object_index_sha256||'':'',res.relationship_basis?r.supplied_relationship_basis?.revision??'':'',res.relationship_basis||'recorded_event_links',false,res.source_completeness||'unknown',res.relationship_validity||'unknown',res.business_compliance||'unknown',false])]);
     show(exports.node,false);box.append(exports.node);
     const recordedExports=exportButtons('owgObjectRuleRecordedExport',()=>last,r=>[
-      ['template','activity','required_activity','via_activity','object_type','related_type','min','max','complete','unknown_reason','unit','units','activated','violating','satisfied','violation_rate','activity_in_log','required_activity_in_log','object_type_in_log','related_type_in_log','basis','log_id','log_name','log_revision'],
+      ['template','activity','required_activity','via_activity','object_type','related_type','direction','qualifier_present','qualifier','min','max','complete','unknown_reason','unit','units','activated','violating','satisfied','violation_rate','activity_in_log','required_activity_in_log','object_type_in_log','related_type_in_log','basis','relationship_digest','object_index_digest','log_id','log_name','log_revision'],
       ...r.results.map(res=>[res.rule.template,res.rule.activity??'',res.rule.required_activity??'',res.rule.via_activity??'',
-        res.rule.object_type,res.rule.related_type??'',res.rule.min??'',res.rule.max??'',res.complete,res.unknown_reason??'',res.unit,
+        res.rule.object_type,res.rule.related_type??'',res.rule.direction??'',Object.hasOwn(res.rule,'qualifier'),res.rule.qualifier??'',res.rule.min??'',res.rule.max??'',res.complete,res.unknown_reason??'',res.unit,
         res.units??'',res.activated??'',res.violating??'',res.satisfied??'',res.violation_rate??'',res.activity_in_log??'',
-        res.required_activity_in_log??'',res.object_type_in_log??'',res.related_type_in_log??'',res.relationship_basis||'recorded_event_links',r.log.log_id,r.log.name,r.log_revision])]);
+        res.required_activity_in_log??'',res.object_type_in_log??'',res.related_type_in_log??'',res.relationship_basis||'recorded_event_links',
+        res.relationship_basis?r.supplied_relationship_basis?.relationships_sha256||'':'',res.relationship_basis?r.supplied_relationship_basis?.object_index_sha256||'':'',
+        r.log.log_id,r.log.name,r.log_revision])]);
     const recordedButtons=recordedExports.node.querySelectorAll('button');
     recordedButtons[0].textContent='Download object rules JSON';recordedButtons[1].textContent='Download object rules CSV';
     show(recordedExports.node,false);box.append(recordedExports.node);
