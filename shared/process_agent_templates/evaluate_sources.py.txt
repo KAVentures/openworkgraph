@@ -31,11 +31,11 @@ def validate_source_suite(spec,suite,bindings):
         non_table_rules=[edge['rule_id'] for edge in spec['process_model']['transitions']
             if edge.get('rule_id') in structured and edge['source'] not in table_decisions]
         requests,_missing=source_rule_bindings(spec,{'unevaluated_structured_rule_ids':structured,
-            'non_table_structured_rule_ids':non_table_rules},case['input'],bindings)
+            'non_table_structured_rule_ids':non_table_rules},case['input'],bindings,allow_missing=True)
         decisions=[]
         if tables:
             from decision_runtime import decision_bindings
-            decisions,_missing_tables=decision_bindings(spec,[{'table_id':t['id'],'target_activity_ids':[]} for t in tables],case['input'],bindings)
+            decisions,_missing_tables=decision_bindings(spec,[{'table_id':t['id'],'target_activity_ids':[]} for t in tables],case['input'],bindings,allow_missing=True)
         if not requests and not decisions:raise ImplementationError('Every case needs at least one reviewed current-source rule or table binding')
         selected={(row['resource_ref'],row['source_type']) for row in requests+decisions}
         if len(selected)>8:raise ImplementationError('Use at most eight selected source records per case')
