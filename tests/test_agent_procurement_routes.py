@@ -91,10 +91,54 @@ with TestClient(app) as client:
     assert decided.json()['result']['rehearsal_candidate_id']=='other'
     assert not decided.json()['result']['execution_authorized']
     assert decided.headers['cache-control']=='no-store'
+    from shared.agent_procurement_outcomes import freeze as freeze_outcomes
+    from shared.agent_procurement_substitution import inspect as inspect_artifacts
+    from shared.process_agent_project import build_runtime_project
+    from shared.process_agent_release import MANIFEST_NAME
+    from io import BytesIO
+    from zipfile import ZipFile
+    import hashlib
+    receipt=decided.json()['result']
+    artifact_root=Path(__import__('sys').argv[1])/'artifact';artifact_root.mkdir()
+    with ZipFile(BytesIO(build_runtime_project(packet))) as z:z.extractall(artifact_root)
+    pin=hashlib.sha256((artifact_root/MANIFEST_NAME).read_bytes()).hexdigest()
+    pf=inspect_artifacts(packet,decision,receipt,artifact_root,artifact_root,
+                         {'expected_selection_receipt_sha256':receipt['receipt_sha256'],'confirmed':True,
+                          'baseline':{'configuration_sha256':digest('current'),'manifest_sha256':pin},
+                          'candidate':{'configuration_sha256':digest('other'),'manifest_sha256':pin}})
+    snapshot={'records':[{'record_id':'target','fields':{'state':'PRIVATE_STATE'}}]}
+    outcome_plan=freeze_outcomes(packet,decision,pf,{'format':'openworkgraph.procurement-outcome-design.v1',
+        'expected_selection_receipt_sha256':receipt['receipt_sha256'],'expected_preflight_sha256':pf['preflight_sha256'],
+        'owner_alias':'a','sandbox_configuration_sha256':digest('sandbox'),'confirmed':True,
+        'policy':{'minimum_distinct_cases':1,'require_all_categories':False},
+        'cases':[{'case_id':'case_1','category':'normal','starting_state':snapshot,'expected_final_state':snapshot,
+                  'permitted_actions':[],'reviewed':True}]})
+    observations={'format':'openworkgraph.procurement-outcome-observations.v1','plan_sha256':outcome_plan['plan_sha256'],
+                  'observations':[{**slot,'sandbox_configuration_sha256':digest('sandbox'),'observer_alias':'observer',
+                      'isolated_run_id':slot['arm'],'started_at':'2026-01-01T00:00:00Z','ended_at':'2026-01-01T00:00:01Z',
+                      'status':'completed','initial_snapshot':snapshot,'final_snapshot':snapshot,'observed_actions':[],
+                      'action_capture_complete':True} for slot in outcome_plan['slots']]}
+    outcome_bundle={'decision_bundle':decision,'preflight':pf,'outcome_plan':outcome_plan,'observations':observations}
+    assert selection('outcome-review',outcome_bundle,bearer).status_code==403
+    outcome=selection('outcome-review',outcome_bundle)
+    assert outcome.status_code==200,outcome.text
+    assert 'PRIVATE_STATE' not in outcome.text
+    review=outcome.json()['result']
+    assert review['eligible_to_request_separate_rollout_review']
+    rollout={**outcome_bundle,'request':{'decision':'request_separate_rollout_review','reviewer_alias':'b',
+        'expected_outcome_review_sha256':review['outcome_review_sha256'],'expected_plan_sha256':review['plan_sha256'],
+        'rollback_plan_sha256':digest('rollback'),'confirmed':True}}
+    result=selection('rollout-review',rollout)
+    assert result.status_code==200,result.text
+    assert result.json()['result']['separate_rollout_review_requested']
+    assert not result.json()['result']['production_rollout_authorized']
+    assert 'PRIVATE_STATE' not in result.text
     updated=client.post('/v1/process-catalog',headers=h,json={'workflow_id':saved['workflow_id'],'title':'Updated','expected_revision':1,'user_confirmed':True,'process_model':model()})
     assert updated.status_code==200,updated.text
     assert selection('nominate',bundle).status_code==409
     assert selection('decide',decision).status_code==409
+    assert selection('rollout-review',rollout).status_code==409
+    assert selection('outcome-review',outcome_bundle).json()['references_latest_revision_at_inspection'] is False
     assert selection('assess',assess_bundle).json()['references_latest_revision_at_inspection'] is False
     historical=client.post(base+'compare',params=params,json=body,headers=h).json()
     assert historical['references_latest_revision_at_inspection'] is False

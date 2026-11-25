@@ -1307,7 +1307,7 @@
     const section=el('section');section.appendChild(el('h4','AI workforce procurement'));
     section.appendChild(el('p','Compare portable shadow evaluations, freeze a repeated trial, or review its full scheduled population. Files are inspected only on this computer and are not retained. Model identities, measurements and business outcomes remain unverified.'));
     const mode=el('select');mode.id='owgCatalogProcurementMode';
-    for(const [value,label] of [['compare','Compare completed shadow reports'],['freeze','Freeze a repeated trial plan'],['review','Review a frozen trial and captures'],['nominate','Nominate a candidate before holdout'],['assess','Assess the held-out trial'],['decide','Record a pinned rehearsal decision']]){
+    for(const [value,label] of [['compare','Compare completed shadow reports'],['freeze','Freeze a repeated trial plan'],['review','Review a frozen trial and captures'],['nominate','Nominate a candidate before holdout'],['assess','Assess the held-out trial'],['decide','Record a pinned rehearsal decision'],['outcome-review','Review controlled sandbox outcomes'],['rollout-review','Request separate rollout review']]){
       const option=el('option',label);option.value=value;mode.appendChild(option);
     }
     const modeLabel=el('label','Procurement operation ');modeLabel.htmlFor=mode.id;modeLabel.appendChild(mode);
@@ -1324,6 +1324,7 @@
       hint.textContent=mode.value==='compare'?'Choose an existing comparison request (see AGENT_PROCUREMENT.md).':
         mode.value==='freeze'?'Choose a confirmed design JSON with exact reference report, candidates, gates and repeats (see AGENT_PROCUREMENT_TRIALS.md).':
         mode.value==='review'?'Choose the frozen plan and a capture ledger. Failed and missing scheduled slots remain in the denominator.':
+        ['outcome-review','rollout-review'].includes(mode.value)?'Choose the outcome review bundle (see AGENT_PROCUREMENT_OUTCOMES.md). No rollout or execution permission will be granted.':
         'Choose the exact selection bundle (see AGENT_PROCUREMENT_SELECTION.md). Nomination and decision require a current saved revision and explicit confirmation in the document.';
       clearProcurementReview();
     });
@@ -1341,8 +1342,9 @@
       if(generation!==procurementGeneration||record!==selected||!output.isConnected)return;
       const result=envelope.result;
       const selectionMode=['nominate','assess','decide'].includes(operation);
-      const heading={nominate:'Frozen candidate nomination',assess:'Held-out selection assessment',decide:'Rehearsal decision receipt'};
-      output.appendChild(el('h5',selectionMode?heading[operation]:operation==='freeze'?'Frozen trial plan · '+result.scheduled_attempts+' attempts':'Candidate procurement comparison'));
+      const outcomeMode=['outcome-review','rollout-review'].includes(operation);
+      const heading={nominate:'Frozen candidate nomination',assess:'Held-out selection assessment',decide:'Rehearsal decision receipt','outcome-review':'Controlled sandbox outcome review','rollout-review':'Separate rollout review receipt'};
+      output.appendChild(el('h5',(selectionMode||outcomeMode)?heading[operation]:operation==='freeze'?'Frozen trial plan · '+result.scheduled_attempts+' attempts':'Candidate procurement comparison'));
       output.appendChild(el('p','Exact saved revision '+envelope.revision+'. '+(envelope.references_latest_revision_at_inspection?
         'Latest saved revision at inspection.':'Historical revision; current revision '+envelope.latest_revision_at_inspection+'. Evaluate the current design before substitution.')));
       if(operation==='freeze'){
@@ -1350,6 +1352,38 @@
         const list=el('ul');
         for(const c of result.basis.candidates)list.appendChild(el('li',c.candidate_id+' · '+c.provider+' / '+c.model+' / '+c.runtime));
         output.appendChild(list);
+      }else if(outcomeMode){
+        if(operation==='rollout-review'){
+          output.appendChild(el('p','Disposition: '+result.request.decision.replaceAll('_',' ')+'. No production rollout authorized.'));
+          output.appendChild(el('p','Rollback plan contents, reviewer identity and execution authority remain unverified.'));
+        }else{
+          for(const [arm,data] of Object.entries(result.arms)){
+            const b=data.success_bounds;output.appendChild(el('h6',arm+' · '+b.lower+'–'+b.upper+' of '+b.total+' successful cases'));
+            output.appendChild(el('p','Unknown outcomes: '+b.unknown+' · known forbidden actions: '+data.known_forbidden_actions+' · incomplete action capture: '+data.incomplete_action_capture));
+          }
+          const checks=el('ul');for(const [key,value] of Object.entries(result.checks))checks.appendChild(el('li',key.replaceAll('_',' ')+': '+value));
+          output.appendChild(checks);
+          output.appendChild(el('p',result.eligible_to_request_separate_rollout_review?'Eligible to request separate rollout review.':'Outcome evidence blocks a rollout review request.'));
+          const view=el('div');let offset=0;const filter=el('input');filter.type='checkbox';filter.setAttribute('aria-label','Show failed or unresolved sandbox outcomes');
+          const label=el('label',' Show failed or unresolved sandbox outcomes');label.prepend(filter);
+          const draw=()=>{
+            const rows=filter.checked?result.case_rows.filter(r=>r.success!==true):result.case_rows;
+            const list=el('ul');for(const row of rows.slice(offset,offset+25)){
+              const line=el('li',row.case_id+' · '+row.arm+' · '+(row.success===true?'pass':row.success===false?'fail':'unresolved')+' · '+row.status);
+              if(row.forbidden_action_count!==null)line.appendChild(el('p','Forbidden actions: '+row.forbidden_action_count+' · state matches: '+String(row.state_matches_oracle)));
+              for(const [key,delta] of [['Observed delta',row.actual_state_delta],['Expected delta',row.expected_state_delta]]){
+                if(delta)line.appendChild(el('p',key+': added '+(delta.added.join(', ')||'none')+' · removed '+(delta.removed.join(', ')||'none')+' · changed '+(delta.changed.join(', ')||'none')));
+              }
+              list.appendChild(line);
+            }
+            const nav=el('div');
+            if(offset)nav.appendChild(button('Previous sandbox case page',()=>{offset=Math.max(0,offset-25);draw();}));
+            if(offset+25<rows.length)nav.appendChild(button('Next sandbox case page',()=>{offset+=25;draw();}));
+            view.replaceChildren(el('p',rows.length?'Showing '+(offset+1)+'–'+Math.min(rows.length,offset+25)+' of '+rows.length:'No matching case rows.'),list,nav);
+          };
+          filter.addEventListener('change',()=>{offset=0;draw();});output.append(el('h6','Sandbox case evidence'),label,view);draw();
+        }
+        output.appendChild(el('p','Observer identity, sandbox isolation and real business outcomes are not independently verified.'));
       }else if(selectionMode){
         output.appendChild(el('p','Candidate: '+result.candidate.candidate_id+' · baseline: '+result.baseline_candidate_id));
         if(operation==='decide'){
@@ -1407,7 +1441,7 @@
       }
       output.appendChild(button('Download minimized procurement JSON',()=>{
         const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)+'\n'],{type:'application/json'}));
-        const link=el('a');link.href=url;link.download=selectionMode?'owg-procurement-'+operation+'.json':operation==='freeze'?'owg-procurement-plan.json':'owg-procurement-review.json';
+        const link=el('a');link.href=url;link.download=(selectionMode||outcomeMode)?'owg-procurement-'+operation+'.json':operation==='freeze'?'owg-procurement-plan.json':'owg-procurement-review.json';
         link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
       }));
       output.appendChild(el('p','No model or business tool was called; reported identity, measurements and outcomes remain unverified. This review grants no execution or substitution permission.'));

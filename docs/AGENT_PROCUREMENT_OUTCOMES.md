@@ -72,3 +72,7 @@ step; the exact supplied preflight pin and recomputed selection are checked.
 No actual production deployment, source read, business write or autonomous
 execution occurs. Use the existing R17/R18 deployment lifecycle separately.
 Private exclusive files, 8 MiB input bounds, 50 cases and two arms.
+
+## Local workbench
+
+For **Review controlled sandbox outcomes**, supply a JSON bundle containing exactly `decision_bundle`, `preflight`, `outcome_plan` and `observations` (the full original artifact objects). For **Request separate rollout review**, add `request`. The dashboard recomputes evidence against the saved revision; new rollout requests require the latest saved revision. It displays minimized case rows with record IDs rather than state values. The raw bundle is not retained. Freezing and challenge export remain CLI-only. No source calls or deployment changes occur.
