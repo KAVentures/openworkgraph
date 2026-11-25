@@ -174,6 +174,60 @@ class ProcessDependencies:
             result.pop('focused_build_basis',None)
         return result
 
+    def build_bundle(self,p,wid,revision,expected_basis):
+        """Create a root starter plus its exact reviewed prerequisite basis.
+
+        Both are built from the same authorized database snapshot. The
+        prerequisite models are deliberately not copied into this release.
+        """
+        import hashlib
+        from io import BytesIO
+        from zipfile import ZipFile, ZipInfo, ZIP_DEFLATED
+        from shared.process_agent_project import build_runtime_project
+        from shared.process_agent_release import create_manifest
+        with self.catalog.reading(p) as c:
+            result=self.snapshot(c,p,wid)
+            basis=result.get('focused_build_basis')
+            if (not basis or basis['basis_sha256']!=expected_basis
+                    or not basis['all_declared_prerequisites_current']):
+                raise Error('Prerequisite basis is unavailable, changed or requires reassessment; refresh before building')
+            root=next(row for row in basis['processes'] if row['workflow_id']==wid)
+            model=root['current_model']
+            if model['revision']!=revision:
+                raise Error('Select the current reviewed root revision')
+            record=self.store._record(c,p,wid,revision)
+            if record['content_sha256']!=model['content_sha256']:
+                raise Error('Root model changed during dependency preflight')
+            packet={'format':'openworkgraph.versioned-process-export.v1',
+                'workflow_id':wid,'revision':revision,'content_sha256':record['content_sha256'],
+                'process_model':record['process_model'],'execution_authorization':False,
+                'organization_catalog_reference':{'organization_id':p.organization_id}}
+            archive=build_runtime_project(packet)
+        # The existing manifest covers every file, including the new sidecar.
+        # No generated runtime semantics or spec fields are changed.
+        with ZipFile(BytesIO(archive)) as original:
+            files={name:original.read(name).decode('utf-8') for name in original.namelist()
+                   if name!='release-manifest.json'}
+        files['dependency-build-basis.json']=json.dumps(basis,indent=2,ensure_ascii=False,allow_nan=False)+'\\n'
+        files['README.md'] += ('\\n## Declared dependency build basis\\n\\n'
+            'This starter was exported with a reviewed prerequisite closure. See dependency-build-basis.json. '
+            'Recheck the exact basis against the authenticated shared process portal before use. '
+            'The runtime does not enforce this sidecar or execute prerequisite processes. '
+            'The snapshot grants no business execution permissions.\\n')
+        spec=json.loads(files['workflow.spec.json'])
+        files['release-manifest.json']=create_manifest(files,spec)
+        out=BytesIO()
+        with ZipFile(out,'w',compression=ZIP_DEFLATED) as bundle:
+            for name,content in files.items():
+                info=ZipInfo(name,date_time=(1980,1,1,0,0,0))
+                info.compress_type=ZIP_DEFLATED;info.external_attr=0o644<<16
+                bundle.writestr(info,content)
+        self.db.audit(organization_id=p.organization_id,principal_id=p.audit_id,
+            action='process.dependencies.build.exported',details={'workflow_id':wid,'revision':revision,
+                'basis_sha256':expected_basis,'process_count':basis['process_count'],
+                'manifest_sha256':hashlib.sha256(files['release-manifest.json'].encode()).hexdigest()})
+        return out.getvalue()
+
     def graph(self,p,focus=None,*,expected_fingerprint=None,exporting=False):
         with self.catalog.reading(p) as c:
             result=self.snapshot(c,p,focus)
