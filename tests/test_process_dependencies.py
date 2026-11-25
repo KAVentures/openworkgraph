@@ -208,6 +208,7 @@ def test_dependency_starter_export_requires_exact_current_basis_and_covers_sidec
         assert b"PRIVATE_REASON" not in archive.read("dependency-build-basis.json")
         spec=json.loads(archive.read("workflow.spec.json"))
         assert spec["workflow_id"]==a["workflow_id"] and not spec["execution_authorization"]
+        assert spec['dependency_build_basis_sha256']==basis['basis_sha256']
         manifest=json.loads(archive.read("release-manifest.json"))
         assert manifest["files"]["dependency-build-basis.json"]==sha256(archive.read("dependency-build-basis.json")).hexdigest()
         manifest_pin=sha256(archive.read("release-manifest.json")).hexdigest()
@@ -221,6 +222,8 @@ def test_dependency_starter_export_requires_exact_current_basis_and_covers_sidec
 import asyncio,sys
 from pathlib import Path
 from check_dependency_basis import check
+from execute import reference
+from runtime import load_spec
 from verify_release import ReleaseIntegrityError
 calls=[]
 async def reader(url,token,parameters):
@@ -230,6 +233,7 @@ async def reader(url,token,parameters):
     return {'format':'openworkgraph.dependency-build-basis-status.v1',
         'organization_id':'acme','workflow_id':sys.argv[2],'requested_revision':parameters['revision'],
         'requested_basis_sha256':parameters['basis_sha256'],'status':'current',
+        'process_reference':reference(load_spec()),'process_model_sha256':load_spec()['process_model_sha256'],
         'current_exact_reviewed_basis':True,'read_only':True,'execution_authorized':False,
         'business_outcomes_verified':False}
 async def run():
