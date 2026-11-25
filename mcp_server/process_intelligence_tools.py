@@ -205,6 +205,34 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         return runtime_module.core._finish("simulate_process_scenario", result)
 
     @mcp.tool(annotations=_READ_ONLY)
+    def compare_process_scenarios(log_id: str, alternatives: list[dict[str, Any]], baseline: dict[str, Any] | None = None,
+                                  case_type: str | None = None) -> dict[str, Any]:
+        """Compare 2 to 4 named what-if alternatives for a shared log side by side. All of them and the baseline
+        are simulated from one calibration with the same cases and random seed, so the differences are like for
+        like. Each alternative needs a distinct "label" and may override "activities", "paths", "distribution",
+        "arrivals_per_hour", "scenario_calendar", "pools" and "priorities" (as in simulate_process_scenario).
+        baseline holds the shared "cases" (10 to 5000), "seed", "calendar", "activity_time_basis" and
+        "arrivals_per_hour". Returns cycle time, throughput, longest waits and the change against the baseline
+        for each. Does not pick a winner; a model output, not a forecast. Aggregates only.
+        """
+        if not isinstance(alternatives, list) or not 2 <= len(alternatives) <= 4:
+            raise ToolError("alternatives must be a list of 2 to 4 named scenarios")
+        if baseline is not None and not isinstance(baseline, dict):
+            raise ToolError("baseline must be an object")
+        payload: dict[str, Any] = {"alternatives": alternatives}
+        if baseline is not None:
+            payload["baseline"] = baseline
+        if case_type is not None:
+            payload["case_type"] = case_type
+        runtime_module.authorize_tool("compare_process_scenarios")
+        try:
+            result = runtime_module.secure_post(f"/v1/process-intelligence/{_log(log_id)}/compare-scenarios", payload)
+        except Exception as exc:
+            raise ToolError(str(exc) or "process intelligence request failed") from None
+        result["interpretation"] = _NOTE
+        return runtime_module.core._finish("compare_process_scenarios", result)
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_automation_candidates(log_id: str, limit: int = 10, case_type: str | None = None) -> dict[str, Any]:
         """Activities of a shared log ranked as automation candidates, with every score component.
 

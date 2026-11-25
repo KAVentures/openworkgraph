@@ -456,6 +456,24 @@ def simulate(log_id: str, scenario: Any, case_type: str | None = None) -> dict[s
             "log_id": log_id, "calibration": calibration, "scenario": shown, "calibrated_paths_returned": False}
 
 
+def compare_scenarios(log_id: str, baseline: Any, alternatives: Any, case_type: str | None = None) -> dict[str, Any]:
+    """2-4 named what-if alternatives simulated against one calibration with the same cases and seed (aggregates
+    level). Only cycle times, throughput, the longest waits and the differences come back; calibrated paths do not."""
+    require(log_id, "aggregates")
+    from . import event_log_simulation_portfolio as portfolio
+    if baseline is None:
+        baseline = {}
+    if not isinstance(baseline, dict):
+        raise EventLogWorkspaceError("baseline must be an object")
+    cases = baseline.get("cases", 2000)
+    if isinstance(cases, bool) or not isinstance(cases, int) or not 10 <= cases <= AGENT_MAX_SIMULATED_CASES:
+        raise EventLogWorkspaceError(f"cases must be a whole number from 10 to {AGENT_MAX_SIMULATED_CASES} for agents")
+    result = portfolio.compare(log_id, {"format": portfolio.FORMAT, "baseline": baseline,
+                                        "alternatives": alternatives}, case_type)
+    return {**{k: v for k, v in result.items() if k != "log"}, "format": FORMAT, "log_id": log_id,
+            "calibrated_paths_returned": False}
+
+
 def automation_candidates(log_id: str, case_type: str | None = None, limit: int = 10) -> dict[str, Any]:
     """Activities ranked by volume, routine routing and waiting (aggregates level)."""
     require(log_id, "aggregates")
