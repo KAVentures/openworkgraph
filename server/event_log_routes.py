@@ -1531,13 +1531,17 @@ def event_log_funnel(request: Request, log_id: str, step: list[str] = Query(defa
                      within_hours: float | None = Query(default=None, gt=0),
                      evidence_step: int | None = Query(default=None, ge=1, le=8),
                      evidence_status: str = Query(default="reached", pattern="^(reached|dropped)$"),
+                     evidence_page: bool = Query(default=False),
+                     evidence_after: str | None = Query(default=None, min_length=1, max_length=200),
+                     evidence_revision: str | None = Query(default=None, min_length=64, max_length=64),
                      case_type: str | None = Query(default=None, max_length=200),
                      cohort: dict = Depends(_case_filter)):
     """How many cases reach each chosen step in order, the time between steps and where the rest stopped."""
     from . import event_log_funnel as funnel
     _require_dashboard(request)
     return _respond(funnel.funnel, log_id, step, case_type, within_hours=within_hours, cohort=cohort,
-                    evidence_step=evidence_step, evidence_status=evidence_status)
+                    evidence_step=evidence_step, evidence_status=evidence_status, evidence_page=evidence_page,
+                    evidence_after=evidence_after, evidence_revision=evidence_revision)
 
 
 @router.get("/v1/event-logs/{log_id}/unusual-cases")
