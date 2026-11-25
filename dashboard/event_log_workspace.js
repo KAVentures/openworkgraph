@@ -11056,6 +11056,25 @@
             if(t)parts.push(el('div','Typical error '+duration(t.mean_absolute_error_seconds)+' (median '+duration(t.median_absolute_error_seconds)+') vs '+(t.naive_mean_absolute_error_seconds===null?'—':duration(t.naive_mean_absolute_error_seconds))+' for one estimate for every case. Range covered '+pct(t.coverage_10_90)+' ['+pct(t.coverage_10_90_ci95[0])+', '+pct(t.coverage_10_90_ci95[1])+'] against 80% nominal. '+t.still_open_known_misses+' still-open cases are already past their range.'));
             else parts.push(el('div','No frozen case has finished yet; append newer events and score again.','muted'));
             if(e.outcome)parts.push(el('div','Outcome: Brier '+Number(e.outcome.brier_score).toFixed(3)+(e.outcome.base_rate_brier_score===null?'':' vs '+Number(e.outcome.base_rate_brier_score).toFixed(3)+' for the base rate')+'; happened in '+pct(e.outcome.observed_rate)+' against '+pct(e.outcome.mean_predicted)+' predicted.'));
+            if(e.cases_with_inconsistent_observation)parts.push(el('div',
+              e.cases_with_inconsistent_observation+' frozen cases have inconsistent observation timing and are not scored as completed.','muted'));
+            const bounds=e.frozen_population_bounds;
+            if(bounds&&bounds.frozen_cases){
+              parts.push(el('div','Whole frozen population: '+bounds.known_inside_range+' known inside the range, '+
+                bounds.known_outside_range+' known outside, '+bounds.range_membership_unknown+
+                ' unknown. Eventual range coverage between '+pct(bounds.eventual_range_coverage_lower)+' and '+
+                pct(bounds.eventual_range_coverage_upper)+'; at least '+duration(bounds.eventual_mae_lower_bound_seconds)+
+                ' mean absolute error. Bounds assume complete observation, not confidence intervals.'));
+            }
+            const paired=e.paired_remaining_time;
+            if(paired)parts.push(el('div','Paired time comparison: '+paired.paired_cases+' finished cases with both estimates · '+
+              duration(paired.model_mae_seconds)+' OWG vs '+duration(paired.baseline_mae_seconds)+' naive error · '+
+              paired.model_better_cases+' better, '+paired.baseline_better_cases+' worse, '+paired.tied_cases+' tied.'));
+            const ob=e.paired_outcome_bounds;
+            if(ob)parts.push(el('div','Paired outcome risk: '+ob.known_outcome_cases+' known and '+ob.unknown_outcome_cases+
+              ' unknown outcomes. Eventual OWG minus base-rate Brier difference between '+
+              ob.eventual_model_minus_baseline_brier_lower.toFixed(3)+' and '+ob.eventual_model_minus_baseline_brier_upper.toFixed(3)+
+              ' (negative favors OWG). '+ob.frozen_cases_without_paired_risk+' frozen cases lack paired risks.'));
             parts.push(el('div',e.interpretation,'muted'));result.replaceChildren(...parts);
           }catch(error){result.replaceChildren(el('div',error.message,'muted'));}
         };
