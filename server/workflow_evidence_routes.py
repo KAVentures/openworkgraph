@@ -1196,6 +1196,26 @@ async def clarify_process_design(request: Request, workflow_id: str = Query(patt
     return JSONResponse(result, headers={'Cache-Control': 'no-store'})
 
 
+@app.post('/v1/process-catalog/clarify/source-revision-review')
+async def review_clarification_sources(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
+                                       revision: int = Query(ge=1)) -> Response:
+    from shared.process_source_revision import Review, compare
+    from .local_source_routes import _require_dashboard
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    try:
+        body = Review.model_validate(await _process_json(request, maximum=800 * 1024))
+    except (ValidationError, ValueError):
+        raise HTTPException(422, 'invalid bounded source revision review') from None
+    record = _catalog_record(workflow_id, revision)
+    try:
+        result = await run_in_threadpool(compare, record, body)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+    _require_dashboard(request)
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
 @app.post('/v1/process-catalog/clarify/decide')
 async def decide_process_clarification(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
                                        revision: int = Query(ge=1)) -> Response:
