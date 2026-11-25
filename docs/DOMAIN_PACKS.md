@@ -138,6 +138,10 @@ allows one optional review and does not model reopening. See [sales lead qualifi
 provide versioned operational metrics, sequence and elapsed-time checks, and illustrative reference lifecycles.
 They are not legal compliance or authorization engines and require no new source access.
 
+## Preview and test a configuration
+
+The [read-only domain-pack preflight](DOMAIN_PACK_PREFLIGHT.md) checks exact role mappings, definition changes and metric ownership conflicts, and trials the proposed definitions on bounded retained logs before installation. An optional preview token binds the subsequent install to the reviewed configuration and retained revision.
+
 ## Install, upgrade and uninstall
 
 - **Install:** an install records the pack version, mapping and parameters, plus a SHA-256 digest of the

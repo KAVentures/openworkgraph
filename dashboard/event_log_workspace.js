@@ -4813,15 +4813,16 @@
             const control=el('div');control.append(s,exact,finder);
             rows.push([kind==='object_types'?'Object type':'Activity',r.label+(r.required?'':' (optional)'),control]);
           }
-          const params=pack.parameters.map(p=>{const i=input('owgDomainPackParam-'+p.name,'number');i.min=String(p.min);i.max=String(p.max);i.value=String(installed?installed.parameters[p.name]:p.default);inputs[p.name]=i;i.oninput=()=>edited();return field(p.label,i);});
+          const params=pack.parameters.map(p=>{const i=input('owgDomainPackParam-'+p.name,'number');i.min=String(p.min);i.max=String(p.max);i.step='any';i.value=String(installed?installed.parameters[p.name]:p.default);inputs[p.name]=i;i.oninput=()=>edited();return field(p.label,i);});
           const install=button(installed?'Install '+pack.latest_version+(installed.version===pack.latest_version?' again':' (upgrade from '+installed.version+')'):'Install '+pack.title+' '+pack.latest_version);install.id='owgDomainPackInstall';
           const run=button('Run pack report','secondary');run.id='owgDomainPackRun';run.disabled=!installed;
           const remove=button('Uninstall','secondary');remove.id='owgDomainPackUninstall';remove.disabled=!installed;
           const paramRow=el('div',null,'row');paramRow.style.alignItems='end';paramRow.append(...params);
           let reportSnapshot=null,reportTurn=null;
+          let previewSnapshot=null,previewRequired=false,installing=false,previewing=false;const previewButton=button('Preview and test mapping','secondary');previewButton.id='owgDomainPackPreflight';
           const exportReport=button('Download report JSON','secondary');exportReport.id='owgDomainPackDownload';exportReport.disabled=true;
-          const invalidate=()=>{turn++;reportSnapshot=null;reportTurn=null;exportReport.disabled=true;out.replaceChildren();};
-          const edited=()=>{invalidate();run.disabled=true;status.textContent='Inputs changed. Install the pack to apply them before running a new report.';};
+          const invalidate=()=>{turn++;reportSnapshot=null;reportTurn=null;previewSnapshot=null;exportReport.disabled=true;out.replaceChildren();};
+          const edited=()=>{invalidate();install.disabled=installing||previewing||previewRequired;run.disabled=true;status.textContent='Inputs changed. Preview or install the new mapping.';};
           exportReport.onclick=()=>{
             if(!reportSnapshot||!current(reportTurn))return;
             download('owg-domain-pack-'+pack.pack_id+'-'+reportSnapshot.report.pack.version+'.json',
@@ -4850,24 +4851,74 @@
             }catch(error){if(current(t2)&&h===historyTurn)historyOut.replaceChildren(el('div',error.message,'muted'));}
             finally{if(reviewHistory.isConnected)reviewHistory.disabled=!installs.installs.some(i=>i.pack_id===pack.pack_id);}
           };
-          const actions=el('div',null,'row');actions.append(install,run,remove,exportReport,reviewHistory);
+          const actions=el('div',null,'row');actions.append(previewButton,install,run,remove,exportReport,reviewHistory);
           const assumptions=el('ul');assumptions.className='muted';pack.assumptions.forEach(a=>assumptions.appendChild(el('li',a)));
           form.replaceChildren(field('Domain pack',chooser),el('h4',pack.title+' '+pack.latest_version),el('div',pack.description,'muted'),table(['Kind','Role','Name in this log'],rows),paramRow,actions,el('div','Report downloads include supplied case/object examples and mapped labels. Save and share them only where authorized.','muted'),el('h4','Assumptions'),assumptions);
           status.textContent=(installed?'Installed: '+installed.version+' on '+String(installed.installed_at).slice(0,10)+'.':'Not installed on this log.')+(installs.names_truncated?' Suggestions show the 1,000 most frequent labels; enter an exact label for others.':'');
-          install.onclick=async()=>{
-            invalidate();const t2=++turn;install.disabled=true;run.disabled=true;historyTurn++;historyOut.replaceChildren();
+          const proposedSetup=()=>{
+            const parameters={};for(const [k,i] of Object.entries(inputs)){
+              if(i.value===''||!i.checkValidity())throw new Error('Enter valid parameters before previewing or installing.');
+              parameters[k]=Number(i.value);
+            }
+            const basis=installs.installs.find(i=>i.pack_id===pack.pack_id);
+            if(basis&&!/^[a-f0-9]{64}$/.test(basis.installation_token||''))throw new Error('Installation review is unavailable. Reload setup.');
+            return {version:pack.latest_version,mapping:packMapping(pack,choices),parameters,expected_installation:basis?basis.installation_token:null};
+          };
+          previewButton.onclick=async()=>{
+            if(installing||previewing)return;previewRequired=true;previewing=true;invalidate();const t2=++turn;previewButton.disabled=true;install.disabled=true;run.disabled=true;
+            out.replaceChildren(el('p','Testing unsaved mapping on the retained log…','muted'));
             try{
-              const parameters={};for(const [k,i] of Object.entries(inputs))parameters[k]=Number(i.value);
-              const basis=installs.installs.find(i=>i.pack_id===pack.pack_id);
-              if(basis&&!/^[a-f0-9]{64}$/.test(basis.installation_token||''))throw new Error('Installation review is unavailable. Reload setup before saving.');
-              const r=await (await post(base+'/'+pack.pack_id,{version:pack.latest_version,mapping:packMapping(pack,choices),parameters,expected_installation:basis?basis.installation_token:null})).json();
+              const proposed=proposedSetup();
+              const response=await (await post(base+'/'+pack.pack_id+'/preflight',proposed)).json();
+              if(!current(t2))return;
+              if(response.log_id!==logId||response.pack.pack_id!==pack.pack_id||response.pack.version!==pack.latest_version||
+                 !/^[a-f0-9]{64}$/.test(response.preview_token||''))throw new Error('Unexpected preview reference.');
+              previewSnapshot={response,proposed};
+              const parts=[el('h4','Read-only mapping trial'),el('p','Retained revision '+response.log_revision+' · '+response.retained_events+' events · '+response.retained_objects+' objects. Nothing installed.'),
+                table(['Role kind','Role','Exact mapped name','Recorded rows'],Object.entries(response.role_counts).flatMap(([kind,roles])=>roles.map(x=>[kind,x.role,x.name,x.recorded_count]))),
+                el('p','Projected metric library: '+response.projected_metric_library_size+' / '+response.metric_library_limit+
+                  ' · '+(response.installable?'No detected installation blockers.':'Installation blocked: '+response.installation_blockers.join(', ')+'.')),
+                ...(response.metric_name_collisions.length?[el('p','Existing unowned metric names: '+response.metric_name_collisions.join(', '),'note')]:[])];
+              if(response.definition_changes){
+                const changes=response.definition_changes;
+                parts.push(el('h4','Exact definition changes'),table(['Section','Unchanged','Added','Removed'],
+                  Object.entries(changes).filter(([k])=>k!=='reference_model').map(([k,v])=>[k,v.unchanged,v.added,v.removed])),
+                  el('p','Reference model: '+(changes.reference_model.changed?'changed':'unchanged')));
+              }else parts.push(el('p','Previous definitions are unavailable for exact comparison.','note'));
+              if(response.trial){
+                const v=packReportRows(response.trial);
+                parts.push(el('h4','Trial case metrics'),table(['Metric','Object type','Cases','Median','90th percentile','With a value'],v.metrics),
+                  el('h4','Trial compliance rules'),table(['Object type','Rule','Applies to','Violating','Unknown'],v.compliance),
+                  ...(v.objectRules.length?[el('h4','Trial object rules'),table(['Rule','Applies to','Violating'],v.objectRules)]:[]),
+                  el('h4','Trial reference model'),el('div',v.model,'note'));
+              }else parts.push(el('p','Trial analytics unavailable within the population bound. Setup checks only.','note'));
+              if(response.trial?.not_applicable?.length)parts.push(el('p','Not applicable: '+response.trial.not_applicable.map(x=>x.section+' '+(x.index+1)+' (needs '+x.unmapped_role+')').join(', '),'muted'));
+              parts.push(el('p',response.interpretation,'muted'));
+              const savePreview=button('Download preview JSON','secondary');
+              savePreview.onclick=()=>{if(current(t2)&&previewSnapshot)download('owg-domain-pack-preflight-'+pack.pack_id+'.json',JSON.stringify(response,null,2),'application/json');};
+              parts.push(savePreview);out.replaceChildren(...parts);
+              status.textContent=response.installable?'Preview ready. Install will recheck this exact setup and retained revision.':'Preview found installation blockers; correct the setup.';
+            }catch(error){if(current(t2)){out.replaceChildren(el('p',error.message,'note'));status.textContent='Preview unavailable.';}}
+            finally{previewing=false;if(previewButton.isConnected){previewButton.disabled=false;install.disabled=previewRequired&&(!previewSnapshot||!previewSnapshot.response.installable);}}
+          };
+          install.onclick=async()=>{
+            if(installing||previewing||(previewRequired&&!previewSnapshot))return;
+            const preview=previewSnapshot;installing=true;previewButton.disabled=true;invalidate();const t2=++turn;install.disabled=true;run.disabled=true;historyTurn++;historyOut.replaceChildren();
+            try{
+              const proposed=proposedSetup();
+              if(preview){
+                if(JSON.stringify(proposed)!==JSON.stringify(preview.proposed))throw new Error('Setup changed; rerun preview.');
+                proposed.expected_preview=preview.response.preview_token;
+              }
+              const r=await (await post(base+'/'+pack.pack_id,proposed)).json();
               // Keep the completed save's basis even if later inputs invalidated its display.
               installs.installs=[...installs.installs.filter(i=>i.pack_id!==pack.pack_id),r];
+              previewRequired=false;
               if(!current(t2))return;
               run.disabled=remove.disabled=reviewHistory.disabled=false;
               status.textContent=({installed:'Installed',upgraded:'Upgraded from '+r.previous_version+' to',reconfigured:'Reinstalled'}[r.change])+' '+r.version+'. '+r.metric_ids.length+' case metrics were added to this log’s metric library.'+(r.not_applicable.length?' '+r.not_applicable.length+' definitions do not apply without their optional roles.':'');
             }catch(error){if(current(t2))status.textContent=error.message;}
-            finally{if(install.isConnected)install.disabled=false;}
+            finally{installing=false;if(install.isConnected){previewButton.disabled=false;install.disabled=previewRequired;}}
           };
           run.onclick=async()=>{
             invalidate();const t2=++turn;run.disabled=true;out.replaceChildren(el('div','Running…','muted'));
