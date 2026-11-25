@@ -9,12 +9,13 @@ relationship was valid at the time, causal, complete, or approved for action.
 """
 from __future__ import annotations
 
-from typing import Any
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, field_validator
+from typing import Any, Literal
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, field_validator, model_validator
 
 from shared.event_log_formats import EventLogFormatError, _exact_key
 from . import event_log_workspace as workspace
 from . import event_log_object_relationships as relationships
+from . import event_log_repeated_milestones as repeated
 
 FORMAT = "openworkgraph.object-relationship-lead-times.v1"
 MAX_PAIRS = 20_000
@@ -30,6 +31,21 @@ class LeadTimeSpec(BaseModel):
     target_activity: str = Field(min_length=1, max_length=200)
     qualifier: str | None = Field(default=None, max_length=80)
     sample_limit: StrictInt = Field(default=20, ge=0, le=MAX_EXAMPLES)
+    repeat_review: bool = False
+    deadline_seconds: StrictInt | None = Field(default=None,ge=0,le=31_536_000)
+    repeat_status: Literal["all","observed_forward","target_only_before_source",
+                           "target_missing","source_missing","both_missing"] = "all"
+    repeat_offset: StrictInt = Field(default=0,ge=0,le=MAX_PAIRS)
+    expected_repeat_sha256: str | None = Field(default=None,pattern=r"^[a-f0-9]{64}$")
+
+    @model_validator(mode="after")
+    def explicit_review(self):
+        if not self.repeat_review and (self.deadline_seconds is not None or self.repeat_status!="all"
+                or self.repeat_offset or self.expected_repeat_sha256 is not None):
+            raise ValueError("enable repeated milestone review first")
+        if self.repeat_offset and (not self.expected_repeat_sha256 or not self.sample_limit):
+            raise ValueError("review page one before requesting later evidence")
+        return self
 
     @field_validator("source_type", "target_type", "source_activity", "target_activity", "qualifier")
     @classmethod
@@ -64,6 +80,9 @@ def _timestamp(value) -> str | None:
 def analyze(log_id: str, spec: Any) -> dict[str, Any]:
     requested = parse(spec)
     params = requested.model_dump()
+    if not requested.repeat_review:
+        for key in ('repeat_review','deadline_seconds','repeat_status','repeat_offset','expected_repeat_sha256'):
+            params.pop(key,None)
     with relationships._read_log(log_id) as (conn, info):
         # Preserve exact supplied O2O direction and selected qualifier. A pair
         # with multiple qualifiers is still one pair, not several observations.
@@ -154,7 +173,9 @@ def analyze(log_id: str, spec: Any) -> dict[str, Any]:
                          "target_event_occurrences": dst_count, "lead_seconds": lag}
                         for source, target, src_at, dst_at, status, src_count, dst_count, lag in rows]
         snap = relationships.snapshot(conn, log_id)
+        repeat_result=repeated.review(conn,log_id,requested,snap) if requested.repeat_review else None
         return {
+            **({"repeated_milestone_review":repeat_result} if repeat_result is not None else {}),
             "format": FORMAT, "log": info, "settings": params,
             "relationship_revision": snap["revision"],
             "relationship_digest": snap["relationships_sha256"],
