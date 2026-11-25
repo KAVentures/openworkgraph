@@ -506,7 +506,11 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
         dependency_routes=[{'table_id':r['table_id'],'target_activity_ids':r['target_activity_ids']}
                            for r in prepared.get('decision_tables',[])] if dependency_contract else []
         record('started', execution_id=execution_id, process_reference=reference(spec), spec_sha256=digest(spec),
-               **({'dependent_decision_routes':dependency_routes} if dependency_contract else {}))
+               **({'dependent_decision_routes':dependency_routes,
+                   'declared_activity_ids':prepared['plan']['activity_ids'],
+                   'declared_plan_sha256':digest(prepared['plan']),
+                   'declared_precondition_attempts':[i+1 for i,a in enumerate(prepared['actions']) if a['precondition']]}
+                  if dependency_contract else {}))
         decision_checkpoint=0
         async def check_catalog():
             if not spec.get('organization_catalog_reference'):
@@ -522,7 +526,7 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
             if not current:
                 raise ImplementationError('Shared process changed, lost review, was archived or is unavailable')
             ensure_current(intent, now, stop_marker)
-        async def check_decisions():
+        async def check_decisions(purpose,attempt=None):
             nonlocal decision_checkpoint
             if not prepared.get('decision_tables'):return
             from decision_runtime import check_decision_receipt, check_decision_batch, _dependent
@@ -542,6 +546,8 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                 decision_checkpoint+=1
                 for summary in summaries:
                     summary['checkpoint_number']=decision_checkpoint
+                    summary['checkpoint_purpose']=purpose
+                    summary['checkpoint_attempt']=attempt
                     result.setdefault('decision_table_checks',[]).append(summary)
                     record('decision_table_checked',**summary)
                 ensure_current(intent,now,stop_marker)
@@ -563,7 +569,7 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                 policy='ordered FIRST' if any(t.get('hit_policy')=='FIRST' for t in spec['process_model'].get('decision_tables',[])) else 'UNIQUE'
                 raise ImplementationError('Current '+policy+' decision route or effective date not established')
 
-        async def check_source_rules():
+        async def check_source_rules(purpose,attempt=None):
             # Deliberately do not reuse dashboard reports, caller facts or a
             # prior receipt. The customer has reviewed these as invariants;
             # every action and the final route check require fresh reads.
@@ -583,10 +589,10 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                 passed=passed and status=='matched'
             ensure_current(intent,now,stop_marker)
             if not passed:raise ImplementationError('Fresh source rule invariant was false or unknown')
-            await check_decisions()
+            await check_decisions(purpose,attempt)
         try:
             await check_catalog()
-            await check_source_rules()
+            await check_source_rules('initial')
         except ImplementationError:
             result.update(stopped_before_tools=True, all_tool_results_matched=False, all_declared_operations_verified=False)
             if os.path.lexists(str(stop_marker)):
@@ -636,7 +642,7 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                         await check_catalog()
                         ensure_current(intent, now, stop_marker)
                         if action['precondition']:
-                            await check_decisions()
+                            await check_decisions('precondition',index+1)
                             condition = action['precondition']
                             record('precondition_pending', activity_id=action['activity_id'], attempt=index+1)
                             try:
@@ -650,7 +656,7 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                                 record('precondition_not_established', activity_id=action['activity_id'], attempt=index+1)
                                 break
                         await check_catalog()
-                        await check_source_rules()
+                        await check_source_rules('action',index+1)
                         ensure_current(intent, now, stop_marker)
                         record('attempt_pending', activity_id=action['activity_id'], attempt=index+1,
                                arguments_sha256=digest(action['arguments']))
@@ -681,7 +687,7 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
             record('transport_or_tool_inventory_unavailable')
             result['transport_or_tool_inventory_unavailable'] = True
         try:
-            await check_source_rules()
+            await check_source_rules('completion')
             result['source_rules_matched_at_completion']=True
         except ImplementationError:
             result['source_rules_matched_at_completion']=False
