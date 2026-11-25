@@ -326,3 +326,15 @@ These checks are non-atomic with external operations, and are not a
 substitute for independent authorization, provider concurrency controls or
 business outcome verification. They enforce the supplied declared closure,
 not completeness of dependency discovery.
+
+
+Dependency-aware execution journals label catalog checks with the exact
+basis digest, sequential check number, checkpoint purpose and (for
+preconditions/actions) attempt number. The offline monitor requires a
+matching current check immediately before every recorded attempt and an
+initial and completion check for a successful run. Missing, stale,
+out-of-order or mismatched checkpoints cannot produce a successful
+projection. An interrupted or refused run may still be projected with
+its observed status. This verifies the internal consistency of a
+customer-supplied journal, not independent provider evidence, signed
+attestation or actual business outcomes.
