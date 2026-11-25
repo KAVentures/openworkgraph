@@ -8,6 +8,7 @@ secrets, provider calls, retry actions, or new persistence.
 from __future__ import annotations
 
 from hashlib import sha256
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -137,3 +138,37 @@ def review(incident_id, spec):
             }
         finally:
             conn.close()
+
+
+class PinnedTriage(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    expected_last_seen: str = Field(min_length=1, max_length=64)
+    expected_review_revision: int = Field(ge=0)
+    expected_membership_sha256: str = Field(pattern=evidence.HASH_PATTERN)
+    expected_population_sha256: str = Field(pattern=evidence.HASH_PATTERN)
+    status: Literal["open", "acknowledged", "resolved"]
+    note: str = Field(default="", max_length=500)
+
+
+def triage_reviewed(incident_id, payload):
+    """Record a human decision only while the inspected evidence still matches.
+
+    Reuse the existing triage lifecycle and optimistic review checks. A digest
+    establishes content equality, not that a person read every report.
+    """
+    request = evidence._parse(PinnedTriage, payload)
+    with m._LOCK, incidents._LOCK:
+        current = review(incident_id, request.model_dump(exclude={"status", "note"}) | {"limit": 1})
+        try:
+            decision = incidents.triage(incident_id, {
+                "status": request.status, "note": request.note,
+                "expected_last_seen": request.expected_last_seen,
+                "expected_review_revision": request.expected_review_revision,
+            })
+        except incidents.IncidentError as exc:
+            raise m.MonitoringError(str(exc)) from None
+        return {"incident": decision, "reviewed_population_sha256": current["population_sha256"],
+                "reviewed_membership_sha256": current["membership_sha256"],
+                "reviewed_run_count": current["matching_runs"],
+                "reviewed_step_count": current["matching_steps"],
+                "human_reading_independently_verified": False, **incidents.CLAIMS, **evidence.CLAIMS}

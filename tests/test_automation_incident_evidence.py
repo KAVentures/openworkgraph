@@ -156,6 +156,14 @@ with TestClient(app) as client:
     assert ok.status_code==200,ok.text
     assert ok.headers["cache-control"]=="no-store"
     assert ok.json()["matching_runs"]==2
+    decision=spec(item,status="acknowledged",note="Reviewed",
+                  expected_population_sha256=ok.json()["population_sha256"])
+    assert client.post(url+"/triage",json=decision,headers=bearer).status_code in (401,403)
+    saved=client.post(url+"/triage",json=decision,headers=h)
+    assert saved.status_code==200,saved.text
+    assert saved.headers["cache-control"]=="no-store"
+    assert saved.json()["incident"]["status"]=="acknowledged"
+    assert client.post(url+"/triage",json=decision,headers=h).status_code==422
     assert client.post(url,content=b'{"limit":1,"limit":2}',headers={**h,"Content-Type":"application/json"}).status_code==422
 """
     env={**os.environ,"WORKFLOW_OBSERVER_DATA":str(tmp_path/"data"),
@@ -164,3 +172,41 @@ with TestClient(app) as client:
     p=subprocess.run([sys.executable,"-c","import sys;sys.path.insert(0,'tests');"+code],
                      cwd=Path(__file__).resolve().parents[1],env=env,capture_output=True,text=True,timeout=120)
     assert p.returncode==0,p.stdout+p.stderr
+
+
+def test_pinned_triage_refuses_content_change_even_when_ordinary_incident_pin_is_current():
+    dep = create([run("a"), run("b")])
+    item = incident(dep)
+    first = review.review(item["incident_id"], spec(item))
+    payload = spec(item, expected_population_sha256=first["population_sha256"],
+                   status="resolved", note="Reviewed exact population")
+    modified = run("b")
+    modified["steps"][0]["activity"] = "Different earlier context"
+    m.import_report(report([modified]), dep)
+    assert incidents.reconcile_deployment(dep) == []
+    with pytest.raises(m.MonitoringError, match="evidence changed"):
+        review.triage_reviewed(item["incident_id"], payload)
+    assert incident(dep)["status"] == "open"
+    assert incident(dep)["notes"] == []
+    fresh = review.review(item["incident_id"], spec(item))
+    result = review.triage_reviewed(item["incident_id"],
+        {**payload, "expected_population_sha256": fresh["population_sha256"]})
+    assert result["incident"]["status"] == "resolved"
+    assert result["reviewed_population_sha256"] == fresh["population_sha256"]
+    assert result["reviewed_run_count"] == 2
+    assert result["human_reading_independently_verified"] is False
+    assert not result["business_writes_replayed"]
+    with pytest.raises(m.MonitoringError, match="incident changed"):
+        review.triage_reviewed(item["incident_id"], {**payload, "expected_population_sha256": fresh["population_sha256"]})
+
+
+def test_pinned_triage_requires_exact_digest_and_rejects_extra_fields():
+    dep = create([run("a")])
+    item = incident(dep)
+    first = review.review(item["incident_id"], spec(item))
+    for bad in (spec(item, status="resolved"),
+                spec(item, status="resolved", expected_population_sha256="bad"),
+                spec(item, status="resolved", expected_population_sha256=first["population_sha256"], execute=True)):
+        with pytest.raises(m.MonitoringError):
+            review.triage_reviewed(item["incident_id"], bad)
+    assert incident(dep)["status"] == "open"

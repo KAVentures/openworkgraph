@@ -34,3 +34,7 @@ Synthetic tests cover first-issue membership, non-sample paging, stale content,
 unreconciled imports, review changes, zero membership, handoffs, strict requests,
 dashboard authentication, bounded work, and exact report readback. Existing
 signed-report browser acceptance exercises opening and reading evidence.
+
+### Evidence-pinned triage
+
+After inspecting a population in the dashboard, incident triage uses POST /v1/automation-monitoring/incidents/{incident_id}/evidence/triage. It requires the same last-seen, review revision, membership SHA-256 and population SHA-256, plus a status and optional note. The server checks the entire population while holding the monitoring and incident locks and applies the existing triage operation only if it is unchanged. This catches even earlier-step edits that do not change incident membership or the ordinary revision. The returned counts and digests refer to the inspected evidence, not a claim that every report was read. Existing ordinary triage remains available when no evidence has been inspected. No business writes or automation execution occur.
