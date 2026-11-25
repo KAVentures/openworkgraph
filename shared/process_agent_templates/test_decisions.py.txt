@@ -480,6 +480,35 @@ class DependentDecisionContracts(unittest.TestCase):
         checked=check_decision_batch(spec,requests,stale,now=now)
         self.assertEqual([r['status'] for r in checked],['unknown','dependency_unresolved'])
 
+    def test_unused_table_and_invariant_record_pointers_are_not_resolved(self):
+        from execute import source_rule_bindings
+        spec,plan,case,bindings=dependent_fixture()
+        # A short alternative visits only the first decision, not its dependent.
+        bindings['decision_table_checks'][1]['resource_ref_pointer']='/absent_downstream'
+        requests,missing=decision_bindings(spec,[{'table_id':'source_decision','target_activity_ids':['hold']}],case,bindings)
+        self.assertEqual(missing,[])
+        self.assertEqual([r['table_id'] for r in requests],['source_decision'])
+        with self.assertRaises(ImplementationError):
+            decision_bindings(spec,[{'table_id':'second_decision','target_activity_ids':['readback']}],case,bindings)
+        raw=spec['process_model']
+        next(e for e in raw['transitions'] if (e['source'],e['target'])==('resolve','choose_again'))['rule_id']='open_rule'
+        spec['process_model_sha256']=digest(raw)
+        bindings['source_rule_checks']=[{'rule_id':'open_rule','source_type':'github_pull_request',
+            'resource_ref_pointer':'/absent_invariant','mode':'invariant_before_each_action',
+            'record_semantics_reviewed':True,'non_atomic_reads_reviewed':True}]
+        checks=check_plan({'revision':spec['revision'],'content_sha256':spec['content_sha256'],
+            'activity_ids':['choose','hold']},spec)
+        bound,unbound=source_rule_bindings(spec,checks,case,bindings)
+        self.assertEqual(bound,[])
+        self.assertFalse(unbound)
+        checks=check_plan(plan,spec)
+        with self.assertRaises(ImplementationError):
+            source_rule_bindings(spec,checks,case,bindings)
+        # Duplicate declarations are still invalid even for unused routes.
+        bindings['decision_table_checks'].append(deepcopy(bindings['decision_table_checks'][1]))
+        with self.assertRaises(ImplementationError):
+            decision_bindings(spec,[{'table_id':'source_decision','target_activity_ids':['hold']}],case,bindings)
+
     def test_missing_prerequisite_binding_and_explicit_review(self):
         spec,plan,case,bindings=dependent_fixture()
         routes=[{'table_id':'second_decision','target_activity_ids':['readback']}]
