@@ -141,14 +141,18 @@ def source_rule_bindings(spec,checks,case,bindings):
     mapped={}
     table_rules={row['rule_id'] for table in spec['process_model'].get('decision_tables',[]) for row in table['rows']}
     required=(set(checks.get('unevaluated_structured_rule_ids',[]))-table_rules) | set(checks.get('non_table_structured_rule_ids',[]))
+    decision_nodes={table['decision_activity_id'] for table in spec['process_model'].get('decision_tables',[])}
+    non_table_rules={edge.get('rule_id') for edge in spec['process_model']['transitions'] if edge['source'] not in decision_nodes}
+    seen=set()
     keys={'rule_id','source_type','resource_ref_pointer','mode','record_semantics_reviewed','non_atomic_reads_reviewed'}
     for row in rows:
         if (not isinstance(row,dict) or set(row)!=keys or not isinstance(row.get('rule_id'),str)
-            or row['rule_id'] not in rules or row['rule_id'] in mapped or (row['rule_id'] in table_rules and row['rule_id'] not in required)
+            or row['rule_id'] not in rules or row['rule_id'] in seen or (row['rule_id'] in table_rules and row['rule_id'] not in non_table_rules)
             or not isinstance(row.get('source_type'),str) or row['source_type'] not in SOURCE_TYPES
             or row.get('mode')!='invariant_before_each_action'
             or row.get('record_semantics_reviewed') is not True or row.get('non_atomic_reads_reviewed') is not True):
             raise ImplementationError('Each source rule needs an exact reviewed current-state invariant binding')
+        seen.add(row['rule_id'])
         rule=rules[row['rule_id']]
         if rule.get('user_confirmed') is not True or not rule.get('predicate'):
             raise ImplementationError('Only confirmed structured rules can use source bindings')
@@ -157,6 +161,8 @@ def source_rule_bindings(spec,checks,case,bindings):
         except ValueError:raise ImplementationError('Invalid source rule predicate') from None
         if any(condition.path not in SOURCE_PATHS for condition in predicate.conditions):
             raise ImplementationError('Only supported current-source fact paths can use this implementation')
+        if row['rule_id'] not in required:
+            continue
         ref=pointer(case,row['resource_ref_pointer'])
         if not isinstance(ref,str) or re.fullmatch(r'owg:r:[a-f0-9]{32}',ref) is None:
             raise ImplementationError('Source rule bindings require a selected observed record reference')
