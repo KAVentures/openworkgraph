@@ -259,16 +259,19 @@ def shared_logs() -> dict[str, Any]:
         try:
             rows = conn.execute("""SELECT s.log_id, l.name, s.level, l.events, l.objects FROM event_log_agent_shares s
                 JOIN logs l USING (log_id) ORDER BY l.name""").fetchall()
-            types = {log_id: [t for (t,) in conn.execute(
-                "SELECT DISTINCT object_type FROM objects WHERE log_id = ? ORDER BY 1 LIMIT 20", [log_id]).fetchall()]
-                for log_id, *_ in rows}
+            counts = {log_id: conn.execute("""SELECT object_type, count(*) FROM objects WHERE log_id = ?
+                GROUP BY 1 ORDER BY 1 LIMIT 20""", [log_id]).fetchall() for log_id, *_ in rows}
+            types = {log_id: [t for t, _ in found] for log_id, found in counts.items()}
             taggable = {r[0] for r in conn.execute("SELECT log_id FROM event_log_agent_tag_grants").fetchall()}
         finally:
             conn.close()
     return {"format": FORMAT, "logs": [{"log_id": i, "name": n, "level": lv, "events": e, "objects": o,
-                                        "case_notions": types[i], "agents_may_tag_cases": i in taggable}
+                                        "case_notions": types[i], "agents_may_tag_cases": i in taggable,
+                                        "case_notions_too_small_for_aggregates": [] if lv == "cases" else [
+                                            t for t, c in counts[i] if c < AGENT_MIN_FILTERED_CASES]}
                      for i, n, lv, e, o in rows],
-            "note": "Only logs the owner shared with agents are listed."}
+            "note": ("Only logs the owner shared with agents are listed. A case notion with fewer than "
+                     f"{AGENT_MIN_FILTERED_CASES} objects answers no aggregates-level request.")}
 
 
 def _top(items: list[Any], n: int) -> list[Any]:
