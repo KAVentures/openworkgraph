@@ -473,8 +473,13 @@ def read_ocel_json(stream: IO[bytes], *, stats: ReadStats | None = None) -> Iter
 
 def write_ocel_json(objects: Iterable[dict[str, Any]], events: Iterable[dict[str, Any]], out: IO[str]) -> None:
     """OCEL 2.0 JSON with declared object/event types and qualified relationships."""
+    json.dump(ocel_json_document(objects, events), out, ensure_ascii=False)
+
+
+def ocel_json_document(objects: Iterable[dict[str, Any]], events: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """The OCEL 2.0 JSON document ``write_ocel_json`` writes, as Python data (for other OCEL writers)."""
     objects, events = list(objects), list(events)
-    document = {
+    return {
         "objectTypes": [{"name": name, "attributes": []} for name in sorted({o["object_type"] for o in objects})],
         "eventTypes": [{"name": name, "attributes": []} for name in sorted({e["activity"] for e in events})],
         "objects": [{"id": o["object_id"], "type": o["object_type"],
@@ -486,7 +491,6 @@ def write_ocel_json(objects: Iterable[dict[str, Any]], events: Iterable[dict[str
                     "relationships": [{"objectId": oid, "qualifier": q} for oid, q in e.get("objects") or []]}
                    for e in events],
     }
-    json.dump(document, out, ensure_ascii=False)
 
 
 def read_ocel_xml(stream: IO[bytes], *, stats: ReadStats | None = None) -> Iterator[EventRecord | ObjectRecord]:
@@ -605,5 +609,5 @@ def detect_format(head: bytes) -> str:
 __all__ = [
     "CASE_TYPE", "EventLogFormatError", "EventRecord", "ObjectRecord", "ReadStats",
     "detect_format", "parse_timestamp", "read_csv", "read_ocel_json", "read_ocel_xml", "read_xes",
-    "write_csv", "write_ocel_json", "write_ocel_xml", "write_xes",
+    "ocel_json_document", "write_csv", "write_ocel_json", "write_ocel_xml", "write_xes",
 ]
