@@ -1196,7 +1196,12 @@
         toggle.onclick=async()=>{try{await post(base()+'/applied',{mapping_id:m.applied?null:m.mapping_id});await analyse();}catch(e){msg.textContent=e.message;}};
         const del=button('Delete','secondary');del.setAttribute('aria-label','Delete mapping '+m.name);
         del.onclick=async()=>{try{await post(base()+'/'+encodeURIComponent(m.mapping_id)+'/delete',{});if(m.applied)await analyse();else render({...r,mappings:(await (await api(base())).json()).mappings});}catch(e){msg.textContent=e.message;}};
-        li.append(toggle,del);list.appendChild(li);
+        const exportMapping=button('Download JSON','secondary');exportMapping.setAttribute('aria-label','Download mapping '+m.name);
+        exportMapping.onclick=()=>download('owg-activity-mapping.json',JSON.stringify({
+          format:'openworkgraph.activity-mapping.v1',
+          mapping:{name:m.name,groups:m.groups,collapse_repeats:m.collapse_repeats}
+        },null,2),'application/json');
+        li.append(toggle,del,exportMapping);list.appendChild(li);
       });
       host.replaceChildren(r.mappings.length?list:el('div','No saved mappings.','muted'));
     };
@@ -1238,7 +1243,49 @@
         suggestions.replaceChildren(el('div',r.groups.length+' groups of names that may be the same activity'+(r.groups_total>r.groups.length?' (showing '+r.groups.length+' of '+r.groups_total+')':'')+'. '+r.caveat,'muted'),list,use);
       }catch(e){suggestions.replaceChildren(el('div',e.message,'muted'));}
       finally{suggest.disabled=false;}};
-    box.append(host,row,suggest,suggestions,draft,collapseWrap,save,msg);
+    const transfer=document.createElement('details');transfer.id='owgActivityMappingTransfer';
+    const file=input('owgActivityMappingFile','file');file.accept='.json,application/json';
+    const inspect=button('Preview mapping file','secondary');inspect.disabled=true;
+    const apply=button('Load mapping draft','secondary');apply.disabled=true;
+    const transferStatus=el('div',null,'muted');transferStatus.setAttribute('role','status');
+    const transferRows=el('div');
+    let preview=null,transferTurn=0;
+    file.onchange=()=>{
+      transferTurn++;preview=null;inspect.disabled=!file.files.length;apply.disabled=true;
+      transferStatus.textContent='';transferRows.replaceChildren();
+    };
+    inspect.onclick=async()=>{
+      const selected=file.files[0],ticket=++transferTurn;
+      preview=null;apply.disabled=true;transferRows.replaceChildren();
+      if(!selected)return;
+      if(selected.size>262144){transferStatus.textContent='Choose a JSON file of at most 256 KiB.';return;}
+      const current=()=>generation===state.generation&&box.isConnected&&ticket===transferTurn;
+      inspect.disabled=true;transferStatus.textContent='Checking the mapping…';
+      try{
+        const result=await(await api(base()+'/template/preview',{
+          method:'POST',headers:{'Content-Type':'application/json'},body:selected
+        })).json();
+        if(!current())return;
+        preview=result.mapping;apply.disabled=false;
+        transferStatus.textContent=preview.name+' · '+preview.groups.length+' groups'+
+          (preview.collapse_repeats?' · consecutive repeats will collapse when applied.':'.');
+        transferRows.replaceChildren(table(['Group','Matching events','Missing activity labels'],
+          result.groups.map(group=>[group.label,group.matched_events,
+            group.missing_activities.map(value=>JSON.stringify(value)).join(', ')||'—'])));
+      }catch(error){if(current())transferStatus.textContent=error.message;}
+      finally{if(current())inspect.disabled=false;}
+    };
+    apply.onclick=()=>{
+      if(!preview)return;
+      if(groups.length&&!window.confirm('Replace the current mapping draft?'))return;
+      name.value=preview.name;collapse.checked=preview.collapse_repeats;
+      groups.splice(0,groups.length,...preview.groups);drawDraft();
+      preview=null;apply.disabled=true;file.value='';inspect.disabled=true;
+      transferRows.replaceChildren();transferStatus.textContent='Loaded the draft. Save it, then apply it when ready.';
+    };
+    transfer.append(el('summary','Import activity mapping'),field('Activity mapping JSON',file),
+      inspect,apply,transferStatus,transferRows);
+    box.append(host,row,suggest,suggestions,draft,collapseWrap,save,msg,transfer);
     api(base()).then(r=>r.json()).then(render).catch(e=>{msg.textContent=e.message;});
     return box;
   }

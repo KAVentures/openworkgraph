@@ -3456,3 +3456,17 @@ Dashboard owners can download a saved log as an Excel workbook (`GET /v1/event-l
 ### Rework and loop case evidence
 
 The local rework report shows the total number of repeated activities and recorded loop patterns, with an adjustable display limit of 20, 50 or 100. JSON and CSV downloads contain the displayed results and the JSON includes the selected cohort and analysis settings. The report offers explicit case-evidence links for repeated activities and exact closed activity loops. Selectors respect the active case cohort and retain literal event order; timestamp ties do not establish business order.
+
+### Reusing activity groupings across logs
+
+Under **Group activities**, download a saved mapping as JSON. In another log,
+open **Import activity mapping**, choose that file, and preview the matching
+event counts and exact activity labels missing from the destination. Load the
+mapping into the draft, review it, and save it. Saving does not apply the
+mapping; apply it separately when ready. The file contains the mapping definition,
+including activity names, but no events.
+
+The dashboard-session endpoint `POST /v1/event-logs/{log_id}/activity-mappings/template/preview`
+accepts `{ "format": "openworkgraph.activity-mapping.v1", "mapping": { ... } }`.
+It validates and previews the definition against original event labels without
+changing the log or its saved mappings.
