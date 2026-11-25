@@ -3417,6 +3417,16 @@ tagged. Tagging again with the same tag does not duplicate it.
 body, plus the case-filter parameters (`tag` there is the filter for cases already tagged, so the
 new tag is `new_tag`). A tag is the analyst's label, not a finding.
 
+### Structural and behavioral net validation
+
+After replaying a net, expand **Structural and behavioral net validation** and choose **Validate net soundness**. This checks the *model*, independently of observed cases or cohort filters. A log can fit an unsound net, and a sound net need not fit a particular log.
+
+The checker explores reachable markings by firing enabled ordinary place/transition net transitions. For a completely explored finite graph it verifies classical workflow-net soundness: unique marked source and sink, all nodes on a structural source-to-sink path, the option to reach the exact final marking from every reachable marking, proper completion, and no dead transitions. It also reports one-safeness separately (a weighted sound net need not be one-safe), final-marking reachability, deadlock and non-completing marking witnesses. Witnesses use transition IDs and reached token counts, not guessed business activity order. Cycles with exits can be sound; inevitable completion is not claimed.
+
+Results have three possible values: **Verified**, **Failed**, and **Inconclusive**. Limits are 200 places, 300 transitions, 5,000 reachable markings, 256 tokens per place and 300,000 transition checks. If a limit is reached, an observed counterexample remains valid; unexplored absence is not evidence of soundness, dead transitions, or unboundedness. The checker does not approximate high-level, reset, inhibitor or other extended nets, does not guess final markings, and rejects unrecognized semantic/tool-specific extensions. Some otherwise replayable external PNML files may consequently be refused. The supported subset is the explicitly marked ordinary PNML P/T net, including OWG-generated nets.
+
+The dashboard can download a JSON report containing the input PNML SHA-256, coverage, property verdicts, limits and counterexamples. The local dashboard-session-only endpoint is `POST /v1/event-logs/petri-soundness` with the raw PNML body (at most 2 MB); returns JSON with `Cache-Control: no-store`. No net or report is retained by this operation, and no connector or business-action authorization is implied.
+
 ### Process trees (PTML) from PM4Py and ProM
 
 The file picker also accepts a **process tree** in PTML, as `pm4py.write_ptml` and ProM's Inductive
