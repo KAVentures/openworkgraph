@@ -75,6 +75,11 @@ OWG replays the 2,000 most frequent variants (10,721 of 13,087 cases, disclosed 
 differences. Both nets are permissive on this log (precision below 0.1): BPI 2012 interleaves offer,
 application and work-item events, which the discovery draws as an any-order region.
 
+The handover-of-work network on BPI Challenge 2012 was checked against a brute-force count of
+consecutive events in a case by two different named resources (an event without a resource breaks
+the chain). All 100 listed pairs matched. PM4Py's handover network normalises its weights and is
+not a like-for-like reference for these counts.
+
 ## What was found and changed
 
 | Finding | Cause | Change |
