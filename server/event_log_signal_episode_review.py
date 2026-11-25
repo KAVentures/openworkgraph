@@ -58,7 +58,7 @@ def reconstruct(rows):
                 "ambiguous_trigger_count":sum(r[6]=="triggered" for r in ambiguous),
                 "ambiguous_clear_count":sum(r[6]=="cleared" for r in ambiguous),
                 "elapsed_seconds":elapsed,
-                "sort_at":_stamp(first[4]),"sort_id":first[5]})
+                "sort_at":first[4],"sort_id":first[5]})
         for _,items in groupby(records,key=lambda r:r[4]):
             batch=list(items)
             if any(r[6] not in timeline.FILTERS-{"all"} for r in batch):
@@ -79,10 +79,16 @@ def reconstruct(rows):
     return sorted(result,key=lambda r:(r["sort_at"],r["log_id"],r["rule_id"],r["sort_id"]),reverse=True)
 
 
-def review(*,start_date,end_date,status="all",offset=0,limit=50,expected_review_sha256=None):
+def review(*,start_date,end_date,status="all",offset=0,limit=50,expected_review_sha256=None,
+           log_id=None,rule_id=None):
     start,end=_date(start_date),_date(end_date)
     if end<=start or end-start>timedelta(days=366):
         raise workspace.EventLogWorkspaceError("Select a positive UTC window of at most 366 days")
+    for value in (log_id,rule_id):
+        if value is not None and (not isinstance(value,str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}",value)):
+            raise workspace.EventLogWorkspaceError("Invalid exact signal log or rule identifier")
+    if rule_id is not None and log_id is None:
+        raise workspace.EventLogWorkspaceError("Select a log before filtering its rule")
     if status not in ("all",*STATUSES):
         raise workspace.EventLogWorkspaceError("Unknown episode status")
     if type(offset) is not int or not 0<=offset<=MAX_TRANSITIONS or type(limit) is not int or not 1<=limit<=MAX_PAGE:
@@ -123,7 +129,9 @@ def review(*,start_date,end_date,status="all",offset=0,limit=50,expected_review_
                   for r in episodes)
     if accounted!=len(rows):
         raise workspace.EventLogWorkspaceError("Episode transition accounting failed")
-    selected=[r for r in episodes if status=="all" or r["status"]==status]
+    selected=[r for r in episodes if (status=="all" or r["status"]==status)
+              and (log_id is None or r["log_id"]==log_id)
+              and (rule_id is None or r["rule_id"]==rule_id)]
     page=selected[offset:offset+limit]
     return {"format":FORMAT,"review_sha256":pin,"start_date_utc":start_date,"end_date_utc_exclusive":end_date,
             "retained_transition_count":len(rows),"retained_trigger_count":trigger_count,
@@ -136,7 +144,7 @@ def review(*,start_date,end_date,status="all",offset=0,limit=50,expected_review_
                 "p50":median(durations) if durations else None,
                 "maximum":max(durations) if durations else None,
                 "mean":mean(durations) if durations else None},
-            "page":{"status":status,"matching_rows":len(selected),"offset":offset,
+            "page":{"status":status,"log_id":log_id,"rule_id":rule_id,"matching_rows":len(selected),"offset":offset,
                     "next_offset":offset+len(page) if page and offset+len(page)<len(selected) else None,
                     "rows":[{k:v for k,v in r.items() if k not in ("sort_at","sort_id")} for r in page]},
             "window_is_complete_for_retained_selected_transitions":True,

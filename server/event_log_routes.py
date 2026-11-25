@@ -321,6 +321,8 @@ def event_log_signal_timeline(
 def event_log_signal_episode_review(
     request: Request, start_date: str = Query(max_length=10), end_date: str = Query(max_length=10),
     status: str = Query(default="all",max_length=60),
+    log_id: str | None = Query(default=None,pattern=r"^[A-Za-z0-9_-]{1,128}$"),
+    rule_id: str | None = Query(default=None,pattern=r"^[A-Za-z0-9_-]{1,128}$"),
     offset: int = Query(default=0,ge=0,le=100000), limit: int = Query(default=50,ge=1,le=100),
     expected_review_sha256: str | None = Query(default=None,pattern=r"^[0-9a-f]{64}$"),
 ):
@@ -328,7 +330,7 @@ def event_log_signal_episode_review(
     from . import event_log_signal_episode_review as episodes
     _require_dashboard(request)
     return _respond(episodes.review,start_date=start_date,end_date=end_date,status=status,
-                    offset=offset,limit=limit,expected_review_sha256=expected_review_sha256)
+                    offset=offset,limit=limit,expected_review_sha256=expected_review_sha256,log_id=log_id,rule_id=rule_id)
 
 
 @router.post("/v1/event-logs/xlsx-to-csv")

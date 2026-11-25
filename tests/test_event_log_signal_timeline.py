@@ -302,3 +302,34 @@ def test_episode_budget_and_empty_window(monkeypatch):
     assert r["retained_transition_count"]==0
     assert r["observed_trigger_to_clear_seconds"]["count"]==0
     assert not r["actions_authorized"]
+
+
+def test_episode_microsecond_order_and_exact_scope_pagination():
+    from server import event_log_signal_episode_review as episodes
+    from datetime import timedelta
+    a,b=_log(),_log()
+    ar=_add(a,"Rule A");br=_add(b,"Rule B")
+    base=datetime(2026,1,1)
+    with workspace._LOCK:
+        conn=workspace._connect()
+        try:
+            conn.executemany("INSERT INTO signal_transitions VALUES (?,?,?,?,?,?)",[
+                [a,ar,"sevt_"+f"{i:024x}",base+timedelta(microseconds=us),"cleared","a"*64]
+                for i,us in enumerate([0,1,999999,1000000])]+[
+                [b,br,"sevt_"+f"{100:024x}",base+timedelta(microseconds=500000),"cleared","b"*64]])
+        finally:conn.close()
+    args={"start_date":"2026-01-01","end_date":"2026-01-02"}
+    report=episodes.review(**args)
+    assert [r["clear_event_id"] for r in report["page"]["rows"]]==[
+        "sevt_"+f"{i:024x}" for i in [3,2,100,1,0]]
+    pin=report["review_sha256"]
+    page=episodes.review(**args,log_id=a,rule_id=ar,limit=2,expected_review_sha256=pin)
+    assert page["retained_transition_count"]==5 and page["page"]["matching_rows"]==4
+    assert page["page"]["next_offset"]==2
+    nxt=episodes.review(**args,log_id=a,rule_id=ar,limit=2,offset=2,expected_review_sha256=pin)
+    assert nxt["page"]["next_offset"] is None
+    assert [r["clear_event_id"] for r in page["page"]["rows"]+nxt["page"]["rows"]]==[
+        "sevt_"+f"{i:024x}" for i in [3,2,1,0]]
+    assert episodes.review(**args,log_id=a,rule_id=br)["page"]["matching_rows"]==0
+    for change in ({"rule_id":ar},{"log_id":True},{"log_id":"bad path"},{"log_id":""}):
+        with pytest.raises(workspace.EventLogWorkspaceError):episodes.review(**args,**change)

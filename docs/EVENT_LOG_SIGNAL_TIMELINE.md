@@ -100,3 +100,9 @@ trimmed history, deleted rules and events before journal creation are
 unknown. No live state, SLA, notification delivery, action or historical
 rule-definition validity is inferred. Native and browser verification
 remain necessary.
+
+Evidence pages can additionally filter an exact log_id and, within that log,
+rule_id. The dashboard provides direct rule drill-down and clear-filter
+controls. Summary counts and the population pin remain window-wide; only
+the evidence page is filtered. Timestamp ordering uses native datetimes,
+so whole-second and fractional-second timestamps sort chronologically.
