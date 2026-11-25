@@ -99,6 +99,13 @@ shift them. Signs, exponents, separators and longer values are rejected as
 unparseable. Format detection offers them when every sampled value is a
 plain number of 9–10 (seconds) or 12–13 (milliseconds) digits.
 
+Excel serial date numbers (`45355.5868055556` for 4 March 2024 14:05, as some
+CSV files saved from spreadsheets contain) use the named format `excel-serial`:
+days since 1899-12-30 (Excel's 1900 date system) with the time of day as the
+fraction, rounded to the millisecond. They are local times, so the import also
+needs the offset decision. Format detection offers it when every sampled value
+is a number from 20000 to 99999 (1954 to 2173), optionally with decimals.
+
 Every value must match the pattern exactly. A value with trailing text, an
 impossible date such as 31/02, or a value in another layout is rejected as
 unparseable, not guessed. A pattern without `%z` describes times without an

@@ -199,3 +199,26 @@ def test_quarantined_rows_release_with_a_unix_format(tmp_path):
     result = quarantine.release(log, {"timestamp_format": "unix-seconds"})
     assert result["decision"]["rows_released"] == 1 and result["decision"]["timestamp_format"] == "unix-seconds"
     assert workspace.summary(log)["last_event_at"] == "2024-03-04T14:05:00Z"
+
+
+def test_excel_serial_numbers_import_with_an_offset_decision():
+    rows = ["c1,Receive,45355.5868055556", "c1,Approve,45355.75", "c2,Receive,45356", "c2,Approve,-45356",
+            "c3,Receive,4.5e4", "c3,Approve,1234567", "c4,Receive,2024-03-04T14:05:00Z"]
+    with pytest.raises(workspace.EventLogWorkspaceError, match="also choose the offset"):
+        _import(rows, timestamp_format="excel-serial")
+    result = _import(rows, timestamp_format="excel-serial", naive_timestamp_offset="+01:00")
+    assert result["events"] == 3            # sign, exponent, 7 digits and ISO are rejected
+    events = {(c, e["activity"]): e["timestamp"] for c, evs in workspace.case_events(result["log_id"]) for e in evs}
+    # 45355.5868055556 is 2024-03-04 14:05:00 local (rounded to the millisecond), 13:05 UTC.
+    assert events[("c1", "Receive")].isoformat() == "2024-03-04T13:05:00+00:00"
+    assert events[("c1", "Approve")].isoformat() == "2024-03-04T17:00:00+00:00"
+    assert events[("c2", "Receive")].isoformat() == "2024-03-04T23:00:00+00:00"
+    assert formats.validate("excel-serial") == "excel-serial" and not formats.has_offset("excel-serial")
+
+
+def test_detect_offers_excel_serial_numbers():
+    found = formats.detect(["45355.5868055556", "45356"])
+    assert found["suggested"] == "excel-serial" and not found["candidates"][0]["has_offset"]
+    assert found["candidates"][0]["first_value_reads_as"] == "2024-03-04 14:05:00"
+    for values in (["1234"], ["45355", "1709561100"], ["123456"]):
+        assert not any(c["pattern"] == "excel-serial" for c in formats.detect(values)["candidates"]), values
