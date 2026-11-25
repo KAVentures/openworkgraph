@@ -1259,13 +1259,21 @@ def cooccurrence(log_id: str, case_type: str | None = None, limit: int = 12,
 
 
 def work_in_progress(log_id: str, case_type: str | None = None, bucket: str = "week",
-                     end_activities: list[str] | None = None) -> dict[str, Any]:
-    """Arrivals, completions and open cases per day or week, with a Little's law check (aggregates level)."""
+                     end_activities: list[str] | None = None,
+                     case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Arrivals, completions and open cases per day or week, with a Little's law check (aggregates level). An
+    optional case filter narrows the cases, for example to a start-date range when stray dates stretch the log."""
     require(log_id, "aggregates")
     from . import event_log_wip as wip
     spec: dict[str, Any] = {"bucket": bucket, "end_activities": list(end_activities or [])}
     if case_type:
         spec["case_type"] = case_type
+    if case_filter is not None:
+        if not isinstance(case_filter, dict) or not case_filter:
+            raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+        if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
+            raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
+        spec["cohort"] = case_filter
     return {**wip.work_in_progress(log_id, spec), "format": FORMAT, "log_id": log_id}
 
 
