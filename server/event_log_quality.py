@@ -205,7 +205,12 @@ def diagnostics(conn, log_id: str, prefix: str | None = None, *,
                  list(to_json([l.object_id, l.qualifier])::VARCHAR
                       ORDER BY l.object_id, l.qualifier)
                       FILTER (WHERE l.object_id IS NOT NULL) AS links
-          FROM qe q LEFT JOIN qlinks l USING (event_id) GROUP BY 1, 2, 3, 4, 5)
+          FROM (SELECT * FROM qe SEMI JOIN (
+                -- Only events sharing activity, time and resource can be duplicates, so the full
+                -- signature is built for those alone (PARTITION BY groups NULLs like GROUP BY).
+                SELECT event_id FROM (SELECT event_id, count(*) OVER (PARTITION BY activity, ts, resource) AS c FROM qe)
+                WHERE c > 1) candidates USING (event_id)) q
+          LEFT JOIN qlinks l USING (event_id) GROUP BY 1, 2, 3, 4, 5)
         GROUP BY activity, ts, resource, attributes, links HAVING count(*) > 1)""").fetchone()[0]
     # A bounded top-N list must disclose omitted keys; otherwise readers may
     # mistake an incomplete list for all available source attributes. The
