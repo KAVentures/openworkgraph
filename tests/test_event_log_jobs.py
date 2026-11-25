@@ -398,8 +398,8 @@ def test_event_level_job_pins_local_view_as_well_as_raw_source(jobs):
         try:
             columns=[r[1] for r in conn.execute("PRAGMA table_info('case_tags')").fetchall()]
             assert {"log_id","case_id","tag"}<=set(columns)
-            conn.execute("INSERT INTO case_tags (log_id,case_id,tag) VALUES (?,?,?)",
-                         [source,"1","reviewed"])
+            conn.execute("INSERT INTO case_tags (log_id,case_id,tag,note,tagged_at) VALUES (?,?,?,?,CURRENT_TIMESTAMP)",
+                         [source,"1","reviewed",""])
         finally:conn.close()
     after=review.source_bound(source,spec)
     assert before["source_content_sha256"]==after["source_content_sha256"]

@@ -1564,13 +1564,19 @@ Celonis Action Engine and UiPath process alerts. Rules belong to one log, are im
   case population checked. The draft preview leaves saved signals and evaluation history alone.
 - `POST /v1/event-logs/{log_id}/signals/{rule_id}/delete` removes one.
 - `POST /v1/event-logs/{log_id}/signals/evaluate` checks every rule now.
+- `POST /v1/event-logs/{log_id}/signals/{rule_id}/evaluate` checks and records one saved rule.
 
 Use **Preview signal** to check the current draft before choosing **Save signal**.
 When the analysis has a case filter, choose **Current case filter** to save its
 conditions with the rule. Signal conditions and their case filters use the
 original recorded activities. **All cases** is selected by default. Later changes to
 the analysis filter leave saved rules unchanged. For case conditions, enter
-**Minimum matching cases** to set the trigger count.
+**Minimum matching cases** to set the trigger count. Use **Check** beside a
+saved rule to evaluate it on its own, or **Check signals** to evaluate the log’s
+whole list. In a preview or a saved result, open an evidence case to see its
+recorded events under the rule’s case notion. Expand the list for the rest of
+the sample. A count shows when more cases matched than were returned as
+evidence.
 
 Use **Move signal rules between logs** to download rule definitions as JSON, or
 select a JSON file and preview the import. The file includes each rule’s case notion,
@@ -2051,6 +2057,14 @@ Use **Save as new rule set** to keep the current rules with the log. **Load rule
 their definitions for review, and **Check object rules** evaluates them against the current log.
 **Update loaded rule set** saves edits to the loaded revision. Deleting a saved set leaves the
 current draft available. Deleting its log also deletes its saved sets.
+
+Use **Transfer object rule definitions** to download the editor's rule set as a
+JSON file. In another log, preview the file to see which exact object types,
+activity labels, or supplied relationship qualifiers are absent. The preview
+checks label presence only. Load the definitions into the editor, then save as
+a new rule set or check the rules explicitly. The JSON contains the name and
+definitions. The preview endpoint is
+`POST /v1/event-logs/{log_id}/object-rule-sets/template/preview`.
 
 Choose a second retained object log and select **Compare object rules** to evaluate the same draft
 against both whole logs. The comparison shows violating and activated counts, the violation rate,
@@ -2669,6 +2683,11 @@ An automatic insight about a case-attribute group (`attribute_segment`) and a ro
 an attribute value or range both offer to become this filter in one click: "Filter to these cases"
 and "Filter". They are offered only while no global filter is active, so they never silently
 replace one. They set exactly the finding's `attribute` or `attribute_range`.
+
+When importing a filter from another log, preview it first to check the matching
+case count, case notion, and activity labels unavailable in the destination.
+Importing then saves the reviewed definition with that log. The preview endpoint
+is `POST /v1/event-logs/{log_id}/filter-sets/import/preview`.
 
 **Saved filters.** A new dashboard filter remembers the selected case notion.
 Applying it restores that notion and the filter together. Older filters saved
@@ -3389,8 +3408,11 @@ A numeric condition with `includes_non_numeric` also matches unusable numbers.
    - the latest non-empty value of every event attribute recorded on the case at or before the
      decision event (`event.*`).
 
-   Values recorded after the decision are never used. Case attributes carry no time, so they may
-   have been set later; the result says so.
+   Use **Timed event attributes only** to exclude untimed case attributes.
+   This setting keeps event values recorded at or before the decision. The
+   combined setting also uses case attributes, which can have been set later.
+   Pass `include_case_attributes=false` to the decision-rules endpoint for
+   the event-only mode.
 3. **Rules.** A CART decision tree (Gini impurity, depth 1–4, default 3) is learned on about 70% of
    the cases and scored on the rest.
    - The split is by a hash of the case id, so it is repeatable and keeps each case on one side.
@@ -3398,6 +3420,11 @@ A numeric condition with `includes_non_numeric` also matches unusable numbers.
      are split on their 30 most common values.
    - Each leaf is a rule. It shows its conditions, the usual next activity, its confidence and the
      number of training occurrences.
+   - **Held-out results by branch** lists recorded and predicted occurrences,
+     correct predictions, precision, and recall. Precision is undefined without
+     predictions for that branch. Recall is undefined without recorded holdout
+     occurrences. **Held-out branch mix-ups** shows which recorded branches were
+     predicted as another branch and how often.
 
 The result also gives:
 - the held-out accuracy, next to the accuracy of always predicting the most common branch;
@@ -3428,4 +3455,18 @@ Dashboard owners can download a saved log as an Excel workbook (`GET /v1/event-l
 
 ### Rework and loop case evidence
 
-The local rework report offers explicit case-evidence links for repeated activities and exact closed activity loops. Selectors respect the active case cohort and retain literal event order; timestamp ties do not establish business order.
+The local rework report shows the total number of repeated activities and recorded loop patterns, with an adjustable display limit of 20, 50 or 100. JSON and CSV downloads contain the displayed results and the JSON includes the selected cohort and analysis settings. The report offers explicit case-evidence links for repeated activities and exact closed activity loops. Selectors respect the active case cohort and retain literal event order; timestamp ties do not establish business order.
+
+### Reusing activity groupings across logs
+
+Under **Group activities**, download a saved mapping as JSON. In another log,
+open **Import activity mapping**, choose that file, and preview the matching
+event counts and exact activity labels missing from the destination. Load the
+mapping into the draft, review it, and save it. Saving does not apply the
+mapping; apply it separately when ready. The file contains the mapping definition,
+including activity names, but no events.
+
+The dashboard-session endpoint `POST /v1/event-logs/{log_id}/activity-mappings/template/preview`
+accepts `{ "format": "openworkgraph.activity-mapping.v1", "mapping": { ... } }`.
+It validates and previews the definition against original event labels without
+changing the log or its saved mappings.

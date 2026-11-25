@@ -87,6 +87,31 @@ header{background:#203427}button{background:#2b6548;border-color:#b7ebc6;color:w
 <div class="tablewrap"><table><thead><tr><th scope="col">Source object</th><th scope="col">Target object</th><th scope="col">Evidence status</th><th scope="col">First joint event (UTC)</th><th scope="col">Next joint event (UTC)</th><th scope="col">Forward elapsed</th></tr></thead><tbody id="rows"></tbody></table></div>
 <details><summary>Full provenance</summary><pre id="provenance" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>
 </section>
+<section aria-labelledby="state-title">
+<h2 id="state-title">Event-time object state check</h2>
+<p class="muted">Check the selected log's retained object attribute values as they stood at each exact activity timestamp. No current-value substitution. Multiple objects use all/any three-valued logic; missing objects remain separately visible.</p>
+<form id="stateQuery">
+<div class="grid">
+<label>Activity<input id="stateActivity" list="knownActivities" maxlength="200" required></label>
+<label>Object type<input id="stateType" list="objectTypes" maxlength="200" required></label>
+<label>Attribute name<input id="stateAttribute" maxlength="200" required></label>
+<label>Exact retained value (empty allowed)<input id="stateValue" maxlength="4096"></label>
+<label>Comparison<select id="stateOperator"><option value="eq">Equals</option><option value="ne">Does not equal</option></select></label>
+<label>Objects per event<select id="stateQuantifier"><option value="all">All selected objects</option><option value="any">Any selected object</option></select></label>
+<label>Event-object qualifier<select id="stateQualifierMode"><option value="all">All qualifiers</option><option value="empty">Empty qualifier only</option><option value="literal">Exact qualifier</option></select></label>
+<label id="stateQualifierLabel" hidden>Exact qualifier<input id="stateQualifier" maxlength="80"></label>
+<label>Evidence filter<select id="stateFilter"><option value="">All events</option><option value="matched">Matched</option><option value="not_matched">Not matched</option><option value="unknown">Unknown</option><option value="no_linked_object">No selected object</option></select></label>
+</div>
+<div class="row"><button type="submit" id="stateRun">Check event-time states</button><button type="button" class="secondary" id="stateClear">Clear state results</button></div>
+</form>
+<p role="status" id="stateStatus"></p>
+<div id="stateResults" hidden>
+<div id="stateCounts" class="stats"></div>
+<p id="stateBasis" class="muted"></p>
+<div class="tablewrap"><table><thead><tr><th scope="col">Event</th><th scope="col">Time (UTC)</th><th scope="col">Result</th><th scope="col">Objects matched / not matched / unknown</th><th scope="col">Retained object witnesses (up to 20)</th></tr></thead><tbody id="stateRows"></tbody></table></div>
+<div class="row"><button type="button" class="secondary" id="statePrev">Previous page</button><button type="button" class="secondary" id="stateNext">Next page</button></div>
+</div>
+</section>
 </main>
 </body>
 </html>

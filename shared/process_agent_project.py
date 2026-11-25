@@ -109,7 +109,9 @@ def build_runtime_project(packet: dict) -> bytes:
     spec = build_runtime_spec(packet)
     model = ProcessModel.model_validate(spec['process_model'])
     files = {name: (_TEMPLATES / (name + '.txt')).read_text(encoding='utf-8')
-             for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'monitor.py', 'test_monitor.py', 'send_report.py', 'stop.py', 'configure.py', 'test_configuration.py', 'evaluate.py', 'test_evaluation.py', 'plan_sources.py', 'test_source_planning.py', 'evaluate_sources.py', 'test_source_evaluation.py')}
+             for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'monitor.py', 'test_monitor.py', 'send_report.py', 'stop.py', 'configure.py', 'test_configuration.py', 'evaluate.py', 'test_evaluation.py', 'plan_sources.py', 'test_source_planning.py', 'evaluate_sources.py', 'test_source_evaluation.py', 'check_runtime.py')}
+    for name in ('run_queue.py', 'test_run_queue.py'):
+        files[name] = (_TEMPLATES / (name + '.txt')).read_text(encoding='utf-8')
     files['owg_report_signing.py'] = (Path(__file__).parent/'automation_report_signing.py').read_text(encoding='utf-8')
     for name in ('process_source_state.py','process_rule_conditions.py'):
         files[name]=(Path(__file__).parent/name).read_text(encoding='utf-8')
@@ -389,6 +391,26 @@ def build_runtime_project(packet: dict) -> bytes:
         'OWG adapters/openai_agents.py can optionally record structural traces\n'
         'when separately configured; this export enables no observation or sync.\n'
     )
+    files['README.md'] += (
+        '\n## Prepared execution queues\n\n'
+        'Use configure.py --shortlist-case-batch and --prepare-execution-queue to prepare\n'
+        'explicit local cases. Record the canonical execute.digest of queue-review.json separately.\n'
+        'Inspect a queue without network access: python run_queue.py --queue prepared-queue\n'
+        ' --queue-sha256 PINNED_DIGEST --inspect. Review each exact disabled intent independently.\n'
+        'A separate authorizations document uses format openworkgraph.queue-authorizations.v1,\n'
+        'queue_sha256 and intents: [{case_id, intent}]. Do not edit the original disabled inputs.\n'
+        'To explicitly execute the next authorized case, use --run-approved --confirm-network\n'
+        ' --authorizations reviewed-intents.json instead of --inspect. --max-cases defaults to 1.\n'
+        'Every proposed start is checked before provider calls. The queue stops at uncertain\n'
+        'or incomplete evidence; no automatic retry or cancellation of in-flight effects.\n'
+        'Retain queue-state and its journals. Stop future attempts with stop.py --stop\n'
+        ' --confirm-stop --journal-directory prepared-queue/queue-state/journals.\n'
+        'A crash lock or incomplete claim requires manual reconciliation, not deleting state.\n'
+        'For an already complete journal with a missing completion receipt only, inspect its\n'
+        'exact bytes and use --reconcile-completed --case-id ID --journal-sha256 DIGEST\n'
+        ' --confirm-runner-stopped-and-journal-reviewed. No execution occurs in recovery.\n'
+        'Never run a copied queue or manually invoke its executor to bypass retained claims.\n'
+        'Reported route completion and source checks do not prove a business outcome.\n')
     if spec.get('control_flow_contract') or model.decision_tables:
         files['README.md'] = files['README.md'].replace(
             '## Offline shadow tests (no installation or model access required)',
@@ -446,6 +468,18 @@ def build_runtime_project(packet: dict) -> bytes:
         "was deployed to a remote runtime or whether a business action succeeded.\n"
         "Files added later by a customer (cases, credentials, bindings, journals)\n"
         "are not in this generated-file manifest and require separate review.\n"
+    )
+    files['README.md'] += (
+        "\n## Portable synthetic runtime acceptance\n\n"
+        "After verifying the export with a separately recorded manifest SHA-256,\n"
+        "install requirements.txt in an isolated environment without business credentials.\n"
+        "Run the following only for a trusted export:\n\n"
+        "```sh\npython check_runtime.py --manifest-sha256 PINNED_HEX_DIGEST --confirm-trusted-synthetic-tests\n```\n\n"
+        "The checker stages only inventoried files, strips inherited customer credentials,\n"
+        "runs the generated synthetic suites, and emits minimized JSON counts tied to the manifest.\n"
+        "Exit 0 means all suites ran without failures or skips; 3 means incomplete,\n"
+        "1 means failed, and 2 means verification refused. This is not an OS sandbox,\n"
+        "independent business-case validation, remote deployment attestation or execution approval.\n"
     )
     files['verify_release.py'] = Path(release_integrity.__file__).read_text(encoding='utf-8')
     files['release-manifest.json'] = create_manifest(files, spec)

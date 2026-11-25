@@ -195,8 +195,59 @@
     }catch(error){if(n===queryGeneration)$('status').textContent=error.message;}
     finally{if(n===queryGeneration)$('analyze').disabled=false;}
   }
+  let stateGeneration=0,stateSettings=null,stateRevision=null,stateOffset=0,stateNext=null;
+  function clearState(message){
+    stateGeneration++;stateSettings=null;stateRevision=null;stateOffset=0;stateNext=null;
+    $('stateRun').disabled=false;$('stateResults').hidden=true;$('stateRows').replaceChildren();
+    $('stateCounts').replaceChildren();$('statePrev').disabled=$('stateNext').disabled=true;
+    $('stateStatus').textContent=message||'';
+  }
+  async function statePage(offset){
+    const log=activeLog;
+    if(!idOK(log)||!stateSettings){$('stateStatus').textContent='Select a retained OCEL log and check settings.';return;}
+    const n=++stateGeneration;
+    $('stateRun').disabled=$('statePrev').disabled=$('stateNext').disabled=true;
+    $('stateResults').hidden=true;$('stateRows').replaceChildren();
+    $('stateStatus').textContent='Checking retained event-time states…';
+    try{
+      const query={...stateSettings,offset,limit:30};
+      if(stateRevision!==null)query.expected_revision=stateRevision;
+      const r=await api('/v1/event-logs/'+log+'/object-state-check',query);
+      if(n!==stateGeneration||log!==activeLog)return;
+      if(r.log_id!==log||(stateRevision!==null&&r.revision!==stateRevision))throw Error('Unexpected retained log revision.');
+      stateRevision=r.revision;stateOffset=r.offset;stateNext=r.next_offset;
+      $('stateCounts').replaceChildren(...Object.entries(r.event_counts).map(([k,v])=>stat('Events: '+k,number(v))),
+        ...Object.entries(r.object_link_counts).map(([k,v])=>stat('Object links: '+k,number(v))));
+      $('stateBasis').textContent=number(r.selected_events)+' events · '+number(r.selected_distinct_event_object_links)+
+        ' distinct links · '+number(r.matching_events)+' events match evidence filter · revision '+r.revision+
+        '. Counts cover retained records only; object witnesses are limited to 20 per event.';
+      $('stateRows').replaceChildren(...r.rows.map(e=>row([e.event_id,e.at,e.status,
+        e.matched_objects+' / '+e.not_matched_objects+' / '+e.unknown_objects,
+        e.object_witnesses.map(o=>o.object_id+' · '+o.status+' · '+(o.recorded_value===null?'unknown':JSON.stringify(o.recorded_value))+
+          ' · '+(o.valid_from||'no timestamp')).join('\n')+(e.object_witnesses_truncated?'\nAdditional objects not displayed.':'')])));
+      $('stateResults').hidden=false;$('statePrev').disabled=stateOffset===0;$('stateNext').disabled=stateNext===null;
+      $('stateStatus').textContent='Completed descriptive check. Actual business compliance and source completeness remain unverified.';
+    }catch(error){if(n===stateGeneration&&log===activeLog)clearState(error.message);}
+    finally{if(n===stateGeneration)$('stateRun').disabled=false;}
+  }
+  function startState(event){
+    event.preventDefault();clearState();
+    stateSettings={activity:$('stateActivity').value,object_type:$('stateType').value,attribute:$('stateAttribute').value,
+      expected_value:$('stateValue').value,operator:$('stateOperator').value,quantifier:$('stateQuantifier').value};
+    const mode=$('stateQualifierMode').value;
+    if(mode!=='all')stateSettings.event_qualifier=mode==='empty'?'':$('stateQualifier').value;
+    if($('stateFilter').value)stateSettings.status=$('stateFilter').value;
+    statePage(0);
+  }
   function init(){
-    $('reload').addEventListener('click',reload);
+    $('stateQuery').addEventListener('submit',startState);
+    $('stateQuery').addEventListener('input',()=>clearState('Settings changed; rerun the check.'));
+    $('stateQualifierMode').addEventListener('change',()=>{$('stateQualifierLabel').hidden=$('stateQualifierMode').value!=='literal';});
+    $('stateClear').addEventListener('click',()=>clearState('State results cleared.'));
+    $('statePrev').addEventListener('click',()=>statePage(Math.max(0,stateOffset-30)));
+    $('stateNext').addEventListener('click',()=>{if(stateNext!==null)statePage(stateNext);});
+    $('reload').addEventListener('click',()=>{clearState('Log refreshed; select settings.');reload();});
+    $('logSelect').addEventListener('change',()=>clearState('Log changed; rerun the state check.'));
     $('logSelect').addEventListener('change',()=>selectLog());
     $('relationship').addEventListener('change',selectRelationship);
     $('qualifierMode').addEventListener('change',()=>{$('qualifierLabel').hidden=$('qualifierMode').value!=='literal';invalidate('Selection changed; rerun analysis.');});

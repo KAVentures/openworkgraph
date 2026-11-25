@@ -36,6 +36,8 @@ def _activities(cohort: dict[str, Any]) -> set[str]:
     named.update(activity for variant in cohort.get("variants", []) for activity in variant)
     named.update(cohort[key] for key in ("activity", "without_activity", "starts_with", "ends_with")
                  if cohort.get(key))
+    for part in cohort.get("all_of", []):
+        named.update(_activities(part))
     return named
 
 
@@ -132,6 +134,43 @@ def save(log_id: str, body: Any) -> dict[str, Any]:
             conn.close()
     return {"set_id": set_id, "created_at": created.isoformat() + "Z", "name": name, "cohort": described,
             **({"case_type": case_type} if case_type is not None else {})}
+
+
+def preview_import(log_id: str, document: Any) -> dict[str, Any]:
+    if (not isinstance(document, dict) or document.get("format") != FORMAT
+            or set(document) - {"format", "name", "cohort", "case_type"}):
+        raise workspace.EventLogWorkspaceError("choose an OpenWorkGraph filter JSON file")
+    name = _name(document.get("name"))
+    requested = document.get("case_type")
+    if requested is not None and (not isinstance(requested, str) or not 0 < len(requested) <= 200):
+        raise workspace.EventLogWorkspaceError("choose a valid case notion")
+    cohort = cohorts.parse_cohort(document.get("cohort"))
+    cohort.pop("label", None)
+    if not cohort:
+        raise workspace.EventLogWorkspaceError("a filter set needs at least one filter")
+    definition = {"format": FORMAT, "name": name, "cohort": cohorts.describe(cohort)}
+    if requested is not None:
+        definition["case_type"] = requested
+    labels = _activities(cohort)
+
+    def calculate(conn):
+        total = conn.execute("SELECT count(DISTINCT case_id) FROM ce").fetchone()[0]
+        cohorts.restrict(conn, cohort, log_id)
+        selected = conn.execute("SELECT count(DISTINCT case_id) FROM ce").fetchone()[0]
+        return {"matching_cases": selected, "cases_before_filter": total}
+    # Both label availability and case counts use one workspace lock, so an
+    # append or activity view change cannot split the preview across revisions.
+    with workspace._LOCK:
+        result = workspace._query(log_id, requested, calculate)
+        conn = workspace._connect()
+        try:
+            known = _known_labels(conn, log_id, labels, {result["case_notion"]}) if labels else {}
+            missing = sorted(labels - known.get(result["case_notion"], set()))
+        finally:
+            conn.close()
+    return {"definition": definition, "case_notion": result["case_notion"],
+            "matching_cases": result["matching_cases"], "cases_before_filter": result["cases_before_filter"],
+            "activities_not_in_log": missing}
 
 
 def import_set(log_id: str, document: Any) -> dict[str, Any]:
