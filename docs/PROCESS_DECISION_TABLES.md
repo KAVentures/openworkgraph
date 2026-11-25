@@ -735,3 +735,20 @@ with missing, repeated or out-of-order invariant checks. A dependent table
 checkpoint cannot substitute for an ordinary invariant checkpoint. These
 remain non-atomic, customer-reported checks; neither journal validation nor
 a matched predicate independently verifies a provider's business outcome.
+
+
+For a mixed dependent execution checkpoint, ordinary structured rules and
+decision tables consume a single shared receipt per exact (resource reference,
+source type). After all selected records are read, one UTC consumer timestamp
+governs receipt freshness, predicate checks and table effective dates. The
+checkpoint cache is discarded before the next checkpoint; it is not a
+cross-action cache. A record cannot satisfy two contradictory predicates
+by returning different values to different rule checks in the same checkpoint.
+The journal records only the common consumer timestamp, checkpoint scope and
+minimized results, not record references or receipt values. Monitoring
+validates that the timestamps agree within each checkpoint and that the
+reported policy date equals the timestamp's UTC date. Distinct source reads
+remain non-atomic, and neither these timestamps nor journal assertions
+constitute independently signed provider evidence. A successful synthetic
+mixed-route fixture should require five state reads rather than fifteen for
+two rules and two tables bound to the same exact record.
