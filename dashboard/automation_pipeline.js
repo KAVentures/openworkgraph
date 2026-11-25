@@ -749,6 +749,85 @@
       }catch(e){status.textContent=e.message;}
       finally{portfolioButton.disabled=false;}
     };
+    const budgetScenarioButton=button('Plan a budget-constrained portfolio','secondary');
+    budgetScenarioButton.id='owgPipelineBudgetScenario';
+    const budgetScenarioHost=el('div');budgetScenarioHost.id='owgPipelineBudgetScenarioResult';
+    let budgetGeneration=0;
+    budgetScenarioButton.onclick=async()=>{
+      const n=++budgetGeneration,root=el('div');budgetScenarioHost.replaceChildren(root);
+      const active=()=>n===budgetGeneration&&root.isConnected;
+      root.append(el('p','Loading current portfolio revisions…','muted'));
+      try{
+        const inv=await(await api('/v1/automation-pipeline/budget-scenario/inventory')).json();
+        if(!active())return;
+        const heading=el('h4','Budget-constrained portfolio planner');
+        const description=el('p','Select up to 18 opportunities, assign explicit priority points, and choose a single currency and budget basis. Include unfinished prerequisites; implemented ones do not consume this scenario budget. This is not a delivery plan or approval.','muted');
+        const currency=el('input');currency.type='text';currency.maxLength=3;currency.placeholder='SEK';currency.id='owgBudgetCurrency';
+        const basis=el('select');basis.id='owgBudgetBasis';
+        for(const value of ['estimate','approved_budget']){const opt=el('option',value);opt.value=value;basis.append(opt);}
+        const limit=el('input');limit.type='number';limit.min='0';limit.max='1000000000000';limit.step='any';limit.id='owgBudgetLimit';
+        const max=el('input');max.type='number';max.min='1';max.max='18';max.value='18';max.id='owgBudgetMax';
+        const labelled=(label,node)=>{const wrapper=el('label',label+' ');wrapper.append(node);return wrapper;};
+        const controls=el('div',null,'row');controls.append(labelled('Currency',currency),labelled('Budget basis',basis),labelled('Budget limit',limit),labelled('Maximum selected ideas',max));
+        const options=el('div'),out=el('div'),status=el('p');status.setAttribute('role','status');
+        const run=button('Evaluate exact portfolio combinations','secondary'),download=button('Download scenario report','secondary');download.disabled=true;
+        let attempt=0,report=null;const controlsById=new Map();
+        function invalidate(){attempt++;report=null;download.disabled=true;out.replaceChildren();status.textContent='Review inputs and evaluate again.';run.disabled=false;}
+        for(const control of [currency,basis,limit,max])control.addEventListener('input',invalidate);
+        const query=el('input');query.type='search';query.placeholder='Find opportunity by name or ID';query.setAttribute('aria-label','Find opportunities');
+        function renderChoices(){
+          options.replaceChildren();
+          const term=query.value.toLowerCase();
+          for(const idea of inv.ideas.filter(i=>['idea','assessing','approved','on_hold'].includes(i.state))){
+            if(term&&!(idea.title+' '+idea.idea_id).toLowerCase().includes(term))continue;
+            let entry=controlsById.get(idea.idea_id);
+            if(!entry){
+              const selected=el('input');selected.type='checkbox';selected.setAttribute('aria-label','Select '+idea.title);
+              const priority=el('input');priority.type='number';priority.min='0';priority.max='100';priority.step='1';priority.value='0';priority.disabled=true;
+              priority.setAttribute('aria-label','Priority points for '+idea.title);
+              const required=el('input');required.type='checkbox';required.disabled=true;required.setAttribute('aria-label','Require '+idea.title);
+              selected.onchange=()=>{priority.disabled=required.disabled=!selected.checked;if(!selected.checked)required.checked=false;invalidate();};
+              priority.oninput=invalidate;required.onchange=invalidate;entry={idea,selected,priority,required};controlsById.set(idea.idea_id,entry);
+            }
+            const row=el('fieldset');row.append(el('legend',idea.title),labelled('Include candidate',entry.selected),
+              el('p',idea.idea_id+' · revision '+idea.revision+' · '+idea.state+' · '+(idea.budget?idea.budget.amount+' '+idea.budget.currency+' ('+idea.budget.basis+')':'No budget'),'muted'),
+              labelled('Priority points (0–100)',entry.priority),labelled('Required in every scenario',entry.required));
+            if(idea.depends_on.length)row.append(el('p','Declared prerequisites: '+idea.depends_on.map(id=>inv.ideas.find(i=>i.idea_id===id)?.title||id).join('; '),'muted'));
+            options.append(row);
+          }
+        }
+        query.oninput=renderChoices;renderChoices();
+        download.onclick=()=>{if(!report)return;const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));const a=el('a');a.href=url;a.download='owg-portfolio-budget-scenario.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+        run.onclick=async()=>{
+          invalidate();const k=attempt;
+          const candidates=[...controlsById.values()].filter(c=>c.selected.checked).map(c=>({idea_id:c.idea.idea_id,revision:c.idea.revision,priority:Number(c.priority.value),required:c.required.checked}));
+          if(!/^[A-Z]{3}$/.test(currency.value)||!limit.value||!max.value||!candidates.length||candidates.length>18||
+            [...controlsById.values()].some(c=>c.selected.checked&&!c.priority.value)){
+            status.textContent='Enter an uppercase currency, budget, selection limit and priorities for 1–18 candidates.';return;
+          }
+          run.disabled=true;status.textContent='Evaluating all bounded candidate subsets…';
+          try{
+            const data=await(await api('/v1/automation-pipeline/budget-scenario',{method:'POST',headers:{'Content-Type':'application/json'},
+              body:JSON.stringify({snapshot_sha256:inv.snapshot_sha256,currency:currency.value,budget_basis:basis.value,budget_limit:Number(limit.value),max_selected:Number(max.value),candidates})})).json();
+            if(!active()||k!==attempt)return;
+            if(data.snapshot_sha256!==inv.snapshot_sha256)throw Error('Unexpected portfolio snapshot.');
+            report=data;download.disabled=false;status.textContent=data.feasible_subsets+' feasible subsets of '+data.subsets_considered+' examined.';
+            const titles=new Map(data.candidates.map(i=>[i.idea_id,i.title]));
+            const show=(row)=>{const item=el('div');item.append(el('strong',row.priority_points+' priority points · '+row.budget_used+' '+data.currency),
+              el('p',row.selected_idea_ids.map(id=>titles.get(id)||id).join('; ')||'No ideas selected'),
+              el('p',row.budget_remaining+' '+data.currency+' remaining; '+row.selected_count+' ideas','muted'));return item;};
+            out.replaceChildren(el('h4',data.status==='feasible'?'Highest-ranked feasible alternatives':'No feasible portfolio under these constraints'),
+              ...data.alternatives.map(show));
+            const details=el('details');details.append(el('summary','Best feasible alternative by selected count'),...data.best_by_selected_count.map(show));out.append(details);
+            for(const candidate of data.candidates.filter(c=>c.blockers.length))out.append(el('p',candidate.title+': '+candidate.blockers.map(b=>b.code+(b.dependency_id?' ('+(titles.get(b.dependency_id)||b.dependency_id)+')':'')).join('; ')));
+            out.append(el('p','Required ideas and unfinished selected prerequisites: '+data.required_closure_ids.map(id=>titles.get(id)||id).join('; ')));
+            out.append(el('p','Priority points are entered by you; no measured or modeled savings are summed. This scenario makes no changes to the portfolio.','muted'));
+          }catch(e){if(active()&&k===attempt)status.textContent=e.message;}
+          finally{if(active()&&k===attempt)run.disabled=false;}
+        };
+        root.replaceChildren(heading,description,controls,query,options,run,download,status,out);
+      }catch(e){if(active())root.replaceChildren(el('p',e.message,'muted'));}
+    };
     const benefitOverlapButton=button('Review overlapping benefit evidence','secondary');
     benefitOverlapButton.id='owgPipelineBenefitOverlap';
     const benefitOverlapHost=el('div');
@@ -914,7 +993,7 @@
       }catch(e){if(generation===refreshGeneration)dependencyScheduleHost.replaceChildren(el('p',e.message,'muted'));}
       finally{dependencyScheduleButton.disabled=false;}
     };
-    card.append(row,resumeSection,auditSection,tools,planningFilters,status,counts,portfolioButton,portfolioHost,benefitOverlapButton,benefitOverlapHost,benefitReadinessButton,benefitReadinessHost,dependencyScheduleButton,dependencyScheduleHost,viewCount,list,comparison,detail);
+    card.append(row,resumeSection,auditSection,tools,planningFilters,status,counts,portfolioButton,portfolioHost,budgetScenarioButton,budgetScenarioHost,benefitOverlapButton,benefitOverlapHost,benefitReadinessButton,benefitReadinessHost,dependencyScheduleButton,dependencyScheduleHost,viewCount,list,comparison,detail);
     panel.appendChild(card);
 
     let latestIdeas=[],refreshGeneration=0,resumeGeneration=0,auditGeneration=0,auditPageIndex=0,auditAbort=null;
