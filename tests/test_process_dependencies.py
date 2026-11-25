@@ -420,6 +420,56 @@ def test_human_api_exact_export_preflight_strict_parser_and_fresh_graph_fingerpr
         assert client.get('/v1/human/process-dependency-graph',headers={'Authorization':'Bearer foreign'}).json()['status']=='empty'
 
 
+def test_authenticated_dependency_build_and_status_refuse_withdrawn_reviews(tmp_path):
+    from io import BytesIO
+    from zipfile import ZipFile
+    with TestClient(app(tmp_path)) as client:
+        auth=lambda who:{'Authorization':'Bearer '+who}
+        roots=[]
+        for title in ('Root','Prerequisite'):
+            record=client.post('/v1/human/processes',headers=auth('alice'),
+                json=write(title).model_dump()).json()['process']
+            roots.append(record)
+            url='/v1/human/processes/'+record['workflow_id']
+            assert client.post(url+'/access',headers=auth('alice'),json={
+                'expected_access_revision':1,'members':[{'actor_id':'bob','role':'reviewer'}],
+                'user_confirmed':True}).status_code==200
+            assert client.post(url+'/reviews',headers=auth('bob'),
+                json=review(record).model_dump()).status_code==200
+        a,b=roots
+        base='/v1/human/processes/'+a['workflow_id']+'/dependencies'
+        child='/v1/human/processes/'+b['workflow_id']
+        assert client.post(base,headers=auth('alice'),json=body(a,b,access=2).model_dump()).status_code==200
+        assert client.post(child+'/dependencies',headers=auth('alice'),
+            json=body(b,access=2).model_dump()).status_code==200
+        graph=client.get('/v1/human/process-dependency-graph',headers=auth('reader'),
+            params={'focus':a['workflow_id']}).json()
+        basis=graph['focused_build_basis']
+        query={'revision':1,'basis_sha256':basis['basis_sha256']}
+        status=client.get(base+'/build-status',headers=auth('reader'),params=query)
+        assert status.status_code==200 and status.headers['cache-control']=='no-store'
+        assert status.json()['current_exact_reviewed_basis'] is True
+        assert status.json()['process_reference']==pin(a)
+        assert not status.json()['execution_authorized']
+        assert 'processes' not in status.json() and 'edges' not in status.json()
+        archive=client.get(base+'/build',headers=auth('reader'),params=query)
+        assert archive.status_code==200 and archive.headers['content-type']=='application/zip'
+        with ZipFile(BytesIO(archive.content)) as bundle:
+            assert json.loads(bundle.read('dependency-build-basis.json'))==basis
+        for endpoint in ('/build','/build-status'):
+            assert client.get(base+endpoint,params=query).status_code==401
+            assert client.get(base+endpoint,headers=auth('no-process'),params=query).status_code==403
+            assert client.get(base+endpoint,headers=auth('foreign'),params=query).status_code==404
+            assert client.get(base+endpoint,headers=auth('reader'),
+                params={**query,'basis_sha256':'bad'}).status_code==422
+        assert client.post(child+'/reviews',headers=auth('bob'),
+            json=review(b,decision='changes_requested',expected=1).model_dump()).status_code==200
+        status=client.get(base+'/build-status',headers=auth('reader'),params=query)
+        assert status.status_code==200 and status.json()['current_exact_reviewed_basis'] is False
+        assert status.json()['process_reference'] is None
+        assert client.get(base+'/build',headers=auth('reader'),params=query).status_code==409
+
+
 def test_dependency_and_root_erasure_roll_back_together_with_audit_failure(store,monkeypatch):
     dep=ProcessDependencies(store);a=process(store);wid=a['workflow_id'];dep.save(person(),wid,body(a));artifact=dep.detail(person(),wid)['artifact'];original=store._audit
     def failure(*args,**kwargs):raise RuntimeError('audit unavailable')
