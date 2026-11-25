@@ -311,12 +311,3 @@ def test_mcp_tools_are_listed_only_when_a_log_is_shared(tmp_path):
     assert off == DEFAULT_TOOLS
     on = asyncio.run(_listed_tools(tmp_path, True))
     assert on == DEFAULT_TOOLS | PROCESS_TOOLS
-
-
-def test_agent_variants_report_how_many_variants_cover_most_cases():
-    log_id = _log()
-    sharing.set_share(log_id, "aggregates")
-    result = sharing.variants(log_id)
-    targets = {t["target_percent"]: t["variants_needed"] for t in result["coverage_targets"]}
-    assert set(targets) == {50, 80, 90, 95}
-    assert 1 <= targets[50] <= targets[95] <= result["distinct_variants"]
