@@ -143,6 +143,19 @@
     out.push(cell);
     return out.slice(0,200);
   }
+  // The 1-based line holding the column names: the first line splitting into at least two columns whose
+  // next non-empty line splits the same way, skipping title rows and an Excel "sep=" line. Line 1 otherwise.
+  function headerLine(text,delimiter){
+    const lines=String(text||'').replace(/^\ufeff/,'').split(/\r?\n/).slice(0,51);
+    const width=line=>csvHeader(line,delimiter).length;
+    for(let i=0;i<lines.length-1;i++){
+      if(i===0&&/^sep=/.test(lines[0]))continue;
+      const w=width(lines[i]);if(w<2)continue;
+      let j=i+1;while(j<lines.length&&!lines[j].trim())j++;
+      if(j<lines.length&&width(lines[j])===w)return i+1;
+    }
+    return 1;
+  }
   function guess(columns,words){return columns.find(c=>words.some(w=>c.toLowerCase().includes(w)))||'';}
   // One accepted path per line, activities separated by ">" or "→".
   function parsePaths(text){
@@ -218,6 +231,9 @@
     const mapping=el('div',null,'row');mapping.id='owgEventLogMapping';mapping.style.alignItems='end';
     const cols={case:select('owgEventLogCase',[]),activity:select('owgEventLogActivity',[]),time:select('owgEventLogTime',[]),resource:select('owgEventLogResource',[])};
     const delimiter=select('owgEventLogDelimiter',[[',','Comma'],[';','Semicolon'],['t','Tab'],['|','Pipe']]);
+    // Exports with a title above the column names: the line is found when the file is read and can be changed.
+    const headerRow=input('owgEventLogHeaderRow','number');headerRow.min='1';headerRow.max='50';headerRow.value='1';
+    let headerRowManual=false;
     const encoding=select('owgEventLogEncoding',[['utf-8','UTF-8'],['windows-1252','Windows-1252 (Western European)'],['utf-16','UTF-16 (Excel Unicode text)']]);
     const extras=select('owgEventLogAttributes',[]);extras.multiple=true;extras.size=3;
     extras.title='Only the columns you choose are stored, for example a lifecycle (start/complete) or end-time column.';
@@ -226,7 +242,7 @@
     naiveOffset.title='For timestamps without a time zone, e.g. +01:00 or -05:00. Leave empty to reject such rows.';
     // Times such as 03/04/2024 14:05 need a declared format; the dashboard suggests one from the first rows.
     const timeFormat=select('owgEventLogTimeFormat',[['','ISO 8601 (2024-03-04T14:05:00Z)']]);
-    mapping.append(field('Case column',cols.case),field('Activity column',cols.activity),field('Timestamp column (with timezone)',cols.time),field('Timestamp format',timeFormat),field('Resource column',cols.resource),field('Extra columns to keep (optional)',extras),field('Delimiter',delimiter),field('Text encoding',encoding),field('Offset for times without one',naiveOffset));
+    mapping.append(field('Case column',cols.case),field('Activity column',cols.activity),field('Timestamp column (with timezone)',cols.time),field('Timestamp format',timeFormat),field('Resource column',cols.resource),field('Extra columns to keep (optional)',extras),field('Delimiter',delimiter),field('Text encoding',encoding),field('Column names on line',headerRow),field('Offset for times without one',naiveOffset));
     const identity=el('fieldset');identity.id='owgEventLogIdentity';identity.append(el('legend','Supplied source-event IDs (optional)'));
     const useIdentity=input('owgEventLogUseIdentity','checkbox');
     const identityFields=el('div',null,'row');identityFields.style.alignItems='end';
@@ -337,6 +353,7 @@
       if(!(useIdentity.checked&&jsonColumn.value))[...extras.selectedOptions].forEach(o=>{if(![cols.case.value,cols.activity.value,cols.time.value,cols.resource.value].includes(o.value))q.append('attribute_column',o.value);});
       q.set('delimiter',delimiter.value);if(keep.checked)q.set('keep_rejected','true');
       if(encoding.value!=='utf-8')q.set('encoding',encoding.value);
+      if((Number(headerRow.value)||1)>1)q.set('header_row',String(Number(headerRow.value)));
       if(naiveOffset.value.trim())q.set('naive_timestamp_offset',naiveOffset.value.trim());
       if(timeFormat.value)q.set('timestamp_format',timeFormat.value);
       if(useIdentity.checked)for(const [key,value] of Object.entries({event_id_column:eventId.value,source_namespace:sourceNamespace.value,source_namespace_column:sourceColumn.value,case_namespace:caseNamespace.value,case_namespace_column:caseColumn.value,attributes_json_column:jsonColumn.value}))if(value)q.set(key,value);
@@ -410,7 +427,9 @@
       readingColumns=true;status('Reading file columns…');refreshImport();
       try{
         const text=await headText(chosen,65536,encoding.value);
-        const columns=csvHeader(text,sep);
+        if(!headerRowManual)headerRow.value=String(headerLine(text,sep));
+        const skip=Math.max(0,Math.min(49,(Number(headerRow.value)||1)-1));
+        const columns=csvHeader(skip?text.split(/\r?\n/).slice(skip).join('\n'):text,sep);
         // A delimiter at the end of every line leaves an unnamed last column; it holds nothing to map.
         if(columns.length>1&&!columns[columns.length-1].trim()&&columns[columns.length-2].trim())columns.pop();
         if(sequence!==columnReadSequence||file.files?.[0]!==chosen||format.value!=='csv'||(delimiter.value==='t'?'\t':delimiter.value)!==sep)return;
@@ -497,6 +516,8 @@
     sheetSelect.onchange=()=>{if(workbook)void convertWorkbook(workbook,sheetSelect.value);};
     delimiter.onchange=()=>{consent.checked=false;readColumns();};
     encoding.onchange=()=>{consent.checked=false;readColumns();};
+    headerRow.onchange=()=>{headerRowManual=true;consent.checked=false;readColumns();};
+    file.addEventListener('change',()=>{headerRowManual=false;headerRow.value='1';});
     // Suggest a timestamp format from the first rows of the chosen time column (sent to this computer only).
     let formatSequence=0;
     async function detectTimeFormat(){
