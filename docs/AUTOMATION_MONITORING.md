@@ -120,6 +120,10 @@ that value unknown rather than reconstructing it from an attached design.
 workspace (case = run, activity = step, resource = step status), where
 variants, KPIs, cohorts, simulation and conformance apply.
 
+## Inspect retained run evidence
+
+Use the [retained run evidence explorer](AUTOMATION_RUN_EVIDENCE.md) to filter run reports, inspect exact step occurrences, and compare two digest-pinned reports without contacting the runtime. Changed matching reports invalidate pagination; reported outcomes remain unverified.
+
 ## Storage
 
 Imports need **Store these runs on this computer**. Runs are kept in

@@ -93,3 +93,27 @@ rendering (including malicious HTML-like qualifier), source navigation,
 and existing keyboard, accessibility, mobile, export and deletion checks.
 
 Native CI must pass on the exact PR head before merge.
+
+
+## Explain a route between two literal objects
+
+Optionally enter a target object ID and trace using the selected direction,
+qualifier and depth. The target must exist in the same retained log. The
+response adds `target_route`, with a shortest discovered distance, the
+number of shortest assertion routes, and one deterministic example retaining
+original source, target, qualifier and forward/reverse traversal direction.
+Parallel assertions count separately; self-links and same-layer links do
+not add shortest routes. A target equal to the starting object has one
+zero-hop route.
+
+A truncated traversal returns only a lower bound on route multiplicity.
+A target not reached after a truncation remains unknown; after a complete
+traversal it was not reached within the selected depth and filters, not
+necessarily disconnected. An exactly exhausted edge budget no longer implies
+truncation unless an additional distinct assertion is encountered.
+
+The new API request field is `target_object_id`. The original navigation
+slice remains unchanged when no target is selected. No identity joins,
+causal claims, temporal validity or business-case membership are inferred.
+Regression coverage includes forward/reverse paths, parallel assertions,
+diamonds, bounded absence and exactly exhausted edge budgets.

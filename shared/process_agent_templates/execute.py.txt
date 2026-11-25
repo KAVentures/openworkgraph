@@ -565,8 +565,7 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                 result['operator_stopped'] = True
                 record('operator_stop_observed', future_tool_attempts_stopped=True,
                        already_in_flight_requests_not_cancelled=True)
-            else:
-                record('stopped_before_tools', reason='shared_design_or_source_rules_not_established')
+            record('stopped_before_tools', reason='operator_stop' if result['operator_stopped'] else 'shared_design_or_source_rules_not_established')
             return result
 
         if any(action['operation_kind'] == 'write' for action in prepared['actions']):
@@ -586,8 +585,7 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                     result['operator_stopped'] = True
                     record('operator_stop_observed', future_tool_attempts_stopped=True,
                            already_in_flight_requests_not_cancelled=True)
-                else:
-                    record('stopped_before_tools', reason='source_verifier_unavailable_or_terminal_state_already_matches')
+                record('stopped_before_tools', reason='operator_stop' if result['operator_stopped'] else 'source_verifier_unavailable_or_terminal_state_already_matches')
                 return result
         try:
             async with AsyncExitStack() as stack:

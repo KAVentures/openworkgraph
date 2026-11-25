@@ -148,6 +148,8 @@ each language:
 The macro F1 covers only intents with enough support. These measure agreement with
 your own labels, on your own messages; they are not verified reasons for contact.
 
+**Paired evaluation.** Compare the existing keyword taxonomy and trained learned classifier on the same reviewed holdout with [aggregate paired classifier evaluation](COMMUNICATIONS_PAIRED_EVALUATION.md), including decision coverage, abstentions, lexical-overlap screening and reviewer-labelled languages. No threshold is tuned.
+
 **Learned analysis.** Choose *Learned model* under *Intents from*.
 
 - The report adds `learned_intents`: present and uncertain counts, and the share

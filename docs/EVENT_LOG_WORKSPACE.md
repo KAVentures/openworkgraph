@@ -45,10 +45,15 @@ sample rather than adding a copy. It is deleted like any other log.
 | Format | Import | Export | Notes |
 | --- | --- | --- | --- |
 | CSV | yes | yes | You map the case, activity, timestamp and (optional) resource columns. |
-| Excel (.xlsx) | yes | no | One worksheet is converted to CSV on this computer, then mapped and imported like any CSV (below). |
+| Excel (.xlsx) | yes | yes | Import: one worksheet is converted to CSV on this computer, then mapped and imported like any CSV (below). Export: the CSV export's rows as text cells ([Excel event-log export](#excel-event-log-export)). |
+| SQLite database | yes | no | One table is converted to CSV, then mapped like any CSV ([SQLite database files](#sqlite-database-files)). |
+| JSON Lines | yes | no | One JSON object per line, flattened to CSV columns ([JSON Lines files](#json-lines-files)). |
+| Apache Parquet | yes | yes | Import: converted to CSV ([Parquet files](#parquet-files)). Export: the CSV export's rows with a typed UTC timestamp column ([Parquet event-log export](#parquet-event-log-export)). |
 | XES (IEEE 1849) | yes | yes | `concept:name`, `time:timestamp` and `org:resource`; up to 32 other attributes of 500 characters each are imported as strings. Choose **XES with retained attributes** to include static trace and event attributes in the export. |
 | OCEL 2.0 JSON | yes | yes | Objects, object types, events, event-to-object links and supplied directed object-to-object relationships with qualifiers. Object attribute values keep their times (below). |
 | OCEL 2.0 XML | yes | yes | The same retained content in the OCEL 2.0 worked-example XML layout (`.xmlocel`). Objects must precede events as in the original 2.0 printed root schema. See the relationship contract for schema/example errata and format limits. |
+| OCEL 2.0 SQLite | no | yes | `GET /v1/event-logs/{log_id}/ocel.sqlite`: the OCEL 2.0 relational layout with per-type event and object tables. |
+| gzip (`.gz`) | yes | no | Any import may be gzip-compressed ([Compressed files](#compressed-files)). |
 
 The attribute export uses the selected case notion and includes values in the
 download, including supported lifecycle fields. The standard XES choice exports
@@ -1535,6 +1540,19 @@ not even on handover edges. Handover counts say who touched a case next, not who
 responsible or how well anyone worked. One million events are analysed in seconds
 (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_organization.py`).
 
+**Download network (GraphML)** saves the same network for Gephi, yEd or Cytoscape
+(`GET /v1/event-logs/{log_id}/organization.graphml`, with the same parameters as `organization`):
+
+- one node per resource, with its event, case and activity counts and its kind;
+- directed `handover` and `subcontracting` edges;
+- `working_together` edges weighted by shared cases. Their `symmetric` attribute is true and
+  their direction carries no meaning; the graph stays directed so networkx and other strict
+  readers load it.
+
+Resources stay pseudonymous unless **Show resource names** is checked, and the file says which.
+No duration, speed or score is added. Node identifiers are generated, and labels are escaped XML
+text. The `X-OWG-Network` header counts resources and edges and states the naming choice.
+
 ### Roles
 
 "Discover roles" groups resources that perform a similar mix of activities. This is organizational
@@ -1580,13 +1598,19 @@ Celonis Action Engine and UiPath process alerts. Rules belong to one log, are im
   case population checked. The draft preview leaves saved signals and evaluation history alone.
 - `POST /v1/event-logs/{log_id}/signals/{rule_id}/delete` removes one.
 - `POST /v1/event-logs/{log_id}/signals/evaluate` checks every rule now.
+- `POST /v1/event-logs/{log_id}/signals/{rule_id}/evaluate` checks and records one saved rule.
 
 Use **Preview signal** to check the current draft before choosing **Save signal**.
 When the analysis has a case filter, choose **Current case filter** to save its
 conditions with the rule. Signal conditions and their case filters use the
 original recorded activities. **All cases** is selected by default. Later changes to
 the analysis filter leave saved rules unchanged. For case conditions, enter
-**Minimum matching cases** to set the trigger count.
+**Minimum matching cases** to set the trigger count. Use **Check** beside a
+saved rule to evaluate it on its own, or **Check signals** to evaluate the log’s
+whole list. In a preview or a saved result, open an evidence case to see its
+recorded events under the rule’s case notion. Expand the list for the rest of
+the sample. A count shows when more cases matched than were returned as
+evidence.
 
 Use **Move signal rules between logs** to download rule definitions as JSON, or
 select a JSON file and preview the import. The file includes each rule’s case notion,
@@ -2068,6 +2092,14 @@ their definitions for review, and **Check object rules** evaluates them against 
 **Update loaded rule set** saves edits to the loaded revision. Deleting a saved set leaves the
 current draft available. Deleting its log also deletes its saved sets.
 
+Use **Transfer object rule definitions** to download the editor's rule set as a
+JSON file. In another log, preview the file to see which exact object types,
+activity labels, or supplied relationship qualifiers are absent. The preview
+checks label presence only. Load the definitions into the editor, then save as
+a new rule set or check the rules explicitly. The JSON contains the name and
+definitions. The preview endpoint is
+`POST /v1/event-logs/{log_id}/object-rule-sets/template/preview`.
+
 Choose a second retained object log and select **Compare object rules** to evaluate the same draft
 against both whole logs. The comparison shows violating and activated counts, the violation rate,
 and the percentage-point change from the baseline. A rate change requires a complete result and
@@ -2154,6 +2186,23 @@ format. The process tree is translated block by block:
 The net has one source place, marked with one token, and one sink place. The sink is declared in
 `finalmarkings`, as PM4Py and ProM read it. Silent transitions carry the ProM `$invisible$` flag.
 
+**Download process tree (PTML)** saves the discovered tree itself, in the PTML format that
+`pm4py.read_ptml` and ProM's process-tree plug-ins read
+(`GET /v1/event-logs/{log_id}/model-discovery.ptml`, same parameters as the PNML export). It
+keeps the block structure that the PNML and BPMN exports flatten:
+
+- activities become `manualTask` and skips become `automaticTask`;
+- `seq`, `xor` and `and` become `sequence`, `xor` and `and`;
+- a loop becomes `xorLoop` with its body, its redo part and a silent exit.
+
+Identifiers are UUIDs derived from each node's position, so the same tree gives the same file.
+The `X-OWG-Process-Tree` header counts nodes and activities.
+
+**Process tree in PM4Py notation** (under the download) shows the same tree as PM4Py prints it, for
+example `->( 'Receive', X( tau, 'Approve' ), 'Close' )`. It can be pasted into
+`pm4py.objects.process_tree.utils.generic.parse`. Labels are written as they are, so a label
+containing a single quote may need editing before PM4Py's parser accepts it.
+
 Place and transition identifiers are generated (`p0`, `t0`, …); activity names appear only as
 transition names. Tests replay every trace up to six steps and check that the net accepts exactly
 the traces the process tree accepts.
@@ -2162,6 +2211,25 @@ the traces the process tree accepts.
 case-filter parameters. It returns `application/xml` with an `X-OWG-Petri-Net` header that counts
 places, transitions and silent transitions. Dashboard session only. Like the discovered draft, the
 net is a candidate model for review, not a verified workflow.
+
+### BPMN export of the discovered model
+
+`GET /v1/event-logs/{log_id}/model-discovery.bpmn` takes the same parameters as the PNML export.
+It returns BPMN 2.0 XML with diagram interchange (shapes and edges) for Camunda Modeler, bpmn.io,
+Signavio and other BPMN designers. The dashboard's **Download BPMN** button sits next to the
+Petri net download.
+
+The file uses the same writer and layout as the process catalog's BPMN export:
+
+- activities become tasks;
+- choices and loops become exclusive gateways;
+- concurrent branches become diverging and converging parallel gateways;
+- the model gets start and end events.
+
+Observed branch shares stay on their sequence flows as unconfirmed rule text. The process
+documentation names the log, case notion, discovery settings and model digest, and marks the file
+as an unreviewed, non-executable draft. The `X-OWG-BPMN` header counts tasks, gateways and flows.
+OWG's own BPMN import reads the file back into an editable draft.
 
 ## Process map with abstraction sliders
 
@@ -2194,6 +2262,19 @@ for a spreadsheet: one row per activity (events and cases), start activity, path
 cases and the median, mean and 90th-percentile gap in seconds) and end activity, with cells that
 would start a formula prefixed with `'`.
 Nothing is uploaded; activity names in the file are as sensitive as the log.
+
+**Download map (Graphviz DOT)** saves the same map as a Graphviz graph, as PM4Py and bupaR draw
+directly-follows graphs. Use it to re-lay out the map with `dot -Tsvg`, or open it in Graphviz
+Online, Gephi or yEd. The server builds it from the current slider settings and case filter with
+`GET /v1/event-logs/{log_id}/process-map.dot`, which takes the same parameters as `process-map`.
+
+- Each shown activity is a box labelled with its event count.
+- Start and end are circles.
+- Each path's arrow is labelled with its count and median gap, and its width grows with frequency.
+
+Node identifiers are generated (`a0`, `a1`, …). Activity names appear only inside escaped,
+quoted labels, so a name cannot add statements to the graph. The `X-OWG-Map` header counts
+activities and paths. Dashboard session only.
 
 ## Predicting open cases
 
@@ -3352,6 +3433,39 @@ tagged. Tagging again with the same tag does not duplicate it.
 body, plus the case-filter parameters (`tag` there is the filter for cases already tagged, so the
 new tag is `new_tag`). A tag is the analyst's label, not a finding.
 
+### Process trees (PTML) from PM4Py and ProM
+
+The file picker also accepts a **process tree** in PTML, as `pm4py.write_ptml` and ProM's Inductive
+Miner save it. The tree is converted to its workflow net with the same block construction as the
+discovered-model PNML export, then replayed, aligned or saved as a reference net like any PNML
+file. `POST /v1/event-logs/ptml-to-pnml` takes the PTML file as the body (dashboard session only,
+at most 2 MB, nothing stored). It returns the `pnml`, the tree's `name`, place and transition
+counts and the activity labels.
+
+Supported nodes:
+
+- `manualTask` (an activity) and `automaticTask` (a silent step);
+- `sequence`, `xor` and `and`;
+- `xorLoop` with two children (PM4Py: do, redo) or three (ProM: do, redo, exit). The exit runs
+  once after the loop.
+
+Other operators (`or`, `interleaved`, …), a node with two parents, cycles, unconnected nodes,
+unknown references and XML with a DOCTYPE or entity declaration are refused with a message.
+Nothing is approximated.
+
+A tree can also be pasted as PM4Py prints it (`print(tree)`), for example
+`->( 'Register', X( 'Check', tau ), *( 'Fix', tau ), 'Close' )`. Its notation:
+
+- `->` is a sequence, `X` a choice, `+` parallel and `*` a loop (two or three children);
+- `tau` is a silent step;
+- labels are single-quoted. A label ends at the quote followed by a comma or a closing bracket,
+  so quotes inside a label are kept.
+
+`O` (or) and `<>` (interleaving) are refused, as in PTML. The dashboard field is
+**Or paste a PM4Py process tree**. Its endpoint is `POST /v1/event-logs/process-tree-to-pnml`
+with `{"notation": "…"}` (dashboard session only, at most 200,000 characters, nesting at most 500
+levels). The response has the same shape as `ptml-to-pnml`.
+
 ## Temporal profile
 
 **Temporal profile** (as in PM4Py and ProM) learns the usual time between every ordered pair of
@@ -3455,6 +3569,34 @@ through `get_process_decision_rules` (see PROCESS_INTELLIGENCE_FOR_AGENTS.md).
 
 Dashboard owners can download a saved log as an Excel workbook (`GET /v1/event-logs/{log_id}/events.xlsx`). The workbook preserves case IDs, activities, timestamps, and resources as literal text cells, with a frozen header and filter. It is a CSV-equivalent view rather than an OCEL relationship export.
 
+### Parquet event-log export
+
+**Apache Parquet (typed columns)** in the export menu downloads the same rows as a Parquet file
+(`GET /v1/event-logs/{log_id}/events.parquet`, dashboard session only), for DuckDB, pandas or
+PM4Py, Spark, Power BI and cloud warehouses. Columns:
+
+- `case_id` and `activity`: strings;
+- `timestamp`: a UTC-adjusted timestamp with microsecond precision, not text;
+- `resource`: a string, null where the event has none.
+
+The CSV export is streamed to a temporary file and converted by DuckDB, so large logs are not held
+in memory; both temporary files are removed after the download. The `X-OWG-Rows` header counts
+events. The workspace's Parquet import reads the file back to the same events.
+
 ### Rework and loop case evidence
 
 The local rework report shows the total number of repeated activities and recorded loop patterns, with an adjustable display limit of 20, 50 or 100. JSON and CSV downloads contain the displayed results and the JSON includes the selected cohort and analysis settings. The report offers explicit case-evidence links for repeated activities and exact closed activity loops. Selectors respect the active case cohort and retain literal event order; timestamp ties do not establish business order.
+
+### Reusing activity groupings across logs
+
+Under **Group activities**, download a saved mapping as JSON. In another log,
+open **Import activity mapping**, choose that file, and preview the matching
+event counts and exact activity labels missing from the destination. Load the
+mapping into the draft, review it, and save it. Saving does not apply the
+mapping; apply it separately when ready. The file contains the mapping definition,
+including activity names, but no events.
+
+The dashboard-session endpoint `POST /v1/event-logs/{log_id}/activity-mappings/template/preview`
+accepts `{ "format": "openworkgraph.activity-mapping.v1", "mapping": { ... } }`.
+It validates and previews the definition against original event labels without
+changing the log or its saved mappings.
