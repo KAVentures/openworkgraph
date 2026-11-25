@@ -115,6 +115,13 @@ const path=require('node:path');
    await page.locator('#owgPetriFile').setInputFiles({name:'or.ptml',mimeType:'application/xml',buffer:Buffer.from('<ptml><processTree id="x" root="o"><or id="o" name=""/></processTree></ptml>')});
    await page.locator('#owgPetriRun').click();
    await page.locator('#owgPetriStatus').filter({hasText:'<or> is not supported'}).waitFor();
+   // The same tree pasted as PM4Py prints it.
+   await page.locator('#owgPetriTreeText').fill("->( 'Register', 'Check', 'Pay', 'Close' )");
+   await page.locator('#owgPetriTreeRun').click();
+   await page.locator('#owgPetriStatus').filter({hasText:'on the pasted process tree: 24 of 30 cases'}).waitFor();
+   await page.locator('#owgPetriTreeText').fill("O( 'Register', 'Check' )");
+   await page.locator('#owgPetriTreeRun').click();
+   await page.locator('#owgPetriStatus').filter({hasText:'O (or) is not supported'}).waitFor();
    // The most common path (Register, Check, Pay, Close; 24 of 30 cases) as the reference model.
    await page.locator('#owgPetriHappy').click();
    await page.locator('#owgPetriStatus').filter({hasText:'on the most common path (followed by 80% of cases): 24 of 30 cases'}).waitFor();
@@ -133,6 +140,6 @@ const path=require('node:path');
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgPetri'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Petri net replay browser acceptance passed: missing tokens and skipped steps, exact evidence and filtered saved-net review, deviation causes, unsafe XML refusal, PTML process trees, conformance signals, WCAG audit.');
+   console.log('Petri net replay browser acceptance passed: missing tokens and skipped steps, exact evidence and filtered saved-net review, deviation causes, unsafe XML refusal, PTML and pasted PM4Py process trees, conformance signals, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});

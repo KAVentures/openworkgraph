@@ -113,6 +113,56 @@ def test_reads_a_tree_written_by_pm4py(tmp_path):
     assert ptml.to_pnml(path.read_bytes())["activities"] == ["A", "B", "C", "D", "E"]
 
 
+def test_pm4py_notation_matches_the_ptml_tree():
+    text = "->( 'Receive', X( tau, 'Check' ), +( 'Pay', 'Ship' ), *( 'Fix', tau, 'Close' ) )"
+    assert ptml.read_notation(text) == ptml.read_tree(PROM)[0]
+    assert ptml.read_notation("*( 'A', tau )") == {"op": "loop", "children": [{"op": "activity", "activity": "A"}, {"op": "tau"}]}
+    assert ptml.read_notation("X( 'it's done', 'a,b' )") == {"op": "xor", "children": [
+        {"op": "activity", "activity": "it's done"}, {"op": "activity", "activity": "a,b"}]}   # quotes and commas inside labels
+    assert ptml.read_notation("  'Single'  ") == {"op": "activity", "activity": "Single"}
+    assert ptml.notation_to_pnml("->( 'A', 'B' )")["activities"] == ["A", "B"]
+
+
+@pytest.mark.parametrize("text,message", [
+    ("", "paste a process tree"),
+    ("O( 'A', 'B' )", "O \\(or\\) is not supported"),
+    ("<>( 'A', 'B' )", "interleaving"),
+    ("->( 'A', 'B'", "expected , or \\)"),
+    ("->( 'A )", "not closed"),
+    ("->( 'A' ) extra", "after the tree"),
+    ("*( 'A' )", "a loop needs"),
+    ("->( '' )", "needs a name"),
+    ("Y( 'A' )", "unexpected text"),
+    ("->->( 'A' )", "expected \\( after ->"),
+])
+def test_malformed_or_unsupported_notation_is_refused(text, message):
+    with pytest.raises(EventLogWorkspaceError, match=message):
+        ptml.read_notation(text)
+
+
+def test_notation_depth_and_size_bounds():
+    deep = "->( " * 501 + "'A'" + " )" * 501
+    with pytest.raises(EventLogWorkspaceError, match="nested too deeply"):
+        ptml.read_notation(deep)
+    with pytest.raises(EventLogWorkspaceError, match="longer than"):
+        ptml.read_notation("'" + "A" * ptml.MAX_NOTATION_CHARS + "'")
+
+
+@pytest.mark.skipif(not os.environ.get("OWG_PM4PY_PYTHON"), reason="set OWG_PM4PY_PYTHON to a Python with pm4py")
+def test_notation_agrees_with_pm4py_parser():
+    trees = ["->( 'A', X( 'B', tau ), +( 'C', 'D' ), *( 'E', tau ) )", "X( ->( 'a', 'b' ), +( 'c', *( 'd', 'e' ) ) )"]
+    code = ("import sys,json; from pm4py.objects.process_tree.utils.generic import parse\n"
+            "def walk(t):\n"
+            "    if not t.children: return {'op':'tau'} if t.label is None else {'op':'activity','activity':t.label}\n"
+            "    op={'->':'seq','X':'xor','+':'and','*':'loop'}[str(t.operator)]\n"
+            "    return {'op':op,'children':[walk(c) for c in t.children]}\n"
+            "print(json.dumps([walk(parse(s)) for s in json.loads(sys.argv[1])]))")
+    import json
+    done = subprocess.run([os.environ["OWG_PM4PY_PYTHON"], "-c", code, json.dumps(trees)], capture_output=True, text=True, timeout=300)
+    assert done.returncode == 0, done.stderr
+    assert json.loads(done.stdout.strip().splitlines()[-1]) == [ptml.read_notation(t) for t in trees]
+
+
 def test_route_is_dashboard_only(tmp_path):
     code = r'''
 from fastapi.testclient import TestClient
@@ -128,6 +178,12 @@ with TestClient(app) as client:
     assert r.status_code == 200 and r.json()["activities"] == ["A", "B"] and "<pnml>" in r.json()["pnml"], r.text
     assert client.post(path, content=b"<ptml/>", headers=owner).status_code == 422
     assert client.post(path, content=b" " * (2 * 1024 * 1024 + 1), headers=owner).status_code == 413
+    text_path = "/v1/event-logs/process-tree-to-pnml"
+    assert client.post(text_path, json={"notation": "->( 'A', 'B' )"}, headers=bearer).status_code == 403
+    r = client.post(text_path, json={"notation": "->( 'A', 'B' )"}, headers=owner)
+    assert r.status_code == 200 and r.json()["activities"] == ["A", "B"], r.text
+    assert client.post(text_path, json={"notation": "O( 'A' )"}, headers=owner).status_code == 422
+    assert client.post(text_path, json={"tree": "x"}, headers=owner).status_code == 422
 print("ok")
 '''
     env = {**os.environ, "WORKFLOW_OBSERVER_DATA": str(tmp_path / "srv"), "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth"),

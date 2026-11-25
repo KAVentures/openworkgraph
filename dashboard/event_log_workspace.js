@@ -7390,7 +7390,20 @@
     const alertSave=button('Alert me','secondary');alertSave.id='owgPetriAlertSave';alertSave.disabled=true;
     const alertMessage=el('div',null,'muted');alertMessage.id='owgPetriAlertMessage';alertMessage.setAttribute('role','status');alertMessage.setAttribute('aria-live','polite');
     const alertRow=el('div',null,'row');alertRow.style.alignItems='end';alertRow.append(field('Signal when cases not fitting this net are',alertShare),field('Among cases',alertWindow),alertSave);
-    box.append(row,statusLine,out,aligned,alertRow,alertMessage);
+    // A tree printed by PM4Py (print(tree)) can be pasted instead of saved as a file.
+    const treeText=document.createElement('textarea');treeText.id='owgPetriTreeText';treeText.rows=2;treeText.maxLength=200000;
+    treeText.placeholder="->( 'Register', X( 'Check', tau ), 'Pay' )";treeText.style.cssText='width:100%;font-family:monospace';
+    const treeRun=button('Replay on pasted process tree','secondary');treeRun.id='owgPetriTreeRun';
+    const treeRow=el('div',null,'row');treeRow.style.alignItems='end';treeRow.append(field('Or paste a PM4Py process tree',treeText),treeRun);
+    treeRun.onclick=async()=>{
+      if(!treeText.value.trim()){statusLine.textContent='Paste a process tree first.';return;}
+      try{
+        statusLine.textContent='Converting the process tree…';
+        const converted=await (await api('/v1/event-logs/process-tree-to-pnml',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({notation:treeText.value})})).json();
+        await replay(converted.pnml,'the pasted process tree');
+      }catch(error){statusLine.textContent=error.message;}
+    };
+    box.append(row,treeRow,statusLine,out,aligned,alertRow,alertMessage);
     // Reference nets saved with this log: keep the net just checked, or check again against a saved one.
     const savedPick=select('owgPetriSaved',[]);const savedRun=button('Replay on saved net','secondary');savedRun.id='owgPetriSavedRun';
     const savedDelete=button('Delete saved net','secondary');savedDelete.id='owgPetriSavedDelete';

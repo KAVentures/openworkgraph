@@ -18,6 +18,9 @@ Other operators (``or``, ``interleaved``, ``def``…) are refused with their nam
 approximated. Child order follows the ``parentsNode`` elements. A node with two parents, a cycle,
 a missing root or an unknown reference is refused. As with PNML input, XML with a DOCTYPE or
 entity declaration is refused, and size and node counts are bounded.
+
+``read_notation`` reads the same trees in PM4Py's printed notation (``print(tree)``), with the same
+operators and the same refusals (``O`` and ``<>`` are not supported).
 """
 from __future__ import annotations
 
@@ -122,15 +125,111 @@ def read_tree(data: bytes) -> tuple[dict[str, Any], str]:
     return result, (tree.get("name") or "").strip()[:200]
 
 
-def to_pnml(data: bytes) -> dict[str, Any]:
+_NOTATION_OPS = {"->": "seq", "X": "xor", "+": "and", "*": "loop"}
+_REFUSED_NOTATION = {"O": "or", "<>": "interleaving"}
+MAX_NOTATION_CHARS = 200_000
+
+
+def read_notation(text: str) -> dict[str, Any]:
+    """A process tree in PM4Py's printed notation, e.g. ``->( 'A', X( 'B', tau ), *( 'C', tau ) )``.
+
+    ``print(tree)`` in PM4Py gives this text. Labels are single-quoted; a label ends at the quote
+    that is followed by a comma or a closing bracket, so quotes inside a label are kept.
+    """
+    if not isinstance(text, str) or not text.strip():
+        raise EventLogWorkspaceError("paste a process tree such as ->( 'A', 'B' )")
+    if len(text) > MAX_NOTATION_CHARS:
+        raise EventLogWorkspaceError(f"the process tree text is longer than {MAX_NOTATION_CHARS:,} characters")
+    pos, count = 0, 0
+
+    def skip() -> None:
+        nonlocal pos
+        while pos < len(text) and text[pos].isspace():
+            pos += 1
+
+    def node(depth: int) -> dict[str, Any]:
+        nonlocal pos, count
+        if depth > 500:
+            raise EventLogWorkspaceError("the process tree is nested too deeply")
+        count += 1
+        if count > MAX_NODES:
+            raise EventLogWorkspaceError(f"the process tree has more than {MAX_NODES} nodes")
+        skip()
+        if text.startswith("'", pos):
+            end = pos + 1
+            while True:
+                end = text.find("'", end)
+                if end == -1:
+                    raise EventLogWorkspaceError("a quoted activity label is not closed")
+                after = end + 1
+                while after < len(text) and text[after].isspace():
+                    after += 1
+                if after >= len(text) or text[after] in ",)":
+                    break
+                end += 1
+            label = text[pos + 1:end].strip()
+            pos = end + 1
+            if not label or len(label) > 200 or any(ord(c) < 32 for c in label):
+                raise EventLogWorkspaceError("an activity needs a name of 1 to 200 characters")
+            return {"op": "activity", "activity": label}
+        if text.startswith("tau", pos) and not text[pos + 3:pos + 4].isalnum():
+            pos += 3
+            return {"op": "tau"}
+        for symbol, name in _REFUSED_NOTATION.items():
+            if text.startswith(symbol + "(", pos) or text.startswith(symbol + " (", pos):
+                raise EventLogWorkspaceError(f"the process tree operator {symbol} ({name}) is not supported")
+        symbol = next((s for s in _NOTATION_OPS if text.startswith(s, pos)), None)
+        if symbol is None:
+            raise EventLogWorkspaceError(f"unexpected text at character {pos + 1}: expected ->, X, +, *, tau or a quoted label")
+        pos += len(symbol)
+        skip()
+        if not text.startswith("(", pos):
+            raise EventLogWorkspaceError(f"expected ( after {symbol} at character {pos + 1}")
+        pos += 1
+        kids = []
+        while True:
+            kids.append(node(depth + 1))
+            skip()
+            if text.startswith(",", pos):
+                pos += 1
+                continue
+            if text.startswith(")", pos):
+                pos += 1
+                break
+            raise EventLogWorkspaceError(f"expected , or ) at character {pos + 1}")
+        op = _NOTATION_OPS[symbol]
+        if op == "loop":
+            if len(kids) not in (2, 3):
+                raise EventLogWorkspaceError("a loop needs two children (do, redo) or three (do, redo, exit)")
+            loop = {"op": "loop", "children": kids[:2]}
+            return loop if len(kids) == 2 or kids[2]["op"] == "tau" else {"op": "seq", "children": [loop, kids[2]]}
+        return {"op": op, "children": kids}
+
+    tree = node(0)
+    skip()
+    if pos != len(text):
+        raise EventLogWorkspaceError(f"unexpected text after the tree at character {pos + 1}")
+    return tree
+
+
+def notation_to_pnml(text: str) -> dict[str, Any]:
     from . import event_log_pnml as pnml
-    tree, name = read_tree(data)
+    return _converted(pnml, read_notation(text), "pasted process tree")
+
+
+def _converted(pnml, tree: dict[str, Any], name: str) -> dict[str, Any]:
     net = pnml.tree_to_net(tree)
     labels = [label for _, label in net["transitions"] if label is not None]
-    return {"pnml": pnml.to_pnml(net, name or "imported process tree"), "name": name,
+    return {"pnml": pnml.to_pnml(net, name), "name": name,
             "places": len(net["places"]), "transitions": len(net["transitions"]),
             "activities": sorted(set(labels)),
             "silent_transitions": sum(1 for _, label in net["transitions"] if label is None)}
 
 
-__all__ = ["read_tree", "to_pnml", "MAX_BYTES"]
+def to_pnml(data: bytes) -> dict[str, Any]:
+    from . import event_log_pnml as pnml
+    tree, name = read_tree(data)
+    return {**_converted(pnml, tree, name or "imported process tree"), "name": name}
+
+
+__all__ = ["read_tree", "read_notation", "to_pnml", "notation_to_pnml", "MAX_BYTES", "MAX_NOTATION_CHARS"]

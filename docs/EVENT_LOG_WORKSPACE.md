@@ -3356,6 +3356,19 @@ Other operators (`or`, `interleaved`, …), a node with two parents, cycles, unc
 unknown references and XML with a DOCTYPE or entity declaration are refused with a message.
 Nothing is approximated.
 
+A tree can also be pasted as PM4Py prints it (`print(tree)`), for example
+`->( 'Register', X( 'Check', tau ), *( 'Fix', tau ), 'Close' )`. Its notation:
+
+- `->` is a sequence, `X` a choice, `+` parallel and `*` a loop (two or three children);
+- `tau` is a silent step;
+- labels are single-quoted. A label ends at the quote followed by a comma or a closing bracket,
+  so quotes inside a label are kept.
+
+`O` (or) and `<>` (interleaving) are refused, as in PTML. The dashboard field is
+**Or paste a PM4Py process tree**. Its endpoint is `POST /v1/event-logs/process-tree-to-pnml`
+with `{"notation": "…"}` (dashboard session only, at most 200,000 characters, nesting at most 500
+levels). The response has the same shape as `ptml-to-pnml`.
+
 ## Temporal profile
 
 **Temporal profile** (as in PM4Py and ProM) learns the usual time between every ordered pair of
