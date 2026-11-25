@@ -46,6 +46,17 @@ const path=require('node:path');
    await page.locator('#owgPetriRun').click();
    await page.locator('#owgPetriStatus').filter({hasText:'on strict.pnml: 24 of 30 cases'}).waitFor();
    assert((await page.locator('#owgPetriStatus').textContent()).includes('Precision 100%'));
+   // Model soundness is independent of the six recorded cases that skipped Check.
+   await page.getByText('Structural and behavioral net validation',{exact:true}).click();
+   await page.locator('#owgPetriSoundnessRun').click();
+   await page.locator('#owgPetriSoundnessStatus').filter({hasText:'Soundness: Verified.'}).waitFor();
+   assert((await page.locator('#owgPetriSoundnessStatus').textContent()).includes('5 reachable markings'));
+   const [soundDownload]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Download validation report (JSON)',exact:true}).click()]);
+   const soundReport=JSON.parse(await fs.readFile(await soundDownload.path(),'utf8'));
+   assert.equal(soundReport.sound,true);
+   assert.equal(soundReport.complete,true);
+   assert.equal(soundReport.reachable_markings,5);
+   assert.match(soundReport.pnml_sha256,/^[a-f0-9]{64}$/);
    const out=page.locator('#owgPetriResults');
    const placesTable=await out.locator('table').first().textContent();
    assert(placesTable.includes('p2'),placesTable);assert(placesTable.includes('p1'),placesTable);
