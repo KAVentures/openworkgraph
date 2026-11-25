@@ -1206,10 +1206,11 @@ def _withhold_small_waits(result: dict[str, Any]) -> dict[str, Any]:
     def activity(row: dict[str, Any]) -> dict[str, Any]:
         row = dict(row)
         small = False
-        if (row.get("instances_with_processing_time") or 0) < keep and row.get("processing"):
+        known = row.get("instances_with_processing_time") or 0
+        if 0 < known < keep and row.get("processing"):
             row["processing"], small = dict(blank), True
         waiting = row.get("waiting_before")
-        if waiting and (waiting.get("instances") or 0) < keep:
+        if waiting and 0 < (waiting.get("instances") or 0) < keep:
             row["waiting_before"] = {**blank, "instances": waiting.get("instances"), "total_seconds": None}
             row["share_of_all_waiting"], small = None, True
         withheld["activities"] += small
