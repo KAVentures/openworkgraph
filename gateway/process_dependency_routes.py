@@ -26,6 +26,11 @@ def add_routes(router,store,human,body,response):
         result.headers['Content-Disposition']='attachment; filename="owg-process-dependency-graph.json"'
         return result
 
+    @router.get(base+'/build-status')
+    def build_status(workflow_id:str=Path(pattern=ID),revision:int=Query(ge=1),
+                     basis_sha256:str=Query(pattern=r'^[a-f0-9]{64}$'),p=Depends(human)):
+        return response(dependencies.check_build_basis,p,workflow_id,revision,basis_sha256)
+
     @router.get(base+'/build')
     def build(workflow_id:str=Path(pattern=ID),revision:int=Query(ge=1),
               basis_sha256:str=Query(pattern=r'^[a-f0-9]{64}$'),p=Depends(human)):
