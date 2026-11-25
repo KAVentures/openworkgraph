@@ -114,6 +114,7 @@ def build_runtime_project(packet: dict) -> bytes:
         files['test_decisions.py'] = (_TEMPLATES / 'test_decisions.py.txt').read_text(encoding='utf-8')
         files['decision_runtime.py'] = (_TEMPLATES / 'decision_runtime.py.txt').read_text(encoding='utf-8')
     if spec.get('control_flow_contract') or model.decision_tables:
+        files['test_route_parallel.py'] = (_TEMPLATES / 'test_route_parallel.py.txt').read_text(encoding='utf-8')
         files['owg_model/__init__.py'] = '"""Portable OWG process validation; no source or tool execution."""\n'
         for name in ('process_model.py','process_parallel.py','process_opportunities.py','process_rule_conditions.py','process_decision_tables.py'):
             files['owg_model/'+name]=(Path(__file__).parent/name).read_text(encoding='utf-8')
@@ -475,6 +476,10 @@ def build_runtime_project(packet: dict) -> bytes:
         "The bounded graph/token search proposes only a unique supported schedule, refuses competing or unresolved "
         "routes and reports search limits. Distinct parallel schedules are not assumed interchangeable. "
         "A proposal never approves tool mappings or business actions. Review and authorize implementation separately.\n"
+        "\nFor reviewed case suites, run evaluate_sources.py with --deterministic, or --paired-model MODEL "
+        "and --confirm-model-rule-check-sharing to compare both planners on the same per-case receipt snapshot. "
+        "Both modes require --confirm-source-reads, --cases, --bindings and --output. "
+        "Paired disagreement and incomplete deterministic search remain explicit review findings.\n"
     )
     files['verify_release.py'] = Path(release_integrity.__file__).read_text(encoding='utf-8')
     files['release-manifest.json'] = create_manifest(files, spec)
