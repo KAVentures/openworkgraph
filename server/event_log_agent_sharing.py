@@ -769,7 +769,6 @@ def data_quality(log_id: str) -> dict[str, Any]:
                        "exported is unknown; check rejected rows and shared timestamps before trusting orderings.")}
 
 
-
 def footprints(log_id: str, case_type: str | None = None, noise: float = 0.2) -> dict[str, Any]:
     """Log and discovered-model footprint matrices and where they disagree (aggregates level)."""
     require(log_id, "aggregates")
