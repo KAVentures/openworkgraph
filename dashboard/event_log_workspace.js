@@ -26,6 +26,7 @@
   FILTERED.add('roles');
   FILTERED.add('process-map.dot');
   FILTERED.add('anonymized-export');
+  FILTERED.add('organization.graphml');
   FILTERED.add('anonymized-export.csv');
   FILTERED.add('model-discovery.pnml');
   FILTERED.add('model-discovery.bpmn');
@@ -9098,13 +9099,24 @@
     const run=button('Show handovers','secondary');run.id='owgEventLogOrgRun';
     const rolesRun=button('Discover roles','secondary');rolesRun.id='owgEventLogRolesRun';
     const threshold=input('owgEventLogRolesThreshold','number');threshold.value='0.65';threshold.min='0.01';threshold.max='0.99';threshold.step='0.01';
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(namesLabel,run,field('Role similarity threshold',threshold),rolesRun);
+    const network=button('Download network (GraphML)','secondary');network.id='owgEventLogOrgGraphml';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(namesLabel,run,field('Role similarity threshold',threshold),rolesRun,network);
     const out=el('div');out.id='owgEventLogOrgResults';out.setAttribute('role','status');
     const evidence=el('div');evidence.id='owgEventLogOrgCaseReview';
     box.append(row,out,evidence);
     let request=0;
     const clear=()=>{request++;out.replaceChildren();evidence.replaceChildren();};
     names.addEventListener('change',clear);threshold.addEventListener('input',clear);
+    // The same network for Gephi, yEd or Cytoscape; pseudonymous unless names are shown.
+    network.onclick=async()=>{
+      try{
+        network.disabled=true;
+        const response=await api(logPath('organization.graphml',{names:names.checked?'shown':'pseudonymous'}));
+        download(state.logId+'-resources.graphml',await response.text(),'application/graphml+xml');
+        out.replaceChildren(el('div','Downloaded the resource network ('+(response.headers.get('X-OWG-Network')||'').replace(/; /g,', ')+'). It opens in Gephi, yEd and Cytoscape. '+(names.checked?'It contains resource names from the log.':'Resources are pseudonymous in the file.'),'muted'));
+      }catch(error){out.textContent=error.message;}
+      finally{network.disabled=false;}
+    };
     function reviewCases(kind,pair,report,current){
       const panel=el('div');
       const titles={handover:'Handover',return:'Return handover',shared:'Shared cases'};

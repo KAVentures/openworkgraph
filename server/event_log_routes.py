@@ -2146,6 +2146,27 @@ def event_log_organization(request: Request, log_id: str, case_type: str | None 
                     automation_resources=automation_resource, limit=limit)
 
 
+@router.get("/v1/event-logs/{log_id}/organization.graphml")
+def event_log_organization_graphml(request: Request, log_id: str,
+                                   case_type: str | None = Query(default=None, max_length=200),
+                                   names: str = Query(default="pseudonymous", max_length=20),
+                                   automation_resource: list[str] | None = Query(default=None, max_length=50),
+                                   limit: int = Query(default=100, ge=1, le=organization.MAX_EDGES),
+                                   cohort: dict[str, Any] = Depends(_case_filter)):
+    """The handover and working-together network as GraphML, pseudonymous unless names are asked for."""
+    from . import event_log_organization_graphml as graphml
+    _require_dashboard(request)
+    try:
+        xml, meta = graphml.organization_graphml(log_id, case_type, names=names, cohort=cohort,
+                                                 automation_resources=automation_resource, limit=limit)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(xml, media_type="application/graphml+xml", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-resources.graphml"',
+        "X-OWG-Network": f"resources={meta['resources']}; handovers={meta['handovers']}; "
+                         f"working_together={meta['working_together']}; names={meta['names']}"})
+
+
 @router.post("/v1/event-logs/{log_id}/organization/cases")
 async def event_log_organization_cases(request: Request, log_id: str,
                                        case_type: str | None = Query(default=None, max_length=200)):

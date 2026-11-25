@@ -748,6 +748,13 @@ const path=require('node:path');
    let org=await page.locator('#owgEventLogOrgResults').textContent();
    assert.match(org,/Resource 01/);assert.doesNotMatch(org,/\bann\b|\bbob\b|\bbot\b/);assert.match(org,/No speed|not say who|None says/);
    assert.equal(await page.locator('#owgEventLogOrgResults').getByRole('button',{name:/Review .* cases for/}).count(),0);
+   // The pseudonymous network downloads as GraphML without any resource name from the log.
+   const [graphmlDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogOrgGraphml').click()]);
+   assert.match(graphmlDownload.suggestedFilename(),/-resources\.graphml$/);
+   const graphmlText=await fs.readFile(await graphmlDownload.path(),'utf8');
+   assert.match(graphmlText,/<graphml/);assert.match(graphmlText,/>handover</);assert.match(graphmlText,/>Resource 01</);
+   assert.doesNotMatch(graphmlText,/>(ann|bob|bot)</);
+   await page.locator('#owgEventLogOrgResults').getByText(/Resources are pseudonymous in the file/).waitFor();
    await page.locator('#owgEventLogOrgNames').check();await page.locator('#owgEventLogOrgRun').click();
    await page.locator('#owgEventLogOrgResults').getByText('bot',{exact:true}).first().waitFor();
    const relationship=page.locator('#owgEventLogOrgCaseReview');
