@@ -145,7 +145,8 @@ def build_runtime_project(packet: dict) -> bytes:
         example['decision_table_checks'] = [dict(table_id=t.id, source_type=None, resource_ref_pointer=None,
             mode='first_route_before_each_action' if t.hit_policy=='FIRST' else 'unique_route_before_each_action', record_semantics_reviewed=False,
             non_atomic_reads_reviewed=False, utc_effective_dates_reviewed=False,
-            **({'row_precedence_reviewed':False} if t.hit_policy=='FIRST' else {})) for t in model.decision_tables]
+            **({'row_precedence_reviewed':False} if t.hit_policy=='FIRST' else {}),
+            **({'dependency_semantics_reviewed':False} if t.required_decisions else {})) for t in model.decision_tables]
         files['tool-bindings.example.json'] = json.dumps(example, indent=2) + '\n'
     files['customer-intent.example.json'] = json.dumps({
         'format':'openworkgraph.customer-execution-intent.v1', 'process_reference':process_reference,
@@ -456,6 +457,16 @@ def build_runtime_project(packet: dict) -> bytes:
         "1 means failed, and 2 means verification refused. This is not an OS sandbox,\n"
         "independent business-case validation, remote deployment attestation or execution approval.\n"
     )
+    if any(t.required_decisions for t in model.decision_tables):
+        files['README.md'] += (
+            "\n## Current-source dependent decision runtime\n\n"
+            "Review every prerequisite table and its exact observed-record binding, even if its decision activity "
+            "is not visited by the chosen route. Dependent bindings require dependency_semantics_reviewed true. "
+            "The runtime injects selected prerequisite target IDs only at the declared non-source fact paths; "
+            "caller and model values cannot supply those outputs. Before each action and at completion, "
+            "the entire required closure is read and evaluated in dependency order with a single UTC check clock. "
+            "Missing, stale, ambiguous or disagreeing decisions stop further actions. Reads are not atomic.\n"
+        )
     files['verify_release.py'] = Path(release_integrity.__file__).read_text(encoding='utf-8')
     files['release-manifest.json'] = create_manifest(files, spec)
     memory = BytesIO()
