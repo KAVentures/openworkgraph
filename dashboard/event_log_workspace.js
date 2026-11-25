@@ -10701,7 +10701,7 @@
 
   function predictionSpec(values){
     const ends=values.ends;
-    if(!ends.length)throw new Error('List the activities that end a case.');
+    if(!Array.isArray(ends)||!ends.length||ends.length>20||ends.some(label=>typeof label!=='string'||!label.length||label.length>200))throw new Error('List the activities that end a case.');
     const spec={end_activities:ends,limit:50};
     if(values.outcome==='duration_over'){const h=Number(values.hours);if(!(h>0))throw new Error('Enter the hours for the outcome.');spec.outcome={kind:'duration_over',seconds:Math.round(h*3600)};}
     if(values.outcome==='contains_activity'){if(!values.activity)throw new Error('Choose the outcome activity.');spec.outcome={kind:'contains_activity',activity:values.activity};}
