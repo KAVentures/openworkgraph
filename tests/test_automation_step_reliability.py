@@ -61,3 +61,42 @@ def test_empty_and_budget(monkeypatch):
     monkeypatch.setattr(reliability,"MAX_STEP_IDS",1)
     with pytest.raises(m.MonitoringError,match="distinct"):
         reliability.review(d,args(None))
+
+
+def test_step_run_filters_preserve_exact_population_and_page_counts():
+    d=imported([
+        run("a",steps=[("x","X","failed"),("x","X","completed")]),
+        run("b",steps=[("y","Y","failed"),("x","X","handed_to_human")]),
+        run("c","succeeded",[("x","X","completed")]),
+        run("d",steps=[("x","X","failed")])],"a"*64)
+    r=reliability.review(d,args())
+    pin=r["population_sha256"]
+    base=args(step_id="x",expected_population_sha256=pin)
+    expected={"all":["a","b","c","d"],"issue":["a","b","d"],"failed":["a","d"],
+              "handoff":["b"],"first_issue":["a","d"],"mixed_status":["a"]}
+    for kind,ids in expected.items():
+        result=reliability.review(d,{**base,"run_filter":kind,"limit":1})
+        seen=[]
+        while True:
+            assert result["population_sha256"]==pin
+            assert result["selected_step"]["runs_with_step"]==4
+            page=result["page"]
+            assert page["run_filter"]==kind and page["matching"]==len(ids)
+            seen.extend(x["reference"]["run_id"] for x in page["rows"])
+            if page["next_offset"] is None:break
+            result=reliability.review(d,{**base,"run_filter":kind,"limit":1,"offset":page["next_offset"]})
+        assert seen==ids
+    with pytest.raises(m.MonitoringError,match="select a reviewed step"):
+        reliability.review(d,args(run_filter="issue"))
+    with pytest.raises(m.MonitoringError):
+        reliability.review(d,{**base,"run_filter":"arbitrary"})
+
+
+def test_step_filter_empty_subset_is_not_missing_step():
+    d=imported([run("a","succeeded",[("x","X","completed")])],"a"*64)
+    r=reliability.review(d,args())
+    page=reliability.review(d,args(step_id="x",run_filter="failed",
+                          expected_population_sha256=r["population_sha256"]))
+    assert page["selected_step"]["runs_with_step"]==1
+    assert page["page"]["matching"]==0 and page["page"]["rows"]==[]
+    assert page["page"]["next_offset"] is None

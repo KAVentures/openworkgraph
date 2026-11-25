@@ -1,5 +1,6 @@
 """Version-scoped step reliability on retained reports, not live execution."""
 from datetime import datetime,timedelta
+from typing import Literal
 from pydantic import BaseModel,ConfigDict,Field
 from . import automation_monitoring as m
 from . import automation_run_evidence as e
@@ -16,12 +17,15 @@ class Request(BaseModel):
     end_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     expected_population_sha256: str | None = Field(default=None,pattern=e.HASH_PATTERN)
     step_id: str | None = Field(default=None,pattern=e.ID_PATTERN)
+    run_filter: Literal["all","issue","failed","handoff","first_issue","mixed_status"] = "all"
     offset: int = Field(default=0,ge=0,le=e.MAX_MATCHING_RUNS)
     limit: int = Field(default=30,ge=1,le=100)
 
 
 def review(deployment_id,spec):
     s=e._parse(Request,spec)
+    if s.step_id is None and s.run_filter!="all":
+        raise m.MonitoringError("select a reviewed step before filtering runs")
     if (s.offset or s.step_id is not None) and not s.expected_population_sha256:
         raise m.MonitoringError("review the population before requesting step evidence")
     try:
@@ -47,6 +51,8 @@ def review(deployment_id,spec):
             distinct=conn.execute("SELECT count(DISTINCT s.step_id) "+scope).fetchone()[0]
             if distinct>MAX_STEP_IDS:
                 raise m.MonitoringError("too many distinct step IDs; narrow the review window")
+            if conn.execute("SELECT 1 "+scope+" WHERE s.status NOT IN ('completed','failed','skipped','handed_to_human') LIMIT 1").fetchone():
+                raise m.MonitoringError("unsupported retained step status")
             if conn.execute("SELECT 1 "+scope+" GROUP BY s.run_id HAVING count(*)>? OR count(*)<>count(DISTINCT s.seq) LIMIT 1",[m.MAX_STEPS_PER_RUN]).fetchone():
                 raise m.MonitoringError("retained step index is ambiguous or oversized")
             run_hash=_set_digest(conn,"""SELECT sha256(to_json(struct_pack(
@@ -118,9 +124,14 @@ def review(deployment_id,spec):
                 selected=next((g for g in groups if g["step_id"]==s.step_id),None)
                 if selected is None:
                     raise m.MonitoringError("select a step ID from the reviewed population")
+                predicate={"all":"TRUE","issue":"(r.failed>0 OR r.handoff>0)",
+                           "failed":"r.failed>0","handoff":"r.handoff>0",
+                           "first_issue":"r.first_issue IS TRUE","mixed_status":"r.states>1"}[s.run_filter]
+                matching=conn.execute("SELECT count(*) FROM run_step r WHERE r.step_id=? AND "+predicate,
+                                      [s.step_id]).fetchone()[0]
                 rows=conn.execute("""SELECT r.run_id,r.occurrences,r.completed,r.failed,r.skipped,r.handoff,
                     r.first_issue FROM run_step r JOIN selected_runs p ON p.run_id=r.run_id
-                    WHERE r.step_id=? ORDER BY p.started_at DESC,r.run_id LIMIT ? OFFSET ?""",
+                    WHERE r.step_id=? AND """+predicate+" ORDER BY p.started_at DESC,r.run_id LIMIT ? OFFSET ?",
                     [s.step_id,s.limit,s.offset]).fetchall()
                 evidence=[]
                 for rid,occ,done,failed,skipped,handoff,first in rows:
@@ -131,8 +142,8 @@ def review(deployment_id,spec):
                         "first_reported_issue":bool(first),
                         "matching_step_occurrences":[x for x in item["run"]["steps"] if x["step_id"]==s.step_id]})
                 result["selected_step"]=selected
-                result["page"]={"kind":"step_runs","matching":selected["runs_with_step"],"offset":s.offset,"rows":evidence,
-                    "next_offset":s.offset+len(evidence) if evidence and s.offset+len(evidence)<selected["runs_with_step"] else None}
+                result["page"]={"kind":"step_runs","run_filter":s.run_filter,"matching":matching,"offset":s.offset,"rows":evidence,
+                    "next_offset":s.offset+len(evidence) if evidence and s.offset+len(evidence)<matching else None}
             return result
         finally:
             conn.close()

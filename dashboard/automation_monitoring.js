@@ -419,13 +419,13 @@
       for(const c of [start,end,spec,unknown])c.addEventListener('input',clear);
       unknown.onchange=()=>{spec.disabled=unknown.checked;clear();};
       const endpoint='/v1/automation-monitoring/deployments/'+encodeURIComponent(dep)+'/step-reliability';
-      async function load(offset=0,step=null){
+      async function load(offset=0,step=null,runFilter='all'){
         const t=++turn,current=()=>active()&&t===turn,previous=basis;
         if(!previous)return;
         run.disabled=true;out.replaceChildren();message.textContent='Reviewing exact retained run and step evidence…';
         try{
           const r=await api(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-            ...previous.settings,offset,limit:30,...(step!==null?{step_id:step}:{}),
+            ...previous.settings,offset,limit:30,...(step!==null?{step_id:step,run_filter:runFilter}:{}),
             ...(previous.pin?{expected_population_sha256:previous.pin}:{})})});
           if(!current())return;
           if(previous.pin&&r.population_sha256!==previous.pin)throw Error('Unexpected evidence population.');
@@ -440,14 +440,19 @@
             parts.push(grid);
           }else{
             const back=button('Return to step groups','secondary');back.onclick=()=>load(0,null);
-            parts.push(back,el('h4','Exact step ID: '+step),el('p',r.selected_step.runs_with_failed_and_completed_occurrences+' runs contain both failed and completed occurrences.'));
+            const filter=el('select');filter.id='owgStepReliabilityRunFilter';
+            setOptions(filter,[['all','All containing runs'],['issue','Failed or handed off'],['failed','Failed occurrence'],
+              ['handoff','Human handoff'],['first_issue','First reported issue'],['mixed_status','Mixed reported statuses']]);
+            filter.value=p.run_filter;filter.onchange=()=>load(0,step,filter.value);
+            parts.push(back,el('h4','Exact step ID: '+step),field('Filter matching runs',filter),
+              el('p',r.selected_step.runs_with_failed_and_completed_occurrences+' runs contain both failed and completed occurrences.'));
             for(const row of p.rows){const detail=el('details');detail.append(el('summary',row.reference.run_id+' · '+row.run_status+' · '+row.started_at),
                 el('p','Exact report SHA-256 '+row.reference.run_sha256),
                 table(['Sequence','Activity','Reported status','UTC'],row.matching_step_occurrences.map(x=>[x.seq,x.activity,x.status,x.at])));parts.push(detail);}
           }
           const prev=button('Previous evidence page','secondary'),next=button('Next evidence page','secondary');
           prev.disabled=p.offset===0;next.disabled=p.next_offset===null;
-          prev.onclick=()=>load(Math.max(0,p.offset-30),step);next.onclick=()=>load(p.next_offset,step);
+          prev.onclick=()=>load(Math.max(0,p.offset-30),step,runFilter);next.onclick=()=>load(p.next_offset,step,runFilter);
           const download=button('Download current review page JSON','secondary');download.onclick=()=>{
             if(!current())return;
             const url=URL.createObjectURL(new Blob([JSON.stringify(r,null,2)],{type:'application/json'}));

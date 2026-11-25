@@ -103,3 +103,10 @@ No provider calls, live execution checks, additional retention or authority.
 Dashboard-only authorization and no-store headers apply. Dashboard includes
 pagination, per-step evidence and current-page JSON export. Native and
 browser acceptance remain outstanding.
+
+Step-run evidence supports run_filter=all, issue, failed, handoff,
+first_issue or mixed_status after selecting an exact step ID. Filters
+operate on retained run/step groups, not individual occurrence counts.
+Page totals reflect the filtered runs while the selected step summary
+and population pin still describe the entire reviewed version cohort.
+No-match filters return an empty page, not a missing-step error.
