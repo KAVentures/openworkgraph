@@ -55,7 +55,7 @@ def _process_row(ordinal, result):
         "manual_review_conditions": result["retained_manual_review_condition_count"],
         "responsibility_labels": result["retained_responsibility_label_count"],
         "business_rules": len(model["business_rules"]),
-        "decision_tables": len(model["decision_tables"]),
+        "decision_tables": len(model.get("decision_tables", [])),
         "activities": len(model["activities"]),
         "transitions": len(model["transitions"]),
     }
