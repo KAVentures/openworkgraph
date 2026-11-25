@@ -10,7 +10,12 @@ UNIQUE_RUNTIME_CONTRACT='openworkgraph.current-source-unique-decision.v1'
 ORDERED_RUNTIME_CONTRACT='openworkgraph.current-source-ordered-decision.v1'
 
 
+DEPENDENT_RUNTIME_CONTRACT='openworkgraph.current-source-dependent-decision.v1'
+
+
 def runtime_contract(model):
+    if any(t.required_decisions for t in model.decision_tables):
+        return DEPENDENT_RUNTIME_CONTRACT
     return ORDERED_RUNTIME_CONTRACT if any(t.hit_policy=='FIRST' for t in model.decision_tables) else UNIQUE_RUNTIME_CONTRACT
 
 
