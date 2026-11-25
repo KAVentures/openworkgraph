@@ -1,0 +1,157 @@
+"""Rehearse reviewed routes and customer mappings without invoking any tools."""
+from __future__ import annotations
+
+import argparse
+from collections import Counter
+import json
+import math
+import sys
+from pathlib import Path
+
+from configure import validate_catalog, write_new
+from evaluate import validate_suite
+from execute import ImplementationError, digest, endpoint, load_object, prepare, reference
+from runtime import load_spec
+
+FORMAT = "openworkgraph.offline-binding-rehearsal.v1"
+MAX_INPUT_BYTES = 262144
+MAX_REPORT_BYTES = 4 * 1024 * 1024
+
+
+def _type_matches(value, kind):
+    if kind == "unknown":
+        return None
+    if kind == "integer":
+        return type(value) is int or (type(value) is float and math.isfinite(value) and value.is_integer())
+    if kind == "number":
+        return type(value) is int or (type(value) is float and math.isfinite(value))
+    return type(value) is {"string":str,"boolean":bool,"object":dict,"array":list,"null":type(None)}[kind]
+
+
+def _check_tool(tool_request, tools, role):
+    tool = tools.get(tool_request["tool_name"])
+    problems = []
+    if tool is None:
+        return {"role":role,"status":"blocked","issues":["tool_not_in_inspected_catalog"]}
+    expected = tool_request.get("tool_schema_sha256")
+    if expected is None:
+        problems.append("schema_pin_missing")
+    elif expected != tool["input_schema_sha256"]:
+        problems.append("schema_pin_mismatch")
+    fields = {f["name"]:f for f in tool["input_fields"]}
+    args = tool_request["arguments"]
+    if any(f["required"] and name not in args for name,f in fields.items()):
+        problems.append("required_argument_missing")
+    # The catalog intentionally omits additionalProperties and nested constraints.
+    # Extra names are unreviewable in this projection, not necessarily invalid.
+    unknown_names = set(args)-fields.keys()
+    if unknown_names:
+        problems.append("argument_not_in_metadata_projection")
+    known_types = []
+    for name in sorted(set(args)&fields.keys()):
+        known_types.append(_type_matches(args[name],fields[name]["type"]))
+    if False in known_types:
+        problems.append("argument_type_mismatch")
+    if None in known_types:
+        problems.append("argument_type_unknown")
+    return {"role":role,"status":"blocked" if problems else "metadata_checks_match",
+            "issues":problems}
+
+
+def rehearse(spec,suite,bindings,catalog):
+    validate_catalog(spec,catalog)
+    cases=validate_suite(spec,suite,allow_current_source_rules=True)
+    if not isinstance(bindings,dict) or bindings.get("format")!="openworkgraph.customer-mcp-bindings.v1" or digest(bindings.get("process_reference"))!=digest(reference(spec)):
+        raise ImplementationError("Bindings must identify the exact specification")
+    if endpoint(bindings.get("tool_server_url")) != endpoint(catalog["tool_server_url"]):
+        raise ImplementationError("The inspected catalog belongs to a different configured tool endpoint")
+    tools={t["name"]:t for t in catalog["tools"]}
+    model=spec["process_model"]
+    declared={a["id"] for a in model["activities"] if a["kind"]=="activity"}
+    covered=set()
+    counts=Counter()
+    requirements=Counter()
+    rows=[]
+    for case in cases:
+        routes=case["expected"]["accepted_routes"]
+        if not routes:
+            counts["clarification_only_cases"]+=1
+            rows.append({"case_id":case["id"],"category":case["category"],"status":"clarification_not_rehearsed","routes":[]})
+            continue
+        route_rows=[]
+        for i,route in enumerate(routes):
+            covered.update(set(route)&declared)
+            plan={"revision":spec["revision"],"content_sha256":spec["content_sha256"],
+                  "status":"proposal","activity_ids":route}
+            counts["reviewed_routes"]+=1
+            try:
+                prepared=prepare(spec,plan,case["input"],bindings)
+            except (ValueError,TypeError,KeyError,IndexError):
+                # Never repeat exception strings: they can contain customer values.
+                counts["blocked_routes"]+=1
+                requirements["offline_prepare_rejected"]+=1
+                route_rows.append({"route_index":i,"status":"blocked","requirements":["offline_prepare_rejected"],"actions":[]})
+                continue
+            issues=set(prepared["requirements"])
+            actions=[]
+            for action in prepared["actions"]:
+                checks=[_check_tool(action,tools,"action")]
+                if action["precondition"] is not None:
+                    checks.append(_check_tool(action["precondition"],tools,"precondition"))
+                actions.append({"activity_id":action["activity_id"],"checks":checks})
+                for check in checks:
+                    issues.update(check["issues"])
+            # Human approvals and live source predicates are deliberately not
+            # simulated or accepted by this offline command.
+            deferred={"human_activity_count":len(prepared["human_activity_ids"]),
+                "manual_condition_count":len(prepared["manual_condition_ids"]),
+                "source_rule_count":len(prepared["source_rules"]),
+                "decision_table_count":len(prepared.get("decision_tables",[])),
+                "terminal_source_check_count":len(prepared["outcomes"])}
+            counts["blocked_routes" if issues else "offline_checks_match_routes"]+=1
+            requirements.update(issues)
+            route_rows.append({"route_index":i,"status":"blocked" if issues else "offline_checks_match",
+                "requirements":sorted(issues),"actions":actions,"deferred_live_checks":deferred})
+        status="all_reviewed_routes_match" if all(r["status"]=="offline_checks_match" for r in route_rows) else "blocked"
+        counts["blocked_cases" if status=="blocked" else "offline_checks_match_cases"]+=1
+        rows.append({"case_id":case["id"],"category":case["category"],"status":status,"routes":route_rows})
+    return {"format":FORMAT,"process_reference":reference(spec),"spec_sha256":digest(spec),
+        "suite_sha256":digest(suite),"bindings_sha256":digest(bindings),"catalog_sha256":digest(catalog),
+        "catalog_inspected_at":catalog["inspected_at"],"omitted_catalog_tools":catalog.get("omitted_tool_count"),
+        "case_count":len(cases),"counts":dict(sorted(counts.items())),
+        "requirement_route_counts":dict(sorted(requirements.items())),
+        "activity_ids_in_reviewed_routes":sorted(covered),"activity_ids_without_reviewed_route":sorted(declared-covered),
+        "cases":rows,"full_json_schema_validated":False,"current_tool_availability_verified":False,
+        "case_values_returned":False,"source_reads_performed":False,"business_tools_called":False,
+        "execution_authorized":False,"business_outcomes_verified":False,
+        "interpretation":"Offline preparation and top-level inspected metadata checks only. A matching route is not approved for execution. Full tool schemas, current availability, service-side authorization, human work, source facts, and business outcomes remain unverified. Clarification-only cases are not rehearsed."}
+
+
+def main(argv=None):
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--cases",required=True)
+    parser.add_argument("--bindings",required=True)
+    parser.add_argument("--catalog",required=True)
+    parser.add_argument("--output",required=True)
+    parser.add_argument("--confirm-local-case-review",action="store_true")
+    args=parser.parse_args(argv)
+    if not args.confirm_local_case_review:
+        print("Explicit local case review is required.",file=sys.stderr)
+        return 2
+    try:
+        report=rehearse(load_spec(),load_object(Path(args.cases),MAX_INPUT_BYTES),
+            load_object(Path(args.bindings),MAX_INPUT_BYTES),load_object(Path(args.catalog),MAX_INPUT_BYTES))
+        write_new(Path(args.output),report,limit=MAX_REPORT_BYTES)
+    except (ValueError,OSError,TypeError,KeyError):
+        print("Offline rehearsal refused; check pinned inputs, fresh catalog and output path.",file=sys.stderr)
+        return 2
+    print(json.dumps(report["counts"],sort_keys=True))
+    if report["counts"].get("blocked_routes",0):
+        return 1
+    if not report["counts"].get("reviewed_routes") or report["counts"].get("clarification_only_cases",0) or report["activity_ids_without_reviewed_route"]:
+        return 3
+    return 0
+
+
+if __name__=="__main__":
+    raise SystemExit(main())
