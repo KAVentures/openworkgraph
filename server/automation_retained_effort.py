@@ -109,7 +109,7 @@ def preview(idea_id,value):
     hi=datetime.combine(end+timedelta(days=1),datetime.min.time())
     settings=spec.model_dump(exclude={"expected_preview"})
     digest=sha256()
-    _hash(digest,{"idea_id":idea_id,"settings":settings})
+    _hash(digest,{"idea_id":idea_id,"settings":{k:v for k,v in settings.items() if k!="expected_revision"}})
     totals={"started_cases":0,"complete_cases":0,"incomplete_cases":0,
         "cases_without_effort_activity":0,"effort_events":0,"missing_effort_events":0,
         "invalid_effort_events":0,"shared_effort_events":0}
@@ -183,6 +183,9 @@ def preview(idea_id,value):
     if hours>Decimal(10_000_000):
         blockers.append("effort_total_exceeds_measurement_bound")
     token=digest.hexdigest()
+    note=json.dumps({"format":FORMAT,"settings":settings,"log_revision":revision},ensure_ascii=False,separators=(",",":"))
+    if len(note)>1000:
+        blockers.append("provenance_note_bound")
     return {"format":FORMAT,"idea_id":idea_id,"settings":settings,"log_revision":revision,
         "counts":totals,"preview_sha256":token,"blockers":blockers,"recordable":not blockers,
         "total_hours":float(hours) if not blockers else None,
@@ -209,8 +212,11 @@ def record(idea_id,value):
         with benefits._LOCK:
             with closing(benefits._connect()) as conn:
                 rows=conn.execute("SELECT body FROM idea_measurements WHERE idea_id=?",[idea_id]).fetchall()
-            if any(json.loads(body).get("source_reference")==result["source_reference"] for (body,) in rows):
+            existing=[json.loads(body) for (body,) in rows]
+            if any(row.get("source_reference")==result["source_reference"] for row in existing):
                 raise benefits.BenefitError("this exact retained effort measurement is already recorded")
+            if any(row["start"]<=spec.end and row["end"]>=spec.start for row in existing):
+                raise benefits.BenefitError("measurement overlaps an existing retained period; reconcile before recording")
             note=json.dumps({"format":FORMAT,"settings":result["settings"],"log_revision":result["log_revision"]},
                             ensure_ascii=False,separators=(",",":"))
             if len(note)>1000:
