@@ -84,7 +84,8 @@ file.
 
 ISO 8601 times (`2024-03-04T14:05:00Z`, `2024-03-04 14:05:00+01:00`) need no
 setting. For other layouts, such as `13/03/2024 14:05`, `04.03.2024 14:05:00`
-or `04-MAR-24 02.05.00 PM`, declare the format of the timestamp column as a
+`04-MAR-24 02.05.00 PM` or `04.03.2024 14:05:00,123` (fractional seconds after a comma or a point are
+recognised too), declare the format of the timestamp column as a
 strptime pattern ("Timestamp format" in the CSV mapping, `timestamp_format=` in
 the API). Patterns may use `%d %m %Y %y %H %I %M %S %f %p %b %B %z`, with
 spaces and `/ . - : , T` between them. They need a year, a month and a day,

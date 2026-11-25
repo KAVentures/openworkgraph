@@ -145,3 +145,16 @@ print("ok")
     done = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1], env=env,
                           capture_output=True, text=True, timeout=120)
     assert done.returncode == 0 and done.stdout.strip().endswith("ok"), f"stdout={done.stdout}\nstderr={done.stderr}"
+
+
+@pytest.mark.parametrize("pattern,value,expected", [
+    ("%d.%m.%Y %H:%M:%S,%f", "04.03.2024 14:05:00,123", "2024-03-04T14:05:00.123000+00:00"),
+    ("%d-%m-%Y %H:%M:%S.%f", "13-03-2024 14:05:00.5", "2024-03-13T14:05:00.500000+00:00"),
+    ("%d/%m/%Y %H:%M:%S.%f", "13/03/2024 14:05:00.250", "2024-03-13T14:05:00.250000+00:00"),
+    ("%m/%d/%Y %H:%M:%S.%f", "03/13/2024 14:05:00.250", "2024-03-13T14:05:00.250000+00:00"),
+])
+def test_fractional_second_layouts_are_detected_and_keep_the_fraction(pattern, value, expected):
+    assert formats.detect([value])["suggested"] == pattern
+    result = _import([f"c1,A,{value}" if "," not in value else f'c1,A,"{value}"'],
+                     timestamp_format=pattern, naive_timestamp_offset="Z")
+    assert [e["timestamp"].isoformat() for _, evs in workspace.case_events(result["log_id"]) for e in evs] == [expected]
