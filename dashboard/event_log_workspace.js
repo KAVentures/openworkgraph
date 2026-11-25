@@ -256,7 +256,7 @@
     card.append(row,mapping,identity,previewPanel,consentLabel,keepLabel,importRow,statusLine,saveMessage,storageRow,storageList);
 
     const pick=select('owgEventLogPick',[]);const caseType=select('owgEventLogCaseType',[]);
-    const exportFormat=select('owgEventLogExportFormat',[['csv','CSV (exact interchange)'],['csv-review','CSV for spreadsheet review'],['sourcecsv','Source-ID CSV (exact interchange)'],['sourcecsv-review','Source-ID CSV for spreadsheet review'],['jsonl','JSON Lines'],['xes','XES'],['xes-attributes','XES with retained attributes'],['ocel','OCEL 2.0 JSON'],['ocelxml','OCEL 2.0 XML']]);
+    const exportFormat=select('owgEventLogExportFormat',[['csv','CSV (exact interchange)'],['csv-attributes','CSV with retained event attributes'],['csv-review','CSV for spreadsheet review'],['sourcecsv','Source-ID CSV (exact interchange)'],['sourcecsv-review','Source-ID CSV for spreadsheet review'],['jsonl','JSON Lines'],['xes','XES'],['xes-attributes','XES with retained attributes'],['ocel','OCEL 2.0 JSON'],['ocelxml','OCEL 2.0 XML']]);
     const analyze=button('Analyse');analyze.id='owgEventLogAnalyze';
     const exportButton=button('Export','secondary');exportButton.id='owgEventLogExport';
     const remove=button('Delete log','secondary');remove.id='owgEventLogDelete';
@@ -622,7 +622,7 @@
     caseType.onchange=()=>{state.generation++;state.caseType=caseType.value;state.follows=[];state.attr={};state.caseActivity='';results.replaceChildren();};
     analyze.onclick=()=>analyse().catch(error=>status(error.message));
     const relationshipExportNote=()=>{const log=state.logs.find(l=>l.log_id===state.logId);return log&&log.object_relationships&&!['ocel','ocelxml','ocelsqlite'].includes(exportFormat.value)?' This format omits supplied object relationships; OCEL JSON/XML preserve the retained assertions.':'';};
-    exportFormat.onchange=()=>{const note=relationshipExportNote();const review=exportFormat.value.endsWith('-review')?'Review CSV changes formula-like text and column names; use the regular export for re-import.':'';const attributes=exportFormat.value==='xes-attributes'?'Includes retained trace and event attribute values in the download.':'';if(review||attributes||note)status((review+attributes+note).trim());};
+    exportFormat.onchange=()=>{const note=relationshipExportNote();const review=exportFormat.value.endsWith('-review')?'Review CSV changes formula-like text and column names; use the regular export for re-import.':'';const attributes=exportFormat.value==='xes-attributes'?'Includes retained trace and event attribute values in the download.':exportFormat.value==='csv-attributes'?'Includes one column per retained event attribute in the download.':'';if(review||attributes||note)status((review+attributes+note).trim());};
     {const option=document.createElement('option');option.value='ocelsqlite';option.textContent='OCEL 2.0 SQLite';exportFormat.appendChild(option);}
     {const option=document.createElement('option');option.value='xlsx';option.textContent='Excel workbook (.xlsx)';exportFormat.appendChild(option);}
     {const option=document.createElement('option');option.value='parquet';option.textContent='Apache Parquet (typed columns)';exportFormat.appendChild(option);}
@@ -631,7 +631,7 @@
         status('Preparing export…');
         const response=await api(exportFormat.value==='ocelsqlite'?logPath('ocel.sqlite',{}):exportFormat.value==='xlsx'?logPath('events.xlsx',{}):exportFormat.value==='parquet'?logPath('events.parquet',{}):logPath('export',{format:exportFormat.value}));
         const url=URL.createObjectURL(await response.blob());
-        const link=el('a');link.href=url;link.download=state.logId+'.'+({sourcecsv:'csv','csv-review':'review.csv','sourcecsv-review':'review.csv','xes-attributes':'xes',ocel:'jsonocel',ocelxml:'xmlocel',ocelsqlite:'ocel.sqlite'}[exportFormat.value]||exportFormat.value);
+        const link=el('a');link.href=url;link.download=state.logId+'.'+({'csv-attributes':'csv',sourcecsv:'csv','csv-review':'review.csv','sourcecsv-review':'review.csv','xes-attributes':'xes',ocel:'jsonocel',ocelxml:'xmlocel',ocelsqlite:'ocel.sqlite'}[exportFormat.value]||exportFormat.value);
         document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
         status('Export ready.'+relationshipExportNote());
       }catch(error){status(error.message);}
@@ -995,7 +995,7 @@
     const run=button('Save as new log','secondary');run.id='owgDeriveRun';
     const preview=button('Preview copy','secondary');
     const previewStatus=el('div',null,'muted');previewStatus.id='owgDerivePreview';previewStatus.setAttribute('role','status');
-    const formatOptions=[['csv','CSV (exact interchange)'],['csv-review','CSV for spreadsheet review'],
+    const formatOptions=[['csv','CSV (exact interchange)'],['csv-attributes','CSV with retained event attributes'],['csv-review','CSV for spreadsheet review'],
       ['xes','XES'],['xes-attributes','XES with retained attributes'],['ocel','OCEL 2.0 JSON'],['ocelxml','OCEL 2.0 XML'],
       ['xlsx','Excel workbook'],['jsonl','JSON Lines']];
     if(current?.source_identity&&state.caseType==='source_case'){
@@ -1007,6 +1007,7 @@
     function describeFormat(){
       formatNote.textContent={
         'csv':'Includes case IDs, activity names, timestamps and resources.',
+        'csv-attributes':'Also includes one column per retained event attribute, such as extra columns kept at import.',
         'csv-review':'Changes formula-like cells for spreadsheet review. Use exact CSV for re-import.',
         'sourcecsv':'Includes supplied event IDs, namespaces, raw case keys and retained event attributes for re-import.',
         'sourcecsv-review':'Includes supplied IDs and changes formula-like cells for spreadsheet review. Use exact Source-ID CSV for re-import.',

@@ -70,8 +70,8 @@ router = APIRouter()
 XLSX_MAX_BYTES = 64 * 1024 * 1024
 SQLITE_MAX_BYTES = 256 * 1024 * 1024
 _SCRIPT = Path(__file__).resolve().parents[1] / "dashboard" / "event_log_workspace.js"
-_TYPES = {"csv": "text/csv", "sourcecsv": "text/csv", "sourcecsv-review": "text/csv", "csv-review": "text/csv", "xes": "application/xml", "xes-attributes": "application/xml", "ocel": "application/json", "ocelxml": "application/xml", "jsonl": "application/x-ndjson"}
-_SUFFIX = {"csv": "csv", "sourcecsv": "csv", "sourcecsv-review": "review.csv", "csv-review": "review.csv", "xes": "xes", "xes-attributes": "xes", "ocel": "jsonocel", "ocelxml": "xmlocel", "jsonl": "jsonl"}
+_TYPES = {"csv": "text/csv", "sourcecsv": "text/csv", "sourcecsv-review": "text/csv", "csv-review": "text/csv", "xes": "application/xml", "xes-attributes": "application/xml", "ocel": "application/json", "ocelxml": "application/xml", "jsonl": "application/x-ndjson", "csv-attributes": "text/csv"}
+_SUFFIX = {"csv": "csv", "sourcecsv": "csv", "sourcecsv-review": "review.csv", "csv-review": "review.csv", "xes": "xes", "xes-attributes": "xes", "ocel": "jsonocel", "ocelxml": "xmlocel", "jsonl": "jsonl", "csv-attributes": "csv"}
 
 
 def _source_identity_mapping(
@@ -3460,7 +3460,7 @@ def export_event_log_parquet(request: Request, log_id: str, case_type: str | Non
 
 
 @router.get("/v1/event-logs/{log_id}/export")
-def export_event_log(request: Request, log_id: str, format: str = Query(pattern="^(csv|sourcecsv|csv-review|sourcecsv-review|jsonl|xes|xes-attributes|ocel|ocelxml)$"),
+def export_event_log(request: Request, log_id: str, format: str = Query(pattern="^(csv|csv-attributes|sourcecsv|csv-review|sourcecsv-review|jsonl|xes|xes-attributes|ocel|ocelxml)$"),
                      case_type: str | None = Query(default=None, max_length=200)):
     _require_dashboard(request)
     handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix="." + _SUFFIX[format],
