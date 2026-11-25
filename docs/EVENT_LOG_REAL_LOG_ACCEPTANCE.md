@@ -64,6 +64,8 @@ move, 0 for synchronous and silent moves). There were no mismatches on either ne
 The directly-follows graph also matches. On BPI Challenge 2017 (1.2M events), the process map's 178
 directly-follows counts and its start and end activity counts equal PM4Py's `discover_dfg`. This is
 on the same events, ordered by time and then by OWG's event order for ties.
+Variants match too: 15,930 distinct variants in both, with identical case counts for the 200
+most frequent.
 
 OWG replays the 2,000 most frequent variants (10,721 of 13,087 cases, disclosed as
 `cases_excluded`); PM4Py replays every case, which explains the small precision and share
