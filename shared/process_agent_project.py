@@ -106,7 +106,7 @@ def build_runtime_project(packet: dict) -> bytes:
     spec = build_runtime_spec(packet)
     model = ProcessModel.model_validate(spec['process_model'])
     files = {name: (_TEMPLATES / (name + '.txt')).read_text(encoding='utf-8')
-             for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'monitor.py', 'test_monitor.py', 'send_report.py', 'stop.py', 'configure.py', 'test_configuration.py', 'evaluate.py', 'test_evaluation.py', 'plan_sources.py', 'test_source_planning.py', 'evaluate_sources.py', 'test_source_evaluation.py', 'check_runtime.py', 'route_candidates.py')}
+             for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'monitor.py', 'test_monitor.py', 'send_report.py', 'stop.py', 'configure.py', 'test_configuration.py', 'evaluate.py', 'test_evaluation.py', 'plan_sources.py', 'test_source_planning.py', 'evaluate_sources.py', 'test_source_evaluation.py', 'check_runtime.py', 'route_candidates.py', 'review_facts.py')}
     files['owg_report_signing.py'] = (Path(__file__).parent/'automation_report_signing.py').read_text(encoding='utf-8')
     for name in ('process_source_state.py','process_rule_conditions.py'):
         files[name]=(Path(__file__).parent/name).read_text(encoding='utf-8')
@@ -480,6 +480,15 @@ def build_runtime_project(packet: dict) -> bytes:
         "and --confirm-model-rule-check-sharing to compare both planners on the same per-case receipt snapshot. "
         "Both modes require --confirm-source-reads, --cases, --bindings and --output. "
         "Paired disagreement and incomplete deterministic search remain explicit review findings.\n"
+    )
+    files['README.md'] += (
+        "\n## Offline declared-fact scenario review\n\n"
+        "Use a customer-reviewed shadow suite whose input objects contain hypothetical facts. "
+        "Run python review_facts.py --cases reviewed-cases.json --as-of-date YYYY-MM-DD "
+        "--output fact-review.json --confirm-declared-fact-review. "
+        "Checks include arbitrary supported predicates, effective dates and dependent decisions using the shared evaluators. "
+        "No network, source reads or model calls occur. The report is not an execution plan; "
+        "caller facts are not authoritative source evidence. Unresolved searches require review.\n"
     )
     files['verify_release.py'] = Path(release_integrity.__file__).read_text(encoding='utf-8')
     files['release-manifest.json'] = create_manifest(files, spec)
