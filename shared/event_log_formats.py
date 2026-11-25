@@ -297,10 +297,35 @@ def write_xes(cases: Iterable[tuple[str, list[dict[str, Any]]] |
 
 # ---------------------------------------------------------------- OCEL 2.0 JSON
 
-def _ocel_attributes(items: Any) -> dict[str, str]:
-    if not isinstance(items, list):
-        return {}
-    return _attributes((item.get("name"), item.get("value")) for item in items if isinstance(item, dict))
+# OCEL 2.0 has no resource field. PM4Py and the XES standard carry the performer as the event attribute
+# ``org:resource``; OWG reads it as the event's resource and writes the resource back the same way, so a
+# log keeps its resources through an OCEL export and import.
+OCEL_RESOURCE_ATTRIBUTE = "org:resource"
+
+
+def _ocel_resource(pairs: list[tuple[Any, Any]]) -> tuple[str, dict[str, str]]:
+    """The resource from an OCEL event's ``org:resource`` attribute, and its other attributes.
+
+    The resource is taken out before the attribute bound applies, so it never costs an attribute
+    slot. A value that is not a valid resource (not text, too long or with control characters)
+    stays an ordinary attribute, so reading resources never refuses a file that was readable before."""
+    for index, (name, value) in enumerate(pairs):
+        if _text(name, 80) != OCEL_RESOURCE_ATTRIBUTE:
+            continue
+        try:
+            resource = _exact_key(value)
+        except EventLogFormatError:
+            break
+        return resource, _attributes(pairs[:index] + pairs[index + 1:])
+    return "", _attributes(pairs)
+
+
+def _ocel_event_attributes(event: dict[str, Any]) -> list[tuple[str, str]]:
+    """An event's attributes for OCEL output, with its resource first as ``org:resource``."""
+    attributes = sorted((event.get("attributes") or {}).items())
+    if event.get("resource") and all(k != OCEL_RESOURCE_ATTRIBUTE for k, _ in attributes):
+        attributes.insert(0, (OCEL_RESOURCE_ATTRIBUTE, event["resource"]))
+    return attributes
 
 
 def _object_history(values: list[tuple[Any, Any, Any]], attributes: dict[str, str],
@@ -441,7 +466,9 @@ def read_ocel_json(stream: IO[bytes], *, stats: ReadStats | None = None) -> Iter
             if isinstance(link, dict) and _exact_key(link.get("objectId")) in types:
                 links.append((_exact_key(link.get("objectId")), _exact_key(link.get("qualifier"), 80)))
         stats.events += 1
-        yield EventRecord(event_id, activity, stamp, "", _ocel_attributes(item.get("attributes")), links)
+        items = item.get("attributes") if isinstance(item.get("attributes"), list) else []
+        resource, attributes = _ocel_resource([(a.get("name"), a.get("value")) for a in items if isinstance(a, dict)])
+        yield EventRecord(event_id, activity, stamp, resource, attributes, links)
 
 
 def write_ocel_json(objects: Iterable[dict[str, Any]], events: Iterable[dict[str, Any]], out: IO[str]) -> None:
@@ -455,17 +482,11 @@ def write_ocel_json(objects: Iterable[dict[str, Any]], events: Iterable[dict[str
                      "relationships": [{"objectId": target, "qualifier": qualifier}
                                        for target, qualifier in o.get("relationships", [])]} for o in objects],
         "events": [{"id": e["event_id"], "type": e["activity"], "time": _iso(e["timestamp"]),
-                    "attributes": [{"name": k, "value": v} for k, v in sorted((e.get("attributes") or {}).items())],
+                    "attributes": [{"name": k, "value": v} for k, v in _ocel_event_attributes(e)],
                     "relationships": [{"objectId": oid, "qualifier": q} for oid, q in e.get("objects") or []]}
                    for e in events],
     }
     json.dump(document, out, ensure_ascii=False)
-
-
-def _ocel_xml_attributes(element: ET.Element | None) -> dict[str, str]:
-    if element is None:
-        return {}
-    return _attributes((child.get("name"), child.text or "") for child in element if child.tag == "attribute")
 
 
 def read_ocel_xml(stream: IO[bytes], *, stats: ReadStats | None = None) -> Iterator[EventRecord | ObjectRecord]:
@@ -519,7 +540,10 @@ def read_ocel_xml(stream: IO[bytes], *, stats: ReadStats | None = None) -> Itera
                              for link in (related if related is not None else [])
                              if link.tag == "relationship" and _exact_key(link.get("object-id")) in types]
                     stats.events += 1
-                    yield EventRecord(event_id, activity, stamp, "", _ocel_xml_attributes(element.find("attributes")), links)
+                    found = element.find("attributes")
+                    resource, attributes = _ocel_resource([(c.get("name"), c.text or "") for c in
+                                                           (found if found is not None else []) if c.tag == "attribute"])
+                    yield EventRecord(event_id, activity, stamp, resource, attributes, links)
             if container is not None:
                 container.remove(element)
     except ET.ParseError:
@@ -559,7 +583,7 @@ def write_ocel_xml(objects: Iterable[dict[str, Any]], events: Iterable[dict[str,
     out.write("</objects>\n<events>\n")
     for e in events:
         out.write(f"<event id={quoteattr(e['event_id'])} type={quoteattr(e['activity'])} time={quoteattr(_iso(e['timestamp']))}><attributes>")
-        for key, value in sorted((e.get("attributes") or {}).items()):
+        for key, value in _ocel_event_attributes(e):
             out.write(f"<attribute name={quoteattr(key)}>{escape(value)}</attribute>")
         out.write("</attributes><objects>")
         for object_id, qualifier in e.get("objects") or []:

@@ -85,6 +85,22 @@ without limit; a damaged archive is refused. The dashboard picks the format from
 report's digests describe the decompressed bytes, so the same log compressed or not counts as the same
 file.
 
+### Resources in OCEL files
+
+OCEL 2.0 has no resource field. As in PM4Py and XES, an event's resource travels as its
+`org:resource` event attribute:
+
+- **Export:** OCEL JSON and XML write each event's resource as `org:resource`, listed first among
+  its attributes. Events without a resource have none.
+- **Import:** an `org:resource` attribute becomes the event's resource, so handover, role and
+  resource analyses work on OCEL logs from other tools. It is taken out of the event's other
+  attributes and does not count toward their limit.
+- **Invalid values:** a value that cannot be a resource (too long, or with control characters)
+  stays an ordinary attribute instead of refusing the file.
+
+A log therefore keeps its resources through an OCEL export and re-import. Logs imported before
+this change keep `org:resource` as an attribute until they are imported again.
+
 ### Timestamp formats
 
 ISO 8601 times (`2024-03-04T14:05:00Z`, `2024-03-04 14:05:00+01:00`) need no

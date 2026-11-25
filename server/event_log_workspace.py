@@ -1131,10 +1131,10 @@ def _ocel_export_projection(conn, log_id, *, matching=False):
             f"SELECT event_id, object_id, qualifier FROM event_objects WHERE log_id = ? {event_filter} ORDER BY 1, 2",
             [log_id]).fetchall():
         links.setdefault(event_id, []).append((object_id, qualifier))
-    events = [{"event_id": i, "activity": a, "timestamp": ts.replace(tzinfo=timezone.utc),
+    events = [{"event_id": i, "activity": a, "timestamp": ts.replace(tzinfo=timezone.utc), "resource": r or "",
                "attributes": json.loads(attr or "{}"), "objects": links.get(i, [])}
-              for i, a, ts, attr in conn.execute(
-                  "SELECT event_id, activity, ts, attributes FROM events WHERE log_id = ? "
+              for i, a, ts, r, attr in conn.execute(
+                  "SELECT event_id, activity, ts, resource, attributes FROM events WHERE log_id = ? "
                   f"{event_filter} ORDER BY ts, event_id", [log_id]).fetchall()]
     return objects, events
 

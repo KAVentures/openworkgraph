@@ -173,8 +173,9 @@ digest.
 - **Not validated against a source system:** the pack states assumptions about a typical order-to-cash process.
   It is not validated against any particular ERP (`source_system_validated: false`). A mapping is your assertion
   that the log's names mean the pack's roles.
-- **Segregation of duties** needs recorded resources. OCEL imports keep none, so those cases are reported as
-  unknown, never as satisfied.
+- **Segregation of duties** needs recorded resources. OCEL imports read them from each event's `org:resource`
+  attribute, as PM4Py writes them ([Resources in OCEL files](EVENT_LOG_WORKSPACE.md#resources-in-ocel-files)).
+  A case whose steps have no resource is reported as unknown, never as satisfied.
 - **What results mean:** results describe the log, not verified business outcomes, policy compliance or the
   source system's completeness.
 
