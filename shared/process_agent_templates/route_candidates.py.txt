@@ -4,7 +4,7 @@ No model, source reads, tool calls, policy approval or execution authorization.
 A route is proposed only when one supported schedule remains and the search
 has ruled out other unresolved or supported schedules within its full bounds.
 """
-from collections import Counter, deque
+from collections import deque
 from runtime import check_plan, validate_spec
 
 MAX_WORK=25000
@@ -85,7 +85,7 @@ def _search(spec,rule_checks,table_checks,*,max_work=MAX_WORK,max_states=MAX_STA
     start=(initial,(),frozenset())
     queue=deque([start]);seen={start}
     complete=True;limit_reasons=set();work=0;pruned=0
-    candidates={}
+    candidates={};replay_cache={}
     while queue and complete:
         marking,path,pending=queue.popleft()
         for ident,next_mark,indices,done in moves(marking):
@@ -102,22 +102,26 @@ def _search(spec,rule_checks,table_checks,*,max_work=MAX_WORK,max_states=MAX_STA
                 # The actual executor uses its conservative union of rule and
                 # table visits, so certify only that same structural contract.
                 if token:
-                    try:
-                        check=check_plan({'revision':spec['revision'],'content_sha256':spec['content_sha256'],
-                            'activity_ids':list(next_path)},spec)
-                    except ValueError:
-                        blocked|=frozenset({'structural_replay_unresolved'})
-                    else:
-                        for r in check.get('decision_table_routes',[]):
-                            row=table_status.get(r['table_id'],{})
-                            if row.get('status') not in SELECTED or not all(
-                                v==row.get('selected_target_activity_id') for v in r['target_activity_ids']):
-                                blocked|=frozenset({'decision_replay_unresolved:'+r['table_id']})
-                        for rid in check.get('non_table_structured_rule_ids',check.get('unevaluated_structured_rule_ids',[])):
-                            if rule_status.get(rid)!='matched':
-                                blocked|=frozenset({'structured_replay_unresolved:'+rid})
-                        for rid in check['unconfirmed_rule_ids']:
-                            blocked|=frozenset({'rule_unconfirmed:'+rid})
+                    if next_path not in replay_cache:
+                        replay_issues=set()
+                        try:
+                            check=check_plan({'revision':spec['revision'],'content_sha256':spec['content_sha256'],
+                                'activity_ids':list(next_path)},spec)
+                        except ValueError:
+                            replay_issues.add('structural_replay_unresolved')
+                        else:
+                            for r in check.get('decision_table_routes',[]):
+                                row=table_status.get(r['table_id'],{})
+                                if row.get('status') not in SELECTED or not all(
+                                    v==row.get('selected_target_activity_id') for v in r['target_activity_ids']):
+                                    replay_issues.add('decision_replay_unresolved:'+r['table_id'])
+                            for rid in check.get('non_table_structured_rule_ids',check.get('unevaluated_structured_rule_ids',[])):
+                                if rule_status.get(rid)!='matched':
+                                    replay_issues.add('structured_replay_unresolved:'+rid)
+                            for rid in check['unconfirmed_rule_ids']:
+                                replay_issues.add('rule_unconfirmed:'+rid)
+                        replay_cache[next_path]=frozenset(replay_issues)
+                    blocked|=replay_cache[next_path]
                 # For duplicate schedules, any unresolved history withholds a
                 # unique-supported claim; never cherry-pick a convenient replay.
                 candidates[next_path]=candidates.get(next_path,frozenset())|blocked
