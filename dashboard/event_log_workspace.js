@@ -4065,11 +4065,18 @@
           return text+(res.violating>shown.length?'; showing '+shown.length+' of '+res.violating+' retained violations':'');
         };
         const rows=r.results.map(res=>{
+          const absent=[['activity_in_log',res.rule.activity??res.rule.via_activity,'activity'],
+            ['required_activity_in_log',res.rule.required_activity,'required activity'],
+            ['object_type_in_log',res.rule.object_type,'object type'],['related_type_in_log',res.rule.related_type,'related object type']]
+            .filter(([key])=>res[key]===false).map(([,value,name])=>name+' '+JSON.stringify(value));
+          const description=el('div');description.appendChild(el('div',res.description));
+          if(absent.length)description.appendChild(el('div','Absent from this log · '+absent.join(', '),'muted'));
+          else if(res.complete&&res.activated===0)description.appendChild(el('div','No activated units; this does not establish compliance.','muted'));
           const open=button('Inspect violations','secondary');open.setAttribute('aria-label','Inspect violations for '+res.description);
           open.onclick=()=>inspect(turn,r,res);
-          return res.complete?[res.description,Number(res.activated).toLocaleString()+' '+unit[res.unit],Number(res.violating).toLocaleString(),
+          return res.complete?[description,Number(res.activated).toLocaleString()+' '+unit[res.unit],Number(res.violating).toLocaleString(),
           res.violation_rate===null?'—':pct(res.violation_rate)+(res.violation_rate_ci95?' ['+pct(res.violation_rate_ci95[0])+', '+pct(res.violation_rate_ci95[1])+']':' (retained set)'),
-          examples(res),res.violating?open:'']:[res.description,'—',unknown(res),'—','',''];
+          examples(res),res.violating?open:'']:[description,'—',unknown(res),'—','',''];
         });
         out.replaceChildren(el('div',r.rules_with_violations+' of '+r.results.length+' object rules have violations.','muted'),
           table(['Rule','Applies to','Violating','Violation rate (95% CI)','Examples','Evidence'],rows),el('div',r.interpretation,'muted'));
@@ -4093,7 +4100,7 @@
           const cell=el('div');
           cell.append(el('div',result.activated?number(result.violating)+' of '+number(result.activated)+' activated '+unit[result.unit]+' violate ('+pct(result.violation_rate)+')':'0 activated '+unit[result.unit]));
           const absent=[['activity','activity'],['object_type','object type'],['related_type','related type'],['required_activity','required activity']]
-            .filter(([key])=>result[key+'_in_log']===false).map(([key,name])=>name+' '+JSON.stringify(result.rule[key]));
+            .filter(([key])=>result[key+'_in_log']===false).map(([key,name])=>name+' '+JSON.stringify(key==='activity'?(result.rule.activity??result.rule.via_activity):result.rule[key]));
           if(absent.length)cell.append(el('div','Absent from this log · '+absent.join(', '),'muted'));
           if(result.violating){
             const open=button('Inspect violations','secondary');
