@@ -66,9 +66,21 @@ def _strict_net(data):
             raise EventLogWorkspaceError("PNML nesting is too deep")
         kind = local(element.tag)
         validated.add(element)
-        if kind in {"name", "graphics", "toolspecific", "initialMarking", "inscription"}:
-            if kind in {"graphics", "toolspecific"}:
-                return
+        if kind == "graphics":
+            return
+        if kind == "toolspecific":
+            # The generated ProM invisibility annotation changes the visible
+            # label only. Other vendor extensions might encode arc semantics
+            # or guards and are deliberately outside the supported subset.
+            if (parent != "transition" or list(element)
+                    or set(element.attrib) - {"tool", "version", "activity", "localNodeID"}
+                    or element.get("activity") != "$invisible$"):
+                raise EventLogWorkspaceError("unsupported tool-specific PNML extension")
+            return
+        if kind == "net" and set(element.attrib) - {"id", "type"}:
+            raise EventLogWorkspaceError("unsupported net attributes")
+        if kind == "page" and set(element.attrib) - {"id"}:
+            raise EventLogWorkspaceError("unsupported page attributes")
         if kind in {"place", "transition", "arc"} and parent != "marking":
             ident = element.get("id")
             if not ident or len(ident) > 200 or ident in ids:
@@ -110,6 +122,8 @@ def _strict_net(data):
     if len(set(refs)) != len(refs):
         raise EventLogWorkspaceError("duplicate final marking place")
     parsed = replay.parse_pnml(data)
+    if any(ref not in parsed["places"] for ref in refs):
+        raise EventLogWorkspaceError("final marking references an unknown place")
     if parsed["final_guessed"]:
         raise EventLogWorkspaceError("soundness requires a nonempty explicit final marking")
     return parsed
