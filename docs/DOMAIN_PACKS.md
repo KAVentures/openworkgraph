@@ -132,6 +132,12 @@ allows one optional review and does not model reopening. See [sales lead qualifi
 - [Expense reimbursement](EXPENSE_REIMBURSEMENT_DOMAIN_PACK.md): submitted claims, approval, recorded payment and optional checks.
 - [Employee onboarding and access readiness](EMPLOYEE_ONBOARDING_DOMAIN_PACK.md): observed access provisioning, start, optional training and access review. Version-pinned and read-only, not account provisioning.
 
+## Service governance packs
+
+[IT change control, customer complaint resolution and data access request operations](SERVICE_GOVERNANCE_DOMAIN_PACKS.md)
+provide versioned operational metrics, sequence and elapsed-time checks, and illustrative reference lifecycles.
+They are not legal compliance or authorization engines and require no new source access.
+
 ## Preview and test a configuration
 
 The [read-only domain-pack preflight](DOMAIN_PACK_PREFLIGHT.md) checks exact role mappings, definition changes and metric ownership conflicts, and trials the proposed definitions on bounded retained logs before installation. An optional preview token binds the subsequent install to the reviewed configuration and retained revision.

@@ -104,6 +104,122 @@ def test_stale_and_reviewed_alerts_are_suppressed_before_any_http(isolated, stat
     assert called == []
 
 
+def test_partial_stale_group_preserves_current_alerts_without_reusing_body_identity(isolated):
+    make()
+    notices.queue_current(LOG)
+    before = notices._read()["channels"][LOG]["pending"][0]
+    isolated[0]["status"] = "acknowledged"
+    isolated[0]["requires_review"] = False
+    called = []
+    result = notices.deliver_due(transport=lambda *args: called.append(args) or 200)
+    assert result["surviving_states_requeued"] == 1
+    assert not result["previous_delivery_may_have_arrived"]
+    assert not called
+    after = notices._read()["channels"][LOG]["pending"][0]
+    assert after["notification_id"] != before["notification_id"]
+    assert after["states"] == before["states"][1:]
+    assert notices.queue_current(LOG)["queued"] == 0
+    assert notices.deliver_due(transport=lambda *args: called.append(args) or 200)["sent"] == 1
+    assert json.loads(called[0][1])["unreviewed_signal_states"] == 1
+    assert notices.status(LOG)["pending_notifications"] == 0
+
+
+def test_partial_reconciliation_after_ambiguous_attempt_uses_new_id(isolated):
+    make()
+    notices.queue_current(LOG)
+    sent = []
+    assert notices.deliver_due(transport=lambda *args: sent.append(args) or 503)["retry_pending"]
+    previous = notices._read()["channels"][LOG]["pending"][0]
+    isolated[0]["requires_review"] = False
+    now = previous["next_attempt_epoch"] + 1
+    result = notices.deliver_due(now=now, transport=lambda *args: sent.append(args) or 204)
+    assert result["previous_delivery_may_have_arrived"]
+    assert len(sent) == 1
+    assert notices.deliver_due(now=now, transport=lambda *args: sent.append(args) or 204)["sent"] == 1
+    assert sent[0][2]["X-OWG-Notification-ID"] != sent[1][2]["X-OWG-Notification-ID"]
+    assert [json.loads(row[1])["unreviewed_signal_states"] for row in sent] == [2, 1]
+
+
+def test_unavailable_preflight_preserves_group_and_backoff_without_network(isolated, monkeypatch):
+    make()
+    notices.queue_current(LOG)
+    first = notices._read()["channels"][LOG]["pending"][0]
+    previous = inbox.list_inbox
+    def unavailable(_):
+        raise OSError("PRIVATE_DATABASE_ERROR")
+    monkeypatch.setattr(inbox, "list_inbox", unavailable)
+    now = first["next_attempt_epoch"] + 1
+    called = []
+    assert notices.deliver_due(now=now, transport=lambda *a: called.append(a))["deferred_preflight_unavailable"]
+    after = notices._read()["channels"][LOG]["pending"][0]
+    assert after["notification_id"] == first["notification_id"]
+    assert after["states"] == first["states"]
+    assert after["attempts"] == 0
+    assert after["next_attempt_epoch"] == now + notices.PREFLIGHT_RETRY_SECONDS
+    assert not called
+    assert "PRIVATE_DATABASE_ERROR" not in json.dumps(notices.status(LOG))
+    monkeypatch.setattr(inbox, "list_inbox", previous)
+    assert notices.deliver_due(now=after["next_attempt_epoch"], transport=lambda *_: 204)["sent"] == 1
+
+
+@pytest.mark.parametrize("blocked", ["quiet", "unavailable"])
+def test_oldest_blocked_channel_does_not_starve_another_log(isolated, monkeypatch, blocked):
+    other = "log_" + "b"*16
+    monkeypatch.setattr(scheduler, "scheduled", lambda kind, target: True)
+    monkeypatch.setattr(scheduler, "status", lambda: {"schedules": [
+        {"kind":"event_log_signals","target_id":key,"enabled":True} for key in (LOG,other)]})
+    make()
+    notices.configure(other, "https://example.com/other", confirm_external_delivery=True, confirm_counts_only=True)
+    notices.queue_current(LOG)
+    notices.queue_current(other)
+    if blocked == "quiet":
+        monkeypatch.setattr(notices, "_delivery_quiet", lambda key, _: key == LOG)
+    else:
+        original = inbox.list_inbox
+        def inspect(key):
+            if key == LOG:
+                raise OSError("unavailable")
+            return original(key)
+        monkeypatch.setattr(inbox, "list_inbox", inspect)
+    calls = []
+    assert notices.deliver_due(transport=lambda *args: calls.append(args) or 204)["sent"] == 1
+    assert calls[0][0] == "https://example.com/other"
+    assert notices.status(LOG)["pending_notifications"] == 1
+    assert notices.status(other)["pending_notifications"] == 0
+
+
+def test_attempt_is_durable_before_transport_and_process_interruption_retries_same_identity(isolated):
+    make()
+    notices.queue_current(LOG)
+    first = notices._read()["channels"][LOG]["pending"][0]
+    calls = []
+    def interrupted(url, body, headers):
+        pending = notices._read()["channels"][LOG]["pending"][0]
+        assert pending["attempts"] == 1
+        assert pending["next_attempt_epoch"] > first["next_attempt_epoch"]
+        calls.append((body, headers))
+        raise KeyboardInterrupt()
+    with pytest.raises(KeyboardInterrupt):
+        notices.deliver_due(now=first["next_attempt_epoch"]+1, transport=interrupted)
+    pending = notices._read()["channels"][LOG]["pending"][0]
+    assert pending["notification_id"] == first["notification_id"]
+    assert notices.status(LOG)["consecutive_failures"] == 1
+    assert notices.deliver_due(now=pending["next_attempt_epoch"]-1, transport=lambda *_: 200)["attempted"] == 0
+    assert notices.deliver_due(now=pending["next_attempt_epoch"], transport=lambda u,b,h: calls.append((b,h)) or 204)["sent"] == 1
+    assert calls[0] == calls[1]
+    assert notices.status(LOG)["consecutive_failures"] == 0
+
+
+def test_bounded_ledger_write_refusal_does_not_replace_last_valid_state(isolated, monkeypatch):
+    make()
+    baseline = notices._path().read_bytes()
+    monkeypatch.setattr(notices, "MAX_LEDGER_BYTES", len(baseline)+10)
+    with pytest.raises(notices.DeliveryError, match="capacity"):
+        notices.queue_current(LOG)
+    assert notices._path().read_bytes() == baseline
+    assert notices.status(LOG)["pending_notifications"] == 0
+
+
 def test_changed_state_after_success_queues_once_and_requires_fresh_review(isolated):
     make()
     notices.queue_current(LOG)

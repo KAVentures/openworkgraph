@@ -58,6 +58,14 @@ const path=require('node:path');
   const revised=(await api(route(b),{title:'Account setup revised',process_model:model,expected_revision:1,user_confirmed:true,organization_sharing_confirmed:true})).process;
   await page.locator('#dependencyGraphExport').click();await page.locator('#dependencyGraphStatus').filter({hasText:'changed; refresh before exporting'}).waitFor();assert.equal(await page.locator('#dependencyGraphResult').textContent(),'');
   await loadGraph();assert.match(await page.locator('#dependencyGraphStatus').textContent(),/needs reassessment/);
+  const worklist=page.locator('#dependencyReassessment');
+  assert.match(await worklist.textContent(),/3 of 4 declared processes need reassessment/);
+  assert.match(await worklist.textContent(),/Account setup revised · direct reassessment required/);
+  assert.match(await worklist.textContent(),/Pins to refresh in this declaration: Account setup revised/);
+  await worklist.getByLabel('Filter reassessment worklist').selectOption('all');
+  assert.match(await worklist.textContent(),/Identity policy · current declared basis/);
+  await worklist.getByLabel('Filter reassessment worklist').selectOption('upstream_reassessment_required');
+  assert.match(await worklist.textContent(),/0 matching processes/);
   await page.locator('#dependencyFocus').selectOption(b.workflow_id);await page.locator('#dependencyInspect').click();await page.locator('#dependencyGraphResult section').filter({hasText:'Potential consumers to review'}).waitFor();
   assert.match(await page.locator('#dependencyGraphResult').textContent(),/pins need reassessment/);
   // Refresh each exact saved basis explicitly; reviews do not propagate.

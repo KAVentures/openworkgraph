@@ -19,3 +19,68 @@ Paths use local idea IDs so reviewers can inspect the intervening prerequisites.
 Normal planning writes already prohibit new dependency cycles. This additional read-only check does not edit plans, reset approval, set outcomes, authorize execution or publish any company data. The scan is bounded to the existing maximum of 1,000 local ideas, returns at most 100 warnings and stops following paths after 20 links. Limits and unresolved paths are disclosed explicitly. No user or source-system identity is inferred from the typed owner/team labels.
 
 A healthy result is **not** proof a delivery target is feasible. The report only checks internal consistency of reviewer-entered labels and must be complemented by real, authorized project planning and source-verified completion evidence.
+
+
+## Exact prerequisite planning waves
+
+The same review includes an independent, complete classification of active
+ideas in prerequisite order. Unlike the bounded list of risk paths, this
+classification does not stop at the 100-warning or 20-link display limits.
+It examines the retained portfolio (at most 1,000 ideas), with one node per
+idea and its declared dependencies.
+
+- Wave 1 contains non-held active ideas whose direct prerequisites are all
+  declared implemented, or which have no prerequisites.
+- Subsequent waves are one plus the maximum wave of the unfinished
+  prerequisites. An idea with two prerequisite paths therefore waits for
+  the longer chain, without duplicating the idea.
+- A held idea, or an idea with a missing, rejected or held prerequisite,
+  blocks downstream dependents. Those ideas have no assigned wave.
+- Remaining cycles and ideas depending on them are classified together as
+  unresolved, never given a speculative wave. Already implemented ideas
+  are treated as satisfied declarations, not independently verified outcomes.
+
+Each row includes its saved revision, state, direct unfinished prerequisites,
+explicit blockers, and (when every unfinished ancestor and the idea itself
+has a target) the maximum declared target quarter across that chain. An
+unknown target stays unknown. That maximum is a consistency indicator, not
+a computed completion date. Wave numbers are precedence layers, not equal
+duration periods, resource allocation, critical-path estimates or authority
+to implement. Unrelated approval or process-revision gates remain in force.
+
+The dashboard exposes one wave or the blocked/unresolved set at a time.
+A snapshot hash identifies the exact sorted idea IDs, revisions, states,
+dependency sets and target quarters used by the calculation. Refreshing
+the portfolio clears the displayed review. No schedule or portfolio state
+is changed. The full machine-readable classification is an additive
+dependency_waves field in the existing authenticated API response.
+
+Regression coverage includes branching and converging graphs, held/rejected
+and missing prerequisites, cycle residuals, unknown target dates, an exact
+1,000-node chain, bounded risk-list independence, and browser navigation.
+This is not a production scheduling optimizer or independently verified
+business implementation plan.
+
+
+### Exact dependency cycles
+
+The wave review independently finds strongly connected components of the
+unfinished retained prerequisite graph, including self-loops. A hold or
+missing prerequisite can block an idea without hiding a simultaneous cycle.
+The dashboard lists exact cycle groups and counts distinct additional ideas
+depending on any cycle. These counts can overlap the state-blocked population;
+the original residual count remains the number unresolved solely by cycle
+precedence after state-blocker propagation. Implemented prerequisites remain
+satisfied declarations and are outside the unfinished graph.
+
+The bounded risk-path display does not determine whether cycles exist.
+The overall review is incomplete if the exact graph contains a cycle or an
+unknown dependency link, even if a bounded risk-path traversal misses it.
+Non-ASCII historical quarter labels are treated as unknown rather than
+interpreted as valid dates.
+
+The exact standalone cycle inventory passed 1,000 randomized graph checks
+against an independent reachability oracle and four long-chain checks
+(1,000 and 10,000 vertices, with and without a cycle). The local tested file
+matches Git blob db72e9175355374c52f2b9aba8e05cf81ebf80e4.
+Full application/browser checks still require CI.
