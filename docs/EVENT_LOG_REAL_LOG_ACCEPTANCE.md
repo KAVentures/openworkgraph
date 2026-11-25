@@ -80,6 +80,13 @@ consecutive events in a case by two different named resources (an event without 
 the chain). All 100 listed pairs matched. PM4Py's handover network normalises its weights and is
 not a like-for-like reference for these counts.
 
+The temporal profile on BPI Challenge 2012 differs from PM4Py's `discover_temporal_profile` by
+design. OWG pairs each event only with events up to 50 positions later in its case
+(`max_span_events`, a documented bound on work); PM4Py pairs every later event. Under OWG's
+definition, a brute-force count reproduced the occurrence counts and mean times of all 50 listed
+pairs exactly. Under PM4Py's unbounded definition 45 of the 50 pairs differ, because BPI 2012 has
+long cases with repeated work items.
+
 ## What was found and changed
 
 | Finding | Cause | Change |
