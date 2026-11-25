@@ -338,3 +338,14 @@ projection. An interrupted or refused run may still be projected with
 its observed status. This verifies the internal consistency of a
 customer-supplied journal, not independent provider evidence, signed
 attestation or actual business outcomes.
+
+
+The start record additionally retains the bounded declared route activity IDs
+and precondition attempt numbers, not case inputs, tool parameters or source
+values. Monitoring independently replays that route against the pinned process
+model, derives the expected ordered machine activities (including repetitions),
+and requires exactly those recorded attempts and the declared preconditions
+for success. An entire missing action and its checkpoint cannot be hidden by
+renumbering the remaining records. The route and precondition declarations
+are still customer journal claims; an offline monitor does not authenticate
+the original customer intent or prove that a provider performed a write.
