@@ -1326,3 +1326,44 @@ def batching(log_id: str, case_type: str | None = None, gap_seconds: int = 60, m
         if (row.get("events") or 0) - (row.get("batched_events") or 0) < keep:
             row["median_wait_before_unbatched_seconds"] = None
     return {**result, "withheld_below": keep, "format": FORMAT, "log_id": log_id}
+
+
+def handovers(log_id: str, case_type: str | None = None, limit: int = 50) -> dict[str, Any]:
+    """How work passes between people (aggregates level): handover of work, ping-pong (subcontracting) and
+    working together, between pseudonymous resources. Names are never returned, a resource or pair seen in
+    fewer than AGENT_MIN_CELL_CASES cases is withheld and matrix cells below that many events are blanked."""
+    require(log_id, "aggregates")
+    from . import event_log_organization as org
+    limit = max(1, min(int(limit), 200))
+    full = org.organization(log_id, case_type, names="pseudonymous", limit=limit)
+    keep = AGENT_MIN_CELL_CASES
+
+    def kept(rows: list[dict[str, Any]], key: str) -> tuple[list[dict[str, Any]], int]:
+        shown = [row for row in rows if row[key] >= keep]
+        return shown, len(rows) - len(shown)
+
+    resources, hidden_resources = kept(full["resources"], "cases")
+    handover, hidden_handover = kept(full["handover_of_work"], "cases")
+    ping_pong, hidden_ping_pong = kept(full["subcontracting"], "cases")
+    together, hidden_together = kept(full["working_together"], "shared_cases")
+    matrix = full["activity_resource_matrix"]
+    return {
+        "resources": [{k: row[k] for k in ("resource", "events", "cases", "activities")} for row in resources],
+        "handover_of_work": handover,
+        "subcontracting": ping_pong,
+        "working_together": together,
+        "cases_with_handover": full["cases_with_handover"],
+        "activity_resource_matrix": {
+            "activities": matrix["activities"], "resources": matrix["resources"],
+            "events": [[n if n >= keep else None for n in row] for row in matrix["events"]],
+        },
+        "coverage": full["coverage"],
+        "withheld": {"resources": hidden_resources, "handover_pairs": hidden_handover,
+                     "subcontracting_pairs": hidden_ping_pong, "working_together_pairs": hidden_together,
+                     "min_cases": keep, "matrix_cells_below": keep,
+                     "resources_truncated": full["resources_truncated"]},
+        "privacy": {"names_returned": False, "labels_are_stable_within_this_response_only": True,
+                    "per_person_durations_or_speed_computed": False, "ranking_or_performance_scoring": False},
+        "interpretation": full["interpretation"],
+        "format": FORMAT, "log_id": log_id,
+    }
