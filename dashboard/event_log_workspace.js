@@ -4621,6 +4621,100 @@
       notApplicable:r.not_applicable.map(n=>n.section.replace(/_/g,' ')+' '+(n.index+1)+' (needs '+n.unmapped_role.replace(/_/g,' ')+')')};
   }
 
+  function domainPackBenchmarkPanel(valid,logId){
+    const panel=document.createElement('details');panel.id='owgDomainBenchmark';
+    const other=select('owgDomainBenchmarkOther',[['','Choose comparison log'],...state.logs.filter(l=>l.log_id!==logId).map(l=>[l.log_id,l.name])]);
+    const pack=select('owgDomainBenchmarkPack',[['','Load installed packs first']]);
+    const load=button('Load installed packs','secondary'),preview=button('Review comparison basis','secondary'),run=button('Compare reviewed installations');
+    load.id='owgDomainBenchmarkLoad';preview.id='owgDomainBenchmarkPreview';run.id='owgDomainBenchmarkRun';
+    const status=el('p',null,'muted');status.setAttribute('role','status');
+    const basis=el('div'),out=el('div');let revision=0,pin=null,report=null;
+    const active=t=>valid()&&panel.isConnected&&t===revision;
+    const pctOr=x=>x==null?'—':pct(x);
+    const num=x=>x==null?'—':Number(x).toLocaleString(undefined,{maximumFractionDigits:2});
+    const delta=x=>x==null?'—':(x>0?'+':'')+num(x);
+    const pp=x=>x==null?'—':(x>0?'+':'')+num(100*x)+' pp';
+    const endpoint=suffix=>'/v1/event-logs/'+encodeURIComponent(logId)+'/domain-packs/'+encodeURIComponent(pack.value)+'/benchmark'+suffix;
+    const post=async(suffix,body)=>(await api(endpoint(suffix),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+    const label=r=>{
+      const d=r.canonical_definition;const x=d.rule||d;
+      return d.metric?d.metric.name:[x.template,x.a||x.activity||x.object_type,x.b||x.related_type].filter(Boolean).join(' · ');
+    };
+    const downloads=exportButtons('owg-domain-benchmark',()=>report,r=>[
+      ['Section','Definition','Comparable','Baseline cases/units','Comparison cases/units','Baseline median/rate','Comparison median/rate','Difference','Baseline unknown','Comparison unknown','Reason','Report digest'],
+      ...[['metric',r.metrics],['case rule',r.case_rules],['object rule',r.object_rules]].flatMap(([kind,rows])=>rows.map(row=>{
+        const a=row.baseline,b=row.comparison,c=row.changes;
+        return [kind,label(row),row.comparable,a?.cases??a?.units,b?.cases??b?.units,
+          kind==='metric'?a?.median:a?.violation_rate,kind==='metric'?b?.median:b?.violation_rate,
+          kind==='metric'?c?.median:c?.violation_rate_change,a?.unknown_cases,b?.unknown_cases,row.not_comparable_reason,r.report_sha256];
+      }))]);
+    function clear(){++revision;pin=null;report=null;basis.replaceChildren();out.replaceChildren();run.disabled=true;downloads.enable(false);preview.disabled=!other.value||!pack.value;}
+    other.onchange=pack.onchange=()=>{clear();status.textContent='Selection changed; review both installations.';};
+    load.onclick=async()=>{
+      clear();const t=revision;load.disabled=true;status.textContent='Loading baseline installations…';
+      try{
+        const result=await getJSON('/v1/event-logs/'+encodeURIComponent(logId)+'/domain-packs');
+        if(!active(t))return;
+        setOptions(pack,[['','Choose installed pack'],...result.installs.map(i=>[i.pack_id,i.pack_id+' · '+i.version])]);
+        status.textContent=result.installs.length?'Select a pack and another retained log.':'Install a domain pack on this log first.';
+        preview.disabled=!other.value||!pack.value;
+      }catch(error){if(active(t))status.textContent=error.message;}
+      finally{if(valid())load.disabled=false;}
+    };
+    preview.onclick=async()=>{
+      clear();const t=revision;preview.disabled=true;status.textContent='Checking exact versions, settings and sources…';
+      try{
+        const r=await post('/preview',{other_log_id:other.value});if(!active(t))return;
+        pin=r;
+        const names=[r.baseline,r.comparison];
+        basis.replaceChildren(table(['Log','Pack version','Events','First event','Last event'],names.map(x=>[x.name,x.version,x.events,x.first_event_at||'—',x.last_event_at||'—'])),
+          table(['Parameter','Baseline','Comparison'],Array.from(new Set([...Object.keys(r.baseline.parameters),...Object.keys(r.comparison.parameters)]))
+            .map(k=>[k,r.baseline.parameters[k]??'—',r.comparison.parameters[k]??'—'])),
+          table(['Role','Baseline source label','Comparison source label'],r.role_alignment.map(x=>[x.role,x.baseline_label??'Unmapped',x.comparison_label??'Unmapped'])),
+          el('p',r.ready_to_compare?'Versions and parameters match. Confirm that role meanings and case populations are appropriate for comparison.':
+            'Cannot compare: '+r.blockers.join(', ')+'. Reconfigure the installations explicitly before trying again.','note'));
+        run.disabled=!r.ready_to_compare;status.textContent='Reviewed source and installation fingerprints captured.';
+      }catch(error){if(active(t))status.textContent=error.message;}
+      finally{if(active(t))preview.disabled=false;}
+    };
+    run.onclick=async()=>{
+      const t=revision,p=pin;if(!p||!p.ready_to_compare)return;
+      run.disabled=true;report=null;downloads.enable(false);out.replaceChildren();status.textContent='Running both installed reports…';
+      try{
+        const r=await post('',{other_log_id:other.value,expected_preflight_sha256:p.preflight_sha256});if(!active(t))return;
+        report=r;
+        const coverage=m=>m?num(m.coverage.cases_with_value)+' / '+num(m.cases):'—';
+        const counts=m=>m?num(m.violating_cases)+' / '+num(m.decided_cases)+'; unknown '+num(m.unknown_cases):'—';
+        const objectCounts=m=>m?.complete?num(m.violating)+' / '+num(m.activated):'Unknown or unavailable';
+        const reason=x=>x.not_comparable_reason||'—';
+        const notes=el('ul');r.assumptions.forEach(a=>notes.append(el('li',a)));
+        out.replaceChildren(el('h4','Role-aligned metrics'),
+          table(['Definition','Unit','Baseline median','Comparison median','Median change','Baseline coverage','Comparison coverage','Status'],
+            r.metrics.map(x=>[label(x),x.baseline?.unit||x.comparison?.unit||'—',num(x.baseline?.median),num(x.comparison?.median),
+              delta(x.changes?.median),coverage(x.baseline),coverage(x.comparison),reason(x)])),
+          el('h4','Case rule results'),
+          table(['Rule','Baseline violations / decided','Comparison violations / decided','Baseline rate','Comparison rate','Rate change','Change bounds over activated cases','Status'],
+            r.case_rules.map(x=>[label(x),counts(x.baseline),counts(x.comparison),pctOr(x.baseline?.violation_rate),pctOr(x.comparison?.violation_rate),
+              pp(x.changes?.violation_rate_change),x.changes?.activated_violation_share_change_bounds?
+                pp(x.changes.activated_violation_share_change_bounds.lower)+' – '+pp(x.changes.activated_violation_share_change_bounds.upper):'—',reason(x)])),
+          el('h4','Object rule results'),
+          table(['Rule','Baseline violations / activated','Comparison violations / activated','Rate change','Status'],
+            r.object_rules.map(x=>[label(x),objectCounts(x.baseline),objectCounts(x.comparison),pp(x.changes?.violation_rate_change),reason(x)])),
+          el('h4','Reference object-model coverage'),
+          table(['Log','Role','Objects','Replayed','Fitting','Unknown'],
+            [['Baseline',r.object_models.baseline],['Comparison',r.object_models.comparison]].flatMap(([name,model])=>
+              (model?.types||[]).map(x=>[name,x.role,x.objects,x.replayed_objects,x.fitting_objects,x.unknown_objects]))),notes);
+        downloads.enable(true);status.textContent='Comparison complete. Changes are descriptive, not causal.';
+      }catch(error){if(active(t)){pin=null;status.textContent=error.message+' Review the comparison again.';}}
+      finally{if(active(t))run.disabled=!pin;}
+    };
+    preview.disabled=run.disabled=true;
+    panel.append(el('summary','Benchmark an installed pack across retained logs'),
+      el('p','Compare the same version and parameters across two explicit source mappings. Reports may have different case populations and coverage; no company ranking or causal claim is made.','muted'),
+      load,field('Installed baseline pack',pack),field('Comparison log',other),preview,status,basis,run,downloads.node,out);
+    return panel;
+  }
+
   function domainPackSection(){
     const box=section('Domain packs');box.id='owgDomainPacks';
     box.appendChild(el('div','Apply ready-made definitions for a well-known process to this log: case metrics, compliance and object rules and a reference object model. Map each role to the names your log uses; the pack states its assumptions and is not validated against your source system.','muted'));
@@ -4633,6 +4727,7 @@
     box.append(setup,form,status,out,historyOut);
     const generation=state.generation,logId=state.logId,base='/v1/event-logs/'+encodeURIComponent(logId)+'/domain-packs';
     let turn=0;const current=t=>generation===state.generation&&box.isConnected&&t===turn;
+    box.append(domainPackBenchmarkPanel(()=>generation===state.generation&&box.isConnected,logId));
     const post=(url,body)=>api(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     setup.onclick=async()=>{
       const t=++turn;setup.disabled=true;historyTurn++;historyOut.replaceChildren();form.replaceChildren();out.replaceChildren();status.textContent='Loading…';
