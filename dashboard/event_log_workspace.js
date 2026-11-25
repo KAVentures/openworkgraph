@@ -8181,8 +8181,98 @@
       }catch(error){if(stillCurrent())compareStatus.textContent=error.message;}
       finally{compareBusy=false;compareRun.disabled=!lastNet||lastNet.generation!==state.generation||!compareFile.files?.length;}
     };
+    const policyBox=document.createElement('details');policyBox.append(el('summary','Verify declared compliance rules on the model'),
+      el('div','Check all reachable completed traces, not just recorded cases. Use exact visible activity names. Untimed activity rules only; resource and time constraints cannot be proved from this net.','muted'));
+    const policyTemplate=select('owgPetriPolicyTemplate',[
+      ['response','Every A is eventually followed by B'],['chain_response','Every A is immediately followed by B'],
+      ['precedence','Every B has an earlier A'],['not_coexistence','A and B never both occur'],['existence','Occurrence count of A']]);
+    const policyA=input('owgPetriPolicyA','text');policyA.maxLength=200;
+    const policyB=input('owgPetriPolicyB','text');policyB.maxLength=200;
+    const policyMin=input('owgPetriPolicyMin','number');policyMin.min='0';policyMin.max='1000000';policyMin.step='1';policyMin.value='1';
+    const policyMax=input('owgPetriPolicyMax','number');policyMax.min='0';policyMax.max='1000000';policyMax.step='1';
+    const policyBField=field('Activity B',policyB),policyMinField=field('Minimum count',policyMin),policyMaxField=field('Maximum count (optional)',policyMax);
+    const policyAdd=button('Add model rule','secondary');policyAdd.id='owgPetriPolicyAdd';
+    const policyRow=el('div',null,'row');policyRow.style.alignItems='end';
+    policyRow.append(field('Rule template',policyTemplate),field('Exact activity A',policyA),policyBField,policyMinField,policyMaxField,policyAdd);
+    const syncPolicyTemplate=()=>{const exists=policyTemplate.value==='existence';show(policyBField,!exists);show(policyMinField,exists);show(policyMaxField,exists);};
+    policyTemplate.onchange=syncPolicyTemplate;syncPolicyTemplate();
+    const policyText=document.createElement('textarea');policyText.id='owgPetriPolicyRules';policyText.rows=6;policyText.maxLength=65536;
+    policyText.style.cssText='width:100%;font-family:monospace';policyText.value=JSON.stringify({rules:[]},null,2);
+    const policyCandidate=input('owgPetriPolicyCandidate','file');policyCandidate.accept='.pnml,application/xml,text/xml';
+    const policyRun=button('Verify model rules','secondary');policyRun.id='owgPetriPolicyRun';policyRun.disabled=true;
+    const policyStatus=el('div',null,'muted');policyStatus.id='owgPetriPolicyStatus';policyStatus.setAttribute('role','status');policyStatus.setAttribute('aria-live','polite');
+    const policyOut=el('div');policyOut.id='owgPetriPolicyResults';
+    policyBox.append(policyRow,field('Rule suite JSON (editable; same untimed rule format as Compliance rules)',policyText),
+      field('Optional candidate revision (.pnml)',policyCandidate),policyRun,policyStatus,policyOut);
+    soundBox.appendChild(policyBox);
+    let policyBusy=false,policyRevision=0;
+    const clearPolicy=()=>{policyRevision++;policyStatus.textContent='';policyOut.replaceChildren();policyRun.disabled=policyBusy||!lastNet;};
+    policyText.oninput=clearPolicy;policyCandidate.onchange=clearPolicy;
+    policyAdd.onclick=()=>{
+      try{
+        const spec=JSON.parse(policyText.value);if(!spec||!Array.isArray(spec.rules)||Object.keys(spec).length!==1)throw new Error('Enter a JSON object with a rules array.');
+        if(spec.rules.length>=20)throw new Error('At most 20 rules are supported.');
+        const a=policyA.value,b=policyB.value,template=policyTemplate.value;
+        if(!a.trim())throw new Error('Enter exact activity A.');
+        let rule={template,a};
+        if(template==='existence'){
+          if(!policyMin.validity.valid||!policyMax.validity.valid||!policyMin.value)throw new Error('Enter valid whole-number count limits.');
+          rule.min=Number(policyMin.value);if(policyMax.value!=='')rule.max=Number(policyMax.value);
+          if(rule.max!==undefined&&rule.max<rule.min||rule.min===0&&rule.max===undefined)throw new Error('Specify a nontrivial count range.');
+        }else{
+          if(!b.trim()||a===b)throw new Error('Enter two different exact activity names.');
+          rule.b=b;
+        }
+        spec.rules.push(rule);policyText.value=JSON.stringify(spec,null,2);clearPolicy();
+      }catch(error){policyStatus.textContent=error.message;}
+    };
+    policyRun.onclick=async()=>{
+      const net=lastNet,revision=policyRevision,chosen=policyCandidate.files?.[0];
+      if(!net||policyBusy||net.generation!==state.generation)return;
+      const stillCurrent=()=>lastNet===net&&state.generation===net.generation&&policyRevision===revision;
+      policyBusy=true;policyRun.disabled=true;policyOut.replaceChildren();policyStatus.textContent='Exploring model and policy states…';
+      try{
+        const spec=JSON.parse(policyText.value),encoder=new TextEncoder();
+        const rules=encoder.encode(JSON.stringify(spec)),baseline=encoder.encode(net.body);
+        if(rules.byteLength>65536||baseline.byteLength>2*1024*1024||chosen&&chosen.size>2*1024*1024)throw new Error('Rule suite or model exceeds the review limit.');
+        const size=n=>{const bytes=new Uint8Array(4);new DataView(bytes.buffer).setUint32(0,n);return bytes;};
+        const body=new Blob([size(rules.byteLength),rules,size(baseline.byteLength),baseline,...(chosen?[chosen]:[])],{type:'application/octet-stream'});
+        const r=await (await api('/v1/event-logs/petri-policy-review',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body})).json();
+        if(!stillCurrent())return;
+        const pretty=s=>({verified:'Verified',counterexample:'Counterexample found',vacuous_only:'Only vacuous satisfaction',no_completed_trace:'No completed trace',inconclusive:'Inconclusive'}[s]||s);
+        const possible=v=>v===true?'Possible':v===false?'Impossible':'Inconclusive';
+        const trace=w=>w?((w.activities.join(' → ')||'(empty trace)')+(w.truncated?' … (prefix only)':'')):'—';
+        const render=(label,model)=>{
+          policyOut.appendChild(el('h4',label));
+          policyOut.appendChild(table(['Check','Verdict','Satisfying trace','Violating trace','Counterexample'],[
+            ['All rules together',pretty(model.joint.status),possible(model.joint.satisfying_trace_possible),possible(model.joint.violating_trace_possible),trace(model.joint.witnesses.violating)],
+            ...model.rules.map(x=>[JSON.stringify(x.rule),pretty(x.status),possible(x.satisfying_trace_possible),possible(x.violating_trace_possible),trace(x.witnesses.violating)])
+          ]));
+          policyOut.appendChild(el('div','Joint satisfying example: '+trace(model.joint.witnesses.activated_satisfying||model.joint.witnesses.vacuous)+(model.joint.limit?' · Search stopped: '+model.joint.limit.replaceAll('_',' '):''),'muted'));
+        };
+        render('Baseline model',r.baseline);
+        if(r.candidate){
+          render('Candidate model',r.candidate);
+          policyOut.appendChild(el('h4','Change in possibility of violations'));
+          policyOut.appendChild(table(['Check','Violation possibility','Satisfaction possibility'],[
+            ['All rules together',r.changes.joint.violating_trace_possibility.replaceAll('_',' '),r.changes.joint.satisfying_trace_possibility.replaceAll('_',' ')],
+            ...r.changes.rules.map(x=>['Rule '+(x.rule_index+1),x.violating_trace_possibility.replaceAll('_',' '),x.satisfying_trace_possibility.replaceAll('_',' ')])
+          ]));
+          policyOut.appendChild(el('div','Unchanged possibility does not prove the same violating or satisfying trace language.','muted'));
+        }
+        policyStatus.textContent='Model policy review: '+pretty(r.baseline.joint.status)+(r.candidate?' · Candidate: '+pretty(r.candidate.joint.status):'')+'.';
+        policyOut.appendChild(el('div',r.caveat,'muted'));
+        const download=button('Download policy review (JSON)','secondary');download.onclick=()=>{
+          if(!stillCurrent())return;
+          const url=URL.createObjectURL(new Blob([JSON.stringify(r,null,2)],{type:'application/json'}));
+          const link=document.createElement('a');link.href=url;link.download='petri-policy-'+r.rules_sha256.slice(0,12)+'.json';
+          document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+        };policyOut.appendChild(download);
+      }catch(error){if(stillCurrent())policyStatus.textContent=error.message;}
+      finally{policyBusy=false;policyRun.disabled=!lastNet||lastNet.generation!==state.generation;}
+    };
     let soundBusy=false;
-    const clearSound=()=>{soundStatus.textContent='';soundOut.replaceChildren();soundRun.disabled=true;clearCompare();};
+    const clearSound=()=>{soundStatus.textContent='';soundOut.replaceChildren();soundRun.disabled=true;clearCompare();clearPolicy();};
     soundRun.onclick=async()=>{
       const net=lastNet;if(!net||soundBusy||net.generation!==state.generation)return;
       soundBusy=true;soundRun.disabled=true;soundOut.replaceChildren();soundStatus.textContent='Exploring reachable markings…';
@@ -8242,6 +8332,7 @@
         if(generation!==state.generation)return;
         lastNet={body,label,generation,cohort};
         compareRun.disabled=compareBusy||!compareFile.files?.length;
+        policyRun.disabled=policyBusy;
         const f=r.fitness;
         statusLine.textContent='Fitness '+pct(f.log)+' on '+label+': '+Number(f.fitting_cases).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases ('+pct(f.fitting_case_share)+') replay without missing or remaining tokens.'+(r.precision.precision!==null?' Precision '+pct(r.precision.precision)+'.':'')+' The net has '+r.net.places+' places and '+r.net.transitions+' transitions ('+r.net.silent_transitions+' silent).'+(r.cases_excluded?' '+Number(r.cases_excluded).toLocaleString()+' cases beyond the length or variant limit were left out.':'');
         if(!r.net.final_marking_declared)out.appendChild(el('div','The file declares no final marking, so cases are expected to end with one token on each place nothing consumes from.','muted'));
