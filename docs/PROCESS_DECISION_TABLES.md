@@ -678,9 +678,10 @@ selection and complete unique routes that match a reviewed expectation.
 Counts represent distinct cases, not repeated visits or observed operations.
 Decision tables are evaluated across cases independently of route selection;
 an evaluated or selected row in an unvisited table is not counted as matching
-route coverage. Parallel token schedules use the union of viable structural
-replays, explicitly labeled possible transition support, not guaranteed
-traversal. Missing support and incomplete search/replay remain visible.
+route coverage. Parallel token schedules distinguish the union of viable structural
+replays (possible support) from their intersection (guaranteed support).
+Strict coverage and revision deltas use only guaranteed transitions, and
+matching decision-row support requires a guaranteed selected transition. Missing support and incomplete search/replay remain visible.
 
 For single-revision review, optionally add
 `--require-all-declared-items-covered` to require matching scenario support
@@ -694,3 +695,30 @@ new items without matching support and removed items using stable IDs.
 Decision row identity includes its target activity ID. Newly uncovered
 items and incomplete comparisons require review even if aggregate case
 agreement does not decline. No raw facts or rule values appear in coverage.
+
+
+### Policy effective-period review
+
+To check a reviewed scenario suite across the effective dates of a fixed
+design, run:
+
+```sh
+python review_facts.py --cases reviewed-cases.json --as-of-date 2026-01-01 \
+  --until-date 2027-01-01 --output effective-period.json --confirm-declared-fact-review
+```
+
+The end date is exclusive. The evaluator partitions the selected period at
+each declared decision-table start or end date and checks the same cases on
+the first date of each interval. Up to 3,660 days and 25 intervals are
+supported, with a single 500,000 search-work allowance across the review.
+The report identifies activating and expiring table IDs, counts of
+agreement/mismatch/unresolved searches, per-case table statuses, and
+changes relative to the preceding interval. Unknown comparisons remain
+explicit when the work bound is reached. Facts and expectations are held
+fixed, so a mismatch after an intended policy change is a review prompt,
+not proof of a policy defect. The command does not infer historical facts,
+verify separate date-specific expectations or account for policy changes
+outside the supplied design. No network reads or model calls occur.
+
+Effective-period mode cannot be combined with paired release comparison
+or the single-date strict item-coverage option. Review those separately.
