@@ -284,6 +284,23 @@ class DeclaredFactScenarioCases(unittest.TestCase):
         self.assertNotIn('750',json.dumps(report['cases']))
         self.assertNotIn('650',json.dumps(report['cases']))
 
+    def test_coverage_separates_reviewed_route_support_from_clarification(self):
+        from review_facts import review_scenarios
+        spec,suite=self.fixture()
+        report=review_scenarios(spec,suite,as_of_date='2026-06-01')
+        coverage=report['scenario_coverage']
+        self.assertTrue(coverage['all_declared_items_have_reviewed_matching_support'])
+        self.assertEqual(coverage['transition_basis'],'exact_adjacent_transitions')
+        self.assertTrue(all(r['reviewed_matching_cases']==1 for r in coverage['activities']))
+        self.assertTrue(all(r['reviewed_matching_cases']==1 for r in coverage['transitions']))
+        # A suite that correctly asks for clarification can pass without
+        # exercising any reviewed routes.
+        suite['cases']=suite['cases'][1:]
+        report=review_scenarios(spec,suite,as_of_date='2026-06-01')
+        self.assertFalse(report['review_required'])
+        self.assertFalse(report['scenario_coverage']['all_declared_items_have_reviewed_matching_support'])
+        self.assertEqual(len(report['scenario_coverage']['coverage_gaps']['activities_without_reviewed_match']),3)
+
     def test_invalid_date_stale_suite_and_incomplete_work_budget(self):
         from review_facts import review_scenarios
         spec,suite=self.fixture()
@@ -319,6 +336,8 @@ class DeclaredFactScenarioCases(unittest.TestCase):
         self.assertEqual(result['classification_counts'],{'regression':1,'stable_match':2})
         self.assertEqual(result['cases'][0]['changed_rule_ids'],['current_source'])
         self.assertTrue(result['cases'][0]['route_behavior_changed'])
+        self.assertTrue(result['coverage_delta']['lost_matching_support'])
+        self.assertTrue(result['coverage_delta']['comparison_complete'])
         self.assertTrue(result['review_required'])
         new['cases'][0]['expected'].update(status='needs_clarification',accepted_routes=[])
         result=compare_scenarios(before,after,old,new,as_of_date='2026-06-01')
