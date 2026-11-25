@@ -32,7 +32,7 @@ from shared.event_log_formats import (
     CASE_TYPE, RESOURCE_PRESENCE_WHITESPACE, MAX_ATTRIBUTE_VALUE, MAX_ATTRIBUTES, MAX_OBJECT_ATTRIBUTE_VALUES,
     EventLogFormatError, EventRecord,
     ObjectRecord, ReadStats,
-    read_csv, read_csv_header, read_ocel_json, read_ocel_xml, read_xes, write_csv, write_ocel_json,
+    read_csv, read_csv_header, read_ocel_json, read_ocel_xml, read_xes, write_csv, write_jsonl, write_ocel_json,
     write_ocel_xml, write_xes,
 )
 
@@ -1143,6 +1143,8 @@ def export_log(log_id: str, export_format: str, out: IO[str], case_type: str | N
     elif export_format in ("csv", "csv-review"):
         write_csv((event for _, events in case_events(log_id, case_type) for event in events), out,
                   spreadsheet_review=export_format == "csv-review")
+    elif export_format == "jsonl":
+        write_jsonl((event for _, events in case_events(log_id, case_type) for event in events), out)
     elif export_format in ("ocel", "ocelxml"):
         with _LOCK:
             conn = _connect()
@@ -1153,7 +1155,7 @@ def export_log(log_id: str, export_format: str, out: IO[str], case_type: str | N
                 conn.close()
         (write_ocel_json if export_format == "ocel" else write_ocel_xml)(objects, events, out)
     else:
-        raise EventLogWorkspaceError("export format must be csv, xes, ocel or ocelxml")
+        raise EventLogWorkspaceError("export format must be csv, jsonl, xes, ocel or ocelxml")
 
 
 __all__ = [

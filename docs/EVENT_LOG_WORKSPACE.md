@@ -166,6 +166,11 @@ number. At most 2,000,000 lines, 500 columns and 1 MB per line are read, and the
 most 256 MB. `POST /v1/event-logs/jsonl-to-csv` with the file as the body returns `rows`, `columns`
 and `csv`. Nothing is stored. A `.json` file is still read as OCEL 2.0 JSON.
 
+**JSON Lines** in the export menu (`GET /v1/event-logs/{log_id}/export?format=jsonl`) writes one
+object per event under the chosen case notion with `case_id`, `activity`, `timestamp` (ISO 8601 UTC)
+and `resource` (`null` when missing), in the CSV export's order. The matching-case export offers the
+same format. Importing the file gives the same CSV as the CSV export.
+
 ### Parquet files
 
 A `.parquet` file, as data warehouses and lakes export, is read with DuckDB's `read_parquet` in an
@@ -367,7 +372,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `POST /v1/event-logs/xlsx-to-csv?sheet=...` | Convert one worksheet of the `.xlsx` request body to CSV (`csv`, `sheet`, `sheets`, `rows`, `columns`, `date_columns`, `dates_have_no_offset`). Nothing is stored. |
 | `POST /v1/event-logs/{log_id}/delete` | Delete the log and every row that belongs to it. |
 | `GET`/`POST /v1/event-logs/{log_id}/expiry` (`{"delete_after": ISO time \| null}`) | Read, set or clear the date after which the log is deleted automatically (below). |
-| `POST /v1/event-logs/{log_id}/export/matching-cases` | Download matching cases. Body contains `cohort` and optional `case_id`, `include_unfiltered`, `case_type`, `events_from` and `events_before`. Query `format` is `csv` (default), `csv-review`, `xes`, `xes-attributes`, `ocel`, `ocelxml`, `sourcecsv`, or `sourcecsv-review`. Source-ID formats require the `source_case` notion. |
+| `POST /v1/event-logs/{log_id}/export/matching-cases` | Download matching cases. Body contains `cohort` and optional `case_id`, `include_unfiltered`, `case_type`, `events_from` and `events_before`. Query `format` is `csv` (default), `csv-review`, `jsonl`, `xes`, `xes-attributes`, `ocel`, `ocelxml`, `sourcecsv`, or `sourcecsv-review`. Source-ID formats require the `source_case` notion. |
 | `POST /v1/event-logs/{log_id}/export/matching-cases.xlsx` | Download matching cases as an Excel workbook. The body is the same as for `export/matching-cases`. The worksheet holds the exact CSV rows as text cells, at most 1,048,575 events. |
 | `POST /v1/event-logs/{log_id}/derive` | Save the cases matching a filter as a new log (below). |
 | `POST /v1/event-logs/combine` | Combine 2 to 10 saved logs into a new log (below). |
@@ -412,7 +417,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET`/`POST /v1/event-logs/{log_id}/case-tags`, `POST .../case-tags/remove` | Analyst tags on cases (below). |
 | `GET`/`POST /v1/event-logs/{log_id}/activity-glossary`, `POST .../activity-glossary/delete`, `POST .../activity-glossary/import`, `GET .../activity-glossary.csv` | The owner's notes per activity (below). |
 | `GET /v1/event-logs/{log_id}/root-cause?outcome=...` | Case features associated with an outcome, with confidence intervals. |
-| `GET /v1/event-logs/{log_id}/export?format=csv\|xes\|ocel\|ocelxml` | Download the log. |
+| `GET /v1/event-logs/{log_id}/export?format=csv\|jsonl\|xes\|ocel\|ocelxml` | Download the log. |
 | `GET /v1/event-logs/{log_id}/ocel.sqlite` | Owner-only download of the retained OCEL 2.0 log as standard SQLite event/object and relationship tables; created temporarily and cleaned up after response. |
 | `GET /v1/event-logs/{log_id}/report.html?sla_seconds=&variants=` | Download a self-contained HTML report (below). |
 | `GET`/`POST /v1/event-logs/{log_id}/saved-reports`, `GET .../saved-reports/{name}` | Copies of the report saved on this computer (below). |
