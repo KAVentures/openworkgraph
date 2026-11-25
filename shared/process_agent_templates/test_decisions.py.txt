@@ -531,6 +531,56 @@ class DependentDecisionExecution(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ImplementationError):report(self.data[0],omitted,'Missing whole checkpoint')
 
 
+    def add_invariants(self):
+        spec,plan,case,bindings=self.data
+        raw=spec['process_model']
+        for ident,edge in [('invariant_a',('resolve','choose_again')),
+                           ('invariant_b',('readback','done'))]:
+            raw['business_rules'].append({'id':ident,'text':'Reviewed invariant','user_confirmed':True,
+                'predicate':{'conditions':[{'path':'/source/state','operator':'eq','expected':'open'}]}})
+            next(e for e in raw['transitions'] if (e['source'],e['target'])==edge)['rule_id']=ident
+        spec['process_model']=ProcessModel.model_validate(raw).model_dump()
+        spec['process_model_sha256']=digest(spec['process_model'])
+        bindings['source_rule_checks']=[{'rule_id':ident,'source_type':'github_pull_request',
+            'resource_ref_pointer':'/record_ref','mode':'invariant_before_each_action',
+            'record_semantics_reviewed':True,'non_atomic_reads_reviewed':True}
+            for ident in ('invariant_a','invariant_b')]
+
+    async def test_monitor_requires_all_ordinary_invariants_and_decisions(self):
+        self.add_invariants()
+        result=await self.run_case()
+        self.assertTrue(result['declared_route_checks_satisfied'])
+        from monitor import report,read_journal
+        records=read_journal(next(Path(self.folder.name).glob('*.jsonl')))
+        self.assertEqual(records[0]['declared_source_rule_ids'],['invariant_a','invariant_b'])
+        checks=[r for r in records if r['phase']=='source_rule_checked']
+        self.assertEqual(len(checks),10)
+        self.assertEqual([r['rule_id'] for r in checks[:2]],['invariant_a','invariant_b'])
+        self.assertEqual(report(self.data[0],records,'Complete mixed journal')['runs'][0]['status'],'succeeded')
+        for purpose in ('initial','precondition','action','completion'):
+            missing=deepcopy(records)
+            missing.pop(next(i for i,r in enumerate(missing) if r['phase']=='source_rule_checked'
+                and r['checkpoint_purpose']==purpose))
+            with self.assertRaises(ImplementationError):
+                report(self.data[0],missing,'Missing ordinary invariant')
+        wrong=deepcopy(records)
+        wrong[0]['declared_source_rule_ids']=[]
+        with self.assertRaises(ImplementationError):
+            report(self.data[0],wrong,'Omitted declaration')
+
+    async def test_invariant_drift_before_precondition_stops_even_the_precondition_read(self):
+        self.add_invariants()
+        original=self.source
+        async def change(base,token,request):
+            value=await original(base,token,request)
+            if request.get('rule_id')=='invariant_a' and len(self.reads)>3:
+                return receipt(request,'merged')
+            return value
+        self.source=change
+        result=await self.run_case()
+        self.assertFalse(result['declared_route_checks_satisfied'])
+        self.assertFalse(self.tools.calls)
+
     async def test_monitor_refuses_route_and_checkpoint_scope_tampering(self):
         await self.run_case()
         from monitor import report,read_journal
