@@ -82,6 +82,18 @@ const path=require('node:path');
    summary=await summaryOf('ambiguous');
    assert.equal(summary.first_event_at,'2024-01-02T10:00:00Z');
    assert.equal(summary.last_event_at,'2024-04-03T10:00:00Z');
+   // Date and time in separate columns: both preselected, the format detected from the joined value.
+   await page.locator('#owgEventLogName').fill('split');
+   await page.locator('#owgEventLogNaiveOffset').fill('');
+   await page.locator('#owgEventLogFile').setInputFiles({name:'split.csv',mimeType:'text/csv',buffer:Buffer.from('Order;Step;Posting Date;Time\n4711;Create;04.03.2024;14:05:00\n4711;Ship;05.03.2024;08:30:15\n')});
+   await page.waitForFunction(()=>document.querySelector('#owgEventLogTimeOfDay').value==='Time'&&document.querySelector('#owgEventLogTime').value==='Posting Date');
+   await page.waitForFunction(()=>document.querySelector('#owgEventLogTimeFormat').value==='%d.%m.%Y %H:%M:%S');
+   await page.locator('#owgEventLogCase').selectOption('Order');await page.locator('#owgEventLogActivity').selectOption('Step');
+   await page.locator('#owgEventLogNaiveOffset').fill('Z');
+   await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Imported 2 events'}).waitFor();
+   summary=await summaryOf('split');
+   assert.equal(summary.first_event_at,'2024-03-04T14:05:00Z');
    // ISO files keep the default and get no format message.
    await page.locator('#owgEventLogName').fill('');
    await page.locator('#owgEventLogFile').setInputFiles({name:'iso.csv',mimeType:'text/csv',buffer:Buffer.from('case,activity,time\nx,A,2024-03-04T08:00:00Z\nx,,2024-03-04T09:00:00Z\n')});

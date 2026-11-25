@@ -106,8 +106,12 @@ def timestamp_sql(raw: str, offset: str, pattern: str) -> str:
             f" || '{suffix}' AS TIMESTAMPTZ) END")
 
 
-def sample_column(text: str, delimiter: str, column: str, limit: int = MAX_SAMPLES) -> list[str]:
-    """Non-empty values of one column from the start of a CSV file; a cut-off last line is dropped."""
+def sample_column(text: str, delimiter: str, column: str, limit: int = MAX_SAMPLES,
+                  time_column: str = "") -> list[str]:
+    """Non-empty values of one column from the start of a CSV file; a cut-off last line is dropped.
+
+    With ``time_column`` each value is the date column and the time-of-day column joined by a space,
+    as the import reads them."""
     if delimiter not in {",", ";", "\t", "|"}:
         raise TimestampFormatError("unsupported delimiter")
     text = text.lstrip("﻿")
@@ -117,10 +121,16 @@ def sample_column(text: str, delimiter: str, column: str, limit: int = MAX_SAMPL
     header = next(reader, None) or []
     if column not in header:
         raise TimestampFormatError("the timestamp column is not in the file header")
+    if time_column and time_column not in header:
+        raise TimestampFormatError("the time-of-day column is not in the file header")
     index, values = header.index(column), []
+    clock = header.index(time_column) if time_column else None
     for row in reader:
         if index < len(row) and row[index].strip():
-            values.append(row[index].strip()[:100])
+            value = row[index].strip()
+            if clock is not None and clock < len(row) and row[clock].strip():
+                value += " " + row[clock].strip()
+            values.append(value[:100])
             if len(values) >= limit:
                 break
     return values

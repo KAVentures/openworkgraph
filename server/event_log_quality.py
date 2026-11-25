@@ -61,6 +61,8 @@ def transform(source_format: str, mapping: dict[str, Any] | None) -> dict[str, A
             declared["mapping"]["naive_timestamp_offset"] = mapping["naive_timestamp_offset"]
         if mapping.get("timestamp_format"):
             declared["mapping"]["timestamp_format"] = mapping["timestamp_format"]
+        if mapping.get("time_column"):
+            declared["mapping"]["time_column"] = mapping["time_column"]
         if mapping.get("encoding") not in (None, "", "utf-8"):
             # Decoding changes the text that is stored, so a non-default encoding is part of the transform.
             declared["mapping"]["encoding"] = mapping["encoding"]

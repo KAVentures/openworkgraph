@@ -39,7 +39,7 @@ def _mapping(declared: dict[str, Any]) -> dict[str, Any] | None:
     if declared.get("format") != "csv" or not isinstance(mapping, dict):
         return None
     keys = ("case_column", "activity_column", "timestamp_column", "resource_column", "attribute_columns",
-            "delimiter", "naive_timestamp_offset", "timestamp_format")
+            "delimiter", "naive_timestamp_offset", "timestamp_format", "time_column")
     out = {k: mapping[k] for k in keys if mapping.get(k) not in (None, "", [])}
     return out if all(out.get(k) for k in ("case_column", "activity_column", "timestamp_column")) else None
 
