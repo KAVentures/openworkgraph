@@ -87,6 +87,34 @@ def report(spec, records, deployment_name):
         _fail()
     nodes = {node['id'] for node in spec['process_model']['activities']
              if node['kind'] == 'activity' and node.get('implementation') != 'human'}
+    dependent=spec.get('decision_table_contract')=='openworkgraph.current-source-dependent-decision.v1'
+    expected_routes={};expected_order=[];checkpoint=0;checkpoint_rows={};checkpoint_ready=False
+    if dependent:
+        from owg_model.process_model import ProcessModel
+        from owg_model.process_decision_tables import decision_order
+        from decision_runtime import _required_tables
+        model=ProcessModel.model_validate(spec['process_model'])
+        tables_by_id={t.id:t for t in model.decision_tables}
+        declared=first.get('dependent_decision_routes')
+        if not isinstance(declared,list) or len(declared)>12:
+            _fail()
+        for route in declared:
+            if (not isinstance(route,dict) or set(route)!={'table_id','target_activity_ids'}
+                or not isinstance(route['table_id'],str) or route['table_id'] not in tables_by_id
+                or route['table_id'] in expected_routes or not isinstance(route['target_activity_ids'],list)
+                or len(route['target_activity_ids'])>80):
+                _fail()
+            table=tables_by_id[route['table_id']]
+            if any(not isinstance(t,str) or t not in {r.target_activity_id for r in table.rows}
+                   for t in route['target_activity_ids']):
+                _fail()
+            expected_routes[table.id]=route['target_activity_ids']
+        visited={k for k,v in expected_routes.items() if v}
+        if _required_tables(model,visited)!=set(expected_routes):
+            _fail()
+        expected_order=[t.id for t in decision_order(model.decision_tables) if t.id in expected_routes]
+        if [r['table_id'] for r in declared]!=expected_order:
+            _fail()
     started = previous = _stamp(first.get('at'))
     steps, pending, ended, blocked = [], None, None, False
     attempts = 0
@@ -99,6 +127,13 @@ def report(spec, records, deployment_name):
             _fail()
         previous = stamp
         phase = row['phase']
+        if dependent and expected_order and phase!='decision_table_checked':
+            if checkpoint_rows and len(checkpoint_rows)!=len(expected_order):
+                _fail()
+            if phase in {'precondition_pending','attempt_pending'}:
+                if not checkpoint_ready or blocked:
+                    _fail()
+                checkpoint_ready=False
         if phase == 'operator_stop_observed':
             if (row.get('future_tool_attempts_stopped') is not True
                     or row.get('already_in_flight_requests_not_cancelled') is not True):
@@ -138,17 +173,37 @@ def report(spec, records, deployment_name):
                     or row.get('policy_document_verified') is not False):
                 _fail()
             table=tables[row['table_id']];first_policy=table.get('hit_policy','UNIQUE')=='FIRST'
-            if spec.get('decision_table_contract')=='openworkgraph.current-source-dependent-decision.v1':
-                required=sorted(d['table_id'] for d in table.get('required_decisions',[]))
-                unresolved=row.get('unresolved_required_decision_table_ids')
-                if (row.get('required_decision_table_ids')!=required or not isinstance(unresolved,list)
-                    or any(not isinstance(d,str) or d not in required for d in unresolved)
-                    or len(unresolved)!=len(set(unresolved))
-                    or row.get('check_purpose') not in {'visited_route','prerequisite_output'}
-                    or bool(unresolved)!=(row.get('status')=='dependency_unresolved')
-                    or (row.get('route_matches') and (unresolved or row.get('selected_target_activity_id') not in
-                        {r['target_activity_id'] for r in table['rows']}))):
+            if dependent:
+                ident=table['id']
+                if not expected_order or ident not in expected_routes:
                     _fail()
+                number=row.get('checkpoint_number')
+                if type(number) is not int:
+                    _fail()
+                if number==checkpoint+1:
+                    if checkpoint_rows and len(checkpoint_rows)!=len(expected_order):
+                        _fail()
+                    checkpoint=number;checkpoint_rows={};checkpoint_ready=False
+                if (number!=checkpoint or len(checkpoint_rows)>=len(expected_order)
+                    or ident!=expected_order[len(checkpoint_rows)]):
+                    _fail()
+                required=sorted(d['table_id'] for d in table.get('required_decisions',[]))
+                unresolved=sorted(d for d in required if checkpoint_rows.get(d) is None)
+                target=row.get('selected_target_activity_id')
+                selected_status='first_match' if first_policy else 'unique_match'
+                targets=expected_routes[ident]
+                expected_match=(target is not None and all(t==target for t in targets))
+                if (row.get('required_decision_table_ids')!=required
+                    or row.get('unresolved_required_decision_table_ids')!=unresolved
+                    or row.get('check_purpose')!=('visited_route' if targets else 'prerequisite_output')
+                    or bool(unresolved)!=(row.get('status')=='dependency_unresolved')
+                    or (target is not None and target not in {r['target_activity_id'] for r in table['rows']})
+                    or (target is not None)!=(row.get('status')==selected_status)
+                    or row['route_matches']!=expected_match or (unresolved and target is not None)):
+                    _fail()
+                checkpoint_rows[ident]=target
+                if len(checkpoint_rows)==len(expected_order):
+                    checkpoint_ready=True
 
             if first_policy:
                 if row.get('hit_policy')!='FIRST' or row.get('row_precedence')!='declared_row_order':_fail()
@@ -172,6 +227,8 @@ def report(spec, records, deployment_name):
                    ('declared_route_checks_satisfied', 'all_tool_results_matched', 'all_declared_operations_verified')):
                 _fail()
             succeeded = row['declared_route_checks_satisfied']
+            if succeeded and dependent and expected_order and not checkpoint_ready:
+                _fail()
             if (row['all_tool_results_matched'] and (pending or any(s['status'] != 'completed' for s in steps))
                     or succeeded and (blocked or not row['all_tool_results_matched'])):
                 _fail()
