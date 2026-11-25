@@ -44,3 +44,22 @@ authenticated HTTP and browser review mode. The exact standalone ordering
 module was also checked locally against 500 randomized populations for
 determinism, completeness, per-stratum priority preservation and language
 rotation.
+
+## Filtered and pinned active review
+
+The priority and diversity views now expose exact filters for declared
+language, keyword intent and review priority. Facet counts describe all
+eligible unlabelled training examples and the matching subset. Unknown
+filter values yield an empty subset, not an implicit widening. No holdout
+example is selected. A queue SHA-256 binds the ordered training population,
+model, taxonomy, settings, model-freshness basis and selected filters/order.
+The dashboard pins subsequent nonzero-offset pages; changed evidence refuses
+the request and requires refreshing the queue. Legacy unpinned API calls
+remain supported. The local-only endpoint adds optional language,
+keyword_intent, priority and expected_queue_sha256 query parameters.
+
+Before returning a ranked page the service rechecks the model, labelled
+freshness basis, settings, unlabelled population and (HTTP path) taxonomy.
+The digest is an opaque local consistency token, not authentication or proof
+of representativeness. No new retention, labels, inference over holdout
+messages or provider access. Full browser and native CI remain required.

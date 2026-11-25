@@ -207,6 +207,8 @@ with TestClient(app) as client:
     assert client.get(route+'?limit=10000',headers=owner).status_code == 422
     assert client.get(route+'?order=other',headers=owner).status_code == 422
     assert client.get(route+'?order=diverse',headers=owner).json()['review_order']=='diverse'
+    assert client.get(route+'?expected_queue_sha256='+('0'*64),headers=owner).status_code==409
+    assert client.get(route+'?language=und',headers=owner).status_code==200
 """
     env = os.environ.copy()
     env.update({"WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"),
@@ -215,3 +217,65 @@ with TestClient(app) as client:
     run = subprocess.run([sys.executable, "-c", code], env=env,
         cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=120)
     assert run.returncode == 0, f"stdout={run.stdout}\nstderr={run.stderr}"
+
+
+def test_exact_facets_pinned_pages_and_filter_change(monkeypatch):
+    enabled()
+    monkeypatch.setattr(review,"_split",lambda _: "train")
+    review.add_examples([{"text":"refund first","language":"en"},
+        {"text":"refund second","language":"en"},{"text":"cancel third","language":"sv"},
+        {"text":"refund cancel fourth","language":"en"}])
+    first=triage.queue(TAXONOMY,language="en",keyword_intent="Refund",limit=1)
+    assert first["total_eligible"]==4 and first["matching_count"]==2
+    assert first["eligible_facets"]["language"]=={"en":3,"sv":1}
+    assert first["matching_facets"]["keyword_intent"]=={"Refund":2}
+    assert first["next_offset"]==1
+    second=triage.queue(TAXONOMY,language="en",keyword_intent="Refund",limit=1,offset=1,
+                       expected_queue_sha256=first["queue_sha256"])
+    assert second["queue_sha256"]==first["queue_sha256"]
+    assert first["examples"][0]["example_id"]!=second["examples"][0]["example_id"]
+    assert second["next_offset"] is None
+    with pytest.raises(review.ReviewError,match="queue changed"):
+        triage.queue(TAXONOMY,language="sv",expected_queue_sha256=first["queue_sha256"])
+    assert triage.queue(TAXONOMY,language="unknown")["matching_count"]==0
+
+
+def test_pin_changes_after_label_and_taxonomy_edit(monkeypatch):
+    seed(monkeypatch)
+    r=triage.queue(TAXONOMY)
+    review.label({"example_id":r["examples"][0]["example_id"],"labels":["Refund"]},["Refund","Cancel"])
+    with pytest.raises(review.ReviewError,match="queue changed"):
+        triage.queue(TAXONOMY,expected_queue_sha256=r["queue_sha256"])
+    r=triage.queue(TAXONOMY)
+    changed={**TAXONOMY,"intents":[{"name":"Refund","terms":["return"]},TAXONOMY["intents"][1]]}
+    with pytest.raises(review.ReviewError,match="queue changed"):
+        triage.queue(changed,expected_queue_sha256=r["queue_sha256"])
+
+
+def test_model_replacement_and_labelled_basis_change_during_ranking(monkeypatch):
+    seed(monkeypatch)
+    model={"model_sha256":"initial"}
+    monkeypatch.setattr(review,"_load_model",lambda:dict(model))
+    monkeypatch.setattr(review,"_freshness",lambda *_:(False,"stale"))
+    original=mining.classify
+    def replace(text,intents):
+        model["model_sha256"]="replacement"
+        return original(text,intents)
+    monkeypatch.setattr(mining,"classify",replace)
+    with pytest.raises(review.ReviewError,match="changed during ranking"):
+        triage.queue(TAXONOMY)
+
+
+def test_taxonomy_recheck_during_ranking(monkeypatch):
+    seed(monkeypatch)
+    with pytest.raises(review.ReviewError,match="changed during ranking"):
+        triage.queue(TAXONOMY,current_taxonomy=lambda:{**TAXONOMY,"intents":[]})
+
+
+def test_filter_validation_and_holdout_exclusion(monkeypatch):
+    seed(monkeypatch)
+    for kwargs in ({"priority":"other"},{"language":True},{"keyword_intent":""},
+                   {"expected_queue_sha256":"bad"}):
+        with pytest.raises(review.ReviewError):
+            triage.queue(TAXONOMY,**kwargs)
+    assert triage.queue(TAXONOMY,keyword_intent="Cancel")["matching_count"]==0
