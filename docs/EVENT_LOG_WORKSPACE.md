@@ -45,10 +45,15 @@ sample rather than adding a copy. It is deleted like any other log.
 | Format | Import | Export | Notes |
 | --- | --- | --- | --- |
 | CSV | yes | yes | You map the case, activity, timestamp and (optional) resource columns. |
-| Excel (.xlsx) | yes | no | One worksheet is converted to CSV on this computer, then mapped and imported like any CSV (below). |
+| Excel (.xlsx) | yes | yes | Import: one worksheet is converted to CSV on this computer, then mapped and imported like any CSV (below). Export: the CSV export's rows as text cells ([Excel event-log export](#excel-event-log-export)). |
+| SQLite database | yes | no | One table is converted to CSV, then mapped like any CSV ([SQLite database files](#sqlite-database-files)). |
+| JSON Lines | yes | no | One JSON object per line, flattened to CSV columns ([JSON Lines files](#json-lines-files)). |
+| Apache Parquet | yes | yes | Import: converted to CSV ([Parquet files](#parquet-files)). Export: the CSV export's rows with a typed UTC timestamp column ([Parquet event-log export](#parquet-event-log-export)). |
 | XES (IEEE 1849) | yes | yes | `concept:name`, `time:timestamp` and `org:resource`; up to 32 other attributes of 500 characters each are imported as strings. Choose **XES with retained attributes** to include static trace and event attributes in the export. |
 | OCEL 2.0 JSON | yes | yes | Objects, object types, events, event-to-object links and supplied directed object-to-object relationships with qualifiers. Object attribute values keep their times (below). |
 | OCEL 2.0 XML | yes | yes | The same retained content in the OCEL 2.0 worked-example XML layout (`.xmlocel`). Objects must precede events as in the original 2.0 printed root schema. See the relationship contract for schema/example errata and format limits. |
+| OCEL 2.0 SQLite | no | yes | `GET /v1/event-logs/{log_id}/ocel.sqlite`: the OCEL 2.0 relational layout with per-type event and object tables. |
+| gzip (`.gz`) | yes | no | Any import may be gzip-compressed ([Compressed files](#compressed-files)). |
 
 The attribute export uses the selected case notion and includes values in the
 download, including supported lifecycle fields. The standard XES choice exports
