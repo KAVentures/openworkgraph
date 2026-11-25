@@ -58,7 +58,7 @@ const path=require('node:path');
   await history.getByRole('button',{name:'Review attribute history'}).click();await historyRequested;
   await mapType.selectOption(emptyType);await page.locator('#owgEventLogObjectMap').getByText('This object type has no retained events',{exact:false}).waitFor();
   const lateHistory=page.waitForResponse(r=>r.url().includes('/object-attribute-history?'));releaseHistory();await lateHistory;await page.unroute('**/object-attribute-history?*');
-  assert.equal(await history.getByRole('status').textContent(),'');
+  assert.equal(await history.getByRole('status').last().textContent(),'');
   await page.locator('#owgEventLogObjectAttributesBox').getByText('status changes on 1 of 1',{exact:false}).waitFor();
   await history.locator('#owgObjectAttributeHistoryId').fill('empty');await history.getByRole('button',{name:'Review attribute history'}).click();await history.getByRole('status').filter({hasText:'Showing 1–2 of 2'}).waitFor();
   await mapType.selectOption('type00');await page.locator('#owgEventLogObjectCases h3').filter({hasText:'type00'}).waitFor({state:'attached'});

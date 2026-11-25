@@ -4934,10 +4934,18 @@
     const history=el('div');history.id='owgObjectAttributeHistory';
     const historyId=input('owgObjectAttributeHistoryId','text','Exact object ID');historyId.maxLength=400;
     const historyOpen=button('Review attribute history','secondary');
+    historyOpen.disabled=true;
     const historyStatus=el('div',null,'muted');historyStatus.setAttribute('role','status');
     const historyRows=el('div'),historyPrevious=button('Previous attribute values','secondary'),historyNext=button('Next attribute values','secondary');
     const historyControls=el('div',null,'row');historyControls.append(historyPrevious,historyNext);
-    history.append(el('h4','Object attribute history'),el('p','Enter an exact object ID from the selected type. Values are recorded observations; 1970-01-01 denotes an initial value without a known time.','muted'),field('Exact object ID',historyId),historyOpen,historyStatus,historyRows,historyControls);
+    const browser=document.createElement('details');browser.id='owgObjectBrowser';
+    const browserSearch=input('owgObjectBrowserSearch','search');browserSearch.maxLength=400;
+    const browserRun=button('Find objects','secondary'),browserPrevious=button('Previous objects','secondary'),browserNext=button('Next objects','secondary');
+    browserRun.disabled=true;
+    const browserStatus=el('div',null,'muted');browserStatus.setAttribute('role','status');
+    const browserRows=el('div'),browserNav=el('div',null,'row');browserNav.append(browserPrevious,browserNext);
+    browser.append(el('summary','Find an object'),el('p','Search literal object IDs in the selected type. Matching is case-sensitive; leave the search empty to browse all objects, including those with no events.','muted'),field('Object ID contains',browserSearch),browserRun,browserStatus,browserRows,browserNav);
+    history.append(el('h4','Object attribute history'),el('p','Enter an exact object ID from the selected type. Values are recorded observations; 1970-01-01 denotes an initial value without a known time.','muted'),browser,field('Exact object ID',historyId),historyOpen,historyStatus,historyRows,historyControls);
     box.append(row,out,flatOut,attrOut,history,shared);
     let graph=null,flat=null,attrs=null,mapTurn=0;
     const flatCache=new Map(),attrCache=new Map();
@@ -4963,6 +4971,34 @@
     historyOpen.onclick=()=>{historyRevision=null;loadObjectHistory(0);};
     historyPrevious.onclick=()=>loadObjectHistory(Math.max(0,historyOffset-50));
     historyNext.onclick=()=>loadObjectHistory(historyFollowing);
+    let browserTurn=0,browserRevision=null,browserIndex=0,browserFollowing=null,browserCursors=[null];
+    const clearObjectBrowser=()=>{++browserTurn;browserRevision=null;browserIndex=0;browserFollowing=null;browserCursors=[null];browserStatus.textContent='';browserRows.replaceChildren();browserPrevious.disabled=browserNext.disabled=true;};
+    clearObjectBrowser();browserSearch.oninput=clearObjectBrowser;
+    async function loadObjects(index){
+      const ticket=++browserTurn,selected=pick.value,search=browserSearch.value;
+      const active=()=>current()&&ticket===browserTurn&&pick.value===selected&&browserSearch.value===search;
+      browserPrevious.disabled=browserNext.disabled=true;browserRows.replaceChildren();
+      if(Array.from(search).length>200){browserStatus.textContent='Use at most 200 characters for the object ID search.';return;}
+      browserStatus.textContent='Loading objects…';
+      const query=new URLSearchParams({object_type:selected,search,limit:'25'});
+      if(browserCursors[index]!==null)query.set('after',browserCursors[index]);
+      if(browserRevision!==null)query.set('revision',String(browserRevision));
+      try{
+        const result=await getJSON(logPath('object-browser').replace(/\?.*$/,'')+'?'+query);
+        if(!active())return;
+        browserRevision=result.log_revision;browserIndex=index;browserFollowing=result.next_after;
+        const start=index*25;browserStatus.textContent=result.total_objects?'Showing '+(start+1).toLocaleString()+'–'+(start+result.objects.length).toLocaleString()+' of '+Number(result.total_objects).toLocaleString()+' matching objects.':'No matching objects.';
+        if(result.objects.length)browserRows.replaceChildren(table(['Object ID','Linked events','Timed values','History'],result.objects.map(item=>{
+          const open=button('Review history','secondary');open.setAttribute('aria-label','Review attribute history for '+JSON.stringify(item.object_id));
+          open.onclick=()=>{historyId.value=item.object_id;clearObjectHistory();historyRevision=browserRevision;loadObjectHistory(0);};
+          return [item.object_id,Number(item.linked_events).toLocaleString(),Number(item.timed_values).toLocaleString(),open];
+        })));
+        browserPrevious.disabled=index===0;browserNext.disabled=browserFollowing===null;
+      }catch(error){if(active()){browserRevision=null;browserStatus.textContent=error.message;}}
+    }
+    browserRun.onclick=()=>{clearObjectBrowser();loadObjects(0);};
+    browserPrevious.onclick=()=>loadObjects(browserIndex-1);
+    browserNext.onclick=()=>{browserCursors[browserIndex+1]=browserFollowing;loadObjects(browserIndex+1);};
     const renderAttrs=()=>{
       const type=attrs&&(attrs.object_types||[]).find(t=>t.object_type===pick.value);
       if(!type){attrOut.replaceChildren(...(attrs?[el('p','No timed object attributes are recorded for this type.','muted')]:[]));return;}
@@ -5073,7 +5109,7 @@
         graph=selectedGraph;render();
       }catch(error){if(current()&&ticket===mapTurn&&pick.value===selected)out.replaceChildren(el('div',error.message,'muted'));}
     };
-    showMap.onclick=selectMap;pick.onchange=()=>{clearObjectHistory();selectMap();};
+    showMap.onclick=selectMap;pick.onchange=()=>{clearObjectHistory();clearObjectBrowser();selectMap();};
     getJSON(logPath('object-map').replace(/\?.*$/,'')).then(async g=>{
       if(!current())return;
       if(!state.objectTypes.length){
@@ -5083,6 +5119,7 @@
       }
       graph=g;setOptions(pick,(state.objectTypes||[]).map(t=>[t.object_type,(t.object_type.trim()===t.object_type?t.object_type:JSON.stringify(t.object_type))+' ('+Number(t.objects).toLocaleString()+')']));
       if(state.caseType)pick.value=state.caseType;
+      browserRun.disabled=historyOpen.disabled=!pick.value;
       const touching=g.activities_touching_several_types||[];
       const sharedRows=el('div');sharedRows.id='owgObjectMapSharedActivities';
       const sharedStatus=el('div',null,'muted');sharedStatus.setAttribute('role','status');

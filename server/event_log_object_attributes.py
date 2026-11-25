@@ -26,6 +26,47 @@ MAX_ASOF_LINKS = 5_000_000      # event links examined to compare stored values 
 _INITIAL = "TIMESTAMP '1970-01-01 00:00:00'"
 
 
+def browse_objects(log_id: str, object_type: str, search: str = '', after: str | None = None,
+                   limit: int = 25, revision: int | None = None) -> dict[str, Any]:
+    """Browse literal IDs of a type, including objects without event links."""
+    if (not isinstance(object_type, str) or not 1 <= len(object_type) <= 200 or
+            not isinstance(search, str) or len(search) > 200 or
+            (after is not None and (not isinstance(after, str) or not 1 <= len(after) <= 200)) or
+            type(limit) is not int or not 1 <= limit <= 100 or
+            (revision is not None and (type(revision) is not int or revision < 0))):
+        raise workspace.EventLogWorkspaceError('invalid object browser request')
+    if after is not None and revision is None:
+        raise workspace.EventLogWorkspaceError('restart the object browser from the first page')
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            current = _revision(conn, log_id)
+            if revision is not None and revision != current:
+                raise workspace.EventLogWorkspaceError('the retained log has changed; restart the object browser')
+            args = [log_id, object_type, search]
+            total = conn.execute('''SELECT count(*) FROM objects
+                WHERE log_id=? AND object_type=? AND contains(object_id, ?)''', args).fetchone()[0]
+            where_after = ' AND object_id > ?' if after is not None else ''
+            ids = [r[0] for r in conn.execute('''SELECT object_id FROM objects
+                WHERE log_id=? AND object_type=? AND contains(object_id, ?)''' + where_after +
+                ' ORDER BY object_id LIMIT ?', [*args, *([after] if after is not None else []), limit + 1]).fetchall()]
+            more = len(ids) > limit
+            ids = ids[:limit]
+            links, values = {}, {}
+            if ids:
+                links = dict(conn.execute('''SELECT object_id, count(DISTINCT event_id) FROM event_objects
+                    WHERE log_id=? AND object_id IN (SELECT unnest(?)) GROUP BY object_id''', [log_id, ids]).fetchall())
+                values = dict(conn.execute('''SELECT object_id, count(*) FROM object_attribute_values
+                    WHERE log_id=? AND object_id IN (SELECT unnest(?)) GROUP BY object_id''', [log_id, ids]).fetchall())
+            return {'object_type': object_type, 'search': search, 'log_revision': current,
+                    'total_objects': total, 'next_after': ids[-1] if more else None,
+                    'objects': [{'object_id': obj, 'linked_events': links.get(obj, 0),
+                                 'timed_values': values.get(obj, 0)} for obj in ids]}
+        finally:
+            conn.close()
+
+
 def object_history(log_id: str, object_type: str, object_id: str, offset: int = 0,
                    limit: int = 50, revision: int | None = None) -> dict[str, Any]:
     """Page one literal object's retained timed values from a single log revision."""
@@ -183,4 +224,4 @@ def _iso(stamp) -> str | None:
     return None if stamp is None else stamp.isoformat() + "Z"
 
 
-__all__ = ["attribute_changes", "object_history"]
+__all__ = ["attribute_changes", "object_history", "browse_objects"]
