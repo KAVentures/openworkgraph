@@ -49,12 +49,17 @@ Everything else answered in under 15 s; most analyses in under 2 s.
 ## Independent cross-check with PM4Py
 
 The discovered Petri nets for BPI Challenge 2012 (exported as PNML) were replayed in OWG and, on
-the same log exported as XES, with PM4Py 2.7 token-based replay and ETConformance precision:
+the same log exported as XES, with PM4Py 2.7.23 token-based replay and ETConformance precision:
 
 | Net (noise) | Fitness OWG / PM4Py | Fitting cases OWG / PM4Py | Precision OWG / PM4Py |
 | --- | --- | --- | --- |
 | 0.2 | 1.0 / 1.0 | 100% / 100% | 0.0839 / 0.0821 |
 | 0.5 | 0.9998 / 0.9998 | 99.3% / 99.2% | 0.087 / 0.0859 |
+
+Optimal alignments agree exactly. For the 200 most frequent variants, each variant's least alignment
+cost from OWG equals PM4Py's (`alignments.petri_net`, standard cost function: 1 per log or model
+move, 0 for synchronous and silent moves). There were no mismatches on either net, and both found the same
+4 deviating variants on the noise 0.5 net and none on the noise 0.2 net.
 
 OWG replays the 2,000 most frequent variants (10,721 of 13,087 cases, disclosed as
 `cases_excluded`); PM4Py replays every case, which explains the small precision and share
