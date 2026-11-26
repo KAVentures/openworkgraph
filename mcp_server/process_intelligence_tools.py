@@ -137,6 +137,45 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         return runtime_module.core._finish("check_process_compliance", result)
 
     @mcp.tool(annotations=_READ_ONLY)
+    def get_process_attributes(log_id: str, top_values: int = 10, case_type: str | None = None) -> dict[str, Any]:
+        """The case and event attributes a shared log records (region, channel, amount, ...), to choose case filters,
+        breakdowns and root-cause features: how many cases and events carry each, numeric or categorical, whether it
+        stays the same within a case, quartiles for numbers, and the most frequent values with their share of cases
+        and median case duration. Values in fewer than 5 cases, minimum and maximum, and values of identifier-like
+        attributes are withheld. Use a value as {"attribute": "name=value"} in other tools. Aggregates only.
+        """
+        if isinstance(top_values, bool) or not isinstance(top_values, int) or not 1 <= top_values <= 50:
+            raise ToolError("top_values must be a whole number from 1 to 50")
+        return _get("get_process_attributes", f"/v1/process-intelligence/{_log(log_id)}/attributes",
+                    {"top_values": top_values, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def compare_process_logs(baseline_log_id: str, comparison_log_id: str, baseline_case_type: str | None = None,
+                             comparison_case_type: str | None = None, baseline_filter: dict[str, Any] | None = None,
+                             comparison_filter: dict[str, Any] | None = None, limit: int = 25) -> dict[str, Any]:
+        """Two shared logs side by side, for example two regions, two systems, or the same process before and after
+        a migration: case counts, events per case, rework rate and durations (with the chance a comparison case takes
+        longer), activities and paths only one log has, and the activities, paths and variants whose share of cases
+        differs most, each with a 95% interval. Activities are matched by exact name. Optional case filters per side
+        (same keys as insight cohorts) need at least 5 matching cases. Rows where either log has 1 to 4 cases are
+        withheld and counted. Both logs must be shared. Descriptive, not causes. Aggregates only, no case IDs.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ToolError("limit must be a whole number from 1 to 100")
+        payload: dict[str, Any] = {"comparison_log_id": _log(comparison_log_id), "limit": limit}
+        for key, value in (("baseline_case_type", baseline_case_type), ("comparison_case_type", comparison_case_type),
+                           ("baseline_filter", baseline_filter), ("comparison_filter", comparison_filter)):
+            if value is not None:
+                payload[key] = value
+        runtime_module.authorize_tool("compare_process_logs")
+        try:
+            result = runtime_module.secure_post(f"/v1/process-intelligence/{_log(baseline_log_id)}/compare-logs", payload)
+        except Exception as exc:
+            raise ToolError(str(exc) or "process intelligence request failed") from None
+        result["interpretation"] = _NOTE
+        return runtime_module.core._finish("compare_process_logs", result)
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_performance_spectrum(log_id: str, segments: list[str] | None = None, top: int = 6, bins: int = 30,
                                          case_type: str | None = None) -> dict[str, Any]:
         """Performance spectrum of a shared log: for the most frequent segments (one activity directly followed by
@@ -411,6 +450,23 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
             import json as _json
             params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
         return _get("get_process_model_quality", f"/v1/process-intelligence/{_log(log_id)}/model-quality", params)
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_process_model(log_id: str, noise: float = 0.2, activities: float = 1.0,
+                          case_type: str | None = None) -> dict[str, Any]:
+        """The discovered process model of a shared log, to plan an automation or explain the process: its steps,
+        decisions, loops and parallel branches with the transitions between them, the observed share of cases on
+        each branch (unconfirmed rules, not business conditions), the same model as a process tree in PM4Py
+        notation, and how many cases it replays. Pick noise with get_process_model_quality first; activities keeps
+        the most frequent share of activities. A reviewable draft from recorded order, not the official or
+        approved process, and it authorizes nothing. Aggregates only, no case IDs or resources.
+        """
+        if isinstance(noise, bool) or not isinstance(noise, (int, float)) or not 0 <= noise < 1:
+            raise ToolError("noise must be a share from 0 up to (not including) 1")
+        if isinstance(activities, bool) or not isinstance(activities, (int, float)) or not 0 < activities <= 1:
+            raise ToolError("activities must be a share above 0 and at most 1")
+        return _get("get_process_model", f"/v1/process-intelligence/{_log(log_id)}/process-model",
+                    {"noise": float(noise), "activities": float(activities), "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_deviations(log_id: str, noise: float = 0.2, case_type: str | None = None,
