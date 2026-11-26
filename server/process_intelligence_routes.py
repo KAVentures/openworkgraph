@@ -307,6 +307,14 @@ async def agent_model_quality(request: Request, log_id: str, levels: str | None 
     return await _answer(sharing.model_quality, log_id, case_type, levels)
 
 
+@router.get("/v1/process-intelligence/{log_id}/process-model")
+async def agent_process_model(request: Request, log_id: str, noise: float = Query(default=0.2, ge=0, lt=1),
+                              activities: float = Query(default=1.0, gt=0, le=1),
+                              case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.process_model, log_id, case_type, noise, activities)
+
+
 @router.get("/v1/process-intelligence/{log_id}/model-deviations")
 async def agent_model_deviations(request: Request, log_id: str, noise: float = Query(default=0.2, ge=0, lt=1),
                                  case_type: str | None = Query(default=None, max_length=200)):
