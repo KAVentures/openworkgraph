@@ -1339,22 +1339,34 @@ def drift(log_id: str, case_type: str | None = None, window: str = "month") -> d
     return {**dr.drift(log_id, case_type, window=window), "format": FORMAT, "log_id": log_id}
 
 
-def stuck_cases(log_id: str, case_type: str | None = None, limit: int = 25) -> dict[str, Any]:
-    """Open cases idle much longer than usual after their latest activity (cases level only)."""
+def stuck_cases(log_id: str, case_type: str | None = None, limit: int = 25,
+                case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Open cases idle much longer than usual after their latest activity (cases level only). An optional case
+    filter looks within one group of cases."""
     require(log_id, "cases")
     from . import event_log_stuck as st
     spec: dict[str, Any] = {"limit": max(1, min(int(limit), 100))}
     if case_type:
         spec["case_type"] = case_type
+    if case_filter is not None:
+        if not isinstance(case_filter, dict) or not case_filter:
+            raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+        spec["cohort"] = case_filter
     return {**st.stuck_cases(log_id, spec), "format": FORMAT, "log_id": log_id}
 
 
-def slowest_cases(log_id: str, case_type: str | None = None, limit: int = 10) -> dict[str, Any]:
+def slowest_cases(log_id: str, case_type: str | None = None, limit: int = 10,
+                  case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The slowest cases, slowest first (cases level only). An optional case filter ranks within one group."""
     require(log_id, "cases")
     from . import event_log_case_explain as case_explain
     spec: dict[str, Any] = {"limit": max(1, min(int(limit), 50))}
     if case_type:
         spec["case_type"] = case_type
+    if case_filter is not None:
+        if not isinstance(case_filter, dict) or not case_filter:
+            raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+        spec["cohort"] = case_filter
     return {"format": FORMAT, "log_id": log_id, **case_explain.slowest(log_id, spec)}
 
 

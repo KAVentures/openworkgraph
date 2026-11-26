@@ -915,24 +915,38 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"window": window, "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
-    def get_stuck_process_cases(log_id: str, limit: int = 25, case_type: str | None = None) -> dict[str, Any]:
+    def get_stuck_process_cases(log_id: str, limit: int = 25, case_type: str | None = None,
+                                case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Open cases of a shared log that have been idle much longer than usual after their latest activity, with
         their latest activity and how many times the usual wait they have exceeded. Needs a log shared at the cases
-        level. A stuck case is a prompt to look, not a finding that anyone did anything wrong.
+        level. A stuck case is a prompt to look, not a finding that anyone did anything wrong. Optional
+        case_filter (see openworkgraph://process-case-filter) looks within one group of cases.
         """
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise ToolError("limit must be 1 to 100")
-        return _get("get_stuck_process_cases", f"/v1/process-intelligence/{_log(log_id)}/stuck-cases",
-                    {"limit": limit, "case_type": case_type})
+        params: dict[str, Any] = {"limit": limit, "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_stuck_process_cases", f"/v1/process-intelligence/{_log(log_id)}/stuck-cases", params)
 
     @mcp.tool(annotations=_READ_ONLY)
-    def get_slowest_process_cases(log_id: str, limit: int = 10, case_type: str | None = None) -> dict[str, Any]:
+    def get_slowest_process_cases(log_id: str, limit: int = 10, case_type: str | None = None,
+                                  case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """The slowest cases of a shared log (first to last recorded event), slowest first.
 
-        Needs a log shared at the cases level. Follow up with explain_process_case.
+        Needs a log shared at the cases level. Follow up with explain_process_case. Optional case_filter (see
+        openworkgraph://process-case-filter) ranks within one group of cases.
         """
-        return _get("get_slowest_process_cases", f"/v1/process-intelligence/{_log(log_id)}/slowest-cases",
-                    {"limit": max(1, min(int(limit), 50)), "case_type": case_type})
+        params: dict[str, Any] = {"limit": max(1, min(int(limit), 50)), "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_slowest_process_cases", f"/v1/process-intelligence/{_log(log_id)}/slowest-cases", params)
 
 
     @mcp.tool(annotations=_READ_ONLY)
