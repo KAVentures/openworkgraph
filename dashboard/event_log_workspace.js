@@ -10992,9 +10992,9 @@
       downloadNext.setAttribute('aria-label','Download next cases in cluster '+cluster.cluster+' as CSV');
       const exportStatus=el('div',null,'muted');exportStatus.setAttribute('role','status');
       nav.append(previous,next,download,downloadNext);
-      const tagging=document.createElement('details');tagging.id='owgClusterTagging';tagging.appendChild(el('summary','Tag cases matching this cluster'));
-      if(!cluster.cohort){
-        tagging.appendChild(el('p','This cluster has too many or too-long variant paths for a case-tag filter. Use the case list instead.','muted'));
+      const tagging=document.createElement('details');tagging.id='owgClusterTagging';tagging.appendChild(el('summary','Tag cases in this cluster'));
+      if(cluster.cases>100000){
+        tagging.appendChild(el('p','Tagging is limited to 100,000 cases at a time. Use the case list instead.','muted'));
       }else{
         const tag=input('owgClusterTagName','text','Tag name');tag.maxLength=60;
         const note=input('owgClusterTagNote','text','Optional tag note');note.maxLength=500;
@@ -11002,20 +11002,17 @@
         const tagStatus=el('div',null,'muted');tagStatus.id='owgClusterTagStatus';tagStatus.setAttribute('role','status');
         const examples=el('div');examples.id='owgClusterTagPreview';
         const tagRow=el('div',null,'row');tagRow.style.alignItems='end';tagRow.append(field('Tag',tag),field('Tag note',note),preview,apply);
-        tagging.append(el('p','These paths are re-evaluated in the original case scope; cases may have changed since clustering. Preview the selection. Applying an existing tag replaces its notes for matching cases.','muted'),tagRow,tagStatus,examples);
+        tagging.append(el('p','The cluster is recomputed in the original case scope; cases may have changed since clustering. Preview the selection. Applying an existing tag replaces its notes for matching cases.','muted'),tagRow,tagStatus,examples);
         let selection=null,tagTurn=0;
         const reset=()=>{++tagTurn;selection=null;apply.disabled=true;preview.disabled=false;tagStatus.textContent='';examples.replaceChildren();};
         tag.addEventListener('input',reset);note.addEventListener('input',reset);
-        const postTag=async(suffix,spec)=>(await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/case-tags'+suffix,
+        const postTag=async(suffix,spec)=>(await api(endpoint+'/tag'+suffix,
           {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
         preview.onclick=async()=>{
           const ticket=++tagTurn,active=()=>current()&&ticket===tagTurn;
           selection=null;apply.disabled=true;examples.replaceChildren();
           const name=tag.value.trim();if(!name){tagStatus.textContent='Enter a tag.';return;}
-          const paths={variants:cluster.cohort.variants};
-          const cohort=settings.cohort&&Object.keys(settings.cohort).length?{all_of:[settings.cohort,paths]}:paths;
-          const spec={tag:name,note:note.value.trim(),case_type:caseNotion,cohort};
-          if(new TextEncoder().encode(JSON.stringify(spec)).length>262000){tagStatus.textContent='The cluster paths exceed the case-tag request limit. Use the case list instead.';return;}
+          const spec={...settings,cluster_key:cluster.cluster_key,tag:name,note:note.value.trim(),case_type:caseNotion};
           preview.disabled=true;tagStatus.textContent='Checking matching cases…';
           try{
             const result=await postTag('/preview',spec);if(!active())return;

@@ -911,15 +911,19 @@ by literal case key, with an optional `limit` of 1–100 (default 50). Send the 
 `next_after` as `after` to continue. If the cluster changes, rerun the report to get
 its current key. This route requires a dashboard session.
 
-From **Inspect cases**, **Tag cases matching this cluster** can mark the cases
-whose current paths match that cluster, within the case scope used to build it.
-Preview the count and sample before applying; existing tag notes on matching
-cases will be replaced. The preview is checked again at save time, so changes to
-the matching cases or existing notes require another preview. The selected paths
-are re-evaluated on the current log, not a frozen report-time case list. When a
-cluster cannot fit the bounded variant filter, request size, or 100,000-case
-tagging limit, tagging is not available; inspect or download its case list instead. Tagging does not change
-stored events and the cluster report must be run again afterward.
+From **Inspect cases**, **Tag cases in this cluster** recomputes the cluster in
+the original case scope and can mark its current members, including clusters
+whose paths cannot fit a variant filter. Preview the count and sample before
+applying; existing tag notes on matching cases will be replaced. The preview is
+checked again at save time, so changes to membership or existing notes require
+another preview. The cluster is recomputed on the current log, not a frozen
+report-time case list. Tagging is limited to 100,000 cases; inspect or download
+larger case lists instead. Tagging does not change stored events and the cluster
+report must be run again afterward. `POST /v1/event-logs/{log_id}/trace-clusters/tag/preview`
+accepts the clustering settings, `cluster_key`, tag and note; apply with the
+same settings and `expected_selection_sha256` at `/trace-clusters/tag`. Both
+routes require a dashboard session. The server rechecks membership and existing
+notes under the workspace lock and applies the tag transactionally.
 
 **Download cluster report JSON** includes the original request, the complete
 returned cluster summary, settings and case notion. The CSV gives one row per

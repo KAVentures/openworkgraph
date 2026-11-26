@@ -3389,6 +3389,24 @@ async def event_log_trace_cluster_cases(request: Request, log_id: str):
     return await run_in_threadpool(_respond, trace_clusters.cluster_cases, log_id, spec)
 
 
+@router.post("/v1/event-logs/{log_id}/trace-clusters/tag/preview")
+async def event_log_preview_trace_cluster_tag(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "trace cluster tag preview", strict=True, limit=32768)
+    response = await run_in_threadpool(_respond, trace_clusters.cluster_tag_preview, log_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/trace-clusters/tag")
+async def event_log_apply_trace_cluster_tag(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "trace cluster tag", strict=True, limit=32768)
+    response = await run_in_threadpool(_respond, trace_clusters.cluster_tag_apply, log_id, spec)
+    _require_dashboard(request)
+    return response
+
+
 @router.post("/v1/event-logs/{log_id}/trace-clusters/cases.csv")
 async def event_log_trace_cluster_cases_csv(request: Request, log_id: str):
     _require_dashboard(request)
