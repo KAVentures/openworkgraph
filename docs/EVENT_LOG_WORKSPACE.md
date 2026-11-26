@@ -3099,6 +3099,15 @@ with the score and its volume, routine and waiting components, occurrences, case
 rate, routing pattern, same-predecessor and same-successor shares, median wait before, resources
 and repeats per case. Cells that a spreadsheet would read as formulas start with `'`.
 
+### Estimating the time automation could free
+
+Below the ranking, **Estimate** turns the top candidates into hours-per-week ranges (and, with an hourly cost,
+cost-per-year ranges) from assumptions you enter: the minutes one occurrence takes, low and high. The log only
+supplies occurrences per week. The share automation could take over is assumed per routing pattern (fixed
+60-90 %, mostly fixed 30-60 %, variable 0-30 %) and shown with the result. Every figure is a range labelled
+measured or assumed, not a measured saving. `POST /v1/event-logs/{log_id}/automation-estimate` with
+`{"handling_minutes": [low, high], "automatable_share"?, "hourly_cost"?, "limit"?}`; the active case filter applies.
+
 ## Performance spectrum
 
 The performance spectrum shows how long each step-to-step segment took, over calendar time. It
