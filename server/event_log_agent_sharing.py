@@ -1099,8 +1099,10 @@ def model_change(log_id: str, case_type: str | None = None, split: str | None = 
     """How the discovered model changed between two periods (aggregates level)."""
     require(log_id, "aggregates")
     from . import event_log_model_change as mc
-    return {**mc.model_change(log_id, case_type, split=split, noise=max(0.0, min(float(noise), 0.95))),
-            "format": FORMAT, "log_id": log_id}
+    fit = _fitting_activities(log_id, case_type)
+    return {**mc.model_change(log_id, case_type, split=split, noise=max(0.0, min(float(noise), 0.95)),
+                              activities=fit["share"]),
+            "model_activities": fit, "format": FORMAT, "log_id": log_id}
 
 
 def model_comparison(log_id: str, group_a: str, group_b: str, case_type: str | None = None,
@@ -1108,8 +1110,10 @@ def model_comparison(log_id: str, group_a: str, group_b: str, case_type: str | N
     """The discovered models of two attribute-defined groups compared (aggregates level)."""
     require(log_id, "aggregates")
     from . import event_log_model_change as mc
-    return {**mc.model_comparison(log_id, group_a, group_b, case_type, noise=max(0.0, min(float(noise), 0.95))),
-            "format": FORMAT, "log_id": log_id}
+    fit = _fitting_activities(log_id, case_type)
+    return {**mc.model_comparison(log_id, group_a, group_b, case_type, noise=max(0.0, min(float(noise), 0.95)),
+                                  activities=fit["share"]),
+            "model_activities": fit, "format": FORMAT, "log_id": log_id}
 
 
 def trace_clusters(log_id: str, case_type: str | None = None, k: int | None = None, max_k: int = 8) -> dict[str, Any]:
