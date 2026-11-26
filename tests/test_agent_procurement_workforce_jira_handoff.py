@@ -118,3 +118,42 @@ def test_comment_requires_exact_bound_observed_project(local_db,monkeypatch):
     assert handoff.dispatch(req)["comment_id"]=="42"
     with pytest.raises(journal.JournalError):handoff.dispatch(req)
     with pytest.raises(ValueError):handoff.preview({**body,"operation":"create"})
+
+
+@pytest.mark.parametrize("operation",["create","comment"])
+@pytest.mark.parametrize("status", [201,302,400,403,429,500])
+@pytest.mark.parametrize("valid", [False,True])
+def test_transport_exact_endpoint_no_redirect(monkeypatch,operation,status,valid):
+    import httpx,json
+    client=httpx.Client
+    calls=[]
+    def handler(request):
+        calls.append(request)
+        assert request.method=="POST"
+        base="https://api.atlassian.com/ex/jira/"+CONFIG[1]+"/rest/api/3/issue"
+        assert str(request.url)==base+("" if operation=="create" else "/ABC-123/comment")
+        assert request.headers["Authorization"]=="Bearer test-token"
+        assert json.loads(request.content)=={"test":"payload"}
+        return httpx.Response(status,json={"key":"ABC-123" if valid else "ZZ-123",
+                                          "id":"42" if valid else "0"},
+                              headers={"location":"https://example.net/not-authorized"})
+    def factory(**kwargs):
+        assert kwargs["follow_redirects"] is False and kwargs["trust_env"] is False
+        return client(transport=httpx.MockTransport(handler),**kwargs)
+    monkeypatch.setattr(handoff.httpx,"Client",factory)
+    result=handoff._post({"operation":operation,"destination":{"cloud_id":CONFIG[1],
+                        "project":"ABC","bound_issue_key":"ABC-123"},"payload":{"test":"payload"}},
+                        "test-token")
+    assert (result["status"]!="unconfirmed")==(status==201 and valid)
+    assert len(calls)==1
+
+
+@pytest.mark.parametrize("kind",["wrong_site","wrong_cloud","read_only","duplicate","unavailable"])
+def test_site_write_grant_required(monkeypatch,kind):
+    resource={"id":CONFIG[1],"url":"https://"+CONFIG[0],"scopes":["write:jira-work"]}
+    if kind=="wrong_site":resource["url"]="https://other.atlassian.net"
+    if kind=="wrong_cloud":resource["id"]="00000000-0000-0000-0000-000000000000"
+    if kind=="read_only":resource["scopes"]=["read:jira-work"]
+    data=[resource,resource] if kind=="duplicate" else None if kind=="unavailable" else [resource]
+    monkeypatch.setattr(handoff.jira,"_jira_get",lambda *args:data)
+    with pytest.raises(ValueError):handoff._authorize(CONFIG,"test-token")
