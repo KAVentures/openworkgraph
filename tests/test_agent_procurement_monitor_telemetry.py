@@ -178,3 +178,30 @@ def test_operator_manifest_is_exact_scope_and_no_secret(producer):
     clock[0]=grant["grant"]["expires_ms"]
     with pytest.raises(journal.JournalError,match="Active scoped"):
         telemetry.manifest("process_1",1,req)
+
+
+def test_native_client_to_retained_server_exact_replay(producer):
+    import httpx
+    import json
+    from shared.agent_procurement_monitor_protocol import Assignment
+    from shared import agent_procurement_monitor_client as native
+    grant,batch,clock,_=producer
+    req={"monitor_id":"monitor-1","expected_head_sha256":grant["head_sha256"],
+         "grant_id":grant["grant"]["grant_id"],"confirmed":True}
+    assignment=Assignment.model_validate(telemetry.manifest("process_1",1,req))
+    prepared=native.prepare(assignment,batch["observations"],now=clock[0])
+    assert len(prepared)==1
+    def handler(request):
+        assert request.url.path==assignment.ingest_path
+        cred=telemetry.authenticate(request.headers["authorization"])
+        result=telemetry.ingest(cred,json.loads(request.content))
+        return httpx.Response(200,json=result)
+    with httpx.Client(transport=httpx.MockTransport(handler)) as transport:
+        first=native.submit(assignment,prepared[0],"http://127.0.0.1:8000",
+            grant["producer_token"],client=transport,now=clock[0])
+        retained=journal.detail("process_1",1,{"monitor_id":"monitor-1"})
+        replay=native.submit(assignment,prepared[0],"http://127.0.0.1:8000",
+            grant["producer_token"],client=transport,now=clock[0])
+    assert not first["idempotent_replay"] and replay["idempotent_replay"]
+    assert retained==journal.detail("process_1",1,{"monitor_id":"monitor-1"})
+    assert retained["credential_authenticated_observations"]==len(batch["observations"])

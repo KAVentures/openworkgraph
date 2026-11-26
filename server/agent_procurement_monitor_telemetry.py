@@ -15,7 +15,7 @@ from typing import Annotated, Literal
 from pydantic import Field, StrictBool, StrictInt
 
 from shared.agent_procurement import Alias, Strict, digest
-from shared.agent_procurement_monitor_protocol import Batch, GrantID, MAX_BATCH, TOKEN_RE
+from shared.agent_procurement_monitor_protocol import Assignment, Batch, Receipt, GrantID, MAX_BATCH, TOKEN_RE
 from shared.agent_procurement_router_monitor import _normalize, _review_verified
 from shared.process_shadow_review import Hash
 from . import agent_procurement_monitor_journal as journal
@@ -172,16 +172,16 @@ def manifest(workflow_id,revision,doc):
             "batch_format":"openworkgraph.procurement-monitor-producer-batch.v1",
             "maximum_batch_observations":MAX_BATCH,"slots":slots,
             "execution_authorized":False,"credential_included":False}
-        return {**result,"assignment_sha256":digest(result)}
+        return Assignment.model_validate({**result,"assignment_sha256":digest(result)}).model_dump()
 
 
 def _receipt(grant_id,batch_id,count,replay=False):
     # No read capability: do not disclose the journal head, other arm,
     # prior observations, policy, reports, or case list.
-    return {"format":"openworkgraph.procurement-monitor-producer-receipt.v1",
+    return Receipt.model_validate({"format":"openworkgraph.procurement-monitor-producer-receipt.v1",
             "grant_id":grant_id,"batch_id":batch_id,"accepted_observations":count,
             "idempotent_replay":replay,"source_credential_authenticated":True,
-            "business_outcomes_independently_verified":False,"execution_authorized":False}
+            "business_outcomes_independently_verified":False,"execution_authorized":False}).model_dump()
 
 
 def ingest(credential,doc):
