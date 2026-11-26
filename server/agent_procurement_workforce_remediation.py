@@ -54,6 +54,7 @@ class Forget(Scope):
     expected_revision: Revision
     expected_history_sha256: Hash
     confirmed_exported: StrictBool
+    expected_ticket_history_sha256: Hash | None = None
 
 
 def _schema(conn):
@@ -235,6 +236,15 @@ def forget(document):
     with db.connect() as conn:
         conn.execute("BEGIN IMMEDIATE");_schema(conn)
         value,_=_load(conn,req.worklist_sha256);_cas(value,req)
+        # Remove associated ticket bindings/checks atomically, never orphan them.
+        from . import agent_procurement_workforce_remediation_tickets as tickets
+        tickets._schema(conn)
+        ledger,bindings,checks=tickets._load(conn,value)
+        if ledger["events"] and req.expected_ticket_history_sha256!=ledger["history_sha256"]:
+            raise journal.JournalError("Export and confirm exact ticket history before removal",409)
+        if req.expected_ticket_history_sha256 is not None and req.expected_ticket_history_sha256!=ledger["history_sha256"]:
+            raise journal.JournalError("Ticket history changed; reload before removal",409)
+        conn.execute("DELETE FROM procurement_audit_remediation_tickets WHERE worklist_sha256=?",(req.worklist_sha256,))
         conn.execute("DELETE FROM procurement_audit_remediation WHERE worklist_sha256=?",(req.worklist_sha256,))
         return {"removed":True,"worklist_sha256":req.worklist_sha256,
                 "removed_history_sha256":req.expected_history_sha256,
