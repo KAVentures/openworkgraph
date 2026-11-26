@@ -95,8 +95,12 @@ def _plan(conn,req,config):
             raise ValueError("ticket outside configured write project")
         # No write to a merely guessed resolver entry. Require an exact
         # retained observation and unambiguous source type without live I/O.
-        graph=source.record_graph(binding["resource_ref"])
-        if (graph.get("record_observed") is not True
+        ref=binding["resource_ref"]
+        graph=source.record_graph(ref,include_source_status=True,
+                                  required_source_type=("jira","issue",host),
+                                  source_reader=lambda requested: {"local_guard_passed":requested==ref})
+        if (graph.get("source_evidence",{}).get("local_guard_passed") is not True
+                or graph.get("record_observed") is not True
                 or graph.get("record_identity_complete_within_retained_window") is not True
                 or graph.get("record_type")!={"provider":"jira","kind":"issue"}):
             raise ValueError("exact retained Jira observation required")
