@@ -668,3 +668,22 @@ def test_appended_history_integrity_stays_unverifiable_even_with_valid_digests()
     assert result["batches_without_report"] == []
     assert result["integrity"]["status"] == "not_verifiable"
     assert result["integrity"]["reason"] == "historical_batches_or_missing_report"
+
+
+def test_duplicate_events_count_only_identical_content_including_null_resources(tmp_path, monkeypatch):
+    from io import BytesIO
+    monkeypatch.setattr(workspace, "DATA_DIR", tmp_path)
+    rows = ["case,activity,time,who,note",
+            "c1,A,2024-01-01T00:00:00Z,,n",     # duplicate pair with an empty resource
+            "c1,A,2024-01-01T00:00:00Z,,n",
+            "c1,A,2024-01-01T00:00:00Z,,m",     # same key, different attribute: not a duplicate
+            "c2,B,2024-01-01T00:00:00Z,x,n",    # unique key
+            "c3,B,2024-01-01T01:00:00Z,x,n", "c3,B,2024-01-01T01:00:00Z,x,n", "c3,B,2024-01-01T01:00:00Z,x,n"]
+    log = workspace.import_log(BytesIO("\n".join(rows).encode()), name="d", source_format="csv",
+                               mapping={"case_column": "case", "activity_column": "activity", "timestamp_column": "time",
+                                        "resource_column": "who", "attribute_columns": ["note"]})["log_id"]
+    conn = workspace._connect()
+    try:
+        assert quality.diagnostics(conn, log)["duplicate_events"] == 3   # one extra in the first pair, two in the triple
+    finally:
+        conn.close()
