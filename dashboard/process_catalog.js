@@ -2372,6 +2372,88 @@
       for(const input of [filter,search])input.addEventListener(input===filter?'change':'input',()=>{page=0;draw();});
       target.append(el('h5','Historical journal review queue'),auditLabel('Filter',filter),auditLabel('Search',search),list,download(value,'owg-workforce-verified-audit-timeline'));draw();
     };
+    const renderAuditTriage=(target,value,document,attempt)=>{
+      const work=value.worklist;
+      if(!work)return;
+      const panel=el('details');panel.append(el('summary','Prioritized audit findings and follow-up assignments'),
+        el('p',work.finding_count+' findings · exact worklist '+work.worklist_sha256),
+        el('p','Assign investigation, escalation or evidence requests. A receipt records declared referrals only; it does not create tickets, verify owners or clear incidents. Unselected findings remain visible.'));
+      const reviewer=el('input');reviewer.maxLength=80;reviewer.setAttribute('aria-label','Declared audit reviewer alias');
+      const kind=el('select');kind.setAttribute('aria-label','Audit finding kind');
+      for(const v of ['all',...Object.keys(work.counts_by_kind)]){const opt=el('option',v.replaceAll('_',' '));opt.value=v;kind.appendChild(opt);}
+      const search=el('input');search.type='search';search.maxLength=80;search.setAttribute('aria-label','Search audit findings');
+      const picks=new Map(),list=el('div'),selection=el('div'),receipt=el('div');receipt.setAttribute('aria-live','polite');
+      let page=0,serial=0;
+      const aliasValid=v=>/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/.test(v);
+      const clearReceipt=()=>{serial++;receipt.replaceChildren();};
+      const count=()=>selection.replaceChildren(el('p',picks.size+' selected of '+work.finding_count+' · '+(work.finding_count-picks.size)+' not selected'));
+      const draw=()=>{
+        const q=search.value.trim().toLowerCase();
+        const matches=work.findings.filter(r=>(kind.value==='all'||r.kind===kind.value)&&(!q||r.finding_id.includes(q)||String(r.scope.installation_alias||'').toLowerCase().includes(q)||String(r.scope.journal_tag||'').includes(q)));
+        const per=25,pages=Math.max(1,Math.ceil(matches.length/per));page=Math.min(page,pages-1);
+        list.replaceChildren(el('p',matches.length+' matching findings · page '+(page+1)+' of '+pages));
+        for(const row of matches.slice(page*per,(page+1)*per)){
+          const item=el('fieldset');item.append(el('legend',row.kind.replaceAll('_',' ')+' · priority '+row.priority));
+          const id=el('p',row.finding_id);id.style.overflowWrap='anywhere';
+          item.append(id,el('p','Scope: '+Object.values(row.scope).join(' · ')),
+            el('p','Evidence snapshots: '+row.evidence.snapshots.map(s=>s.snapshot).join(', ')));
+          const chosen=picks.get(row.finding_id);
+          const select=el('input');select.type='checkbox';select.checked=!!chosen;
+          select.setAttribute('aria-label','Select finding '+row.finding_id);
+          const action=el('select');action.setAttribute('aria-label','Disposition '+row.finding_id);
+          for(const v of ['investigate','escalate','request_evidence',...(row.priority===0?[]:['acknowledge'])]){
+            const opt=el('option',v.replaceAll('_',' '));opt.value=v;action.appendChild(opt);
+          }
+          action.value=chosen?.disposition||'investigate';
+          const owner=el('input');owner.maxLength=80;owner.value=chosen?.owner_alias||'';owner.setAttribute('aria-label','Follow-up owner '+row.finding_id);
+          const ref=el('input');ref.maxLength=80;ref.value=chosen?.external_reference||'';ref.setAttribute('aria-label','External reference '+row.finding_id);
+          const sync=()=>{
+            clearReceipt();
+            if(select.checked){
+              if(!picks.has(row.finding_id)&&picks.size>=200){select.checked=false;receipt.replaceChildren(el('p','Maximum 200 findings per receipt.'));return;}
+              picks.set(row.finding_id,{finding_id:row.finding_id,expected_finding_sha256:row.finding_sha256,
+                disposition:action.value,owner_alias:owner.value||null,external_reference:ref.value||null});
+            }else picks.delete(row.finding_id);
+            count();
+          };
+          select.addEventListener('change',sync);action.addEventListener('change',sync);
+          for(const input of [owner,ref])input.addEventListener('input',sync);
+          item.append(auditLabel('Select for receipt',select),auditLabel('Disposition',action),
+            auditLabel('Declared owner (required for follow-up)',owner),auditLabel('Optional opaque external reference',ref));
+          list.appendChild(item);
+        }
+        const prev=button('Previous finding page',()=>{if(page>0){page--;draw();}});
+        const next=button('Next finding page',()=>{if(page+1<pages){page++;draw();}});
+        prev.disabled=page===0;next.disabled=page+1===pages;list.append(prev,next);
+      };
+      for(const input of [kind,search])input.addEventListener(input===kind?'change':'input',()=>{page=0;draw();});
+      reviewer.addEventListener('input',clearReceipt);
+      const submit=button('Record selected audit follow-up referrals',async()=>{
+        const version=++serial;receipt.replaceChildren();
+        try{
+          if(!aliasValid(reviewer.value)||!picks.size)throw new Error('Provide a reviewer alias and select at least one finding.');
+          const selections=[...picks.values()];
+          for(const p of selections){
+            if((p.disposition!=='acknowledge'&&!p.owner_alias)||(p.owner_alias&&!aliasValid(p.owner_alias))||(p.external_reference&&!aliasValid(p.external_reference)))throw new Error('Use valid opaque aliases and references; follow-up requires an owner.');
+          }
+          if(!window.confirm('Record only the selected evidence-pinned referrals? No incident clearance or external action is authorized.'))return;
+          const decision={expected_worklist_sha256:work.worklist_sha256,reviewer_alias:reviewer.value,confirmed:true,selections};
+          const payload=document.slice(0,-1)+',"decision":'+JSON.stringify(decision)+'}';
+          if(new TextEncoder().encode(payload).length>auditMax)throw new Error('Combined evidence and selections exceed the browser limit; use the offline CLI.');
+          const result=await inboxCall('audit-triage',payload);
+          if(version!==serial||attempt!==auditGeneration||!receipt.isConnected)return;
+          receipt.append(el('h5','Evidence-pinned follow-up receipt'),
+            el('p',result.selected_count+' declared referrals · '+result.unselected_count+' unselected findings · '+result.unselected_rollback_referrals+' unselected rollback referrals'),
+            el('p','Receipt SHA-256: '+result.triage_sha256),
+            el('p','No external tickets created and no incident clearance established.'),
+            download(result,'owg-workforce-audit-triage'));
+        }catch(error){if(version===serial&&attempt===auditGeneration&&receipt.isConnected)receipt.replaceChildren(el('p','Follow-up refused: '+error.message));}
+      });
+      panel.append(auditLabel('Declared reviewer',reviewer),auditLabel('Finding kind',kind),auditLabel('Search findings',search),
+        selection,list,button('Clear selected findings',()=>{picks.clear();clearReceipt();count();draw();}),
+        submit,receipt,download(work,'owg-workforce-audit-findings'));
+      count();draw();target.appendChild(panel);
+    };
     const verifyAudit=button('Recompute selected historical audit evidence',async()=>{
       const attempt=++auditGeneration;auditOutput.replaceChildren();
       try{
@@ -2399,7 +2481,7 @@
             el('p','Historical review clock: '+new Date(receipt.reviewed_as_of_ms).toISOString()+' · current freshness and trusted timestamp not verified.'),
             download(value,'owg-workforce-verified-audit-dossier'));
           renderReview(auditOutput,value.report);
-        }else renderAuditTimeline(auditOutput,value);
+        }else{renderAuditTimeline(auditOutput,value);renderAuditTriage(auditOutput,value,document,attempt);}
       }catch(error){if(attempt===auditGeneration&&auditOutput.isConnected)auditOutput.replaceChildren(el('p','Historical review refused. Check file ordering, independent pins and size limits. '+error.message));}
     });
     auditMode.addEventListener('change',resetAuditFiles);auditDigest.addEventListener('input',invalidateAudit);auditTrust.addEventListener('change',invalidateAudit);
