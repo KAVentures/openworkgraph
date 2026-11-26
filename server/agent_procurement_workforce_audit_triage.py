@@ -22,7 +22,7 @@ MAX_SELECTION = 200
 ACTIONS = ("escalate", "investigate", "request_evidence", "acknowledge")
 PRIORITIES = {"rollback_referral": 0, "cutoff_regression": 1,
               "unreadable_journals": 1, "site_absent": 1,
-              "journal_absent_latest": 1, "cohort_change": 2,
+              "journal_absent_latest": 1, "source_attention": 2, "cohort_change": 2,
               "excluded_journal": 2, "key_change": 2, "freshness_policy_change": 2}
 
 
@@ -49,6 +49,7 @@ def from_timeline(result):
         scope = {"installation_alias": row["installation_alias"], "journal_tag": row["journal_tag"]}
         for kind, field in (("rollback_referral","rollback_referral_snapshots"),
                             ("cutoff_regression","cutoff_regression_snapshots"),
+                            ("source_attention","source_attention_snapshots"),
                             ("cohort_change","changed_cohort_snapshots"),
                             ("excluded_journal","excluded_snapshots")):
             if row[field]:
