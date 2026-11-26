@@ -125,6 +125,32 @@ with TestClient(app) as client:
     assert reconciled.headers["cache-control"]=="no-store"
     assert reconciled.json()["counts_by_status"]["one_declaration"]==1
     assert not reconciled.json()["conflicts_resolved"]
+    retained=audit_call("remediation-create",{**timeline_body,"expected_worklist_sha256":work["worklist_sha256"],
+                                              "confirm_local_retention":True})
+    assert retained.status_code==200,retained.text
+    v=retained.json()
+    assert v["revision"]==0 and v["finding_count"]==1
+    assert retained.headers["cache-control"]=="no-store"
+    scope={"worklist_sha256":v["worklist_sha256"]}
+    assert audit_call("remediation-list",{}).json()["registers"][0]["revision"]==0
+    assert audit_call("remediation-status",scope).json()==v
+    cmd={**scope,"expected_revision":0,"expected_history_sha256":v["history_sha256"],
+         "finding_id":finding["finding_id"],"expected_finding_sha256":finding["finding_sha256"],
+         "state":"assigned","owner_alias":"ops","reviewer_alias":"reviewer","confirmed":True}
+    updated=audit_call("remediation-change",cmd)
+    assert updated.status_code==200,updated.text
+    assert updated.json()["revision"]==1
+    assert audit_call("remediation-change",cmd).status_code==409
+    removed=audit_call("remediation-forget",{**scope,"expected_revision":1,
+                       "expected_history_sha256":updated.json()["history_sha256"],"confirmed_exported":True})
+    assert removed.status_code==200,removed.text
+    assert audit_call("remediation-status",scope).status_code==404
+    for action in ("remediation-create","remediation-list","remediation-status","remediation-change","remediation-forget"):
+        path="/v1/process-catalog/procurement-workforce/exchange/"+action
+        assert client.post(path,json={"document":"{}"}).status_code==401
+        assert client.post(path,json={"document":"{}"},headers=bearer).status_code==403
+        assert client.post(path,json={"document":"{}"},headers={**h,"X-OpenWorkGraph-Context":"ai"}).status_code==403
+
     assert audit_call("audit-reconcile",{**timeline_body,"receipt_set":{"confirmed":True,"receipts":[entry,entry]}}).status_code==422
 
     assert audit_call("audit-triage",{**timeline_body,"decision":{**decision,"expected_worklist_sha256":"0"*64}}).status_code==422
