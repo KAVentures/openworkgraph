@@ -225,6 +225,30 @@ def require(log_id: Any, level: str) -> None:
     shared = _level(log_id)
     if shared is None or (level == "cases" and shared != "cases"):
         raise NotShared("no process log shared with agents at that level has this id")
+    if level == "aggregates" and shared == "aggregates" and _case_count(log_id) < AGENT_MIN_FILTERED_CASES:
+        # Every aggregate of a log this small describes a handful of identifiable cases.
+        raise NotAllowed(f"this log has fewer than {AGENT_MIN_FILTERED_CASES} cases, too few to share as "
+                         "aggregates; the owner can share it at the cases level instead")
+
+
+def check_answer_size(log_id: str, result: Any) -> None:
+    """Refuse an aggregates-level answer that describes fewer than AGENT_MIN_FILTERED_CASES cases, for example
+    one about a small object type inside a larger object-centric log."""
+    cases = result.get("cases") if isinstance(result, dict) else None
+    if (isinstance(cases, int) and not isinstance(cases, bool) and 0 < cases < AGENT_MIN_FILTERED_CASES
+            and _level(log_id) == "aggregates"):
+        raise NotAllowed(f"this selection has fewer than {AGENT_MIN_FILTERED_CASES} cases, too few to describe "
+                         "as aggregates; pick a larger case type or ask the owner to share at the cases level")
+
+
+def _case_count(log_id: str) -> int:
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            row = conn.execute("SELECT objects FROM logs WHERE log_id = ?", [log_id]).fetchone()
+        finally:
+            conn.close()
+    return int(row[0]) if row else 0
 
 
 def shared_logs() -> dict[str, Any]:
@@ -235,16 +259,19 @@ def shared_logs() -> dict[str, Any]:
         try:
             rows = conn.execute("""SELECT s.log_id, l.name, s.level, l.events, l.objects FROM event_log_agent_shares s
                 JOIN logs l USING (log_id) ORDER BY l.name""").fetchall()
-            types = {log_id: [t for (t,) in conn.execute(
-                "SELECT DISTINCT object_type FROM objects WHERE log_id = ? ORDER BY 1 LIMIT 20", [log_id]).fetchall()]
-                for log_id, *_ in rows}
+            counts = {log_id: conn.execute("""SELECT object_type, count(*) FROM objects WHERE log_id = ?
+                GROUP BY 1 ORDER BY 1 LIMIT 20""", [log_id]).fetchall() for log_id, *_ in rows}
+            types = {log_id: [t for t, _ in found] for log_id, found in counts.items()}
             taggable = {r[0] for r in conn.execute("SELECT log_id FROM event_log_agent_tag_grants").fetchall()}
         finally:
             conn.close()
     return {"format": FORMAT, "logs": [{"log_id": i, "name": n, "level": lv, "events": e, "objects": o,
-                                        "case_notions": types[i], "agents_may_tag_cases": i in taggable}
+                                        "case_notions": types[i], "agents_may_tag_cases": i in taggable,
+                                        "case_notions_too_small_for_aggregates": [] if lv == "cases" else [
+                                            t for t, c in counts[i] if c < AGENT_MIN_FILTERED_CASES]}
                      for i, n, lv, e, o in rows],
-            "note": "Only logs the owner shared with agents are listed."}
+            "note": ("Only logs the owner shared with agents are listed. A case notion with fewer than "
+                     f"{AGENT_MIN_FILTERED_CASES} objects answers no aggregates-level request.")}
 
 
 def _top(items: list[Any], n: int) -> list[Any]:
@@ -478,6 +505,26 @@ def signals(log_id: str) -> dict[str, Any]:
                      "or snooze signals. A triggered signal is not a verified problem or an instruction to act.")}
 
 
+def preview_signal(log_id: str, rule: Any) -> dict[str, Any]:
+    """Run a draft signal rule against the log once, without saving it or touching the owner's signal state
+    (aggregates level). Example case IDs come back only at the cases level; a filtered draft must cover at least
+    AGENT_MIN_FILTERED_CASES cases so a narrow filter cannot describe one case."""
+    require(log_id, "aggregates")
+    from . import event_log_signals as sig
+    result = sig.preview_rule(log_id, rule)
+    if isinstance(rule, dict) and rule.get("cohort") and result["cohort_cases"] < AGENT_MIN_FILTERED_CASES:
+        raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this rule's filter; widen it")
+    signal = dict(result["signal"])
+    if _level(log_id) != "cases":
+        signal.pop("evidence_cases", None)
+        signal.pop("evidence_truncated", None)
+    signal.pop("pnml", None)
+    return {**result, "signal": signal, "saved": False, "owner_signal_state_changed": False,
+            "note": ("A draft evaluated once. To keep it, the owner saves it as a signal rule in the dashboard; "
+                     "agents cannot save, evaluate saved rules, acknowledge or snooze."),
+            "format": FORMAT, "log_id": log_id}
+
+
 AGENT_MAX_SIMULATED_CASES = 5000
 AGENT_MAX_REPLICATIONS = 20
 
@@ -515,6 +562,17 @@ def automation_candidates(log_id: str, case_type: str | None = None, limit: int 
     keep = ("case_notion", "cases", "weeks_observed", "weights", "min_cases", "activities_below_min_cases",
             "candidates", "routing_patterns", "caveat")
     return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
+
+
+def automation_estimate(log_id: str, handling_minutes: Any, automatable_share: Any = None, hourly_cost: Any = None,
+                        case_type: str | None = None, limit: int = 10) -> dict[str, Any]:
+    """Hours-per-week (and optional cost) ranges for the automation candidates under the caller's stated
+    assumptions (aggregates level). Only occurrences per week are measured; the rest is assumed."""
+    require(log_id, "aggregates")
+    from . import event_log_automation_estimate as est
+    result = est.estimate(log_id, case_type, handling_minutes=handling_minutes, automatable_share=automatable_share,
+                          hourly_cost=hourly_cost, limit=max(1, min(int(limit), 50)))
+    return {**{k: v for k, v in result.items() if k != "log"}, "format": FORMAT, "log_id": log_id}
 
 
 def costs(log_id: str, model: dict[str, Any] | None = None, case_type: str | None = None,
@@ -757,6 +815,39 @@ def heuristics_net(log_id: str, case_type: str | None = None, dependency_thresho
     return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
 
 
+STRAY_MIN_GAP_DAYS = 365
+
+
+def _stray_dates(log_id: str) -> dict[str, Any]:
+    """Events dated far outside the bulk of the log (beyond the 1st-99th percentile span, and at least a year,
+    either side), which stretch timelines and week-by-week analyses. Counts and the suggested filter only; the
+    stray dates themselves are not returned."""
+    def run(conn):
+        low, high = conn.execute("SELECT quantile_disc(ts, 0.01), quantile_disc(ts, 0.99) FROM ce").fetchone()
+        if low is None:
+            return {"stray": None}
+        from datetime import timedelta
+        gap = max(high - low, timedelta(days=STRAY_MIN_GAP_DAYS))
+        before, after = low - gap, high + gap
+        row = conn.execute("""SELECT count(*) FILTER (WHERE ts < ?), count(DISTINCT case_id) FILTER (WHERE ts < ?),
+              count(*) FILTER (WHERE ts > ?), count(DISTINCT case_id) FILTER (WHERE ts > ?) FROM ce""",
+                           [before, before, after, after]).fetchone()
+        return {"stray": {"bulk_from": low.date().isoformat(), "bulk_to": high.date().isoformat(),
+                          "far_before": before.date().isoformat(), "far_after": after.date().isoformat(),
+                          "events_far_before": row[0], "cases_far_before": row[1],
+                          "events_far_after": row[2], "cases_far_after": row[3]}}
+    found = workspace._query(log_id, None, run)["stray"]
+    if not found:
+        return {"events_far_before": 0, "events_far_after": 0}
+    if found["events_far_before"] or found["events_far_after"]:
+        found["suggested_case_filter"] = {
+            **({"started_from": found["far_before"] + "T00:00:00Z"} if found["events_far_before"] else {}),
+            **({"started_before": found["far_after"] + "T00:00:00Z"} if found["events_far_after"] else {})}
+        found["note"] = ("A few events lie far outside the dates of the rest of the log, usually placeholder or "
+                         "mistyped dates. They stretch timelines; tools that take a case_filter can leave them out.")
+    return found
+
+
 def data_quality(log_id: str) -> dict[str, Any]:
     """How far the log can be trusted (aggregates level): rows accepted and rejected (by reason) over every
     import and append, the current diagnostics (duplicates, shared timestamps, events without resource,
@@ -782,29 +873,51 @@ def data_quality(log_id: str) -> dict[str, Any]:
                      "reason_counts_can_overlap": True},
             "diagnostics": current.get("diagnostics"), "completeness": current.get("completeness"),
             "integrity": {k: v for k, v in (result.get("integrity") or {}).items() if k in ("status", "reason")},
-            "batch_trend": trends,
+            "batch_trend": trends, "stray_dates": _stray_dates(log_id),
             "caveat": ("Quality describes the supplied rows. Whether the source system holds events that were not "
                        "exported is unknown; check rejected rows and shared timestamps before trusting orderings.")}
+
+
+def _fitting_activities(log_id: str, case_type: str | None) -> dict[str, Any]:
+    """The largest activity share (by events, most frequent first) whose activities fit in a discovered model.
+    Agents cannot choose a share, so a log with more activities than a model holds would otherwise refuse every
+    model-based answer. The share and the activities left out are reported with each answer."""
+    from . import event_log_model_discovery as discovery
+    limit = discovery.MAX_MODEL_NODES - 2 - AGENT_MODEL_NODE_HEADROOM
+
+    def run(conn):
+        return {"counts": [n for (n,) in conn.execute(
+            "SELECT count(*) FROM ce GROUP BY activity ORDER BY 1 DESC").fetchall()]}
+    counts = workspace._query(log_id, case_type, run)["counts"]
+    if len(counts) <= limit or not counts:
+        return {"share": 1.0, "activities_left_out": 0}
+    total = sum(counts)
+    return {"share": sum(counts[:limit]) / total, "activities_left_out": len(counts) - limit}
+
+
+AGENT_MODEL_NODE_HEADROOM = 8   # room for decisions and loops beside the activities themselves
 
 
 def footprints(log_id: str, case_type: str | None = None, noise: float = 0.2) -> dict[str, Any]:
     """Log and discovered-model footprint matrices and where they disagree (aggregates level)."""
     require(log_id, "aggregates")
     from . import event_log_footprints as fp
-    result = fp.footprints(log_id, case_type, noise=max(0.0, min(float(noise), 0.95)))
+    fit = _fitting_activities(log_id, case_type)
+    result = fp.footprints(log_id, case_type, noise=max(0.0, min(float(noise), 0.95)), activities=fit["share"])
     keep = ("case_notion", "cases", "activities", "settings", "conformance", "start_activities", "end_activities",
             "differences", "differences_total", "matrix", "legend", "method", "caveat")
-    return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
+    return {"format": FORMAT, "log_id": log_id, "model_activities": fit, **{k: result[k] for k in keep if k in result}}
 
 
 def model_quality(log_id: str, case_type: str | None = None, levels: str | None = None) -> dict[str, Any]:
     """Fitness, precision, generalization and simplicity of the discovered net by noise level (aggregates)."""
     require(log_id, "aggregates")
     from . import event_log_model_quality as mq
-    result = mq.model_quality(log_id, case_type, levels=levels)
-    keep = ("case_notion", "cases", "cases_excluded", "variants", "levels", "best_f_score_noise", "definitions",
-            "method", "caveat")
-    return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
+    fit = _fitting_activities(log_id, case_type)
+    result = mq.model_quality(log_id, case_type, levels=levels, activities=fit["share"])
+    keep = ("case_notion", "cases", "cases_excluded", "variants", "levels", "levels_skipped", "best_f_score_noise",
+            "definitions", "method", "caveat")
+    return {"format": FORMAT, "log_id": log_id, "model_activities": fit, **{k: result[k] for k in keep if k in result}}
 
 
 def attributes(log_id: str, case_type: str | None = None, top_values: int = 10) -> dict[str, Any]:
@@ -927,12 +1040,13 @@ def model_deviations(log_id: str, case_type: str | None = None, noise: float = 0
     from . import event_log_alignments as al
     from . import event_log_pnml as pnml
     noise = max(0.0, min(float(noise), 0.95))
-    xml, meta = pnml.discovered_pnml(log_id, case_type, noise=noise)
+    fit = _fitting_activities(log_id, case_type)
+    xml, meta = pnml.discovered_pnml(log_id, case_type, noise=noise, activities=fit["share"])
     result = al.alignments(log_id, xml.encode(), case_type)
     keep = ("case_notion", "cases", "cases_excluded", "variants", "fitness", "by_month", "deviation_cost", "log_moves",
             "model_moves", "activities_not_in_net", "non_fitting_variants", "non_fitting_variants_total",
             "unaligned", "method", "caveat")
-    return {"format": FORMAT, "log_id": log_id, "noise": noise,
+    return {"format": FORMAT, "log_id": log_id, "noise": noise, "model_activities": fit,
             "process_model_sha256": meta.get("process_model_sha256"),
             **{k: result[k] for k in keep if k in result}}
 
@@ -1015,9 +1129,10 @@ def model_deviation_causes(log_id: str, case_type: str | None = None, noise: flo
     from . import event_log_alignments as al
     from . import event_log_pnml as pnml
     noise = max(0.0, min(float(noise), 0.95))
-    xml, meta = pnml.discovered_pnml(log_id, case_type, noise=noise)
+    fit = _fitting_activities(log_id, case_type)
+    xml, meta = pnml.discovered_pnml(log_id, case_type, noise=noise, activities=fit["share"])
     result = al.deviation_causes(log_id, xml.encode(), case_type)
-    return {**result, "format": FORMAT, "log_id": log_id, "noise": noise,
+    return {**result, "format": FORMAT, "log_id": log_id, "noise": noise, "model_activities": fit,
             "process_model_sha256": meta.get("process_model_sha256")}
 
 
@@ -1034,8 +1149,10 @@ def model_change(log_id: str, case_type: str | None = None, split: str | None = 
     """How the discovered model changed between two periods (aggregates level)."""
     require(log_id, "aggregates")
     from . import event_log_model_change as mc
-    return {**mc.model_change(log_id, case_type, split=split, noise=max(0.0, min(float(noise), 0.95))),
-            "format": FORMAT, "log_id": log_id}
+    fit = _fitting_activities(log_id, case_type)
+    return {**mc.model_change(log_id, case_type, split=split, noise=max(0.0, min(float(noise), 0.95)),
+                              activities=fit["share"]),
+            "model_activities": fit, "format": FORMAT, "log_id": log_id}
 
 
 def model_comparison(log_id: str, group_a: str, group_b: str, case_type: str | None = None,
@@ -1043,8 +1160,10 @@ def model_comparison(log_id: str, group_a: str, group_b: str, case_type: str | N
     """The discovered models of two attribute-defined groups compared (aggregates level)."""
     require(log_id, "aggregates")
     from . import event_log_model_change as mc
-    return {**mc.model_comparison(log_id, group_a, group_b, case_type, noise=max(0.0, min(float(noise), 0.95))),
-            "format": FORMAT, "log_id": log_id}
+    fit = _fitting_activities(log_id, case_type)
+    return {**mc.model_comparison(log_id, group_a, group_b, case_type, noise=max(0.0, min(float(noise), 0.95)),
+                                  activities=fit["share"]),
+            "model_activities": fit, "format": FORMAT, "log_id": log_id}
 
 
 def trace_clusters(log_id: str, case_type: str | None = None, k: int | None = None, max_k: int = 8) -> dict[str, Any]:
@@ -1387,8 +1506,54 @@ def waiting_times(log_id: str, case_type: str | None = None,
     working calendar (timezone, weekly hours, holidays) the same figures are also measured in working time."""
     require(log_id, "aggregates")
     from . import event_log_waiting as waiting
-    return {**waiting.waiting_time(log_id, case_type, working_calendar=working_calendar),
-            "format": FORMAT, "log_id": log_id}
+    result = waiting.waiting_time(log_id, case_type, working_calendar=working_calendar)
+    return {**_withhold_small_waits(result), "format": FORMAT, "log_id": log_id}
+
+
+def _withhold_small_waits(result: dict[str, Any]) -> dict[str, Any]:
+    """Blank timing statistics resting on fewer than AGENT_MIN_CELL_CASES instances, so one case's wait or
+    processing time is never returned on its own. Counts stay; withheld rows are counted."""
+    keep = AGENT_MIN_CELL_CASES
+    blank = {"median_seconds": None, "p90_seconds": None, "mean_seconds": None}
+    withheld = {"activities": 0, "waiting_hotspots": 0, "min_instances": keep}
+
+    def activity(row: dict[str, Any]) -> dict[str, Any]:
+        row = dict(row)
+        small = False
+        known = row.get("instances_with_processing_time") or 0
+        if 0 < known < keep and row.get("processing"):
+            row["processing"], small = dict(blank), True
+        waiting = row.get("waiting_before")
+        if waiting and 0 < (waiting.get("instances") or 0) < keep:
+            row["waiting_before"] = {**blank, "instances": waiting.get("instances"), "total_seconds": None}
+            row["share_of_all_waiting"], small = None, True
+        withheld["activities"] += small
+        return row
+
+    def hotspot(row: dict[str, Any]) -> dict[str, Any] | None:
+        if (row.get("count") or 0) >= keep:
+            return row
+        withheld["waiting_hotspots"] += 1
+        return None
+    out = dict(result)
+    if "activities" in out:
+        out["activities"] = [activity(r) for r in out["activities"]]
+    if "waiting_hotspots" in out:
+        out["waiting_hotspots"] = [r for r in map(hotspot, out["waiting_hotspots"]) if r]
+    calendar = out.get("working_calendar")
+    if isinstance(calendar, dict):
+        calendar = dict(calendar)
+        if "activities" in calendar:
+            calendar["activities"] = [activity(r) for r in calendar["activities"]]
+        if "waiting_hotspots" in calendar:
+            calendar["waiting_hotspots"] = [r for r in map(hotspot, calendar["waiting_hotspots"]) if r]
+        out["working_calendar"] = calendar
+    flow = out.get("flow_efficiency")
+    if isinstance(flow, dict) and (flow.get("cases") or 0) < keep:
+        out["flow_efficiency"] = {"cases": flow.get("cases"), "median": None, "p10": None, "p90": None,
+                                  "busy_seconds": None, "elapsed_seconds": None}
+    out["withheld"] = withheld
+    return out
 
 
 def drift(log_id: str, case_type: str | None = None, window: str = "month") -> dict[str, Any]:
@@ -1457,13 +1622,21 @@ def cooccurrence(log_id: str, case_type: str | None = None, limit: int = 12,
 
 
 def work_in_progress(log_id: str, case_type: str | None = None, bucket: str = "week",
-                     end_activities: list[str] | None = None) -> dict[str, Any]:
-    """Arrivals, completions and open cases per day or week, with a Little's law check (aggregates level)."""
+                     end_activities: list[str] | None = None,
+                     case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Arrivals, completions and open cases per day or week, with a Little's law check (aggregates level). An
+    optional case filter narrows the cases, for example to a start-date range when stray dates stretch the log."""
     require(log_id, "aggregates")
     from . import event_log_wip as wip
     spec: dict[str, Any] = {"bucket": bucket, "end_activities": list(end_activities or [])}
     if case_type:
         spec["case_type"] = case_type
+    if case_filter is not None:
+        if not isinstance(case_filter, dict) or not case_filter:
+            raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+        if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
+            raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
+        spec["cohort"] = case_filter
     return {**wip.work_in_progress(log_id, spec), "format": FORMAT, "log_id": log_id}
 
 
@@ -1477,3 +1650,85 @@ def batching(log_id: str, case_type: str | None = None, gap_seconds: int = 60, m
     if case_type:
         spec["case_type"] = case_type
     return {**bt.batching(log_id, spec), "format": FORMAT, "log_id": log_id}
+
+
+def _checked_case_filter(log_id: str, case_type: str | None, case_filter: Any) -> dict[str, Any] | None:
+    """An agent-supplied case filter, refused unless it is a non-empty object matching at least
+    AGENT_MIN_FILTERED_CASES cases, so a narrow filter cannot describe one case."""
+    if case_filter is None:
+        return None
+    if not isinstance(case_filter, dict) or not case_filter:
+        raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+    if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
+        raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
+    return case_filter
+
+
+def handovers(log_id: str, case_type: str | None = None, limit: int = 50,
+              case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
+    """How work passes between people (aggregates level): handover of work, ping-pong (subcontracting) and
+    working together, between pseudonymous resources. Names are never returned, a resource or pair seen in
+    fewer than AGENT_MIN_CELL_CASES cases is withheld and matrix cells below that many events are blanked."""
+    require(log_id, "aggregates")
+    from . import event_log_organization as org
+    limit = max(1, min(int(limit), 200))
+    full = org.organization(log_id, case_type, names="pseudonymous", limit=limit,
+                            cohort=_checked_case_filter(log_id, case_type, case_filter))
+    keep = AGENT_MIN_CELL_CASES
+
+    def kept(rows: list[dict[str, Any]], key: str) -> tuple[list[dict[str, Any]], int]:
+        shown = [row for row in rows if row[key] >= keep]
+        return shown, len(rows) - len(shown)
+
+    resources, hidden_resources = kept(full["resources"], "cases")
+    handover, hidden_handover = kept(full["handover_of_work"], "cases")
+    ping_pong, hidden_ping_pong = kept(full["subcontracting"], "cases")
+    together, hidden_together = kept(full["working_together"], "shared_cases")
+    matrix = full["activity_resource_matrix"]
+    return {
+        "resources": [{k: row[k] for k in ("resource", "events", "cases", "activities")} for row in resources],
+        "handover_of_work": handover,
+        "subcontracting": ping_pong,
+        "working_together": together,
+        "cases_with_handover": full["cases_with_handover"],
+        "activity_resource_matrix": {
+            "activities": matrix["activities"], "resources": matrix["resources"],
+            "events": [[n if n >= keep else None for n in row] for row in matrix["events"]],
+        },
+        "coverage": full["coverage"],
+        "withheld": {"resources": hidden_resources, "handover_pairs": hidden_handover,
+                     "subcontracting_pairs": hidden_ping_pong, "working_together_pairs": hidden_together,
+                     "min_cases": keep, "matrix_cells_below": keep,
+                     "resources_truncated": full["resources_truncated"]},
+        "privacy": {"names_returned": False, "labels_are_stable_within_this_response_only": True,
+                    "per_person_durations_or_speed_computed": False, "ranking_or_performance_scoring": False},
+        "interpretation": full["interpretation"],
+        "format": FORMAT, "log_id": log_id,
+    }
+
+
+def roles(log_id: str, case_type: str | None = None, threshold: float = 0.65,
+          case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Roles mined from which activities resources perform (aggregates level). Members are only counted, never
+    listed, and activities a role did fewer than AGENT_MIN_CELL_CASES times are left out of its mix."""
+    require(log_id, "aggregates")
+    from . import event_log_roles as rl
+    threshold = float(threshold)
+    if not 0 < threshold < 1:
+        raise EventLogWorkspaceError("threshold must be between 0 and 1")
+    full = rl.roles(log_id, case_type, threshold=threshold, names="pseudonymous",
+                    cohort=_checked_case_filter(log_id, case_type, case_filter))
+    keep = AGENT_MIN_CELL_CASES
+    out, hidden = [], 0
+    for role in full["roles"]:
+        if role["events"] < keep:
+            hidden += 1
+            continue
+        out.append({"role": role["role"], "member_count": role["member_count"], "events": role["events"],
+                    "activity_mix": [a for a in role["activity_mix"] if a["events"] >= keep],
+                    "activities": role["activities"], "exclusive_activities": role["exclusive_activities"]})
+    return {"roles": out, "withheld_roles": hidden, "min_events": keep, "threshold": full["threshold"],
+            "merges": full["merges"], "coverage": full["coverage"], "method": full["method"],
+            "privacy": {"names_returned": False, "members_listed": False,
+                        "per_person_durations_or_speed_computed": False, "ranking_or_performance_scoring": False},
+            "interpretation": full["interpretation"], "format": FORMAT, "log_id": log_id}

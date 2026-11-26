@@ -411,8 +411,9 @@ def _ocel_resource(pairs: list[tuple[Any, Any]]) -> tuple[str, dict[str, str]]:
 
 def _ocel_event_attributes(event: dict[str, Any]) -> list[tuple[str, str]]:
     """An event's attributes for OCEL output, with its resource first as ``org:resource``."""
-    attributes = sorted((event.get("attributes") or {}).items())
-    if event.get("resource") and all(k != OCEL_RESOURCE_ATTRIBUTE for k, _ in attributes):
+    stored = event.get("attributes") or {}
+    attributes = sorted(stored.items())
+    if event.get("resource") and OCEL_RESOURCE_ATTRIBUTE not in stored:
         attributes.insert(0, (OCEL_RESOURCE_ATTRIBUTE, event["resource"]))
     return attributes
 
@@ -562,8 +563,13 @@ def read_ocel_json(stream: IO[bytes], *, stats: ReadStats | None = None) -> Iter
 
 def write_ocel_json(objects: Iterable[dict[str, Any]], events: Iterable[dict[str, Any]], out: IO[str]) -> None:
     """OCEL 2.0 JSON with declared object/event types and qualified relationships."""
+    json.dump(ocel_json_document(objects, events), out, ensure_ascii=False)
+
+
+def ocel_json_document(objects: Iterable[dict[str, Any]], events: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """The OCEL 2.0 JSON document ``write_ocel_json`` writes, as Python data (for other OCEL writers)."""
     objects, events = list(objects), list(events)
-    document = {
+    return {
         "objectTypes": [{"name": name, "attributes": []} for name in sorted({o["object_type"] for o in objects})],
         "eventTypes": [{"name": name, "attributes": []} for name in sorted({e["activity"] for e in events})],
         "objects": [{"id": o["object_id"], "type": o["object_type"],
@@ -575,7 +581,6 @@ def write_ocel_json(objects: Iterable[dict[str, Any]], events: Iterable[dict[str
                     "relationships": [{"objectId": oid, "qualifier": q} for oid, q in e.get("objects") or []]}
                    for e in events],
     }
-    json.dump(document, out, ensure_ascii=False)
 
 
 def read_ocel_xml(stream: IO[bytes], *, stats: ReadStats | None = None) -> Iterator[EventRecord | ObjectRecord]:

@@ -8513,14 +8513,212 @@
       return inspect;
     };
     let lastNet=null;
+    const soundRun=button('Validate net soundness','secondary');soundRun.id='owgPetriSoundnessRun';soundRun.disabled=true;
+    const soundStatus=el('div',null,'muted');soundStatus.id='owgPetriSoundnessStatus';soundStatus.setAttribute('role','status');soundStatus.setAttribute('aria-live','polite');
+    const soundOut=el('div');soundOut.id='owgPetriSoundnessResults';
+    const soundBox=document.createElement('details');soundBox.append(el('summary','Structural and behavioral net validation'),
+      el('div','Check whether the model itself can reach completion, deadlock, leave tokens behind, loop indefinitely or contain transitions that can never fire. This check is independent of recorded cases.','muted'),
+      soundRun,soundStatus,soundOut);box.appendChild(soundBox);
+    const compareFile=input('owgPetriCompareFile','file');compareFile.accept='.pnml,application/xml,text/xml';
+    const compareRun=button('Compare completed behavior','secondary');compareRun.id='owgPetriCompareRun';compareRun.disabled=true;
+    const compareStatus=el('div',null,'muted');compareStatus.id='owgPetriCompareStatus';compareStatus.setAttribute('role','status');compareStatus.setAttribute('aria-live','polite');
+    const compareOut=el('div');compareOut.id='owgPetriCompareResults';
+    const compareBox=document.createElement('details');compareBox.append(el('summary','Compare two model revisions'),
+      el('div','Use the net just replayed as the baseline. Select a candidate PNML file to check whether completed visible activity sequences are added or removed. This does not compare timing, costs or business outcomes.','muted'),
+      field('Candidate Petri net (.pnml)',compareFile),compareRun,compareStatus,compareOut);
+    soundBox.appendChild(compareBox);
+    let compareBusy=false,compareRevision=0;
+    const clearCompare=()=>{compareRevision++;compareStatus.textContent='';compareOut.replaceChildren();compareRun.disabled=compareBusy||!lastNet||!compareFile.files?.length;};
+    compareFile.onchange=clearCompare;
+    compareRun.onclick=async()=>{
+      const net=lastNet,chosen=compareFile.files?.[0],revision=compareRevision;
+      if(!net||!chosen||compareBusy||net.generation!==state.generation)return;
+      const stillCurrent=()=>lastNet===net&&state.generation===net.generation&&compareRevision===revision;
+      compareBusy=true;compareRun.disabled=true;compareOut.replaceChildren();compareStatus.textContent='Exploring both model languages…';
+      try{
+        const baseline=new TextEncoder().encode(net.body);
+        if(baseline.byteLength>2*1024*1024||chosen.size>2*1024*1024)throw new Error('Each model must be at most 2 MB.');
+        const head=new Uint8Array(4);new DataView(head.buffer).setUint32(0,baseline.byteLength);
+        const body=new Blob([head,baseline,chosen],{type:'application/octet-stream'});
+        const r=await (await api('/v1/event-logs/petri-language-comparison',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body})).json();
+        if(!stillCurrent())return;
+        const verdict=v=>v===true?'Verified':v===false?'Failed':'Inconclusive';
+        compareStatus.textContent='Completed behavior equivalence: '+verdict(r.equivalent)+'. '+Number(r.product_states).toLocaleString()+' paired states examined.'+(r.complete?' Complete comparison.':' Stopped: '+r.limit.replaceAll('_',' ')+'.');
+        compareOut.appendChild(table(['Property','Result'],[
+          ['Candidate preserves baseline traces',verdict(r.candidate_preserves_baseline_language)],
+          ['Candidate introduces no new traces',verdict(r.candidate_introduces_no_new_language)],
+          ['Baseline marking graph',r.baseline.complete?'Complete':'Incomplete: '+r.baseline.limit],
+          ['Candidate marking graph',r.candidate.complete?'Complete':'Incomplete: '+r.candidate.limit]
+        ]));
+        const examples=[['Removed from candidate',r.removed_trace],['Added by candidate',r.added_trace]].filter(([,w])=>w!==null);
+        if(examples.length){
+          compareOut.appendChild(el('h4','Shortest discovered distinguishing traces'));
+          compareOut.appendChild(table(['Difference','Visible activities','Length'],examples.map(([kind,w])=>[
+            kind,(w.activities.join(' → ')||'(empty trace)')+(w.truncated?' … (prefix only)':''),String(w.length)
+          ])));
+        }
+        compareOut.appendChild(el('div',r.caveat,'muted'));
+        const download=button('Download model comparison (JSON)','secondary');download.onclick=()=>{
+          if(!stillCurrent())return;
+          const url=URL.createObjectURL(new Blob([JSON.stringify(r,null,2)],{type:'application/json'}));
+          const link=document.createElement('a');link.href=url;link.download='petri-language-'+r.candidate.pnml_sha256.slice(0,12)+'.json';
+          document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+        };compareOut.appendChild(download);
+      }catch(error){if(stillCurrent())compareStatus.textContent=error.message;}
+      finally{compareBusy=false;compareRun.disabled=!lastNet||lastNet.generation!==state.generation||!compareFile.files?.length;}
+    };
+    const policyBox=document.createElement('details');policyBox.append(el('summary','Verify declared compliance rules on the model'),
+      el('div','Check all reachable completed traces, not just recorded cases. Use exact visible activity names. Untimed activity rules only; resource and time constraints cannot be proved from this net.','muted'));
+    const policyTemplate=select('owgPetriPolicyTemplate',[
+      ['response','Every A is eventually followed by B'],['chain_response','Every A is immediately followed by B'],
+      ['precedence','Every B has an earlier A'],['not_coexistence','A and B never both occur'],['existence','Occurrence count of A']]);
+    const policyA=input('owgPetriPolicyA','text');policyA.maxLength=200;
+    const policyB=input('owgPetriPolicyB','text');policyB.maxLength=200;
+    const policyMin=input('owgPetriPolicyMin','number');policyMin.min='0';policyMin.max='1000000';policyMin.step='1';policyMin.value='1';
+    const policyMax=input('owgPetriPolicyMax','number');policyMax.min='0';policyMax.max='1000000';policyMax.step='1';
+    const policyBField=field('Activity B',policyB),policyMinField=field('Minimum count',policyMin),policyMaxField=field('Maximum count (optional)',policyMax);
+    const policyAdd=button('Add model rule','secondary');policyAdd.id='owgPetriPolicyAdd';
+    const policyRow=el('div',null,'row');policyRow.style.alignItems='end';
+    policyRow.append(field('Rule template',policyTemplate),field('Exact activity A',policyA),policyBField,policyMinField,policyMaxField,policyAdd);
+    const syncPolicyTemplate=()=>{const exists=policyTemplate.value==='existence';show(policyBField,!exists);show(policyMinField,exists);show(policyMaxField,exists);};
+    policyTemplate.onchange=syncPolicyTemplate;syncPolicyTemplate();
+    const policyText=document.createElement('textarea');policyText.id='owgPetriPolicyRules';policyText.rows=6;policyText.maxLength=65536;
+    policyText.style.cssText='width:100%;font-family:monospace';policyText.value=JSON.stringify({rules:[]},null,2);
+    const policyCandidate=input('owgPetriPolicyCandidate','file');policyCandidate.accept='.pnml,application/xml,text/xml';
+    const policyRun=button('Verify model rules','secondary');policyRun.id='owgPetriPolicyRun';policyRun.disabled=true;
+    const policyStatus=el('div',null,'muted');policyStatus.id='owgPetriPolicyStatus';policyStatus.setAttribute('role','status');policyStatus.setAttribute('aria-live','polite');
+    const policyOut=el('div');policyOut.id='owgPetriPolicyResults';
+    policyBox.append(policyRow,field('Rule suite JSON (editable; same untimed rule format as Compliance rules)',policyText),
+      field('Optional candidate revision (.pnml)',policyCandidate),policyRun,policyStatus,policyOut);
+    soundBox.appendChild(policyBox);
+    let policyBusy=false,policyRevision=0;
+    const clearPolicy=()=>{policyRevision++;policyStatus.textContent='';policyOut.replaceChildren();policyRun.disabled=policyBusy||!lastNet;};
+    policyText.oninput=clearPolicy;policyCandidate.onchange=clearPolicy;
+    policyAdd.onclick=()=>{
+      try{
+        const spec=JSON.parse(policyText.value);if(!spec||!Array.isArray(spec.rules)||Object.keys(spec).length!==1)throw new Error('Enter a JSON object with a rules array.');
+        if(spec.rules.length>=20)throw new Error('At most 20 rules are supported.');
+        const a=policyA.value,b=policyB.value,template=policyTemplate.value;
+        if(!a.trim())throw new Error('Enter exact activity A.');
+        let rule={template,a};
+        if(template==='existence'){
+          if(!policyMin.validity.valid||!policyMax.validity.valid||!policyMin.value)throw new Error('Enter valid whole-number count limits.');
+          rule.min=Number(policyMin.value);if(policyMax.value!=='')rule.max=Number(policyMax.value);
+          if(rule.max!==undefined&&rule.max<rule.min||rule.min===0&&rule.max===undefined)throw new Error('Specify a nontrivial count range.');
+        }else{
+          if(!b.trim()||a===b)throw new Error('Enter two different exact activity names.');
+          rule.b=b;
+        }
+        spec.rules.push(rule);policyText.value=JSON.stringify(spec,null,2);clearPolicy();
+      }catch(error){policyStatus.textContent=error.message;}
+    };
+    policyRun.onclick=async()=>{
+      const net=lastNet,revision=policyRevision,chosen=policyCandidate.files?.[0];
+      if(!net||policyBusy||net.generation!==state.generation)return;
+      const stillCurrent=()=>lastNet===net&&state.generation===net.generation&&policyRevision===revision;
+      policyBusy=true;policyRun.disabled=true;policyOut.replaceChildren();policyStatus.textContent='Exploring model and policy states…';
+      try{
+        const spec=JSON.parse(policyText.value),encoder=new TextEncoder();
+        const rules=encoder.encode(JSON.stringify(spec)),baseline=encoder.encode(net.body);
+        if(rules.byteLength>65536||baseline.byteLength>2*1024*1024||chosen&&chosen.size>2*1024*1024)throw new Error('Rule suite or model exceeds the review limit.');
+        const size=n=>{const bytes=new Uint8Array(4);new DataView(bytes.buffer).setUint32(0,n);return bytes;};
+        const body=new Blob([size(rules.byteLength),rules,size(baseline.byteLength),baseline,...(chosen?[chosen]:[])],{type:'application/octet-stream'});
+        const r=await (await api('/v1/event-logs/petri-policy-review',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body})).json();
+        if(!stillCurrent())return;
+        const pretty=s=>({verified:'Verified',counterexample:'Counterexample found',vacuous_only:'Only vacuous satisfaction',no_completed_trace:'No completed trace',inconclusive:'Inconclusive'}[s]||s);
+        const possible=v=>v===true?'Possible':v===false?'Impossible':'Inconclusive';
+        const trace=w=>w?((w.activities.join(' → ')||'(empty trace)')+(w.truncated?' … (prefix only)':'')):'—';
+        const render=(label,model)=>{
+          policyOut.appendChild(el('h4',label));
+          policyOut.appendChild(table(['Check','Verdict','Satisfying trace','Violating trace','Counterexample'],[
+            ['All rules together',pretty(model.joint.status),possible(model.joint.satisfying_trace_possible),possible(model.joint.violating_trace_possible),trace(model.joint.witnesses.violating)],
+            ...model.rules.map(x=>[JSON.stringify(x.rule),pretty(x.status),possible(x.satisfying_trace_possible),possible(x.violating_trace_possible),trace(x.witnesses.violating)])
+          ]));
+          policyOut.appendChild(el('div','Joint satisfying example: '+trace(model.joint.witnesses.activated_satisfying||model.joint.witnesses.vacuous)+(model.joint.limit?' · Search stopped: '+model.joint.limit.replaceAll('_',' '):''),'muted'));
+        };
+        render('Baseline model',r.baseline);
+        if(r.candidate){
+          render('Candidate model',r.candidate);
+          policyOut.appendChild(el('h4','Change in possibility of violations'));
+          policyOut.appendChild(table(['Check','Violation possibility','Satisfaction possibility'],[
+            ['All rules together',r.changes.joint.violating_trace_possibility.replaceAll('_',' '),r.changes.joint.satisfying_trace_possibility.replaceAll('_',' ')],
+            ...r.changes.rules.map(x=>['Rule '+(x.rule_index+1),x.violating_trace_possibility.replaceAll('_',' '),x.satisfying_trace_possibility.replaceAll('_',' ')])
+          ]));
+          policyOut.appendChild(el('div','Unchanged possibility does not prove the same violating or satisfying trace language.','muted'));
+        }
+        policyStatus.textContent='Model policy review: '+pretty(r.baseline.joint.status)+(r.candidate?' · Candidate: '+pretty(r.candidate.joint.status):'')+'.';
+        policyOut.appendChild(el('div',r.caveat,'muted'));
+        const download=button('Download policy review (JSON)','secondary');download.onclick=()=>{
+          if(!stillCurrent())return;
+          const url=URL.createObjectURL(new Blob([JSON.stringify(r,null,2)],{type:'application/json'}));
+          const link=document.createElement('a');link.href=url;link.download='petri-policy-'+r.rules_sha256.slice(0,12)+'.json';
+          document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+        };policyOut.appendChild(download);
+      }catch(error){if(stillCurrent())policyStatus.textContent=error.message;}
+      finally{policyBusy=false;policyRun.disabled=!lastNet||lastNet.generation!==state.generation;}
+    };
+    let soundBusy=false;
+    const clearSound=()=>{soundStatus.textContent='';soundOut.replaceChildren();soundRun.disabled=true;clearCompare();clearPolicy();};
+    soundRun.onclick=async()=>{
+      const net=lastNet;if(!net||soundBusy||net.generation!==state.generation)return;
+      soundBusy=true;soundRun.disabled=true;soundOut.replaceChildren();soundStatus.textContent='Exploring reachable markings…';
+      try{
+        const r=await (await api('/v1/event-logs/petri-soundness',{method:'POST',headers:{'Content-Type':'application/xml'},body:net.body})).json();
+        if(lastNet!==net||state.generation!==net.generation)return;
+        const verdict=v=>v===true?'Verified':v===false?'Failed':'Inconclusive';
+        soundStatus.textContent='Soundness: '+verdict(r.sound)+'. '+Number(r.reachable_markings).toLocaleString()+' reachable markings found. '+(r.complete?'Complete exploration.':'Exploration stopped at '+r.limit.replaceAll('_',' ')+'.');
+        soundOut.appendChild(table(['Property','Result'],[
+          ['Workflow-net structure',verdict(r.workflow_net_structure)],
+          ['Final marking reachable',verdict(r.final_reachable)],
+          ['Completion possible from every marking',verdict(r.option_to_complete)],
+          ['Proper completion',verdict(r.proper_completion)],
+          ['No dead transitions',verdict(r.no_dead_transitions)],
+          ['At most one token per place',verdict(r.one_safe)],
+          ['Every maximal execution completes',verdict(r.all_maximal_executions_complete)]
+        ]));
+        const steps=n=>n==null?'Not established':Number(n).toLocaleString();
+        soundOut.appendChild(table(['Execution property','Result'],[
+          ['Repeatable execution cycle possible',r.infinite_execution_possible===true?'Yes':r.infinite_execution_possible===false?'No':'Inconclusive'],
+          ['Shortest completion (transition firings)',steps(r.shortest_completion_steps)],
+          ['Longest execution when completion is guaranteed (transition firings)',steps(r.longest_execution_steps)]
+        ]));
+        const cycle=r.infinite_execution_witness;
+        if(cycle){
+          soundOut.appendChild(el('h4','Repeatable cycle witness'));
+          soundOut.appendChild(table(['Reach the cycle','Repeat these transitions'],[[
+            (cycle.entry.transition_ids.join(' → ')||'(initial marking)')+(cycle.entry.truncated?' … (prefix only)':''),
+            cycle.cycle_transition_ids.join(' → ')+(cycle.cycle_truncated?' … (prefix only)':'')
+          ]]));
+          soundOut.appendChild(el('div','A repeatable cycle proves that an infinite execution is possible, not that it is inevitable. A model can remain sound when the cycle has an exit.','muted'));
+        }
+        if(r.dead_transition_ids?.length)soundOut.appendChild(el('div','Unreachable transition IDs: '+r.dead_transition_ids.join(', ')));
+        const witnesses=Object.entries(r.witnesses).filter(([,w])=>w!==null);
+        if(witnesses.length){soundOut.appendChild(el('h4','Counterexamples'));
+          soundOut.appendChild(table(['Property','Transition ID sequence','Reached marking'],witnesses.map(([kind,w])=>[
+            kind.replaceAll('_',' '),(w.transition_ids.join(' → ')||'(initial marking)')+(w.truncated?' … (prefix of '+w.steps+' steps)':''),
+            w.marking.map(p=>p.place_id+': '+p.tokens).join(', ')||'(empty)'
+          ])));}
+        soundOut.appendChild(el('div',r.caveat,'muted'));
+        const download=button('Download validation report (JSON)','secondary');download.onclick=()=>{
+          if(lastNet!==net||state.generation!==net.generation)return;
+          const url=URL.createObjectURL(new Blob([JSON.stringify(r,null,2)],{type:'application/json'}));
+          const link=document.createElement('a');link.href=url;link.download='petri-soundness-'+r.pnml_sha256.slice(0,12)+'.json';
+          document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+        };soundOut.appendChild(download);
+      }catch(error){if(lastNet===net&&state.generation===net.generation)soundStatus.textContent=error.message;}
+      finally{soundBusy=false;soundRun.disabled=!lastNet||lastNet.generation!==state.generation;}
+    };
+
     const replay=async(body,label)=>{
       if(sectionGeneration!==state.generation||run.disabled)return;
       const generation=sectionGeneration,cohort=globalCohort();
-      run.disabled=own.disabled=happy.disabled=align.disabled=alertSave.disabled=true;aligned.replaceChildren();alertMessage.textContent='';lastNet=null;statusLine.textContent='Replaying on '+label+'…';out.replaceChildren();
+      run.disabled=own.disabled=happy.disabled=align.disabled=alertSave.disabled=true;aligned.replaceChildren();alertMessage.textContent='';lastNet=null;clearSound();statusLine.textContent='Replaying on '+label+'…';out.replaceChildren();
       try{
         const r=await (await api(logPath('petri-net-replay',{}),{method:'POST',headers:{'Content-Type':'application/xml'},body})).json();
         if(generation!==state.generation)return;
         lastNet={body,label,generation,cohort};
+        compareRun.disabled=compareBusy||!compareFile.files?.length;
+        policyRun.disabled=policyBusy;
         const f=r.fitness;
         statusLine.textContent='Fitness '+pct(f.log)+' on '+label+': '+Number(f.fitting_cases).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases ('+pct(f.fitting_case_share)+') replay without missing or remaining tokens.'+(r.precision.precision!==null?' Precision '+pct(r.precision.precision)+'.':'')+' The net has '+r.net.places+' places and '+r.net.transitions+' transitions ('+r.net.silent_transitions+' silent).'+(r.cases_excluded?' '+Number(r.cases_excluded).toLocaleString()+' cases beyond the length or variant limit were left out.':'');
         if(!r.net.final_marking_declared)out.appendChild(el('div','The file declares no final marking, so cases are expected to end with one token on each place nothing consumes from.','muted'));
@@ -8538,7 +8736,7 @@
           ])));out.appendChild(more);}
         out.appendChild(el('div',r.caveat,'muted'));
       }catch(error){statusLine.textContent=error.message;}
-      finally{run.disabled=own.disabled=happy.disabled=false;align.disabled=alertSave.disabled=saveRun.disabled=!lastNet;}};
+      finally{run.disabled=own.disabled=happy.disabled=false;align.disabled=alertSave.disabled=saveRun.disabled=!lastNet;soundRun.disabled=!lastNet||soundBusy;}};
     alertSave.onclick=async()=>{
       if(!lastNet)return;
       if(lastNet.body.length>60000){alertMessage.textContent='This net is too large to keep with a signal (over 60,000 characters).';return;}
