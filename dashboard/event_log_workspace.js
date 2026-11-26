@@ -8280,6 +8280,7 @@
       ['completed_true','Trace can complete'],['completed_false','Trace cannot complete'],
       ['fireable_true','Prefix can execute'],['fireable_false','Prefix cannot execute'],
       ['finishable_true','Prefix can still finish'],['finishable_false','Prefix cannot finish'],
+      ['all_prefix_states_finishable_true','Every matching prefix state can finish'],['all_prefix_states_finishable_false','Not every matching prefix state can finish'],
       ['required_next','Required next activities'],['forbidden_next','Forbidden next activities'],['exact_next','Exact set of next activities']]);
     const acceptanceNext=document.createElement('textarea');acceptanceNext.id='owgPetriAcceptanceNext';acceptanceNext.rows=2;acceptanceNext.value='[]';acceptanceNext.maxLength=25000;
     const acceptanceNextField=field('Next activities (JSON array)',acceptanceNext);
@@ -8312,7 +8313,7 @@
           const next=JSON.parse(acceptanceNext.value);
           if(!Array.isArray(next)||next.length>100||next.some(x=>typeof x!=='string'))throw new Error('Next activities must be a JSON array of activity names.');
           expect={[kind]:next};
-        }else{const [key,value]=kind.split('_');expect={[key]:value==='true'};}
+        }else{const split=kind.lastIndexOf('_');expect={[kind.slice(0,split)]:kind.slice(split+1)==='true'};}
         suite.cases.push({id,trace,expect});acceptanceText.value=JSON.stringify(suite,null,2);clearAcceptance();
       }catch(error){acceptanceStatus.textContent=error.message;}
     };
@@ -8340,6 +8341,7 @@
             const details=document.createElement('details');details.append(el('summary',c.id+' · assertion details'),
               el('div','Supplied trace: '+JSON.stringify(c.trace),'muted'),
               table(['Property','Expected','Observed','Passed'],c.assertions.map(a=>[a.property,JSON.stringify(a.expected),JSON.stringify(a.observed),verdict(a.passed)])));
+            details.appendChild(el('div','Matching markings: '+(c.observed.matched_markings??'unknown')+' · Known completable: '+(c.observed.known_completable_markings??'unknown')+' · Noncompletable: '+(c.observed.noncompletable_markings??'unknown')+' · Every matching marking can finish: '+verdict(c.observed.all_prefix_states_finishable),'muted'));
             const suffix=c.observed.completion_suffix;
             if(suffix)details.appendChild(el('div','Completion suffix: '+JSON.stringify(suffix.activities)+(suffix.truncated?' (prefix only)':'')+(suffix.shortest_proven?' · shortest proven':' · shortest not established')));
             acceptanceOut.appendChild(details);
