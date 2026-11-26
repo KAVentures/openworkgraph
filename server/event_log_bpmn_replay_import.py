@@ -1,9 +1,10 @@
 """Strict BPMN control-flow interchange for event-log Petri replay.
 
 Supports one independent process, plain start/end, opaque named tasks,
-unconditional exclusive gateways and paired acyclic parallel regions.
+unconditional exclusive gateways, paired acyclic parallel regions and
+plain embedded subprocess scopes.
 A sequence flow becomes a place. Gateway transitions reproduce token flow;
-no task implementation, condition, message, timer or subprocess is executed.
+no task implementation, condition, message or timer is executed.
 Reject unsupported semantics instead of approximating them.
 """
 from __future__ import annotations
@@ -19,11 +20,12 @@ from .event_log_workspace import EventLogWorkspaceError
 MAX_BYTES = 2 * 1024 * 1024
 MAX_NODES = 250
 MAX_FLOWS = 600
+MAX_SCOPE_DEPTH = 12
 NS = "http://www.omg.org/spec/BPMN/20100524/MODEL"
 DI = "http://www.omg.org/spec/BPMN/20100524/DI"
 TASKS = {"task", "userTask", "manualTask", "serviceTask", "scriptTask", "businessRuleTask"}
 GATEWAYS = {"exclusiveGateway", "parallelGateway"}
-NODES = TASKS | GATEWAYS | {"startEvent", "endEvent"}
+NODES = TASKS | GATEWAYS | {"startEvent", "endEvent", "subProcess"}
 FORBIDDEN = re.compile(rb"<!\s*(DOCTYPE|ENTITY)", re.IGNORECASE)
 
 
@@ -152,34 +154,61 @@ def to_pnml(data: bytes):
     pid = _id(process)
     if process.get("processType") not in (None, "None", "Private") or process.get("isClosed") not in (None, "false", "0"):
         _fail("only independent private process control flow is supported")
+    context = {"ids": {pid}, "nodes": 0, "flows": 0}
+    scope = _read_scope(process, context, depth=0)
+    net = pnml._Net()
+    source, sink = net.place(), net.place()
+    evidence = {"node_transition_ids": {}, "flow_place_ids": {}, "parallel_pairs": {},
+                "scope_by_node": {}, "scope_by_flow": {}, "subprocess_boundaries": {}}
+    _emit_scope(net, scope, source, sink, evidence)
+    result_net = {"places": net.places, "transitions": net.transitions, "arcs": net.arcs,
+                  "source": source, "sink": sink}
+    xml = pnml.to_pnml(result_net, (process.get("name") or pid)[:200])
+    if len(xml.encode("utf-8")) > MAX_BYTES:
+        _fail("converted PNML exceeds the replay byte limit")
+    return {"format": "openworkgraph.bpmn_replay_conversion.v1", "pnml": xml,
+            "bpmn_sha256": sha256(data).hexdigest(), "pnml_sha256": sha256(xml.encode()).hexdigest(),
+            "process_id": pid, "nodes": context["nodes"], "sequence_flows": context["flows"],
+            "places": len(net.places), "transitions": len(net.transitions), **evidence,
+            "caveat": "Only unconditional visible activity and routing token semantics are represented. "
+                      "Plain embedded subprocess wrappers are silent; their internal tasks remain visible. "
+                      "No task code, data conditions, timing, resources, collaboration or execution authority is imported."}
+
+
+def _read_scope(process, context, depth):
+    if depth > MAX_SCOPE_DEPTH:
+        _fail("BPMN embedded subprocess nesting exceeds 12 levels")
     nodes = {}
     labels = {}
     elements = {}
     flows = {}
-    ids = {pid}
+    children = {}
     for element in process:
         kind = _kind(element)
-        if kind == "documentation":
+        if kind == "documentation" or (_kind(process) == "subProcess" and kind in {"incoming", "outgoing"}):
             continue
         if kind not in NODES and kind != "sequenceFlow":
             _fail("unsupported BPMN process element: " + element.tag.rsplit("}", 1)[-1])
         ident = _id(element)
-        if ident in ids:
-            _fail("duplicate BPMN identifier: " + ident)
-        ids.add(ident)
+        if ident in context["ids"]:
+            _fail("duplicate BPMN identifier across scopes: " + ident)
+        context["ids"].add(ident)
         if kind == "sequenceFlow":
             _attrs(element, {"id", "name", "sourceRef", "targetRef"})
             if any(c.tag != _tag("documentation") for c in element):
                 _fail("conditional or extended sequence flows are unsupported")
             flows[ident] = (element.get("sourceRef"), element.get("targetRef"))
-            if len(flows) > MAX_FLOWS:
-                _fail("too many BPMN sequence flows")
+            context["flows"] += 1
+            if context["flows"] > MAX_FLOWS:
+                _fail("too many BPMN sequence flows across scopes")
         else:
             allowed = {"id", "name"}
             if kind in GATEWAYS:
                 allowed.add("gatewayDirection")
-            if kind in TASKS:
+            if kind in TASKS or kind == "subProcess":
                 allowed.add("isForCompensation")
+            if kind == "subProcess":
+                allowed.add("triggeredByEvent")
             if kind == "startEvent":
                 allowed.add("isInterrupting")
             _attrs(element, allowed)
@@ -187,17 +216,24 @@ def to_pnml(data: bytes):
                 _fail("compensation tasks are unsupported")
             if element.get("isInterrupting") not in (None, "true", "1"):
                 _fail("noninterrupting start events are unsupported")
-            for c in element:
-                if c.tag not in {_tag("incoming"), _tag("outgoing"), _tag("documentation")}:
-                    _fail("unsupported task, gateway or event semantics: " + c.tag.rsplit("}", 1)[-1])
+            if kind == "subProcess":
+                if element.get("triggeredByEvent") not in (None, "false", "0"):
+                    _fail("event subprocesses are unsupported")
+            else:
+                for c in element:
+                    if c.tag not in {_tag("incoming"), _tag("outgoing"), _tag("documentation")}:
+                        _fail("unsupported task, gateway or event semantics: " + c.tag.rsplit("}", 1)[-1])
             nodes[ident] = kind
             elements[ident] = element
             label = element.get("name", "")
             if kind in TASKS and (not label.strip() or label != label.strip() or len(label) > 200 or any(ord(c) < 32 for c in label)):
                 _fail("every task needs a nonempty name of at most 200 characters without surrounding whitespace")
             labels[ident] = label if kind in TASKS else None
-            if len(nodes) > MAX_NODES:
-                _fail("too many BPMN flow nodes")
+            context["nodes"] += 1
+            if context["nodes"] > MAX_NODES:
+                _fail("too many BPMN flow nodes across scopes")
+            if kind == "subProcess":
+                children[ident] = _read_scope(element, context, depth + 1)
     starts = [n for n, k in nodes.items() if k == "startEvent"]
     ends = [n for n, k in nodes.items() if k == "endEvent"]
     if len(starts) != 1 or len(ends) != 1:
@@ -224,7 +260,7 @@ def to_pnml(data: bytes):
             ok = (n_in, n_out) == (0, 1)
         elif kind == "endEvent":
             ok = (n_in, n_out) == (1, 0)
-        elif kind in TASKS:
+        elif kind in TASKS or kind == "subProcess":
             ok = (n_in, n_out) == (1, 1)
         elif kind == "parallelGateway":
             ok = (n_in == 1 and n_out >= 2) or (n_in >= 2 and n_out == 1)
@@ -243,11 +279,17 @@ def to_pnml(data: bytes):
     if _reachable(start, successors) != set(nodes) or _reachable(end, predecessors) != set(nodes):
         _fail("every BPMN node must lie on a start-to-end graph path")
     pairs = _parallel_pairs(nodes, successors, predecessors, end)
-    net = pnml._Net()
-    source = net.place()
-    sink = net.place()
-    flow_places = {fid: net.place() for fid in sorted(flows)}
-    mapping = {}
+    return {"id": _id(process), "nodes": nodes, "labels": labels, "flows": flows,
+            "incoming": incoming, "outgoing": outgoing, "pairs": pairs, "children": children}
+
+
+def _emit_scope(net, scope, source, sink, evidence):
+    nodes, labels = scope["nodes"], scope["labels"]
+    incoming, outgoing = scope["incoming"], scope["outgoing"]
+    flow_places = {fid: net.place() for fid in sorted(scope["flows"])}
+    evidence["flow_place_ids"].update(flow_places)
+    evidence["parallel_pairs"].update(scope["pairs"])
+    evidence["scope_by_flow"].update({fid: scope["id"] for fid in flow_places})
     for ident in sorted(nodes):
         kind = nodes[ident]
         inputs = [flow_places[f] for f in sorted(incoming[ident])]
@@ -258,20 +300,17 @@ def to_pnml(data: bytes):
             tids = [net.transition(None, inputs[0], sink)]
         elif kind in TASKS:
             tids = [net.transition(labels[ident], inputs[0], outputs[0])]
+        elif kind == "subProcess":
+            entry, exit = net.place(), net.place()
+            enter = net.transition(None, inputs[0], entry)
+            _emit_scope(net, scope["children"][ident], entry, exit, evidence)
+            leave = net.transition(None, exit, outputs[0])
+            tids = [enter, leave]
+            evidence["subprocess_boundaries"][ident] = {"entry_place_id": entry, "exit_place_id": exit,
+                                                        "entry_transition_id": enter, "exit_transition_id": leave}
         elif kind == "exclusiveGateway":
             tids = [net.transition(None, a, b) for a in inputs for b in outputs]
         else:
             tids = [net.silent_between(inputs, outputs)]
-        mapping[ident] = tids
-    result_net = {"places": net.places, "transitions": net.transitions, "arcs": net.arcs,
-                  "source": source, "sink": sink}
-    xml = pnml.to_pnml(result_net, (process.get("name") or pid)[:200])
-    if len(xml.encode("utf-8")) > MAX_BYTES:
-        _fail("converted PNML exceeds the replay byte limit")
-    return {"format": "openworkgraph.bpmn_replay_conversion.v1", "pnml": xml,
-            "bpmn_sha256": sha256(data).hexdigest(), "pnml_sha256": sha256(xml.encode()).hexdigest(),
-            "process_id": pid, "nodes": len(nodes), "sequence_flows": len(flows),
-            "places": len(net.places), "transitions": len(net.transitions),
-            "parallel_pairs": pairs, "node_transition_ids": mapping, "flow_place_ids": flow_places,
-            "caveat": "Only unconditional visible activity and routing token semantics are represented. "
-                      "No task code, data conditions, timing, resources, collaboration or execution authority is imported."}
+        evidence["node_transition_ids"][ident] = tids
+        evidence["scope_by_node"][ident] = scope["id"]
