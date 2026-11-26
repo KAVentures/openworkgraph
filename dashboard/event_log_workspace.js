@@ -12610,6 +12610,35 @@
     const run=button('Predict');run.id='owgPredictRun';
     const watch=button('Monitor quality over time','secondary');watch.id='owgPredictMonitor';
     const f={hours:field('Hours',hours),activity:field('Activity',activity)};
+    const outcomeExact=input('owgPredictOutcomeExact','text','Exact activity label (optional)');outcomeExact.maxLength=400;
+    const outcomeLookup=activityLabelLookup(outcomeExact,{id:part=>'owgPredictOutcomeActivity'+part,subject:'prediction outcome activity'});
+    const outcomeNote=el('div','An exact label overrides the suggestion; matching is literal.','muted');
+    f.activity.append(field('Exact outcome activity',outcomeExact),outcomeLookup.wrap,outcomeNote);
+    let suggestion=activity.value,addedOutcome=null;
+    outcomeExact.addEventListener('input',()=>{
+      outcomeLookup.reset();
+      if(addedOutcome){addedOutcome.remove();addedOutcome=null;}
+      const value=outcomeExact.value;
+      if(value&&Array.from(value).length<=200){
+        if(!Array.from(activity.options).some(option=>option.value===value)){
+          addedOutcome=document.createElement('option');addedOutcome.value=value;addedOutcome.textContent=value;activity.appendChild(addedOutcome);
+        }
+        activity.value=value;outcomeNote.textContent='An exact label overrides the suggestion; matching is literal.';
+      }else{
+        activity.value=value?'':suggestion;
+        outcomeNote.textContent=value?'Activity labels must have at most 200 characters.':'An exact label overrides the suggestion; matching is literal.';
+      }
+      activity.dispatchEvent(new Event('input',{bubbles:true}));
+      ++watchTurn;monitorOut.replaceChildren();watch.disabled=false;
+    });
+    activity.addEventListener('change',()=>{
+      const selected=activity.value;
+      if(addedOutcome){addedOutcome.remove();addedOutcome=null;}
+      if(Array.from(activity.options).some(option=>option.value===selected))suggestion=selected;
+      activity.value=suggestion;outcomeExact.value='';outcomeLookup.reset();
+      outcomeNote.textContent='An exact label overrides the suggestion; matching is literal.';
+      ++watchTurn;monitorOut.replaceChildren();watch.disabled=false;
+    });
     const sync=()=>{
       show(f.hours,outcome.value==='duration_over');show(f.activity,outcome.value==='contains_activity');
       rankBy.querySelector('option[value="outcome"]').disabled=!outcome.value;
