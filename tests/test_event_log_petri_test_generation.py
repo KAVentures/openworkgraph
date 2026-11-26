@@ -98,3 +98,36 @@ def test_work_and_selection_limits_explicit(monkeypatch):
 def test_invalid_settings(settings):
     with pytest.raises(EventLogWorkspaceError):
         generation.generate(model(A), settings)
+
+
+def test_http_owner_only_and_nonretained(tmp_path):
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    code = r'''
+from fastapi.testclient import TestClient
+from server.secure_app import app
+from server import local_auth, event_log_pnml as pnml
+net = pnml.to_pnml(pnml.tree_to_net({"op":"activity","activity":"A"}), "reference").encode()
+path = "/v1/event-logs/petri-test-generation"
+with TestClient(app) as client:
+    owner = {"Authorization":"OWG-Session "+local_auth.create_dashboard_session()}
+    bearer = {"Authorization":"Bearer "+local_auth.ensure_api_token()}
+    assert client.post(path, content=net, headers=bearer).status_code == 403
+    response = client.post(path+"?max_cases=2&max_depth=5",content=net,headers=owner)
+    assert response.status_code == 200,response.text
+    assert response.json()["status"] == "generated"
+    assert len(response.json()["suite"]["cases"]) <= 2
+    assert response.headers["cache-control"] == "no-store"
+    assert client.post(path+"?max_cases=41",content=net,headers=owner).status_code == 422
+    assert client.post(path,content=b"<pnml/>",headers=owner).status_code == 422
+    assert client.post(path,content=b" "*(2*1024*1024+1),headers=owner).status_code == 413
+print("ok")
+'''
+    env = {**os.environ, "WORKFLOW_OBSERVER_DATA": str(tmp_path / "srv"),
+           "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth"),
+           "WORKFLOW_OBSERVER_CONFIG": str(tmp_path / "config.json")}
+    done = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1],
+                          env=env, capture_output=True, text=True, timeout=180)
+    assert done.returncode == 0 and done.stdout.strip().endswith("ok"), done.stderr + done.stdout
