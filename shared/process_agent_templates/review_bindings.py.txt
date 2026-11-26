@@ -1,0 +1,315 @@
+"""Rehearse reviewed routes and customer mappings without invoking any tools."""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import os
+from collections import Counter
+import json
+import math
+import sys
+from pathlib import Path
+
+from configure import validate_catalog, write_new
+from evaluate import validate_suite
+from execute import ImplementationError, digest, endpoint, load_object, prepare, reference, tool_input_schema, _tool_client
+from runtime import load_spec
+
+FORMAT = "openworkgraph.offline-binding-rehearsal.v1"
+MAX_INPUT_BYTES = 262144
+MAX_REPORT_BYTES = 4 * 1024 * 1024
+
+
+SCHEMA_FORMAT = "openworkgraph.customer-tool-schema-bundle.v1"
+MAX_SCHEMA_BYTES = 1048576
+MAX_SCHEMA_NODES = 4000
+MAX_ARGUMENT_NODES = 10000
+MAX_VALIDATION_WORK = 20_000_000
+# Restrict the offline validator to bounded, nonrecursive structural schemas.
+# Regex, references, formats, conditional/combinator and unevaluated keywords
+# need a separately reviewed validator; never silently treat them as checked.
+ANNOTATIONS = {"title","description","default","examples","deprecated","readOnly","writeOnly","$comment"}
+KEYWORDS = {"$schema","type","properties","required","additionalProperties","items","prefixItems",
+    "minItems","maxItems","minProperties","maxProperties","minLength","maxLength",
+    "minimum","maximum","exclusiveMinimum","exclusiveMaximum","multipleOf","enum","const"} | ANNOTATIONS
+DIALECTS = {"https://json-schema.org/draft/2020-12/schema","https://json-schema.org/draft/2020-12/schema#"}
+
+
+def _nodes(value,limit,depth=24):
+    pending=[(value,0)]
+    count=0
+    while pending:
+        node,level=pending.pop()
+        count+=1
+        if count>limit or level>depth:
+            raise ValueError("bounded JSON complexity exceeded")
+        if isinstance(node,dict):
+            pending.extend((v,level+1) for v in node.values())
+        elif isinstance(node,list):
+            pending.extend((v,level+1) for v in node)
+    return count
+
+
+def _supported_schema(schema):
+    pending=[schema]
+    while pending:
+        node=pending.pop()
+        if type(node) is bool:
+            continue
+        if not isinstance(node,dict) or set(node)-KEYWORDS:
+            return False
+        if "$schema" in node and node["$schema"] not in DIALECTS:
+            return False
+        properties=node.get("properties",{})
+        if not isinstance(properties,dict):
+            return False
+        pending.extend(properties.values())
+        for key in ("additionalProperties","items"):
+            if key in node:
+                pending.append(node[key])
+        if "prefixItems" in node:
+            if not isinstance(node["prefixItems"],list):
+                return False
+            pending.extend(node["prefixItems"])
+    return True
+
+
+async def capture_schemas(spec,catalog,*,client_factory=_tool_client):
+    """Explicit metadata-only capture. Raw schema descriptions/defaults stay local."""
+    validate_catalog(spec,catalog)
+    token=os.environ.get("OWG_EXECUTION_MCP_TOKEN","")
+    if not token:
+        raise ImplementationError("Configure the customer MCP metadata credential")
+    async with client_factory(endpoint(catalog["tool_server_url"]),token) as client:
+        live=await client.list_tools()
+    if not isinstance(live,list) or len(live)>1000:
+        raise ImplementationError("Current tool inventory exceeds bounds")
+    pins={row["name"]:row["input_schema_sha256"] for row in catalog["tools"]}
+    found={}
+    for tool in live:
+        name=tool.get("name") if isinstance(tool,dict) else getattr(tool,"name",None)
+        if not isinstance(name,str) or name not in pins:
+            continue
+        if name in found:
+            raise ImplementationError("Current tool inventory is ambiguous")
+        schema=tool_input_schema(tool)
+        if digest(schema)!=pins[name]:
+            raise ImplementationError("Tool schema changed since inspection; re-inspect the catalog")
+        # Avoid persisting the known bearer secret even in unexpected metadata.
+        if token in json.dumps(schema,ensure_ascii=False) or token in json.dumps(schema):
+            raise ImplementationError("Schema contains the configured credential")
+        found[name]=schema
+    if set(found)!=set(pins):
+        raise ImplementationError("Inspected tools are no longer present; re-inspect the catalog")
+    return {"format":SCHEMA_FORMAT,"spec_sha256":digest(spec),"catalog_sha256":digest(catalog),
+        "schemas":[{"name":name,"schema":found[name]} for name in sorted(found)],
+        "business_tools_called":False,"execution_authorized":False}
+
+
+def _schema_validators(spec,catalog,bundle):
+    if (not isinstance(bundle,dict) or bundle.get("format")!=SCHEMA_FORMAT
+            or bundle.get("spec_sha256")!=digest(spec) or bundle.get("catalog_sha256")!=digest(catalog)
+            or not isinstance(bundle.get("schemas"),list) or len(bundle["schemas"])>100):
+        raise ImplementationError("Select a schema bundle pinned to this exact specification and catalog")
+    from jsonschema import Draft202012Validator
+    from jsonschema.exceptions import SchemaError
+    pins={t["name"]:t["input_schema_sha256"] for t in catalog["tools"]}
+    validators={}
+    for row in bundle["schemas"]:
+        if not isinstance(row,dict) or set(row)!={"name","schema"} or not isinstance(row["name"],str):
+            raise ImplementationError("Malformed schema bundle")
+        name,schema=row["name"],row["schema"]
+        if name not in pins or name in validators or not isinstance(schema,dict) or digest(schema)!=pins[name]:
+            raise ImplementationError("Schema bundle tool digest or identity does not match the inspected catalog")
+        try:
+            size=_nodes(schema,MAX_SCHEMA_NODES)
+            if not _supported_schema(schema):
+                validators[name]=(None,0,"unsupported_schema_keywords")
+                continue
+            Draft202012Validator.check_schema(schema)
+            validators[name]=(Draft202012Validator(schema),size,None)
+        except (ValueError,TypeError,SchemaError,RecursionError,OverflowError):
+            validators[name]=(None,0,"invalid_or_unbounded_schema")
+    return validators
+
+
+def _check_schema(request,validators,budget):
+    entry=validators.get(request["tool_name"])
+    if entry is None:
+        return "schema_not_in_bundle"
+    validator,size,problem=entry
+    if problem:
+        return problem
+    try:
+        work=size*_nodes(request["arguments"],MAX_ARGUMENT_NODES)
+        if work>budget[0]:
+            return "schema_validation_work_bound"
+        budget[0]-=work
+        if not validator.is_valid(request["arguments"]):
+            return "nested_schema_validation_failed"
+    except (ValueError,TypeError,RecursionError,OverflowError,ArithmeticError):
+        return "schema_validation_refused"
+    return None
+
+
+def _type_matches(value, kind):
+    if kind == "unknown":
+        return None
+    if kind == "integer":
+        return type(value) is int or (type(value) is float and math.isfinite(value) and value.is_integer())
+    if kind == "number":
+        return type(value) is int or (type(value) is float and math.isfinite(value))
+    return type(value) is {"string":str,"boolean":bool,"object":dict,"array":list,"null":type(None)}[kind]
+
+
+def _check_tool(tool_request, tools, role, validators=None, budget=None):
+    tool = tools.get(tool_request["tool_name"])
+    problems = []
+    if tool is None:
+        return {"role":role,"status":"blocked","issues":["tool_not_in_inspected_catalog"]}
+    expected = tool_request.get("tool_schema_sha256")
+    if expected is None:
+        problems.append("schema_pin_missing")
+    elif expected != tool["input_schema_sha256"]:
+        problems.append("schema_pin_mismatch")
+    fields = {f["name"]:f for f in tool["input_fields"]}
+    args = tool_request["arguments"]
+    if any(f["required"] and name not in args for name,f in fields.items()):
+        problems.append("required_argument_missing")
+    # The catalog intentionally omits additionalProperties and nested constraints.
+    # Extra names are unreviewable in this projection, not necessarily invalid.
+    unknown_names = set(args)-fields.keys()
+    if unknown_names:
+        problems.append("argument_not_in_metadata_projection")
+    known_types = []
+    for name in sorted(set(args)&fields.keys()):
+        known_types.append(_type_matches(args[name],fields[name]["type"]))
+    if False in known_types:
+        problems.append("argument_type_mismatch")
+    if None in known_types and validators is None:
+        problems.append("argument_type_unknown")
+    if validators is not None:
+        problem=_check_schema(tool_request,validators,budget)
+        if problem:
+            problems.append(problem)
+    return {"role":role,"status":"blocked" if problems else "metadata_checks_match",
+            "issues":problems}
+
+
+def rehearse(spec,suite,bindings,catalog,schemas=None):
+    validate_catalog(spec,catalog)
+    cases=validate_suite(spec,suite,allow_current_source_rules=True)
+    if not isinstance(bindings,dict) or bindings.get("format")!="openworkgraph.customer-mcp-bindings.v1" or digest(bindings.get("process_reference"))!=digest(reference(spec)):
+        raise ImplementationError("Bindings must identify the exact specification")
+    if endpoint(bindings.get("tool_server_url")) != endpoint(catalog["tool_server_url"]):
+        raise ImplementationError("The inspected catalog belongs to a different configured tool endpoint")
+    tools={t["name"]:t for t in catalog["tools"]}
+    validators=_schema_validators(spec,catalog,schemas) if schemas is not None else None
+    budget=[MAX_VALIDATION_WORK]
+    model=spec["process_model"]
+    declared={a["id"] for a in model["activities"] if a["kind"]=="activity"}
+    covered=set()
+    counts=Counter()
+    requirements=Counter()
+    rows=[]
+    for case in cases:
+        routes=case["expected"]["accepted_routes"]
+        if not routes:
+            counts["clarification_only_cases"]+=1
+            rows.append({"case_id":case["id"],"category":case["category"],"status":"clarification_not_rehearsed","routes":[]})
+            continue
+        route_rows=[]
+        for i,route in enumerate(routes):
+            covered.update(set(route)&declared)
+            plan={"revision":spec["revision"],"content_sha256":spec["content_sha256"],
+                  "status":"proposal","activity_ids":route}
+            counts["reviewed_routes"]+=1
+            try:
+                prepared=prepare(spec,plan,case["input"],bindings)
+            except (ValueError,TypeError,KeyError,IndexError):
+                # Never repeat exception strings: they can contain customer values.
+                counts["blocked_routes"]+=1
+                requirements["offline_prepare_rejected"]+=1
+                route_rows.append({"route_index":i,"status":"blocked","requirements":["offline_prepare_rejected"],"actions":[]})
+                continue
+            issues=set(prepared["requirements"])
+            actions=[]
+            for action in prepared["actions"]:
+                checks=[_check_tool(action,tools,"action",validators,budget)]
+                if action["precondition"] is not None:
+                    checks.append(_check_tool(action["precondition"],tools,"precondition",validators,budget))
+                actions.append({"activity_id":action["activity_id"],"checks":checks})
+                for check in checks:
+                    issues.update(check["issues"])
+            # Human approvals and live source predicates are deliberately not
+            # simulated or accepted by this offline command.
+            deferred={"human_activity_count":len(prepared["human_activity_ids"]),
+                "manual_condition_count":len(prepared["manual_condition_ids"]),
+                "source_rule_count":len(prepared["source_rules"]),
+                "decision_table_count":len(prepared.get("decision_tables",[])),
+                "terminal_source_check_count":len(prepared["outcomes"])}
+            counts["blocked_routes" if issues else "offline_checks_match_routes"]+=1
+            requirements.update(issues)
+            route_rows.append({"route_index":i,"status":"blocked" if issues else "offline_checks_match",
+                "requirements":sorted(issues),"actions":actions,"deferred_live_checks":deferred})
+        status="all_reviewed_routes_match" if all(r["status"]=="offline_checks_match" for r in route_rows) else "blocked"
+        counts["blocked_cases" if status=="blocked" else "offline_checks_match_cases"]+=1
+        rows.append({"case_id":case["id"],"category":case["category"],"status":status,"routes":route_rows})
+    return {"format":FORMAT,"process_reference":reference(spec),"spec_sha256":digest(spec),
+        "suite_sha256":digest(suite),"bindings_sha256":digest(bindings),"catalog_sha256":digest(catalog),
+        "catalog_inspected_at":catalog["inspected_at"],"omitted_catalog_tools":catalog.get("omitted_tool_count"),
+        "case_count":len(cases),"counts":dict(sorted(counts.items())),
+        "requirement_route_counts":dict(sorted(requirements.items())),
+        "activity_ids_in_reviewed_routes":sorted(covered),"activity_ids_without_reviewed_route":sorted(declared-covered),
+        "cases":rows,"schema_bundle_sha256":digest(schemas) if schemas is not None else None,
+        "bounded_nested_schema_checks_requested":schemas is not None,
+        "full_json_schema_validated":False,"current_tool_availability_verified":False,
+        "case_values_returned":False,"source_reads_performed":False,"business_tools_called":False,
+        "execution_authorized":False,"business_outcomes_verified":False,
+        "interpretation":"Offline preparation, inspected metadata and optional bounded nested schema checks only. A matching route is not approved for execution. Full tool schemas, current availability, service-side authorization, human work, source facts, and business outcomes remain unverified. Clarification-only cases are not rehearsed."}
+
+
+def main(argv=None):
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--cases")
+    parser.add_argument("--bindings")
+    parser.add_argument("--schemas")
+    parser.add_argument("--capture-schemas",action="store_true")
+    parser.add_argument("--confirm-local-schema-capture",action="store_true")
+    parser.add_argument("--catalog",required=True)
+    parser.add_argument("--output",required=True)
+    parser.add_argument("--confirm-local-case-review",action="store_true")
+    args=parser.parse_args(argv)
+    if args.capture_schemas:
+        if not args.confirm_local_schema_capture or args.cases or args.bindings or args.schemas or Path(args.output).exists():
+            print("Confirm local raw schema capture and choose a new output file.",file=sys.stderr)
+            return 2
+        try:
+            result=asyncio.run(capture_schemas(load_spec(),load_object(Path(args.catalog),MAX_INPUT_BYTES)))
+            write_new(Path(args.output),result,limit=MAX_SCHEMA_BYTES)
+        except Exception:
+            print("Schema capture refused; review the catalog and metadata credential.",file=sys.stderr)
+            return 2
+        print("Pinned local schema bundle written; no business tools called.")
+        return 0
+    if not args.confirm_local_case_review or not args.cases or not args.bindings:
+        print("Explicit local case review is required.",file=sys.stderr)
+        return 2
+    try:
+        report=rehearse(load_spec(),load_object(Path(args.cases),MAX_INPUT_BYTES),
+            load_object(Path(args.bindings),MAX_INPUT_BYTES),load_object(Path(args.catalog),MAX_INPUT_BYTES),
+            load_object(Path(args.schemas),MAX_SCHEMA_BYTES) if args.schemas else None)
+        write_new(Path(args.output),report,limit=MAX_REPORT_BYTES)
+    except (ValueError,OSError,TypeError,KeyError,ImportError,RecursionError,OverflowError):
+        print("Offline rehearsal refused; check pinned inputs, fresh catalog and output path.",file=sys.stderr)
+        return 2
+    print(json.dumps(report["counts"],sort_keys=True))
+    if report["counts"].get("blocked_routes",0):
+        return 1
+    if not report["counts"].get("reviewed_routes") or report["counts"].get("clarification_only_cases",0) or report["activity_ids_without_reviewed_route"]:
+        return 3
+    return 0
+
+
+if __name__=="__main__":
+    raise SystemExit(main())
