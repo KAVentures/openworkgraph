@@ -756,6 +756,39 @@ def model_quality(log_id: str, case_type: str | None = None, levels: str | None 
     return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
 
 
+def attributes(log_id: str, case_type: str | None = None, top_values: int = 10) -> dict[str, Any]:
+    """Which case and event attributes a shared log has, to choose filters, breakdowns and root-cause features
+    (aggregates level): coverage, numeric or categorical, case- or event-level, quartiles for numbers and the
+    most frequent values with their case share and median case duration. Values seen in fewer than
+    AGENT_MIN_CELL_CASES cases are withheld and counted; the minimum and maximum (single cases) and the values
+    of identifier-like attributes (a different value on every event) are not returned."""
+    require(log_id, "aggregates")
+    if isinstance(top_values, bool) or not isinstance(top_values, int) or not 1 <= top_values <= 50:
+        raise EventLogWorkspaceError("top_values must be a whole number from 1 to 50")
+    from . import event_log_attribute_profile as profiles
+    result = profiles.profile(log_id, {"top_values": 50, **({"case_type": case_type} if case_type else {})})
+    shown, withheld_values = [], 0
+    for entry in result["attributes"]:
+        values = [] if entry.get("unique_per_event") else entry.get("top_values") or []
+        kept = [v for v in values if v["cases"] >= AGENT_MIN_CELL_CASES]
+        withheld_values += max(int(entry.get("distinct_values") or 0) - len(kept), 0)
+        item = {k: entry[k] for k in ("attribute", "events", "cases", "case_coverage", "event_coverage",
+                                      "distinct_values", "kind", "level", "cases_where_value_changes",
+                                      "unique_per_event") if k in entry}
+        item["top_values"] = kept[:top_values]
+        if entry.get("numeric"):
+            item["numeric"] = {k: entry["numeric"][k] for k in ("p25", "median", "p75", "mean") if k in entry["numeric"]}
+        shown.append(item)
+    return {"format": FORMAT, "log_id": log_id, "case_notion": result.get("case_notion"), "cases": result["cases"],
+            "events": result["events"], "median_case_duration_seconds": result.get("median_case_duration_seconds"),
+            "attributes": shown, "attributes_truncated": result.get("attributes_truncated", False),
+            "withheld": {"values": withheld_values, "min_cases": AGENT_MIN_CELL_CASES,
+                         "numeric_min_max": True, "identifier_like_values": True},
+            "caveat": ("Use an attribute and value here as a case filter, for example {\"attribute\": \"region=EU\"} "
+                       "for a case-level attribute or {\"event_attribute\": \"amount=100\"}. Durations per value are "
+                       "descriptive: cases with a value can differ from the rest in many other ways.")}
+
+
 def compare_logs(baseline_log_id: str, comparison_log_id: str, *, baseline_case_type: str | None = None,
                  comparison_case_type: str | None = None, baseline_filter: dict[str, Any] | None = None,
                  comparison_filter: dict[str, Any] | None = None, limit: int = 25) -> dict[str, Any]:

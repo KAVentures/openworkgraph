@@ -307,6 +307,13 @@ async def agent_model_quality(request: Request, log_id: str, levels: str | None 
     return await _answer(sharing.model_quality, log_id, case_type, levels)
 
 
+@router.get("/v1/process-intelligence/{log_id}/attributes")
+async def agent_attributes(request: Request, log_id: str, top_values: int = Query(default=10, ge=1, le=50),
+                           case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.attributes, log_id, case_type, top_values)
+
+
 @router.post("/v1/process-intelligence/{log_id}/compare-logs")
 async def agent_compare_logs(request: Request, log_id: str):
     """Compare this shared log (baseline) with another shared log (comparison), aggregates only."""
