@@ -144,6 +144,12 @@ the existing signals, looks at trends, drift and stuck or overdue cases, and tes
 with cases that already work that way, 2 to 4 simulated alternatives side by side, side effects, and what to
 monitor afterwards. Observed and simulated evidence are kept apart; nothing authorises making the change.
 
+### Resource: `openworkgraph://process-case-filter`
+
+When a log is shared, the MCP server also offers this resource: the keys and value formats of `case_filter`
+(dates, activities, attributes, ranges, duration, rework, follows rules, variants, tags, `all_of`) with examples.
+The playbook prompts point agents to it.
+
 ## HTTP
 
 | Route | Who |
