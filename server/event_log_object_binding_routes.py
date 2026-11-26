@@ -75,6 +75,15 @@ def list_saved_object_state_checks(request: Request, log_id: str):
     return _respond(saved.listing, log_id)
 
 
+@router.post("/v1/event-logs/{log_id}/object-state-check/template/preview")
+async def preview_object_state_check_template(request: Request, log_id: str):
+    from . import event_log_object_state_saved as saved
+    _require_dashboard(request)
+    document = await _json_body(request, "object state definition file", strict=True, limit=65536)
+    _require_dashboard(request)
+    return await run_in_threadpool(_respond, saved.preview_template, log_id, document)
+
+
 @router.post("/v1/event-logs/{log_id}/object-state-check/saved")
 async def save_object_state_check(request: Request, log_id: str):
     from . import event_log_object_state_saved as saved

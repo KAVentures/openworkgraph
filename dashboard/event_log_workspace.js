@@ -4304,6 +4304,11 @@
     const savedLoad=button('Load saved check','secondary'),savedRefresh=button('Refresh saved checks','secondary'),savedCreate=button('Save as new check','secondary'),savedUpdate=button('Update loaded check','secondary'),savedDelete=button('Delete loaded check','secondary');
     const savedRow=el('div',null,'row');savedRow.style.alignItems='end';savedRow.append(field('Saved state checks',savedPick),savedLoad,savedRefresh,field('Saved check name',savedName),savedCreate,savedUpdate,savedDelete);
     const savedStatus=el('div',null,'muted');savedStatus.id='owgObjectStateSavedStatus';savedStatus.setAttribute('role','status');
+    const transfer=document.createElement('details');transfer.id='owgObjectStateTransfer';
+    const transferFile=input('owgObjectStateTemplateFile','file');transferFile.accept='.json,application/json';
+    const transferPreview=button('Preview definition file','secondary'),transferApply=button('Load previewed definition','secondary'),transferDownload=button('Download current definition','secondary');
+    const transferStatus=el('div',null,'muted');transferStatus.setAttribute('role','status');const transferChecks=el('div');
+    transfer.append(el('summary','Transfer a check definition'),el('p','The JSON contains the check name and settings, including its expected value. It does not include event IDs, object IDs or results. Previewing does not save or run it.','muted'),field('Object state definition JSON',transferFile),transferPreview,transferApply,transferDownload,transferStatus,transferChecks);
     const notice=el('div',null,'muted');notice.id='owgObjectStateStatus';notice.setAttribute('role','status');
     const summary=el('div');summary.id='owgObjectStateSummary';
     const resultFilter=select('owgObjectStateResultFilter',[['','All results'],['matched','Matched'],['not_matched','Not matched'],['unknown','Unknown'],['no_linked_object','No linked object']]);
@@ -4315,7 +4320,7 @@
     exportBar.append(el('p','Downloads cover the entire selected result status and include event or object IDs and recorded values. Formula-like cells are escaped for spreadsheet review.','muted'),exportEvents,exportObjects,exportStatus);show(exportBar,false);
     const results=el('div');results.id='owgObjectStateResults';
     const witness=el('div');witness.id='owgObjectStateWitness';
-    box.append(form,el('p','Saved checks are stored locally with this log and can include exact recorded values. Loading one does not run it.','muted'),savedRow,savedStatus,notice,summary,resultControls,exportBar,results,witness);
+    box.append(form,el('p','Saved checks are stored locally with this log and can include exact recorded values. Loading one does not run it.','muted'),savedRow,savedStatus,transfer,notice,summary,resultControls,exportBar,results,witness);
     const generation=state.generation,logId=state.logId,base='/v1/event-logs/'+encodeURIComponent(logId)+'/object-state-check';
     let turn=0,witnessTurn=0,exportTurn=0,formVersion=0,settings=null,revision=null,offset=0,following=null;
     const current=t=>generation===state.generation&&box.isConnected&&t===turn;
@@ -4343,6 +4348,49 @@
       setOptions(savedPick,[['','Choose a saved check'],...result.checks.map(item=>[item.check_id,item.name+' · revision '+item.revision])]);
       if(preferred&&result.checks.some(item=>item.check_id===preferred))savedPick.value=preferred;
     }
+    const templateFormat='openworkgraph.object-state-check.v1';
+    let transferTurn=0,transferCandidate=null;
+    const transferCurrent=t=>generation===state.generation&&logId===state.logId&&box.isConnected&&t===transferTurn;
+    const resetTransfer=()=>{++transferTurn;transferCandidate=null;transferPreview.disabled=!transferFile.files.length;transferApply.disabled=true;transferDownload.disabled=false;transferStatus.textContent='';transferChecks.replaceChildren();};
+    transferFile.onchange=resetTransfer;form.addEventListener('input',resetTransfer);form.addEventListener('change',resetTransfer);savedName.addEventListener('input',resetTransfer);resetTransfer();
+    function applyDefinition(d,name){
+      clear();activityLookup.reset();attributeLookup.reset();valueLookup.reset();qualifierLookup.reset();
+      if(![...objectType.options].some(option=>option.value===d.object_type)){const option=el('option',JSON.stringify(d.object_type)+' (not currently present)');option.value=d.object_type;objectType.appendChild(option);}
+      activity.value=d.activity;objectType.value=d.object_type;attribute.value=d.attribute;value.value=d.expected_value;rememberValue(d.expected_value);
+      operator.value=d.operator;quantifier.value=d.quantifier;exact.checked=Object.hasOwn(d,'event_qualifier');qualifier.value=d.event_qualifier??'';show(qualifierField,exact.checked);
+      savedName.value=name;
+    }
+    transferPreview.onclick=async()=>{
+      const file=transferFile.files[0];if(!file)return;
+      if(file.size>65536){transferStatus.textContent='Choose a definition file of at most 64 KiB.';return;}
+      const ticket=++transferTurn;transferCandidate=null;transferPreview.disabled=transferApply.disabled=transferDownload.disabled=true;transferChecks.replaceChildren();transferStatus.textContent='Checking definition against this log…';
+      try{
+        const result=await (await api(base+'/template/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:file})).json();
+        if(!transferCurrent(ticket)||transferFile.files[0]!==file)return;
+        transferCandidate=result;
+        const labels=[['Stored activity',result.label_checks.activity_present],['Object type',result.label_checks.object_type_present],
+          ['Timed attribute',result.label_checks.timed_attribute_present],['Expected value in retained history',result.label_checks.expected_value_present],
+          ['Activity linked to object type',result.label_checks.activity_type_link_present],['Exact qualifier on such a link',result.label_checks.qualified_activity_type_link_present]];
+        transferChecks.replaceChildren(table(['Destination check','Result'],labels.map(([label,present])=>[label,present===null?'Not restricted':present?'Present':'Not found'])));
+        transferStatus.textContent='Previewed against append revision '+result.log_revision+'. Presence describes retained data and may change; it does not establish compliance.';transferApply.disabled=false;
+      }catch(error){if(transferCurrent(ticket))transferStatus.textContent=error.message;}
+      finally{if(transferCurrent(ticket)){transferPreview.disabled=false;transferDownload.disabled=false;}}
+    };
+    transferApply.onclick=()=>{
+      if(!transferCandidate)return;const candidate=transferCandidate;resetTransfer();applyDefinition(candidate.definition,candidate.name);
+      loadedSaved=null;savedPick.value='';syncSaved();savedStatus.textContent='Loaded the preview as a draft. Save or run it explicitly.';
+    };
+    transferDownload.onclick=async()=>{
+      let definition;try{definition=read();if(!savedName.value.trim())throw new Error('Enter a saved check name.');}catch(error){transferStatus.textContent=error.message;return;}
+      const ticket=++transferTurn,version=formVersion,name=savedName.value;transferPreview.disabled=transferApply.disabled=transferDownload.disabled=true;transferStatus.textContent='Preparing definition…';
+      try{
+        const response=await (await api(base+'/template/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({format:templateFormat,name,definition})})).json();
+        if(!transferCurrent(ticket)||formVersion!==version||savedName.value!==name)return;
+        download('object-state-check.json',JSON.stringify({format:response.format,name:response.name,definition:response.definition},null,2),'application/json');
+        transferStatus.textContent='Downloaded the definition only.';
+      }catch(error){if(transferCurrent(ticket))transferStatus.textContent=error.message;}
+      finally{if(transferCurrent(ticket)){transferPreview.disabled=!transferFile.files.length;transferDownload.disabled=false;}}
+    };
     savedPick.onchange=()=>{loadedSaved=null;savedStatus.textContent='';syncSaved();};
     savedRefresh.onclick=async()=>{
       const selected=savedPick.value,ticket=++savedTurn;loadedSaved=null;savedBusy=true;syncSaved();savedStatus.textContent='Refreshing saved checks…';
@@ -4356,11 +4404,7 @@
       try{
         const result=await getJSON(base+'/saved/'+encodeURIComponent(selected));if(!savedCurrent(ticket))return;
         if(formVersion!==startVersion||savedName.value!==startName){savedStatus.textContent='The form changed while loading; load the saved check again.';return;}
-        const d=result.definition;clear();activityLookup.reset();attributeLookup.reset();valueLookup.reset();qualifierLookup.reset();
-        if(![...objectType.options].some(option=>option.value===d.object_type)){const option=el('option',JSON.stringify(d.object_type)+' (not currently present)');option.value=d.object_type;objectType.appendChild(option);}
-        activity.value=d.activity;objectType.value=d.object_type;attribute.value=d.attribute;value.value=d.expected_value;rememberValue(d.expected_value);
-        operator.value=d.operator;quantifier.value=d.quantifier;exact.checked=Object.hasOwn(d,'event_qualifier');qualifier.value=d.event_qualifier??'';show(qualifierField,exact.checked);
-        savedName.value=result.name;loadedSaved={check_id:result.check_id,revision:result.revision};
+        resetTransfer();applyDefinition(result.definition,result.name);loadedSaved={check_id:result.check_id,revision:result.revision};
         savedStatus.textContent='Loaded revision '+result.revision+'. Run the check to review current data.';
       }catch(error){if(savedCurrent(ticket))savedStatus.textContent=error.message;}
       finally{if(savedCurrent(ticket)){savedBusy=false;syncSaved();}}

@@ -11,8 +11,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from . import event_log_object_state_check as state
 from . import event_log_workspace as workspace
+from .event_log_object_relationships import _revision
 
 MAX_CHECKS = 50
+TEMPLATE_FORMAT = 'openworkgraph.object-state-check.v1'
 _DEFINITION_KEYS = {'activity', 'object_type', 'attribute', 'expected_value', 'operator', 'quantifier', 'event_qualifier'}
 
 
@@ -77,6 +79,38 @@ def listing(log_id):
 
 def get(log_id, check_id):
     return _with_log(log_id, lambda conn: _read(conn, log_id, check_id))
+
+
+def preview_template(log_id, document):
+    if (not isinstance(document, dict) or set(document) != {'format','name','definition'} or
+            document.get('format') != TEMPLATE_FORMAT):
+        raise workspace.EventLogWorkspaceError('choose an OWG object state check definition file')
+    _, name, encoded = _parse(NewCheck, {'name':document['name'], 'definition':document['definition']})
+    definition = json.loads(encoded)
+    def run(conn):
+        conn.execute('BEGIN TRANSACTION')
+        workspace._check_log(conn, log_id)
+        revision = _revision(conn, log_id)
+        def exists(sql, args):
+            return conn.execute(sql, args).fetchone() is not None
+        activity, object_type, attribute, value = (definition[k] for k in ('activity','object_type','attribute','expected_value'))
+        object_scope = '''FROM object_attribute_values v JOIN objects o ON o.log_id=v.log_id AND o.object_id=v.object_id
+                          WHERE v.log_id=? AND o.object_type=? AND v.name=?'''
+        event_scope = '''FROM event_objects eo JOIN events e ON e.log_id=eo.log_id AND e.event_id=eo.event_id
+                         JOIN objects o ON o.log_id=eo.log_id AND o.object_id=eo.object_id
+                         WHERE eo.log_id=? AND e.activity=? AND o.object_type=?'''
+        event_args = [log_id, activity, object_type]
+        checks = {
+            'activity_present': exists('SELECT 1 FROM events WHERE log_id=? AND activity=? LIMIT 1',[log_id,activity]),
+            'object_type_present': exists('SELECT 1 FROM objects WHERE log_id=? AND object_type=? LIMIT 1',[log_id,object_type]),
+            'timed_attribute_present': exists('SELECT 1 '+object_scope+' LIMIT 1',[log_id,object_type,attribute]),
+            'expected_value_present': exists('SELECT 1 '+object_scope+' AND v.value=? LIMIT 1',[log_id,object_type,attribute,value]),
+            'activity_type_link_present': exists('SELECT 1 '+event_scope+' LIMIT 1',event_args),
+            'qualified_activity_type_link_present': (exists('SELECT 1 '+event_scope+' AND eo.qualifier=? LIMIT 1',
+                [*event_args,definition['event_qualifier']]) if 'event_qualifier' in definition else None),
+        }
+        return {'format':TEMPLATE_FORMAT,'name':name,'definition':definition,'log_revision':revision,'label_checks':checks}
+    return _with_log(log_id, run)
 
 
 def save(log_id, payload):

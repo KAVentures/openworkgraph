@@ -105,6 +105,25 @@ be read, updated with `expected_revision`, or deleted with an
 only check settings; result filters, page offsets, results and source event
 data are not stored in them.
 
+## Transfer definitions between logs
+
+Open **Transfer a check definition** to download the current named check as
+JSON, or select a JSON definition and preview it against the destination log.
+The versioned file contains only the name and check settings, including the
+expected value; treat it as sensitive when that value is sensitive. It does
+not contain event IDs, object IDs, or results. The file limit is 64 KiB.
+
+Preview reports whether the exact activity, object type, timed attribute,
+expected value and relevant event-object link labels occur in the retained
+log at the reported append revision. These checks are advisory: label presence
+can change, and it does not establish source completeness or compliance.
+Loading a preview fills an unsaved draft; saving and running remain explicit.
+
+The owner-only endpoint is `POST
+/v1/event-logs/{log_id}/object-state-check/template/preview`. Its body must
+contain exactly `format` (`openworkgraph.object-state-check.v1`), `name`, and
+`definition`. Preview neither saves nor runs the definition.
+
 ## Complete review worklists
 
 The object-map checker can download all events in the chosen result status or
