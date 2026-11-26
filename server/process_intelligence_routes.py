@@ -46,6 +46,8 @@ async def _answer(operation, *args: Any, **kwargs: Any) -> JSONResponse:
     outcome = "ok"
     try:
         result = await run_in_threadpool(operation, *args, **kwargs)
+        if args and isinstance(args[0], str):
+            sharing.check_answer_size(args[0], result)
     except sharing.NotShared as exc:
         outcome = "not_shared"
         raise HTTPException(404, str(exc)) from None
@@ -148,9 +150,10 @@ async def agent_performance_spectrum(request: Request, log_id: str, segment: lis
 
 @router.get("/v1/process-intelligence/{log_id}/overview")
 async def agent_overview(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
-                         sla_hours: float | None = Query(default=None, gt=0, le=100000)):
+                         sla_hours: float | None = Query(default=None, gt=0, le=100000),
+                         automation_resource: list[str] | None = Query(default=None, max_length=50)):
     _require_agent_access(request)
-    return await _answer(sharing.overview, log_id, case_type, sla_hours)
+    return await _answer(sharing.overview, log_id, case_type, sla_hours, automation_resource)
 
 
 @router.post("/v1/process-intelligence/{log_id}/overview-for-cases")
@@ -168,6 +171,22 @@ async def agent_overview_for_cases(request: Request, log_id: str):
     if sla is not None and (isinstance(sla, bool) or not isinstance(sla, (int, float)) or not 0 < sla <= 100000):
         raise HTTPException(422, "sla_hours must be a number of hours above 0")
     return await _answer(sharing.overview_for_cases, log_id, spec["case_filter"], case_type, sla)
+
+
+@router.post("/v1/process-intelligence/{log_id}/compare-cohorts")
+async def agent_compare_cohorts(request: Request, log_id: str):
+    """Body: {"first": case filter, "second": case filter, "case_type"?: text, "sla_hours"?: number}."""
+    _require_agent_access(request)
+    spec = await _json_body(request, "cohort comparison", strict=True, limit=32768)
+    if (not isinstance(spec, dict) or not {"first", "second"} <= set(spec)
+            or set(spec) - {"first", "second", "case_type", "sla_hours"}):
+        raise HTTPException(422, 'send {"first": {...}, "second": {...}} with optional case_type and sla_hours')
+    case_type, sla = spec.get("case_type"), spec.get("sla_hours")
+    if case_type is not None and (not isinstance(case_type, str) or not 0 < len(case_type) <= 200):
+        raise HTTPException(422, "case_type must be a short text")
+    if sla is not None and (isinstance(sla, bool) or not isinstance(sla, (int, float)) or not 0 < sla <= 100000):
+        raise HTTPException(422, "sla_hours must be a number of hours above 0")
+    return await _answer(sharing.compare_cohorts, log_id, spec["first"], spec["second"], case_type, sla)
 
 
 @router.get("/v1/process-intelligence/{log_id}/root-cause")
@@ -205,6 +224,25 @@ async def agent_automation_candidates(request: Request, log_id: str, limit: int 
                                       case_type: str | None = Query(default=None, max_length=200)):
     _require_agent_access(request)
     return await _answer(sharing.automation_candidates, log_id, case_type, limit)
+
+
+@router.post("/v1/process-intelligence/{log_id}/automation-estimate")
+async def agent_automation_estimate(request: Request, log_id: str):
+    """Body: {"handling_minutes": [low, high], "automatable_share"?: {...}, "hourly_cost"?: number,
+    "case_type"?: text, "limit"?: 1-50}."""
+    _require_agent_access(request)
+    spec = await _json_body(request, "automation estimate", strict=True, limit=8192)
+    allowed = {"handling_minutes", "automatable_share", "hourly_cost", "case_type", "limit"}
+    if not isinstance(spec, dict) or "handling_minutes" not in spec or set(spec) - allowed:
+        raise HTTPException(422, 'send {"handling_minutes": [low, high]} with optional automatable_share, '
+                                 'hourly_cost, case_type and limit')
+    case_type, limit = spec.get("case_type"), spec.get("limit", 10)
+    if case_type is not None and (not isinstance(case_type, str) or not 0 < len(case_type) <= 200):
+        raise HTTPException(422, "case_type must be a short text")
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
+        raise HTTPException(422, "limit must be 1 to 50")
+    return await _answer(sharing.automation_estimate, log_id, spec["handling_minutes"], spec.get("automatable_share"),
+                         spec.get("hourly_cost"), case_type, limit)
 
 
 @router.post("/v1/process-intelligence/{log_id}/costs")
@@ -519,6 +557,16 @@ async def agent_activity_glossary(request: Request, log_id: str):
 async def agent_signals(request: Request, log_id: str):
     _require_agent_access(request)
     return await _answer(sharing.signals, log_id)
+
+
+@router.post("/v1/process-intelligence/{log_id}/signals/preview")
+async def agent_preview_signal(request: Request, log_id: str):
+    """Body: {"rule": a signal rule (name, when, optional case_type and cohort)}. Nothing is saved."""
+    _require_agent_access(request)
+    spec = await _json_body(request, "signal rule", strict=True, limit=65536)
+    if not isinstance(spec, dict) or set(spec) != {"rule"}:
+        raise HTTPException(422, 'send {"rule": {...}}')
+    return await _answer(sharing.preview_signal, log_id, spec["rule"])
 
 
 @router.get("/v1/process-intelligence/{log_id}/rework")
