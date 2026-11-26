@@ -14,6 +14,7 @@ from . import agent_procurement_workforce_timeline as timeline
 from . import agent_procurement_workforce_audit_triage as triage
 from . import agent_procurement_workforce_audit_reconcile as reconciliation
 from . import agent_procurement_workforce_remediation as remediation
+from . import agent_procurement_workforce_remediation_continuity as continuity
 
 
 class VerifyRequest(Strict):
@@ -106,3 +107,31 @@ def create_remediation(document):
                               expected_manifest_sha256=req.expected_manifest_sha256,
                               expected_worklist_sha256=req.expected_worklist_sha256,
                               confirmed=True)
+
+
+class ContinuityPreviewRequest(TimelineRequest):
+    continuity: continuity.Preview
+
+
+class ContinuityCarryRequest(TimelineRequest):
+    continuity: continuity.Carry
+
+
+def preview_continuity(document):
+    _bounded(document)
+    req = ContinuityPreviewRequest.model_validate(document)
+    if not req.confirmed:
+        raise ValueError("explicit continuity comparison confirmation required")
+    return continuity.preview(document["dossiers"],document["manifest"],
+                              document["continuity"],
+                              expected_manifest_sha256=req.expected_manifest_sha256)
+
+
+def carry_continuity(document):
+    _bounded(document)
+    req = ContinuityCarryRequest.model_validate(document)
+    if not req.confirmed:
+        raise ValueError("explicit continuity retention confirmation required")
+    return continuity.carry(document["dossiers"],document["manifest"],
+                            document["continuity"],
+                            expected_manifest_sha256=req.expected_manifest_sha256)
