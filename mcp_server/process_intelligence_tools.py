@@ -75,6 +75,33 @@ def propose_monitors_prompt(goal: str = "", log_id: str = "") -> str:
     ])
 
 
+def evaluate_change_prompt(change: str = "", log_id: str = "") -> str:
+    """A playbook for weighing a proposed process change with evidence and simulation. Pure text."""
+    change = " ".join(str(change or "").split())[:500] or "A change the owner is considering."
+    log_id = str(log_id or "").strip()
+    target = (f"Use the shared log {log_id}." if _LOG_ID.fullmatch(log_id)
+              else "Start with list_process_logs and pick the log that matches; ask if it is unclear.")
+    return "\n".join([
+        f"Proposed change: {change}",
+        target,
+        "",
+        "1. get_process_overview and get_process_waiting_times: the baseline and where time goes now.",
+        "2. If some cases already work the proposed way, compare them with the rest using compare_process_cohorts "
+        "(or get_process_overview_for_cases): an observed, not simulated, difference.",
+        "3. Turn the change into 2 to 4 named alternatives (for example the change, a smaller version, and a "
+        "different fix for the same bottleneck) and run compare_process_scenarios; use simulate_process_scenario "
+        "with uncertainty replications for the most promising one.",
+        "4. Check side effects: rework (get_process_rework), handovers (get_process_handovers) and whether "
+        "waiting simply moves to another step.",
+        "",
+        "Answer with: the expected effect and its range, the evidence behind it (observed vs simulated), the "
+        "assumptions that matter most, and what to measure after the change (a monitor to preview with "
+        "preview_process_signal). Skip steps whose tools are not listed. A simulation is a model output, not a "
+        "forecast; an observed difference between groups is an association, not a cause; nothing here "
+        "authorises making the change.",
+    ])
+
+
 def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
     sid = id(mcp)
     if sid in _REGISTERED:
@@ -114,6 +141,11 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
     def propose_process_monitors(goal: str = "", log_id: str = "") -> str:
         """Ask the connected AI to propose monitoring signals for a shared process log, tested on the log first."""
         return propose_monitors_prompt(goal=goal, log_id=log_id)
+
+    @mcp.prompt()
+    def evaluate_process_change(change: str = "", log_id: str = "") -> str:
+        """Ask the connected AI to weigh a proposed process change with observed evidence and simulation."""
+        return evaluate_change_prompt(change=change, log_id=log_id)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_brief(log_id: str, sla_hours: float | None = None, case_type: str | None = None) -> dict[str, Any]:
