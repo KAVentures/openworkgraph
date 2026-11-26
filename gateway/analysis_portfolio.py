@@ -10,10 +10,11 @@ from hashlib import sha256
 import json
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_validator
 
 from .analysis_publications import PublicationError
 from .analysis_revision_comparisons import compare_snapshots
+from .analysis_portfolio_pairwise import pairwise_review
 
 FORMAT = "openworkgraph.shared-analysis-portfolio.v1"
 MAX_SELECTIONS = 8
@@ -31,6 +32,7 @@ class PortfolioRequest(BaseModel):
     model_config=ConfigDict(extra="forbid")
     selections: Annotated[list[Selection],Field(min_length=2,max_length=MAX_SELECTIONS)]
     baseline_index: Annotated[StrictInt,Field(ge=0,lt=MAX_SELECTIONS)] = 0
+    include_pairwise: StrictBool = False
 
     @model_validator(mode="after")
     def distinct(self):
@@ -117,6 +119,8 @@ def review(store,principal,request: PortfolioRequest):
                     "Matching source and specification digests are publisher claims, not verification. Conflicting complete numeric reports with the same claimed source and analysis basis are flagged across all selections, even between two alternatives. Comparisons involving conflicting members are withheld.",
                     "Populations may overlap or differ. No aggregation, ranking, savings, intervention effect, case join or execution permission is inferred.",
                     "No case attachments or case-viewer grants are read. Aggregate permissions alone do not authorize access to cases."]}
+        if request.include_pairwise:
+            report["pairwise_review"] = pairwise_review(details, contradictions)
         report["report_sha256"]=_digest(report)
         # Audit contains identifiers/digests/counts, never titles, values or
         # any case codes. The same transaction rolls back if audit fails.
@@ -127,5 +131,8 @@ def review(store,principal,request: PortfolioRequest):
                     comparable_count=report["comparable_count"],
                     incomparable_count=report["incomparable_count"],
                     conflicting_pair_count=len(conflicts),
+                    **({"pairwise_count": report["pairwise_review"]["pair_count"],
+                        "pairwise_comparable_count": report["pairwise_review"]["comparable_pair_count"]}
+                       if request.include_pairwise else {}),
                     report_sha256=report["report_sha256"])
         return report

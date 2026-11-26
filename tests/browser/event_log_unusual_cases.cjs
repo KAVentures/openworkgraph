@@ -50,6 +50,13 @@ const path=require('node:path');
    assert(status.includes('Rare activity 1')&&status.includes('Rare path 1')&&status.includes('Unusually slow 1'),status);
    const cells=await page.locator('#owgUnusualResults tbody tr').first().locator('td').allTextContents();
    assert.equal(cells[0],'t30');assert(cells[2].includes('Rare activity: contains Escalate (1 cases)'),cells[2]);
+   // Every unusual case downloads as a CSV worklist with its reasons and path.
+   const [unusualCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgUnusualCsv').click()]);
+   const unusualLines=(await fs.readFile(await unusualCsv.path(),'utf8')).trim().split(/\r?\n/);
+   assert.equal(unusualLines[0],'case_id,score,signals,reasons,events,hours,path,path_truncated');
+   assert.equal(unusualLines.length,2,unusualLines.join('|'));
+   assert.match(unusualLines[1],/^t30,[\d.]+,[a-z_;]*rare_activity[a-z_;]*,.*contains Escalate \(1 cases\).*,\d+,[\d.]+,.*Escalate.*,False$/);
+   await page.locator('#owgUnusualStatus').filter({hasText:'Downloaded every matching unusual case (rows=1, unusual=1, cases=31)'}).waitFor();
    const reason=page.locator('#owgUnusualSignal');
    await reason.selectOption('heavy_rework');await page.locator('#owgUnusualRun').click();
    await box.getByText('No unusual cases match this selection.').waitFor();
@@ -76,6 +83,6 @@ const path=require('node:path');
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgUnusual'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Unusual cases browser acceptance passed: the escalated case is found with its reasons, Explain opens it, tagged for filtering, the analysis navigator finds and focuses it, WCAG audit.');
+   console.log('Unusual cases browser acceptance passed: the escalated case is found with its reasons, Explain opens it, tagged for filtering, the analysis navigator finds and focuses it, CSV worklist, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});

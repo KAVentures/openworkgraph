@@ -462,6 +462,8 @@ def build_runtime_project(packet: dict) -> bytes:
         "Record the printed manifest SHA-256 OUTSIDE the archive (in your trusted\n"
         "release record). Later, compare that recorded digest with:\n\n"
         "```sh\npython verify_release.py --root . --manifest-sha256 PINNED_HEX_DIGEST\n```\n\n"
+        "With a trusted current verifier and a separately retained manifest digest, inspect an unopened generated ZIP before extraction:\n\n"
+        "```sh\npython /trusted/verify_release.py --archive runtime.zip --manifest-sha256 PINNED_HEX_DIGEST\n```\n\n"
         "This manifest is unsigned: an attacker who replaces both the archive and\n"
         "manifest can forge a new self-consistent release. The separately pinned\n"
         "digest is necessary to detect replacement. Integrity does NOT prove what\n"
