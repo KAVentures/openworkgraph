@@ -14,7 +14,7 @@ from typing import Annotated, Literal
 from pydantic import Field, StrictBool, StrictInt, model_validator
 
 from .agent_procurement import Alias, CaseId, Cost, Duration, Strict, _cohort, _load, digest
-from .agent_procurement_trials import Bps, MAX_REPEATS
+from .agent_procurement_trials import Bps, MAX_REPEATS, _latency
 from .agent_procurement_selection import _inputs
 from .agent_procurement_operating_cost import Request, operation as economics, _money
 from .agent_procurement_portfolio import Category, _pair, _sum, _scale, _shift, _min_gate, _max_gate, _combine
@@ -38,6 +38,7 @@ class Policy(Strict):
     minimum_declared_success_basis_points: Bps=9000
     maximum_declared_regression_basis_points: Bps=0
     require_complete_financial_evidence: StrictBool=True
+    maximum_router_p95_elapsed_ms: Duration | None=None
 
 
 class FreezeRequest(Strict):
@@ -224,6 +225,11 @@ def _slot(slot,category,pred,assignments,paths,labor_rate):
     cost=_sum(_union([p["cost"] for p in options]),overhead)
     saving=_difference(_union([p["saving"] for p in options]),overhead)
     capacity=_difference(_union([p["capacity"] for p in options]),time)
+    # Compare against the identical intended arm. Its unknown cost cancels
+    # when the actual destination is the intended destination.
+    route_delta=_union([ZERO if c==expected else _difference(paths[c]["cost"],paths[expected]["cost"])
+                        for c in destinations])
+    total_routing_delta=_sum(route_delta,overhead)
     return {**slot,"true_category":category,"status":status,
             "predicted_category":pred.predicted_category if pred else None,
             "intended_candidate_id":expected,"possible_candidate_ids":sorted(c for c in destinations if c is not None),
@@ -231,6 +237,8 @@ def _slot(slot,category,pred,assignments,paths,labor_rate):
             "router_elapsed_ms":pred.elapsed_ms if pred else None,
             "router_cost":_money_bounds(overhead),"routed_cost":_money_bounds(cost),
             "paired_savings":_money_bounds(saving),"released_person_ms":_rational(capacity),
+            "cost_difference_from_ideal_path":_money_bounds(route_delta),
+            "cost_difference_from_ideal_including_router":_money_bounds(total_routing_delta),
             **{k:_count(v) for k,v in metrics.items()}}
 
 
@@ -293,6 +301,7 @@ def review(packet, discovery, holdout, router_plan, captures):
     volumes=verified["annual_category_volumes"];annual=sum(volumes.values())
     categories=[];metrics={k:ZERO for k in METRICS}
     annual_cost=ZERO;annual_savings=ZERO;annual_capacity=ZERO
+    annual_route_delta=ZERO;annual_router_delta=ZERO
     for category,volume in sorted(volumes.items()):
         group=[r for r in rows if r["true_category"]==category]
         if not group:
@@ -309,6 +318,8 @@ def review(packet, discovery, holdout, router_plan, captures):
         annual_cost=_sum(annual_cost,_scale(_sum_pair(group,"routed_cost",_pair),len(group),volume))
         annual_savings=_sum(annual_savings,_scale(_sum_pair(group,"paired_savings",_pair),len(group),volume))
         annual_capacity=_sum(annual_capacity,_scale(_sum_pair(group,"released_person_ms",_read_time),len(group),volume))
+        annual_route_delta=_sum(annual_route_delta,_scale(_sum_pair(group,"cost_difference_from_ideal_path",_pair),len(group),volume))
+        annual_router_delta=_sum(annual_router_delta,_scale(_sum_pair(group,"cost_difference_from_ideal_including_router",_pair),len(group),volume))
     selected=next(p for p in h.scenario.portfolio.portfolios if p.portfolio_id==req.portfolio_id)
     fixed={x.candidate_id:x for x in h.scenario.candidate_fixed_costs}
     # Charge all configured agents, even if a small holdout happened not to
@@ -324,6 +335,15 @@ def review(packet, discovery, holdout, router_plan, captures):
     checks["configured_candidate_trial_gates"]=_combine([candidates[c]["trial_gate_status"] for c in active])
     checks["complete_financial_evidence"]="pass" if complete or not req.policy.require_complete_financial_evidence else "unknown"
     checks["router_capture_coverage"]="unknown" if any(r["route_unresolved"] for r in rows) else "pass"
+    latency=_latency([r["router_elapsed_ms"] if not r["route_unresolved"] else None for r in rows])
+    if req.policy.maximum_router_p95_elapsed_ms is not None:
+        limit=req.policy.maximum_router_p95_elapsed_ms
+        checks["router_p95_latency"]=("fail" if latency["p95_lower_ms"]>limit else
+            "pass" if latency["p95_upper_ms"] is not None and latency["p95_upper_ms"]<=limit else "unknown")
+    labels=("normal","exception","missing_facts","abstain","timeout","transport_failed","invalid_output","withdrawn","not_recorded")
+    confusion={cat:{label:sum(r["true_category"]==cat and
+        (r["predicted_category"] if r["status"]=="classified" else r["status"])==label for r in rows)
+        for label in labels} for cat in ("normal","exception","missing_facts")}
     return _seal({"format":REPORT,"router_plan_sha256":verified["router_plan_sha256"],
         "router_configuration_sha256":req.router_configuration_sha256,
         "holdout_operating_report_sha256":result["report_sha256"],"captures_sha256":digest(ledger.model_dump()),
@@ -332,6 +352,9 @@ def review(packet, discovery, holdout, router_plan, captures):
         "status_counts":{s:sum(r["status"]==s for r in rows) for s in
             ("classified","abstain","timeout","transport_failed","invalid_output","withdrawn","not_recorded")},
         "observed_counts":{k:_count(_sum_metric(rows,k)) for k in METRICS},
+        "confusion_counts":confusion,"router_latency":latency,
+        "annual_cost_difference_from_ideal_path":_money_bounds(annual_route_delta),
+        "annual_cost_difference_from_ideal_including_router":_money_bounds(annual_router_delta),
         "annual_conditional_counts":{k:_rational(v) for k,v in metrics.items()},
         "category_reviews":categories,"rows":rows,"checks":checks,"gate_status":_combine(checks.values()),
         "annual_cost":_money_bounds(annual_cost),"first_year_cost":_money_bounds(_shift(annual_cost,one_time)),
@@ -346,6 +369,7 @@ def review(packet, discovery, holdout, router_plan, captures):
             "Known router failures use the declared manual fallback counterfactual; absent/withdrawn predictions are unresolved over every configured path.",
             "Outcome and cost evidence come from paired independent-in-design arms, not actual routed execution; router measurements replace scenario per-case routing charges and include all attempts.",
             "Annual counts are rational conditional projections at frozen category volumes, not predictions of actual integer outcomes.",
+            "Ideal-path differences are signed paired variable-cost comparisons; they do not include fixed charges or imply the ideal path is economically optimal. A negative difference may coexist with a quality regression.",
             "Manual fixed costs remain because fallback is retained; every configured agent incurs fixed costs. No execution or selection is authorized."]},"report_sha256")
 
 

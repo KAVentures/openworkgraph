@@ -106,3 +106,12 @@ preceded answer access. Router, manual and agent observations are customer
 declarations. The replay uses paired arm outcomes, not actual routed
 execution, and does not establish route classification accuracy in production,
 causal benefit, realized cost savings or independent business outcomes.
+
+The report includes a complete classification confusion count matrix (including
+abstentions, failed, withdrawn and missing predictions), all-attempt p95 router
+latency bounds and an optional maximum_router_p95_elapsed_ms policy gate.
+It also reports signed paired variable-cost differences from the intended
+path with and without router effort. An identical path cancels even unknown
+shared arm costs. These differences exclude fixed charges, may be negative,
+and do not establish that the intended path was optimal or that cheaper
+misrouting is acceptable. Quality gates remain separate.

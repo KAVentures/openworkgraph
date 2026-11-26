@@ -56,6 +56,10 @@ def test_perfect_router_reconciles_cost_and_capacity(rehearsal):
     assert amount(result["first_year_savings"]["upper_microunits"])==1050
     assert amount(result["annual_released_person_ms"]["lower"])==69840000
     assert result["configured_candidate_ids"]==["baseline","cheap"]
+    assert amount(result["annual_cost_difference_from_ideal_path"]["lower_microunits"])==0
+    assert amount(result["annual_cost_difference_from_ideal_including_router"]["upper_microunits"])==120
+    assert result["confusion_counts"]["normal"]["normal"]==2
+    assert result["router_latency"]["p95_upper_ms"]==500
     assert result["manual_fixed_cost_retained"]
     assert not result["actual_routed_execution_observed"] and not result["execution_authorized"]
     assert result==operation(packet,"router-review",{"discovery":d,"holdout":h,"router_plan":rp,"captures":c})
@@ -89,6 +93,9 @@ def test_router_failure_and_missing_capture_not_conflated(rehearsal):
     assert timeout["manual_path_possible"] and timeout["possible_candidate_ids"]==[]
     assert amount(timeout["paired_savings"]["lower_microunits"])==-2
     assert timeout["fallback"]=={"lower":1,"upper":1}
+    assert amount(timeout["cost_difference_from_ideal_path"]["lower_microunits"])==45
+    assert result["confusion_counts"]["normal"]["timeout"]==1
+    assert result["confusion_counts"]["normal"]["not_recorded"]==1
     assert missing["route_unresolved"] and missing["manual_path_possible"]
     assert missing["possible_candidate_ids"]==["baseline","cheap"]
     assert missing["fallback"]=={"lower":0,"upper":1}
@@ -172,3 +179,17 @@ def test_actual_generated_input_only_router_challenge(inputs):
     assert "PRIVATE_HOLDOUT_INPUT" not in json.dumps(rp)
     wrong=deepcopy(held);wrong["cases"][0]["input"]["text"]="different"
     with pytest.raises(ValueError):challenge(packet,discovery,hp,rp,wrong,confirm_export_inputs=True)
+
+
+def test_latency_gate_and_unknown_identical_path_cost_cancellation(rehearsal):
+    packet,d,h,rp,c=rehearsal
+    req=deepcopy(rp["request"]);req["policy"]["maximum_router_p95_elapsed_ms"]=400
+    rp=freeze(packet,d,h["plan"],req);c["router_plan_sha256"]=rp["router_plan_sha256"]
+    result=review(packet,d,h,rp,c)
+    assert result["checks"]["router_p95_latency"]=="fail"
+    # Same intended and predicted destination, but missing intervention cost.
+    h["request"]["interventions"]=[]
+    result=review(packet,d,h,rp,c)
+    assert amount(result["annual_cost_difference_from_ideal_path"]["lower_microunits"])==0
+    assert amount(result["annual_cost_difference_from_ideal_path"]["upper_microunits"])==0
+    assert result["annual_cost"]["upper_microunits"] is None

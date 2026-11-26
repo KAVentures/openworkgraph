@@ -1379,9 +1379,17 @@
             el('p','Category accuracy count: '+counts(result.observed_counts.accuracy)+' · destination agreement: '+counts(result.observed_counts.agreement)+' · manual leakage: '+counts(result.observed_counts.manual_leakage)),
             el('p','Declared outcome regressions: '+counts(result.observed_counts.regression)+' · shadow critical: '+counts(result.observed_counts.critical)+' · non-delivery: '+counts(result.observed_counts.non_delivery)),
             el('p','Conditional annual cost: '+range(result.annual_cost)+' · first-year savings: '+range(result.first_year_savings)),
+            el('p','Annual signed variable cost difference from intended paths: '+range(result.annual_cost_difference_from_ideal_path)),
+            el('p','Including router effort and direct charges: '+range(result.annual_cost_difference_from_ideal_including_router)+' (excludes fixed charges)'),
+            el('p','Router p95 latency: '+result.router_latency.p95_lower_ms+' to '+(result.router_latency.p95_upper_ms==null?'unbounded':result.router_latency.p95_upper_ms)+' ms · all scheduled predictions'),
             el('p','Manual fixed costs retained. All configured agents charged. Financial evidence: '+(result.financial_evidence_complete?'complete for these assumptions':'incomplete')));
           const gates=el('ul');for(const [key,value] of Object.entries(result.checks))gates.appendChild(el('li',key.replaceAll('_',' ')+': '+value));
           output.append(el('h6','Frozen policy checks'),gates);
+          const matrix=el('ul');for(const [cat,values] of Object.entries(result.confusion_counts)){
+            const item=el('li',cat.replaceAll('_',' ')+': '+Object.entries(values).filter(([,v])=>v).map(([k,v])=>k.replaceAll('_',' ')+' '+v).join(' · '));
+            matrix.appendChild(item);
+          }
+          output.append(el('h6','Classification confusion counts (including failed and missing predictions)'),matrix);
           for(const c of result.category_reviews){
             const section=el('section');section.append(el('h6',c.category.replaceAll('_',' ')+' · '+c.status),
               el('p',c.distinct_cases+' distinct cases · '+c.attempts+' attempts · declared annual volume '+c.annual_cases),
@@ -1399,6 +1407,7 @@
               const item=el('li',r.case_id+' · repeat '+r.repeat+' · '+r.status+' · expected '+r.true_category+' / predicted '+(r.predicted_category||'none'));
               item.append(el('p','Intended: '+(r.intended_candidate_id||'manual')+' · possible destinations: '+[...r.possible_candidate_ids,...(r.manual_path_possible?['manual']:[])].join(', ')),
                 el('p','Router cost: '+range(r.router_cost)+' · paired savings: '+range(r.paired_savings)),
+                el('p','Variable cost difference from intended path: '+range(r.cost_difference_from_ideal_path)),
                 el('p','Manual leakage: '+counts(r.manual_leakage)+' · declared regression: '+counts(r.regression)+' · shadow critical: '+counts(r.critical)));
               list.appendChild(item);
             }
