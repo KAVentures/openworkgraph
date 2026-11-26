@@ -378,3 +378,45 @@ Dashboard-session-only POST actions under
 All use the standard JSON-text document envelope and no-store response.
 These actions never create or update external tickets, verify actual
 remediation, clear incidents, or authorize deployment.
+
+
+## Cross-worklist continuity
+
+When a new verified dossier is appended to the audit timeline, review the
+extended timeline and expand **Carry remediation into an appended audit
+history**. Load and select the earlier retained register and enter its
+independently obtained manifest digest. The previous manifest must be an
+exact strict prefix of the new manifest (including its original trust
+entries and signed dossier pins). Both worklists are recomputed from the
+original evidence; a different or rewritten history is refused.
+
+The preview distinguishes unchanged evidence pins, changed evidence pins,
+new findings and findings not present in the successor. Missing findings
+are not cleared and remain in the original register. Only a finding with
+an exact unchanged pin and an existing owner is eligible for explicit
+owner carry. Select up to 200 such owners and supply a declared reviewer.
+Each selected owner is recorded as a fresh assignment with no carried
+progress or evidence reference. Changed evidence requires new review.
+
+Creating a successor requires the exact previous register revision and
+history pin, previous manifest digest, new worklist pin and continuity
+preview digest, plus explicit local retention consent. Creation is atomic;
+an existing successor is never overwritten. The previous register remains
+untouched, and the successor retains minimized, hash-bound lineage to its
+previous register and selected owner assignments. Keep original evidence
+and prior exported registers separately; removing an earlier local register
+does not remove its independently retained successor or erase exported
+lineage.
+
+The dashboard-only POST action
+`/v1/process-catalog/procurement-workforce/exchange/remediation-continuity-preview`
+accepts the original audit-timeline request plus a `continuity` object:
+`previous_worklist_sha256`, `expected_previous_revision`,
+`expected_previous_history_sha256`, `previous_manifest_sha256`,
+`expected_current_worklist_sha256`, and `confirmed: true`.
+The corresponding `remediation-continuity-carry` action requires the
+additional `expected_continuity_sha256`, `reviewer_alias`,
+`carry_finding_ids` and `confirm_local_retention: true`.
+Existing dashboard authentication, JSON-text and storage bounds apply.
+No actual remediation, incident clearance or external ticket action is
+verified by these operations.
