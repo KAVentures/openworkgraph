@@ -12,6 +12,7 @@ from shared.process_shadow_review import Hash
 from . import agent_procurement_workforce_dossier as audit
 from . import agent_procurement_workforce_timeline as timeline
 from . import agent_procurement_workforce_audit_triage as triage
+from . import agent_procurement_workforce_audit_reconcile as reconciliation
 
 
 class VerifyRequest(Strict):
@@ -74,3 +75,17 @@ def record_triage(document):
         raise ValueError("explicit historical evidence review confirmation required")
     return triage.record(document["dossiers"], document["manifest"], document["decision"],
                          expected_manifest_sha256=req.expected_manifest_sha256)
+
+
+class ReconciliationRequest(TimelineRequest):
+    receipt_set: reconciliation.ReceiptSet
+
+
+def reconcile_receipts(document):
+    _bounded(document)
+    req = ReconciliationRequest.model_validate(document)
+    if not req.confirmed:
+        raise ValueError("explicit historical evidence review confirmation required")
+    return reconciliation.reconcile(document["dossiers"],document["manifest"],
+                                    document["receipt_set"],
+                                    expected_manifest_sha256=req.expected_manifest_sha256)
