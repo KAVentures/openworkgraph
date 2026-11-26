@@ -139,6 +139,11 @@ def _change_receipt(packet, upstream):
 def freeze(packet,upstream,request):
     req=FreezeRequest.model_validate(request)
     receipt=_change_receipt(packet,upstream)
+    return _freeze_verified(upstream,req,receipt)
+
+
+def _freeze_verified(upstream,req,receipt):
+    """Internal: receipt must already be recomputed by the caller."""
     if req.rollback_target_configuration_sha256!=receipt["incumbent_configuration_sha256"]:
         raise ValueError("rollback target must pin the reviewed incumbent")
     cp=upstream["change_plan"]["incumbent_plan"]
@@ -267,6 +272,11 @@ def review(packet,upstream,pilot_plan,captures):
     plan=freeze(packet,upstream,pilot_plan["request"])
     if digest(plan)!=digest(pilot_plan):
         raise ValueError("pilot plan or upstream evidence changed")
+    return _review_verified(plan,captures)
+
+
+def _review_verified(plan,captures):
+    """Internal: exact plan must already be recomputed by the caller."""
     req=FreezeRequest.model_validate(plan["request"]);ledger=Captures.model_validate(captures)
     if ledger.pilot_plan_sha256!=plan["pilot_plan_sha256"] or ledger.as_of_ms<req.window_start_ms:
         raise ValueError("wrong pilot ledger or as-of time")
@@ -314,6 +324,10 @@ def review(packet,upstream,pilot_plan,captures):
 def decide(packet,upstream,pilot_plan,captures,request):
     req=Decision.model_validate(request)
     result=review(packet,upstream,pilot_plan,captures)
+    return _decide_verified(pilot_plan,result,req)
+
+
+def _decide_verified(pilot_plan,result,req):
     if not req.confirmed or req.expected_pilot_plan_sha256!=result["pilot_plan_sha256"] or req.expected_report_sha256!=result["report_sha256"]:
         raise ValueError("review confirmation or evidence pin mismatch")
     if req.reviewer_alias.casefold()==pilot_plan["request"]["coordinator_alias"].casefold():
