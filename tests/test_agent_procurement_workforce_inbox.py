@@ -149,3 +149,27 @@ def test_retirement_requires_inactive_namespace_exact_history_and_consent(local_
     assert not result["archive_independently_verified"]
     assert not status()["retained_rollback_signals"]
     assert trust.status({})["entries"][0]["active"] is False
+
+
+def test_portable_dossier_requires_complete_current_inbox_without_advancing_pins(local_db):
+    from server import agent_procurement_workforce_dossier as dossier
+    from test_agent_procurement_workforce_signing import trust as pin
+    a,b=Ed25519PrivateKey.generate(),Ed25519PrivateKey.generate()
+    configure(0,"a",a);configure(1,"b",b)
+    first=admit(status(),packet("a",a))
+    with pytest.raises(journal.JournalError):
+        dossier.freeze_inbox(scope(first),now=150)
+    complete=admit(first,packet("b",b))
+    with pytest.raises(journal.JournalError):
+        dossier.freeze_inbox(scope(first),now=150)
+    with pytest.raises(ValueError):
+        dossier.freeze_inbox({**scope(complete),"confirmed":False},now=150)
+    with pytest.raises(journal.JournalError):
+        dossier.freeze_inbox(scope(complete),now=201)
+    doc=dossier.freeze_inbox(scope(complete),now=150)
+    receipt=dossier.verify(doc,{"expected_correlation_namespace_sha256":NS,
+        "trust":[pin("a",a),pin("b",b)]},expected_dossier_sha256=doc["dossier_sha256"])
+    assert receipt["historical_report_recomputed"]
+    assert status()==complete
+    assert all(r["accepted_at_ms"] is None for r in trust.status({})["entries"])
+    assert inbox.review(scope(complete),now=150)["accepted_new_packets"]==2
