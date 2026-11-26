@@ -1426,7 +1426,7 @@
           output.append(el('h6','Latest window results'),windows,el('h6','Chained local audit history'));
           const history=el('ul');for(const e of result.history){
             const item=el('li',e.sequence+' · '+e.kind+' · '+new Date(e.recorded_at_ms).toISOString());
-            item.append(el('p','Entry: '+e.entry_sha256),el('p',e.kind==='decision'?e.details.disposition.replaceAll('_',' ')+' · '+e.details.reviewer_alias:e.kind==='producer_grant'||e.kind==='producer_revoke'?'Grant '+e.details.grant_id:e.kind==='producer_checkpoint'?'Producer '+e.details.producer_alias+' · '+e.details.accepted_observations+' accepted observations':e.kind==='finance_reconciliation'?'Finance statement '+e.details.window_id+' · '+e.details.reconciliation_sha256:e.kind==='schedule_consent'?'Scheduled deadline review '+(e.details.enabled?'enabled':'disabled'):'Snapshot '+e.details.snapshot_sha256+' · '+e.details.recorded_cases+' recorded cases'));
+            item.append(el('p','Entry: '+e.entry_sha256),el('p',e.kind==='decision'?e.details.disposition.replaceAll('_',' ')+' · '+e.details.reviewer_alias:e.kind==='producer_grant'||e.kind==='producer_revoke'?'Grant '+e.details.grant_id:e.kind==='producer_checkpoint'?'Producer '+e.details.producer_alias+' · '+e.details.accepted_observations+' accepted observations':e.kind==='finance_reconciliation'?'Finance statement '+e.details.window_id+' · '+e.details.reconciliation_sha256:e.kind==='schedule_consent'?'Scheduled deadline review '+(e.details.enabled?'enabled':'disabled'):e.kind==='outcome_corroboration'?'Separate review '+e.details.window_id+' · '+e.details.reviewed_cases+' cases':e.kind==='corroboration_required'?'Full corroboration required':'Snapshot '+e.details.snapshot_sha256+' · '+e.details.recorded_cases+' recorded cases'));
             history.appendChild(item);
           }
           output.append(history,el('p','Locally retained declarations, not authenticated production telemetry or a tamper-proof external audit log. No deployment or rollback performed.'));
@@ -1959,6 +1959,45 @@
       }
       const dispositionLabel=el('label','Disposition ');dispositionLabel.appendChild(disposition);
       output.append(label,dispositionLabel,button('Record monitoring review decision',()=>change('router-journal-decide',{reviewer_alias:reviewer.value,disposition:disposition.value},'Record this review referral or hold? This does not execute a rollback or deployment.')));
+      const corroboration=value.outcome_corroboration;
+      const reviewSection=el('details');reviewSection.append(el('summary','Separate outcome corroboration'),
+        el('p',corroboration.matched+'/'+corroboration.enrolled+' matched · '+corroboration.reviewed+' reviewed · '+corroboration.conflicts+' conflicts · '+corroboration.source_overlap+' source/alias overlaps'),
+        el('p',corroboration.required?'Full corroboration required for continuation.':'Separate corroboration optional; any discovered conflict still blocks continuation.'),
+        el('p','Separate declared evidence is not proof of reviewer identity or source-system accuracy.'));
+      if(!corroboration.required)reviewSection.appendChild(button('Require complete outcome corroboration',()=>change('router-corroboration-require',{},'Require full outcome corroboration for continuation? This cannot be switched off within this journal.')));
+      const reviewWindow=el('select');reviewWindow.setAttribute('aria-label','Closed corroboration window');
+      for(const w of value.latest_report.windows){
+        if(w.end_exclusive_ms<=value.latest_report.as_of_ms&&w.end_exclusive_ms<=Date.now()){
+          const opt=el('option',w.window_id);opt.value=w.window_id;reviewWindow.appendChild(opt);
+        }
+      }
+      const reviewLabel=el('label','Closed window ');reviewLabel.appendChild(reviewWindow);
+      const reviewAlias=el('input');reviewAlias.maxLength=80;reviewAlias.setAttribute('aria-label','Separate outcome reviewer alias');
+      const aliasLabel=el('label','Reviewer alias ');aliasLabel.appendChild(reviewAlias);
+      const reviewFile=el('input');reviewFile.type='file';reviewFile.accept='.json,application/json';reviewFile.setAttribute('aria-label','Separate reviewer outcome rows JSON');
+      const reviewPin={expected_report_sha256:value.latest_report.report_sha256};
+      reviewSection.append(reviewLabel,button('Prepare blind corroboration manifest',()=>perform(async()=>{
+        if(!reviewWindow.value)throw new Error('Choose a closed monitoring window.');
+        if(!window.confirm('Export unreviewed opaque case and slot references without arm assignments or producer outcomes?'))return;
+        const attempt=++serial;
+        const manifest=await call('router-corroboration-manifest',{...base,...reviewPin,window_id:reviewWindow.value});
+        if(valid(attempt))reviewSection.appendChild(download(manifest,'owg-corroboration-manifest'));
+      })),aliasLabel,el('p','Upload a JSON array of resolved reviewer rows. See AGENT_PROCUREMENT_CORROBORATION.md. Unresolved cases may be omitted and reviewed later.'),reviewFile,
+      button('Retain separate reviewer evidence',()=>perform(async()=>{
+        if(!reviewWindow.value)throw new Error('Choose a closed monitoring window.');
+        const file=reviewFile.files?.[0];if(!file||file.size>512*1024)throw new Error('Choose reviewer rows JSON of at most 512 KiB.');
+        // Keep the original JSON array text: do not round or discard duplicate
+        // fields in a browser parse before the server validates it.
+        const raw=await file.text();
+        if(!window.confirm('Retain separate reviewer declarations? Submitted slots cannot be rewritten. Conflicts block continuation.'))return;
+        const attempt=++serial;
+        const prefix=JSON.stringify({...base,...reviewPin,window_id:reviewWindow.value,reviewer_alias:reviewAlias.value,confirm_separate_source_review:true});
+        const document=prefix.slice(0,-1)+',"rows":'+raw+'}';
+        await request('/v1/process-catalog/procurement/router-corroboration-record?'+new URLSearchParams({workflow_id:scope.workflow_id,revision:String(scope.revision)}),{document});
+        if(valid(attempt))await loadDetail(value.monitor_id);
+      })));
+      const reviewTriggers=el('ul');for(const x of corroboration.triggers)reviewTriggers.appendChild(el('li',x.window_id+' · '+x.reason+(x.fields?' · '+x.fields.join(', '):'')));
+      reviewSection.appendChild(reviewTriggers);output.appendChild(reviewSection);
       output.appendChild(el('h6','Producer credential management'));
       for(const g of value.producer_grants){
         const row=el('div');row.appendChild(el('p',g.producer_alias+' · '+g.window_id+' / '+g.arm+' · '+(g.revoked?'revoked':g.expires_ms<=Date.now()?'expired':'active')));
@@ -2215,6 +2254,7 @@
             el('p','Retained cutoff: '+new Date(r.as_of_ms).toISOString()+' · head '+r.head_sha256),
             el('p','Rollback triggers: '+(r.sticky_rollback_triggers.map(x=>(x.window_id||'cumulative')+': '+x.reason).join(' · ')||'none recorded')),
             el('p','Rollback referral: '+(r.rollback_referral_recorded?'recorded':'not recorded')+' · due for review: '+(r.due_for_review_windows.join(', ')||'none')),
+            el('p','Outcome corroboration: '+r.outcome_corroboration.matched+'/'+r.outcome_corroboration.enrolled+' matched · '+r.outcome_corroboration.conflicts+' conflicts'),
             el('p','Declared finance statements: '+(r.finance_reconciled_windows.join(', ')||'none')+' · scheduled review consent '+(r.scheduled_deadline_review_enabled?'enabled':'disabled')),
             button('Open saved revision',()=>load(r.workflow_id,r.revision)));
           installJournalWorkbench(section,{workflow_id:r.workflow_id,revision:r.revision},r.monitor_id);

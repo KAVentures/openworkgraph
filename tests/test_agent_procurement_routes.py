@@ -42,6 +42,10 @@ with TestClient(app) as client:
     assert client.post(base+'router-producer-manifest',params=params,json={'document':'{}'},headers=bearer).status_code==403
     assert client.post(base+'router-producer-manifest',params=params,json={'document':'{}'},headers={**h,'X-OpenWorkGraph-Context':'ai'}).status_code==403
     assert client.post(base+'router-producer-manifest',params=params,json={'document':'{}'},headers=h).status_code==422
+    for operation in ("router-corroboration-require","router-corroboration-manifest","router-corroboration-record"):
+        assert client.post(base+operation,params=params,json={"document":"{}"},headers=bearer).status_code==403
+        assert client.post(base+operation,params=params,json={"document":"{}"},headers={**h,"X-OpenWorkGraph-Context":"ai"}).status_code==403
+        assert client.post(base+operation,params=params,json={"document":"{}"},headers=h).status_code==422
     assert client.post(base+'router-producer-manifest',params=params,json={'document':'{}'},headers=bearer).status_code==403
     assert client.post(base+'router-producer-manifest',params=params,json={'document':'{}'},headers={**h,'X-OpenWorkGraph-Context':'ai'}).status_code==403
     assert client.post(base+'router-producer-manifest',params=params,json={'document':'{}'},headers=h).status_code==422

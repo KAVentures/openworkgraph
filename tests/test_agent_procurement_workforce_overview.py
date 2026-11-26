@@ -17,15 +17,15 @@ def _record(key,*,currency="USD",case="a",source="s",upper=20,critical=False,cut
     cost=_money_bounds((Fraction(10),None if upper is None else Fraction(upper)))
     arm={"cases":2,"recorded":1,"terminal":1,"counts":{k:{"lower":0,"upper":1} for k in overview.METRICS},
          "attribution_counts":{"pass":1,"fail":0,"unknown":1},"variable_cost":cost}
-    state={"plan_sha256":digest(key),"snapshot":{"windows":[{"observations":[{"source_evidence_sha256":digest(source)}]}]},
+    state={"plan_sha256":digest(key),"snapshot":{"windows":[{"observations":[{"slot_id":digest(["slot",case]),"source_evidence_sha256":digest(source)}]}]},
            "monitor_plan":{"request":{"maximum_reporting_delay_ms":10},
-                           "windows":[{"plan":{"slots":[{"case_token_sha256":digest(case)}]}}]},
+                           "windows":[{"window_id":"w1","plan":{"slots":[{"slot_id":digest(["slot",case]),"case_token_sha256":digest(case)}]}}]},
            "report":{"currency":currency,"as_of_ms":cut,"scheduled_cases":4,"started_window_cases":4,
                      "recorded_cases":2,"arms":{a:deepcopy(arm) for a in overview.ARMS},
                      "windows":[{"window_id":"w1","end_exclusive_ms":150,"state":"hold"}],
                      "recommended_review":"hold","eligible_for_continued_monitoring_review":False},
            "sticky_rollback_triggers":[{"window_id":"w1","reason":"critical"}] if critical else [],
-           "rollback_referral_recorded":False,"overdue_window_history":[],"producer_attribution":{"slot":{}}}
+           "rollback_referral_recorded":False,"overdue_window_history":[],"producer_attribution":{"slot":{"producer_alias":"adapter"}}}
     history=[{"kind":"checkpoint","entry_sha256":digest([key,1]),"recorded_at_ms":cut}]
     return key,state,history
 
