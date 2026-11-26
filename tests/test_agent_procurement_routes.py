@@ -32,6 +32,13 @@ with TestClient(app) as client:
     base='/v1/process-catalog/procurement/'
     body={'document':json.dumps(comparison)}
     assert client.post(base+'compare',params=params,json=body).status_code==401
+    producer_path='/v1/process-catalog/procurement-producer/ingest'
+    assert client.post(producer_path,json={}).status_code==401
+    assert client.post(producer_path,json={},headers=h).status_code==401
+    assert client.post(producer_path,json={},headers=bearer).status_code==401
+    assert client.post(producer_path,json={},headers={**bearer,'Origin':'http://localhost'}).status_code==403
+    assert client.post(base+'router-producer-grant',params=params,json={'document':'{}'},headers=bearer).status_code==403
+    assert client.post(base+'router-producer-revoke',params=params,json={'document':'{}'},headers=bearer).status_code==403
     journal_body={'document':'{}'}
     assert client.post(base+'router-journal-list',params=params,json=journal_body).status_code==401
     assert client.post(base+'router-journal-list',params=params,json=journal_body,headers=bearer).status_code==403
