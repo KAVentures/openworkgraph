@@ -5010,6 +5010,13 @@
           table(['Rule','Object type','Deadline','Activated','Missing response','Late complete','Violating','Newly satisfied','Newly violating'],rows),
           ...result.rules.map(r=>el('p','Rule '+(r.rule_index+1)+': every '+r.rule.a+' followed by '+r.rule.b+' within the selected deadline.','muted')),
           ...(basis.omitted_rules.length?[el('p','Unmapped affected rules: '+basis.omitted_rules.map(r=>(r.rule_index+1)+' needs '+r.unmapped_role).join(', '),'muted')]:[]),
+          el('h4','Observed deadline feasibility'),
+          el('p','Minimum whole-second thresholds per rule, within the declared parameter range. Missing responses cannot be fixed by extending a deadline. These are descriptive thresholds, not proposed policies.','muted'),
+          table(['Rule','Object type','Target satisfied','Required cases','Maximum satisfiable in range','Minimum threshold (seconds)','Status'],
+            result.rules.flatMap(r=>r.frontier.targets.map(x=>[
+              r.rule_index+1,r.case_type,x.target_percent+'%',x.required_satisfied_cases+' / '+r.frontier.activated_cases,
+              r.frontier.maximum_satisfied_cases_in_range,x.minimum_seconds??'—',
+              ({attainable:'Attainable in retained data',unattainable_missing_responses:'Missing responses',outside_declared_range:'Outside declared range',no_activated_cases:'No activated cases'})[x.status]||x.status]))),
           el('p',result.interpretation,'muted'),save,el('h4','Inspect exact case evidence'),
           field('Rule',evidenceRule),field('Alternative',evidenceValue),field('Classification',evidenceState),evidence,more);
         status.textContent='Review complete. No configuration changed.';

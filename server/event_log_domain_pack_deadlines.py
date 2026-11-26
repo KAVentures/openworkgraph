@@ -22,6 +22,7 @@ MAX_SOURCE_ROWS = 500_000
 MAX_RULES = 8
 MAX_VALUES = 8
 MAX_EVIDENCE = 100
+FRONTIER_TARGETS = (50, 80, 90, 95, 99, 100)
 _GUARD = benchmark._GUARD
 _STATES = {"newly_satisfied", "newly_violating", "missing_response", "late_complete"}
 
@@ -135,6 +136,9 @@ def _prepare(log_id, pack_id, name, values):
                  "definitions_sha256": record["definitions_sha256"], "parameter": name,
                  "parameter_unit": unit, "baseline_value": baseline, "baseline_seconds": baseline_seconds,
                  "alternatives": alternatives, "source_rows": rows,
+                 "parameter_min_seconds": max(1, int(round(parameter["min"] * factor))),
+                 "parameter_max_seconds": min(10**9, int(round(parameter["max"] * factor))),
+                 "frontier_target_percentages": list(FRONTIER_TARGETS),
                  "source_sha256": provenance.source_digest(conn, log_id),
                  "source_fingerprint_basis": "stored_events_objects_and_event_object_links",
                  "omitted_rules": omitted_rules,
@@ -181,6 +185,51 @@ def _counts(conn, baseline, seconds):
             "baseline_violating_cases": missing+base_late,
             "newly_satisfied_cases": improved, "newly_violating_cases": worsened,
             "violation_count_change": worsened-improved}
+
+
+def _frontier(conn, lower, upper):
+    """Minimum whole-second thresholds per fixed observed target, not a policy proposal."""
+    activated, completed, achievable = conn.execute("""
+        SELECT count(*) FILTER (WHERE triggers>0),
+          count(*) FILTER (WHERE triggers>0 AND missing=0),
+          count(*) FILTER (WHERE triggers>0 AND missing=0 AND worst_seconds<=?)
+        FROM deadline_profile""", [upper]).fetchone()
+    targets = [(percent, (activated*percent+99)//100) for percent in FRONTIER_TARGETS]
+    # Group ties before accumulating: reaching a threshold admits every case
+    # at that exact integer-second boundary. Never count partially answered cases.
+    needed = [n for _, n in targets]
+    expressions = ", ".join("min(seconds) FILTER (WHERE cumulative>=?)" for _ in needed)
+    first = conn.execute("""
+        WITH bins AS (
+          SELECT CAST(ceil(worst_seconds) AS BIGINT) AS seconds, count(*) AS cases
+          FROM deadline_profile WHERE triggers>0 AND missing=0 GROUP BY 1
+        ), ranked AS (
+          SELECT seconds, sum(cases) OVER (ORDER BY seconds ROWS UNBOUNDED PRECEDING) AS cumulative
+          FROM bins
+        )
+        SELECT """+expressions+" FROM ranked", needed).fetchone()
+    results = []
+    for (percent, required), seconds in zip(targets, first):
+        if not activated:
+            status = "no_activated_cases"
+        elif required > completed:
+            status = "unattainable_missing_responses"
+        elif required > achievable:
+            status = "outside_declared_range"
+        elif seconds is None:
+            _fail("Deadline frontier does not match the observed case population")
+        else:
+            status = "attainable"
+        threshold = max(lower, seconds) if status == "attainable" else None
+        if threshold is not None and threshold > upper:
+            _fail("Deadline frontier exceeds the declared range")
+        results.append({"target_percent":percent,"required_satisfied_cases":required,
+                        "status":status,"minimum_seconds":threshold})
+    return {"activated_cases":activated,"fully_responded_cases":completed,
+            "missing_response_cases":activated-completed,
+            "maximum_satisfied_cases_in_range":achievable,
+            "minimum_allowed_seconds":lower,"maximum_allowed_seconds":upper,
+            "targets":results,"policy_recommendation":False}
 
 
 def _page(conn, baseline, seconds, spec):
@@ -240,12 +289,13 @@ def review(log_id, pack_id, spec):
                     population.require_count(basis["case_populations"][item["case_type"]],
                                              conn.execute("SELECT count(*) FROM deadline_profile").fetchone()[0])
                     return {"baseline": _counts(conn, baseline, baseline),
+                            "frontier": _frontier(conn, basis["parameter_min_seconds"], basis["parameter_max_seconds"]),
                             "alternatives": [{**row, **_counts(conn, baseline, row["seconds"])}
                                              for row in basis["alternatives"]]}
                 output = workspace._query(log_id, item["case_type"], run)
                 results.append({"rule_index": index, "case_type": item["case_type"],
                                 "rule": rule, "population": basis["case_populations"][item["case_type"]], "baseline": output["baseline"],
-                                "alternatives": output["alternatives"]})
+                                "alternatives": output["alternatives"], "frontier": output["frontier"]})
             return {"format": FORMAT, "basis": basis, "basis_sha256": pin, "rules": results,
                     "configuration_modified": False, "source_system_validated": False,
                     "policy_compliance_verified": False, "execution_authorized": False,

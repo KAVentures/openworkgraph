@@ -85,3 +85,7 @@ budgets, strict HTTP authorization, a deterministic randomized oracle for
 repeated triggers and tied timestamps, comparison with the existing
 compliance engine, and a Chromium dashboard scenario. Synthetic tests
 do not establish real-customer acceptance or enterprise-scale performance.
+
+## Observed deadline feasibility
+
+Every reviewed rule also reports the exact minimum whole-second threshold for fixed 50%, 80%, 90%, 95%, 99% and 100% observed satisfaction targets among activated cases. The required case count is the ceiling of target times activated population. All answered occurrences must meet the threshold; ties are handled together and fractional-second gaps round upward. The output respects the declared parameter range and distinguishes targets impossible because of missing responses, targets outside the range, and cases where no rule is activated. Each frontier concerns a single rule, not a simultaneous guarantee across rules sharing a parameter. These are descriptive results, not recommendations to change a deadline or verified future service levels.

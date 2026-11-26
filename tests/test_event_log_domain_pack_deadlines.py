@@ -203,3 +203,41 @@ with TestClient(app) as c:
     result=subprocess.run([sys.executable,"-c","import sys;sys.path.insert(0,'tests');"+code],
         cwd=Path(__file__).resolve().parents[1],env=env,capture_output=True,text=True,timeout=120)
     assert result.returncode==0,result.stdout+result.stderr
+
+
+def test_observed_frontier_payment_missing_responses():
+    log,_=installed()
+    result=deadlines.review(log,PACK,{"parameter":"payment_terms_days","values":[5,60]})
+    f=result["rules"][0]["frontier"]
+    targets={r["target_percent"]:r for r in f["targets"]}
+    assert f["activated_cases"]==20
+    assert f["fully_responded_cases"]==19
+    assert f["missing_response_cases"]==1
+    assert f["maximum_satisfied_cases_in_range"]==19
+    assert targets[95]["minimum_seconds"]==22*86400
+    assert targets[95]["required_satisfied_cases"]==19
+    assert targets[99]["status"]==targets[100]["status"]=="unattainable_missing_responses"
+    assert targets[100]["minimum_seconds"] is None
+    assert f["policy_recommendation"] is False
+
+
+def test_frontier_exact_integer_rounding_ties_and_range():
+    conn=duckdb.connect()
+    try:
+        conn.execute("CREATE TABLE deadline_profile(case_id VARCHAR,triggers BIGINT,missing BIGINT,worst_seconds DOUBLE)")
+        conn.executemany("INSERT INTO deadline_profile VALUES (?,?,?,?)",[
+            ("a",1,0,0.0),("b",2,0,1.25),("c",1,0,1.25),("d",1,0,4.0),
+            ("e",2,1,1.0),("f",0,0,None)])
+        f=deadlines._frontier(conn,1,3)
+        rows={r["target_percent"]:r for r in f["targets"]}
+        assert f["activated_cases"]==5 and f["fully_responded_cases"]==4
+        assert f["maximum_satisfied_cases_in_range"]==3
+        assert rows[50]=={"target_percent":50,"required_satisfied_cases":3,"status":"attainable","minimum_seconds":2}
+        assert rows[80]["status"]=="outside_declared_range"
+        assert rows[90]["status"]=="unattainable_missing_responses"
+        assert deadlines._frontier(conn,3,5)["targets"][0]["minimum_seconds"]==3
+        conn.execute("DELETE FROM deadline_profile WHERE triggers>0")
+        empty=deadlines._frontier(conn,1,3)
+        assert all(r["status"]=="no_activated_cases" and r["minimum_seconds"] is None for r in empty["targets"])
+    finally:
+        conn.close()
