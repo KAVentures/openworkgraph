@@ -1655,7 +1655,7 @@
     const section=el('section');section.appendChild(el('h4','AI workforce procurement'));
     section.appendChild(el('p','Compare portable shadow evaluations, freeze a repeated trial, or review its full scheduled population. Files are inspected only on this computer and are not retained. Model identities, measurements and business outcomes remain unverified.'));
     const mode=el('select');mode.id='owgCatalogProcurementMode';mode.setAttribute('aria-label','Procurement operation');
-    for(const [value,label] of [['compare','Compare completed shadow reports'],['freeze','Freeze a repeated trial plan'],['review','Review a frozen trial and captures'],['operating-cost','Review human and AI operating costs'],['router-freeze','Freeze a held-out router rehearsal'],['router-review','Review held-out routing predictions'],['router-change-freeze','Freeze router version comparison'],['router-change-assess','Assess paired router version change'],['router-change-decide','Record controlled router change referral'],['router-pilot-freeze','Freeze controlled router pilot'],['router-pilot-review','Review controlled pilot observations'],['router-pilot-decide','Record pilot expansion or rollback referral'],['router-monitor-freeze','Freeze multi-window router monitoring'],['router-monitor-review','Review cumulative monitoring snapshot'],['router-monitor-decide','Record monitoring or rollback referral'],['router-journal-list','List locally retained monitoring journals'],['router-journal-append','Retain a monitoring checkpoint locally'],['router-journal-refresh','Refresh monitoring using the local clock'],['router-journal-schedule','Set journal-specific scheduled review consent'],['router-journal-detail','Inspect retained monitoring history'],['router-journal-decide','Record retained monitoring decision'],['router-journal-forget','Remove retained monitoring journal'],['router-producer-grant','Issue scoped monitoring producer credential'],['router-producer-revoke','Revoke monitoring producer credential'],['router-finance-reconcile','Reconcile declared booked financial amounts'],['nominate','Nominate a candidate before holdout'],['assess','Assess the held-out trial'],['decide','Record a pinned rehearsal decision'],['outcome-review','Review controlled sandbox outcomes'],['rollout-review','Request separate rollout review'],['deployment-review','Review monitored deployment readiness'],['deployment-decide','Record deployment review referral']]){
+    for(const [value,label] of [['compare','Compare completed shadow reports'],['freeze','Freeze a repeated trial plan'],['review','Review a frozen trial and captures'],['operating-cost','Review human and AI operating costs'],['case-robustness','Stress-test paired candidate robustness'],['router-freeze','Freeze a held-out router rehearsal'],['router-review','Review held-out routing predictions'],['router-change-freeze','Freeze router version comparison'],['router-change-assess','Assess paired router version change'],['router-change-decide','Record controlled router change referral'],['router-pilot-freeze','Freeze controlled router pilot'],['router-pilot-review','Review controlled pilot observations'],['router-pilot-decide','Record pilot expansion or rollback referral'],['router-monitor-freeze','Freeze multi-window router monitoring'],['router-monitor-review','Review cumulative monitoring snapshot'],['router-monitor-decide','Record monitoring or rollback referral'],['router-journal-list','List locally retained monitoring journals'],['router-journal-append','Retain a monitoring checkpoint locally'],['router-journal-refresh','Refresh monitoring using the local clock'],['router-journal-schedule','Set journal-specific scheduled review consent'],['router-journal-detail','Inspect retained monitoring history'],['router-journal-decide','Record retained monitoring decision'],['router-journal-forget','Remove retained monitoring journal'],['router-producer-grant','Issue scoped monitoring producer credential'],['router-producer-revoke','Revoke monitoring producer credential'],['router-finance-reconcile','Reconcile declared booked financial amounts'],['nominate','Nominate a candidate before holdout'],['assess','Assess the held-out trial'],['decide','Record a pinned rehearsal decision'],['outcome-review','Review controlled sandbox outcomes'],['rollout-review','Request separate rollout review'],['deployment-review','Review monitored deployment readiness'],['deployment-decide','Record deployment review referral']]){
       const option=el('option',label);option.value=value;mode.appendChild(option);
     }
     const modeLabel=el('label','Procurement operation ');modeLabel.htmlFor=mode.id;modeLabel.appendChild(mode);
@@ -1672,6 +1672,7 @@
       hint.textContent=mode.value==='compare'?'Choose an existing comparison request (see AGENT_PROCUREMENT.md).':
         mode.value==='freeze'?'Choose a confirmed design JSON with exact reference report, candidates, gates and repeats (see AGENT_PROCUREMENT_TRIALS.md).':
         mode.value==='review'?'Choose the frozen plan and a capture ledger. Failed and missing scheduled slots remain in the denominator.':
+        mode.value==='case-robustness'?'Choose a pinned trial, captures and robustness policy bundle. All enrolled cases and missing attempts remain visible. See AGENT_PROCUREMENT_CASE_ROBUSTNESS.md.':
         mode.value==='operating-cost'?'Choose the exact trial and human operating-cost bundle (see AGENT_PROCUREMENT_OPERATING_COST.md). Review and fallback time, missing evidence and fixed-cost assumptions remain visible.':
         mode.value.startsWith('router-producer-')?'Issue or revoke an explicitly confirmed scoped producer credential using the retained journal head. Credentials are shown once and never included in report downloads.':
         mode.value==='router-finance-reconcile'?'Submit an explicitly confirmed finance statement for a closed monitoring window, with current journal and report pins. See AGENT_PROCUREMENT_FINANCE.md.':
@@ -1702,14 +1703,15 @@
       const outcomeMode=['outcome-review','rollout-review'].includes(operation);
       const deploymentMode=['deployment-review','deployment-decide'].includes(operation);
       const economicsMode=operation==='operating-cost';
+      const robustnessMode=operation==='case-robustness';
       const routerMode=['router-freeze','router-review'].includes(operation);
       const routerChangeMode=operation.startsWith('router-change-');
       const routerPilotMode=operation.startsWith('router-pilot-');
       const routerMonitorMode=operation.startsWith('router-monitor-');
       const routerJournalMode=operation.startsWith('router-journal-')||operation==='router-finance-reconcile';
       const routerProducerMode=operation.startsWith('router-producer-');
-      const heading={'router-finance-reconcile':'Retained finance reconciliation','router-producer-grant':'Scoped monitoring producer credential','router-producer-revoke':'Monitoring producer revoked','router-journal-list':'Retained monitoring journals','router-journal-append':'Retained monitoring checkpoint','router-journal-refresh':'Clock-refreshed monitoring checkpoint','router-journal-schedule':'Scheduled review consent','router-journal-detail':'Retained monitoring history','router-journal-decide':'Retained monitoring decision','router-journal-forget':'Monitoring journal removal','router-monitor-freeze':'Frozen multi-window router monitoring','router-monitor-review':'Cumulative router monitoring review','router-monitor-decide':'Monitoring review referral receipt','router-pilot-freeze':'Frozen controlled router pilot','router-pilot-review':'Controlled router pilot review','router-pilot-decide':'Pilot review referral receipt','router-change-freeze':'Frozen router version comparison','router-change-assess':'Paired router version assessment','router-change-decide':'Controlled router change receipt','router-freeze':'Frozen router rehearsal plan','router-review':'Held-out router rehearsal review','operating-cost':'Human and AI operating cost comparison',nominate:'Frozen candidate nomination',assess:'Held-out selection assessment',decide:'Rehearsal decision receipt','outcome-review':'Controlled sandbox outcome review','rollout-review':'Separate rollout review receipt','deployment-review':'Monitored deployment readiness','deployment-decide':'Release-owner referral receipt'};
-      output.appendChild(el('h5',(selectionMode||outcomeMode||deploymentMode||economicsMode||routerMode||routerChangeMode||routerPilotMode||routerMonitorMode||routerJournalMode||routerProducerMode)?heading[operation]:operation==='freeze'?'Frozen trial plan · '+result.scheduled_attempts+' attempts':'Candidate procurement comparison'));
+      const heading={'router-finance-reconcile':'Retained finance reconciliation','router-producer-grant':'Scoped monitoring producer credential','router-producer-revoke':'Monitoring producer revoked','router-journal-list':'Retained monitoring journals','router-journal-append':'Retained monitoring checkpoint','router-journal-refresh':'Clock-refreshed monitoring checkpoint','router-journal-schedule':'Scheduled review consent','router-journal-detail':'Retained monitoring history','router-journal-decide':'Retained monitoring decision','router-journal-forget':'Monitoring journal removal','router-monitor-freeze':'Frozen multi-window router monitoring','router-monitor-review':'Cumulative router monitoring review','router-monitor-decide':'Monitoring review referral receipt','router-pilot-freeze':'Frozen controlled router pilot','router-pilot-review':'Controlled router pilot review','router-pilot-decide':'Pilot review referral receipt','router-change-freeze':'Frozen router version comparison','router-change-assess':'Paired router version assessment','router-change-decide':'Controlled router change receipt','router-freeze':'Frozen router rehearsal plan','router-review':'Held-out router rehearsal review','operating-cost':'Human and AI operating cost comparison','case-robustness':'Paired case-cluster robustness review',nominate:'Frozen candidate nomination',assess:'Held-out selection assessment',decide:'Rehearsal decision receipt','outcome-review':'Controlled sandbox outcome review','rollout-review':'Separate rollout review receipt','deployment-review':'Monitored deployment readiness','deployment-decide':'Release-owner referral receipt'};
+      output.appendChild(el('h5',(selectionMode||outcomeMode||deploymentMode||economicsMode||robustnessMode||routerMode||routerChangeMode||routerPilotMode||routerMonitorMode||routerJournalMode||routerProducerMode)?heading[operation]:operation==='freeze'?'Frozen trial plan · '+result.scheduled_attempts+' attempts':'Candidate procurement comparison'));
       output.appendChild(el('p','Exact saved revision '+envelope.revision+'. '+(envelope.references_latest_revision_at_inspection?
         'Latest saved revision at inspection.':'Historical revision; current revision '+envelope.latest_revision_at_inspection+'. Evaluate the current design before substitution.')));
       if(operation==='freeze'){
@@ -2008,6 +2010,44 @@
           output.append(el('h6','Paired routing evidence'),label,view);draw();
         }
         output.appendChild(el('p','No actual routed execution or pre-execution prediction provenance was verified. Known router failures use a declared manual fallback counterfactual; missing predictions are unresolved.'));
+      }else if(robustnessMode){
+        const pct=v=>v==null?'unknown':(100*v.lower_numerator/v.denominator).toFixed(2)+'% to '+(100*v.upper_numerator/v.denominator).toFixed(2)+'%';
+        const metrics={match_difference:'Match-rate change (percentage points)',regression:'Paired regressions',new_critical:'New critical attempts'};
+        const describe=(host,slice)=>{
+          host.append(el('p',slice.distinct_cases+' distinct cases · '+slice.paired_slots+' paired attempts · '+slice.status));
+          for(const [key,interval] of Object.entries(slice.intervals))host.appendChild(el('p',metrics[key]+': '+pct(interval)));
+        };
+        output.append(el('p',result.distinct_cases+' distinct enrolled cases · '+result.repeats+' repeats per case. Repeats are not independent cases.'),
+          el('p','Baseline all-repeat match rate by case: '+pct(result.baseline_all_repeats_match_case_rate)),
+          el('p','Exact finite-population stress tests, not confidence intervals. No candidate selected or deployment authorized.'),
+          el('p','Robustness SHA-256: '+result.robustness_sha256));
+        for(const candidate of result.comparisons){
+          const section=el('details');section.open=true;section.append(el('summary',candidate.candidate_id+' · '+candidate.robustness_status),
+            el('p','All-repeat match rate by case: '+pct(candidate.all_repeats_match_case_rate)),
+            el('h6','Full enrolled population'));describe(section,candidate.full_population);
+          const categories=el('details');categories.append(el('summary','Workflow categories'));
+          for(const row of candidate.per_category){
+            const item=el('section');item.append(el('h6',row.category+' · coverage '+row.coverage));describe(item,row);categories.appendChild(item);
+          }
+          const repeats=el('details');repeats.append(el('summary','Repeat blocks'));
+          for(const row of candidate.per_repeat){
+            const item=el('section');item.append(el('h6','Repeat '+row.repeat));describe(item,row);repeats.appendChild(item);
+          }
+          const sensitivity=el('details');sensitivity.append(el('summary','Whole-case deletion stress tests'),
+            el('p','Requested '+candidate.requested_deletions+' deletions; evaluated through '+candidate.evaluated_maximum_deletions+' · coverage '+candidate.deletion_coverage+'. Never replaces the full trial.'));
+          for(const row of candidate.case_deletion_sensitivity){
+            const item=el('details');item.append(el('summary','Delete '+row.deleted_cases+' · keep '+row.remaining_cases+' cases · '+row.universal_status));
+            for(const [key,interval] of Object.entries(row.intervals)){
+              const check=row.universal_checks[key];
+              item.append(el('h6',metrics[key]+' · '+check.status),el('p','Across all permitted subsets: '+pct(interval)),
+                el('p','Lower witness removes: '+(interval.lower_witness_deleted_case_ids.join(', ')||'none')),
+                el('p','Upper witness removes: '+(interval.upper_witness_deleted_case_ids.join(', ')||'none')));
+              if(check.definite_failure_witness_deleted_case_ids!==null)item.appendChild(el('p','Definite failure witness removes: '+(check.definite_failure_witness_deleted_case_ids.join(', ')||'none')));
+            }
+            sensitivity.appendChild(item);
+          }
+          section.append(categories,repeats,sensitivity);output.appendChild(section);
+        }
       }else if(economicsMode){
         // Exact amounts use decimal strings. Round only the displayed value,
         // never the downloaded report or the evidence hash.
@@ -2240,7 +2280,7 @@
       }
       if(operation!=='router-producer-grant')output.appendChild(button('Download minimized procurement JSON',()=>{
         const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)+'\n'],{type:'application/json'}));
-        const link=el('a');link.href=url;link.download=(selectionMode||outcomeMode||deploymentMode||economicsMode||routerMode||routerChangeMode||routerPilotMode||routerMonitorMode||routerJournalMode||routerProducerMode)?'owg-procurement-'+operation+'.json':operation==='freeze'?'owg-procurement-plan.json':'owg-procurement-review.json';
+        const link=el('a');link.href=url;link.download=(selectionMode||outcomeMode||deploymentMode||economicsMode||robustnessMode||routerMode||routerChangeMode||routerPilotMode||routerMonitorMode||routerJournalMode||routerProducerMode)?'owg-procurement-'+operation+'.json':operation==='freeze'?'owg-procurement-plan.json':'owg-procurement-review.json';
         link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
       }));
       output.appendChild(el('p','No model or business tool was called; reported identity, measurements and outcomes remain unverified. This review grants no execution or substitution permission.'));
