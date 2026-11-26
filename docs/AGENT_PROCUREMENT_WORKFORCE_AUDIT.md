@@ -102,3 +102,80 @@ file; never treat it as a valid dossier. Do not send linkable artifacts to
 unapproved recipients. Exact historical recomputation can require the same
 OWG report implementation; no indefinite cross-version compatibility or
 trusted archival storage is claimed.
+
+
+## Multi-snapshot independent audit timeline
+
+For an audit involving 2–12 historical dossiers, including installations that
+have temporarily disappeared or changed signing keys, obtain a separately
+trusted manifest of the ordered dossier digests and historical trust sets.
+Use this format:
+
+```json
+{
+  "format": "openworkgraph.workforce-audit-timeline-manifest.v1",
+  "entries": [
+    {
+      "dossier_sha256": "<first independently obtained digest>",
+      "trust": {
+        "expected_correlation_namespace_sha256": "<namespace>",
+        "trust": [
+          {
+            "installation_alias": "site-a",
+            "public_key_hex": "<historical public key>",
+            "correlation_namespace_sha256": "<namespace>"
+          }
+        ]
+      }
+    },
+    {
+      "dossier_sha256": "<second independently obtained digest>",
+      "trust": {
+        "expected_correlation_namespace_sha256": "<namespace>",
+        "trust": [
+          {
+            "installation_alias": "site-a",
+            "public_key_hex": "<later historical public key>",
+            "correlation_namespace_sha256": "<namespace>"
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+Obtain the manifest's canonical JSON SHA-256 separately from the authorized
+audit coordinator. The manifest must not be trusted merely because it was
+supplied alongside the dossiers. Then run:
+
+```sh
+python -m server.agent_procurement_workforce_timeline manifest.json --manifest-sha256 <separately-obtained-digest> --output timeline.json first.json second.json
+```
+
+Files must appear in manifest order. The timeline recomputes every signed
+report, checks strict review-clock progression and a single namespace,
+rejects duplicate dossiers, backwards or conflicting per-installation
+packets (including after a site disappears and reappears), key reassignment
+to a different alias, case-only alias changes, and reuse of a previously
+retired key. A separately pinned new key can be recorded as a historical
+key change; the tool does not verify who authorized that change. Changes in
+the declared freshness policy and participating installation set are
+displayed, not silently normalized.
+
+The resulting minimized timeline shows the first/last snapshot and
+observation count for every seen journal; changed or unavailable case
+cohorts; exclusions; cutoff regressions against the historical high-water
+mark; and every supplied snapshot in which a rollback-review signal was
+observed. It never interprets later absence or a clean snapshot as clearance.
+The timeline does not contain case/source correlation tags or raw packets;
+journal tags and installation aliases remain linkable. No across-snapshot
+financial sums or causal comparisons are calculated.
+
+The manifest and dossiers must come from trusted custody. Strictly advancing
+declared times do not prove trusted chronology; a missing snapshot may
+contain an unobserved incident. The report does not verify revocation,
+organization identity, completeness of historical custody or live rollout
+authority. Individual input files and the output are capped at 40 MiB;
+aggregate dossier input is capped at 160 MiB. Output is exclusive/private
+under the same conditions as the original audit CLI.
