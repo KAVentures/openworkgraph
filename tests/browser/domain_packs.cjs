@@ -78,6 +78,19 @@ const path=require('node:path');
   await page.locator('#owgDomainPackStatus').filter({hasText:'Reinstalled 1.0.0.'}).waitFor();
   await page.locator('#owgDomainPackRun').click();
   await report.getByRole('cell',{name:'every VF01 Billing is followed by Clear Payment within 1728000 s',exact:true}).waitFor();
+  // Overlap is computed from installed rules and exact case populations.
+  const overlap=page.locator('#owgDomainPackOverlap');
+  await overlap.locator('summary').click();
+  await overlap.getByRole('button',{name:'Load installed packs'}).click();
+  await overlap.locator('#owgOverlapPack').selectOption('order_to_cash');
+  await overlap.locator('#owgOverlapType').selectOption(mapping.object_types.invoice);
+  await overlap.getByRole('button',{name:'Review rule overlap'}).click();
+  await overlap.getByText('Overlap review complete. No configuration changed.',{exact:true}).waitFor();
+  await overlap.locator('#owgOverlapFirst').selectOption('4');
+  await overlap.locator('#owgOverlapSecond').selectOption('5');
+  await overlap.getByRole('button',{name:'Inspect matching cases'}).click();
+  await overlap.getByRole('cell',{name:'bd9',exact:true}).waitFor();
+  await overlap.locator('summary').click();
   await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
   const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgDomainPacks'),{
    runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
