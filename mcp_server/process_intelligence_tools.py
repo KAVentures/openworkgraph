@@ -156,17 +156,24 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_root_cause(log_id: str, outcome: str, hours: float | None = None,
-                               activity: str | None = None, case_type: str | None = None) -> dict[str, Any]:
+                               activity: str | None = None, case_type: str | None = None,
+                               case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Which activities, resources and case attributes are associated with an outcome.
 
         outcome is duration_over (needs hours), rework, contains_activity or ends_with (both need
         activity). Returns risk differences with confidence intervals and a Bonferroni flag.
-        These are associations in the log, never causes.
+        These are associations in the log, never causes. case_filter (the same keys as insight cohorts)
+        looks within one group of at least 5 cases.
         """
         if outcome not in _OUTCOMES:
             raise ToolError("outcome must be duration_over, rework, contains_activity or ends_with")
-        return _get("get_process_root_cause", f"/v1/process-intelligence/{_log(log_id)}/root-cause",
-                    {"outcome": outcome, "hours": hours, "activity": activity, "case_type": case_type})
+        params: dict[str, Any] = {"outcome": outcome, "hours": hours, "activity": activity, "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_process_root_cause", f"/v1/process-intelligence/{_log(log_id)}/root-cause", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def explain_process_case(log_id: str, case_id: str, case_type: str | None = None) -> dict[str, Any]:
