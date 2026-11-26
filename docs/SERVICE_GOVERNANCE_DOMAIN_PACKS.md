@@ -1,6 +1,6 @@
 # Service governance domain packs (R23)
 
-Three additional versioned packs are available in **Domain packs** on a saved
+Six versioned packs are available in **Domain packs** on a saved
 event log. They use the same mapping, saved metric library, compliance engine,
 reference-model checks, local authorization, installation digest and revision
 history as the existing packs. They add no source connectors or permissions.
@@ -110,3 +110,42 @@ and nonworking hours. Tied timestamps use existing retained event ordering;
 missing events are not proof that an action failed to occur. The underlying
 rule and model results must be interpreted against the actual coverage and
 declared case population.
+
+
+## Warehouse outbound fulfillment — `warehouse_fulfillment`
+
+Map release, pick complete, pack complete, recorded shipment and carrier
+handoff. Stock exceptions, repacking and closure are optional. Seven metrics
+measure the five elapsed intervals and two exception counts. Rules review
+precedence, illustrative 24-hour pick and 48-hour handoff targets, and repeated
+shipment events. Scope to one shipment or fulfillment record; multi-parcel
+orders and parallel operations need separate reviewed models. Recorded carrier
+handoff is not proof of physical custody or successful delivery.
+
+## Sales quote approval — `sales_quote_approval`
+
+Map request, preparation, commercial review, recorded approval and issue.
+Revision, return for review and closure are optional. Seven metrics include
+request-to-preparation, review-to-approval, approval-to-issue and counts of
+revisions and returns. Illustrative targets are 24 hours to prepare and 72
+hours to issue. Review recorded separation of duties between preparation
+and approval and repeated issuance. This does not verify pricing authority,
+quote acceptance, contracts or revenue.
+
+## Payment dispute operations — `payment_disputes`
+
+Map receipt, triage, evidence preparation, recorded response submission and
+recorded outcome. Escalation, reopening and closure are optional. Seven
+metrics include intake-to-triage, evidence-to-response, response-to-outcome
+and counts of escalation and reopening. Illustrative targets are 24 hours
+to triage and seven elapsed days to submit a response; they are not payment
+network or statutory deadlines. No actual recovery, settlement, fraud or
+financial action is inferred. Do not import payment details or evidence
+payloads. Scope to cases expected to have a submitted response.
+
+All three use existing catalog discovery, exact mappings, local compliance
+review, reference models, parameter overrides, installation digest and
+uninstallation semantics. Each synthetic acceptance case exercises an exact
+sequence, late response, missing response, reversed order and extra activity,
+plus optional mappings and user-owned metric preservation. No external
+provider or live-system acceptance is claimed.
