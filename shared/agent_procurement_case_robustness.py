@@ -114,6 +114,7 @@ def _checks(intervals,policy):
 
 
 def _status(checks):
+    checks=tuple(checks)
     return "fail" if "fail" in checks else "unknown" if "unknown" in checks else "pass"
 
 
