@@ -13,13 +13,16 @@ class Lookup(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     activity: str = Field(min_length=1, max_length=200)
     search: str = Field(default='', max_length=200)
+    scope_object_id: str | None = Field(default=None, min_length=1, max_length=200)
+    object_type: str | None = Field(default=None, min_length=1, max_length=200)
+    event_qualifier: str | None = Field(default=None, max_length=80)
     from_date: str | None = None
     until_date: str | None = None
     after: str | None = Field(default=None, min_length=1, max_length=200)
     expected_revision: int | None = Field(default=None, ge=0)
     limit: int = Field(default=50, ge=1, le=100)
 
-    @field_validator('activity', 'after')
+    @field_validator('activity', 'after', 'scope_object_id', 'object_type')
     @classmethod
     def exact_key(cls, value):
         if value is not None:
@@ -28,6 +31,16 @@ class Lookup(BaseModel):
                     raise ValueError('Use an exact imported identifier')
             except EventLogFormatError:
                 raise ValueError('Use an exact imported identifier') from None
+        return value
+
+    @field_validator('event_qualifier')
+    @classmethod
+    def valid_qualifier(cls, value):
+        if value is not None:
+            try:
+                _exact_key(value, 80)
+            except EventLogFormatError:
+                raise ValueError('Use an exact imported qualifier') from None
         return value
 
     @field_validator('search')
@@ -48,6 +61,10 @@ class Lookup(BaseModel):
 
     @model_validator(mode='after')
     def bounds(self):
+        if (self.scope_object_id is None) != (self.object_type is None):
+            raise ValueError('Object scope needs an object type')
+        if self.scope_object_id is None and self.event_qualifier is not None:
+            raise ValueError('Qualifier needs an object scope')
         if self.after is not None and self.expected_revision is None:
             raise ValueError('Revision required for paging')
         if self.from_date and self.until_date and self.from_date >= self.until_date:
@@ -72,6 +89,15 @@ def search(log_id, value):
                 raise workspace.EventLogWorkspaceError('log changed; restart the event lookup')
             clauses = ['log_id=?', 'activity=?', 'contains(event_id, ?)']
             args = [log_id, spec.activity, spec.search]
+            if spec.scope_object_id is not None:
+                condition = '''EXISTS (SELECT 1 FROM event_objects scoped JOIN objects scoped_object
+                    ON scoped_object.log_id=scoped.log_id AND scoped_object.object_id=scoped.object_id
+                    WHERE scoped.log_id=events.log_id AND scoped.event_id=events.event_id
+                    AND scoped.object_id=? AND scoped_object.object_type=?'''
+                args.extend([spec.scope_object_id, spec.object_type])
+                if spec.event_qualifier is not None:
+                    condition += ' AND scoped.qualifier=?';args.append(spec.event_qualifier)
+                clauses.append(condition + ')')
             if spec.from_date is not None:
                 clauses.append('ts>=?');args.append(date.fromisoformat(spec.from_date))
             if spec.until_date is not None:

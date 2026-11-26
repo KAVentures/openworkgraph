@@ -105,6 +105,19 @@ be read, updated with `expected_revision`, or deleted with an
 only check settings; result filters, page offsets, results and source event
 data are not stored in them.
 
+## Analyze one exact object
+
+Optionally enter an exact object ID for the selected object type before running
+the check. Only events of the stored activity linked to that object (and the
+exact qualifier, if set) are included. The event bound applies after this
+selection. The check evaluates that object alone, so results do not describe
+other objects linked to the same events. The event-ID lookup honors this object
+scope, and an optional exact event ID and date window further restrict it.
+
+The object ID is temporary, excluded from saved and transferred definitions,
+and included in scoped CSV metadata. All downstream evidence, timelines and
+distributions use the reviewed revision and the same object scope.
+
 ## Analyze one exact event
 
 Use **Find an event ID** to browse or search exact IDs for the stored activity

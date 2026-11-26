@@ -4299,25 +4299,27 @@
     qualifierField.append(qualifierLookup.wrap);
     const fromDate=input('owgObjectStateFromDate','date'),untilDate=input('owgObjectStateUntilDate','date');
     const scopeEvent=input('owgObjectStateScopeEvent','text','Exact event ID');scopeEvent.maxLength=400;
+    const scopeObject=input('owgObjectStateScopeObject','text','Exact object ID');scopeObject.maxLength=400;
     const eventLookup=(()=>{
       const wrap=document.createElement('details');wrap.id='owgObjectStateEventLookup';
       const find=button('Find event IDs','secondary'),more=button('More event IDs','secondary'),use=button('Use selected event ID','secondary');
       const choices=select('owgObjectStateEventLookupChoice',[]),choiceField=field('Matching event IDs',choices),status=el('div',null,'muted');status.setAttribute('role','status');
-      wrap.append(el('summary','Find an event ID'),el('p','Search the selected stored activity and UTC date window. Results are ordered by exact ID.','muted'),find,choiceField,use,more,status);
+      wrap.append(el('summary','Find an event ID'),el('p','Search the selected stored activity and UTC date window. If an object ID is set, only events linked to that object are shown. Results are ordered by exact ID.','muted'),find,choiceField,use,more,status);
       show(choiceField,false);show(use,false);show(more,false);
       let lookupTurn=0,nextAfter=null,lookupRevision=null,items=[];
       const reset=()=>{++lookupTurn;nextAfter=null;lookupRevision=null;items=[];choices.replaceChildren();find.disabled=more.disabled=use.disabled=false;show(choiceField,false);show(use,false);show(more,false);status.textContent='';};
       const active=t=>box.isConnected&&generation===state.generation&&logId===state.logId&&t===lookupTurn;
       async function load(after){
-        const text=scopeEvent.value,label=activity.value,from=fromDate.value,until=untilDate.value;
+        const text=scopeEvent.value,label=activity.value,from=fromDate.value,until=untilDate.value,objectId=scopeObject.value,type=objectType.value,qualified=exact.checked,linkQualifier=qualifier.value;
         if(!label.trim()||Array.from(label).length>200){status.textContent='Enter an exact stored activity first.';return;}
         if(Array.from(text).length>200){status.textContent='Event ID search is too long.';return;}
+        if(objectId&&(!objectId.trim()||Array.from(objectId).length>200||!type)){status.textContent='Enter an exact object ID and choose its type.';return;}
         if(from&&until&&from>=until){status.textContent='The exclusive end date must be after the start date.';return;}
         const ticket=++lookupTurn;find.disabled=more.disabled=use.disabled=true;status.textContent='Searching retained events…';
-        const payload={activity:label,search:text,...(from?{from_date:from}:{}),...(until?{until_date:until}:{}),...(after!==null?{after,expected_revision:lookupRevision}:{})};
+        const payload={activity:label,search:text,...(from?{from_date:from}:{}),...(until?{until_date:until}:{}),...(objectId?{scope_object_id:objectId,object_type:type,...(qualified?{event_qualifier:linkQualifier}:{})}:{}),...(after!==null?{after,expected_revision:lookupRevision}:{})};
         try{
           const result=await (await api(base+'/events/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).json();
-          if(!active(ticket)||scopeEvent.value!==text||activity.value!==label||fromDate.value!==from||untilDate.value!==until)return;
+          if(!active(ticket)||scopeEvent.value!==text||activity.value!==label||fromDate.value!==from||untilDate.value!==until||scopeObject.value!==objectId||objectType.value!==type||exact.checked!==qualified||qualifier.value!==linkQualifier)return;
           items=result.events;lookupRevision=result.revision;nextAfter=result.next_after;
           setOptions(choices,items.map((item,index)=>[String(index),JSON.stringify(item.event_id)+' · '+item.at]));
           show(choiceField,items.length>0);show(use,items.length>0);show(more,nextAfter!==null);
@@ -4327,13 +4329,13 @@
       }
       find.onclick=()=>{reset();load(null);};more.onclick=()=>{if(nextAfter!==null)load(nextAfter);};
       use.onclick=()=>{if(choices.selectedIndex<0)return;const selected=items[Number(choices.value)];scopeEvent.value=selected.event_id;scopeEvent.dispatchEvent(new Event('input',{bubbles:true}));scopeEvent.focus();};
-      scopeEvent.addEventListener('input',reset);activity.addEventListener('input',reset);fromDate.addEventListener('input',reset);fromDate.addEventListener('change',reset);untilDate.addEventListener('input',reset);untilDate.addEventListener('change',reset);
+      scopeEvent.addEventListener('input',reset);scopeObject.addEventListener('input',reset);objectType.addEventListener('change',reset);exact.addEventListener('change',reset);qualifier.addEventListener('input',reset);activity.addEventListener('input',reset);fromDate.addEventListener('input',reset);fromDate.addEventListener('change',reset);untilDate.addEventListener('input',reset);untilDate.addEventListener('change',reset);
       wrap.addEventListener('input',event=>event.stopPropagation());wrap.addEventListener('change',event=>event.stopPropagation());
       return {wrap,reset};
     })();
     const run=button('Check recorded state');run.id='owgObjectStateRun';
     const form=el('div',null,'row');form.style.alignItems='end';
-    form.append(field('Stored activity',activity),activityLookup.wrap,field('Only this event ID (optional)',scopeEvent),eventLookup.wrap,field('From date (UTC, inclusive)',fromDate),field('Until date (UTC, exclusive)',untilDate),field('Object type',objectType),field('Attribute',attribute),attributeLookup.wrap,field('Comparison',operator),field('Expected value (empty is allowed)',value),valueNote,valueLookup.wrap,field('Match',quantifier),field('Match an exact event-link qualifier',exact),qualifierField,run);
+    form.append(field('Stored activity',activity),activityLookup.wrap,field('Only this event ID (optional)',scopeEvent),eventLookup.wrap,field('From date (UTC, inclusive)',fromDate),field('Until date (UTC, exclusive)',untilDate),field('Object type',objectType),field('Only this object ID (optional)',scopeObject),field('Attribute',attribute),attributeLookup.wrap,field('Comparison',operator),field('Expected value (empty is allowed)',value),valueNote,valueLookup.wrap,field('Match',quantifier),field('Match an exact event-link qualifier',exact),qualifierField,run);
     const savedPick=select('owgObjectStateSaved',[]),savedName=input('owgObjectStateSavedName','text','Name this check');savedName.maxLength=120;
     const savedLoad=button('Load saved check','secondary'),savedRefresh=button('Refresh saved checks','secondary'),savedCreate=button('Save as new check','secondary'),savedUpdate=button('Update loaded check','secondary'),savedDelete=button('Delete loaded check','secondary');
     const savedRow=el('div',null,'row');savedRow.style.alignItems='end';savedRow.append(field('Saved state checks',savedPick),savedLoad,savedRefresh,field('Saved check name',savedName),savedCreate,savedUpdate,savedDelete);
@@ -4365,7 +4367,7 @@
     distribution.append(el('summary','Recorded values at events'),el('p','Counts are event-object links, not distinct objects. Missing history, future-only history and conflicting values are separate unknown groups. Events without a linked object have no link to count. Inspecting a group finds events with at least one matching object; their evidence still includes every selected object. The current result filters apply.','muted'),distRun,distDownload,distPrev,distNext,distStatus,distRows);show(distribution,false);
     const results=el('div');results.id='owgObjectStateResults';
     const witness=el('div');witness.id='owgObjectStateWitness';
-    box.append(form,el('p','An optional event ID narrows the analysis before its event limit. Event IDs are temporary and are not saved or transferred with check definitions.','muted'),el('p','Saved checks are stored locally with this log and can include exact recorded values. Loading one does not run it.','muted'),savedRow,savedStatus,transfer,notice,summary,resultControls,trend,distribution,exportBar,results,witness);
+    box.append(form,el('p','Optional event and object IDs narrow analysis before its event limit. Object scope includes only events linked to that object and evaluates that object alone, not all linked objects. IDs are temporary and are not saved or transferred with check definitions.','muted'),el('p','Saved checks are stored locally with this log and can include exact recorded values. Loading one does not run it.','muted'),savedRow,savedStatus,transfer,notice,summary,resultControls,trend,distribution,exportBar,results,witness);
     const generation=state.generation,logId=state.logId,base='/v1/event-logs/'+encodeURIComponent(logId)+'/object-state-check';
     let turn=0,witnessTurn=0,exportTurn=0,trendTurn=0,distTurn=0,formVersion=0,settings=null,revision=null,offset=0,following=null;
     const current=t=>generation===state.generation&&box.isConnected&&t===turn;
@@ -4404,7 +4406,7 @@
     function applyDefinition(d,name){
       clear();activityLookup.reset();attributeLookup.reset();valueLookup.reset();qualifierLookup.reset();eventLookup.reset();
       if(![...objectType.options].some(option=>option.value===d.object_type)){const option=el('option',JSON.stringify(d.object_type)+' (not currently present)');option.value=d.object_type;objectType.appendChild(option);}
-      scopeEvent.value='';fromDate.value=d.from_date??'';untilDate.value=d.until_date??'';activity.value=d.activity;objectType.value=d.object_type;attribute.value=d.attribute;value.value=d.expected_value;rememberValue(d.expected_value);
+      scopeEvent.value='';scopeObject.value='';fromDate.value=d.from_date??'';untilDate.value=d.until_date??'';activity.value=d.activity;objectType.value=d.object_type;attribute.value=d.attribute;value.value=d.expected_value;rememberValue(d.expected_value);
       operator.value=d.operator;quantifier.value=d.quantifier;exact.checked=Object.hasOwn(d,'event_qualifier');qualifier.value=d.event_qualifier??'';show(qualifierField,exact.checked);
       savedName.value=name;
     }
@@ -4517,8 +4519,8 @@
         settings=spec;revision=response.revision;offset=start;following=response.next_offset;
         notice.textContent='Checked '+Number(response.selected_events).toLocaleString()+' recorded events; '+Number(response.matching_events).toLocaleString()+' match the result filter.';
         summary.replaceChildren(table(['Matched','Not matched','Unknown','No linked object'],[[...['matched','not_matched','unknown','no_linked_object'].map(key=>Number(response.event_counts[key]).toLocaleString())]]),
-          ...(response.selected_events===0?[el('p',spec.scope_event_id?'No event matches this activity, event ID and date window. This does not establish compliance.':spec.from_date||spec.until_date?'No events have this stored activity in the selected date window. This does not establish compliance.':'No events have this stored activity. This does not establish compliance.','muted')]:[]),
-          el('p','Summary counts cover all selected events before result filters. '+(spec.scope_event_id?'Analysis scoped to exact event ID: '+JSON.stringify(spec.scope_event_id)+'. ':'')+(spec.result_event_id?'Applied exact event ID: '+JSON.stringify(spec.result_event_id)+'. ':'')+(spec.object_status_filter?'Object filter: '+(statusLabel[spec.object_status_filter]||spec.object_status_filter)+(Object.hasOwn(spec,'object_value_filter')?' '+JSON.stringify(spec.object_value_filter):'')+'. Events include all linked object evidence. ':'')+'Values at the event timestamp apply immediately. 1970-01-01 denotes an initial value without a known time. Counts describe retained data, not verified source completeness or compliance.','muted'));
+          ...(response.selected_events===0?[el('p',spec.scope_object_id?'No event matches this activity, object scope and selected restrictions. This does not establish compliance.':spec.scope_event_id?'No event matches this activity, event ID and date window. This does not establish compliance.':spec.from_date||spec.until_date?'No events have this stored activity in the selected date window. This does not establish compliance.':'No events have this stored activity. This does not establish compliance.','muted')]:[]),
+          el('p','Summary counts cover all selected events before result filters. '+(spec.scope_event_id?'Analysis scoped to exact event ID: '+JSON.stringify(spec.scope_event_id)+'. ':'')+(spec.scope_object_id?'Only object '+JSON.stringify(spec.scope_object_id)+' and its linked events are analyzed; other objects are excluded. ':'')+(spec.result_event_id?'Applied exact event ID: '+JSON.stringify(spec.result_event_id)+'. ':'')+(spec.object_status_filter?'Object filter: '+(statusLabel[spec.object_status_filter]||spec.object_status_filter)+(Object.hasOwn(spec,'object_value_filter')?' '+JSON.stringify(spec.object_value_filter):'')+'. Events include all linked object evidence. ':'')+'Values at the event timestamp apply immediately. 1970-01-01 denotes an initial value without a known time. Counts describe retained data, not verified source completeness or compliance.','muted'));
         const headers=['Event','Timestamp (UTC)','Result','Linked objects','Matched','Not matched','Unknown','Evidence'];
         results.replaceChildren(response.rows.length?table(headers,response.rows.map(item=>{
           const inspect=button('View object evidence','secondary');inspect.setAttribute('aria-label','View object evidence for event '+JSON.stringify(item.event_id));
@@ -4530,7 +4532,7 @@
       }catch(error){if(current(request)){settings=null;revision=null;notice.textContent=error.message;show(resultControls,false);}}
       finally{if(current(request))run.disabled=false;}
     }
-    run.onclick=()=>{try{const spec=read();if(scopeEvent.value){if(!scopeEvent.value.trim()||Array.from(scopeEvent.value).length>200)throw new Error('Enter an exact event ID of at most 200 characters.');spec.scope_event_id=scopeEvent.value;}resultFilter.value='';eventIdFilter.value='';load(spec,0,'',null);}catch(error){notice.textContent=error.message;}};
+    run.onclick=()=>{try{const spec=read();if(scopeEvent.value){if(!scopeEvent.value.trim()||Array.from(scopeEvent.value).length>200)throw new Error('Enter an exact event ID of at most 200 characters.');spec.scope_event_id=scopeEvent.value;}if(scopeObject.value){if(!scopeObject.value.trim()||Array.from(scopeObject.value).length>200)throw new Error('Enter an exact object ID of at most 200 characters.');spec.scope_object_id=scopeObject.value;}resultFilter.value='';eventIdFilter.value='';load(spec,0,'',null);}catch(error){notice.textContent=error.message;}};
     findEvent.onclick=()=>{
       if(!settings)return;
       const id=eventIdFilter.value;

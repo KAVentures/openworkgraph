@@ -89,3 +89,16 @@ with TestClient(app) as c:
     env={**os.environ,'WORKFLOW_OBSERVER_DATA':str(tmp_path/'data'),'WORKFLOW_OBSERVER_AUTH_DIR':str(tmp_path/'auth')}
     result=subprocess.run([sys.executable,'-c',"import sys;sys.path.insert(0,'tests');"+code],env=env,cwd=Path(__file__).resolve().parents[1],capture_output=True,text=True,timeout=90)
     assert result.returncode==0,result.stdout+result.stderr
+
+
+def test_lookup_restricts_object_scope_and_exact_qualifier():
+    from test_event_log_object_state_check import fixture
+    log=workspace.import_log(BytesIO(json.dumps(fixture()).encode()),name='object scope',source_format='ocel')['log_id']
+    request={'activity':'Pay','scope_object_id':'a','object_type':'order'}
+    assert {r['event_id'] for r in lookup.search(log,request)['events']}=={'e1','e2','e3','e8'}
+    assert [r['event_id'] for r in lookup.search(log,{**request,'event_qualifier':'payer'})['events']]==['e1']
+    assert len(lookup.search(log,{**request,'event_qualifier':''})['events'])==4
+    assert lookup.search(log,{**request,'object_type':'invoice'})['events']==[]
+    for bad in ({'activity':'Pay','scope_object_id':'a'}, {'activity':'Pay','object_type':'order'},
+                {'activity':'Pay','event_qualifier':''}):
+        with pytest.raises(workspace.EventLogWorkspaceError):lookup.search(log,bad)
