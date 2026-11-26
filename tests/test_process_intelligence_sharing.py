@@ -310,7 +310,7 @@ PROCESS_TOOLS = {"list_process_logs", "get_process_overview", "get_process_overv
                  "get_process_breakdown",
                  "find_similar_process_cases",
                  "get_process_cooccurrence", "get_process_work_in_progress", "get_process_batching",
-                 "get_process_handovers"}
+                 "get_process_handovers", "get_process_roles"}
 
 
 def test_mcp_tools_are_listed_only_when_a_log_is_shared(tmp_path):
