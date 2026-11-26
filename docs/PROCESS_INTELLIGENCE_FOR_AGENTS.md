@@ -116,6 +116,14 @@ All tools except `tag_process_cases` are read-only. All are idempotent. Their an
 durations are elapsed time between recorded events, that associations are not causes, and that
 nothing authorizes an action.
 
+### Prompt: `investigate_process`
+
+When a log is shared, the MCP server also offers the prompt `investigate_process(question, log_id)`. It gives the
+connected AI a step-by-step playbook: overview, data quality, variants, where time goes, why cases differ, change
+over time, then options and simulation. It sets the rules for reporting: associations rather than causes, withheld
+counts acknowledged, people never named, simulations as model outputs. It is plain text; every tool keeps its own
+sharing checks.
+
 ## HTTP
 
 | Route | Who |
