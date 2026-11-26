@@ -2340,16 +2340,16 @@
         target.appendChild(item);
       }
       const filter=el('select');filter.setAttribute('aria-label','Historical journal review filter');
-      for(const [v,label] of [['attention','Attention (rollback, regression, cohort change or exclusion)'],['all','All journals'],['rollback','Observed rollback referrals'],['regression','Cutoff regressions'],['cohort','Changed or unavailable cohorts'],['excluded','Excluded in any snapshot'],['absent','Absent in latest snapshot']]){
+      for(const [v,label] of [['attention','Attention (rollback, source warning, regression, cohort change or exclusion)'],['all','All journals'],['rollback','Observed rollback referrals'],['source','Source attention flags'],['regression','Cutoff regressions'],['cohort','Changed or unavailable cohorts'],['excluded','Excluded in any snapshot'],['absent','Absent in latest snapshot']]){
         const opt=el('option',label);opt.value=v;filter.appendChild(opt);
       }
       const search=el('input');search.type='search';search.maxLength=80;search.setAttribute('aria-label','Search historical installation or journal tag');
       const list=el('div');list.setAttribute('aria-live','polite');let page=0;
-      const isAttention=r=>r.historical_rollback_referral_observed||r.cutoff_regression_snapshots.length||r.changed_cohort_snapshots.length||r.excluded_snapshots.length;
+      const isAttention=r=>r.historical_rollback_referral_observed||r.source_attention_snapshots.length||r.cutoff_regression_snapshots.length||r.changed_cohort_snapshots.length||r.excluded_snapshots.length;
       const draw=()=>{
         const q=search.value.trim().toLowerCase();
         const match=r=>({all:true,attention:isAttention(r),rollback:r.historical_rollback_referral_observed,
-          regression:r.cutoff_regression_snapshots.length>0,cohort:r.changed_cohort_snapshots.length>0,
+          source:r.source_attention_snapshots.length>0,regression:r.cutoff_regression_snapshots.length>0,cohort:r.changed_cohort_snapshots.length>0,
           excluded:r.excluded_snapshots.length>0,absent:!r.present_in_latest_snapshot}[filter.value]);
         const rows=result.journals.filter(r=>match(r)&&(!q||r.installation_alias.toLowerCase().includes(q)||r.journal_tag.includes(q)));
         const per=40;const pages=Math.max(1,Math.ceil(rows.length/per));page=Math.min(page,pages-1);
@@ -2359,6 +2359,7 @@
             el('p','Journal tag: '+r.journal_tag),
             el('p','First snapshot '+r.first_snapshot+' · last '+r.last_snapshot+' · observed '+r.observed_snapshots+' times'),
             el('p','Rollback referral snapshots: '+(r.rollback_referral_snapshots.join(', ')||'none')),
+            el('p','Source attention snapshots: '+(r.source_attention_snapshots.join(', ')||'none')),
             el('p','Cutoff regression snapshots: '+(r.cutoff_regression_snapshots.join(', ')||'none')),
             el('p','Changed/unavailable cohort snapshots: '+(r.changed_cohort_snapshots.join(', ')||'none')),
             el('p','Excluded snapshots: '+(r.excluded_snapshots.join(', ')||'none')),
