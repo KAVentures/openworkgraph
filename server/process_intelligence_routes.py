@@ -307,6 +307,20 @@ async def agent_model_quality(request: Request, log_id: str, levels: str | None 
     return await _answer(sharing.model_quality, log_id, case_type, levels)
 
 
+@router.post("/v1/process-intelligence/{log_id}/compare-logs")
+async def agent_compare_logs(request: Request, log_id: str):
+    """Compare this shared log (baseline) with another shared log (comparison), aggregates only."""
+    _require_agent_access(request)
+    body = await _json_body(request, "log comparison settings", strict=True, limit=16384)
+    allowed = {"comparison_log_id", "baseline_case_type", "comparison_case_type", "baseline_filter",
+               "comparison_filter", "limit"}
+    if not isinstance(body, dict) or set(body) - allowed or not isinstance(body.get("comparison_log_id"), str):
+        raise HTTPException(422, "send comparison_log_id and optional case types, filters and limit")
+    return await _answer(sharing.compare_logs, log_id, body["comparison_log_id"],
+                         baseline_case_type=body.get("baseline_case_type"),
+                         comparison_case_type=body.get("comparison_case_type"),
+                         baseline_filter=body.get("baseline_filter"), comparison_filter=body.get("comparison_filter"),
+                         limit=body.get("limit", 25))
 @router.get("/v1/process-intelligence/{log_id}/process-model")
 async def agent_process_model(request: Request, log_id: str, noise: float = Query(default=0.2, ge=0, lt=1),
                               activities: float = Query(default=1.0, gt=0, le=1),

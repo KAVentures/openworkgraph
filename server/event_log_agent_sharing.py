@@ -756,6 +756,47 @@ def model_quality(log_id: str, case_type: str | None = None, levels: str | None 
     return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
 
 
+def compare_logs(baseline_log_id: str, comparison_log_id: str, *, baseline_case_type: str | None = None,
+                 comparison_case_type: str | None = None, baseline_filter: dict[str, Any] | None = None,
+                 comparison_filter: dict[str, Any] | None = None, limit: int = 25) -> dict[str, Any]:
+    """Two shared logs compared (aggregates level on both): KPIs, activities, paths and variants with share
+    differences and 95% intervals. A row where either log has 1 to AGENT_MIN_CELL_CASES - 1 cases is withheld
+    and counted, so a small group cannot be singled out; each filtered side needs AGENT_MIN_FILTERED_CASES cases."""
+    require(baseline_log_id, "aggregates")
+    require(comparison_log_id, "aggregates")
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+        raise EventLogWorkspaceError("limit must be a whole number from 1 to 100")
+    from . import event_log_cohorts as cohorts
+    from . import event_log_log_comparison as comparison
+    sides = {}
+    for name, log_id, case_type, case_filter in (("baseline", baseline_log_id, baseline_case_type, baseline_filter),
+                                                 ("comparison", comparison_log_id, comparison_case_type, comparison_filter)):
+        if case_filter not in (None, {}):
+            if not isinstance(case_filter, dict):
+                raise EventLogWorkspaceError(f"{name}_filter must be an object of case-filter keys")
+            cohorts.parse_cohort(case_filter)
+        sides[name] = {"log_id": log_id, "case_type": case_type, "cohort": case_filter or {}}
+    result = comparison.compare({**sides, "limit": 200})
+    for name in ("baseline", "comparison"):
+        if sides[name]["cohort"] and result["kpis"][name]["cases"] < AGENT_MIN_FILTERED_CASES:
+            raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match the {name} filter; widen it")
+    small = lambda row: 0 < row["baseline_cases"] < AGENT_MIN_CELL_CASES or 0 < row["comparison_cases"] < AGENT_MIN_CELL_CASES
+    withheld = {"min_cases": AGENT_MIN_CELL_CASES}
+    sections = {}
+    for section in ("activities", "paths", "variants"):
+        rows = result[section]["largest_share_differences"]
+        kept = [row for row in rows if not small(row)]
+        withheld[section] = len(rows) - len(kept)
+        sections[section] = {**result[section], "largest_share_differences": kept[:limit]}
+    activity_rows = [r for r in result["activities"]["largest_share_differences"] if not small(r)]
+    sections["activities"]["only_baseline"] = [r["activity"] for r in activity_rows if r["presence"] == "only_baseline"]
+    sections["activities"]["only_comparison"] = [r["activity"] for r in activity_rows if r["presence"] == "only_comparison"]
+    for row in sections["variants"]["largest_share_differences"]:
+        row.pop("variant_id", None)
+    return {"format": FORMAT, "baseline": result["baseline"], "comparison": result["comparison"],
+            "kpis": result["kpis"], "duration": result["duration"], **sections, "withheld": withheld,
+            "interpretation": result["interpretation"] +
+            f" Rows where either log has 1 to {AGENT_MIN_CELL_CASES - 1} cases are withheld and counted."}
 def _tree_notation(node: dict[str, Any]) -> str | None:
     """A process tree in PM4Py's notation: ->( ) sequence, X( ) choice, +( ) parallel, *( ) loop, tau.
     PM4Py's notation has no escaping, so a label containing a single quote cannot be written: None."""

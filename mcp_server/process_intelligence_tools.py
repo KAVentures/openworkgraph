@@ -137,6 +137,32 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         return runtime_module.core._finish("check_process_compliance", result)
 
     @mcp.tool(annotations=_READ_ONLY)
+    def compare_process_logs(baseline_log_id: str, comparison_log_id: str, baseline_case_type: str | None = None,
+                             comparison_case_type: str | None = None, baseline_filter: dict[str, Any] | None = None,
+                             comparison_filter: dict[str, Any] | None = None, limit: int = 25) -> dict[str, Any]:
+        """Two shared logs side by side, for example two regions, two systems, or the same process before and after
+        a migration: case counts, events per case, rework rate and durations (with the chance a comparison case takes
+        longer), activities and paths only one log has, and the activities, paths and variants whose share of cases
+        differs most, each with a 95% interval. Activities are matched by exact name. Optional case filters per side
+        (same keys as insight cohorts) need at least 5 matching cases. Rows where either log has 1 to 4 cases are
+        withheld and counted. Both logs must be shared. Descriptive, not causes. Aggregates only, no case IDs.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ToolError("limit must be a whole number from 1 to 100")
+        payload: dict[str, Any] = {"comparison_log_id": _log(comparison_log_id), "limit": limit}
+        for key, value in (("baseline_case_type", baseline_case_type), ("comparison_case_type", comparison_case_type),
+                           ("baseline_filter", baseline_filter), ("comparison_filter", comparison_filter)):
+            if value is not None:
+                payload[key] = value
+        runtime_module.authorize_tool("compare_process_logs")
+        try:
+            result = runtime_module.secure_post(f"/v1/process-intelligence/{_log(baseline_log_id)}/compare-logs", payload)
+        except Exception as exc:
+            raise ToolError(str(exc) or "process intelligence request failed") from None
+        result["interpretation"] = _NOTE
+        return runtime_module.core._finish("compare_process_logs", result)
+
+    @mcp.tool(annotations=_READ_ONLY)
     def get_process_performance_spectrum(log_id: str, segments: list[str] | None = None, top: int = 6, bins: int = 30,
                                          case_type: str | None = None) -> dict[str, Any]:
         """Performance spectrum of a shared log: for the most frequent segments (one activity directly followed by
