@@ -1307,7 +1307,7 @@
     const section=el('section');section.appendChild(el('h4','AI workforce procurement'));
     section.appendChild(el('p','Compare portable shadow evaluations, freeze a repeated trial, or review its full scheduled population. Files are inspected only on this computer and are not retained. Model identities, measurements and business outcomes remain unverified.'));
     const mode=el('select');mode.id='owgCatalogProcurementMode';mode.setAttribute('aria-label','Procurement operation');
-    for(const [value,label] of [['compare','Compare completed shadow reports'],['freeze','Freeze a repeated trial plan'],['review','Review a frozen trial and captures'],['operating-cost','Review human and AI operating costs'],['nominate','Nominate a candidate before holdout'],['assess','Assess the held-out trial'],['decide','Record a pinned rehearsal decision'],['outcome-review','Review controlled sandbox outcomes'],['rollout-review','Request separate rollout review'],['deployment-review','Review monitored deployment readiness'],['deployment-decide','Record deployment review referral']]){
+    for(const [value,label] of [['compare','Compare completed shadow reports'],['freeze','Freeze a repeated trial plan'],['review','Review a frozen trial and captures'],['operating-cost','Review human and AI operating costs'],['router-freeze','Freeze a held-out router rehearsal'],['router-review','Review held-out routing predictions'],['nominate','Nominate a candidate before holdout'],['assess','Assess the held-out trial'],['decide','Record a pinned rehearsal decision'],['outcome-review','Review controlled sandbox outcomes'],['rollout-review','Request separate rollout review'],['deployment-review','Review monitored deployment readiness'],['deployment-decide','Record deployment review referral']]){
       const option=el('option',label);option.value=value;mode.appendChild(option);
     }
     const modeLabel=el('label','Procurement operation ');modeLabel.htmlFor=mode.id;modeLabel.appendChild(mode);
@@ -1325,6 +1325,7 @@
         mode.value==='freeze'?'Choose a confirmed design JSON with exact reference report, candidates, gates and repeats (see AGENT_PROCUREMENT_TRIALS.md).':
         mode.value==='review'?'Choose the frozen plan and a capture ledger. Failed and missing scheduled slots remain in the denominator.':
         mode.value==='operating-cost'?'Choose the exact trial and human operating-cost bundle (see AGENT_PROCUREMENT_OPERATING_COST.md). Review and fallback time, missing evidence and fixed-cost assumptions remain visible.':
+        ['router-freeze','router-review'].includes(mode.value)?'Choose the exact routing rehearsal bundle (see AGENT_PROCUREMENT_ROUTER_REHEARSAL.md). Predictions and paired outcomes are declarations, not observed live routing.':
         ['deployment-review','deployment-decide'].includes(mode.value)?'Choose the deployment readiness bundle (see AGENT_PROCUREMENT_DEPLOYMENT.md). Existing monitoring records are read locally; no release changes are made.':
         ['outcome-review','rollout-review'].includes(mode.value)?'Choose the outcome review bundle (see AGENT_PROCUREMENT_OUTCOMES.md). No rollout or execution permission will be granted.':
         'Choose the exact selection bundle (see AGENT_PROCUREMENT_SELECTION.md). Nomination and decision require a current saved revision and explicit confirmation in the document.';
@@ -1347,8 +1348,9 @@
       const outcomeMode=['outcome-review','rollout-review'].includes(operation);
       const deploymentMode=['deployment-review','deployment-decide'].includes(operation);
       const economicsMode=operation==='operating-cost';
-      const heading={'operating-cost':'Human and AI operating cost comparison',nominate:'Frozen candidate nomination',assess:'Held-out selection assessment',decide:'Rehearsal decision receipt','outcome-review':'Controlled sandbox outcome review','rollout-review':'Separate rollout review receipt','deployment-review':'Monitored deployment readiness','deployment-decide':'Release-owner referral receipt'};
-      output.appendChild(el('h5',(selectionMode||outcomeMode||deploymentMode||economicsMode)?heading[operation]:operation==='freeze'?'Frozen trial plan · '+result.scheduled_attempts+' attempts':'Candidate procurement comparison'));
+      const routerMode=['router-freeze','router-review'].includes(operation);
+      const heading={'router-freeze':'Frozen router rehearsal plan','router-review':'Held-out router rehearsal review','operating-cost':'Human and AI operating cost comparison',nominate:'Frozen candidate nomination',assess:'Held-out selection assessment',decide:'Rehearsal decision receipt','outcome-review':'Controlled sandbox outcome review','rollout-review':'Separate rollout review receipt','deployment-review':'Monitored deployment readiness','deployment-decide':'Release-owner referral receipt'};
+      output.appendChild(el('h5',(selectionMode||outcomeMode||deploymentMode||economicsMode||routerMode)?heading[operation]:operation==='freeze'?'Frozen trial plan · '+result.scheduled_attempts+' attempts':'Candidate procurement comparison'));
       output.appendChild(el('p','Exact saved revision '+envelope.revision+'. '+(envelope.references_latest_revision_at_inspection?
         'Latest saved revision at inspection.':'Historical revision; current revision '+envelope.latest_revision_at_inspection+'. Evaluate the current design before substitution.')));
       if(operation==='freeze'){
@@ -1356,6 +1358,59 @@
         const list=el('ul');
         for(const c of result.basis.candidates)list.appendChild(el('li',c.candidate_id+' · '+c.provider+' / '+c.model+' / '+c.runtime));
         output.appendChild(list);
+      }else if(routerMode){
+        if(operation==='router-freeze'){
+          output.append(el('p',result.scheduled_attempts+' scheduled router predictions · portfolio '+result.request.portfolio_id),
+            el('p','Retain the exact plan before obtaining predictions. The separate input-only challenge is available through the local CLI. The plan does not establish chronology.'));
+          const routes=el('ul');
+          for(const [category,candidate] of Object.entries(result.assignments))routes.appendChild(el('li',category.replaceAll('_',' ')+' → '+(candidate||'manual')));
+          output.appendChild(routes);
+        }else{
+          const money=v=>{
+            if(v==null)return 'unbounded';
+            const n=BigInt(v.numerator),d=BigInt(v.denominator),a=n<0n?-n:n;
+            const r=(2n*a+d)/(2n*d);
+            return (a%d!==0n?'≈ ':'')+(n<0n?'-':'')+String(r/1000000n)+'.'+String(r%1000000n).padStart(6,'0')+' '+result.currency;
+          };
+          const range=v=>money(v.lower_microunits)+' to '+money(v.upper_microunits);
+          const counts=v=>v.lower+'–'+v.upper;
+          output.append(el('p','Portfolio '+result.portfolio_id+' · gate status: '+result.gate_status),
+            el('p',result.recorded_attempts+' of '+result.scheduled_attempts+' predictions recorded · '+Object.entries(result.status_counts).map(([k,v])=>k.replaceAll('_',' ')+': '+v).join(' · ')),
+            el('p','Category accuracy count: '+counts(result.observed_counts.accuracy)+' · destination agreement: '+counts(result.observed_counts.agreement)+' · manual leakage: '+counts(result.observed_counts.manual_leakage)),
+            el('p','Declared outcome regressions: '+counts(result.observed_counts.regression)+' · shadow critical: '+counts(result.observed_counts.critical)+' · non-delivery: '+counts(result.observed_counts.non_delivery)),
+            el('p','Conditional annual cost: '+range(result.annual_cost)+' · first-year savings: '+range(result.first_year_savings)),
+            el('p','Manual fixed costs retained. All configured agents charged. Financial evidence: '+(result.financial_evidence_complete?'complete for these assumptions':'incomplete')));
+          const gates=el('ul');for(const [key,value] of Object.entries(result.checks))gates.appendChild(el('li',key.replaceAll('_',' ')+': '+value));
+          output.append(el('h6','Frozen policy checks'),gates);
+          for(const c of result.category_reviews){
+            const section=el('section');section.append(el('h6',c.category.replaceAll('_',' ')+' · '+c.status),
+              el('p',c.distinct_cases+' distinct cases · '+c.attempts+' attempts · declared annual volume '+c.annual_cases),
+              el('p','Category accuracy: '+counts(c.counts.accuracy)+' · manual leakage: '+counts(c.counts.manual_leakage)+' · outcome regressions: '+counts(c.counts.regression)));
+            const cg=el('ul');for(const [key,value] of Object.entries(c.checks))cg.appendChild(el('li',key.replaceAll('_',' ')+': '+value));
+            section.appendChild(cg);output.appendChild(section);
+          }
+          const filter=el('input');filter.type='checkbox';filter.setAttribute('aria-label','Show router problems or unresolved predictions');
+          const label=el('label',' Show router problems or unresolved predictions');label.prepend(filter);
+          const view=el('div');let offset=0;
+          const draw=()=>{
+            const rows=filter.checked?result.rows.filter(r=>r.route_unresolved||r.accuracy.lower!==1||r.manual_leakage.upper||r.regression.upper||r.critical.upper||r.non_delivery.upper):result.rows;
+            const list=el('ul');
+            for(const r of rows.slice(offset,offset+25)){
+              const item=el('li',r.case_id+' · repeat '+r.repeat+' · '+r.status+' · expected '+r.true_category+' / predicted '+(r.predicted_category||'none'));
+              item.append(el('p','Intended: '+(r.intended_candidate_id||'manual')+' · possible destinations: '+[...r.possible_candidate_ids,...(r.manual_path_possible?['manual']:[])].join(', ')),
+                el('p','Router cost: '+range(r.router_cost)+' · paired savings: '+range(r.paired_savings)),
+                el('p','Manual leakage: '+counts(r.manual_leakage)+' · declared regression: '+counts(r.regression)+' · shadow critical: '+counts(r.critical)));
+              list.appendChild(item);
+            }
+            const nav=el('div');
+            if(offset)nav.appendChild(button('Previous router case page',()=>{offset=Math.max(0,offset-25);draw();}));
+            if(offset+25<rows.length)nav.appendChild(button('Next router case page',()=>{offset+=25;draw();}));
+            view.replaceChildren(el('p',rows.length?'Showing '+(offset+1)+'–'+Math.min(rows.length,offset+25)+' of '+rows.length+' routing rows':'No matching routing rows.'),list,nav);
+          };
+          filter.addEventListener('change',()=>{offset=0;draw();});
+          output.append(el('h6','Paired routing evidence'),label,view);draw();
+        }
+        output.appendChild(el('p','No actual routed execution or pre-execution prediction provenance was verified. Known router failures use a declared manual fallback counterfactual; missing predictions are unresolved.'));
       }else if(economicsMode){
         // Exact amounts use decimal strings. Round only the displayed value,
         // never the downloaded report or the evidence hash.
@@ -1588,7 +1643,7 @@
       }
       output.appendChild(button('Download minimized procurement JSON',()=>{
         const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)+'\n'],{type:'application/json'}));
-        const link=el('a');link.href=url;link.download=(selectionMode||outcomeMode||deploymentMode||economicsMode)?'owg-procurement-'+operation+'.json':operation==='freeze'?'owg-procurement-plan.json':'owg-procurement-review.json';
+        const link=el('a');link.href=url;link.download=(selectionMode||outcomeMode||deploymentMode||economicsMode||routerMode)?'owg-procurement-'+operation+'.json':operation==='freeze'?'owg-procurement-plan.json':'owg-procurement-review.json';
         link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
       }));
       output.appendChild(el('p','No model or business tool was called; reported identity, measurements and outcomes remain unverified. This review grants no execution or substitution permission.'));

@@ -149,3 +149,5 @@ benefits require separate validation before production use.
 Quality gate status, financial evidence completeness and capacity evidence
 completeness are reported separately; a quality pass is not proof of complete
 cost measurements or verified economics.
+
+The subsequent [held-out router rehearsal](AGENT_PROCUREMENT_ROUTER_REHEARSAL.md) tests explicit predictions against paired manual/agent evidence; the conditional portfolio alone does not demonstrate that case categories can be identified before execution.

@@ -17,7 +17,6 @@ from .agent_procurement import Alias, CaseId, Cost, Duration, Strict, _cohort, _
 from .agent_procurement_trials import Bps, MAX_REPEATS
 from .agent_procurement_selection import _inputs
 from .agent_procurement_operating_cost import Request, operation as economics, _money
-from .agent_procurement_adoption import paired_outcomes
 from .agent_procurement_portfolio import Category, _pair, _sum, _scale, _shift, _min_gate, _max_gate, _combine
 from .process_shadow_review import Hash
 
@@ -321,8 +320,8 @@ def review(packet, discovery, holdout, router_plan, captures):
     first=_shift(annual_savings,-one_time)
     complete=annual_cost[1] is not None and all(x is not None for x in first)
     checks=_gates(metrics,req.policy,annual)
-    checks["all_positive_volume_category_checks"]=_combine(c["status"] for c in categories if c["annual_cases"])
-    checks["configured_candidate_trial_gates"]=_combine(candidates[c]["trial_gate_status"] for c in active)
+    checks["all_observed_category_checks"]=_combine([c["status"] for c in categories])
+    checks["configured_candidate_trial_gates"]=_combine([candidates[c]["trial_gate_status"] for c in active])
     checks["complete_financial_evidence"]="pass" if complete or not req.policy.require_complete_financial_evidence else "unknown"
     checks["router_capture_coverage"]="unknown" if any(r["route_unresolved"] for r in rows) else "pass"
     return _seal({"format":REPORT,"router_plan_sha256":verified["router_plan_sha256"],
