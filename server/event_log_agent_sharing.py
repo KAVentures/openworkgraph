@@ -828,24 +828,46 @@ def data_quality(log_id: str) -> dict[str, Any]:
                        "exported is unknown; check rejected rows and shared timestamps before trusting orderings.")}
 
 
+def _fitting_activities(log_id: str, case_type: str | None) -> dict[str, Any]:
+    """The largest activity share (by events, most frequent first) whose activities fit in a discovered model.
+    Agents cannot choose a share, so a log with more activities than a model holds would otherwise refuse every
+    model-based answer. The share and the activities left out are reported with each answer."""
+    from . import event_log_model_discovery as discovery
+    limit = discovery.MAX_MODEL_NODES - 2 - AGENT_MODEL_NODE_HEADROOM
+
+    def run(conn):
+        return {"counts": [n for (n,) in conn.execute(
+            "SELECT count(*) FROM ce GROUP BY activity ORDER BY 1 DESC").fetchall()]}
+    counts = workspace._query(log_id, case_type, run)["counts"]
+    if len(counts) <= limit or not counts:
+        return {"share": 1.0, "activities_left_out": 0}
+    total = sum(counts)
+    return {"share": sum(counts[:limit]) / total, "activities_left_out": len(counts) - limit}
+
+
+AGENT_MODEL_NODE_HEADROOM = 8   # room for decisions and loops beside the activities themselves
+
+
 def footprints(log_id: str, case_type: str | None = None, noise: float = 0.2) -> dict[str, Any]:
     """Log and discovered-model footprint matrices and where they disagree (aggregates level)."""
     require(log_id, "aggregates")
     from . import event_log_footprints as fp
-    result = fp.footprints(log_id, case_type, noise=max(0.0, min(float(noise), 0.95)))
+    fit = _fitting_activities(log_id, case_type)
+    result = fp.footprints(log_id, case_type, noise=max(0.0, min(float(noise), 0.95)), activities=fit["share"])
     keep = ("case_notion", "cases", "activities", "settings", "conformance", "start_activities", "end_activities",
             "differences", "differences_total", "matrix", "legend", "method", "caveat")
-    return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
+    return {"format": FORMAT, "log_id": log_id, "model_activities": fit, **{k: result[k] for k in keep if k in result}}
 
 
 def model_quality(log_id: str, case_type: str | None = None, levels: str | None = None) -> dict[str, Any]:
     """Fitness, precision, generalization and simplicity of the discovered net by noise level (aggregates)."""
     require(log_id, "aggregates")
     from . import event_log_model_quality as mq
-    result = mq.model_quality(log_id, case_type, levels=levels)
-    keep = ("case_notion", "cases", "cases_excluded", "variants", "levels", "best_f_score_noise", "definitions",
-            "method", "caveat")
-    return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
+    fit = _fitting_activities(log_id, case_type)
+    result = mq.model_quality(log_id, case_type, levels=levels, activities=fit["share"])
+    keep = ("case_notion", "cases", "cases_excluded", "variants", "levels", "levels_skipped", "best_f_score_noise",
+            "definitions", "method", "caveat")
+    return {"format": FORMAT, "log_id": log_id, "model_activities": fit, **{k: result[k] for k in keep if k in result}}
 
 
 def attributes(log_id: str, case_type: str | None = None, top_values: int = 10) -> dict[str, Any]:
@@ -968,12 +990,13 @@ def model_deviations(log_id: str, case_type: str | None = None, noise: float = 0
     from . import event_log_alignments as al
     from . import event_log_pnml as pnml
     noise = max(0.0, min(float(noise), 0.95))
-    xml, meta = pnml.discovered_pnml(log_id, case_type, noise=noise)
+    fit = _fitting_activities(log_id, case_type)
+    xml, meta = pnml.discovered_pnml(log_id, case_type, noise=noise, activities=fit["share"])
     result = al.alignments(log_id, xml.encode(), case_type)
     keep = ("case_notion", "cases", "cases_excluded", "variants", "fitness", "by_month", "deviation_cost", "log_moves",
             "model_moves", "activities_not_in_net", "non_fitting_variants", "non_fitting_variants_total",
             "unaligned", "method", "caveat")
-    return {"format": FORMAT, "log_id": log_id, "noise": noise,
+    return {"format": FORMAT, "log_id": log_id, "noise": noise, "model_activities": fit,
             "process_model_sha256": meta.get("process_model_sha256"),
             **{k: result[k] for k in keep if k in result}}
 
@@ -1056,9 +1079,10 @@ def model_deviation_causes(log_id: str, case_type: str | None = None, noise: flo
     from . import event_log_alignments as al
     from . import event_log_pnml as pnml
     noise = max(0.0, min(float(noise), 0.95))
-    xml, meta = pnml.discovered_pnml(log_id, case_type, noise=noise)
+    fit = _fitting_activities(log_id, case_type)
+    xml, meta = pnml.discovered_pnml(log_id, case_type, noise=noise, activities=fit["share"])
     result = al.deviation_causes(log_id, xml.encode(), case_type)
-    return {**result, "format": FORMAT, "log_id": log_id, "noise": noise,
+    return {**result, "format": FORMAT, "log_id": log_id, "noise": noise, "model_activities": fit,
             "process_model_sha256": meta.get("process_model_sha256")}
 
 
