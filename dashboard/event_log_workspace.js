@@ -10933,14 +10933,14 @@
   // Builds one compliance rule from form values; throws a readable error.
   function complianceRule(values){
     const rule={template:values.template,a:values.a};
-    if(!rule.a)throw new Error('Choose activity A.');
+    if(!rule.a||Array.from(rule.a).length>200)throw new Error('Choose activity A with at most 200 characters.');
     if(values.template==='existence'){
       const min=values.min===''?0:Number(values.min),max=values.max===''?null:Number(values.max);
       if(!Number.isInteger(min)||min<0||(max!==null&&(!Number.isInteger(max)||max<min)))throw new Error('Enter whole numbers with the maximum at least the minimum.');
       if(min===0&&max===null)throw new Error('Set a minimum above 0 or a maximum.');
       rule.min=min;if(max!==null)rule.max=max;return rule;
     }
-    rule.b=values.b;if(!rule.b||rule.b===rule.a)throw new Error('Choose a different activity B.');
+    rule.b=values.b;if(!rule.b||Array.from(rule.b).length>200||rule.b===rule.a)throw new Error('Choose a different activity B with at most 200 characters.');
     if(values.template==='response_within'){const h=Number(values.hours);if(!(h>0))throw new Error('Enter the time limit in hours.');rule.seconds=Math.round(h*3600);}
     return rule;
   }
@@ -11120,14 +11120,20 @@
     const template=select('owgComplianceTemplate',COMPLIANCE_TEMPLATES);
     const options=activityNames.slice(0,500).map(x=>[x,x]);
     const a=select('owgComplianceA',options),b=select('owgComplianceB',options);if(options.length>1)b.selectedIndex=1;
+    const exactA=input('owgComplianceAExact','text','Exact activity A (optional)'),exactB=input('owgComplianceBExact','text','Exact activity B (optional)');
+    exactA.maxLength=exactB.maxLength=400;
+    const lookupA=activityLabelLookup(exactA,{id:part=>'owgComplianceA'+part,subject:'compliance activity A'});
+    const lookupB=activityLabelLookup(exactB,{id:part=>'owgComplianceB'+part,subject:'compliance activity B'});
+    exactA.addEventListener('input',lookupA.reset);exactB.addEventListener('input',lookupB.reset);
+    a.addEventListener('change',()=>{exactA.value='';lookupA.reset();});b.addEventListener('change',()=>{exactB.value='';lookupB.reset();});
     const hours=input('owgComplianceHours','number');hours.min='0';hours.step='any';
     const min=input('owgComplianceMin','number');min.min='0';min.step='1';const max=input('owgComplianceMax','number');max.min='0';max.step='1';
     const add=button('Add rule','secondary');add.id='owgComplianceAdd';
     const run=button('Check rules');run.id='owgComplianceRun';run.disabled=true;
-    const f={b:field('Activity B',b),hours:field('Within (hours)',hours),min:field('At least',min),max:field('At most',max)};
-    const sync=()=>{const t=template.value;show(f.b,t!=='existence');show(f.hours,t==='response_within');show(f.min,t==='existence');show(f.max,t==='existence');};
+    const f={b:field('Activity B',b),exactB:field('Exact activity B',exactB),lookupB:lookupB.wrap,hours:field('Within (hours)',hours),min:field('At least',min),max:field('At most',max)};
+    const sync=()=>{const t=template.value;show(f.b,t!=='existence');show(f.exactB,t!=='existence');show(f.lookupB,t!=='existence');show(f.hours,t==='response_within');show(f.min,t==='existence');show(f.max,t==='existence');};
     template.onchange=sync;sync();
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Rule',template),field('Activity A',a),...Object.values(f),add);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Rule',template),field('Activity A',a),field('Exact activity A',exactA),lookupA.wrap,...Object.values(f),add);
     const pending=el('div');pending.id='owgComplianceRules';
     const message=el('div',null,'muted');message.id='owgComplianceStatus';message.setAttribute('role','status');
     const out=el('div');out.id='owgComplianceResults';
@@ -11192,11 +11198,12 @@
     };
     const label=r=>({response:'every '+r.a+' is eventually followed by '+r.b,chain_response:'every '+r.a+' is immediately followed by '+r.b,precedence:'every '+r.b+' needs an earlier '+r.a,response_within:'every '+r.a+' is followed by '+r.b+' within '+duration(r.seconds),segregation_of_duties:r.a+' and '+r.b+' are done by different people',not_coexistence:r.a+' and '+r.b+' never happen together',existence:r.a+' happens '+(r.max===undefined?'at least '+r.min:r.min===r.max?'exactly '+r.min:r.min+'–'+r.max)+' times'}[r.template]);
     function drawPending(){
+      ++checkTurn;++reviewTurn;out.replaceChildren();review.replaceChildren();
       pending.replaceChildren(rules.length?table(['Rule',''],rules.map((r,i)=>{const del=button('Remove','secondary');del.setAttribute('aria-label','Remove rule '+label(r));del.onclick=()=>{rules.splice(i,1);drawPending();};return [label(r),del];})):el('div','No rules added yet.','muted'));
       run.disabled=!rules.length;
     }
     drawPending();
-    add.onclick=()=>{try{if(rules.length>=20)throw new Error('Check at most 20 rules at once.');rules.push(complianceRule({template:template.value,a:a.value,b:b.value,hours:hours.value,min:min.value,max:max.value}));message.textContent='';drawPending();}catch(error){message.textContent=error.message;}};
+    add.onclick=()=>{try{if(rules.length>=20)throw new Error('Check at most 20 rules at once.');rules.push(complianceRule({template:template.value,a:exactA.value||a.value,b:exactB.value||b.value,hours:hours.value,min:min.value,max:max.value}));message.textContent='';drawPending();}catch(error){message.textContent=error.message;}};
     run.onclick=async()=>{
       const ticket=++checkTurn;
       const current=()=>ticket===checkTurn&&generation===state.generation;
@@ -11207,13 +11214,13 @@
         if(!current())return;
         const rows=r.results.map(res=>{
           const keep=button('Save as signal','secondary');keep.setAttribute('aria-label','Save as signal: '+res.description);
-          keep.onclick=async()=>{try{const sig={name:res.description.slice(0,120),when:{kind:'compliance',rule:res.rule}};if(state.caseType)sig.case_type=state.caseType;
-            await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/signals',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sig)});message.textContent='Saved as a signal.';}catch(error){message.textContent=error.message;}};
+          keep.onclick=async()=>{if(!current())return;try{const sig={name:res.description.slice(0,120),when:{kind:'compliance',rule:res.rule}};if(state.caseType)sig.case_type=state.caseType;
+            await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/signals',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sig)});if(current())message.textContent='Saved as a signal.';}catch(error){if(current())message.textContent=error.message;}};
           const rate=res.violation_rate===null?'—':pct(res.violation_rate)+' ['+pct(res.violation_rate_ci95[0])+', '+pct(res.violation_rate_ci95[1])+']';
           const actions=el('div',null,'row');
           if(res.violating_cases){
             const browse=button('Review violations','secondary');browse.setAttribute('aria-label','Review violations of '+res.description);
-            browse.onclick=()=>reviewViolations(res,scope);
+            browse.onclick=()=>{if(current())reviewViolations(res,scope);};
             actions.append(browse);
           }
           actions.append(keep);

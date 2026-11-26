@@ -3853,3 +3853,11 @@ The dashboard-session endpoint `POST /v1/event-logs/{log_id}/activity-mappings/t
 accepts `{ "format": "openworkgraph.activity-mapping.v1", "mapping": { ... } }`.
 It validates and previews the definition against original event labels without
 changing the log or its saved mappings.
+
+### Exact activities in compliance rules
+
+Activity A and B accept an exact label in place of the suggested activity. Use
+**Find labels** to search the current case notion, then add and check the rule.
+The checked definition is also used for violation evidence and saved signals.
+Adding or removing a queued rule clears the previous check; run it again to
+review violations or save a signal.
