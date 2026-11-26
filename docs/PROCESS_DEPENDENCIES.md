@@ -211,3 +211,141 @@ disclosure, deep chains and complete reachable populations.
 `tests/browser/process_dependencies.cjs` checks user-visible path displays,
 the downloaded report and HTML-safe rendering. These are structural checks,
 not customer validation of true business dependency semantics.
+
+
+## Organization reassessment worklist
+
+The dependency graph includes a prerequisite-first worklist derived from the
+same resolved graph and declaration revisions. Direct findings include an
+unavailable/archived process, missing independent current model review,
+missing dependency declaration, stale root pin, or stale prerequisite link.
+Stale links belong to the consumer declaration: a prerequisite whose own
+model and declaration have been repaired is not still a direct finding merely
+because another consumer retains its old revision.
+
+Each process is classified as direct reassessment required, upstream
+reassessment required (no local findings but at least one affected
+prerequisite), or current declared basis. The worklist lists the precise
+stale link IDs, immediate affected prerequisites and the count of distinct
+upstream processes with direct findings. Shared prerequisites are counted
+once, including diamond-shaped dependency graphs. Layers follow the
+longest declared prerequisite chain, not a duration or an implementation
+schedule. The dashboard supports filtering and opening available processes
+for explicit review. The existing graph fingerprint, authenticated access,
+audit and export checks also apply to this additive worklist.
+
+Review the prerequisite model and its declaration first, then refresh and
+review consumer pins as appropriate. Model approvals are never inherited or
+automatically propagated, and no link is updated without the existing
+explicit save flow. This does not verify completeness of business dependency
+discovery, actual operational impacts or authority to execute.
+
+Regression tests exercise a diamond, a changed leaf, repair of the leaf
+without silently repairing incoming links, and complete consumer repair;
+the browser acceptance checks filtering and stale-link guidance.
+
+
+## Selected-process build basis
+
+Focus a process in the dependency graph to see the entire declared prerequisite
+closure, including the selected process, in prerequisite-first order. The portal
+shows each model and dependency declaration revision, reassessment findings and
+a deterministic SHA-256 of the exact minimized basis. The focused graph API and
+existing authenticated graph download include this same basis. An unrelated
+consumer's stale incoming pin or a disconnected process does not invalidate
+the selected closure. All actual prerequisite links and their pinned models
+remain included; a missing declaration, unavailable model, changed pin or
+withdrawn independent review requires reassessment.
+
+The digest is a comparison key, not a signature or an executable authorization.
+Compare it against a freshly requested focused graph before relying on a saved
+snapshot. The existing export still checks the full graph fingerprint, and a
+corrupt or oversized organization scan withholds the focused result as well.
+No new grants, subprocess execution or automatic review inheritance are added.
+
+
+### Dependency-aware starter export
+
+When the focused basis is current, use **Download dependency-aware starter
+ZIP**. The authenticated endpoint is
+`GET /v1/human/processes/{workflow_id}/dependencies/build?revision=...&basis_sha256=...`.
+It recomputes the closure and verifies the requested root revision and
+previously reviewed basis digest in one authorized read snapshot. A stale
+basis, missing declaration or withdrawn model review refuses the build.
+
+The deterministic ZIP includes the normal root agent starter and
+`dependency-build-basis.json`, with the sidecar and amended README covered
+by the existing release manifest. It contains prerequisite identifiers and
+review/declaration pins, not prerequisite model bodies or reason text.
+The existing unsigned release integrity contract applies. The authenticated
+audit records the root, revision, basis and manifest digests and process
+count. The snapshot is pinned in the exported runtime specification, and the
+runtime revalidates it at catalog checkpoints. It grants no execution
+authority. Ordinary agent-project exports
+remain unchanged, and prerequisite processes are not executed automatically.
+
+
+### Live dependency preflight
+
+The exported dependency-aware starter includes a standalone checker:
+```sh
+python check_dependency_basis.py --manifest-sha256 INDEPENDENT_PIN --catalog-url YOUR_CATALOG_URL
+```
+Use a trusted copy of the checker and set the existing
+`OWG_EXECUTION_CATALOG_READ_TOKEN` to a separately authorized catalog-read
+credential. The checker verifies the pinned archive inventory and root
+specification before any network request, then queries the authenticated
+`dependencies/build-status` endpoint with the exact revision and basis
+digest. The response is minimized to the requested reference and current
+status; the checker refuses a different organization, revision, digest or
+authorizing response. Exit code zero means the live read returned a matching
+current reviewed basis; exit code two means that was not established.
+No business tools are called, and no credential is printed.
+
+This is a point-in-time preflight for explicit use by operators or external
+orchestrators, not an atomic lock on later model changes. The standalone checker is optional: the generated executor also
+performs live basis checks through its existing catalog-read transport. Ordinary runtime
+permissions, source checks and exact root review requirements are unchanged.
+
+
+### Automatic runtime basis enforcement
+
+New dependency-aware starters include the exact basis digest in
+`workflow.spec.json`; their existing execution intent and shadow-suite spec
+hashes therefore bind this digest. The catalog reader selects the
+dependency status endpoint for these specs, requiring the exact organization,
+root revision, root content and model digests, and prerequisite basis digest.
+The executor checks the basis initially, before precondition and action
+attempts, and at completion. An unavailable or changed basis stops future
+attempts or prevents a successful route classification; it does not undo
+operations already attempted. Source-aware planning uses the same catalog
+reader. Ordinary exports without a dependency pin retain their existing
+catalog contract.
+
+These checks are non-atomic with external operations, and are not a
+substitute for independent authorization, provider concurrency controls or
+business outcome verification. They enforce the supplied declared closure,
+not completeness of dependency discovery.
+
+
+Dependency-aware execution journals label catalog checks with the exact
+basis digest, sequential check number, checkpoint purpose and (for
+preconditions/actions) attempt number. The offline monitor requires a
+matching current check immediately before every recorded attempt and an
+initial and completion check for a successful run. Missing, stale,
+out-of-order or mismatched checkpoints cannot produce a successful
+projection. An interrupted or refused run may still be projected with
+its observed status. This verifies the internal consistency of a
+customer-supplied journal, not independent provider evidence, signed
+attestation or actual business outcomes.
+
+
+The start record additionally retains the bounded declared route activity IDs
+and precondition attempt numbers, not case inputs, tool parameters or source
+values. Monitoring independently replays that route against the pinned process
+model, derives the expected ordered machine activities (including repetitions),
+and requires exactly those recorded attempts and the declared preconditions
+for success. An entire missing action and its checkpoint cannot be hidden by
+renumbering the remaining records. The route and precondition declarations
+are still customer journal claims; an offline monitor does not authenticate
+the original customer intent or prove that a provider performed a write.

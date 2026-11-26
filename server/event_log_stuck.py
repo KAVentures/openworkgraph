@@ -45,7 +45,8 @@ def _parse(spec: Any) -> StuckSpec:
     return parsed
 
 
-def stuck_cases(log_id: str, spec: Any = None) -> dict[str, Any]:
+def stuck_cases(log_id: str, spec: Any = None, *, all_cases: bool = False) -> dict[str, Any]:
+    """``all_cases`` returns every stuck case (for the CSV worklist) instead of the first ``limit``."""
     settings = _parse(spec)
     selected = cohorts.parse_cohort(settings.cohort)
 
@@ -98,11 +99,33 @@ def stuck_cases(log_id: str, spec: Any = None) -> dict[str, Any]:
             "cohort": cohorts.describe(selected),
             "as_of": as_of.isoformat() + "Z" if as_of else None,
             "open_cases": len(rows), "judged_open_cases": judged, "not_judged_open_cases": unjudged,
-            "stuck_cases": len(stuck), "cases": stuck[:settings.limit], "cases_truncated": len(stuck) > settings.limit,
+            "stuck_cases": len(stuck), "cases": stuck if all_cases else stuck[:settings.limit],
+            "cases_truncated": not all_cases and len(stuck) > settings.limit,
             "by_activity": sorted(by_activity.values(), key=lambda a: (-a["stuck_cases"], -a["open_cases"], a["activity"])),
             "interpretation": ("Open cases idle longer than usual after their latest activity, measured to the end of "
                                "the log. A prompt to look, not a finding that anyone did anything wrong; the export "
                                "may end before the next step.")}
 
 
-__all__ = ["stuck_cases"]
+CSV_COLUMNS = ["case_id", "latest_activity", "idle_seconds", "usual_wait_seconds", "stuck_after_seconds",
+               "times_stuck_threshold", "events_so_far", "case_age_seconds", "as_of"]
+
+
+def stuck_cases_csv(log_id: str, spec: Any = None) -> tuple[str, dict[str, Any]]:
+    """Every stuck case as a CSV worklist, most overdue first, with formula-like cells neutralized."""
+    import csv
+    import io
+    from .event_log_variant_export import _cell
+    result = stuck_cases(log_id, spec, all_cases=True)
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(CSV_COLUMNS)
+    for c in result["cases"]:
+        writer.writerow([_cell(c["case_id"]), _cell(c["latest_activity"]), c["idle_seconds"], c["usual_wait_seconds"],
+                         c["threshold_seconds"], c["times_usual_threshold"], c["events_so_far"], c["age_seconds"],
+                         result["as_of"]])
+    return out.getvalue(), {"stuck_cases": result["stuck_cases"], "judged_open_cases": result["judged_open_cases"],
+                            "not_judged_open_cases": result["not_judged_open_cases"], "as_of": result["as_of"]}
+
+
+__all__ = ["stuck_cases", "stuck_cases_csv", "CSV_COLUMNS"]

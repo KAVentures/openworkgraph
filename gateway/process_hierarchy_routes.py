@@ -34,6 +34,12 @@ def add_routes(router,store,human,body,response):
         await run_in_threadpool(response,maps.preflight,p,workflow_id,writing=True,owner=True)
         return await run_in_threadpool(response,maps.delete,p,workflow_id,await body(request,Remove,maximum=4096))
 
+    @router.post(base+'/compare')
+    async def compare(request:Request,workflow_id:str=Path(pattern=ID),p=Depends(human)):
+        from shared.process_hierarchy_comparison import MapComparison
+        await run_in_threadpool(response,maps.preflight,p,workflow_id)
+        return await run_in_threadpool(response,maps.compare,p,workflow_id,await body(request,MapComparison,maximum=4096))
+
     @router.get(base+'/export')
     def export(workflow_id:str=Path(pattern=ID),revision:int=Query(ge=1,le=20),p=Depends(human)):
         result=response(maps.detail,p,workflow_id,revision,exporting=True)

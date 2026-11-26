@@ -139,3 +139,21 @@ def test_bad_requests():
     with pytest.raises(EventLogWorkspaceError, match="anchor_steps"):
         px.next_steps(log, ["Open"], anchor_steps=1)
     assert px.next_steps(log, ["Nope"])["cases_at_point"] == 0
+
+
+def test_large_branch_count_keeps_exact_total_and_bounded_rows():
+    rows = ['case,activity,time']
+    for i in range(40):
+        rows.extend([f'c{i},Start,2024-01-01T00:00:00Z',
+                     f'c{i},Branch {i:02d},2024-01-01T01:00:00Z'])
+    rows.append('last,Start,2024-01-01T00:00:00Z')
+    log = workspace.import_log(BytesIO('\n'.join(rows).encode()), name='branches', source_format='csv',
+        mapping={'case_column':'case', 'activity_column':'activity', 'timestamp_column':'time'})['log_id']
+    result = px.next_steps(log, ['Start'])
+    assert result['cases_at_point'] == 41
+    assert result['next_total'] == 41
+    assert len(result['next']) == px.MAX_NEXT
+    assert result['next'][0]['activity'] == 'Branch 00'
+    assert sum(row['cases'] for row in result['next']) == 30
+    absent = px.next_steps(log, ['Missing'])
+    assert absent['cases_at_point'] == 0 and absent['next_total'] == 0 and absent['next'] == []

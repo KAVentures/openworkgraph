@@ -41,6 +41,10 @@ Query JSON is limited to 64 KiB; duplicate keys, non-finite numbers, unknown fie
 and unbounded filters are refused. Import/append still require explicit local
 storage consent. Reading relationships adds no sharing or execution authority.
 
+## Compare retained snapshots
+
+The [relationship snapshot comparison](OBJECT_RELATIONSHIP_COMPARISON.md) compares two explicitly reviewed local OCEL indexes using literal IDs and qualifiers. It separates comparable assertions from missing endpoints and conflicting types, without establishing real-world relationship changes.
+
 ## Storage, append and export
 
 Assertions reside in the existing DuckDB workspace, scoped to their log. Import
