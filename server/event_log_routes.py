@@ -375,6 +375,44 @@ async def event_log_petri_soundness(request: Request):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/petri-release/{action}")
+async def event_log_petri_release(request: Request, action: str):
+    """Freeze exact inputs or recompute all requested model release criteria."""
+    from . import event_log_petri_release as release
+    from . import event_log_petri_acceptance as acceptance
+    from . import event_log_petri_replay as replay
+    _require_dashboard(request)
+    if action not in {"pin", "review"}:
+        raise HTTPException(404, "unknown release action")
+    if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/octet-stream":
+        raise HTTPException(415, "send framed release specification and PNML bytes")
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > 8 + release.MAX_SPEC_BYTES + 2 * replay.MAX_BYTES:
+            raise HTTPException(413, "release review payload is too large")
+        data.extend(chunk)
+    if len(data) < 8:
+        raise HTTPException(422, "missing specification or model length")
+    n = int.from_bytes(data[:4], "big")
+    if n > release.MAX_SPEC_BYTES:
+        raise HTTPException(413, "release spec is too large")
+    if n < 1 or len(data) < 8 + n:
+        raise HTTPException(422, "invalid spec framing")
+    offset = 8 + n
+    m = int.from_bytes(data[4+n:offset], "big")
+    if m > replay.MAX_BYTES or len(data) - offset - m > replay.MAX_BYTES:
+        raise HTTPException(413, "each model must be at most 2 MB")
+    if m < 1 or len(data) <= offset + m:
+        raise HTTPException(422, "both models are required")
+    try:
+        spec = acceptance._strict_json(bytes(data[4:4+n]))
+        result = await run_in_threadpool(release.pin if action == "pin" else release.review,
+                                         bytes(data[offset:offset+m]), bytes(data[offset+m:]), spec)
+    except (workspace.EventLogWorkspaceError, UnicodeError, RecursionError) as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/petri-mutation-review")
 async def event_log_petri_mutation_review(request: Request):
     """Assess one supplied suite against independent synthetic model faults."""
