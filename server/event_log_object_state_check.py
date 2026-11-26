@@ -32,6 +32,7 @@ class Spec(BaseModel):
     event_qualifier: str | None = Field(default=None, max_length=80)
     from_date: str | None = None
     until_date: str | None = None
+    result_event_id: str | None = Field(default=None, min_length=1, max_length=200)
     status: Literal["matched", "not_matched", "unknown", "no_linked_object"] | None = None
     offset: int = Field(default=0, ge=0, le=MAX_EVENTS)
     limit: int = Field(default=30, ge=1, le=100)
@@ -51,6 +52,17 @@ class Spec(BaseModel):
         if self.from_date and self.until_date and self.from_date >= self.until_date:
             raise ValueError("The exclusive end date must be after the start date")
         return self
+
+    @field_validator("result_event_id")
+    @classmethod
+    def result_key(cls, value):
+        if value is not None:
+            try:
+                if not _exact_key(value):
+                    raise ValueError("Event ID cannot be blank")
+            except EventLogFormatError:
+                raise ValueError("Use an exact imported event identifier") from None
+        return value
 
     @field_validator("activity", "object_type", "attribute", "event_qualifier")
     @classmethod
@@ -140,9 +152,20 @@ def export_worklist(log_id: str, value, out: IO[str]):
     return _analyze(log_id, spec, export=out)
 
 
+def _result_predicate(spec, alias=""):
+    prefix = alias + "." if alias else ""
+    terms, params = [], []
+    if spec.status is not None:
+        terms.append(prefix + "status=?")
+        params.append(spec.status)
+    if spec.result_event_id is not None:
+        terms.append(prefix + "event_id=?")
+        params.append(spec.result_event_id)
+    return (" WHERE " + " AND ".join(terms) if terms else ""), params
+
+
 def _write_worklist(conn, log_id: str, spec: ExportSpec, revision: int, out: IO[str]) -> dict[str, int]:
-    predicate = ' WHERE r.status=?' if spec.status else ''
-    params = [spec.status] if spec.status else []
+    predicate, params = _result_predicate(spec, 'r')
     if spec.kind == 'events':
         expected = conn.execute('SELECT count(*) FROM st_result r' + predicate, params).fetchone()[0]
         query = '''SELECT r.event_id,r.ts,r.status,r.n_objects,r.n_true,r.n_false,r.n_unknown,
@@ -160,17 +183,17 @@ def _write_worklist(conn, log_id: str, spec: ExportSpec, revision: int, out: IO[
                      'expected_value_review','operator','quantifier','qualifier_present','qualifier_review','result_filter',
                      'event_id_review','event_time_utc','event_result','linked_objects','matched_objects',
                      'not_matched_objects','unknown_objects','object_id_review','object_result','recorded_from_utc',
-                     'recorded_value_review','recorded_value_present','from_date_utc','until_date_exclusive_utc'])
+                     'recorded_value_review','recorded_value_present','from_date_utc','until_date_exclusive_utc','event_id_filter_review'])
     prefix = [log_id,revision,spec.activity,spec.object_type,spec.attribute,spec.expected_value,spec.operator,
               spec.quantifier,str(spec.event_qualifier is not None).lower(),spec.event_qualifier,spec.status]
     writer.writerow([review_cell(value) for value in ['check',*prefix,None,None,None,None,None,None,None,
-                                                       None,None,None,None,'false',spec.from_date,spec.until_date]])
+                                                       None,None,None,None,'false',spec.from_date,spec.until_date,spec.result_event_id]])
     written = 0
     while batch := cursor.fetchmany(5000):
         for eid,at,status,n,yes,no,unknown,oid,object_status,valid_from,recorded in batch:
             kind = 'event' if spec.kind == 'events' else ('event_without_object' if oid is None else 'event_object')
             values = [kind,*prefix,eid,_stamp(at),status,n,yes,no,unknown,oid,
-                      object_status if oid is not None else None,_stamp(valid_from),recorded,str(recorded is not None).lower(),spec.from_date,spec.until_date]
+                      object_status if oid is not None else None,_stamp(valid_from),recorded,str(recorded is not None).lower(),spec.from_date,spec.until_date,spec.result_event_id]
             writer.writerow([review_cell(value) for value in values])
             written += 1
     if written != expected:
@@ -259,15 +282,14 @@ def _analyze(log_id, spec, witness=False, export=None):
             event_counts.update(dict(conn.execute("SELECT status,count(*) FROM st_result GROUP BY status").fetchall()))
             object_counts=dict.fromkeys(OBJECT_STATUSES,0)
             object_counts.update(dict(conn.execute("SELECT status,count(*) FROM st_object GROUP BY status").fetchall()))
-            where="WHERE status=?" if spec.status else ""
-            args=[spec.status] if spec.status else []
+            where, args = _result_predicate(spec)
             total=conn.execute("SELECT count(*) FROM st_result "+where,args).fetchone()[0]
             if export is not None:
                 return _write_worklist(conn, log_id, spec, revision, export)
             if witness:
-                selected = conn.execute('SELECT n_objects, status FROM st_result WHERE event_id=?' +
-                                        (' AND status=?' if spec.status else ''),
-                                        [spec.event_id, *([spec.status] if spec.status else [])]).fetchone()
+                selected = conn.execute('SELECT n_objects, status FROM st_result' +
+                                        (where + ' AND ' if where else ' WHERE ') + 'event_id=?',
+                                        [*args, spec.event_id]).fetchone()
                 if not selected:
                     raise workspace.EventLogWorkspaceError('event is not in the reviewed state-check result')
                 predicate = 'event_id=?' + (' AND object_id>?' if spec.after is not None else '')

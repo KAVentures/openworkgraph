@@ -105,6 +105,16 @@ be read, updated with `expected_revision`, or deleted with an
 only check settings; result filters, page offsets, results and source event
 data are not stored in them.
 
+## Find a specific event in a result
+
+After running a check, apply an exact event ID to narrow the displayed result
+and both worklists. It combines with the result-status filter and the UTC date
+window; summary counts continue to describe all selected events before result
+filters. Filtering happens after the bounded check and does not bypass its event,
+link, or history limits. Witness requests enforce the same filters. The event ID is a temporary
+review filter and is not stored in saved or portable definitions. Worklist
+metadata records the applied ID, including when no rows match.
+
 ## Restrict the event review period
 
 Optional UTC calendar dates select events from the inclusive start date to the
