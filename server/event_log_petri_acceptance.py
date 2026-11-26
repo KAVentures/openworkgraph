@@ -56,11 +56,12 @@ def parse_suite(spec):
         ids.add(ident)
         trace = _labels(case["trace"], MAX_TRACE)
         expect = case["expect"]
-        allowed = {"completed", "fireable", "finishable", "required_next", "forbidden_next", "exact_next"}
+        allowed = {"completed", "fireable", "finishable", "all_prefix_states_finishable",
+                   "required_next", "forbidden_next", "exact_next"}
         if not isinstance(expect, dict) or not expect or set(expect) - allowed:
             _invalid("unknown or missing acceptance expectations")
         normalized = {}
-        for key in ("completed", "fireable", "finishable"):
+        for key in ("completed", "fireable", "finishable", "all_prefix_states_finishable"):
             if key in expect:
                 if not isinstance(expect[key], bool):
                     _invalid(f"{key} expectation must be boolean")
@@ -185,6 +186,10 @@ def _observed(graph, trace, dist, successor, budget):
     return {"completed": observed_or_unknown(final is not None and final in states),
             "fireable": observed_or_unknown(bool(states)),
             "finishable": observed_or_unknown(bool(viable)),
+            "all_prefix_states_finishable": bool(states) and states <= viable if complete else None,
+            "matched_markings": len(states),
+            "known_completable_markings": len(viable),
+            "noncompletable_markings": len(states - viable) if complete else None,
             "viable_next_activities": sorted(next_labels),
             "next_activities_complete": complete,
             "matched_prefix_length": matched,
@@ -194,6 +199,8 @@ def _observed(graph, trace, dist, successor, budget):
 
 def _unknown():
     return {"completed": None, "fireable": None, "finishable": None,
+            "all_prefix_states_finishable": None, "matched_markings": None,
+            "known_completable_markings": None, "noncompletable_markings": None,
             "viable_next_activities": [], "next_activities_complete": False,
             "matched_prefix_length": None, "matched_prefix_exact": False,
             "completion_suffix": None}
@@ -202,7 +209,7 @@ def _unknown():
 def _assertions(expect, actual):
     checks = []
     for key, expected in expect.items():
-        if key in {"completed", "fireable", "finishable"}:
+        if key in {"completed", "fireable", "finishable", "all_prefix_states_finishable"}:
             observed = actual[key]
             passed = None if observed is None else observed == expected
             checks.append({"property": key, "expected": expected, "observed": observed, "passed": passed})
