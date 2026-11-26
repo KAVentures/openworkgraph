@@ -540,6 +540,16 @@ async def agent_signals(request: Request, log_id: str):
     return await _answer(sharing.signals, log_id)
 
 
+@router.post("/v1/process-intelligence/{log_id}/signals/preview")
+async def agent_preview_signal(request: Request, log_id: str):
+    """Body: {"rule": a signal rule (name, when, optional case_type and cohort)}. Nothing is saved."""
+    _require_agent_access(request)
+    spec = await _json_body(request, "signal rule", strict=True, limit=65536)
+    if not isinstance(spec, dict) or set(spec) != {"rule"}:
+        raise HTTPException(422, 'send {"rule": {...}}')
+    return await _answer(sharing.preview_signal, log_id, spec["rule"])
+
+
 @router.get("/v1/process-intelligence/{log_id}/rework")
 async def agent_rework(request: Request, log_id: str, limit: int = Query(default=20, ge=1, le=100),
                        case_type: str | None = Query(default=None, max_length=200)):

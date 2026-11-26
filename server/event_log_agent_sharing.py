@@ -499,6 +499,26 @@ def signals(log_id: str) -> dict[str, Any]:
                      "or snooze signals. A triggered signal is not a verified problem or an instruction to act.")}
 
 
+def preview_signal(log_id: str, rule: Any) -> dict[str, Any]:
+    """Run a draft signal rule against the log once, without saving it or touching the owner's signal state
+    (aggregates level). Example case IDs come back only at the cases level; a filtered draft must cover at least
+    AGENT_MIN_FILTERED_CASES cases so a narrow filter cannot describe one case."""
+    require(log_id, "aggregates")
+    from . import event_log_signals as sig
+    result = sig.preview_rule(log_id, rule)
+    if isinstance(rule, dict) and rule.get("cohort") and result["cohort_cases"] < AGENT_MIN_FILTERED_CASES:
+        raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this rule's filter; widen it")
+    signal = dict(result["signal"])
+    if _level(log_id) != "cases":
+        signal.pop("evidence_cases", None)
+        signal.pop("evidence_truncated", None)
+    signal.pop("pnml", None)
+    return {**result, "signal": signal, "saved": False, "owner_signal_state_changed": False,
+            "note": ("A draft evaluated once. To keep it, the owner saves it as a signal rule in the dashboard; "
+                     "agents cannot save, evaluate saved rules, acknowledge or snooze."),
+            "format": FORMAT, "log_id": log_id}
+
+
 AGENT_MAX_SIMULATED_CASES = 5000
 AGENT_MAX_REPLICATIONS = 20
 
