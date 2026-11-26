@@ -750,11 +750,17 @@ def impact(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, An
             "groups": groups, "withheld": {"period_summaries": blanked, "min_cases": floor}}
 
 
-def temporal_profile(log_id: str, case_type: str | None = None, zeta: float = 3.0) -> dict[str, Any]:
+def temporal_profile(log_id: str, case_type: str | None = None, zeta: float = 3.0,
+                     case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
     """Usual times between activity pairs and how often they are broken (aggregates level, no case IDs)."""
     require(log_id, "aggregates")
     from . import event_log_temporal_profile as temporal
-    result = temporal.temporal_profile(log_id, case_type, zeta=max(0.5, min(float(zeta), 10.0)))
+    if case_filter is not None:
+        if not isinstance(case_filter, dict) or not case_filter:
+            raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+        if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
+            raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
+    result = temporal.temporal_profile(log_id, case_type, zeta=max(0.5, min(float(zeta), 10.0)), cohort=case_filter)
     keep = ("case_notion", "cases", "zeta", "min_occurrences", "max_span_events", "profile_pairs", "pairs_checked",
             "deviating_cases", "deviating_case_share", "pairs", "method", "caveat")
     return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
