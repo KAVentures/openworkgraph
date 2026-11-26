@@ -2273,6 +2273,140 @@
     for(const [label,input] of [['Correlation namespace',inboxNs],['Maximum age in hours',age]]){const l=el('label',label+' ');l.appendChild(input);inboxSection.appendChild(l);}
     for(const input of [inboxNs,age])input.addEventListener('change',()=>{inboxState=null;inboxOutput.replaceChildren();});
     inboxSection.append(button('Load inbox status',()=>inboxPerform(loadInbox)),inboxFile,admit,reviewInbox,exportDossier,forgetInbox,inboxOutput);
+    const auditSection=el('details');auditSection.append(el('summary','Independently verify historical workforce audit evidence'),
+      el('p','Review on this local installation only, without enrolling keys or advancing registry watermarks. Obtain the expected digest and public-key trust file or timeline manifest through a separately trusted administrative channel. Never derive trust from the submitted dossier.'));
+    const auditMax=8*1024*1024;
+    const auditMode=el('select');auditMode.setAttribute('aria-label','Historical audit operation');
+    for(const [v,label] of [['verify','Verify one signed dossier'],['timeline','Review an ordered historical timeline']]){
+      const opt=el('option',label);opt.value=v;auditMode.appendChild(opt);
+    }
+    const auditDigest=el('input');auditDigest.type='text';auditDigest.maxLength=64;
+    auditDigest.setAttribute('aria-label','Independently obtained audit digest');auditDigest.autocomplete='off';
+    const makeFile=label=>{const input=el('input');input.type='file';input.accept='.json,application/json';input.setAttribute('aria-label',label);return input;};
+    const auditTrust=makeFile('Independent audit trust file or timeline manifest');
+    const auditInputs=el('div'),auditOutput=el('div');auditOutput.setAttribute('aria-live','polite');
+    const auditLabel=(label,input)=>{const l=el('label',label+' ');l.appendChild(input);return l;};
+    let auditGeneration=0,auditFiles=[];
+    const invalidateAudit=()=>{auditGeneration++;auditOutput.replaceChildren();};
+    const drawAuditFiles=()=>{
+      auditInputs.replaceChildren();
+      auditFiles.forEach((input,i)=>{
+        input.setAttribute('aria-label','Historical dossier '+(i+1));
+        auditInputs.appendChild(auditLabel('Dossier '+(i+1),input));
+      });
+      if(auditMode.value==='timeline'){
+        const add=button('Add next dossier',()=>{
+          if(auditFiles.length>=12)return;
+          invalidateAudit();const input=makeFile('Historical dossier');
+          input.addEventListener('change',invalidateAudit);auditFiles.push(input);drawAuditFiles();
+        });
+        add.disabled=auditFiles.length>=12;
+        const remove=button('Remove last dossier',()=>{
+          if(auditFiles.length<=2)return;
+          invalidateAudit();auditFiles.pop();drawAuditFiles();
+        });
+        remove.disabled=auditFiles.length<=2;
+        auditInputs.append(add,remove,el('p','Enter dossiers in the exact order of the independently pinned manifest, oldest first. Two to twelve dossiers supported.'));
+      }
+    };
+    const resetAuditFiles=()=>{
+      invalidateAudit();auditTrust.value='';auditDigest.value='';
+      auditFiles=Array.from({length:auditMode.value==='timeline'?2:1},()=>{
+        const input=makeFile('Historical dossier');input.addEventListener('change',invalidateAudit);return input;
+      });drawAuditFiles();
+    };
+    const auditRead=async file=>{
+      const raw=new TextDecoder('utf-8',{fatal:true}).decode(await file.arrayBuffer());
+      // Check syntax only. Preserve original text and numeric precision;
+      // duplicate keys and canonical values are checked on the server.
+      const parsed=JSON.parse(raw);
+      if(!parsed||Array.isArray(parsed)||typeof parsed!=='object')throw new Error('Each audit file must be a JSON object.');
+      return raw;
+    };
+    const renderAuditTimeline=(target,value)=>{
+      const result=value.timeline;
+      target.append(el('h4','Independently recomputed historical timeline'),
+        el('p',result.snapshots.length+' supplied snapshots · '+result.journals.length+' distinct opaque journal identities · '+result.unique_journals_with_observed_rollback_referrals+' with observed rollback referrals'),
+        el('p','Missing snapshots or a later clean report do not establish incident clearance. Key changes are separately pinned declarations, not verified rotation authority. No financial or deployment authorization.'),
+        el('p','Timeline SHA-256: '+result.timeline_sha256));
+      for(const s of result.snapshots){
+        const item=el('details');item.append(el('summary','Snapshot '+s.snapshot+' · '+new Date(s.reviewed_as_of_ms).toISOString()+' · '+s.included_journals+' included / '+s.excluded_journals+' excluded'),
+          el('p','Dossier: '+s.dossier_sha256),el('p','Report: '+s.report_sha256),
+          el('p','Supplied sites: '+s.active_supplied_aliases.join(', ')),
+          el('p','Added: '+(s.aliases_added_since_previous.join(', ')||'none')+' · absent: '+(s.aliases_absent_since_previous.join(', ')||'none')),
+          el('p',s.unreadable_journals+' unreadable journals · '+s.journals_absent_since_previous+' journals absent since preceding snapshot'),
+          el('p','Maximum packet age: '+s.maximum_packet_age_ms+' ms'+(s.packet_age_policy_changed?' (changed)':'')));
+        for(const k of s.declared_key_changes)item.appendChild(el('p','Declared key change: '+k.installation_alias+' · '+k.previous_key_sha256+' → '+k.current_key_sha256));
+        target.appendChild(item);
+      }
+      const filter=el('select');filter.setAttribute('aria-label','Historical journal review filter');
+      for(const [v,label] of [['attention','Attention (rollback, regression, cohort change or exclusion)'],['all','All journals'],['rollback','Observed rollback referrals'],['regression','Cutoff regressions'],['cohort','Changed or unavailable cohorts'],['excluded','Excluded in any snapshot'],['absent','Absent in latest snapshot']]){
+        const opt=el('option',label);opt.value=v;filter.appendChild(opt);
+      }
+      const search=el('input');search.type='search';search.maxLength=80;search.setAttribute('aria-label','Search historical installation or journal tag');
+      const list=el('div');list.setAttribute('aria-live','polite');let page=0;
+      const isAttention=r=>r.historical_rollback_referral_observed||r.cutoff_regression_snapshots.length||r.changed_cohort_snapshots.length||r.excluded_snapshots.length;
+      const draw=()=>{
+        const q=search.value.trim().toLowerCase();
+        const match=r=>({all:true,attention:isAttention(r),rollback:r.historical_rollback_referral_observed,
+          regression:r.cutoff_regression_snapshots.length>0,cohort:r.changed_cohort_snapshots.length>0,
+          excluded:r.excluded_snapshots.length>0,absent:!r.present_in_latest_snapshot}[filter.value]);
+        const rows=result.journals.filter(r=>match(r)&&(!q||r.installation_alias.toLowerCase().includes(q)||r.journal_tag.includes(q)));
+        const per=40;const pages=Math.max(1,Math.ceil(rows.length/per));page=Math.min(page,pages-1);
+        list.replaceChildren(el('p',rows.length+' matching journals · page '+(page+1)+' of '+pages));
+        for(const r of rows.slice(page*per,(page+1)*per)){
+          const item=el('details');item.append(el('summary',r.installation_alias+' · '+r.journal_tag.slice(0,12)+' · '+(r.historical_rollback_referral_observed?'rollback referral observed':isAttention(r)?'review attention':'no supplied warning')+(r.present_in_latest_snapshot?'':' · absent in latest')),
+            el('p','Journal tag: '+r.journal_tag),
+            el('p','First snapshot '+r.first_snapshot+' · last '+r.last_snapshot+' · observed '+r.observed_snapshots+' times'),
+            el('p','Rollback referral snapshots: '+(r.rollback_referral_snapshots.join(', ')||'none')),
+            el('p','Cutoff regression snapshots: '+(r.cutoff_regression_snapshots.join(', ')||'none')),
+            el('p','Changed/unavailable cohort snapshots: '+(r.changed_cohort_snapshots.join(', ')||'none')),
+            el('p','Excluded snapshots: '+(r.excluded_snapshots.join(', ')||'none')),
+            el('p','Latest recorded cutoff: '+r.latest_cutoff_ms+' · historical maximum: '+r.maximum_cutoff_ms));
+          list.appendChild(item);
+        }
+        const prev=button('Previous journal page',()=>{if(page>0){page--;draw();}});
+        const next=button('Next journal page',()=>{if(page+1<pages){page++;draw();}});
+        prev.disabled=page===0;next.disabled=page+1===pages;list.append(prev,next);
+      };
+      for(const input of [filter,search])input.addEventListener(input===filter?'change':'input',()=>{page=0;draw();});
+      target.append(el('h5','Historical journal review queue'),auditLabel('Filter',filter),auditLabel('Search',search),list,download(value,'owg-workforce-verified-audit-timeline'));draw();
+    };
+    const verifyAudit=button('Recompute selected historical audit evidence',async()=>{
+      const attempt=++auditGeneration;auditOutput.replaceChildren();
+      try{
+        const mode=auditMode.value,digest=auditDigest.value;
+        if(!/^[a-f0-9]{64}$/.test(digest))throw new Error('Enter the separately obtained lowercase SHA-256 digest.');
+        const anchor=auditTrust.files?.[0],files=auditFiles.map(input=>input.files?.[0]);
+        if(!anchor||files.some(f=>!f))throw new Error('Select the independent trust file or manifest and every required dossier.');
+        if([anchor,...files].reduce((n,f)=>n+f.size,0)>auditMax)throw new Error('Combined browser input must be at most 8 MiB. Use the offline audit CLI for larger archives.');
+        if(!window.confirm('Recompute signatures and reports against the independently obtained trust anchors? Selected artifacts will be processed by the local OWG server only, without registry changes or storage by this review.'))return;
+        auditOutput.appendChild(el('p','Recomputing selected evidence…'));
+        const trustText=await auditRead(anchor);const raw=[];
+        for(const file of files)raw.push(await auditRead(file));
+        if(attempt!==auditGeneration||!auditOutput.isConnected)return;
+        const document=mode==='verify'?
+          '{"confirmed":true,"expected_dossier_sha256":'+JSON.stringify(digest)+',"trust":'+trustText+',"dossier":'+raw[0]+'}':
+          '{"confirmed":true,"expected_manifest_sha256":'+JSON.stringify(digest)+',"manifest":'+trustText+',"dossiers":['+raw.join(',')+']}';
+        if(new TextEncoder().encode(document).length>auditMax)throw new Error('Combined review document exceeds 8 MiB. Use the offline CLI.');
+        const value=await inboxCall(mode==='verify'?'audit-verify':'audit-timeline',document);
+        if(attempt!==auditGeneration||!auditOutput.isConnected)return;
+        auditOutput.replaceChildren();
+        if(mode==='verify'){
+          const receipt=value.verification;
+          auditOutput.append(el('h4','Historical dossier independently recomputed'),
+            el('p','Dossier SHA-256: '+receipt.dossier_sha256),
+            el('p','Historical review clock: '+new Date(receipt.reviewed_as_of_ms).toISOString()+' · current freshness and trusted timestamp not verified.'),
+            download(value,'owg-workforce-verified-audit-dossier'));
+          renderReview(auditOutput,value.report);
+        }else renderAuditTimeline(auditOutput,value);
+      }catch(error){if(attempt===auditGeneration&&auditOutput.isConnected)auditOutput.replaceChildren(el('p','Historical review refused. Check file ordering, independent pins and size limits. '+error.message));}
+    });
+    auditMode.addEventListener('change',resetAuditFiles);auditDigest.addEventListener('input',invalidateAudit);auditTrust.addEventListener('change',invalidateAudit);
+    auditSection.append(auditLabel('Operation',auditMode),auditLabel('Independent digest',auditDigest),
+      auditLabel('Independent trust JSON or manifest',auditTrust),auditInputs,verifyAudit,auditOutput,
+      el('p','Browser review is limited to 8 MiB including the request wrapper. Larger archives can be verified offline using the documented CLI.'));
+    resetAuditFiles();
     const runReview=button('Review pinned installation packets',async()=>{
       const attempt=++generation;output.replaceChildren();
       try{
@@ -2287,7 +2421,7 @@
     file.addEventListener('change',()=>{generation++;output.replaceChildren();});
     signingMode.addEventListener('change',()=>{generation++;output.replaceChildren();});
     registered.addEventListener('change',()=>{generation++;output.replaceChildren();});
-    section.append(signingLabel,registeredLabel,identity,button('Load local trust registry',refreshTrust),trustPanel,inboxSection,aliasLabel,secretLabel,runExport,el('p','Review bundle: combine downloaded packets with separately obtained pins, the expected correlation namespace and either the expected registry revision (registered review) or an explicit public-key trust list (stateless signed review) (see AGENT_PROCUREMENT_WORKFORCE_EXCHANGE.md).'),file,runReview,output);host.appendChild(section);
+    section.append(signingLabel,registeredLabel,identity,button('Load local trust registry',refreshTrust),trustPanel,inboxSection,auditSection,aliasLabel,secretLabel,runExport,el('p','Review bundle: combine downloaded packets with separately obtained pins, the expected correlation namespace and either the expected registry revision (registered review) or an explicit public-key trust list (stateless signed review) (see AGENT_PROCUREMENT_WORKFORCE_EXCHANGE.md).'),file,runReview,output);host.appendChild(section);
   }
   function installWorkforceSchedule(host){
     const section=el('details');section.append(el('summary','Schedule local workforce deadline reviews'),
