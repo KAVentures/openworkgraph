@@ -36,6 +36,45 @@ def _log():
     return workspace.import_log(BytesIO("\n".join(rows).encode()), name="g", source_format="csv", mapping=MAPPING)["log_id"]
 
 
+def test_import_preview_detects_changes_and_refuses_stale_apply():
+    log = _log()
+    gl.set_note(log, {"activity": "Approve", "description": "Original"})
+    text = "activity,description\nApprove,Updated\nClose,New\nGhost,Missing\n"
+    review = gl.import_csv(log, text, preview=True)
+    assert [(row["activity"], row["action"]) for row in review["changes"]] == [
+        ("Approve", "update"), ("Close", "add")]
+    assert review["skipped_not_in_log"] == ["Ghost"]
+    gl.set_note(log, {"activity": "Approve", "description": "Edited meanwhile"})
+    with pytest.raises(EventLogWorkspaceError, match="Preview the import again"):
+        gl.import_csv(log, text, expected_fingerprint=review["fingerprint"])
+    assert next(row for row in gl.glossary(log)["activities"] if row["activity"] == "Approve")["description"] == "Edited meanwhile"
+    review = gl.import_csv(log, text, preview=True)
+    applied = gl.import_csv(log, text, expected_fingerprint=review["fingerprint"])
+    assert applied["imported"] == 2
+
+
+def test_glossary_csv_retains_literal_activity_spaces_and_refuses_ambiguous_guards():
+    rows = ['case,activity,time', 'a, Check ,2024-01-01T00:00:00Z',
+            'b,Check,2024-01-01T00:00:01Z', 'c,=Total,2024-01-01T00:00:02Z']
+    log = workspace.import_log(BytesIO(("\n".join(rows) + "\n").encode()), name="literal",
+                               source_format="csv", mapping=MAPPING)["log_id"]
+    gl.set_note(log, {"activity": " Check ", "description": "spaced"})
+    gl.set_note(log, {"activity": "Check", "description": "plain"})
+    gl.set_note(log, {"activity": "=Total", "description": "formula"})
+    exported = gl.glossary_csv(log)
+    gl.delete_note(log, " Check ")
+    gl.delete_note(log, "Check")
+    gl.delete_note(log, "=Total")
+    gl.import_csv(log, exported)
+    found = {row["activity"]: row["description"] for row in gl.glossary(log)["activities"]}
+    assert found == {" Check ": "spaced", "Check": "plain", "=Total": "formula"}
+    extra = workspace.import_log(BytesIO(b"case,activity,time\na,=Total,2024-01-01T00:00:00Z\nb,'=Total,2024-01-01T00:00:01Z\n"),
+                                 name="ambiguous", source_format="csv", mapping=MAPPING)["log_id"]
+    with pytest.raises(EventLogWorkspaceError, match="ambiguous"):
+        gl.import_csv(extra, "activity,description\n'=Total,check\n", preview=True)
+
+
+
 def test_notes_coverage_and_clearing():
     log = _log()
     empty = gl.glossary(log)

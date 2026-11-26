@@ -102,6 +102,13 @@ Disconnect clears page memory immediately even while a request is pending. A
 response from the previous identity cannot repopulate the page or clear the next
 identity's state. This does not undo an already accepted server-side write.
 
+## Finite decision coverage lab
+
+Use the [decision coverage lab](PROCESS_DECISION_DOMAIN.md) on a saved local revision
+to enumerate reviewed synthetic boundary combinations and inspect overlap, gaps,
+FIRST shadowing, dependencies and selection coverage. Exact finite-domain counts
+are not exhaustive coverage of arbitrary business inputs or authority to execute.
+
 ## Portable declarations and limits
 
 Tables are an optional `decision_tables` field of the existing process model.
@@ -395,6 +402,19 @@ unconfirmed rules, and the table cites the DMN file's SHA-256 as its source basi
 dashboard opens the proposal as unsaved edits of that revision. Nothing is saved
 automatically.
 
+In the process catalog, choose a file and select **Inspect DMN file**. Map each
+table you want to import to a distinct decision in the saved design, then choose
+the effective dates and select **Preview selected DMN tables**. Review the
+proposed rules and open them together as one unsaved draft. The preview checks
+that the file is the same one you inspected. The API uses
+`POST /v1/process-catalog/import-dmn/inspect` for the list and file digest, then
+`POST /v1/process-catalog/import-dmn/batch` with the same XML and an
+`assignments` query parameter containing an array of
+`{"index":0,"decision_activity_id":"choose"}` entries. Include
+`workflow_id`, `revision`, `document_sha256`, `effective_from`, and optionally
+`effective_until`. A file may contain up to 12 tables. Decision and knowledge
+dependencies and imported definitions are refused in this DMN subset.
+
 Only what maps exactly is accepted, in both directions:
 
 - **Input entries:** FEEL simple unary tests: `-`, a literal (number, quoted string,
@@ -408,3 +428,7 @@ ANY, PRIORITY and other hit policies; several outputs; rows whose OWG predicate
 matches ANY of several conditions or tests one fact twice; and fact paths that are not
 simple identifiers. The DMN file is untrusted data. DOCTYPE and entities are rejected,
 size is bounded, and nothing is evaluated or executed.
+
+## Behavioral regression across saved revisions
+
+[Paired decision regression](PROCESS_POLICY_REGRESSION.md) evaluates the same explicitly dated reviewed case suite against two exact saved revisions, distinguishes regressions from intentional changes, and reports unreviewed table/case pairs without returning fact values.

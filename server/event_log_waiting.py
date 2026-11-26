@@ -40,15 +40,19 @@ class _HotspotPage:
     destination: str
     after: str | None
     limit: int
+    expected_evidence_sha256: str | None = None
 
 
-def _hotspot_cases(conn, page: _HotspotPage) -> dict[str, Any]:
-    conn.execute("""CREATE TEMP TABLE waiting_case_evidence AS
-        SELECT case_id, count(*) AS instances, sum(wait) AS waiting, max(wait) AS longest
-        FROM seq2 WHERE wait IS NOT NULL AND prev_activity = ? AND activity = ? GROUP BY case_id""",
+def _hotspot_cases(conn, page: _HotspotPage, clock: dict[str, Any] | None) -> dict[str, Any]:
+    table = 'working_seq' if clock else 'seq2'
+    scheduled = ', sum(working_wait) AS scheduled, max(working_wait) AS longest_scheduled' if clock else ''
+    conn.execute(f"""CREATE TEMP TABLE waiting_case_evidence AS
+        SELECT case_id, count(*) AS instances, sum(wait) AS waiting, max(wait) AS longest{scheduled}
+        FROM {table} WHERE wait IS NOT NULL AND prev_activity = ? AND activity = ? GROUP BY case_id""",
                  [page.source, page.destination])
-    total, occurrences, waiting_seconds = conn.execute(
-        "SELECT count(*), coalesce(sum(instances), 0), coalesce(sum(waiting), 0) FROM waiting_case_evidence"
+    scheduled_total = ', coalesce(sum(scheduled), 0)' if clock else ''
+    total, occurrences, waiting_seconds, *working = conn.execute(
+        f"SELECT count(*), coalesce(sum(instances), 0), coalesce(sum(waiting), 0){scheduled_total} FROM waiting_case_evidence"
     ).fetchone()
     where, params = (" WHERE case_id > ?", [page.after]) if page.after is not None else ("", [])
     rows = conn.execute("SELECT * FROM waiting_case_evidence" + where + " ORDER BY case_id LIMIT ?",
@@ -56,9 +60,11 @@ def _hotspot_cases(conn, page: _HotspotPage) -> dict[str, Any]:
     return {
         "from": page.source, "to": page.destination,
         "total_cases": total, "total_instances": occurrences, "total_waiting_seconds": waiting_seconds,
+        **({"total_scheduled_waiting_seconds": working[0], "evidence_sha256": clock['evidence_sha256']} if clock else {}),
         "next_after": rows[page.limit - 1][0] if len(rows) > page.limit else None,
-        "cases": [{"case_id": key, "instances": count, "waiting_seconds": waiting, "longest_wait_seconds": longest}
-                  for key, count, waiting, longest in rows[:page.limit]],
+        "cases": [{"case_id": key, "instances": count, "waiting_seconds": waiting, "longest_wait_seconds": longest,
+                   **({"scheduled_waiting_seconds": schedule[0], "longest_scheduled_wait_seconds": schedule[1]} if clock else {})}
+                  for key, count, waiting, longest, *schedule in rows[:page.limit]],
     }
 
 
@@ -151,12 +157,18 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
               CASE WHEN prev_end IS NULL THEN NULL ELSE greatest(0, epoch(st - prev_end)) END AS wait,
               CASE WHEN proc IS NULL THEN 0 ELSE greatest(0, epoch(en - greatest(st, coalesce(prev_end, st)))) END AS busy
             FROM seq""")
+        clock = calendars.prepare(conn, calendar) if calendar is not None else None
+        if clock is not None:
+            clock['case_filter_sha256'] = calendars.digest(base['cohort'])
+            clock['instance_settings_sha256'] = calendars.digest({**base['settings'], 'mode_used': used})
+            if clock['available']:
+                clock['evidence_sha256'] = calendars.evidence_digest(conn, log_id=log_id,
+                    case_notion=workspace._case_type(conn, log_id, case_type), clock=clock)
         if _hotspot is not None:
-            return {**base, "available": True, **_hotspot_cases(conn, _hotspot)}
-        calendar_result = calendars.measure(conn,calendar) if calendar is not None else None
-        if calendar_result is not None:
-            calendar_result['case_filter_sha256']=calendars.digest(cohorts.describe(chosen))
-            calendar_result['instance_settings_sha256']=calendars.digest({**base['settings'],'mode_used':used})
+            if clock is not None and (not clock['available'] or _hotspot.expected_evidence_sha256 != clock['evidence_sha256']):
+                raise workspace.EventLogWorkspaceError("the scheduled waiting intervals changed; run the analysis again")
+            return {**base, "available": True, **_hotspot_cases(conn, _hotspot, clock)}
+        calendar_result = calendars.summarize(conn, clock) if clock is not None else None
         kinds = dict(conn.execute("SELECT kind, count(*) FROM inst GROUP BY kind").fetchall())
         total_wait = conn.execute("SELECT coalesce(sum(wait), 0) FROM seq2").fetchone()[0] or 0
         # Open lifecycle starts are absent from inst; include them in both coverage denominators.
@@ -302,15 +314,20 @@ def waiting_time(log_id: str, case_type: str | None = None, *, mode: str = "auto
 def waiting_hotspot_cases(log_id: str, case_type: str | None = None, *, source: str, destination: str,
                           after: str | None = None, limit: int = 50, mode: str = "auto",
                           lifecycle_attribute: str = "lifecycle:transition", end_attribute: str = "",
-                          cohort: dict[str, Any] | None = None) -> dict[str, Any]:
+                          cohort: dict[str, Any] | None = None, working_calendar: dict[str, Any] | None = None,
+                          expected_evidence_sha256: str | None = None) -> dict[str, Any]:
     if any(not isinstance(value, str) or not value or len(value) > 200 for value in (source, destination)):
         raise workspace.EventLogWorkspaceError("choose the exact source and destination activity labels")
     if after is not None and (not isinstance(after, str) or not after or len(after) > 200):
         raise workspace.EventLogWorkspaceError("invalid case key cursor")
     if type(limit) is not int or not 1 <= limit <= 100:
         raise workspace.EventLogWorkspaceError("page size must be a whole number from 1 to 100")
+    if working_calendar is not None and (not isinstance(expected_evidence_sha256, str) or
+                                         not re.fullmatch(r"[0-9a-f]{64}", expected_evidence_sha256)):
+        raise workspace.EventLogWorkspaceError("choose the evidence digest from the scheduled waiting report")
     return waiting_time(log_id, case_type, mode=mode, lifecycle_attribute=lifecycle_attribute, end_attribute=end_attribute,
-                        cohort=cohort, _hotspot=_HotspotPage(source, destination, after, limit))
+                        cohort=cohort, working_calendar=working_calendar,
+                        _hotspot=_HotspotPage(source, destination, after, limit, expected_evidence_sha256))
 
 
 __all__ = ["waiting_time", "waiting_hotspot_cases", "MODES"]

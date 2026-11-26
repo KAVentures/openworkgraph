@@ -28,8 +28,19 @@ const path=require('node:path');
   await toggle.check();assert.equal(await output.textContent(),'');assert.equal(await exportButton.isDisabled(),true);
   await page.locator('#owgWaitingRun').click();await output.getByRole('heading',{name:'Declared working-calendar lens',exact:true}).waitFor();
   assert.match(await output.textContent(),/Calendar flow efficiency: 50(?:\.0)?%/);
+  const [evidenceResponse]=await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/waiting-time/cases')&&r.request().method()==='POST'),
+    output.getByRole('button',{name:'Inspect scheduled waits from Receive to Review',exact:true}).click()]);
+  assert.equal(evidenceResponse.status(),200,await evidenceResponse.text());
+  const evidence=await evidenceResponse.json();
+  assert.equal(evidence.cases[0].scheduled_waiting_seconds,7200);
+  assert.equal(evidence.cases[0].waiting_seconds,237600);
+  const casePanel=page.locator('#owgWaitingCases');
+  await casePanel.getByRole('columnheader',{name:'Total scheduled waiting',exact:true}).waitFor();
+  await casePanel.getByRole('button',{name:'Open case CASE_PRIVATE',exact:true}).click();
+  await page.locator('#owgEventLogCaseEvents').getByRole('heading',{name:'Case CASE_PRIVATE',exact:true}).waitFor();
   const artifact=async()=>{const [download]=await Promise.all([page.waitForEvent('download'),exportButton.click()]);return JSON.parse(await fs.readFile(await download.path(),'utf8'));};
   const first=await artifact();assert.equal(first.working_calendar.flow_efficiency.median,.5);assert.equal(first.working_calendar.activities.find(a=>a.activity==='Review').waiting_before.total_seconds,7200);
+  assert.equal(evidenceResponse.request().postDataJSON().expected_evidence_sha256,first.working_calendar.evidence_sha256);
   for(const key of ['raw_events_exported','raw_case_ids_exported','resource_names_exported','execution_authorized'])assert.equal(first[key],false);
   assert.ok(!JSON.stringify(first).includes('PRIVATE'));assert.equal(first.working_calendar.actual_working_hours_verified,false);
   const axe=await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8');await page.addScriptTag({content:axe});
@@ -47,6 +58,6 @@ const path=require('node:path');
   await workingDays.selectOption(['mon','sun']);await page.locator('#owgWaitingRun').click();await output.getByRole('heading',{name:'Declared working-calendar lens',exact:true}).waitFor();
   latest=await artifact();assert.deepEqual(Object.keys(latest.working_calendar.calendar.hours).sort(),['mon','sun']);assert.equal(latest.working_calendar.flow_efficiency.elapsed_seconds,28800);assert.equal(latest.working_calendar.flow_efficiency.median,0);assert.equal(latest.mode_used,'end_attribute');
   await toggle.uncheck();assert.equal(await output.textContent(),'');assert.equal(await exportButton.isDisabled(),true);await page.locator('#owgWaitingRun').click();await page.locator('#owgWaitingStatus').filter({hasText:'2 of 2 activity instances'}).waitFor();assert.equal(await output.getByRole('heading',{name:'Declared working-calendar lens',exact:true}).count(),0);
-  assert.deepEqual(errors,[]);console.log('Working calendar browser passed: explicit opt-in, retained elapsed results, schedule/holiday clock, pinned aggregate-only local downloads without cases/resources/file names, held-old-calendar guard, default GET, WCAG/mobile.');
+  assert.deepEqual(errors,[]);console.log('Working calendar browser passed: elapsed and scheduled hotspot evidence, recorded case history, aggregate-only downloads, schedule changes, default GET, and WCAG/mobile.');
  }finally{if(browser)await browser.close();server.kill('SIGTERM');await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);if(server.exitCode===null)server.kill('SIGKILL');await fs.rm(scratch,{recursive:true,force:true});}
 })().catch(error=>{console.error(error);process.exit(1);});

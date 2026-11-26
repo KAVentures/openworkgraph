@@ -30,6 +30,19 @@ Everything more detailed belongs here.
 - [Discovery Mode](DISCOVERY_MODE.md)
 - [Exports and AI](EXPORTS_AND_AI.md)
 
+## Process mining on event logs
+
+- [Event-log workspace](EVENT_LOG_WORKSPACE.md): import CSV, Excel, SQLite, JSON Lines, Parquet, XES and OCEL 2.0 logs, then analyse maps, variants, KPIs, conformance, simulation and predictions. It starts with a [formats table](EVENT_LOG_WORKSPACE.md#formats).
+- Data quality: [import and append quality](EVENT_LOG_QUALITY_TRENDS.md), [quarantined rows](EVENT_LOG_QUARANTINE_PREVIEW.md) and [grouping activities](EVENT_LOG_ACTIVITY_MAPPINGS.md).
+- Cases needing attention: [case evidence](EVENT_LOG_CASE_EVIDENCE.md), [stuck open cases](EVENT_LOG_STUCK_CASES.md), [rework and loops](EVENT_LOG_REWORK.md) and [signals](EVENT_LOG_SIGNAL_OVERVIEW.md).
+- Time and capacity: [work in progress](EVENT_LOG_WORK_IN_PROGRESS.md), [when work happens](EVENT_LOG_TIME_PATTERNS.md), [case durations](EVENT_LOG_DURATION_DISTRIBUTION.md), [batch processing](EVENT_LOG_BATCHING.md) and [simulation alternatives](EVENT_LOG_SIMULATION_PORTFOLIO.md).
+- Change and outcomes: [intervention impact](INTERVENTION_IMPACT.md).
+- [Object-centric process models](OBJECT_CENTRIC_PROCESS_MODELS.md).
+- Process designs: [process catalog](PROCESS_CATALOG.md), [BPMN import](PROCESS_BPMN_IMPORT.md) and [portable BPMN diagrams](PROCESS_DIAGRAM_INTERCHANGE.md).
+- [Domain packs](DOMAIN_PACKS.md): reusable, versioned process definitions such as order to cash, procure to pay and IT service management.
+- [Process intelligence for AI agents](PROCESS_INTELLIGENCE_FOR_AGENTS.md): what shared agents may read from a log.
+- [Competitor gap assessment](COMPETITOR_GAP_ASSESSMENT_2026_10.md): what remains to be built.
+
 ## Privacy and data
 
 - [Privacy and data handling](PRIVACY_AND_DATA.md)

@@ -63,6 +63,13 @@ const path=require('node:path');
    assert.equal(queue.labels_auto_applied,false);
    assert.equal(queue.learned_predictions_used,false,'keyword-only until model trained');
    assert(!(await page.locator('#owgCommsReviewExamples').textContent()).includes('client.example'));
+   await page.locator('#owgCommsReviewDiverse').click();
+   await page.locator('#owgCommsReviewExamples').getByText(/Diverse order: rotate through declared language and keyword groups/).waitFor();
+   const diversity=await page.evaluate(async()=>await (await fetch('/v1/communications/review/triage?order=diverse&limit=20')).json());
+   assert.equal(diversity.review_order,'diverse');
+   assert.equal(diversity.language_inferred,false);
+   assert.equal(diversity.sampling_representativeness_verified,false);
+   assert.deepEqual(new Set(diversity.examples.map(x=>x.example_id)),new Set(queue.examples.map(x=>x.example_id)));
    await page.locator('#owgCommsReviewNormal').click();
    await page.locator('#owgCommsReviewExamples h3').getByText('Examples to label').waitFor();
    // Label one example in the UI, the rest through the same API.
@@ -85,6 +92,15 @@ const path=require('node:path');
    await page.locator('#owgCommsReviewStatus').filter({hasText:'Model trained.'}).waitFor({timeout:60000});
    const modelText=await page.locator('#owgCommsModel').textContent();
    assert.match(modelText,/Refund request/);assert.match(modelText,/Account access/);assert.match(modelText,/en .*sv|sv .*en/);
+   await page.locator('#owgCommsModel').getByRole('heading',{name:'Training / holdout overlap check'}).waitFor();
+   assert.match(await page.locator('#owgCommsModel').textContent(),/not proof of independent messages or threads/);
+   const quality=await page.evaluate(async()=>await (await fetch('/v1/communications/review/model')).json());
+   const overlap=quality.evaluation.lexical_overlap;
+   assert.equal(overlap.complete,true);
+   assert.equal(overlap.normalized_exact_overlap+overlap.near_lexical_overlap+overlap.no_detected_overlap,overlap.holdout_examples);
+   assert.equal(quality.evaluation.without_detected_overlap.holdout_examples,overlap.no_detected_overlap);
+   assert(Object.values(quality.holdout_language_gates).every(g=>g.evaluation_basis==='holdout_without_detected_lexical_overlap'));
+
    // Use the learned model for an analysis; reports stay aggregate.
    await page.locator('#owgCommsFile').setInputFiles({name:'tickets.csv',mimeType:'text/csv',buffer:Buffer.from(rows.join('\n'))});
    await page.waitForFunction(()=>document.querySelectorAll('#owgCommsTextColumns input').length===2);

@@ -16,6 +16,11 @@ gap while retaining the 66-hour elapsed gap. A holiday can exclude a recorded
 interval; that does not establish that nobody worked. The view reports how many
 recorded intervals cross closed time.
 
+Under **Where cases wait during scheduled hours**, select **Inspect scheduled waits**.
+Each case shows its count of recorded gaps, the elapsed and scheduled waiting totals,
+and the longest wait on each clock. Gaps that fall entirely outside the calendar stay
+in the case list with zero scheduled waiting. Open a case to review its recorded events.
+
 Editing lifecycle/end attributes or any calendar setting clears results and
 aggregate downloads. A late response for old settings cannot replace a newer
 analysis or restore its download. Turning the lens off restores the existing GET
@@ -66,6 +71,13 @@ union-busy flow efficiency, outside-calendar instance counts and provenance:
   clipped to the selected retained interval range; `utc_opening_windows` is their count.
 - `case_filter_sha256` and `instance_settings_sha256` identify query assumptions
   without exporting literal filter values.
+- `evidence_sha256` identifies the case, activity and interval projection used for scheduled case review.
+
+`POST /v1/event-logs/{id}/waiting-time/cases` takes the same calendar settings and
+cohort query as the aggregate report. Include `source`, `destination`, and the report's
+`evidence_sha256` as `expected_evidence_sha256`. The optional `limit` is 1–100 (default 50).
+Use `next_after` as `after` on the next page. Changes to the calendar or the projected
+intervals require a fresh report. The elapsed-only `GET` case evidence stays available.
 
 These hashes identify calculation inputs, not verified business authority or a
 signed source receipt. A changed time-zone database can change the UTC-window

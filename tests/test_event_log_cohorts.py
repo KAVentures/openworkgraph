@@ -12,6 +12,7 @@ import sys
 import pytest
 
 from server import event_log_analytics as analytics
+from server import event_log_cases as case_pages
 from server import event_log_cohorts as cohorts
 from server import event_log_workspace as workspace
 from test_event_log_analytics import _claims_csv
@@ -109,6 +110,13 @@ def test_benchmark_preserves_fractional_seconds_and_strict_sla_boundary():
     assert (first["sla_breached_cases"], second["sla_breached_cases"]) == (1, 2)
     assert first["sla_breach_rate"] == round(1 / 3, 6)
     assert second["sla_breach_rate"] == 1.0
+    variant, = result["variants"]
+    assert variant["path"] == ["Start", "End"]
+    assert (variant["cases_in_first"], variant["cases_in_second"]) == (3, 2)
+    evidence = case_pages.cases(log_id, {"cohort": {"resource": "team_a"},
+                                        "duration_seconds_gt": 1, "variant_id": variant["variant_id"]})
+    assert evidence["selected_cases"] == first["sla_breached_cases"]
+    assert [case["case_id"] for case in evidence["cases"]] == ["a3"]
     gap = result["differences_second_minus_first"]["median_throughput_seconds"]
     assert gap["difference"] == pytest.approx(1.0)
     assert gap["sampled_median_throughput_seconds_first"] == pytest.approx(1.0)

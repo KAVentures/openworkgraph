@@ -28,17 +28,80 @@ const path=require('node:path');const zlib=require('node:zlib');
    await page.locator('#owgEventLogFile').setInputFiles({name:'orders.csv.gz',mimeType:'application/gzip',buffer:zlib.gzipSync(Buffer.from(rows.join('\n')))});
    await page.waitForFunction(()=>document.querySelector('#owgEventLogCase').options.length===3);
    assert.deepEqual(await page.locator('#owgEventLogCase option').allTextContents(),['case','activity','time']);
+   await page.getByRole('button',{name:'Preview CSV mapping',exact:true}).click();
+   await page.locator('#owgEventLogImportPreviewStatus').getByText(
+     '12 rows checked. 12 accepted events in 6 cases. 0 rows rejected.',{exact:true}).waitFor();
    await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Imported 12 events'}).waitFor();
    const xes=await page.evaluate(async()=>{const id=(await (await fetch('/v1/event-logs')).json()).logs[0].log_id;return (await fetch('/v1/event-logs/'+id+'/export?format=xes')).text();});
    await page.locator('#owgEventLogName').fill('');
    await page.locator('#owgEventLogFile').setInputFiles({name:'orders.xes.gz',mimeType:'application/gzip',buffer:zlib.gzipSync(Buffer.from(xes))});
    assert.equal(await page.locator('#owgEventLogFormat').inputValue(),'xes');
+   assert.equal(await page.locator('#owgEventLogPreviewImport').isVisible(),false);
    await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Imported 12 events'}).waitFor();
    const logs=await page.evaluate(async()=>(await (await fetch('/v1/event-logs')).json()).logs.map(l=>[l.source_format,l.events]).sort());
    assert.deepEqual(logs,[['csv',12],['xes',12]]);
+   // An XES file whose times have no UTC offset (as PM4Py writes naive times): the offset is proposed, then used.
+   const naiveXes=xes.replace(/(key="time:timestamp" value="[^"]+?)(Z|[+-]\d\d:\d\d)"/g,'$1"');
+   assert.notEqual(naiveXes,xes);
+   await page.locator('#owgEventLogName').fill('naive');
+   await page.locator('#owgEventLogFile').setInputFiles({name:'naive.xes',mimeType:'application/xml',buffer:Buffer.from(naiveXes)});
+   await page.locator('#owgEventLogStatus').filter({hasText:'Times in this file have no UTC offset'}).waitFor();
+   assert.equal(await page.locator('#owgEventLogStandardOffset').isVisible(),true);
+   await page.locator('#owgEventLogStandardOffset').fill('Z');
+   await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Imported 12 events'}).waitFor();
+   const naiveLog=await page.evaluate(async()=>(await (await fetch('/v1/event-logs')).json()).logs.find(l=>l.name==='naive'));
+   assert.equal(naiveLog.events,12);
+   const file=page.locator('#owgEventLogFile'),pick=page.locator('#owgEventLogPick');
+   const consent=page.locator('#owgEventLogConsent'),saveStatus=page.locator('#owgEventLogSaveStatus');
+   const importButton=page.locator('#owgEventLogImport'),appendButton=page.locator('#owgEventLogAppend');
+   async function stage(name){
+     await file.setInputFiles({name:name+'.csv',mimeType:'text/csv',
+       buffer:Buffer.from('case,activity,time\n'+name+',Open,2024-05-01T08:00:00Z\n')});
+     await page.locator('#owgEventLogName').fill(name);
+     await page.locator('#owgEventLogStatus').getByText('File mapping ready.',{exact:false}).waitFor();
+     await consent.check();
+   }
+   async function holdSave(pattern,button){
+     let release;
+     const gate=new Promise(resolve=>{release=resolve;});
+     await page.route(pattern,async route=>{
+       await gate;
+       await route.continue();
+     },{times:1});
+     await Promise.all([page.waitForRequest(request=>pattern.test(request.url())),button.click()]);
+     return release;
+   }
+   const activeLog=await pick.inputValue();
+   await stage('first');
+   const finishImport=await holdSave(/\/v1\/event-logs\/import\?/,importButton);
+   await stage('next');
+   assert(await importButton.isDisabled());assert(await appendButton.isDisabled());
+   finishImport();
+   await saveStatus.getByText('Imported 1 events.',{exact:false}).waitFor();
+   assert.equal(await pick.inputValue(),activeLog);
+   assert.equal(await file.evaluate(input=>input.files[0].name),'next.csv');
+   assert.equal(await page.locator('#owgEventLogName').inputValue(),'next');
+   assert(await consent.isChecked());
+   await page.waitForFunction(()=>!document.querySelector('#owgEventLogAppend').disabled);
+   const csvId=await page.evaluate(async()=>(await (await fetch('/v1/event-logs')).json()).logs
+     .find(log=>log.source_format==='csv'&&log.events===12).log_id);
+   await pick.selectOption(csvId);
+   const finishAppend=await holdSave(/\/append\?/,appendButton);
+   await pick.selectOption(activeLog);
+   await stage('after');
+   assert(await importButton.isDisabled());assert(await appendButton.isDisabled());
+   finishAppend();
+   await saveStatus.getByText('Added 1 new events',{exact:false}).waitFor();
+   assert.equal(await file.evaluate(input=>input.files[0].name),'after.csv');
+   assert.equal(await pick.inputValue(),activeLog);
+   assert(await consent.isChecked());
+   const saved=await page.evaluate(async id=>(await (await fetch('/v1/event-logs')).json()).logs
+     .find(log=>log.log_id===id),csvId);
+   assert.equal(saved.events,13);
    assert.deepEqual(errors,[]);
-   console.log('Gzip import browser acceptance passed: .csv.gz columns read in the browser, .csv.gz and .xes.gz imported.');
+   console.log('Gzip import browser acceptance passed: .csv.gz columns read in the browser, .csv.gz and .xes.gz imported, XES without offsets imported with a chosen offset.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});

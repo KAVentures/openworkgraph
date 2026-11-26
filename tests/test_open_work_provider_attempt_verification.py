@@ -18,7 +18,8 @@ def payload(**overrides):
 def check(reader, **kwargs):
     return verify_provider_attempt(account="acct_1", object_id="inv_1",
         operation="invoice.update", correlation_id="attempt_1",
-        expected_event_id="evt_1", read_events=reader, now=NOW, **kwargs)
+        expected_event_id="evt_1", read_events=reader, now=NOW, 
+        recheck_authorization=kwargs.pop("recheck_authorization", lambda: True), **kwargs)
 
 
 def test_exact_authenticated_provider_operation_is_not_customer_success():
@@ -114,6 +115,9 @@ def test_invalid_or_unavailable_grant_blocks_provider_read():
     def reader():
         calls.append(True)
         return payload()
+    assert verify_provider_attempt(account="acct_1", object_id="inv_1", 
+        operation="invoice.update", correlation_id="attempt_1", 
+        expected_event_id="evt_1", read_events=reader, now=NOW)["reason"] == "authorization_required" 
     assert check(reader, recheck_authorization=lambda: False)["reason"] == "authorization_revoked"
     def unavailable():
         raise OSError("grant store unavailable")

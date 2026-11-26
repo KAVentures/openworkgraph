@@ -19,6 +19,21 @@ def _data_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(workspace, "DATA_DIR", tmp_path)
 
 
+def test_rework_discloses_total_and_truncated_results():
+    rows = ["case,activity,time"]
+    for i in range(25):
+        for minute in range(2):
+            rows.append(f"c{i},activity{i},2024-03-04T00:{minute:02d}:00Z")
+    log = workspace.import_log(BytesIO(("\n".join(rows) + "\n").encode()), name="loops",
+                               source_format="csv", mapping=MAPPING)["log_id"]
+    report = rework.rework(log)
+    assert report["distinct_repeated_activities"] == report["distinct_loop_patterns"] == 25
+    assert report["activities_truncated"] and report["loop_patterns_truncated"]
+    full = rework.rework(log, {"limit": 50})
+    assert len(full["activities"]) == len(full["loop_patterns"]) == 25
+    assert not full["activities_truncated"] and not full["loop_patterns_truncated"]
+
+
 def _log():
     paths = {}
     for i in range(10):

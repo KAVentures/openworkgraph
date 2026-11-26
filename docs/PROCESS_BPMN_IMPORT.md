@@ -1,5 +1,8 @@
 # Bring a BPMN design into the process catalog
 
+For organizations migrating many diagrams, the [offline BPMN portfolio migration assessment](BPMN_PORTFOLIO_MIGRATION.md) provides a bounded JSON inventory and CSV remediation worklist using this same importer, without saving any drafts.
+
+
 Open **Evidence → Process catalog → Import a BPMN design as an unreviewed
 draft**. Choose an authorized UTF-8 `.bpmn` or `.xml` file and explicitly select
 **Preview selected BPMN**. Selecting a file makes no request. Preview parses
@@ -83,6 +86,17 @@ A process needs one plain start event, or one structurally unambiguous entry
 when no start event is supplied. All imported nodes must be reachable and able
 to reach a terminal. Multiple processes, ambiguous entries, duplicate IDs or
 transitions, disconnected fragments and invalid references are rejected.
+
+## Files with more than one process
+
+Choose **Inspect BPMN file**, select an independent process, then preview it.
+The preview uses the exact inspected file and includes only the selected
+process in the draft. Multi-process collaborations and processes that call
+another process in the file are listed with the reason they cannot be selected.
+
+`POST /v1/process-catalog/import-bpmn/inspect` returns the document SHA-256 and
+process choices. To preview a choice, send the same XML to the usual import
+endpoint with `process_id` and `expected_source_sha256` as query parameters.
 
 ## Review and save
 

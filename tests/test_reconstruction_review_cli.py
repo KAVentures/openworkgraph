@@ -92,6 +92,35 @@ class AnnotationCliTests(unittest.TestCase):
                     self.assertEqual(main(), 2)
             self.assertIn("must be distinct", errors.getvalue())
 
+class PositiveEventContaminationMetricsTests(unittest.TestCase):
+    def test_positive_false_link_detected_even_with_true_link_present(self):
+        source = payload([pair("A", "F", ["shared"]), pair("B", "G", ["shared"])])
+        row = build_review_queue(source)["event_reviews"][0]
+        score = score_review_annotations(source, [{
+            "window": row["window"], "event_id": row["event_id"],
+            "true_resource_pairs": [row["candidate_resource_pairs"][0]],
+        }])
+        self.assertEqual(score["explicit_positive_events"], 1)
+        self.assertEqual(score["explicit_positive_events_with_false_links"], 1)
+        self.assertEqual(score["explicit_positive_false_link_rate"], 1.0)
+        self.assertEqual(score["explicit_negative_events"], 0)
+        self.assertIsNone(score["explicit_negative_false_link_rate"])
+        self.assertFalse(score["held_out_verified"])
+        self.assertFalse(score["cross_case_contamination_measured"])
+
+    def test_negative_only_probe_does_not_inflate_positive_denominator(self):
+        source = payload([pair("A", "F", ["negative"])])
+        row = build_review_queue(source)["event_reviews"][0]
+        score = score_review_annotations(source, [{
+            "window": row["window"], "event_id": row["event_id"],
+            "true_resource_pairs": [],
+        }])
+        self.assertEqual(score["explicit_positive_events"], 0)
+        self.assertEqual(score["explicit_positive_events_with_false_links"], 0)
+        self.assertIsNone(score["explicit_positive_false_link_rate"])
+        self.assertEqual(score["explicit_negative_false_link_rate"], 1.0)
+
+
 class TruncatedNavigationEvidenceTests(unittest.TestCase):
     def test_group_or_continuity_truncation_blocks_scoring(self):
         # Pair rows may be complete even when case navigation is not.
@@ -108,6 +137,81 @@ class TruncatedNavigationEvidenceTests(unittest.TestCase):
                            "true_resource_pairs": row["candidate_resource_pairs"]}]
                 with self.assertRaisesRegex(ValueError, "incomplete source evidence"):
                     score_review_annotations(source, labels)
+
+    def test_hidden_continuity_records_force_incomplete_scoring(self):
+        source = payload([pair("A", "F", ["e1"])])
+        source["observed_group_continuity"] = [{"group_id": str(i)} for i in range(25)]
+        queue = build_review_queue(source)
+        self.assertTrue(queue["coverage_incomplete"])
+        row = queue["event_reviews"][0]
+        labels = [{"window": row["window"], "event_id": row["event_id"],
+                   "true_resource_pairs": row["candidate_resource_pairs"]}]
+        with self.assertRaisesRegex(ValueError, "incomplete source evidence"):
+            score_review_annotations(source, labels)
+        # An explicit false flag must not override the actual source length.
+        source["observed_group_continuity_truncated"] = False
+        self.assertTrue(build_review_queue(source)["coverage_incomplete"])
+
+    def test_hidden_continuity_validation_is_fail_closed(self):
+        source = payload([pair("A", "F", ["e1"])])
+        for records in ([{"group_id": str(i)} for i in range(257)],
+                        [{"group_id": str(i)} for i in range(24)] + [None],
+                        [{"group_id": "x" * 65536}]):
+            with self.subTest(size=len(records)):
+                source["observed_group_continuity"] = records
+                with self.assertRaisesRegex(ValueError, "continuity"):
+                    build_review_queue(source)
+
+    def test_over_cap_navigation_still_rejects_malformed_truncation_flags(self):
+        # A large source list must not short-circuit validation of the
+        # explicit completeness flag supplied by the authenticated adapter.
+        for collection, flag in (
+            ("observed_group_continuity", "observed_group_continuity_truncated"),
+            ("identity_timelines", "identity_timelines_truncated"),
+        ):
+            with self.subTest(collection=collection):
+                source = payload([pair("A", "F", ["e1"])])
+                source[collection] = [{"group_id": str(i)} for i in range(25)]
+                source[flag] = "false"
+                with self.assertRaisesRegex(ValueError, "invalid " + flag):
+                    build_review_queue(source)
+
+    def test_nested_timeline_omissions_block_complete_scoring(self):
+        for timeline in (
+            {"episodes_truncated": True, "episodes": []},
+            {"episodes_truncated": False, "episodes": [{"evidence_truncated": True}]},
+            {"episodes": [{"evidence_truncated": False, "segments": [
+                {"evidence_truncated": True}]}]},
+            {"episodes": [{"evidence_truncated": False, "segments_truncated": True,
+                           "segments": [{"evidence_truncated": False}]}]},
+        ):
+            with self.subTest(timeline=timeline):
+                source = payload([pair("A", "F", ["e1"])])
+                source["identity_timelines"] = [timeline]
+                queue = build_review_queue(source)
+                self.assertTrue(queue["coverage_incomplete"])
+                row = queue["event_reviews"][0]
+                labels = [{"window": row["window"], "event_id": row["event_id"],
+                           "true_resource_pairs": row["candidate_resource_pairs"]}]
+                with self.assertRaisesRegex(ValueError, "incomplete source evidence"):
+                    score_review_annotations(source, labels)
+
+    def test_malformed_nested_timeline_metadata_fails_closed(self):
+        for timeline in (
+            {"episodes_truncated": "false", "episodes": []},
+            {"episodes": [{"evidence_truncated": 0}]},
+            {"episodes": [None]},
+            {"episodes": [{"segments": [{"evidence_truncated": "false"}]}]},
+            {"episodes": [{"segments_truncated": "false", "segments": []}]},
+            {"episodes": [{"segments": [None]}]},
+            {"episodes": [{"segments": [{}] * 9}]},
+            {"episodes": [{}] * 9},
+        ):
+            with self.subTest(timeline=timeline):
+                source = payload([pair("A", "F", ["e1"])])
+                source["identity_timelines"] = [timeline]
+                with self.assertRaisesRegex(ValueError, "invalid"):
+                    build_review_queue(source)
 
     def test_complete_navigation_remains_scoreable(self):
         source = payload([pair("A", "F", ["e1"])])
@@ -179,6 +283,39 @@ class ExplicitAnnotationScoreTests(unittest.TestCase):
         self.assertFalse(score["held_out_verified"])
         self.assertFalse(score["real_work_accuracy_claim"])
 
+    def test_adversarial_interleaved_cases_and_unrelated_shared_event_expose_contamination(self):
+        # Synthetic case truth is specified independently of the proposed
+        # assignments: shared is an interruption, not evidence for either case.
+        # This measures pair-level leakage on this fixture only, not held-out
+        # accuracy or real-world cross-case contamination.
+        data = payload([pair("A", "F", ["a1", "shared"]),
+                        pair("B", "G", ["b1", "shared"])])
+        rows = build_review_queue(data)["event_reviews"]
+        truth = {
+            "a1": [pair("A", "F", ["a1"])["resource_pointers"]],
+            "b1": [pair("B", "G", ["b1"])["resource_pointers"]],
+            "shared": [],
+        }
+        labels = [{"window": row["window"], "event_id": row["event_id"],
+                   "true_resource_pairs": [
+                       [[p["provider"], p["resource_kind"], p["resource_ref"]] for p in pair_pointers]
+                       for pair_pointers in truth[row["event_id"]]]}
+                  for row in rows]
+        score = score_review_annotations(data, labels)
+        self.assertEqual((score["true_positive_pairs"], score["false_positive_pairs"],
+                          score["false_negative_pairs"]), (2, 2, 0))
+        self.assertAlmostEqual(score["precision"], 0.5)
+        self.assertAlmostEqual(score["recall"], 1.0)
+        self.assertAlmostEqual(score["f1"], 2 / 3)
+        self.assertEqual(score["ambiguous_annotated_events"], 1)
+        self.assertAlmostEqual(score["false_link_event_rate"], 1 / 3)
+        self.assertEqual(score["per_window_metrics"]["current"]["false_link_events"], 1)
+        self.assertAlmostEqual(score["per_window_metrics"]["current"]["false_link_event_rate"], 1 / 3)
+        self.assertEqual([row["event_id"] for row in score["event_disagreements"]], ["shared"])
+        self.assertFalse(score["cross_case_contamination_measured"])
+        self.assertFalse(score["held_out_verified"])
+        self.assertFalse(score["real_work_accuracy_claim"])
+
     def test_ambiguous_assignment_counts_false_positive_not_silent_case_merge(self):
         data = payload([pair("A", "F", ["shared"]), pair("B", "G", ["shared"])])
         row = build_review_queue(data)["event_reviews"][0]
@@ -198,9 +335,9 @@ class ExplicitAnnotationScoreTests(unittest.TestCase):
                    "true_resource_pairs": row["candidate_resource_pairs"] if row["event_id"] == "old" else []}
                   for row in rows]
         score = score_review_annotations(data, labels)
-        self.assertEqual(score["per_window_counts"]["current"], {"tp": 0, "fp": 1, "fn": 0, "events": 1})
+        self.assertEqual(score["per_window_counts"]["current"], {"tp": 0, "fp": 1, "fn": 0, "events": 1, "false_link_events": 1})
         self.assertEqual(score["per_window_counts"]["earlier:2026-10-12T09:00:00+00:00"],
-                         {"tp": 1, "fp": 0, "fn": 0, "events": 1})
+                         {"tp": 1, "fp": 0, "fn": 0, "events": 1, "false_link_events": 0})
         self.assertFalse(score["cross_case_contamination_measured"])
         disagreements = score["event_disagreements"]
         self.assertEqual(len(disagreements), 1)
@@ -623,6 +760,31 @@ class FingerprintScopeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "digest mismatch"):
             score_bound_review_annotations(changed, envelope)
 
+    def test_identity_timeline_truncation_invalidates_labels_and_scoring(self):
+        from server.reconstruction_review_cli import score_bound_review_annotations, score_review_annotations
+        source = payload([pair("A", "F", ["e1"])])
+        queue = build_review_queue(source)
+        row = queue["event_reviews"][0]
+        labels = [{"window": row["window"], "event_id": row["event_id"],
+                   "true_resource_pairs": row["candidate_resource_pairs"]}]
+        changed = dict(source, identity_timelines_truncated=True)
+        incomplete = build_review_queue(changed)
+        self.assertTrue(incomplete["coverage_incomplete"])
+        self.assertNotEqual(queue["evidence_sha256"], incomplete["evidence_sha256"])
+        with self.assertRaisesRegex(ValueError, "incomplete source evidence"):
+            score_review_annotations(changed, labels)
+        with self.assertRaisesRegex(ValueError, "digest mismatch"):
+            score_bound_review_annotations(changed, {
+                "evidence_sha256": queue["evidence_sha256"], "annotations": labels})
+        with self.assertRaisesRegex(ValueError, "invalid identity_timelines_truncated"):
+            build_review_queue(dict(source, identity_timelines_truncated="false"))
+        capped = dict(source, identity_timelines=[{"session": n} for n in range(13)])
+        self.assertTrue(build_review_queue(capped)["coverage_incomplete"])
+        self.assertEqual(build_review_queue(capped)["evidence_sha256"],
+                         build_review_queue(dict(capped, identity_timelines_truncated=True))["evidence_sha256"])
+        with self.assertRaisesRegex(ValueError, "incomplete source evidence"):
+            score_review_annotations(capped, labels)
+
 class LiveReconstructionServiceTests(unittest.TestCase):
     def test_live_service_rebuilds_evidence_and_refuses_stale_envelope(self):
         from unittest.mock import patch
@@ -930,3 +1092,472 @@ class ProvisionalGroupAuthorityTests(unittest.TestCase):
                 source["observed_case_groups"] = groups
                 with self.assertRaisesRegex(ValueError, "invalid or unbounded provisional case groups"):
                     build_review_queue(source)
+
+class ReturnedEvidenceCountIntegrityTests(unittest.TestCase):
+    def test_api_adapter_counts_match_bounded_visible_evidence(self):
+        source = payload([pair("A", "F", ["e1"])])
+        source.update({
+            "identity_timelines": [{"id": "timeline"}],
+            "identity_timelines_returned_count": 1,
+            "observed_pair_event_assignments_returned_count": 1,
+            "observed_group_continuity": [],
+            "observed_group_continuity_returned_count": 0,
+            "observed_case_groups": [],
+            "observed_case_groups_returned_count": 0,
+        })
+        self.assertEqual(build_review_queue(source)["event_reviews_count"], 1)
+        for field in ("identity_timelines_returned_count",
+                      "observed_pair_event_assignments_returned_count",
+                      "observed_group_continuity_returned_count",
+                      "observed_case_groups_returned_count"):
+            with self.subTest(field=field):
+                tampered = dict(source, **{field: source[field] + 1})
+                with self.assertRaisesRegex(ValueError, "inconsistent " + field):
+                    build_review_queue(tampered)
+                tampered = dict(source, **{field: True})
+                with self.assertRaisesRegex(ValueError, "inconsistent " + field):
+                    build_review_queue(tampered)
+
+    def test_http_cap_count_must_not_claim_unshown_records(self):
+        source = payload([pair("A", "F", ["e1"])])
+        source["identity_timelines"] = [{"id": str(i)} for i in range(13)]
+        source["identity_timelines_returned_count"] = 12
+        self.assertTrue(build_review_queue(source)["coverage_incomplete"])
+        source["identity_timelines_returned_count"] = 13
+        with self.assertRaisesRegex(ValueError, "inconsistent identity_timelines_returned_count"):
+            build_review_queue(source)
+
+
+
+class IdentityTimelineResourceBoundsTests(unittest.TestCase):
+    def test_oversized_hidden_timeline_refused_before_digest(self):
+        source = payload([pair("A", "F", ["e1"])])
+        source["identity_timelines"] = [{"id": str(i)} for i in range(12)] + [
+            {"id": "hidden", "data": "x" * 65536}
+        ]
+        with self.assertRaisesRegex(ValueError, "unbounded identity timeline evidence"):
+            build_review_queue(source)
+
+    def test_malformed_hidden_timeline_refused(self):
+        source = payload([pair("A", "F", ["e1"])])
+        source["identity_timelines"] = [{"id": str(i)} for i in range(12)] + [None]
+        with self.assertRaisesRegex(ValueError, "invalid identity timeline evidence"):
+            build_review_queue(source)
+
+    def test_unbounded_timeline_collection_refused(self):
+        source = payload([pair("A", "F", ["e1"])])
+        source["identity_timelines"] = [{"id": str(i)} for i in range(257)]
+        with self.assertRaisesRegex(ValueError, "invalid or unbounded identity timelines"):
+            build_review_queue(source)
+
+    def test_bounded_over_cap_marks_incomplete(self):
+        source = payload([pair("A", "F", ["e1"])])
+        source["identity_timelines"] = [{"id": str(i)} for i in range(13)]
+        self.assertTrue(build_review_queue(source)["coverage_incomplete"])
+
+
+class MalformedAnnotationIdentityTests(unittest.TestCase):
+    def test_non_scalar_annotation_identity_refused_as_validation_error(self):
+        source = payload([pair("A", "F", ["e1"])])
+        for field in ("window", "event_id"):
+            for invalid in ([], {}, None, 1, True):
+                with self.subTest(field=field, invalid=invalid):
+                    annotation = {"window": "current", "event_id": "e1",
+                                  "true_resource_pairs": []}
+                    annotation[field] = invalid
+                    with self.assertRaisesRegex(ValueError, "invalid annotated event identity"):
+                        score_review_annotations(source, [annotation])
+
+    def test_valid_annotation_identity_still_scores(self):
+        source = payload([pair("A", "F", ["e1"])])
+        annotation = {"window": "current", "event_id": "e1",
+                      "true_resource_pairs": []}
+        result = score_review_annotations(source, [annotation])
+        self.assertEqual(result["false_positive_pairs"], 1)
+        self.assertFalse(result["held_out_verified"])
+
+
+class MalformedUnicodeEvidenceTests(unittest.TestCase):
+    def test_unpaired_surrogates_are_validation_errors_not_server_crashes(self):
+        # JSON transports can carry escaped lone surrogates. UTF-8 evidence
+        # hashing must reject them with a handled ValueError, not UnicodeError.
+        for field, value in (
+            ("observed_case_groups", [{"proves_same_case": False, "label": chr(0xD800)}]),
+            ("identity_timelines", [{"label": chr(0xD800)}]),
+            ("observed_group_continuity", [{"label": chr(0xD800)}]),
+            ("coverage", {"scan_truncated": False, "label": chr(0xD800)}),
+        ):
+            with self.subTest(field=field):
+                source = payload([pair("A", "F", ["e1"])])
+                source[field] = value
+                with self.assertRaises(ValueError):
+                    build_review_queue(source)
+
+
+class AdversarialInterleavingIsolationTests(unittest.TestCase):
+    def test_shared_resource_does_not_create_transitive_cross_case_event_links(self):
+        # Two interleaved workflows mention a common file, but no source event
+        # observes both outer issues. A connected-component case inference
+        # would incorrectly invent a cross-case pair here.
+        source = payload([
+            pair("case-A", "shared", ["a-before", "a-after"]),
+            pair("case-B", "shared", ["b-between"]),
+        ])
+        rows = build_review_queue(source)["event_reviews"]
+        by_event = {row["event_id"]: row for row in rows}
+        self.assertEqual(set(by_event), {"a-before", "b-between", "a-after"})
+        self.assertEqual(by_event["a-before"]["candidate_resource_pairs"],
+                         by_event["a-after"]["candidate_resource_pairs"])
+        self.assertNotEqual(by_event["a-before"]["candidate_resource_pairs"],
+                            by_event["b-between"]["candidate_resource_pairs"])
+        self.assertTrue(all(len(row["candidate_resource_pairs"]) == 1 for row in rows))
+        self.assertTrue(all(row["confirmed_case"] is False for row in rows))
+        labels = [{"window": row["window"], "event_id": row["event_id"],
+                   "true_resource_pairs": row["candidate_resource_pairs"]}
+                  for row in rows]
+        score = score_review_annotations(source, labels)
+        self.assertEqual(score["false_positive_pairs"], 0)
+        # This is a synthetic regression, NOT an independently labeled holdout.
+        self.assertFalse(score["held_out_verified"])
+        self.assertFalse(score["cross_case_contamination_measured"])
+
+
+class CrossCaseContaminationScoringTests(unittest.TestCase):
+    """Synthetic adversarial checks, not independent held-out measurements."""
+
+    def test_transitive_bridge_does_not_assign_unrelated_events(self):
+        source = payload([pair("case-A", "shared", ["event-A"]),
+                          pair("case-C", "shared", ["event-C"])])
+        queue = build_review_queue(source)
+        self.assertEqual(queue["event_reviews_count"], 2)
+        self.assertEqual(queue["ambiguous_event_reviews_count"], 0)
+        rows = {row["event_id"]: row for row in queue["event_reviews"]}
+        self.assertEqual(set(rows), {"event-A", "event-C"})
+        self.assertNotEqual(rows["event-A"]["candidate_resource_pairs"],
+                            rows["event-C"]["candidate_resource_pairs"])
+        labels = [{"window": row["window"], "event_id": row["event_id"],
+                   "true_resource_pairs": row["candidate_resource_pairs"]}
+                  for row in queue["event_reviews"]]
+        result = score_review_annotations(source, labels)
+        self.assertEqual(result["false_positive_pairs"], 0)
+        self.assertFalse(result["held_out_verified"])
+
+    def test_shared_event_ambiguity_exposes_cross_case_false_positive(self):
+        source = payload([pair("case-A", "shared", ["same-event"]),
+                          pair("case-C", "shared", ["same-event"])])
+        queue = build_review_queue(source)
+        self.assertEqual(queue["event_reviews_count"], 1)
+        self.assertEqual(queue["ambiguous_event_reviews_count"], 1)
+        row = queue["event_reviews"][0]
+        self.assertEqual(row["review_status"], "ambiguous_multiple_pairs")
+        self.assertFalse(row["confirmed_case"])
+        labels = [{"window": row["window"], "event_id": row["event_id"],
+                   "true_resource_pairs": row["candidate_resource_pairs"][:1]}]
+        result = score_review_annotations(source, labels)
+        self.assertEqual(result["false_positive_pairs"], 1)
+        self.assertFalse(result["held_out_verified"])
+
+
+class IndependentlySpecifiedSyntheticTruthTests(unittest.TestCase):
+    """Fixed synthetic truth is specified before looking at proposed pair rows.
+
+    This is deliberately NOT a human-labeled or independently held-out cohort.
+    It protects the measurement path against self-labeling and silent bridges.
+    """
+
+    def test_interleaved_interruptions_score_false_links_by_session(self):
+        # The observation plan deliberately includes an interruption that
+        # falsely bridges both cases, plus a legitimate later resumption.
+        earlier = [{"session_started_at": "2026-11-01T09:00:00Z",
+                    "evidence_event_ids": ["a-before"]}]
+        source = payload([
+            pair("case-A", "file-A", ["a-return", "interruption"], earlier),
+            pair("case-B", "file-B", ["b-between", "interruption"]),
+        ])
+        # Ground truth is declared separately from the reconstruction output.
+        truth = {
+            ("earlier:2026-11-01T09:00:00+00:00", "a-before"): [
+                [["github", "issue", "case-A"], ["local_file", "file", "file-A"]]],
+            ("current", "a-return"): [
+                [["github", "issue", "case-A"], ["local_file", "file", "file-A"]]],
+            ("current", "b-between"): [
+                [["github", "issue", "case-B"], ["local_file", "file", "file-B"]]],
+            ("current", "interruption"): [],
+        }
+        queue = build_review_queue(source)
+        self.assertEqual({(r["window"], r["event_id"]) for r in queue["event_reviews"]},
+                         set(truth))
+        labels = [{"window": window, "event_id": event,
+                   "true_resource_pairs": pairs}
+                  for (window, event), pairs in truth.items()]
+        measured = score_review_annotations(source, labels)
+        self.assertEqual((measured["true_positive_pairs"],
+                          measured["false_positive_pairs"],
+                          measured["false_negative_pairs"]), (3, 2, 0))
+        self.assertAlmostEqual(measured["precision"], 3 / 5)
+        self.assertAlmostEqual(measured["recall"], 1.0)
+        self.assertAlmostEqual(measured["f1"], 0.75)
+        self.assertEqual([r["event_id"] for r in measured["event_disagreements"]],
+                         ["interruption"])
+        self.assertEqual(queue["ambiguous_event_reviews_count"], 1)
+        self.assertTrue(queue["no_case_identity_inferred"])
+        self.assertFalse(measured["held_out_verified"])
+        self.assertEqual(measured["explicit_negative_events"], 1)
+        self.assertEqual(measured["explicit_negative_events_with_false_links"], 1)
+        self.assertEqual(measured["explicit_negative_false_link_rate"], 1.0)
+        self.assertEqual(measured["false_positive_events"], 1)
+        self.assertEqual(measured["false_negative_events"], 0)
+        self.assertTrue(measured["explicit_negative_metrics_are_reviewer_labels_not_held_out"])
+        self.assertFalse(measured["cross_case_contamination_measured"])
+        self.assertFalse(measured["real_work_accuracy_claim"])
+
+
+class ExplicitNegativeReviewMetricTests(unittest.TestCase):
+    def test_no_negative_labels_reports_undefined_rate_not_zero(self):
+        source = payload([pair("A", "F", ["e1"])])
+        labels = [{"window": "current", "event_id": "e1",
+                   "true_resource_pairs": [[["github", "issue", "A"],
+                                            ["local_file", "file", "F"]]]}]
+        result = score_review_annotations(source, labels)
+        self.assertEqual(result["explicit_negative_events"], 0)
+        self.assertIsNone(result["explicit_negative_false_link_rate"])
+        self.assertFalse(result["held_out_verified"])
+
+    def test_negative_event_with_candidate_is_counted_as_false_link(self):
+        source = payload([pair("A", "F", ["e1"])])
+        labels = [{"window": "current", "event_id": "e1", "true_resource_pairs": []}]
+        result = score_review_annotations(source, labels)
+        self.assertEqual(result["explicit_negative_events"], 1)
+        self.assertEqual(result["explicit_negative_events_with_false_links"], 1)
+        self.assertEqual(result["explicit_negative_false_link_rate"], 1.0)
+        self.assertFalse(result["missed_source_events_measured"])
+        self.assertFalse(result["cross_case_contamination_measured"])
+
+
+class CompleteSourceCohortTests(unittest.TestCase):
+    """Synthetic adversarial tests, not an independently verified holdout."""
+
+    def test_unlisted_positive_events_count_as_false_negatives(self):
+        from server.reconstruction_review_cli import score_source_event_cohort
+        source = payload([pair("A", "F", ["observed"])])
+        candidate = build_review_queue(source)["event_reviews"][0]["candidate_resource_pairs"][0]
+        labels = [
+            {"window": "current", "event_id": "observed", "true_resource_pairs": [candidate]},
+            {"window": "current", "event_id": "missed", "true_resource_pairs": [candidate]},
+            {"window": "current", "event_id": "interruption", "true_resource_pairs": []},
+        ]
+        score = score_source_event_cohort(source, labels)
+        self.assertEqual(score["true_positive_pairs"], 1)
+        self.assertEqual(score["false_negative_pairs"], 1)
+        self.assertEqual(score["source_events_without_surfaced_predictions"], 2)
+        self.assertEqual(score["positive_source_events_without_predictions"], 1)
+        self.assertEqual(score["recall"], 0.5)
+        self.assertFalse(score["held_out_verified"])
+        self.assertFalse(score["source_event_inventory_exhaustiveness_verified"])
+
+    def test_cross_case_negative_link_is_counted_and_missing_inventory_rejected(self):
+        from server.reconstruction_review_cli import score_source_event_cohort
+        source = payload([pair("A", "F", ["cross_case"])])
+        labels = [{"window": "current", "event_id": "cross_case", "true_resource_pairs": []}]
+        score = score_source_event_cohort(source, labels)
+        self.assertEqual(score["false_positive_pairs"], 1)
+        self.assertEqual(score["negative_source_events_with_false_links"], 1)
+        self.assertEqual(score["negative_false_link_rate"], 1.0)
+        self.assertEqual(score["positive_source_events"], 0)
+        self.assertIsNone(score["positive_false_link_rate"])
+        with self.assertRaisesRegex(ValueError, "omits surfaced"):
+            score_source_event_cohort(source, [
+                {"window": "current", "event_id": "other", "true_resource_pairs": []}
+            ])
+        with self.assertRaisesRegex(ValueError, "duplicate source"):
+            score_source_event_cohort(source, labels + labels)
+
+    def test_source_cohort_disagreements_remain_event_scoped_across_interleaving(self):
+        from server.reconstruction_review_cli import score_source_event_cohort
+        source = payload([
+            pair("case-A", "shared", ["a-before", "a-after"]),
+            pair("case-B", "shared", ["b-between"]),
+        ])
+        rows = {r["event_id"]: r for r in build_review_queue(source)["event_reviews"]}
+        labels = [
+            {"window": "current", "event_id": "a-before",
+             "true_resource_pairs": rows["a-before"]["candidate_resource_pairs"]},
+            {"window": "current", "event_id": "b-between", "true_resource_pairs": []},
+            {"window": "current", "event_id": "a-after",
+             "true_resource_pairs": rows["a-after"]["candidate_resource_pairs"]},
+            {"window": "current", "event_id": "missed",
+             "true_resource_pairs": rows["b-between"]["candidate_resource_pairs"]},
+        ]
+        score = score_source_event_cohort(source, labels)
+        self.assertEqual((score["true_positive_pairs"], score["false_positive_pairs"],
+                          score["false_negative_pairs"]), (2, 1, 1))
+        self.assertEqual(score["per_window_counts"]["current"]["events"], 4)
+        self.assertEqual(score["per_window_counts"]["current"]["negative_false_link_events"], 1)
+        self.assertEqual(score["source_events_with_false_links"], 1)
+        self.assertEqual(score["source_event_false_link_rate"], 0.25)
+        self.assertEqual(score["per_window_counts"]["current"]["false_link_events"], 1)
+        # Three events have positive labels (two surfaced, one missed).
+        # The only false link belongs to the explicitly negative b-between event.
+        self.assertEqual(score["per_window_counts"]["current"]["positive_events"], 3)
+        self.assertEqual(score["per_window_counts"]["current"]["positive_false_link_events"], 0)
+        self.assertEqual(score["per_window_metrics"]["current"]["positive_false_link_rate"], 0.0)
+        metrics = score["per_window_metrics"]["current"]
+        self.assertAlmostEqual(metrics["precision"], 2 / 3)
+        self.assertAlmostEqual(metrics["recall"], 2 / 3)
+        self.assertAlmostEqual(metrics["f1"], 2 / 3)
+        self.assertEqual(metrics["source_event_false_link_rate"], 0.25)
+        self.assertEqual(metrics["negative_false_link_rate"], 1.0)
+        disagreements = {r["event_id"]: r for r in score["event_disagreements"]}
+        self.assertEqual(set(disagreements), {"b-between", "missed"})
+        self.assertTrue(disagreements["b-between"]["explicit_negative_event"])
+        self.assertFalse(disagreements["b-between"]["prediction_missing"])
+        self.assertTrue(disagreements["missed"]["prediction_missing"])
+        self.assertEqual(len(disagreements["missed"]["false_negative_resource_pairs"]), 1)
+        self.assertTrue(score["event_disagreements_are_label_comparisons_not_confirmed_cases"])
+        self.assertFalse(score["held_out_verified"])
+
+    def test_false_link_on_positive_event_is_not_hidden_by_negative_only_rate(self):
+        from server.reconstruction_review_cli import score_source_event_cohort
+        source = payload([
+            pair("case-A", "file-A", ["shared"]),
+            pair("case-B", "file-B", ["shared"]),
+        ])
+        row = build_review_queue(source)["event_reviews"][0]
+        # The event really supports case A; case B is an erroneous extra link.
+        score = score_source_event_cohort(source, [
+            {"window": "current", "event_id": "shared",
+             "true_resource_pairs": row["candidate_resource_pairs"][:1]}
+        ])
+        self.assertEqual(score["negative_source_events"], 0)
+        self.assertIsNone(score["negative_false_link_rate"])
+        self.assertEqual(score["source_events_with_false_links"], 1)
+        self.assertEqual(score["source_event_false_link_rate"], 1.0)
+        self.assertEqual(score["positive_source_events"], 1)
+        self.assertEqual(score["positive_source_events_with_false_links"], 1)
+        self.assertEqual(score["positive_false_link_rate"], 1.0)
+        self.assertIsNone(score["per_window_metrics"]["current"]["negative_false_link_rate"])
+        self.assertEqual(score["per_window_metrics"]["current"]["source_event_false_link_rate"], 1.0)
+        self.assertEqual(score["per_window_counts"]["current"]["false_link_events"], 1)
+        self.assertEqual(score["false_positive_pairs"], 1)
+        self.assertFalse(score["held_out_verified"])
+
+    def test_cross_window_duplicate_source_id_cannot_inflate_denominator(self):
+        from server.reconstruction_review_cli import score_source_event_cohort
+        source = payload([pair("A", "F", ["observed"])])
+        candidate = build_review_queue(source)["event_reviews"][0]["candidate_resource_pairs"][0]
+        # The same source observation cannot be scored twice by placing an
+        # otherwise missed event in a different session window.
+        labels = [
+            {"window": "current", "event_id": "observed",
+             "true_resource_pairs": [candidate]},
+            {"window": "earlier:2026-11-19T09:00:00+00:00", "event_id": "observed",
+             "true_resource_pairs": [candidate]},
+        ]
+        with self.assertRaisesRegex(ValueError, "reused across windows"):
+            score_source_event_cohort(source, labels)
+
+    def test_source_inventory_rejects_fabricated_and_noncanonical_windows(self):
+        from server.reconstruction_review_cli import score_source_event_cohort
+        source = payload([pair("A", "F", ["observed"])])
+        candidate = build_review_queue(source)["event_reviews"][0]["candidate_resource_pairs"][0]
+        observed = {"window": "current", "event_id": "observed",
+                    "true_resource_pairs": [candidate]}
+        for invalid in ("arbitrary", "earlier:tomorrow", "earlier:2026-11-01T09:00:00Z",
+                        "earlier:2026-11-01T09:00:00", "earlier:2026-11-01T10:00:00+01:00"):
+            with self.subTest(window=invalid), self.assertRaisesRegex(ValueError, "noncanonical source event window"):
+                score_source_event_cohort(source, [observed, {
+                    "window": invalid, "event_id": "missed", "true_resource_pairs": [candidate]}])
+        valid = score_source_event_cohort(source, [observed, {
+            "window": "earlier:2026-11-01T09:00:00+00:00",
+            "event_id": "missed", "true_resource_pairs": [candidate]}])
+        self.assertEqual(valid["false_negative_pairs"], 1)
+        self.assertFalse(valid["held_out_verified"])
+
+    def test_truncated_source_cannot_be_scored(self):
+        from server.reconstruction_review_cli import score_source_event_cohort
+        source = payload([pair("A", "F", ["e1"])])
+        source["coverage"]["scan_truncated"] = True
+        with self.assertRaisesRegex(ValueError, "truncated"):
+            score_source_event_cohort(source, [
+                {"window": "current", "event_id": "e1", "true_resource_pairs": []}
+            ])
+
+    def test_source_cohort_stratifies_ambiguous_false_links_and_missed_events(self):
+        from server.reconstruction_review_cli import score_source_event_cohort
+        source = payload([
+            pair("case-A", "file-A", ["ambiguous", "single"]),
+            pair("case-B", "file-B", ["ambiguous"]),
+        ])
+        rows = {row["event_id"]: row for row in build_review_queue(source)["event_reviews"]}
+        a = rows["single"]["candidate_resource_pairs"][0]
+        labels = [
+            {"window": "current", "event_id": "ambiguous", "true_resource_pairs": [a]},
+            {"window": "current", "event_id": "single", "true_resource_pairs": [a]},
+            {"window": "current", "event_id": "missing", "true_resource_pairs": [a]},
+            {"window": "current", "event_id": "interruption", "true_resource_pairs": []},
+        ]
+        result = score_source_event_cohort(source, labels)
+        strata = result["per_prediction_status_metrics"]
+        self.assertEqual(strata["ambiguous_multiple_pairs"]["events"], 1)
+        self.assertEqual(strata["ambiguous_multiple_pairs"]["fp"], 1)
+        self.assertEqual(strata["ambiguous_multiple_pairs"]["false_link_event_rate"], 1.0)
+        self.assertEqual(strata["single_pair"]["events"], 1)
+        self.assertEqual(strata["single_pair"]["tp"], 1)
+        self.assertEqual(strata["single_pair"]["fp"], 0)
+        self.assertEqual(strata["no_prediction"]["events"], 2)
+        self.assertEqual(strata["no_prediction"]["fn"], 1)
+        self.assertEqual(strata["no_prediction"]["false_link_event_rate"], 0.0)
+        self.assertEqual(result["true_positive_pairs"], 2)
+        self.assertEqual(result["false_positive_pairs"], 1)
+        self.assertEqual(result["false_negative_pairs"], 1)
+        self.assertFalse(result["independent_labels_verified"])
+        self.assertFalse(result["held_out_verified"])
+
+
+class SourceCohortOperatorCliTests(unittest.TestCase):
+    def test_source_inventory_counts_unsurfaced_events_without_claiming_holdout(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from server.reconstruction_review_cli import main
+        source = payload([pair("A", "F", ["e1"])])
+        row = build_review_queue(source)["event_reviews"][0]
+        inventory = {"evidence_sha256": build_review_queue(source)["evidence_sha256"], "source_events": [
+            {"window": "current", "event_id": "e1", "true_resource_pairs": row["candidate_resource_pairs"]},
+            {"window": "current", "event_id": "e2", "true_resource_pairs": row["candidate_resource_pairs"]},
+            {"window": "current", "event_id": "e3", "true_resource_pairs": []},
+        ]}
+        with tempfile.TemporaryDirectory() as directory:
+            source_path, labels_path = Path(directory) / "source.json", Path(directory) / "inventory.json"
+            source_path.write_text(json.dumps(source), encoding="utf-8")
+            labels_path.write_text(json.dumps(inventory), encoding="utf-8")
+            output = StringIO()
+            with patch("sys.argv", ["review", str(source_path), "--source-labels", str(labels_path)]):
+                with redirect_stdout(output):
+                    self.assertEqual(main(), 0)
+            result = json.loads(output.getvalue())
+            self.assertEqual(result["true_positive_pairs"], 1)
+            self.assertEqual(result["false_negative_pairs"], 1)
+            self.assertFalse(result["held_out_verified"])
+            self.assertFalse(result["source_event_inventory_exhaustiveness_verified"])
+
+    def test_source_inventory_refuses_stale_digest(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        from contextlib import redirect_stderr
+        from io import StringIO
+        from server.reconstruction_review_cli import main
+        source = payload([pair("A", "F", ["e1"])])
+        with tempfile.TemporaryDirectory() as directory:
+            source_path, labels_path = Path(directory) / "source.json", Path(directory) / "inventory.json"
+            source_path.write_text(json.dumps(source), encoding="utf-8")
+            labels_path.write_text(json.dumps({"evidence_sha256": "0" * 64, "source_events": []}), encoding="utf-8")
+            with patch("sys.argv", ["review", str(source_path), "--source-labels", str(labels_path)]):
+                with redirect_stderr(StringIO()) as errors:
+                    self.assertEqual(main(), 2)
+            self.assertIn("digest mismatch", errors.getvalue())

@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from . import event_log_workspace as workspace
 
 MAX_MAPPINGS_PER_LOG = 50
+TEMPLATE_FORMAT = "openworkgraph.activity-mapping.v1"
 MAX_GROUPS = 200
 Label = Annotated[str, Field(min_length=1, max_length=200)]
 
@@ -115,6 +116,27 @@ def create(log_id: str, payload: Any) -> dict[str, Any]:
     return _with_conn(log_id, run)
 
 
+def preview_template(log_id: str, document: Any) -> dict[str, Any]:
+    if (not isinstance(document, dict) or set(document) != {"format", "mapping"}
+            or document["format"] != TEMPLATE_FORMAT):
+        raise workspace.EventLogWorkspaceError("choose an OWG activity mapping file")
+    mapping = _parse(document["mapping"])
+    definition = mapping.model_dump()
+
+    def run(conn):
+        labels = sorted({activity for group in mapping.groups for activity in group.activities})
+        rows = conn.execute("""SELECT activity, count(*) FROM events
+            WHERE log_id=? AND list_contains(?, activity) GROUP BY activity""", [log_id, labels]).fetchall()
+        counts = dict(rows)
+        groups = [{"label": group.label, "activities": len(group.activities),
+                   "matched_events": sum(counts.get(activity, 0) for activity in set(group.activities)),
+                   "missing_activities": [activity for activity in group.activities if activity not in counts]}
+                  for group in mapping.groups]
+        return {"format": TEMPLATE_FORMAT, "mapping": definition, "groups": groups,
+                "applied": False}
+    return _with_conn(log_id, run)
+
+
 def _require(conn, log_id: str, mapping_id: str) -> None:
     if not conn.execute("SELECT 1 FROM activity_mappings WHERE log_id = ? AND mapping_id = ?",
                         [log_id, str(mapping_id)]).fetchone():
@@ -154,14 +176,18 @@ def erase(conn, log_id: str) -> None:
     erase_hidden(conn, log_id)
 
 
-def apply_to_case_events(conn, log_id: str) -> dict[str, Any] | None:
-    """Relabel the request's ``ce`` table with the applied mapping, if any; describe what was done."""
+def applied_mapping(conn, log_id: str) -> dict[str, Any] | None:
     _ensure(conn)
     row = conn.execute("SELECT mapping_id, created_at, definition, applied FROM activity_mappings "
                        "WHERE log_id = ? AND applied", [log_id]).fetchone()
-    if row is None:
+    return _describe(*row) if row is not None else None
+
+
+def apply_to_case_events(conn, log_id: str) -> dict[str, Any] | None:
+    """Relabel the request's ``ce`` table with the applied mapping, if any; describe what was done."""
+    described = applied_mapping(conn, log_id)
+    if described is None:
         return None
-    described = _describe(*row)
     pairs = [(a, g["label"]) for g in described["groups"] for a in g["activities"]]
     before = conn.execute("SELECT count(*) FROM ce").fetchone()[0]
     conn.execute("CREATE OR REPLACE TEMP TABLE ce_map AS SELECT unnest(?) AS original, unnest(?) AS label",

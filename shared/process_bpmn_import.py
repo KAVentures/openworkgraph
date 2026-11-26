@@ -358,7 +358,7 @@ def _apply_lanes(process, applied):
     process.remove(lane_sets[0])
 
 
-def import_bpmn(raw: bytes):
+def _read_document(raw: bytes):
     if not isinstance(raw,bytes) or not raw or len(raw)>MAX_BYTES:
         raise BPMNImportError('BPMN must be a nonempty UTF-8 file of at most 128 KiB')
     try:
@@ -383,7 +383,7 @@ def import_bpmn(raw: bytes):
     if any(not identifier or len(identifier)>200 for identifier in ids) or len(ids)!=len(set(ids)):
         raise BPMNImportError('BPMN IDs must be unique, nonempty and at most 200 characters')
     processes=[]
-    ignored_diagram_count=0
+    diagrams=[]
     collaborations,definitions=[],[]
     for child in root:
         if child.tag=='{'+BPMN+'}process':processes.append(child)
@@ -398,14 +398,69 @@ def import_bpmn(raw: bytes):
                 namespace=node.tag.partition('}')[0].removeprefix('{')
                 if namespace not in DIAGRAM_NAMESPACES:
                     raise BPMNImportError('Diagram metadata contains unsupported elements')
-            ignored_diagram_count+=1
+            diagrams.append(child)
         else:
-            raise BPMNImportError('Import one process only; collaborations, external imports and executable extensions are unsupported')
-    if len(processes)!=1:
-        raise BPMNImportError('Import exactly one BPMN process at a time')
-    process=copy.deepcopy(processes[0])
+            raise BPMNImportError('External imports and executable extensions are unsupported')
+    if not processes:
+        raise BPMNImportError('A BPMN document needs at least one process')
     if len(collaborations)>1:
         raise BPMNImportError('Import at most one collaboration')
+    return processes, collaborations, definitions, diagrams
+
+
+def _selection_blocker(process, processes, collaborations):
+    if len(processes) == 1:
+        return None
+    if collaborations:
+        return 'The file has a collaboration spanning multiple processes'
+    if not process.get('id'):
+        return 'This process has no identifier'
+    siblings = {item.get('id') for item in processes if item is not process and item.get('id')}
+    for child in process.iter():
+        if child.tag == '{'+BPMN+'}callActivity':
+            called = (child.get('calledElement') or '').strip().rsplit(':', 1)[-1]
+            if called in siblings:
+                return 'This process calls another process in the same file'
+    return None
+
+
+def _process_choice(process, processes, collaborations):
+    return {
+        'id': process.get('id'),
+        'name': ' '.join((process.get('name') or '').split())[:160],
+        'blocking_reason': _selection_blocker(process, processes, collaborations),
+    }
+
+
+def inspect_bpmn(raw: bytes):
+    processes, collaborations, _, _ = _read_document(raw)
+    return {'format': 'openworkgraph.bpmn-process-inspection.v1',
+            'source_sha256': sha256(raw).hexdigest(),
+            'processes': [_process_choice(process, processes, collaborations) for process in processes]}
+
+
+def import_bpmn(raw: bytes, *, process_id: str | None = None, expected_source_sha256: str | None = None):
+    processes, collaborations, definitions, diagrams = _read_document(raw)
+    source_sha256 = sha256(raw).hexdigest()
+    selected_process = None
+    if process_id is None:
+        if len(processes) != 1:
+            raise BPMNImportError('Inspect the BPMN file and choose an independent process to preview')
+        source = processes[0]
+    else:
+        if expected_source_sha256 != source_sha256:
+            raise BPMNImportError('The BPMN file changed. Inspect it again before previewing.')
+        source = next((item for item in processes if item.get('id') == process_id), None)
+        if source is None:
+            raise BPMNImportError('The selected process is not in the inspected file')
+        selected_process = _process_choice(source, processes, collaborations)
+        if selected_process['blocking_reason']:
+            raise BPMNImportError(selected_process['blocking_reason'])
+    process = copy.deepcopy(source)
+    if len(processes) > 1:
+        diagrams = [diagram for diagram in diagrams if any(
+            node.tag.endswith('}BPMNPlane') and node.get('bpmnElement') == process_id for node in diagram
+        )]
     applied=[]
     if collaborations:_apply_collaboration(collaborations[0],process,definitions,applied)
     _apply_lanes(process,applied)
@@ -613,10 +668,11 @@ def import_bpmn(raw: bytes):
     if notes:warnings.append('documentation_requires_separate_manual_review_and_is_not_saved_with_the_model')
     if manual_conditions:warnings.append('unevaluated_manual_review_guards_retained_in_the_model')
     if typed_tasks:warnings.append('typed_task_execution_semantics_not_imported')
-    if ignored_diagram_count:warnings.append('diagram_layout_recomputed_by_owg')
+    if diagrams:warnings.append('diagram_layout_recomputed_by_owg')
     if process.get('isExecutable','false').lower()=='true':warnings.append('source_executable_flag_does_not_authorize_execution')
     return {'format':'openworkgraph.bpmn-draft-import.v1','process_model':model.model_dump(),
-        'source_sha256':sha256(raw).hexdigest(),'source_node_ids':mapping,
+        'source_sha256':source_sha256,'source_node_ids':mapping,
+        **({'selected_process': selected_process} if selected_process is not None else {}),
         'documentation_notes':notes,'placeholder_label_count':len(label_corrections),
         'lowered_constructs':[{'kind':item['kind']} for item in lowered][:40],
         'message_flow_count':sum(item['kind']=='message_flow' for item in applied),

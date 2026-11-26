@@ -81,6 +81,14 @@ const {tmpdir}=require('node:os'),path=require('node:path');
   await panel.getByRole('button',{name:'Find open questions across sources'}).click();
   await panel.locator('#owgCatalogClarifyResult').getByText(
     "The documents disagree about rule 'big'",{exact:false}).waitFor();
+  await texts.nth(0).fill('A refund amount above 700 EUR must get manager approval. '.repeat(6));
+  await panel.getByRole('button',{name:'Find open questions across sources'}).click();
+  await panel.locator('#owgCatalogClarifyResult').getByText('Source review incomplete:',{exact:false}).waitFor();
+  const incomplete=panel.locator('#owgCatalogClarifyResult section').filter({hasText:"documents disagree about rule 'big'"}).first();
+  await incomplete.getByText('Confirmation is unavailable',{exact:false}).waitFor();
+  assert.equal(await incomplete.getByRole('button',{name:'Confirm',exact:true}).count(),0);
+  await incomplete.getByRole('button',{name:'Defer',exact:true}).click();
+  await incomplete.getByText('Previous decision: defer.',{exact:false}).waitFor();
   await panel.locator('#owgCatalogClarifyAddDocument').click();
   await panel.locator('#owgCatalogClarifyAddDocument').click();
   assert.equal(await texts.count(),5);

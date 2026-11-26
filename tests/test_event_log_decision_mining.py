@@ -128,6 +128,44 @@ def test_rule_recovers_threshold_without_later_data():
     assert "not the business rule" in result["caveat"]
 
 
+def test_timed_attribute_scope_excludes_case_attributes_and_later_events():
+    log = _log()
+    with workspace._connect() as conn:
+        conn.execute("""UPDATE objects SET attributes = to_json(struct_pack(
+            final_route := CASE WHEN (try_cast(substr(object_id, 2) AS INTEGER) * 137) % 10000 >= 5000
+                                THEN 'Manager approval' ELSE 'Auto approve' END))
+            WHERE log_id = ?""", [log])
+    combined = decisions.analyse(log, "Check")
+    timed = decisions.analyse(log, "Check", include_case_attributes=False)
+    assert combined["includes_case_attributes"] is True
+    assert "case.final_route" in {field["name"] for field in combined["features"]}
+    assert timed["includes_case_attributes"] is False
+    assert {field["name"] for field in timed["features"]} == {"event.amount", "event.channel"}
+    assert timed["evaluation"]["holdout_accuracy"] == 1.0
+    evaluated = timed["evaluation"]
+    assert evaluated["training_cases"] + evaluated["holdout_cases"] == 200
+    assert sum(branch["actual_occurrences"] for branch in evaluated["holdout_branches"]) == evaluated["holdout_occurrences"]
+    assert {branch["next"] for branch in evaluated["holdout_branches"]} == {"Auto approve", "Manager approval"}
+    assert all(branch["precision"] == branch["recall"] == 1 for branch in evaluated["holdout_branches"])
+    assert "c0" not in str(evaluated)
+
+
+def test_branch_metrics_distinguish_unseen_and_unpredicted_routes():
+    from collections import Counter
+
+    branches = decisions._branch_evaluation(
+        Counter({"A": 9, "B": 2, "Completion": 4}),
+        {"A": Counter({"A": 6, "Completion": 1}), "B": Counter({"A": 2}),
+         "new": Counter({"A": 1})}, "Completion"
+    )
+    by = {row["next"]: row for row in branches}
+    assert by["A"]["precision"] == round(6 / 9, 4)
+    assert by["A"]["recall"] == round(6 / 7, 4)
+    assert by["B"]["precision"] is None and by["B"]["recall"] == 0
+    assert by["new"]["training_occurrences"] == 0 and by["new"]["recall"] == 0
+    assert by["Completion"]["next_is_terminal"] and by["Completion"]["recall"] is None
+
+
 def test_split_is_repeatable_and_case_level():
     log = _log()
     assert decisions.analyse(log, "Check")["rules"] == decisions.analyse(log, "Check")["rules"]

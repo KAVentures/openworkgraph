@@ -340,7 +340,7 @@ def _parallel(children, parts, log, noise, notes, mark):
     ordered = {"op": "seq", "children": [children[i] for i in order], "simplified_from": "parallel"}
     names = ", ".join(_first_activity(children[i]) or "skipped work" for i in order)
     total = sum(n for _, n in log)
-    if sum(n for t, n in log if _accepts(ordered, t)) >= (1 - noise) * total:
+    if _fits_enough(ordered, log, (1 - noise) * total):
         notes.append(f"Concurrent behaviour of {names} is drawn in its most common observed order, because a "
                      "catalog parallel region cannot contain decisions or loops or more than 8 branches.")
         return ordered
@@ -348,6 +348,21 @@ def _parallel(children, parts, log, noise, notes, mark):
     return _flower(sorted({a for t, _ in log for a in t}), log, notes,
                    f"Concurrent behaviour of {names} has decisions or loops a catalog parallel region cannot hold "
                    "and no single order fits")
+
+
+def _fits_enough(tree, log, needed) -> bool:
+    """Whether cases the tree accepts weigh at least ``needed``: the same answer as summing every
+    accepted variant, but replay stops once the answer is settled (heaviest variants first)."""
+    fitting, remaining = 0, sum(n for _, n in log)
+    for trace, n in sorted(log, key=lambda item: -item[1]):
+        if fitting >= needed:
+            return True
+        if fitting + remaining < needed:
+            return False
+        remaining -= n
+        if _accepts(tree, trace):
+            fitting += n
+    return fitting >= needed
 
 
 def _fall_through(alphabet, log, noise, depth, notes):

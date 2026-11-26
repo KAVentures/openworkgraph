@@ -53,7 +53,18 @@ reachability, branch rules and paths to a terminal. Loops are supported when
 there is a route to a terminal. Up to 40 activities, 100 transitions and 40 rules
 are allowed. A graph revision request is bounded to 128 KiB.
 
+## Structural execution assurance
+
+Open a saved revision and expand **Structural execution assurance** to inspect
+reachable token markings, completed node and transition witnesses, dead-end
+prefixes and possible loops. Results bind the exact saved content digest and
+never evaluate policy or authorize execution. See [token-flow assurance](PROCESS_TOKEN_ASSURANCE.md)
+for the structural semantics, explicit limits and JSON export.
+
 ## Compare immutable saved revisions before handoff
+
+Use [policy revision impact review](PROCESS_POLICY_IMPACT.md) within a saved revision comparison to identify changed declarations, affected decision dependencies and potential downstream graph paths. The review does not establish actual execution or policy equivalence.
+
 
 Open a saved process in **Process catalog**, select **Load revision history**,
 then **Compare rN with opened rM** for a different saved revision. This explicitly
@@ -328,3 +339,20 @@ structural analysis. SDK projects now support complete node-firing plans with
 serial customer-authorized execution across every required branch and join.
 Complete nested paired blocks are supported within the 40-node model limit;
 conditional regions remain unsupported.
+
+## Local process prerequisites
+
+Open a saved design and select **Review prerequisites**. Load the saved designs,
+choose a prerequisite, then record whether the selected process uses its output
+or policy and why. Confirm the exact revisions before saving. OWG pins both
+designs by revision and content digest and rejects cycles or concurrent edits.
+To clear the current declaration, remove the entries and save an empty revision.
+
+A new revision makes the earlier pin superseded. Review the latest revision
+before choosing **Use latest** and saving a new declaration. **Potential
+consumers** shows direct and indirect relationships from saved declarations.
+Deleting a saved design also deletes its own declarations. Other designs keep
+their pins and show the deleted prerequisite as unavailable.
+
+These declarations stay in the local reviewed catalog. The dashboard reads and
+saves them through `GET|POST /v1/process-catalog/prerequisites?workflow_id=...`.

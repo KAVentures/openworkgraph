@@ -6,7 +6,9 @@ sends notifications, grants permissions, or returns case-level evidence.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from typing import Any
 
 from . import event_log_signal_inbox as inbox
@@ -37,7 +39,8 @@ def _schedules() -> dict[str, dict[str, Any]]:
         return {}
 
 
-def overview(*, status: str = "attention", limit: int = 100, offset: int = 0) -> dict[str, Any]:
+def overview(*, status: str = "attention", limit: int = 100, offset: int = 0,
+             expected_fingerprint: str | None = None) -> dict[str, Any]:
     """Snapshot bounded cross-log review status, without changing saved rules.
 
     Full status counters are calculated BEFORE limiting displayed rows; no
@@ -49,6 +52,9 @@ def overview(*, status: str = "attention", limit: int = 100, offset: int = 0) ->
         raise workspace.EventLogWorkspaceError("signal overview limit must be 1 to 200")
     if type(offset) is not int or not 0 <= offset <= MAX_RULES_TOTAL:
         raise workspace.EventLogWorkspaceError("signal overview offset must be 0 to 2500")
+    if expected_fingerprint is not None and (not isinstance(expected_fingerprint, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", expected_fingerprint)):
+        raise workspace.EventLogWorkspaceError("invalid signal overview fingerprint")
     schedules = _schedules()
     now = inbox._now()
     counts = {name: 0 for name in _STATUS_ORDER}
@@ -129,11 +135,16 @@ def overview(*, status: str = "attention", limit: int = 100, offset: int = 0) ->
         filtered = pending
     else:
         filtered = [r for r in pending if r["status"] == status]
+    payload = {"filter": status, "items": pending, "datasets_scanned": len(log_rows)}
+    fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"),
+                                            ensure_ascii=True).encode("utf-8")).hexdigest()
+    if expected_fingerprint is not None and expected_fingerprint != fingerprint:
+        raise workspace.EventLogWorkspaceError("Signal states changed. Refresh the overview before changing pages.")
     shown = filtered[offset:offset + limit]
     next_offset = offset + len(shown) if shown and offset + len(shown) < len(filtered) else None
     return {
         "format": "openworkgraph.signal-review-overview.v1",
-        "filter": status,
+        "filter": status, "fingerprint": fingerprint,
         "datasets_scanned": len(log_rows),
         "datasets_with_rules": len({r["log_id"] for r in pending}),
         "total_rules": len(pending),
