@@ -22,6 +22,18 @@ value or qualifier. Value matches cover retained history, including values
 from times other than the event being checked. Select a result to copy its
 exact stored text into the check. Labels the checker cannot accept are shown as unavailable. Lookups
 are local and owner-only; later pages use the reviewed append revision.
+When a selected or loaded value contains carriage returns, the form preserves
+the exact stored text until the value is edited, even though the text area
+displays normalized line breaks.
+
+Use **Save as new check** to keep the current definition with the retained
+log, then **Load saved check** to restore it without running it. Saved
+definitions can contain exact recorded values and stay local with the log.
+Each log keeps up to 50 named checks. Updates and deletion require the loaded
+definition's revision; if another edit wins, reload before changing it.
+Deleting the retained log also deletes its saved checks. Saved definitions
+contain settings, not event or witness results, and loading one does not
+authorize any action.
 
 ## Time and uncertainty
 
@@ -85,6 +97,13 @@ The owner-only label endpoint is
 literal substring. Pass a non-null `next_after` (including an empty string)
 as `after` with `expected_revision` for another page. `checkable` marks
 whether each returned label can be used by the checker.
+
+Saved definitions use the owner-only `GET` and `POST`
+`/v1/event-logs/{log_id}/object-state-check/saved` endpoints. A saved ID can
+be read, updated with `expected_revision`, or deleted with an
+`expected_revision` query parameter under the same path. Definitions contain
+only check settings; result filters, page offsets, results and source event
+data are not stored in them.
 
 ## Complete review worklists
 
