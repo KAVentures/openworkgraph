@@ -595,6 +595,10 @@ async def local_capability_guard(request: Request, call_next):
             return _json_error("active agent grant required", 401)
         return await call_next(request)
 
+    # Dedicated route authenticates a scoped write-only producer before reading its body.
+    if method=="POST" and path=="/v1/process-catalog/procurement-producer/ingest":
+        return await call_next(request)
+
     if path.startswith("/v1/"):
         if not _api_authenticated(request):
             return _json_error("authentication required", 401)

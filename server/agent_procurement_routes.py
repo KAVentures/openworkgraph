@@ -20,6 +20,7 @@ from shared import agent_procurement_router_pilot as pilot
 from shared import agent_procurement_router_monitor as monitor
 from . import agent_procurement_deployment as deployment
 from . import agent_procurement_monitor_journal as journal
+from . import agent_procurement_monitor_telemetry as telemetry
 from .local_auth import dashboard_session_valid
 from .local_process_catalog import catalog
 
@@ -88,6 +89,10 @@ def _inspect(operation, workflow_id, revision, payload):
             if operation!="router-monitor-review" and catalog.get(workflow_id)["revision"]!=revision:
                 raise HTTPException(409,"Open latest saved process revision before monitoring decision")
             result=monitor.operation(packet,operation,document)
+        elif operation=="router-producer-grant":
+            result=telemetry.grant(workflow_id,revision,document)
+        elif operation=="router-producer-revoke":
+            result=telemetry.revoke(workflow_id,revision,document)
         elif operation.startswith("router-journal-"):
             result=journal.operation(packet,workflow_id,revision,operation,document)
         elif operation in ("deployment-review","deployment-decide"):
@@ -130,7 +135,7 @@ def _inspect(operation, workflow_id, revision, payload):
 
 
 @router.post("/v1/process-catalog/procurement/{operation}")
-async def inspect_procurement(request: Request, operation: Literal["compare","freeze","review","nominate","assess","decide","outcome-review","rollout-review","deployment-review","deployment-decide","operating-cost","router-freeze","router-review","router-change-freeze","router-change-assess","router-change-decide","router-pilot-freeze","router-pilot-review","router-pilot-decide","router-monitor-freeze","router-monitor-review","router-monitor-decide","router-journal-list","router-journal-append","router-journal-detail","router-journal-decide","router-journal-forget"],
+async def inspect_procurement(request: Request, operation: Literal["compare","freeze","review","nominate","assess","decide","outcome-review","rollout-review","deployment-review","deployment-decide","operating-cost","router-freeze","router-review","router-change-freeze","router-change-assess","router-change-decide","router-pilot-freeze","router-pilot-review","router-pilot-decide","router-monitor-freeze","router-monitor-review","router-monitor-decide","router-journal-list","router-journal-append","router-journal-detail","router-journal-decide","router-journal-forget","router-producer-grant","router-producer-revoke"],
                               workflow_id: str = Query(pattern=r"^[A-Za-z0-9_-]{1,80}$"),
                               revision: int = Query(ge=1,le=2**31-1)):
     _require_dashboard(request)
@@ -138,3 +143,21 @@ async def inspect_procurement(request: Request, operation: Literal["compare","fr
     _require_dashboard(request)
     result=await run_in_threadpool(_inspect,operation,workflow_id,revision,payload)
     return JSONResponse(result,headers={"Cache-Control":"no-store"})
+
+
+@router.post("/v1/process-catalog/procurement-producer/ingest")
+async def ingest_monitor_producer(request: Request):
+    # Separate write-only capability, never accepted by dashboard or MCP.
+    try:
+        if request.headers.get("origin"):
+            raise HTTPException(403,"Native producer requests only")
+        credential=await run_in_threadpool(telemetry.authenticate,request.headers.get("authorization"))
+        payload=await _envelope(request)
+        result=await run_in_threadpool(telemetry.ingest,credential,payload)
+        return JSONResponse(result,headers={"Cache-Control":"no-store"})
+    except journal.JournalError as exc:
+        raise HTTPException(exc.status,str(exc)) from None
+    except sqlite3.Error:
+        raise HTTPException(503,"Local procurement storage temporarily unavailable") from None
+    except (ValueError,TypeError,KeyError,RecursionError,OverflowError):
+        raise HTTPException(422,"Invalid monitoring producer evidence") from None

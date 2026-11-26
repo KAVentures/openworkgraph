@@ -233,6 +233,11 @@ def review(packet,initial,monitor_plan,snapshot,previous_checkpoint):
     if digest(plan)!=digest(monitor_plan):
         raise ValueError("monitoring plan or initial evidence changed")
     initial_sources={o["source_evidence_sha256"] for o in initial["captures"]["observations"]}
+    return _review_verified(plan,snapshot,initial_sources,previous_checkpoint)
+
+
+def _review_verified(plan,snapshot,initial_sources,previous_checkpoint):
+    """Internal: use only an already recomputed and retained plan."""
     latest=_snapshot_review(plan,snapshot,initial_sources)
     previous_pin=None;prior_overdue=[];prior_triggers=[]
     if previous_checkpoint is not None:

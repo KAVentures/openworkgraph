@@ -106,7 +106,9 @@ def _view(key,state,history):
         "eligible_for_continued_monitoring_review":bool(state["report"]["eligible_for_continued_monitoring_review"]
             and not state["sticky_rollback_triggers"] and not state["rollback_referral_recorded"]),
         "result_persisted":True,"local_dashboard_session_required":True,
-        "source_evidence_authenticated":False,"tamper_resistant_against_database_owner":False,
+        "source_evidence_authenticated":False,
+        "credential_authenticated_observations":len(state.get("producer_attribution",{})),
+        "producer_attribution":state.get("producer_attribution",{}),"tamper_resistant_against_database_owner":False,
         "deployment_changed":False,"execution_authorized":False}
 
 
@@ -157,6 +159,19 @@ def _require_current(conn,workflow_id,revision):
     if current!=revision:raise JournalError("Open latest saved process revision before recording monitoring evidence",409)
 
 
+def _next_state(state,plan,snapshot,report,initial_sources):
+    sticky=_unique([*(state["sticky_rollback_triggers"] if state else []),
+        *report["rollback_review_triggers"],*report["rollback_triggers_at_previous_checkpoint"]])
+    overdue=sorted(set((state["overdue_window_history"] if state else [])+
+        [w["window_id"] for w in report["windows"] if w["state"]=="overdue"]+
+        report["overdue_windows_at_previous_checkpoint"]))
+    return {"plan_sha256":report["monitor_plan_sha256"],"coordinator_alias":plan["request"]["coordinator_alias"],
+        "snapshot":snapshot,"report":report,"sticky_rollback_triggers":sticky,"overdue_window_history":overdue,
+        "rollback_referral_recorded":state["rollback_referral_recorded"] if state else False,
+        "monitor_plan":plan,"initial_sources":sorted(initial_sources),
+        "producer_attribution":state.get("producer_attribution",{}) if state else {}}
+
+
 def append(packet,workflow_id,revision,doc):
     if not isinstance(doc,dict) or set(doc)!={"initial","monitor_plan","snapshot","request"}:
         raise JournalError("Exact monitoring checkpoint bundle required")
@@ -173,14 +188,7 @@ def append(packet,workflow_id,revision,doc):
         raise JournalError("Monitor ID already binds another plan",409)
     prior=None if state is None else {"snapshot":state["snapshot"],"expected_snapshot_sha256":state["report"]["snapshot_sha256"]}
     report=review(packet,doc["initial"],plan,snapshot,prior)
-    sticky=_unique([*(state["sticky_rollback_triggers"] if state else []),
-        *report["rollback_review_triggers"],*report["rollback_triggers_at_previous_checkpoint"]])
-    overdue=sorted(set((state["overdue_window_history"] if state else [])+
-        [w["window_id"] for w in report["windows"] if w["state"]=="overdue"]+
-        report["overdue_windows_at_previous_checkpoint"]))
-    new_state={"plan_sha256":report["monitor_plan_sha256"],"coordinator_alias":plan["request"]["coordinator_alias"],
-        "snapshot":snapshot,"report":report,"sticky_rollback_triggers":sticky,"overdue_window_history":overdue,
-        "rollback_referral_recorded":state["rollback_referral_recorded"] if state else False}
+    new_state=_next_state(state,plan,snapshot,report,{o["source_evidence_sha256"] for o in doc["initial"]["captures"]["observations"]})
     with db.connect() as conn:
         conn.execute("BEGIN IMMEDIATE");_schema(conn);current,history=_read(conn,key)
         _check_head(history,req.expected_head_sha256)
@@ -230,6 +238,8 @@ def forget(workflow_id,revision,doc):
         conn.execute("BEGIN IMMEDIATE");_schema(conn);state,history=_read(conn,key)
         if state is None:raise JournalError("Monitoring journal not found",404)
         _check_head(history,req.expected_head_sha256)
+        from . import agent_procurement_monitor_telemetry as telemetry
+        telemetry.forget_in_transaction(conn,key)
         conn.execute("DELETE FROM procurement_monitor_journal_entries WHERE workflow_id=? AND revision=? AND monitor_id=?",key)
         conn.execute("DELETE FROM procurement_monitor_journals WHERE workflow_id=? AND revision=? AND monitor_id=?",key)
     return {"format":FORMAT,"monitor_id":req.monitor_id,"removed":True,"result_persisted":False,
