@@ -81,7 +81,7 @@ else: raise AssertionError('tampered model accepted')
 '''
     run=subprocess.run([sys.executable,'-c',code],cwd=tmp_path,capture_output=True,text=True,timeout=20)
     assert run.returncode==0,run.stderr
-    run=subprocess.run([sys.executable,'-m','unittest','-v','test_execution','test_evaluation','test_run_queue'],cwd=tmp_path,
+    run=subprocess.run([sys.executable,'-m','unittest','-v','test_execution','test_evaluation','test_run_queue','test_binding_rehearsal'],cwd=tmp_path,
                        capture_output=True,text=True,timeout=30)
     assert run.returncode==0,run.stdout+run.stderr
 
