@@ -8343,8 +8343,82 @@
       field('Expectation',acceptanceExpected),acceptanceNextField,acceptanceAdd,field('Editable acceptance suite JSON',acceptanceText),
       field('Optional candidate model (.pnml)',acceptanceCandidate),acceptanceRun,acceptanceStatus,acceptanceOut);
     soundBox.appendChild(acceptanceBox);
+    const mutationBox=document.createElement('details');
+    mutationBox.append(el('summary','Challenge acceptance suite with synthetic faults'),
+      el('div','Evaluate the current suite against independently perturbed copies of the baseline model. No saved model is changed. Surviving faults with a completed-trace difference can suggest additional regression scenarios.','muted'));
+    const mutationCount=input('owgPetriMutationCount','number');mutationCount.min='1';mutationCount.max='8';mutationCount.step='1';mutationCount.value='4';
+    const mutationOps=[['hide_activity','Hide an activity'],['rename_activity','Rename an activity'],
+      ['remove_transition','Remove a transition'],['increase_input_weight','Increase an input-arc weight']].map(([value,label])=>{
+        const control=document.createElement('input');control.type='checkbox';control.checked=true;control.value=value;
+        const wrapper=el('label');wrapper.append(control,document.createTextNode(' '+label));return {control,wrapper};
+      });
+    const mutationRun=button('Challenge acceptance suite','secondary');mutationRun.id='owgPetriMutationRun';mutationRun.disabled=true;
+    const mutationStatus=el('div',null,'muted');mutationStatus.id='owgPetriMutationStatus';mutationStatus.setAttribute('role','status');mutationStatus.setAttribute('aria-live','polite');
+    const mutationOut=el('div');mutationOut.id='owgPetriMutationResults';
+    mutationBox.append(field('Maximum synthetic faults',mutationCount),...mutationOps.map(x=>x.wrapper),mutationRun,mutationStatus,mutationOut);
+    acceptanceBox.appendChild(mutationBox);
+    let mutationBusy=false,mutationRevision=0;
+    const clearMutation=()=>{mutationRevision++;mutationStatus.textContent='';mutationOut.replaceChildren();mutationRun.disabled=mutationBusy||!lastNet;};
+    mutationCount.oninput=clearMutation;mutationOps.forEach(x=>x.control.onchange=clearMutation);
+    mutationRun.onclick=async()=>{
+      const net=lastNet,revision=mutationRevision;
+      if(!net||mutationBusy||net.generation!==state.generation)return;
+      const current=()=>lastNet===net&&state.generation===net.generation&&mutationRevision===revision;
+      mutationBusy=true;mutationRun.disabled=true;mutationOut.replaceChildren();mutationStatus.textContent='Challenging the declared suite…';
+      try{
+        if(!mutationCount.validity.valid||!mutationCount.value)throw new Error('Choose 1–8 synthetic faults.');
+        const spec={suite:JSON.parse(acceptanceText.value),settings:{max_mutants:Number(mutationCount.value),operators:mutationOps.filter(x=>x.control.checked).map(x=>x.control.value)}};
+        if(!spec.settings.operators.length)throw new Error('Choose at least one fault operator.');
+        const encoder=new TextEncoder(),settings=encoder.encode(JSON.stringify(spec)),baseline=encoder.encode(net.body);
+        if(settings.byteLength>266240||baseline.byteLength>2*1024*1024)throw new Error('Suite or model exceeds the review limit.');
+        const header=new Uint8Array(4);new DataView(header.buffer).setUint32(0,settings.byteLength);
+        const body=new Blob([header,settings,baseline],{type:'application/octet-stream'});
+        const r=await (await api('/v1/event-logs/petri-mutation-review',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body})).json();
+        if(!current())return;
+        if(r.status==='baseline_not_passed'){
+          mutationStatus.textContent='Baseline suite must pass before mutation testing.';
+          mutationOut.appendChild(table(['Baseline scenario','Status'],r.baseline.cases.map(c=>[c.id,c.status])));
+        }else if(r.status==='no_applicable_mutations'){
+          mutationStatus.textContent='No applicable synthetic faults for these operators.';
+        }else{
+          const c=r.counts,bounds=r.detected_fraction_bounds;
+          mutationStatus.textContent=c.detected+' detected · '+c.survived+' survived · '+c.inconclusive+' inconclusive';
+          mutationOut.appendChild(el('div','Selected '+r.selected_mutants+' of '+r.available_mutants+' possible individual faults. Detection fraction: '+pct(bounds.lower)+'–'+pct(bounds.upper)+'. '+r.survivors_with_proven_language_difference+' surviving faults have a proven completed-trace difference.','muted'));
+          mutationOut.appendChild(table(['Fault','Operator','Status','Failed scenarios','Completed-trace equivalence'],r.mutants.map(m=>[
+            m.id,m.recipe.operator.replaceAll('_',' '),m.status,m.failed_case_ids.join(', ')||'—',
+            m.language_comparison?(m.language_comparison.equivalent===true?'Verified equivalent':m.language_comparison.equivalent===false?'Different':'Inconclusive'):'Not checked'
+          ])));
+          for(const m of r.mutants){
+            const details=document.createElement('details');details.append(el('summary',m.id+' · '+m.status),el('div',JSON.stringify(m.recipe),'muted'));
+            if(m.reason)details.appendChild(el('div',m.reason,'muted'));
+            for(const scenario of m.suggested_cases||[]){
+              details.appendChild(el('div',JSON.stringify(scenario)));
+              const adopt=button('Add suggested regression scenario','secondary');adopt.onclick=()=>{
+                if(!current())return;
+                try{
+                  const suite=JSON.parse(acceptanceText.value);
+                  if(!Array.isArray(suite.cases)||suite.cases.length>=40)throw new Error('Suite must have room for another scenario.');
+                  if(suite.cases.some(c=>c.id===scenario.id))throw new Error('Scenario ID already exists.');
+                  suite.cases.push(scenario);acceptanceText.value=JSON.stringify(suite,null,2);clearAcceptance();
+                  mutationStatus.textContent='Suggested scenario added to editor. Review before running the suite.';
+                }catch(error){mutationStatus.textContent=error.message;}
+              };details.appendChild(adopt);
+            }
+            mutationOut.appendChild(details);
+          }
+        }
+        mutationOut.appendChild(el('div',r.caveat,'muted'));
+        const download=button('Download mutation review (JSON)','secondary');download.onclick=()=>{
+          if(!current())return;
+          const url=URL.createObjectURL(new Blob([JSON.stringify(r,null,2)],{type:'application/json'}));
+          const link=document.createElement('a');link.href=url;link.download='petri-mutation-'+r.suite_sha256.slice(0,12)+'.json';
+          document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+        };mutationOut.appendChild(download);
+      }catch(error){if(current())mutationStatus.textContent=error.message;}
+      finally{mutationBusy=false;mutationRun.disabled=!lastNet||lastNet.generation!==state.generation;}
+    };
     let acceptanceBusy=false,acceptanceRevision=0;
-    const clearAcceptance=()=>{acceptanceRevision++;acceptanceStatus.textContent='';acceptanceOut.replaceChildren();acceptanceRun.disabled=acceptanceBusy||!lastNet;};
+    const clearAcceptance=()=>{acceptanceRevision++;acceptanceStatus.textContent='';acceptanceOut.replaceChildren();acceptanceRun.disabled=acceptanceBusy||!lastNet;clearMutation();};
     acceptanceText.oninput=clearAcceptance;acceptanceCandidate.onchange=clearAcceptance;
     acceptanceAdd.onclick=()=>{
       try{
@@ -8472,6 +8546,7 @@
         compareRun.disabled=compareBusy||!compareFile.files?.length;
         policyRun.disabled=policyBusy;
         acceptanceRun.disabled=acceptanceBusy;
+        mutationRun.disabled=mutationBusy;
         genRun.disabled=genBusy;
         const f=r.fitness;
         statusLine.textContent='Fitness '+pct(f.log)+' on '+label+': '+Number(f.fitting_cases).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases ('+pct(f.fitting_case_share)+') replay without missing or remaining tokens.'+(r.precision.precision!==null?' Precision '+pct(r.precision.precision)+'.':'')+' The net has '+r.net.places+' places and '+r.net.transitions+' transitions ('+r.net.silent_transitions+' silent).'+(r.cases_excluded?' '+Number(r.cases_excluded).toLocaleString()+' cases beyond the length or variant limit were left out.':'');
