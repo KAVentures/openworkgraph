@@ -4944,7 +4944,7 @@
         const preferred=catalog.packs.find(p=>installs.installs.some(i=>i.pack_id===p.pack_id));if(preferred)chooser.value=preferred.pack_id;
         const show=()=>{
           const pack=catalog.packs.find(p=>p.pack_id===chooser.value),installed=installs.installs.find(i=>i.pack_id===pack.pack_id);
-          const choices={object_types:{},activities:{}},inputs={};
+          const choices={object_types:{},activities:{}},inputs={},templateSetters={object_types:{},activities:{}};
           const rows=[];
           for(const [kind,names] of [['object_types',installs.log_object_types],['activities',installs.log_activities]])for(const r of pack[kind]){
             // Allow an exact source label beyond the bounded suggestions. Pick
@@ -4961,6 +4961,11 @@
             s.onchange=()=>{exact.hidden=s.value!==custom;choices[kind][r.role]=selected();edited();};
             exact.oninput=()=>{choices[kind][r.role]=selected();edited();};
             choices[kind][r.role]=selected();
+            templateSetters[kind][r.role]=label=>{
+              s.value=label?(names.includes(label)?label:custom):'';
+              exact.value=s.value===custom?label:'';exact.hidden=s.value!==custom;
+              choices[kind][r.role]=selected();
+            };
             const lookup=input('owgDomainPackLookup-'+r.role,'search');lookup.maxLength=400;
             lookup.setAttribute('aria-label','Search labels for '+r.label);
             const find=button('Find labels','secondary');find.setAttribute('aria-label','Find labels for '+r.label);
@@ -5034,8 +5039,59 @@
             finally{if(reviewHistory.isConnected)reviewHistory.disabled=!installs.installs.some(i=>i.pack_id===pack.pack_id);}
           };
           const actions=el('div',null,'row');actions.append(previewButton,install,run,remove,exportReport,reviewHistory);
+          const portable=el('details');portable.id='owgDomainPackTemplate';
+          const templateFile=input('owgDomainPackTemplateFile','file');templateFile.accept='.json,application/json';
+          templateFile.setAttribute('aria-label','Portable domain pack setup file');
+          const exportTemplate=button('Download installed setup only','secondary');exportTemplate.id='owgDomainPackTemplateExport';
+          const importTemplate=button('Review setup file','secondary');importTemplate.id='owgDomainPackTemplateReview';
+          const templateResult=el('div');templateResult.setAttribute('role','status');
+          exportTemplate.disabled=!installed;importTemplate.disabled=true;
+          let fileTurn=0;
+          templateFile.onchange=()=>{fileTurn++;importTemplate.disabled=!templateFile.files?.length;templateResult.replaceChildren();};
+          exportTemplate.onclick=async()=>{
+            exportTemplate.disabled=true;
+            try{
+              const response=await getJSON(base+'/'+pack.pack_id+'/template');
+              if(!exportTemplate.isConnected||generation!==state.generation)return;
+              download('owg-domain-pack-setup-'+pack.pack_id+'.json',JSON.stringify(response,null,2),'application/json');
+            }catch(error){if(exportTemplate.isConnected)templateResult.textContent=error.message;}
+            finally{if(exportTemplate.isConnected)exportTemplate.disabled=!installs.installs.some(i=>i.pack_id===pack.pack_id);}
+          };
+          importTemplate.onclick=async()=>{
+            if(installing||previewing||!templateFile.files?.length)return;
+            const file=templateFile.files[0];
+            if(file.size>131072){templateResult.textContent='Setup files must be at most 128 KiB.';return;}
+            previewRequired=true;invalidate();const t2=turn,ft=++fileTurn;
+            install.disabled=true;run.disabled=true;importTemplate.disabled=true;
+            templateResult.textContent='Checking setup against exact labels in this log…';
+            try{
+              const raw=await file.text();
+              if(!current(t2)||ft!==fileTurn)return;
+              // Send the original JSON to the strict server parser. Parsing and
+              // reserializing here could hide duplicate keys in the uploaded file.
+              const response=await (await api(base+'/'+pack.pack_id+'/template/review',
+                {method:'POST',headers:{'Content-Type':'application/json'},body:raw})).json();
+              if(!current(t2)||ft!==fileTurn)return;
+              if(response.pack_id!==pack.pack_id||response.version!==pack.latest_version||
+                 response.installation_performed!==false)throw new Error('Unexpected setup review.');
+              for(const [kind,setters] of Object.entries(templateSetters))
+                for(const [role,set] of Object.entries(setters))set(response.suggested_mapping[kind][role]||'');
+              for(const [name,i] of Object.entries(inputs))i.value=String(response.parameters[name]);
+              edited();
+              templateResult.replaceChildren(el('p','Candidate labels loaded, replacing the unsaved form only. Review every role; a matching name is not proof of meaning.'),
+                table(['Role','Label in template','Rows in destination','Status'],response.roles.map(r=>[
+                  r.kind+' / '+r.role+(r.required?' (required)':''),r.template_label??'Not mapped',r.destination_count,r.status.replaceAll('_',' ')])),
+                el('p',response.missing_required_roles.length?'Map missing required roles: '+response.missing_required_roles.join(', ')+'.':'All required labels have exact candidates.'),
+                ...(response.missing_optional_mapped_roles.length?[el('p','Previously mapped optional roles not found: '+response.missing_optional_mapped_roles.join(', ')+'. Review or explicitly leave unmapped.')]:[]),
+                el('p','Run Preview and test mapping before installing. The file grants no authority.','muted'));
+            }catch(error){if(current(t2)&&ft===fileTurn)templateResult.textContent=error.message;}
+            finally{if(importTemplate.isConnected&&ft===fileTurn)importTemplate.disabled=!templateFile.files?.length;}
+          };
+          portable.append(el('summary','Transfer a saved setup between logs'),
+            el('p','Setup files contain mapped label names and parameters, not case evidence, source IDs or approval tokens. Labels can still be sensitive. Import replaces unsaved form values only.','muted'),
+            exportTemplate,field('Setup JSON file',templateFile),importTemplate,templateResult);
           const assumptions=el('ul');assumptions.className='muted';pack.assumptions.forEach(a=>assumptions.appendChild(el('li',a)));
-          form.replaceChildren(field('Domain pack',chooser),el('h4',pack.title+' '+pack.latest_version),el('div',pack.description,'muted'),table(['Kind','Role','Name in this log'],rows),paramRow,actions,el('div','Report downloads include supplied case/object examples and mapped labels. Save and share them only where authorized.','muted'),el('h4','Assumptions'),assumptions);
+          form.replaceChildren(field('Domain pack',chooser),el('h4',pack.title+' '+pack.latest_version),el('div',pack.description,'muted'),table(['Kind','Role','Name in this log'],rows),paramRow,actions,portable,el('div','Report downloads include supplied case/object examples and mapped labels. Save and share them only where authorized.','muted'),el('h4','Assumptions'),assumptions);
           status.textContent=(installed?'Installed: '+installed.version+' on '+String(installed.installed_at).slice(0,10)+'.':'Not installed on this log.')+(installs.names_truncated?' Suggestions show the 1,000 most frequent labels; enter an exact label for others.':'');
           const proposedSetup=()=>{
             const parameters={};for(const [k,i] of Object.entries(inputs)){
@@ -5097,7 +5153,7 @@
               installs.installs=[...installs.installs.filter(i=>i.pack_id!==pack.pack_id),r];
               previewRequired=false;
               if(!current(t2))return;
-              run.disabled=remove.disabled=reviewHistory.disabled=false;
+              run.disabled=remove.disabled=reviewHistory.disabled=exportTemplate.disabled=false;
               status.textContent=({installed:'Installed',upgraded:'Upgraded from '+r.previous_version+' to',reconfigured:'Reinstalled'}[r.change])+' '+r.version+'. '+r.metric_ids.length+' case metrics were added to this log’s metric library.'+(r.not_applicable.length?' '+r.not_applicable.length+' definitions do not apply without their optional roles.':'');
             }catch(error){if(current(t2))status.textContent=error.message;}
             finally{installing=false;if(install.isConnected){previewButton.disabled=false;install.disabled=previewRequired;}}
