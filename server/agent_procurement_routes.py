@@ -21,6 +21,7 @@ from shared import agent_procurement_router_monitor as monitor
 from . import agent_procurement_deployment as deployment
 from . import agent_procurement_monitor_journal as journal
 from . import agent_procurement_monitor_telemetry as telemetry
+from . import agent_procurement_workforce_overview as workforce
 from .local_auth import dashboard_session_valid
 from .local_process_catalog import catalog
 
@@ -163,3 +164,15 @@ async def ingest_monitor_producer(request: Request):
         raise HTTPException(503,"Local procurement storage temporarily unavailable") from None
     except (ValueError,TypeError,KeyError,RecursionError,OverflowError):
         raise HTTPException(422,"Invalid monitoring producer evidence") from None
+
+
+@router.get("/v1/process-catalog/procurement-workforce/overview")
+async def workforce_overview(request: Request):
+    _require_dashboard(request)
+    try:
+        result=await run_in_threadpool(workforce.overview)
+        return JSONResponse(result,headers={"Cache-Control":"no-store"})
+    except journal.JournalError as exc:
+        raise HTTPException(exc.status,str(exc)) from None
+    except (sqlite3.Error,ValueError,TypeError,KeyError,RecursionError,OverflowError):
+        raise HTTPException(503,"Local workforce monitoring overview unavailable") from None

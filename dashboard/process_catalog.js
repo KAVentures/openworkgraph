@@ -1876,6 +1876,58 @@
       button('Clear procurement review',()=>{documentFile.value='';planFile.value='';clearProcurementReview();}),output);
     host.appendChild(section);
   }
+  async function workforceOverview(){
+    const host=document.getElementById('owgWorkforceOverview');
+    host.replaceChildren(el('p','Loading retained local monitoring journals…'));
+    try{
+      const data=await request('/v1/process-catalog/procurement-workforce/overview');
+      host.replaceChildren(el('h3','AI workforce monitoring · local installation'),
+        el('p',data.journal_count+' retained journals · '+data.included_journals+' included in totals · '+data.excluded_journals+' excluded · '+data.unreadable_journals.length+' unreadable'),
+        el('p','Snapshot viewed '+new Date(data.as_of_server_ms).toISOString()+'. No production execution or independently verified savings.'));
+      const money=(v,currency)=>{
+        if(v==null)return 'unbounded';
+        const n=BigInt(v.numerator),d=BigInt(v.denominator),a=n<0n?-n:n,r=(2n*a+d)/(2n*d);
+        return (a%d!==0n?'≈ ':'')+(n<0n?'-':'')+String(r/1000000n)+'.'+String(r%1000000n).padStart(6,'0')+' '+currency;
+      };
+      const range=(v,currency)=>money(v.lower_microunits,currency)+' to '+money(v.upper_microunits,currency);
+      const armLine=(name,a,currency)=>el('p',name+': '+a.recorded+'/'+a.cases+' recorded · success '+a.counts.success.lower+'–'+a.counts.success.upper+' · declared variable cost '+range(a.variable_cost,currency));
+      if(data.totals_may_be_incomplete)host.appendChild(el('p','Totals exclude overlapping, historical, unreadable or otherwise ineligible journals. Inspect the exclusions before using these figures.'));
+      for(const g of data.currency_totals){
+        const section=el('section');section.append(el('h4',g.currency+' · '+g.journals+' included journals'),
+          el('p',g.recorded_cases+' recorded / '+g.started_window_cases+' started / '+g.scheduled_cases+' scheduled · '+g.credential_authenticated_observations+' credential-attributed observations'));
+        for(const [name,a] of Object.entries(g.arms))section.appendChild(armLine(name,a,g.currency));
+        host.appendChild(section);
+      }
+      host.appendChild(el('h4','Incident and review queue'));
+      const filter=el('select');filter.setAttribute('aria-label','Workforce review filter');
+      for(const [value,label] of [['all','All journals'],['rollback_review','Rollback review'],['attention','Needs attention'],['excluded_review','Excluded review'],['monitoring','Monitoring'],['continuation_review','Continuation review']]){
+        const o=el('option',label);o.value=value;filter.appendChild(o);
+      }
+      const list=el('div');const draw=()=>{
+        list.replaceChildren();
+        const rows=data.journals.filter(r=>filter.value==='all'||r.priority===filter.value);
+        if(!rows.length)list.appendChild(el('p','No matching journals.'));
+        for(const r of rows){
+          const section=el('section');
+          section.append(el('h5',r.title+' · r'+r.revision+' · '+r.monitor_id),
+            el('p',r.priority.replaceAll('_',' ')+' · '+r.recorded_cases+'/'+r.started_window_cases+' recorded · '+(r.included_in_totals?'included in totals':'excluded: '+r.exclusion_reasons.join(', '))),
+            el('p','Retained cutoff: '+new Date(r.as_of_ms).toISOString()+' · head '+r.head_sha256),
+            el('p','Rollback triggers: '+(r.sticky_rollback_triggers.map(x=>(x.window_id||'cumulative')+': '+x.reason).join(' · ')||'none recorded')),
+            el('p','Rollback referral: '+(r.rollback_referral_recorded?'recorded':'not recorded')+' · due for review: '+(r.due_for_review_windows.join(', ')||'none')),
+            button('Open saved revision',()=>load(r.workflow_id,r.revision)));
+          for(const [name,a] of Object.entries(r.arms))section.appendChild(armLine(name,a,r.currency));
+          list.appendChild(section);
+        }
+      };
+      filter.addEventListener('change',draw);host.append(filter,list);draw();
+      for(const r of data.unreadable_journals)host.appendChild(el('p','Unreadable journal: '+r.workflow_id+' · r'+r.revision+' · '+r.monitor_id));
+      host.appendChild(el('p','Currencies are never combined. Disjoint arm costs are not realized savings. Source credentials do not verify business outcomes.'));
+      host.appendChild(button('Download workforce monitoring overview',()=>{
+        const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)+'\n'],{type:'application/json'}));
+        const link=el('a');link.href=url;link.download='owg-workforce-monitoring-overview.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+      }));
+    }catch(error){host.replaceChildren(el('p','Workforce overview unavailable.'));status(error.message);}
+  }
   async function backlog(currency){
     const result=await request('/v1/process-catalog/opportunities?'+new URLSearchParams({currency}));
     const host=document.getElementById('owgCatalogBacklog');host.replaceChildren(el('h3','Improvement backlog · '+currency));
@@ -2020,6 +2072,8 @@
     let currency='USD';field(host,'Backlog currency',currency,value=>currency=value,['USD','EUR','GBP','SEK']);
     host.appendChild(button('Review improvement backlog',()=>backlog(currency)));
     const backlogHost=el('div');backlogHost.id='owgCatalogBacklog';host.appendChild(backlogHost);
+    host.appendChild(button('Review AI workforce monitoring',()=>workforceOverview()));
+    const workforceHost=el('div');workforceHost.id='owgWorkforceOverview';host.appendChild(workforceHost);
     const message=el('p','No saved process has been loaded.');message.id='owgCatalogStatus';message.setAttribute('role','status');host.appendChild(message);
     const editor=el('div');editor.id='owgCatalogEditor';host.appendChild(editor);
     const style=el('style');style.textContent='#owgProcessCatalog label{display:block;margin:8px 0}#owgProcessCatalog fieldset{margin:12px 0;min-width:0}#owgProcessCatalog input:not([type=checkbox]){max-width:100%;width:32em}#owgProcessCatalog .owg-catalog-actions{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0}';host.prepend(style);
