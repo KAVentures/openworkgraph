@@ -103,6 +103,29 @@ def _deletion_envelope(clusters,field,k):
             "upper_witness_deleted_case_ids":[c["case_id"] for c in high_drop]}
 
 
+def _universal_check(clusters,field,k,interval,threshold,minimum):
+    # All-subset pass is equivalent to the worst lower/upper endpoint
+    # satisfying the threshold. A definite failure needs a single subset
+    # whose *entire* interval violates it; sort the opposite endpoint to
+    # find such a witness even if the adverse-bound witness is ambiguous.
+    adverse=interval["lower_witness_deleted_case_ids" if minimum else "upper_witness_deleted_case_ids"]
+    retained=[c for c in clusters if c["case_id"] not in set(adverse)]
+    witness=_interval(sum(c[field+"_lower"] for c in retained),
+                      sum(c[field+"_upper"] for c in retained),interval["denominator"])
+    opposite=sorted(clusters,key=lambda c:(
+        -c[field+"_upper"] if minimum else c[field+"_lower"],c["case_id"]))[:k]
+    excluded={c["case_id"] for c in opposite}
+    other=[c for c in clusters if c["case_id"] not in excluded]
+    extreme=_interval(sum(c[field+"_lower"] for c in other),
+                      sum(c[field+"_upper"] for c in other),interval["denominator"])
+    definite=_gate(extreme,threshold,minimum=minimum)
+    bound_status=_gate(interval,threshold,minimum=minimum)
+    status="pass" if bound_status=="pass" else "fail" if definite=="fail" else "unknown"
+    return {"status":status,"adverse_witness_interval":witness,
+            "adverse_witness_status":_gate(witness,threshold,minimum=minimum),
+            "definite_failure_witness_deleted_case_ids":sorted(excluded) if definite=="fail" else None}
+
+
 def _checks(intervals,policy):
     return {
         "paired_match_change":_gate(intervals["match_difference"],
@@ -188,31 +211,9 @@ def _comparison(paired,attempts,categories,repeats,policy):
             ("match_difference",policy.minimum_paired_match_change_basis_points,True),
             ("regression",policy.maximum_paired_regression_basis_points,False),
             ("new_critical",policy.maximum_new_critical_basis_points,False)):
-            interval=entry["intervals"][field]
-            # Test the adverse witness with its own missing-data bounds.
-            drop=set(interval["lower_witness_deleted_case_ids" if minimum else "upper_witness_deleted_case_ids"])
-            retained=[c for c in clusters if c["case_id"] not in drop]
-            witness=_interval(sum(c[field+"_lower"] for c in retained),
-                              sum(c[field+"_upper"] for c in retained),
-                              interval["denominator"])
-            bound_status=entry["checks"][{"match_difference":"paired_match_change",
-                "regression":"paired_regression","new_critical":"new_critical"}[field]]
-            witness_status=_gate(witness,threshold,minimum=minimum)
-            # Even if the first adverse witness is ambiguous, a different
-            # subset may definitely fail: minimize upper (or maximize lower).
-            opposite=sorted(clusters,key=lambda c:(
-                -c[field+"_upper"] if minimum else c[field+"_lower"],c["case_id"]))[:k]
-            excluded={c["case_id"] for c in opposite}
-            other=[c for c in clusters if c["case_id"] not in excluded]
-            extreme=_interval(sum(c[field+"_lower"] for c in other),
-                              sum(c[field+"_upper"] for c in other),interval["denominator"])
-            definite=_gate(extreme,threshold,minimum=minimum)
-            status="pass" if bound_status=="pass" else "fail" if definite=="fail" else "unknown"
-            stress.append(status)
-            entry.setdefault("universal_checks",{})[field]={
-                "status":status,"adverse_witness_interval":witness,
-                "adverse_witness_status":witness_status,
-                "definite_failure_witness_deleted_case_ids":sorted(excluded) if definite=="fail" else None}
+            check=_universal_check(clusters,field,k,entry["intervals"][field],threshold,minimum)
+            stress.append(check["status"])
+            entry.setdefault("universal_checks",{})[field]=check
         entry["universal_status"]=_status(v["status"] for v in entry["universal_checks"].values())
     return {"candidate_id":paired["candidate_id"],"full_population":full,
             "all_repeats_match_case_rate":_all_repeat_match(attempts),
