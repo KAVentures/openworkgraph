@@ -6,9 +6,9 @@ across object types. Unknown outcomes are not passes; no causal claims.
 from __future__ import annotations
 
 from itertools import combinations
-from threading import BoundedSemaphore
 from typing import Any
 
+from . import event_log_domain_pack_benchmark as benchmark
 from . import event_log_domain_packs as packs
 from . import event_log_compliance as compliance
 from . import event_log_workspace as workspace
@@ -20,7 +20,7 @@ FORMAT = "openworkgraph.domain-pack-overlap.v1"
 MAX_SOURCE_ROWS = 500_000
 MAX_OUTCOME_ROWS = 2_000_000
 MAX_RULES = 12
-_GUARD = BoundedSemaphore(1)
+_GUARD = benchmark._GUARD
 
 
 def _fail(message):
@@ -208,7 +208,7 @@ def _page(conn, basis, evidence):
 def review(log_id, pack_id, spec):
     kind, indices, evidence = _parse(spec)
     if not _GUARD.acquire(blocking=False):
-        _fail("Another overlap review is running")
+        _fail("Another domain pack analysis is running")
     try:
         with workspace._LOCK:
             basis = _basis(log_id, pack_id, kind, indices)

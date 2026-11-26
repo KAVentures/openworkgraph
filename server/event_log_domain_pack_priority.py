@@ -6,9 +6,9 @@ upper bound. Every case is evaluated within one exact object type.
 """
 from __future__ import annotations
 
-from threading import BoundedSemaphore
 from typing import Any
 
+from . import event_log_domain_pack_benchmark as benchmark
 from . import event_log_domain_packs as packs
 from . import event_log_workspace as workspace
 from . import event_log_compliance as compliance
@@ -21,7 +21,7 @@ MAX_RULES = 12
 MAX_SOURCE_ROWS = 500_000
 MAX_OUTCOMES = 2_000_000
 MAX_EXPORT_CASES = 5_000
-_GUARD = BoundedSemaphore(1)
+_GUARD = benchmark._GUARD
 
 
 def _fail(message):
@@ -172,6 +172,81 @@ def _page(conn, basis, after, limit):
             "next_after":{"case_id":page[-1][0],"lower":page[-1][1],"upper":page[-1][2]} if len(rows)>limit else None}
 
 
+def inspect_case(log_id, pack_id, spec):
+    """Explain one matching case under the exact reviewed worklist basis."""
+    expected = {"case_type", "weights", "minimum_confirmed", "include_uncertain",
+                "expected_basis_sha256", "case_id"}
+    if not isinstance(spec, dict) or set(spec) != expected:
+        _fail("Case inspection requires the reviewed selection, basis digest and case ID")
+    key, expected_pin = spec["case_id"], spec["expected_basis_sha256"]
+    if not isinstance(key, str) or not 1 <= len(key) <= 200:
+        _fail("Invalid inspection case identifier")
+    if not isinstance(expected_pin, str) or len(expected_pin) != 64 or any(c not in "0123456789abcdef" for c in expected_pin):
+        _fail("Invalid reviewed inspection digest")
+    request = {**{k:v for k,v in spec.items() if k not in ("case_id", "expected_basis_sha256")}, "limit":1}
+    kind, weights, _ = _parse(request)
+    if not _GUARD.acquire(blocking=False):
+        _fail("Another domain pack analysis is running")
+    try:
+        with workspace._LOCK:
+            basis = _basis(log_id, pack_id, kind, weights, request)
+            pin = provenance.digest(basis)
+            if pin != expected_pin:
+                _fail("Reviewed source or installation changed; rerun priority review")
+
+            def run(conn):
+                # Rule outcomes are independent per case. Restrict only after
+                # selecting the exact same object-type projection as the review.
+                conn.execute("DELETE FROM ce WHERE case_id<>?", [key])
+                event_count = conn.execute("SELECT count(*) FROM ce").fetchone()[0]
+                if not event_count:
+                    _fail("Case is not present in the reviewed projection")
+                compliance.positions(conn)
+                outcomes = []
+                lo = hi = 0
+                for item in basis["rules"]:
+                    rule = compliance.parse({"case_type":kind,"rules":[item["rule"]]}).rules[0]
+                    compliance._materialize_outcomes(conn,rule)
+                    rows = conn.execute("SELECT case_id,activated,violated,unknown,detail FROM co").fetchall()
+                    if len(rows) != 1 or rows[0][0] != key:
+                        _fail("Case rule outcome does not match the reviewed projection")
+                    _, activated, violated, unknown, detail = rows[0]
+                    if (violated and unknown) or ((violated or unknown) and not activated):
+                        _fail("Case rule outcome is inconsistent")
+                    weight = item["weight"]
+                    if violated:
+                        status, reason = "violated", detail
+                        lo += weight
+                        hi += weight
+                    elif unknown:
+                        status, reason = "unknown", "Insufficient recorded evidence to decide this rule"
+                        hi += weight
+                    elif activated:
+                        status, reason = "satisfied", None
+                    else:
+                        status, reason = "nonactivated", None
+                    outcomes.append({"rule_index":item["rule_index"],"rule":item["rule"],
+                                     "weight":weight,"status":status,"detail":reason,
+                                     "confirmed_points":weight if violated else 0,
+                                     "possible_points":weight if violated or unknown else 0})
+                minimum = basis["minimum_confirmed"]
+                if (hi if basis["include_uncertain"] else lo) < minimum:
+                    _fail("Case is outside the reviewed worklist threshold")
+                return {"case_id":key,"projected_events":event_count,"lower":lo,"upper":hi,
+                        "threshold_status":"confirmed" if lo>=minimum else "uncertain",
+                        "outcomes":outcomes}
+
+            output = workspace._query(log_id,kind,run)
+            fields = ("case_id","projected_events","lower","upper","threshold_status","outcomes")
+            return {"format":"openworkgraph.domain-pack-priority-case.v1",
+                    "basis_sha256":pin,**{k:output[k] for k in fields},
+                    "resource_names_returned":False,"configuration_modified":False,
+                    "execution_authorized":False,
+                    "interpretation":"Recorded rule evidence only. A missing event may reflect unfinished work or incomplete data; a violation is not verified policy breach."}
+    finally:
+        _GUARD.release()
+
+
 def _review(log_id, pack_id, spec, *, complete_export=False):
     export_pin = None
     if complete_export:
@@ -183,7 +258,7 @@ def _review(log_id, pack_id, spec, *, complete_export=False):
         spec = {**{k:v for k,v in spec.items() if k != "expected_basis_sha256"}, "limit": 1}
     kind, weights, after = _parse(spec)
     if not _GUARD.acquire(blocking=False):
-        _fail("Another priority review is running")
+        _fail("Another domain pack analysis is running")
     try:
         with workspace._LOCK:
             basis = _basis(log_id, pack_id, kind, weights, spec)

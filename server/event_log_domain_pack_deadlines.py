@@ -6,9 +6,9 @@ mappings and other parameters are fixed. No pack configuration is modified.
 from __future__ import annotations
 
 import math
-from threading import BoundedSemaphore
 from typing import Any
 
+from . import event_log_domain_pack_benchmark as benchmark
 from . import event_log_domain_packs as packs
 from . import event_log_workspace as workspace
 from . import event_log_compliance as compliance
@@ -21,7 +21,7 @@ MAX_SOURCE_ROWS = 500_000
 MAX_RULES = 8
 MAX_VALUES = 8
 MAX_EVIDENCE = 100
-_GUARD = BoundedSemaphore(1)
+_GUARD = benchmark._GUARD
 _STATES = {"newly_satisfied", "newly_violating", "missing_response", "late_complete"}
 
 

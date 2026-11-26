@@ -57,3 +57,7 @@ not establish operational priority validity or real customer acceptance.
 ## Complete reviewed export
 
 The separate complete JSON download re-evaluates the exact reviewed selection under the workspace lock and requires its basis digest. POST the same selection without limit or cursor, with expected_basis_sha256, to the priority/export endpoint. It returns every matching case (up to 5,000), or refuses without a partial result. A changed configuration or retained source requires a fresh review. Ordinary JSON and CSV downloads still contain just the current page. Complete exports can contain sensitive case identifiers; store and share them only with authorized recipients.
+
+## Case evidence
+
+Inspect a matching case on the displayed worklist to see each selected rule's exact recorded outcome, declared weight, confirmed and possible points, and violation detail. POST the same reviewed selection without limit or cursor, with expected_basis_sha256 and case_id, to priority/case. The inspection rejects changed source/configuration, absent case IDs, and cases outside the reviewed threshold. It evaluates only the selected case, returns no resource names, and never uses the compliance engine's violation-detail string for an unknown or satisfied outcome. The benchmark, portfolio, deadline, overlap and priority workbenches now share one nonblocking execution guard.

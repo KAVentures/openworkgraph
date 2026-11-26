@@ -5239,7 +5239,8 @@
     const include=el('input');include.id='owgPriorityUncertain';include.type='checkbox';include.checked=true;
     const load=button('Load installed packs','secondary'),run=button('Build priority worklist'),next=button('Next cases','secondary');
     const status=el('p',null,'muted'),out=el('div'),choices=el('fieldset');status.setAttribute('role','status');
-    let revision=0,groups=[],weights=[],report=null,request=null,busy=false,exporting=false;
+    let revision=0,groups=[],weights=[],report=null,request=null,busy=false,exporting=false,inspecting=false;
+    const detailOut=el('div');detailOut.setAttribute('aria-live','polite');
     const exportAll=button('Download complete worklist JSON','secondary');exportAll.disabled=true;
     const active=t=>valid()&&panel.isConnected&&t===revision;
     const endpoint=()=>'/v1/event-logs/'+encodeURIComponent(logId)+'/domain-packs/'+encodeURIComponent(pack.value)+'/priority';
@@ -5247,7 +5248,7 @@
       ['Case','Confirmed points','Possible points','Threshold status','Violated rule indices (zero based)','Unknown rule indices (zero based)','Basis digest'],
       ...r.cases.map(c=>[c.case_id,c.lower,c.upper,c.threshold_status,c.violated_rule_indices.join(';'),c.unknown_rule_indices.join(';'),r.basis_sha256])]);
     function clear(){
-      revision++;report=null;request=null;out.replaceChildren();next.hidden=true;downloads.enable(false);exportAll.disabled=true;
+      revision++;report=null;request=null;out.replaceChildren();detailOut.replaceChildren();next.hidden=true;downloads.enable(false);exportAll.disabled=true;
       run.disabled=busy||!weights.some(w=>w.check.checked);
     }
     function edited(){clear();status.textContent='Selection changed; build a fresh worklist.';}
@@ -5283,7 +5284,7 @@
       finally{if(panel.isConnected)load.disabled=false;}
     };
     async function page(body,t){
-      busy=true;run.disabled=true;next.disabled=true;downloads.enable(false);exportAll.disabled=true;status.textContent='Evaluating retained cases…';
+      busy=true;detailOut.replaceChildren();run.disabled=true;next.disabled=true;downloads.enable(false);exportAll.disabled=true;status.textContent='Evaluating retained cases…';
       try{
         const r=await (await api(endpoint(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
         if(!active(t))return;
@@ -5295,13 +5296,34 @@
           el('p',r.matching_cases+' matching cases; '+r.cases.length+' on this page. Export contains this page only.','muted'),
           table(['Case','Confirmed points','Possible points','Status','Violated rules','Unknown rules'],r.cases.map(c=>[
             c.case_id,c.lower,c.upper,c.threshold_status,c.violated_rule_indices.map(i=>i+1).join(', ')||'—',c.unknown_rule_indices.map(i=>i+1).join(', ')||'—'])),
+          ...r.cases.map(c=>{
+            const b=button('Inspect '+c.case_id,'secondary');b.onclick=()=>inspect(c,b,r,t);return b;
+          }),
           el('p',r.interpretation,'muted'));
         next.hidden=!r.next_after;downloads.enable(true);exportAll.disabled=exporting||r.matching_cases>r.export_case_limit;status.textContent='Priority review complete. No configuration changed.';
       }catch(error){if(active(t)){report=null;next.hidden=true;status.textContent=error.message;}}
       finally{busy=false;if(panel.isConnected){run.disabled=!weights.some(w=>w.check.checked);next.disabled=false;}}
     }
+    async function inspect(c,b,r,t){
+      if(inspecting||busy||exporting||!active(t)||report!==r||!request)return;
+      inspecting=true;b.disabled=true;detailOut.replaceChildren(el('p','Verifying case evidence…','muted'));
+      try{
+        const {limit,...selection}=request;
+        const result=await (await api(endpoint()+'/case',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({...selection,expected_basis_sha256:r.basis_sha256,case_id:c.case_id})})).json();
+        if(!active(t)||report!==r)return;
+        if(result.basis_sha256!==r.basis_sha256||result.case_id!==c.case_id||result.lower!==c.lower||result.upper!==c.upper)
+          throw new Error('Case evidence no longer matches the reviewed worklist.');
+        detailOut.replaceChildren(el('h4','Case evidence: '+result.case_id),
+          el('p',result.projected_events+' projected events · '+result.lower+' confirmed / '+result.upper+' possible points'),
+          table(['Rule','Recorded outcome','Confirmed points','Possible points','Evidence detail'],result.outcomes.map(x=>[
+            x.rule_index+1,x.status,x.confirmed_points,x.possible_points,x.detail??'—'])),
+          el('p',result.interpretation,'muted'));
+      }catch(error){if(active(t)&&report===r){clear();status.textContent=error.message+' Build a fresh worklist.';}}
+      finally{inspecting=false;if(b.isConnected)b.disabled=false;}
+    }
     run.onclick=()=>{
-      if(busy)return;
+      if(busy||inspecting||exporting)return;
       clear();const t=revision,chosen=weights.filter(x=>x.check.checked);
       const points=chosen.map(x=>({rule_index:x.rule.rule_index,weight:Number(x.w.value)}));
       if(!chosen.length||chosen.length>12||chosen.some(x=>!x.w.value||!x.w.checkValidity())||
@@ -5311,9 +5333,9 @@
       request={case_type:kind.value,weights:points,minimum_confirmed:Number(threshold.value),include_uncertain:include.checked,limit:50};
       page(request,t);
     };
-    next.onclick=()=>{if(!busy&&report?.next_after&&request)page({...request,expected_basis_sha256:report.basis_sha256,after:report.next_after},revision);};
+    next.onclick=()=>{if(!busy&&!inspecting&&!exporting&&report?.next_after&&request)page({...request,expected_basis_sha256:report.basis_sha256,after:report.next_after},revision);};
     exportAll.onclick=async()=>{
-      if(exporting||busy||!report||!request)return;
+      if(exporting||busy||inspecting||!report||!request)return;
       const t=revision,reviewed=report,{limit,...selection}=request;
       exporting=true;exportAll.disabled=true;status.textContent='Verifying and exporting every matching case…';
       try{
@@ -5330,7 +5352,7 @@
     run.disabled=true;next.hidden=true;
     panel.append(el('summary','Build a weighted compliance priority worklist'),el('p','Declare review points per rule. Unknown outcomes contribute only to possible points. Scores are not probabilities, financial losses or staff ratings.','muted'),
       load,field('Installed pack',pack),field('Object type',kind),choices,field('Minimum priority points',threshold),
-      field('Include cases that may reach the threshold',include),run,status,downloads.node,exportAll,out,next);
+      field('Include cases that may reach the threshold',include),run,status,downloads.node,exportAll,out,next,detailOut);
     return panel;
   }
 

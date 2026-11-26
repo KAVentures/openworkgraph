@@ -153,3 +153,53 @@ def test_complete_export_empty_population():
         **{k:v for k,v in req.items() if k!="limit"},"expected_basis_sha256":first["basis_sha256"]})
     assert result["complete_export"] is True
     assert result["matching_cases"]==0 and result["cases"]==[] and result["next_after"] is None
+
+
+def test_case_inspection_matches_reviewed_scores_and_details():
+    log,spec,_=installed()
+    req=request(minimum_confirmed=1)
+    first=priority.review(log,"order_to_cash",req)
+    selection={k:v for k,v in req.items() if k!="limit"}
+    body={**selection,"expected_basis_sha256":first["basis_sha256"],"case_id":"bd9"}
+    detail=priority.inspect_case(log,"order_to_cash",body)
+    assert detail["lower"]==detail["upper"]==7
+    assert detail["projected_events"]==1
+    assert detail["threshold_status"]=="confirmed"
+    assert [r["status"] for r in detail["outcomes"]]==["violated","violated"]
+    assert sum(r["confirmed_points"] for r in detail["outcomes"])==detail["lower"]
+    assert sum(r["possible_points"] for r in detail["outcomes"])==detail["upper"]
+    assert "no later step" in detail["outcomes"][0]["detail"]
+    assert detail["outcomes"][1]["detail"]=="0 occurrences"
+    assert not detail["resource_names_returned"]
+    with pytest.raises(workspace.EventLogWorkspaceError,match="outside"):
+        priority.inspect_case(log,"order_to_cash",{**body,"case_id":"bd0"})
+    with pytest.raises(workspace.EventLogWorkspaceError,match="not present"):
+        priority.inspect_case(log,"order_to_cash",{**body,"case_id":"so9"})
+    packs.install(log,"order_to_cash",{**spec,"parameters":{"payment_terms_days":20}})
+    with pytest.raises(workspace.EventLogWorkspaceError,match="changed"):
+        priority.inspect_case(log,"order_to_cash",body)
+
+
+def test_case_inspection_unknown_never_claims_same_resource():
+    log,_,_=installed()
+    req=request(case_type=TYPES["order"],weights=[{"rule_index":2,"weight":9}],
+                minimum_confirmed=1,include_uncertain=True)
+    first=priority.review(log,"order_to_cash",req)
+    detail=priority.inspect_case(log,"order_to_cash",{
+        **{k:v for k,v in req.items() if k!="limit"},
+        "expected_basis_sha256":first["basis_sha256"],"case_id":"so1"})
+    assert detail["lower"]==0 and detail["upper"]==9
+    assert detail["threshold_status"]=="uncertain"
+    assert detail["outcomes"][0]["status"]=="unknown"
+    assert "Insufficient recorded evidence" in detail["outcomes"][0]["detail"]
+
+
+def test_workbenches_share_nonblocking_execution_guard():
+    from server import event_log_domain_pack_benchmark as benchmark
+    from server import event_log_domain_pack_overlap as overlap
+    from server import event_log_domain_pack_deadlines as deadlines
+    assert priority._GUARD is overlap._GUARD is deadlines._GUARD is benchmark._GUARD
+    log,_,_=installed()
+    with benchmark._GUARD:
+        with pytest.raises(workspace.EventLogWorkspaceError,match="Another domain pack analysis"):
+            priority.review(log,"order_to_cash",request())
