@@ -1,4 +1,4 @@
-"""Conservative projection of a minimized Stripe invoice source receipt."""
+"""Conservative projections of minimized operational source receipts."""
 from datetime import datetime, timezone
 
 
@@ -46,11 +46,47 @@ def project(receipt,start,end,now):
     return {**result,"status":"confirmed","reason":"paid_transition_in_window"}
 
 
+def project_jira(receipt,start,end,now):
+    """Confirm only Jira's own current resolution with a timestamp in scope.
+
+    Conservative whole-second boundary handling also works for timestamps
+    normalized from a source with finer precision. No customer outcome or
+    historical continuous resolved-state assertion is made.
+    """
+    result={"provider":"jira","predicate":"jira_issue_resolved_in_window",
+            "status":"unknown","reason":"source_unavailable","resolved_at_ms":None,
+            "source_read_at_ms":None}
+    if not isinstance(receipt,dict) or receipt.get("provider")!="jira" or receipt.get("availability")!="source_reported":
+        return result
+    at=_ms(receipt.get("verified_at"))
+    if at is None or not end<=at<=now:
+        return {**result,"reason":"invalid_source_read_time"}
+    result["source_read_at_ms"]=at
+    if (receipt.get("verification_method")!="explicit_opt_in_site_verified_oauth_jira_issue_status_read"
+            or receipt.get("source_state_reported") is not True or receipt.get("object_type")!="issue"):
+        return {**result,"reason":"unrecognized_source_provenance"}
+    outcome=receipt.get("verified_operational_outcome")
+    if (receipt.get("source_state")!="done" or not isinstance(outcome,dict)
+            or outcome.get("kind")!="jira_issue_resolved" or outcome.get("status")!="resolved"
+            or outcome.get("verified") is not True
+            or outcome.get("scope")!="jira_issue_only_not_customer_acknowledgement_or_refund"):
+        return {**result,"reason":"resolved_state_not_established"}
+    resolved=_ms(outcome.get("source_timestamp"))
+    if resolved is None or resolved>at:
+        return {**result,"reason":"resolution_timestamp_not_established"}
+    result["resolved_at_ms"]=resolved
+    second=resolved//1000*1000
+    if second<start or second+999>=end:
+        return {**result,"reason":"resolution_timestamp_outside_window"}
+    return {**result,"status":"confirmed","reason":"resolution_timestamp_in_window"}
+
+
 def summarize(state):
     bindings=state.get("source_outcome_bindings",[])
     results=state.get("source_outcome_checks",[])
     observations={o["slot_id"]:o for w in state["snapshot"]["windows"] for o in w["observations"]}
     latest={x["slot_id"]:x for x in results}
+    reviewed={row["slot_id"]:row for batch in state.get("outcome_corroborations",[]) for row in batch["rows"]}
     confirmed=0;unknown=0;conflicts=[]
     for b in bindings:
         sid=b["slot_id"];check=latest.get(sid);obs=observations.get(sid)
@@ -58,7 +94,9 @@ def summarize(state):
             unknown+=1;continue
         confirmed+=1
         if obs and (obs["status"]=="failed" or obs["status"]=="completed" and obs["business_outcome"]=="failure"):
-            conflicts.append({"window_id":b["window_id"],"slot_id":sid,"reason":"stripe_paid_predicate_conflicts_with_declared_failure"})
+            conflicts.append({"window_id":b["window_id"],"slot_id":sid,"reason":"source_predicate_conflicts_with_declared_failure"})
+        if sid in reviewed and reviewed[sid]["business_outcome"]=="failure":
+            conflicts.append({"window_id":b["window_id"],"slot_id":sid,"reason":"source_predicate_conflicts_with_separate_reviewer_failure"})
     return {"bound":len(bindings),"confirmed":confirmed,"unknown":unknown,
             "conflicts":conflicts,"blocks_continuation":bool(conflicts),
             "case_to_source_link_independently_verified":False,

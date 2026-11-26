@@ -1,6 +1,6 @@
 """Explicit local source predicate verification for retained monitoring cases.
 
-Reuses the existing default-off Stripe read adapter. Operator-declared
+Reuses the existing default-off Stripe and Jira read adapters. Operator-declared
 case-to-record mapping is not independently established. No source writes.
 """
 from __future__ import annotations
@@ -14,11 +14,12 @@ from typing import Annotated, Literal
 from pydantic import Field, StrictBool, model_validator
 
 from shared.agent_procurement import Strict,digest
-from shared.agent_procurement_source_outcome import project
+from shared.agent_procurement_source_outcome import project, project_jira
 from shared.process_shadow_review import Hash
 from . import agent_procurement_monitor_journal as journal
 from . import agent_procurement_corroboration as corroboration
-from . import stripe_source_evidence
+from . import stripe_source_evidence, jira_source_evidence
+from .record_graph import record_graph
 from .local_reference_lookup import resolve_resource_reference
 from .local_auth import ensure_api_token
 from . import db
@@ -32,7 +33,7 @@ class Binding(Strict):
     slot_id: Hash
     case_token_sha256: Hash
     resource_ref: Ref
-    predicate: Literal["invoice_paid_in_window"]
+    predicate: Literal["invoice_paid_in_window","jira_issue_resolved_in_window"]
 
 
 class Bind(corroboration.WindowRequest):
@@ -58,14 +59,41 @@ class Check(corroboration.WindowRequest):
         return self
 
 
-def _identity(record):
-    if not isinstance(record,dict) or (record.get("provider"),record.get("resource_kind"),record.get("host"))!=("stripe","invoice","dashboard.stripe.com"):
-        raise ValueError("observed Stripe invoice reference required")
+def _identity(record,predicate="invoice_paid_in_window"):
+    if not isinstance(record,dict):raise ValueError("observed source reference required")
     locator=record.get("resolver_locator")
-    if not isinstance(locator,str) or not re.fullmatch(r"invoice:in_[A-Za-z0-9]{10,90}",locator):
-        raise ValueError("invalid observed Stripe invoice locator")
-    return hmac.new(ensure_api_token().encode("utf-8"),("owg-source-invoice-v1:"+locator).encode("ascii"),hashlib.sha256).hexdigest()
+    host=record.get("host")
+    if predicate=="invoice_paid_in_window":
+        if (record.get("provider"),record.get("resource_kind"),host)!=("stripe","invoice","dashboard.stripe.com"):
+            raise ValueError("observed Stripe invoice reference required")
+        if not isinstance(locator,str) or not re.fullmatch(r"invoice:in_[A-Za-z0-9]{10,90}",locator):
+            raise ValueError("invalid observed Stripe invoice locator")
+        # Preserve the existing Stripe identity pin format.
+        value="owg-source-invoice-v1:"+locator
+    elif predicate=="jira_issue_resolved_in_window":
+        if (record.get("provider"),record.get("resource_kind"))!=("jira","issue") or not isinstance(host,str) or not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.atlassian\\.net",host):
+            raise ValueError("observed Jira Cloud issue reference required")
+        if not isinstance(locator,str) or not re.fullmatch(r"[A-Z][A-Z0-9]{1,20}-[1-9][0-9]{0,10}",locator):
+            raise ValueError("invalid observed Jira issue locator")
+        value="owg-source-jira-issue-v1:"+host+":"+locator
+    else:raise ValueError("unsupported source predicate")
+    return hmac.new(ensure_api_token().encode("utf-8"),value.encode("ascii"),hashlib.sha256).hexdigest()
 
+
+def _read_source(ref,resolved,predicate):
+    # Use the existing exact retained-event guard before any provider read,
+    # including for Stripe. A resolver entry alone is not read authority.
+    identity=(resolved["provider"],resolved["resource_kind"],resolved["host"])
+    resolver=lambda requested:dict(resolved) if requested==ref else None
+    if predicate=="invoice_paid_in_window":
+        def reader(requested,*,include_lifecycle=False):
+            return stripe_source_evidence.stripe_record_receipt(requested,include_lifecycle=include_lifecycle,resolver=resolver)
+    else:
+        def reader(requested):
+            return jira_source_evidence.jira_issue_receipt(requested,resolver=resolver)
+    graph=record_graph(ref,include_source_status=True,include_source_lifecycle=predicate=="invoice_paid_in_window",
+                       required_source_type=identity,source_reader=reader)
+    return graph["source_evidence"]
 
 def bind(workflow_id,revision,document):
     req=Bind.model_validate(document)
@@ -81,7 +109,7 @@ def bind(workflow_id,revision,document):
         if {b.slot_id for b in req.bindings}&{b["slot_id"] for b in prior}:
             raise ValueError("source binding is immutable")
         # Never pass caller-supplied native IDs or URLs to the source reader.
-        identities={b.resource_ref:_identity(resolve_resource_reference(b.resource_ref)) for b in req.bindings}
+        identities={b.resource_ref:_identity(resolve_resource_reference(b.resource_ref),b.predicate) for b in req.bindings}
         refs=set(identities)
         identity_pins=set(identities.values())
         if len(identity_pins)!=len(refs):raise ValueError("duplicate resolved source record")
@@ -115,16 +143,20 @@ def check(workflow_id,revision,document):
         start=window["plan"]["request"]["window_start_ms"]
         end=window["plan"]["request"]["window_end_exclusive_ms"]
     rows=[]
+    resolved_records={}
     for sid in sorted(req.slot_ids):
         binding=bindings[sid];ref=binding["resource_ref"]
         resolved=resolve_resource_reference(ref)
-        if _identity(resolved)!=binding["record_identity_hmac"]:
+        if _identity(resolved,binding["predicate"])!=binding["record_identity_hmac"]:
             raise ValueError("bound source record identity changed")
-        receipt=stripe_source_evidence.stripe_record_receipt(ref,include_lifecycle=True,
-            resolver=lambda requested:dict(resolved) if requested==ref else None)
+        resolved_records[sid]=dict(resolved)
+    for sid in sorted(req.slot_ids):
+        binding=bindings[sid];predicate=binding["predicate"]
+        receipt=_read_source(binding["resource_ref"],resolved_records[sid],predicate)
         now=int(time.time()*1000)
+        projector=project if predicate=="invoice_paid_in_window" else project_jira
         rows.append({"slot_id":sid,"window_id":req.window_id,"checked_at_ms":now,
-                     "report_sha256":req.expected_report_sha256,**project(receipt,start,end,now)})
+                     "report_sha256":req.expected_report_sha256,**projector(receipt,start,end,now)})
     with db.connect() as conn:
         conn.execute("BEGIN IMMEDIATE");key,state,history=corroboration._read(conn,workflow_id,revision,req)
         corroboration._window(state,req)

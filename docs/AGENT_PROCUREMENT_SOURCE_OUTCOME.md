@@ -46,3 +46,26 @@ Both take monitor_id, expected_head_sha256, expected_report_sha256,
 window_id, confirmed=true. Bind adds confirm_operator_case_mapping=true,
 confirm_case_outcome_defined_by_predicate=true, bindings array. Check adds
 confirm_source_read=true and slot_ids (1–10). AI-context requests are refused.
+
+## Jira issue resolution predicate
+
+The same binding and check operations support `jira_issue_resolved_in_window`.
+The resource reference must resolve to an observed Jira Cloud issue; the
+identity pin includes its tenant hostname and issue key. An issue key is not
+an immutable provider object ID across moves/renames or tenant migrations.
+The existing Jira adapter requires explicit site opt-in and OAuth read scope,
+checks authorized site and returned issue key, and returns a minimized current
+status and resolution timestamp. A confirmed predicate requires current done
+state, verified Jira operational resolution, and a resolution timestamp wholly
+inside the frozen window (conservative whole-second boundaries). Missing or
+inconsistent resolution, currently reopened issues, or out-of-window timestamps
+remain unknown. This does not establish historical uninterrupted resolution,
+customer acceptance, correct work, handoff, safety or general business success.
+
+Both Stripe and Jira reads now go through the existing record graph's exact
+retained-event authorization guard, including the exact provider/kind/host
+and untruncated evidence requirement. A resolver entry alone does not permit
+network access. No arbitrary source URL or native locator is accepted. A source
+confirmation contradicting either a producer failure or a separately retained
+reviewer failure blocks continuation. Post-hoc binding/selection limitations
+still apply; no live account acceptance is claimed.
