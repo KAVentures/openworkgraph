@@ -6193,6 +6193,16 @@
     const seed=input('owgCapacitySeed','number');seed.min='0';seed.max='2147483640';seed.step='1';seed.value='1';
     const basis=select('owgCapacityBasis',TIME_BASES);
     const dist=select('owgCapacityDist',[['exponential','Variable (exponential)'],['fixed','Fixed']]);
+    const decisionEnabled=input('owgCapacityDecisionEnabled','checkbox');
+    const currency=input('owgCapacityCurrency','text','SEK');currency.maxLength=3;
+    const hourCost=input('owgCapacityHourCost','number');hourCost.min='0';hourCost.max='1000000000';hourCost.step='any';
+    const budget=input('owgCapacityBudget','number');budget.min='0';budget.max='1000000000000000';budget.step='any';
+    const weights=input('owgCapacityWeights','text','One positive weight per entered demand rate, e.g. 1, 2, 1');
+    const thresholds=input('owgCapacityThresholds','text','e.g. 80, 90, 95');
+    const decisionControls=el('div',null,'row');decisionControls.style.alignItems='end';decisionControls.hidden=true;
+    decisionControls.append(field('Currency code',currency),field('Default cost per resource-hour',hourCost),field('Maximum cost per staffed hour',budget),
+      field('Demand weights (same order as demand rates)',weights),field('Service share sensitivity (%)',thresholds));
+    decisionEnabled.onchange=()=>{decisionControls.hidden=!decisionEnabled.checked;};
     const prepare=button('Prepare capacity grid','secondary');prepare.id='owgCapacityPrepare';
     const file=input('owgCapacityFile','file');file.accept='.json,application/json';
     const draft=document.createElement('textarea');draft.id='owgCapacityInputs';draft.rows=10;draft.style.width='100%';
@@ -6231,8 +6241,19 @@
           const overrides=Object.create(null);overrides[activity.value]={resources:n};
           return {label:String(n)+' resources',activities:overrides};
         });
-        draft.value=JSON.stringify({format:CAPACITY_FORMAT,baseline,designs,arrival_rates_per_hour:rates,
-          replications:repCount,target:{cycle_time_minutes:minutes,minimum_completion_share:percent/100}},null,2);
+        const packet={format:CAPACITY_FORMAT,baseline,designs,arrival_rates_per_hour:rates,
+          replications:repCount,target:{cycle_time_minutes:minutes,minimum_completion_share:percent/100}};
+        if(decisionEnabled.checked){
+          const w=numbers(weights.value,'demand weights'),t=numbers(thresholds.value,'service-share percentages');
+          if(!/^[A-Z]{3}$/.test(currency.value)||[hourCost,budget].some(n=>!n.value||!n.checkValidity())||
+            w.length!==rates.length||w.some(x=>x<.000001||x>1e9)||t.length<1||t.length>8||
+            t.some(x=>x<1||x>100)||new Set(t).size!==t.length||!t.includes(percent))
+            throw Error('Enter currency, explicit costs and budget, one positive weight per rate, and distinct service thresholds including the grid target.');
+          packet.decision_review={currency:currency.value,default_resource_hour_cost:Number(hourCost.value),
+            maximum_staffed_hour_cost:Number(budget.value),demand_weights:rates.map((r,i)=>({arrival_rate_per_hour:r,weight:w[i]})),
+            service_share_thresholds:t.map(v=>v/100),dedicated_hour_costs:{},pool_hour_costs:{}};
+        }
+        draft.value=JSON.stringify(packet,null,2);
         readTurn++;clearResult();status.textContent='Review the exact inputs below. Nothing has run yet.';sync();
       }catch(error){status.textContent=error.message;}
     };
@@ -6249,6 +6270,30 @@
         draft.value=JSON.stringify(packet,null,2);status.textContent='Loaded for review. Rerunning recalibrates from the selected log.';sync();
       }catch(error){if(current()&&turn===readTurn)status.textContent=error.message;}
     };
+    function showDecisionReview(review){
+      const section=el('div');
+      if(!review)return section;
+      const range=b=>pct(b.lower)+' – '+pct(b.upper);
+      const money=x=>x===null?'None':x+' '+review.currency;
+      const status=s=>s.replaceAll('_',' ');
+      section.append(el('h4','Cost-constrained staffing decision review'),
+        el('p','Budget: '+money(review.maximum_staffed_hour_cost_decimal)+' per staffed hour. Service gates require every tested rate and seed; weights do not override an individual failed rate.','muted'),
+        table(['Design','Staffed resources','Cost / staffed hour','Budget','Every-rate service gate','Worst rate / seed bounds','Worst seed demand mix bounds'],
+          review.designs.map(d=>[d.design,d.staffed_resources,money(d.staffed_hour_cost_decimal),d.within_budget?'Within':'Over',status(d.service_status_all_tested_rates),range(d.worst_rate_and_seed_target_bounds),range(d.worst_seed_demand_mix_target_bounds)])),
+        el('h4','Declared demand mixture'),table(['Demand / hour','Normalized weight'],review.normalized_demand_weights.map(r=>[r.arrival_rate_per_hour,pct(r.weight)])),
+        el('h4','Service threshold sensitivity'),table(['Service threshold','Demonstrated within budget','Minimum qualifying tested cost','Equal minimum cost designs'],review.service_threshold_sensitivity.map(r=>[pct(r.service_share_threshold),r.demonstrated_designs.join(', ')||'None',money(r.minimum_tested_qualifying_staffed_hour_cost_decimal),r.equal_minimum_cost_designs.join(', ')||'None'])),
+        el('h4','Robust dominance among tested stable designs'),
+        el('p','Not robustly dominated: '+review.not_robustly_dominated_tested_designs.join(', ')+'. Not a staffing recommendation.'),
+        ...(review.robust_dominance_witnesses.length?[table(['Dominant','Dominated','Matched rate/seed cells','Minimum service advantage','Cost advantage / hour'],review.robust_dominance_witnesses.map(w=>[w.dominant_design,w.dominated_design,w.matched_rate_seed_cells,pct(w.minimum_service_advantage_lower_bound),money(w.staffed_hour_cost_advantage_decimal)]))]:[el('p','No strict robust dominance established.')]),
+        el('h4','Inspect effective cost and demand evidence'));
+      const picker=select('owgCapacityDecisionDesign',review.designs.map((d,i)=>[String(i),d.design]));const details=el('div');
+      const draw=()=>{const d=review.designs[Number(picker.value)];if(!d)return;
+        details.replaceChildren(table(['Resource basis','Exact resource name','Resources','Unit hourly cost','Staffed hourly cost','Rate source'],d.cost_basis.map(r=>[status(r.kind),r.name,r.resources,money(r.unit_hour_cost_decimal),money(r.staffed_hour_cost_decimal),r.explicit_override?'Explicit override':'Declared default'])),
+          table(['Demand / hour','Weight','Service gate','Overloaded runs','Worst seed bounds'],d.demand_evidence.map(r=>[r.arrival_rate_per_hour,pct(r.normalized_weight),status(r.service_status),r.overloaded_replications,range(r.worst_seed_target_bounds)])),
+          table(['Shared seed','Demand-mix target bounds'],d.demand_mix_by_seed.map(r=>[r.seed,range(r.target_bounds)])));
+      };picker.onchange=draw;draw();section.append(field('Exact staffing design',picker),details);
+      const notes=el('ul');review.interpretation.forEach(t=>notes.append(el('li',t)));section.append(notes);return section;
+    }
     function showReport(report){
       const grid=table(['Design','Demand / hour','Target status','Worst run target share (bounds)','Completed-case p90 range','Overloaded runs'],
         report.cells.map(c=>[
@@ -6289,7 +6334,7 @@
           [el('p','At least one design passed a higher tested rate but did not pass a lower rate. Inspect individual runs; do not assume monotonic behavior.','note')]:[]),
         el('h4','Paired changes against baseline'),comparisons,
         el('p','Target-share differences are percentage-point bounds across the tested seeds. Cycle-time differences are withheld unless every pair has complete, stable completion populations.','muted'),
-        el('h4','Inspect every replication'),field('Design and demand',cellSelect),details,el('h4','Assumptions'),assumptions);
+        el('h4','Inspect every replication'),field('Design and demand',cellSelect),details,showDecisionReview(report.decision_review),el('h4','Assumptions'),assumptions);
     }
     run.onclick=async()=>{
       if(busy)return;
@@ -6314,7 +6359,9 @@
       field('First seed',seed),field('Measured time basis',basis),field('Activity-time distribution',dist),prepare);
     panel.append(el('summary','Demand and capacity stress testing'),
       el('p','Test a grid of staffing designs and explicit arrival rates using one calibration. Targets count every post-warm-up arrival. This uses complete-path routing and fixed or exponential activity times.','muted'),
-      controls,field('Import capacity inputs or report JSON',file),field('Review or edit exact capacity inputs',draft),
+      controls,field('Include cost-constrained decision review',decisionEnabled),decisionControls,
+      el('p','Optional cost review uses one currency, a default resource-hour rate and explicit demand weights. Exact dedicated/pool rate overrides can be edited in the reviewed JSON. Prepare the grid again after changing controls.','muted'),
+      field('Import capacity inputs or report JSON',file),field('Review or edit exact capacity inputs',draft),
       run,status,exports.node,inputs,out);
     return panel;
   }
