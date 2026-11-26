@@ -1,8 +1,11 @@
 # Event-time object state review (R24)
 
-Open **Object binding continuity** from the object-centric event-log workspace.
-The **Event-time object state check** section uses the selected retained OCEL
-log even if it has no supplied object-to-object assertions.
+Open **Event-time object state check** in the object-centric map, or open
+**Object binding continuity** from the workspace. Both use the selected
+retained OCEL log even if it has no supplied object-to-object assertions.
+In the map, select a result status to page matching events and open an event
+to review its bounded object witnesses. Changing the check clears earlier
+results; a changed log requires rerunning the check.
 
 Enter an exact activity, object type, attribute name and expected retained
 string (including an empty string if appropriate). Select equality or
