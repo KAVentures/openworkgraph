@@ -7661,7 +7661,13 @@
     const statusLine=el('div',null,'muted');statusLine.id='owgPathsStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgPathsResults';
     const review=el('div');review.id='owgPathsCaseReview';
-    box.append(row,trail,statusLine,out,review);
+    // The branches at the current point, with the path that led there on every row.
+    let lastStep=null;
+    const exports=exportButtons('owgPathsReport',()=>lastStep,r=>[
+      ['path','anchor','next','cases','share','median_hours_from_previous','median_hours_to_case_end'],
+      ...r.next.map(x=>[r._path.join(' → '),r._anchor,x.is_end?'(case ends)':x.activity,x.cases,x.share,
+        x.hours_from_previous?x.hours_from_previous.median:'',x.hours_to_case_end?x.hours_to_case_end.median:''])]);
+    box.append(row,trail,statusLine,out,review,exports.node);
     let path=[],anchored=0,request=0,reviewTurn=0;
     const pct=x=>x===null||x===undefined?'—':Math.round(x*1000)/10+'%';
     const hrs=x=>x===null||x===undefined?'—':(x<48?(Math.round(x*10)/10)+' h':(Math.round(x/24*10)/10)+' d');
@@ -7702,6 +7708,7 @@
       const generation=state.generation,turn=++request;
       const current=()=>generation===state.generation&&turn===request;
       start.disabled=back.disabled=true;statusLine.textContent='Following cases…';out.replaceChildren();review.replaceChildren();
+      lastStep=null;exports.enable(false);
       trail.textContent=path.length?'Path: '+(anywhere.checked?'… → ':'(start) → ')+path.join(' → '):'';
       try{
         const params={step:path,anchor:anywhere.checked?'anywhere':'start'};
@@ -7719,6 +7726,7 @@
           inspect.onclick=()=>showCases(url,x,current);tr.cells[5].appendChild(inspect);
         });
         out.appendChild(t);
+        lastStep={...r,_path:[...path],_anchor:anywhere.checked?'anywhere':'start'};exports.enable(true);
       }catch(error){if(current())statusLine.textContent=error.message;}
       finally{if(current()){start.disabled=false;back.disabled=!path.length;}}};
     start.onclick=()=>{path=[];anchored=0;anywhere.checked=false;show();};
