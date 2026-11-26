@@ -105,6 +105,17 @@ be read, updated with `expected_revision`, or deleted with an
 only check settings; result filters, page offsets, results and source event
 data are not stored in them.
 
+## Analyze one exact event
+
+Optionally enter an exact event ID before running the check. The activity,
+UTC date window, and exact ID jointly define the analysis scope, and the event
+limit applies after this selection. This differs from the result event-ID
+filter, which narrows already analyzed results and does not bypass analysis
+limits. A scoped event still uses its complete linked-object evidence and
+retained history. The scope follows the reviewed revision into timelines,
+distributions, witnesses, and CSV metadata. It is temporary and is neither
+saved nor included in transferred check definitions.
+
 ## Review recorded values at events
 
 **Recorded values at events** groups the selected event-object links by their
