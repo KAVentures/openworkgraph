@@ -5978,7 +5978,7 @@
             table(['Holdout','Metric','Observed elapsed','Simulated minimum','Simulated maximum','Simulated spread','Resolved seeds'],
               r.split_sensitivity.flatMap(s=>Object.entries(s.metrics).map(([metric,m])=>[percent(s.holdout_share),metric,
                 duration(m.observed_seconds),duration(m.simulated_seconds_minimum),duration(m.simulated_seconds_maximum),
-                m.simulated_seconds_spread==null?'—':duration(m.simulated_seconds_spread),m.resolved_seeds+' / '+s.seed_count]))]:[]),
+                m.simulated_seconds_spread==null?'—':duration(m.simulated_seconds_spread),m.resolved_seeds+' / '+s.seed_count])))]:[]),
           ...r.interpretation.map(x=>el('p',x,'muted')),download);
       }catch(error){if(active())multiOut.replaceChildren(el('p',error.message,'note'));}
       finally{if(active())compare.disabled=false;}
