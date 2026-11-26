@@ -2572,6 +2572,17 @@ async def event_log_domain_pack_benchmark(request: Request, log_id: str, pack_id
     return response
 
 
+@router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}/deadline-sensitivity")
+async def event_log_domain_pack_deadline_sensitivity(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_deadlines as deadlines
+    _require_dashboard(request)
+    spec = await _json_body(request, "domain pack deadline sensitivity", strict=True, limit=8192)
+    _require_dashboard(request)
+    response = await run_in_threadpool(_respond, deadlines.review, log_id, pack_id, spec)
+    _require_dashboard(request)
+    return response
+
+
 @router.get("/v1/event-logs/{log_id}/domain-packs/{pack_id}/report")
 def event_log_domain_pack_report(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
     _require_dashboard(request)
