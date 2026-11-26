@@ -373,7 +373,8 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         return _get("get_process_data_quality", f"/v1/process-intelligence/{_log(log_id)}/data-quality", {})
 
     @mcp.tool(annotations=_READ_ONLY)
-    def get_process_footprints(log_id: str, noise: float = 0.2, case_type: str | None = None) -> dict[str, Any]:
+    def get_process_footprints(log_id: str, noise: float = 0.2, case_type: str | None = None,
+                               case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Footprint comparison of a shared log: for every pair of activities, whether one directly follows the
         other (→), both orders occur (||) or neither (#), once from the recorded cases and once from the discovered
         model, with the orderings only the log has (and how many cases took them) or only the model allows.
@@ -381,12 +382,18 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         """
         if isinstance(noise, bool) or not isinstance(noise, (int, float)) or not 0 <= noise < 1:
             raise ToolError("noise must be a share from 0 up to (not including) 1")
-        return _get("get_process_footprints", f"/v1/process-intelligence/{_log(log_id)}/footprints",
-                    {"noise": float(noise), "case_type": case_type})
+        params: dict[str, Any] = {"noise": float(noise), "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_process_footprints", f"/v1/process-intelligence/{_log(log_id)}/footprints", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_model_quality(log_id: str, noise_levels: list[float] | None = None,
-                                  case_type: str | None = None) -> dict[str, Any]:
+                                  case_type: str | None = None,
+                                  case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """How good the discovered process model of a shared log is at each noise level: fitness (can it replay
         the cases), precision (does it allow little else), their F-score, generalization and simplicity, plus the
         noise level with the best F-score. Use it to pick a noise level before asking for the model or its
@@ -398,10 +405,16 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 <= v < 1 for v in noise_levels)):
                 raise ToolError("noise_levels must be 1 to 8 shares from 0 up to (not including) 1")
             params["levels"] = ",".join(str(float(v)) for v in noise_levels)
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
         return _get("get_process_model_quality", f"/v1/process-intelligence/{_log(log_id)}/model-quality", params)
 
     @mcp.tool(annotations=_READ_ONLY)
-    def get_process_deviations(log_id: str, noise: float = 0.2, case_type: str | None = None) -> dict[str, Any]:
+    def get_process_deviations(log_id: str, noise: float = 0.2, case_type: str | None = None,
+                               case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Exactly where the recorded cases of a shared log depart from its discovered process model, from optimal
         alignments: the steps cases took that the model does not allow there, the steps the model requires that
         cases skipped (each with case counts), alignment fitness, and how each non-fitting variant is explained
@@ -410,8 +423,13 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         """
         if isinstance(noise, bool) or not isinstance(noise, (int, float)) or not 0 <= noise < 1:
             raise ToolError("noise must be a share from 0 up to (not including) 1")
-        return _get("get_process_deviations", f"/v1/process-intelligence/{_log(log_id)}/model-deviations",
-                    {"noise": float(noise), "case_type": case_type})
+        params: dict[str, Any] = {"noise": float(noise), "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_process_deviations", f"/v1/process-intelligence/{_log(log_id)}/model-deviations", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def list_process_reference_nets(log_id: str) -> dict[str, Any]:
