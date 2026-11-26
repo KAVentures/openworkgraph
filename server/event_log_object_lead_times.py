@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, f
 from shared.event_log_formats import EventLogFormatError, _exact_key
 from . import event_log_workspace as workspace
 from . import event_log_object_relationships as relationships
-from . import event_log_repeated_milestones as repeated
+from . import event_log_repeated_milestones as repeated_milestones
 
 FORMAT = "openworkgraph.object-relationship-lead-times.v1"
 MAX_PAIRS = 20_000
@@ -173,7 +173,7 @@ def analyze(log_id: str, spec: Any) -> dict[str, Any]:
                          "target_event_occurrences": dst_count, "lead_seconds": lag}
                         for source, target, src_at, dst_at, status, src_count, dst_count, lag in rows]
         snap = relationships.snapshot(conn, log_id)
-        repeat_result=repeated.review(conn,log_id,requested,snap) if requested.repeat_review else None
+        repeat_result=repeated_milestones.review(conn,log_id,requested,snap) if requested.repeat_review else None
         return {
             **({"repeated_milestone_review":repeat_result} if repeat_result is not None else {}),
             "format": FORMAT, "log": info, "settings": params,
