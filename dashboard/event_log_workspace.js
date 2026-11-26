@@ -4865,7 +4865,7 @@
         status.textContent=result.installs.length?'Select a pack and another retained log.':'Install a domain pack on this log first.';
         preview.disabled=!other.value||!pack.value;
       }catch(error){if(active(t))status.textContent=error.message;}
-      finally{if(valid())load.disabled=false;}
+      finally{if(valid()&&panel.isConnected)load.disabled=false;}
     };
     preview.onclick=async()=>{
       clear();const t=revision;preview.disabled=true;status.textContent='Checking exact versions, settings and sources…';
@@ -5330,11 +5330,23 @@
     box.append(setup,form,status,out,historyOut);
     const generation=state.generation,logId=state.logId,base='/v1/event-logs/'+encodeURIComponent(logId)+'/domain-packs';
     let turn=0;const current=t=>generation===state.generation&&box.isConnected&&t===turn;
-    box.append(domainPackBenchmarkPanel(()=>generation===state.generation&&box.isConnected,logId));
-    box.append(domainPackDeadlinePanel(()=>generation===state.generation&&box.isConnected,logId));
-    box.append(domainPackPortfolioPanel(()=>generation===state.generation&&box.isConnected,logId));
-    box.append(domainPackOverlapPanel(()=>generation===state.generation&&box.isConnected,logId));
-    box.append(domainPackPriorityPanel(()=>generation===state.generation&&box.isConnected,logId));
+    // Pack installation changes invalidate every view pinned to the old setup.
+    const analysisPanels=el('div');box.append(analysisPanels);
+    const refreshAnalysisPanels=()=>{
+      if(generation!==state.generation||!box.isConnected)return;
+      const valid=()=>generation===state.generation&&box.isConnected;
+      analysisPanels.replaceChildren(
+        domainPackBenchmarkPanel(valid,logId),domainPackDeadlinePanel(valid,logId),
+        domainPackPortfolioPanel(valid,logId),domainPackOverlapPanel(valid,logId),
+        domainPackPriorityPanel(valid,logId));
+    };
+    // Initial construction precedes insertion of box into the document.
+    analysisPanels.append(
+      domainPackBenchmarkPanel(()=>generation===state.generation&&box.isConnected,logId),
+      domainPackDeadlinePanel(()=>generation===state.generation&&box.isConnected,logId),
+      domainPackPortfolioPanel(()=>generation===state.generation&&box.isConnected,logId),
+      domainPackOverlapPanel(()=>generation===state.generation&&box.isConnected,logId),
+      domainPackPriorityPanel(()=>generation===state.generation&&box.isConnected,logId));
     const post=(url,body)=>api(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     setup.onclick=async()=>{
       const t=++turn;setup.disabled=true;historyTurn++;historyOut.replaceChildren();form.replaceChildren();out.replaceChildren();status.textContent='Loading…';
@@ -5552,6 +5564,7 @@
               const r=await (await post(base+'/'+pack.pack_id,proposed)).json();
               // Keep the completed save's basis even if later inputs invalidated its display.
               installs.installs=[...installs.installs.filter(i=>i.pack_id!==pack.pack_id),r];
+              refreshAnalysisPanels();
               previewRequired=false;
               if(!current(t2))return;
               run.disabled=remove.disabled=reviewHistory.disabled=exportTemplate.disabled=false;
@@ -5587,6 +5600,7 @@
               const basis=installs.installs.find(i=>i.pack_id===pack.pack_id);
               if(!basis||!/^[a-f0-9]{64}$/.test(basis.installation_token||''))throw new Error('Installation review is unavailable. Reload setup before removing.');
               const r=await (await api(base+'/'+pack.pack_id+'?expected_installation='+encodeURIComponent(basis.installation_token),{method:'DELETE'})).json();
+              refreshAnalysisPanels();
               if(!current(t2))return;
               installs.installs=installs.installs.filter(i=>i.pack_id!==pack.pack_id);
             run.disabled=reviewHistory.disabled=exportTemplate.disabled=true;out.replaceChildren();status.textContent='Uninstalled '+r.version+'; '+r.metrics_removed+' pack case metrics were removed.';
