@@ -348,15 +348,23 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         return runtime_module.core._finish("preview_process_signal", result)
 
     @mcp.tool(annotations=_READ_ONLY)
-    def get_process_temporal_profile(log_id: str, zeta: float = 3.0, case_type: str | None = None) -> dict[str, Any]:
+    def get_process_temporal_profile(log_id: str, zeta: float = 3.0, case_type: str | None = None,
+                                     case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Temporal profile of a shared log: for each ordered pair of activities in a case, the mean and
         standard deviation of the time between them, and how many occurrences lie more than zeta standard
-        deviations away (slower or faster). Aggregates only, no case IDs. Unusual timings to review, not errors.
+        deviations away (slower or faster). case_filter (the same keys as insight cohorts) profiles one group of at
+        least 5 cases. Aggregates only, no case IDs. Unusual timings to review, not errors.
         """
         if isinstance(zeta, bool) or not isinstance(zeta, (int, float)) or not 0.5 <= zeta <= 10:
             raise ToolError("zeta must be a number from 0.5 to 10")
+        params: dict[str, Any] = {"zeta": float(zeta), "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
         return _get("get_process_temporal_profile", f"/v1/process-intelligence/{_log(log_id)}/temporal-profile",
-                    {"zeta": float(zeta), "case_type": case_type})
+                    params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_object_map(log_id: str) -> dict[str, Any]:

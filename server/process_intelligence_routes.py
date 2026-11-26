@@ -268,9 +268,19 @@ async def agent_impact(request: Request, log_id: str):
 
 @router.get("/v1/process-intelligence/{log_id}/temporal-profile")
 async def agent_temporal_profile(request: Request, log_id: str, zeta: float = Query(default=3.0, ge=0.5, le=10),
-                                 case_type: str | None = Query(default=None, max_length=200)):
+                                 case_type: str | None = Query(default=None, max_length=200),
+                                 case_filter: str | None = Query(default=None, max_length=8192)):
     _require_agent_access(request)
-    return await _answer(sharing.temporal_profile, log_id, case_type, zeta)
+    chosen = None
+    if case_filter is not None:
+        import json
+        try:
+            chosen = json.loads(case_filter)
+        except ValueError:
+            raise HTTPException(422, "case_filter must be a JSON object") from None
+        if not isinstance(chosen, dict):
+            raise HTTPException(422, "case_filter must be a JSON object")
+    return await _answer(sharing.temporal_profile, log_id, case_type, zeta, chosen)
 
 
 @router.get("/v1/process-intelligence/{log_id}/object-map")
