@@ -141,11 +141,34 @@ with TestClient(app) as client:
     assert updated.status_code==200,updated.text
     assert updated.json()["revision"]==1
     assert audit_call("remediation-change",cmd).status_code==409
+    z=snapshot({"site":(key,[row("site")])},140)
+    successor_manifest=manifest(x,y,z)
+    successor_body={"confirmed":True,"expected_manifest_sha256":digest(successor_manifest),
+                    "manifest":successor_manifest,"dossiers":[x[0],y[0],z[0]]}
+    successor_work=audit_call("audit-timeline",successor_body).json()["worklist"]
+    continuity={"previous_worklist_sha256":v["worklist_sha256"],"expected_previous_revision":1,
+                "expected_previous_history_sha256":updated.json()["history_sha256"],
+                "previous_manifest_sha256":digest(m),
+                "expected_current_worklist_sha256":successor_work["worklist_sha256"],"confirmed":True}
+    compared=audit_call("remediation-continuity-preview",{**successor_body,"continuity":continuity})
+    assert compared.status_code==200,compared.text
+    assert compared.headers["cache-control"]=="no-store"
+    assert compared.json()["owner_carry_eligible_count"]==1
+    carried=audit_call("remediation-continuity-carry",{**successor_body,"continuity":{**continuity,
+        "expected_continuity_sha256":compared.json()["continuity_sha256"],
+        "reviewer_alias":"reviewer","carry_finding_ids":[finding["finding_id"]],"confirm_local_retention":True}})
+    assert carried.status_code==200,carried.text
+    assert carried.json()["findings"][0]["state"]=="assigned"
+    assert carried.json()["lineage"]["previous_history_sha256"]==updated.json()["history_sha256"]
+    assert audit_call("remediation-status",scope).json()==updated.json()
+    assert audit_call("remediation-forget",{"worklist_sha256":carried.json()["worklist_sha256"],
+        "expected_revision":carried.json()["revision"],"expected_history_sha256":carried.json()["history_sha256"],
+        "confirmed_exported":True}).status_code==200
     removed=audit_call("remediation-forget",{**scope,"expected_revision":1,
                        "expected_history_sha256":updated.json()["history_sha256"],"confirmed_exported":True})
     assert removed.status_code==200,removed.text
     assert audit_call("remediation-status",scope).status_code==404
-    for action in ("remediation-create","remediation-list","remediation-status","remediation-change","remediation-forget"):
+    for action in ("remediation-create","remediation-list","remediation-status","remediation-change","remediation-forget","remediation-continuity-preview","remediation-continuity-carry"):
         path="/v1/process-catalog/procurement-workforce/exchange/"+action
         assert client.post(path,json={"document":"{}"}).status_code==401
         assert client.post(path,json={"document":"{}"},headers=bearer).status_code==403
