@@ -187,3 +187,8 @@ monitor afterwards. Observed and simulated evidence are kept apart; nothing auth
 
 Not covered: acting in source systems. That would need separate, explicit action authority,
 which this feature never grants.
+
+## Stray dates
+
+`get_process_data_quality` also returns `stray_dates`: events dated far outside the bulk of the log (placeholder or
+mistyped dates) and a `suggested_case_filter` that leaves only those cases out.
