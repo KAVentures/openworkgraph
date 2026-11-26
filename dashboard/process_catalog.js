@@ -1426,7 +1426,7 @@
           output.append(el('h6','Latest window results'),windows,el('h6','Chained local audit history'));
           const history=el('ul');for(const e of result.history){
             const item=el('li',e.sequence+' · '+e.kind+' · '+new Date(e.recorded_at_ms).toISOString());
-            item.append(el('p','Entry: '+e.entry_sha256),el('p',e.kind==='decision'?e.details.disposition.replaceAll('_',' ')+' · '+e.details.reviewer_alias:e.kind==='producer_grant'||e.kind==='producer_revoke'?'Grant '+e.details.grant_id:e.kind==='producer_checkpoint'?'Producer '+e.details.producer_alias+' · '+e.details.accepted_observations+' accepted observations':e.kind==='finance_reconciliation'?'Finance statement '+e.details.window_id+' · '+e.details.reconciliation_sha256:e.kind==='schedule_consent'?'Scheduled deadline review '+(e.details.enabled?'enabled':'disabled'):e.kind==='outcome_corroboration'?'Separate review '+e.details.window_id+' · '+e.details.reviewed_cases+' cases':e.kind==='corroboration_required'?'Full corroboration required':'Snapshot '+e.details.snapshot_sha256+' · '+e.details.recorded_cases+' recorded cases'));
+            item.append(el('p','Entry: '+e.entry_sha256),el('p',e.kind==='decision'?e.details.disposition.replaceAll('_',' ')+' · '+e.details.reviewer_alias:e.kind==='producer_grant'||e.kind==='producer_revoke'?'Grant '+e.details.grant_id:e.kind==='producer_checkpoint'?'Producer '+e.details.producer_alias+' · '+e.details.accepted_observations+' accepted observations':e.kind==='finance_reconciliation'?'Finance statement '+e.details.window_id+' · '+e.details.reconciliation_sha256:e.kind==='schedule_consent'?'Scheduled deadline review '+(e.details.enabled?'enabled':'disabled'):e.kind==='outcome_corroboration'?'Separate review '+e.details.window_id+' · '+e.details.reviewed_cases+' cases':e.kind==='corroboration_required'?'Full corroboration required':e.kind==='source_outcome_bind'?'Source bindings '+e.details.bound_cases:e.kind==='source_outcome_check'?'Source checks '+e.details.confirmed_cases+'/'+e.details.checked_cases:'Snapshot '+e.details.snapshot_sha256+' · '+e.details.recorded_cases+' recorded cases'));
             history.appendChild(item);
           }
           output.append(history,el('p','Locally retained declarations, not authenticated production telemetry or a tamper-proof external audit log. No deployment or rollback performed.'));
@@ -1998,6 +1998,37 @@
       })));
       const reviewTriggers=el('ul');for(const x of corroboration.triggers)reviewTriggers.appendChild(el('li',x.window_id+' · '+x.reason+(x.fields?' · '+x.fields.join(', '):'')));
       reviewSection.appendChild(reviewTriggers);output.appendChild(reviewSection);
+      const source=value.source_outcomes;
+      const sourceSection=el('details');sourceSection.append(el('summary','Read-only source outcome checks'),
+        el('p',source.confirmed+'/'+source.bound+' linked invoice predicates confirmed · '+source.unknown+' unknown · '+source.conflicts.length+' discrepancies'),
+        el('p','Only Stripe invoice payment inside the closed window is supported. Requires a separately enabled restricted-read source connection and explicit case mapping; no payment or invoice changes are made.'));
+      const sourceWindow=el('select');sourceWindow.setAttribute('aria-label','Closed source outcome window');
+      for(const w of value.latest_report.windows){
+        if(w.end_exclusive_ms<=value.latest_report.as_of_ms&&w.end_exclusive_ms<=Date.now()){
+          const opt=el('option',w.window_id);opt.value=w.window_id;sourceWindow.appendChild(opt);
+        }
+      }
+      const sourceWindowLabel=el('label','Closed window ');sourceWindowLabel.appendChild(sourceWindow);
+      const mappingFile=el('input');mappingFile.type='file';mappingFile.accept='.json,application/json';mappingFile.setAttribute('aria-label','Invoice outcome bindings JSON');
+      sourceSection.append(sourceWindowLabel,el('p','Use the blind case manifest above to prepare an array of slot_id, case_token_sha256, observed opaque resource_ref and predicate (invoice_paid_in_window).'),mappingFile,
+        button('Retain invoice outcome bindings',()=>perform(async()=>{
+          const file=mappingFile.files?.[0];if(!sourceWindow.value||!file||file.size>128*1024)throw new Error('Choose a closed window and bindings JSON up to 128 KiB.');
+          const raw=await file.text();
+          if(!window.confirm('Retain immutable case-to-invoice mappings? Confirm the exact business outcome definition is invoice payment within this window. This mapping is your declaration.'))return;
+          const attempt=++serial;
+          const prefix=JSON.stringify({...base,expected_report_sha256:value.latest_report.report_sha256,window_id:sourceWindow.value,confirm_operator_case_mapping:true,confirm_case_outcome_defined_by_predicate:true});
+          await request('/v1/process-catalog/procurement/router-source-outcome-bind?'+new URLSearchParams({workflow_id:scope.workflow_id,revision:String(scope.revision)}),{document:prefix.slice(0,-1)+',"bindings":'+raw+'}'});
+          if(valid(attempt))await loadDetail(value.monitor_id);
+        })));
+      for(const b of value.source_outcome_bindings){
+        const result=[...value.source_outcome_checks].reverse().find(x=>x.slot_id===b.slot_id);
+        const row=el('div');row.appendChild(el('p',b.window_id+' · '+b.slot_id.slice(0,12)+' · '+(result?result.status+' / '+result.reason:'not checked')));
+        if(result?.status!=='confirmed')row.appendChild(button('Check linked Stripe invoice',()=>change('router-source-outcome-check',{
+          expected_report_sha256:value.latest_report.report_sha256,window_id:b.window_id,slot_ids:[b.slot_id],confirm_source_read:true
+        },'Perform an explicitly authorized read-only Stripe invoice status/lifecycle check?')));
+        sourceSection.appendChild(row);
+      }
+      output.appendChild(sourceSection);
       output.appendChild(el('h6','Producer credential management'));
       for(const g of value.producer_grants){
         const row=el('div');row.appendChild(el('p',g.producer_alias+' · '+g.window_id+' / '+g.arm+' · '+(g.revoked?'revoked':g.expires_ms<=Date.now()?'expired':'active')));
@@ -2254,6 +2285,7 @@
             el('p','Retained cutoff: '+new Date(r.as_of_ms).toISOString()+' · head '+r.head_sha256),
             el('p','Rollback triggers: '+(r.sticky_rollback_triggers.map(x=>(x.window_id||'cumulative')+': '+x.reason).join(' · ')||'none recorded')),
             el('p','Rollback referral: '+(r.rollback_referral_recorded?'recorded':'not recorded')+' · due for review: '+(r.due_for_review_windows.join(', ')||'none')),
+            el('p','Source predicates: '+r.source_outcomes.confirmed+'/'+r.source_outcomes.bound+' confirmed'),
             el('p','Outcome corroboration: '+r.outcome_corroboration.matched+'/'+r.outcome_corroboration.enrolled+' matched · '+r.outcome_corroboration.conflicts+' conflicts'),
             el('p','Declared finance statements: '+(r.finance_reconciled_windows.join(', ')||'none')+' · scheduled review consent '+(r.scheduled_deadline_review_enabled?'enabled':'disabled')),
             button('Open saved revision',()=>load(r.workflow_id,r.revision)));

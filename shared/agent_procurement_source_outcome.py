@@ -41,7 +41,7 @@ def project(receipt,start,end,now):
     if len(paid)!=1 or paid[0] is None or paid[0]>at:
         return {**result,"reason":"paid_transition_not_established"}
     result["paid_at_ms"]=paid[0]
-    if not start<=paid[0]<end:
+    if not start<=paid[0] or paid[0]+999>=end:
         return {**result,"reason":"paid_transition_outside_window"}
     return {**result,"status":"confirmed","reason":"paid_transition_in_window"}
 
