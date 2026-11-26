@@ -9,12 +9,12 @@ import argparse
 import getpass
 import json
 import os
+import sys
 from pathlib import Path
 import time
 from urllib.parse import urlsplit
 
 import httpx
-from pydantic import ValidationError
 
 from .agent_procurement import digest, loads, MAX_BYTES
 from .agent_procurement_monitor_protocol import (
@@ -137,7 +137,10 @@ def main(argv=None):
             if not args.confirm_submit:raise ValueError("explicit submission confirmation required")
             batch=_read(args.batch)
             _url(args.base_url)
-            token=os.environ.get(TOKEN_ENV) or getpass.getpass("Scoped producer credential: ")
+            token=os.environ.get(TOKEN_ENV)
+            if not token:
+                if not sys.stdin.isatty():raise ValueError("interactive terminal or credential environment required")
+                token=getpass.getpass("Scoped producer credential: ")
             receipt=submit(assignment,batch,args.base_url,token)
             print(json.dumps(receipt,sort_keys=True,separators=(",",":")))
     except (OSError,ValueError,TypeError,KeyError,RecursionError,OverflowError,httpx.HTTPError):
