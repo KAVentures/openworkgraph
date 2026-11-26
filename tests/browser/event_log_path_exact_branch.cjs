@@ -1,0 +1,48 @@
+const {chromium}=require('playwright');
+const assert=require('node:assert/strict');
+const fs=require('node:fs/promises');
+const {spawn}=require('node:child_process');
+const {tmpdir}=require('node:os');
+const path=require('node:path');
+(async()=>{
+ const scratch=await fs.mkdtemp(path.join(tmpdir(),'owg-path-exact-'));
+ const base='http://127.0.0.1:8787';
+ const server=spawn(process.env.OWG_BROWSER_PYTHON||'python',['-m','uvicorn','process_logs_app:app','--app-dir','tests/browser','--host','127.0.0.1','--port','8787'],{env:{...process.env,OWG_BROWSER_TEST_DIR:scratch},stdio:['ignore','pipe','pipe']});
+ let browser,logs='';for(const stream of [server.stdout,server.stderr])stream.on('data',c=>logs=(logs+c).slice(-10000));
+ try{
+  let ready=false;for(let i=0;i<100;i++){if(server.exitCode!==null)throw Error(logs);try{await fs.access(path.join(scratch,'session.txt'));if((await fetch(base+'/')).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,200));}assert.ok(ready,logs);
+  browser=await chromium.launch({...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE}:{}),headless:true,args:['--no-sandbox']});
+  const page=await browser.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.goto(base+'/#session='+(await fs.readFile(path.join(scratch,'session.txt'),'utf8')).trim());
+  await page.locator('[role=tab][data-tab=evidence]').click();
+  const rare='  rare 雪😀  ',rows=['case,activity,time'];
+  for(let i=0;i<35;i++)for(let j=0;j<2;j++)rows.push(`c${i}_${j},Branch${String(i).padStart(2,'0')},2024-01-01T00:00:00Z`);
+  rows.push(`rare,${rare},2024-01-01T00:00:00Z`,'rare,Finish,2024-01-01T01:00:00Z');
+  await page.locator('#owgEventLogFile').setInputFiles({name:'paths.csv',mimeType:'text/csv',buffer:Buffer.from(rows.join('\n'))});
+  await page.locator('#owgEventLogStatus').filter({hasText:'File mapping ready.'}).waitFor();
+  await page.locator('#owgEventLogCase').selectOption('case');await page.locator('#owgEventLogActivity').selectOption('activity');await page.locator('#owgEventLogTime').selectOption('time');
+  await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
+  await page.locator('#owgEventLogStatus').filter({hasText:'Imported'}).waitFor();await page.locator('#owgEventLogAnalyze').click();
+  await page.locator('#owgPathsStart').click();await page.locator('#owgPathsStatus').filter({hasText:'Showing the 30 most common of 36 next steps.'}).waitFor();
+  assert.equal(await page.locator('#owgPathsResults').getByRole('button',{name:'Go to '+rare,exact:true}).count(),0);
+  await page.locator('#owgPathsExact').fill('x'.repeat(201));await page.locator('#owgPathsExactGo').click();
+  await page.locator('#owgPathsStatus').filter({hasText:'1 to 200 characters'}).waitFor();
+  await page.locator('#owgPathsExact').fill('rare');await page.locator('#owgPathsExactFind').click();
+  await page.locator('#owgPathsExactMatches').selectOption(rare);await page.locator('#owgPathsExactUse').click();
+  assert.equal(await page.locator('#owgPathsExact').inputValue(),rare);
+  const [request]=await Promise.all([page.waitForRequest(r=>r.url().includes('/next-steps?')),page.locator('#owgPathsExactGo').click()]);
+  assert.deepEqual(new URL(request.url()).searchParams.getAll('step'),[rare]);
+  await page.locator('#owgPathsStatus').filter({hasText:'1 cases'}).waitFor();
+  await page.locator('#owgPathsResults').getByRole('button',{name:'Inspect cases continuing to Finish'}).click();
+  await page.locator('#owgPathsCaseReview').getByRole('button',{name:'Open case rare'}).click();
+  await page.locator('#owgEventLogCaseEvents').getByText('rare',{exact:false}).first().waitFor();
+  await page.locator('#owgPathsBack').click();await page.locator('#owgPathsStatus').filter({hasText:'Showing the 30 most common'}).waitFor();
+  await page.locator('#owgPathsExact').fill('not present');await page.locator('#owgPathsExactGo').click();
+  await page.locator('#owgPathsStatus').filter({hasText:'0 cases'}).waitFor();
+  await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
+  const audit=await page.evaluate(()=>window.axe.run(document.querySelector('#owgPaths'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
+  assert.deepEqual(audit.violations.map(v=>v.id),[]);await page.setViewportSize({width:390,height:844});
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2));assert.deepEqual(errors,[]);
+  console.log('Exact path branch browser passed: omitted Unicode branch, case evidence, unknown branch and accessibility.');
+ }finally{if(browser)await browser.close();server.kill('SIGTERM');await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);if(server.exitCode===null)server.kill('SIGKILL');await fs.rm(scratch,{recursive:true,force:true});}
+})().catch(e=>{console.error(e);process.exit(1);});
