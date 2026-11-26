@@ -58,6 +58,15 @@ async def object_state_check_witnesses(request: Request, log_id: str):
     return await run_in_threadpool(_respond, state.witnesses, log_id, spec)
 
 
+@router.post("/v1/event-logs/{log_id}/object-state-check/labels")
+async def object_state_check_labels(request: Request, log_id: str):
+    from . import event_log_object_state_labels as labels
+    _require_dashboard(request)
+    spec = await _json_body(request, "object state label lookup", strict=True, limit=16384)
+    _require_dashboard(request)
+    return await run_in_threadpool(_respond, labels.search, log_id, spec)
+
+
 @router.post("/v1/event-logs/{log_id}/object-state-check/export")
 async def export_object_state_check(request: Request, log_id: str):
     from . import event_log_object_state_check as state

@@ -14,6 +14,15 @@ qualifier to the exact literal value, including the empty qualifier. Every
 recorded event of the selected activity is included, including events with
 no selected object. Duplicate qualifier links to the same object count once.
 
+The map's optional **Find** controls search stored activities across the log,
+or timed attribute names, values and event-link qualifiers for the selected
+object type. Value lookup also uses the exact attribute name. Matching is
+case-sensitive and literal; a blank search lists values, including an empty
+value or qualifier. Value matches cover retained history, including values
+from times other than the event being checked. Select a result to copy its
+exact stored text into the check. Labels the checker cannot accept are shown as unavailable. Lookups
+are local and owner-only; later pages use the reviewed append revision.
+
 ## Time and uncertainty
 
 The latest retained attribute timestamp at or before the event applies.
@@ -68,6 +77,14 @@ For full object evidence, POST the same check settings to
 another page. A result status filter, if supplied, must include the event;
 the endpoint refuses stale revisions and unrelated events. Witness requests
 recompute the same bounded check and can therefore take time on large logs.
+
+The owner-only label endpoint is
+`POST /v1/event-logs/{log_id}/object-state-check/labels`. Its `kind` is
+`activity`, `attribute`, `value` or `qualifier`; scoped kinds need
+`object_type`, and `value` also needs `attribute`. The optional `search` is a
+literal substring. Pass a non-null `next_after` (including an empty string)
+as `after` with `expected_revision` for another page. `checkable` marks
+whether each returned label can be used by the checker.
 
 ## Complete review worklists
 
