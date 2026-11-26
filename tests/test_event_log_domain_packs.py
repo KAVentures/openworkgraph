@@ -73,9 +73,10 @@ def test_the_report_finds_every_planted_deviation_through_the_mapping():
     assert unpicked["violating_cases"] == 2
     terms = rules[(invoice, "response_within", NAMES["create_invoice"], NAMES["receive_payment"])]
     assert terms["violating_cases"] == 1 and terms["violating_case_examples"][0]["case_id"] == "bd9"
-    # OCEL keeps no event resources, so four-eyes cannot be judged: unknown, never satisfied.
+    # Event resources arrive as org:resource: orders 5 and 15 are released by their own creator.
     four_eyes = rules[(order, "segregation_of_duties", NAMES["create_order"], NAMES["approve_credit"])]
-    assert four_eyes["violating_cases"] == 0 and four_eyes["unknown_cases"] == 6 and four_eyes["satisfied_cases"] == 0
+    assert (four_eyes["violating_cases"], four_eyes["satisfied_cases"], four_eyes["unknown_cases"]) == (2, 4, 0)
+    assert sorted(e["case_id"] for e in four_eyes["violating_case_examples"]) == ["so15", "so5"]
     sync = next(r for r in report["object_rules"]["results"] if r["rule"]["template"] == "synchronization")
     assert sync["violating"] == 2
     model = report["object_model"]

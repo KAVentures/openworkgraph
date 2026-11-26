@@ -26,6 +26,12 @@ CASES = [
      "acknowledgement_hours", "complaint_intake_to_acknowledgement", "escalated"),
     ("data_access_requests", "request", "received", "verified", "response_sent",
      "verification_hours", "dar_intake_to_verification", "clarification"),
+    ("warehouse_fulfillment", "fulfillment", "released", "picked", "carrier_handoff",
+     "pick_hours", "whf_release_to_pick", "stock_exception"),
+    ("sales_quote_approval", "quote", "requested", "prepared", "issued",
+     "preparation_hours", "sqa_request_to_preparation", "revised"),
+    ("payment_disputes", "dispute", "received", "triaged", "outcome_recorded",
+     "triage_hours", "pdis_intake_to_triage", "escalated"),
 ]
 
 
@@ -160,3 +166,33 @@ def test_catalog_contract_and_unique_metric_names():
         # Catalog callers cannot mutate the installed definition.
         definition["metrics"].clear()
         assert packs.definitions(pack_id)["metrics"]
+
+
+def test_new_packs_have_distinct_lifecycles_and_expected_controls():
+    expected = {
+        "warehouse_fulfillment": ("released", "carrier_handoff", "handoff_hours"),
+        "sales_quote_approval": ("requested", "issued", "issue_hours"),
+        "payment_disputes": ("received", "response_submitted", "response_days"),
+    }
+    for pack_id, (start, end, threshold) in expected.items():
+        definition = packs.definitions(pack_id)
+        assert any(r["rule"] == {"template": "response_within", "a": "@" + start,
+                                 "b": "@" + end, "seconds": "$" + threshold}
+                   for r in definition["compliance"])
+        assert len(definition["metrics"]) == 7
+        assert len({m["metric"]["name"] for m in definition["metrics"]}) == 7
+        assert definition["object_rules"] == []
+    quote = packs.definitions("sales_quote_approval")
+    assert any(r["rule"] == {"template": "segregation_of_duties",
+                              "a": "@prepared", "b": "@approved"}
+               for r in quote["compliance"])
+
+
+def test_quote_resource_overlap_is_a_review_flag_not_approval_validity():
+    pack_id = "sales_quote_approval"
+    log = _fixture(pack_id)
+    packs.install(log, pack_id, _spec(pack_id, "quote"))
+    report = packs.report(log, pack_id)
+    overlap = _rule(report, "segregation_of_duties", "prepared", "approved")
+    assert "good" in {e["case_id"] for e in overlap["violating_case_examples"]}
+    assert report["policy_compliance_verified"] is False

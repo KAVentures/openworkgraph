@@ -64,6 +64,12 @@ def test_effort_cost_and_quality_are_separate_with_hand_calculated_oracle():
     assert result["baseline"]["quality_failure_rate"]==0.04
     assert result["after"]["quality_failure_rate"]==0.1
     assert result["review_gates"][-1]["status"]=="above_threshold"
+    population=result["whole_population_quality"]
+    assert population["failure_rate_change_lower"]==-.47
+    assert population["failure_rate_change_upper"]==.53
+    assert population["threshold_status"]=="unresolved"
+    assert population["after"]["nonhandoff_and_quality_pass_count_lower"]==0
+    assert population["after"]["nonhandoff_and_quality_pass_count_upper"]==50
     assert not result["all_declared_gates_met"]
     assert not result["financial_return_verified"] and not result["savings_claimed"]
     assert "private source" not in str(q.inventory(key))
@@ -82,6 +88,9 @@ def test_no_checked_cases_and_no_eligible_cases_are_unknown_not_zero():
     assert result["after"]["quality_failure_rate"] is None
     assert result["after"]["attempted_share_of_eligible"] is None
     assert [g["status"] for g in result["review_gates"]]==["insufficient","insufficient","unknown","unknown"]
+    pop=result["whole_population_quality"]
+    assert pop["failure_rate_change_lower"]==-1 and pop["failure_rate_change_upper"]==1
+    assert pop["after"]["nonhandoff_and_quality_pass_share_of_eligible_upper"] is None
 
 
 @pytest.mark.parametrize("patch",[
@@ -141,6 +150,7 @@ with TestClient(app) as client:
     assert result.status_code==200,result.text
     assert result.headers["cache-control"]=="no-store"
     assert result.json()["financial_scenario"]["modeled_net_monthly_value_change"]==20394.8
+    assert result.json()["whole_population_quality"]["threshold_status"]=="unresolved"
     assert client.post(url,content=b'{"currency":"SEK","currency":"EUR"}',headers={**h,"Content-Type":"application/json"}).status_code==422
 """
     env={**os.environ,"WORKFLOW_OBSERVER_DATA":str(tmp_path/"data"),

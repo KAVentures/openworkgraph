@@ -11,11 +11,103 @@
   const status=text=>{const n=document.getElementById('owgCatalogStatus');if(n)n.textContent=String(text);};
   const copy=value=>JSON.parse(JSON.stringify(value));
   function clearShadowReview(){shadowGeneration++;document.getElementById('owgCatalogShadowResult')?.replaceChildren();}
-  function clearRuleChecks(){ruleCheckGeneration++;document.getElementById('owgCatalogRuleCheckResult')?.replaceChildren();}
+  function renderDecisionDomainLab(host){
+    if(!record?.workflow_id||!record.revision||!record.content_sha256||!model.decision_tables?.length)return;
+    const section=el('details');section.appendChild(el('summary','Decision coverage lab'));
+    section.appendChild(el('p','Test synthetic inputs against the exact saved revision. Every combination in your finite domain is checked, but this does not prove general policy coverage. Do not enter real customer or employee facts.'));
+    const date=el('input');date.type='date';date.setAttribute('aria-label','Declared decision test date');
+    const dateLabel=el('label','Declared decision test date ');dateLabel.appendChild(date);
+    const input=el('textarea');input.rows=12;input.style.cssText='width:100%;box-sizing:border-box;font-family:monospace';
+    input.setAttribute('aria-label','Synthetic domain dimensions JSON');input.value='[]';
+    const inputLabel=el('label','Synthetic domain dimensions JSON');inputLabel.appendChild(input);
+    const info=el('p','Each dimension has a JSON pointer path and choices, each containing either a scalar value or {"missing":true}.');
+    const output=el('div');output.id='owgDecisionDomainResult';output.setAttribute('role','status');
+    let report=null, turn=0;
+    const download=button('Download minimized coverage report',()=>{
+      if(!report)return;
+      const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));
+      const a=el('a');a.href=url;a.download='owg-decision-coverage-r'+report.reference.revision+'.json';a.click();
+      setTimeout(()=>URL.revokeObjectURL(url),1000);
+    });download.disabled=true;
+    const invalidate=()=>{turn++;report=null;download.disabled=true;output.replaceChildren();};
+    const ref=()=>({workflow_id:record.workflow_id,revision:String(record.revision),content_sha256:record.content_sha256});
+    const guard=(selected,generation,attempt)=>output.isConnected&&generation===editGeneration&&attempt===turn&&
+      record?.workflow_id===selected.workflow_id&&String(record.revision)===selected.revision&&record.content_sha256===selected.content_sha256;
+    const verify=(data,selected)=>{
+      if(data.reference.workflow_id!==selected.workflow_id||String(data.reference.revision)!==selected.revision||
+         data.reference.content_sha256!==selected.content_sha256)throw new Error('Unexpected saved revision reference.');
+    };
+    const suggest=button('Suggest synthetic boundary choices',async()=>{
+      if(input.value.trim()!=='[]'&&!window.confirm('Replace the current synthetic dimensions with new suggestions?'))return;
+      invalidate();const selected=ref(),generation=editGeneration,attempt=turn;
+      suggest.disabled=true;
+      try{
+        const data=await request('/v1/process-catalog/decision-domain/suggestions?'+new URLSearchParams(selected));
+        if(!guard(selected,generation,attempt))return;verify(data,selected);
+        input.value=JSON.stringify(data.dimensions,null,2);
+        info.textContent=data.suggested_combinations+' suggested combinations; limit '+data.max_combinations+
+          '. Review and narrow the dimensions if needed. Suggestions are not an exhaustive partition.';
+        for(const item of data.omitted_paths)info.appendChild(el('span',' Omitted '+item.path+' ('+item.reason+').'));
+        if(data.clipped_paths.length)info.appendChild(el('span',' Choice limit reached for: '+data.clipped_paths.join(', ')+'.'));
+      }catch(error){if(guard(selected,generation,attempt))output.replaceChildren(el('p',error.message));}
+      finally{suggest.disabled=false;}
+    });
+    const run=button('Check finite decision domain',async()=>{
+      invalidate();const selected=ref(),generation=editGeneration,attempt=turn;
+      if(!date.value){output.textContent='Choose an explicit test date.';return;}
+      let dimensions;try{dimensions=JSON.parse(input.value);}catch{output.textContent='Enter valid JSON dimensions.';return;}
+      run.disabled=true;output.textContent='Checking synthetic combinations…';
+      try{
+        const data=await request('/v1/process-catalog/decision-domain?'+new URLSearchParams(selected),
+          {as_of_date:date.value,dimensions});
+        if(!guard(selected,generation,attempt))return;verify(data,selected);report=data;download.disabled=false;
+        output.replaceChildren(el('h4','Coverage · saved revision '+data.reference.revision),
+          el('p',data.combinations+' / '+data.enumerated_combinations+' declared combinations checked for '+data.as_of_date+'.'),
+          el('p','Domain SHA-256: '+data.domain_sha256),
+          el('p','Witness vectors use zero-based choice indices in the submitted dimension order. The report omits input values.'));
+        for(const table of data.tables){
+          const group=el('details');group.open=true;
+          group.appendChild(el('summary',table.table_id+' · '+table.hit_policy));
+          group.appendChild(el('p',Object.entries(table.status_counts).map(([status,n])=>status+': '+n).join(' · ')));
+          if(table.required_decision_table_ids.length)group.appendChild(el('p','Requires: '+table.required_decision_table_ids.join(', ')));
+          if(table.undeclared_predicate_paths.length)group.appendChild(el('p','No explicit dimension or direct injection for: '+table.undeclared_predicate_paths.join(', ')));
+          for(const [status,vectors] of Object.entries(table.status_examples)){
+            group.appendChild(el('p',status+' example indices: '+vectors.map(v=>'['+v.join(', ')+']').join(' · ')));
+          }
+          const grid=el('table'),thead=el('thead'),head=el('tr'),tbody=el('tbody');
+          for(const title of ['Row','Matched','Selected','Unknown','Not evaluated','Shadowed','Finite-domain finding']){
+            const th=el('th',title);th.scope='col';head.appendChild(th);
+          }
+          thead.appendChild(head);grid.append(thead,tbody);
+          for(const row of table.rows){
+            const tr=el('tr');
+            const finding=row.fully_shadowed_when_matched_in_domain?'Fully shadowed when matched':
+              row.known_never_matches_in_domain?'Never matches in this domain':
+              row.never_selected_in_declared_domain?'Not selected in this domain':'Selected';
+            for(const value of [row.row_id,row.matched,row.selected,row.unknown,row.not_evaluated,row.shadowed_by_earlier_selection,finding])
+              tr.appendChild(el('td',value));
+            tbody.appendChild(tr);
+          }
+          const scroll=el('div');scroll.style.cssText='overflow-x:auto;max-width:100%';scroll.appendChild(grid);group.appendChild(scroll);
+          const pairs=el('details');pairs.appendChild(el('summary','Co-matching row pairs ('+table.co_matching_pairs.length+')'));
+          for(const pair of table.co_matching_pairs)pairs.appendChild(el('p',pair.row_ids.join(' + ')+': '+pair.both_matched_cases+
+            ' cases; witness ['+pair.witness_choice_indices.join(', ')+']'));
+          group.appendChild(pairs);output.appendChild(group);
+        }
+        output.appendChild(el('p','No facts, approvals, legal compliance, case distribution or execution permissions are verified.'));
+      }catch(error){if(guard(selected,generation,attempt))output.replaceChildren(el('p',error.message));}
+      finally{run.disabled=false;}
+    });
+    date.addEventListener('change',invalidate);input.addEventListener('input',invalidate);
+    section.addEventListener('owg-decision-domain-clear',()=>{invalidate();input.value='[]';date.value='';});
+    section.append(dateLabel,suggest,inputLabel,info,run,download,output);host.appendChild(section);
+  }
+
+  function clearRuleChecks(){document.getElementById('owgDecisionDomainResult')?.closest('details')?.dispatchEvent(new Event('owg-decision-domain-clear'));ruleCheckGeneration++;document.getElementById('owgCatalogRuleCheckResult')?.replaceChildren();}
   function clearSourceRuleChecks(){sourceRuleGeneration++;document.getElementById('owgCatalogSourceRuleResult')?.replaceChildren();}
   function clearOrigins(){originGeneration++;document.getElementById('owgCatalogOriginResult')?.replaceChildren();}
   function clearRevisionComparison(){revisionCompareGeneration++;document.getElementById('owgCatalogRevisionCompare')?.replaceChildren();}
-  function changed(invalidateTables=true){editGeneration++;if(invalidateTables&&model?.decision_tables?.length){for(const t of model.decision_tables)t.user_confirmed=false;document.querySelectorAll("input[data-table-confirmation]").forEach(n=>{n.checked=false;});}clearOrigins();clearRevisionComparison();clearSourceRuleChecks();reviewed=false;const check=document.getElementById('owgCatalogReviewed');if(check)check.checked=false;clearShadowReview();clearRuleChecks();}
+  function changed(invalidateTables=true){editGeneration++;document.getElementById('owgCatalogTokenAssurance')?.closest('details')?.dispatchEvent(new Event('owg-token-assurance-clear'));if(invalidateTables&&model?.decision_tables?.length){for(const t of model.decision_tables)t.user_confirmed=false;document.querySelectorAll("input[data-table-confirmation]").forEach(n=>{n.checked=false;});}clearOrigins();clearRevisionComparison();clearSourceRuleChecks();reviewed=false;const check=document.getElementById('owgCatalogReviewed');if(check)check.checked=false;clearShadowReview();clearRuleChecks();}
   function field(parent,title,value,apply,options){
     const label=el('label',title+' '),input=el(options?'select':'input');
     if(options)options.forEach(value=>{const option=el('option',value);option.value=value;input.appendChild(option);});
@@ -263,6 +355,51 @@
           }
           table.appendChild(body);wrap.appendChild(table);section.appendChild(wrap);
         }else section.appendChild(el('p','No stored-model difference detected. Source evidence and outcomes remain unverified.'));
+        const impactHost=el('div');impactHost.setAttribute('aria-live','polite');
+        const impactButton=button('Review policy change impact',async()=>{
+          impactButton.disabled=true;impactHost.replaceChildren(el('p','Comparing the exact saved policy declarations…'));
+          const active=()=>generation===revisionCompareGeneration&&record===selected&&impactHost.isConnected;
+          try{
+            const data=await request('/v1/process-catalog/policy-impact?'+new URLSearchParams({
+              workflow_id:selected.workflow_id,before_revision:String(previous.revision),after_revision:String(selected.revision),
+              before_sha256:previous.content_sha256,after_sha256:selected.content_sha256}));
+            if(!active())return;
+            if(data.before.content_sha256!==previous.content_sha256||data.after.content_sha256!==selected.content_sha256||
+              data.before.workflow_id!==selected.workflow_id||data.after.workflow_id!==selected.workflow_id||
+              data.before.revision!==previous.revision||data.after.revision!==selected.revision)throw Error('Unexpected saved revision references.');
+            const parts=[el('h4','Policy revision impact'),
+              el('p','Potential structural impact only. Text meaning, policy equivalence, actual execution and outcomes are not verified. No source state is read.')];
+            const list=(title,rows,describe)=>{
+              const group=el('details');group.open=true;group.appendChild(el('summary',title+' ('+rows.length+')'));
+              for(const row of rows)group.appendChild(el('p',describe(row)));
+              if(!rows.length)group.appendChild(el('p','None detected.'));
+              parts.push(group);
+            };
+            list('Changed rules',data.rule_changes,r=>r.rule_id+' · '+r.changes.join(', ')+
+              ' · Previous fact paths: '+(r.old_fact_paths.join(', ')||'none')+' · Current fact paths: '+(r.new_fact_paths.join(', ')||'none'));
+            list('Changed decision tables',data.decision_table_changes,t=>t.table_id+' · '+t.changes.join(', '));
+            list('Changed transitions',data.transition_changes,e=>e.edge.join(' → ')+' · '+
+              (e.old_exists?(e.old_rule_id||'unconditional'):'absent')+' → '+(e.new_exists?(e.new_rule_id||'unconditional'):'absent'));
+            list('Changed manual review conditions',data.manual_review_changes,r=>r.identity.join(' · ')+' · '+r.change);
+            list('Changed outcome expectations',data.outcome_expectation_changes,r=>r.identity.join(' · ')+' · '+r.change);
+            for(const [side,value] of [['Compared revision',data.before_impact],['Opened revision',data.after_impact]]){
+              parts.push(el('h5',side),el('p','Potentially affected terminals: '+(value.potentially_affected_terminal_ids.join(', ')||'none')));
+              list('Direct affected edges',value.direct_guarded_edges,e=>e.join(' → '));
+              list('Decision dependency paths',value.decision_dependency_witnesses,r=>r.path.join(' → '));
+              list('Downstream activity paths',value.downstream_activity_witnesses,r=>r.path.join(' → '));
+              parts.push(el('p','Changed but unreferenced rules: '+(value.unreferenced_changed_rule_ids.join(', ')||'none')));
+            }
+            parts.push(button('Download minimized policy-impact JSON',()=>{
+              if(!active())return;
+              const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
+              const link=el('a');link.href=url;link.download='owg-policy-impact-r'+previous.revision+'-r'+selected.revision+'.json';
+              link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+            }));
+            impactHost.replaceChildren(...parts);
+          }catch(error){if(active())impactHost.replaceChildren(el('p',error.message));}
+          finally{impactButton.disabled=false;}
+        });
+        section.append(impactButton,impactHost);
         if(revision<selected.revision){
           section.appendChild(el('p','Restoration creates an UNSAVED draft from the historical model against the current latest revision. All earlier confirmations and evidence links are removed. A separate human review and new save are required.'));
           section.appendChild(button('Prepare historical r'+revision+' as unsaved restoration draft',
@@ -271,6 +408,7 @@
         section.appendChild(button('Open compared revision r'+revision,
           ()=>load(selected.workflow_id,revision,previous.content_sha256)));
         host.replaceChildren(section);
+        renderPolicyRegression(previous,selected,host,generation);
       }catch(error){
         if(generation===revisionCompareGeneration&&record===selected)
           host.replaceChildren(el('p','Comparison unavailable: '+error.message));
@@ -278,6 +416,87 @@
       }
     });
   }
+  function renderPolicyRegression(previous,selected,host,generation){
+    if(previous.revision>=selected.revision)return;
+    const panel=el('details');panel.appendChild(el('summary','Test behavioral regression between saved revisions'));
+    panel.appendChild(el('p','Use synthetic or explicitly authorized local facts, with separately reviewed expectations for each revision. Both versions see the exact same dated case. No agent runs or source calls.'));
+    const input=el('textarea');input.rows=14;input.style.cssText='width:100%;box-sizing:border-box;font-family:monospace';
+    input.setAttribute('aria-label','Reviewed decision regression cases JSON');
+    input.placeholder='{"cases":[{"case_id":"case_1","as_of_date":"2026-01-01","facts":{},"expectations":[{"table_id":"decision_id","before":{"status":"unknown"},"after":{"status":"unknown"}}]}]}';
+    const confirm=el('input');confirm.type='checkbox';const label=el('label',' I authorize local analysis of these facts and confirm the expectations were reviewed.');label.prepend(confirm);
+    const out=el('div');out.setAttribute('role','status');
+    let turn=0,report=null;
+    const active=()=>panel.isConnected&&host.isConnected&&generation===revisionCompareGeneration&&record===selected;
+    const download=button('Download minimized regression report',()=>{
+      if(!report||!active())return;
+      const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));
+      const a=el('a');a.href=url;a.download='owg-policy-regression-r'+previous.revision+'-r'+selected.revision+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    });download.disabled=true;
+    const run=button('Evaluate both revisions and review change impact',async()=>{
+      if(!active()||!confirm.checked)return;
+      const n=++turn;report=null;download.disabled=true;run.disabled=true;out.replaceChildren(el('p','Evaluating reviewed cases locally…'));
+      try{
+        const raw=JSON.parse(input.value);
+        if(!raw||typeof raw!=='object'||Array.isArray(raw)||Object.keys(raw).some(k=>k!=='cases'))
+          throw Error('Supply a JSON object containing only the cases array.');
+        // Send the original JSON object text rather than parsed/reserialized
+        // facts, so duplicate keys and nonfinite values reach the strict parser.
+        const rawText=input.value.trim();
+        const body='{"reviewed_by_user":true,'+rawText.slice(1);
+        await window.__owgAuthReady;
+        if(!active()||n!==turn||!confirm.checked)return;
+        const params=new URLSearchParams({workflow_id:selected.workflow_id,before_revision:String(previous.revision),
+          after_revision:String(selected.revision),before_sha256:previous.content_sha256,after_sha256:selected.content_sha256,include_change_review:'true'});
+        const response=await fetch('/v1/process-catalog/policy-regression?'+params,{method:'POST',cache:'no-store',
+          headers:{'Content-Type':'application/json','X-OWG-Case-Facts-Authorized':'true'},body});
+        if(!response.ok){const error=await response.json().catch(()=>({}));throw Error(error.detail||'Regression request failed.');}
+        const data=await response.json();
+        if(!active()||n!==turn)return;
+        if(data.before.workflow_id!==previous.workflow_id||data.before.revision!==previous.revision||
+          data.before.content_sha256!==previous.content_sha256||data.after.workflow_id!==selected.workflow_id||
+          data.after.revision!==selected.revision||data.after.content_sha256!==selected.content_sha256)
+          throw Error('Unexpected revision references.');
+        report=data;download.disabled=false;
+        const parts=[el('h4','Paired regression results'),el('p',data.after_matches+' / '+data.reviewed_expectations+
+          ' after expectations matched; '+data.before_matches+' before. '+data.cases_all_after_match+' / '+data.case_count+' cases matched every reviewed after expectation.'),
+          el('p',data.unreviewed_table_case_pairs+' unreviewed table/case pairs, '+data.unreviewed_changed_table_case_pairs+' with observed changes.'),
+          el('p',Object.entries(data.classification_counts).map(([k,v])=>k.replaceAll('_',' ')+': '+v).join(' · '))];
+        const review=data.change_review;
+        if(review){
+          const st=review.structural_after;
+          parts.push(el('h4','Integrated change review'),el('p',review.assessment.replaceAll('_',' ')),
+            el('p','Structural markings: '+st.states_discovered+' · '+(st.complete?'complete bounded exploration':'incomplete exploration')+
+              ' · '+st.known_deadlock_count+' known deadlocks.'),
+            el('p',review.unreviewed_affected_table_case_pairs+' potentially affected table/case pairs lack reviewed expectations.'));
+          const findings=el('ul');for(const item of review.findings)findings.appendChild(el('li',item.status.replaceAll('_',' ')+': '+item.detail));parts.push(findings);
+          if(review.affected_decision_coverage.length){
+            const coverageWrap=el('div');coverageWrap.className='table-wrap';coverageWrap.tabIndex=0;coverageWrap.setAttribute('role','region');coverageWrap.setAttribute('aria-label','Affected decision coverage');
+            const ct=el('table'),head=el('thead'),hr=el('tr');for(const h of ['Affected table','Reviewed cases','Unreviewed cases','After matches','After mismatches'])hr.appendChild(el('th',h));
+            head.appendChild(hr);ct.appendChild(head);const cb=el('tbody');
+            for(const c of review.affected_decision_coverage){const cr=el('tr');for(const value of [c.table_id,c.reviewed_case_count,c.unreviewed_case_count,c.after_matches,c.after_mismatches])cr.appendChild(el('td',String(value)));cb.appendChild(cr);}
+            ct.appendChild(cb);coverageWrap.appendChild(ct);parts.push(coverageWrap);
+          }
+          parts.push(el('p',review.interpretation,'muted'));
+        }
+        const wrap=el('div');wrap.className='table-wrap';wrap.tabIndex=0;wrap.setAttribute('role','region');wrap.setAttribute('aria-label','Paired case expectations');
+        const t=el('table'),thead=el('thead'),tr=el('tr');for(const h of ['Case','Date','Table','Before actual / expected','After actual / expected','Classification'])tr.appendChild(el('th',h));
+        thead.appendChild(tr);t.appendChild(thead);const tbody=el('tbody');
+        const desc=v=>v.status+(v.target_activity_id?' → '+v.target_activity_id:'');
+        for(const c of data.cases)for(const x of c.checks){
+          const row=el('tr');for(const value of [c.case_id,c.as_of_date,x.table_id,desc(x.before)+' / '+desc(x.before_expected),
+            desc(x.after)+' / '+desc(x.after_expected),x.classification+(x.table_identity_discontinuous?' (table identity changed)':'')])row.appendChild(el('td',value));
+          tbody.appendChild(row);
+        }
+        t.appendChild(tbody);wrap.appendChild(t);parts.push(wrap,el('p',data.interpretation),el('p','Suite SHA-256: '+data.suite_sha256));
+        out.replaceChildren(...parts);
+      }catch(error){if(active()&&n===turn)out.replaceChildren(el('p',error instanceof SyntaxError?'Invalid JSON case suite.':error.message));}
+      finally{if(active()&&n===turn)run.disabled=!confirm.checked;}
+    });run.disabled=true;
+    const invalidate=()=>{turn++;report=null;download.disabled=true;out.replaceChildren();run.disabled=!confirm.checked;};
+    input.oninput=()=>{confirm.checked=false;invalidate();};confirm.onchange=invalidate;
+    panel.append(input,label,run,download,out);host.appendChild(panel);
+  }
+
   async function history(before){
     if(!record)return;
     return locked(async()=>{
@@ -445,6 +664,67 @@
     }));
     host.appendChild(section);
   }
+  function renderTokenAssurance(host){
+    if(!record?.workflow_id||!record.revision||!record.content_sha256)return;
+    const section=el('details');section.appendChild(el('summary','Structural execution assurance'));
+    section.appendChild(el('p','Explore possible token schedules of the exact saved revision, excluding unsaved edits. This does not evaluate rules, verify outcomes or authorize execution.'));
+    const result=el('div');result.id='owgCatalogTokenAssurance';result.setAttribute('role','status');
+    let report=null;
+    const download=button('Download structural assurance JSON',()=>{
+      if(!report)return;
+      const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));
+      const a=el('a');a.href=url;a.download='owg-token-assurance-r'+report.reference.revision+'.json';
+      a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    });download.disabled=true;
+    const inspect=button('Analyze saved token flow',async()=>{
+      const selected={workflow_id:record.workflow_id,revision:String(record.revision),content_sha256:record.content_sha256};
+      const generation=editGeneration;
+      const current=()=>result.isConnected&&generation===editGeneration&&record?.workflow_id===selected.workflow_id&&
+        String(record.revision)===selected.revision&&record.content_sha256===selected.content_sha256;
+      report=null;download.disabled=true;inspect.disabled=true;
+      result.replaceChildren(el('p','Exploring bounded structural markings…'));
+      try{
+        const data=await request('/v1/process-catalog/token-assurance?'+new URLSearchParams(selected));
+        if(!current())return;
+        if(data.reference.workflow_id!==selected.workflow_id||String(data.reference.revision)!==selected.revision||
+          data.reference.content_sha256!==selected.content_sha256)throw new Error('Unexpected saved revision reference.');
+        report=data;download.disabled=false;
+        result.replaceChildren(el('h4','Saved revision '+data.reference.revision+' · structural token analysis'),
+          el('p','SHA-256: '+data.reference.content_sha256),
+          el('p',(data.complete?'Complete bounded marking exploration.':'Incomplete exploration ('+data.incomplete_reason+'); missing witnesses remain unknown.')+
+            ' '+data.states_discovered+' markings, '+data.firings_examined+' firings.'),
+          el('p','Completion reachable: '+(data.completion_reachable===null?'unknown':data.completion_reachable?'yes':'no')+
+            ' · Every reachable marking can complete: '+(data.every_reachable_marking_can_complete===null?'unknown':data.every_reachable_marking_can_complete?'yes':'no')),
+          el('p',data.known_deadlock_count+' known dead-end markings · '+data.known_cyclic_component_count+' known cyclic components'+
+            (data.complete?'':' (partial observations, not exact totals)')+'. A cycle permits repeated structural firings; it does not prove an actual endless execution.'),
+          el('p',data.activities_with_complete_witness+' / '+data.activities.length+' nodes and '+
+            data.transitions_with_complete_witness+' / '+data.transitions.length+' transitions have completed structural witnesses.'));
+        const pathText=w=>w?w.node_ids.join(' → ')+(w.truncated?' … [display truncated; '+w.firing_count+' firings]':''):'No completed witness established';
+        if(data.shortest_completion)result.appendChild(el('p','Shortest known completion: '+pathText(data.shortest_completion)));
+        const table=el('table'),thead=el('thead'),head=el('tr'),body=el('tbody');
+        for(const title of ['Transition','Structural coverage','Completed firing witness']){
+          const th=el('th',title);th.scope='col';head.appendChild(th);
+        }
+        thead.appendChild(head);table.append(thead,body);
+        for(const item of data.transitions){
+          const row=el('tr');
+          for(const value of [item.source+' → '+item.target+(item.rule_id?' · '+item.rule_id:''),
+            {complete_witness:'Completed witness',no_complete_witness:'No completed witness',unknown_budget:'Unknown: budget'}[item.status],pathText(item.witness)])
+            row.appendChild(el('td',value));
+          body.appendChild(row);
+        }
+        const scroll=el('div');scroll.style.cssText='overflow-x:auto;max-width:100%;overflow-wrap:anywhere';scroll.appendChild(table);result.appendChild(scroll);
+        for(const item of data.deadlock_examples)result.appendChild(el('p','Dead-end prefix: '+pathText(item.prefix)));
+        for(const item of data.cycle_examples)result.appendChild(el('p','Cycle: '+pathText(item.cycle)+' · prefix: '+pathText(item.prefix)));
+        result.appendChild(el('p','Structural witnesses include gateway firings. Rules and inclusive selections are possibilities, not facts or approved routes.'));
+      }catch(error){if(current())result.replaceChildren(el('p',error.message));}
+      finally{inspect.disabled=false;}
+    });
+    section.append(inspect,download,result);host.appendChild(section);
+    // An edit invalidates both the report and its downloadable snapshot.
+    section.addEventListener('owg-token-assurance-clear',()=>{report=null;download.disabled=true;result.replaceChildren();});
+  }
+
   function renderEditor(){
     clearRevisionComparison();
     clearOrigins();
@@ -506,7 +786,9 @@
       'Inclusive splits run one or more branches: each branch has its own rule, and the join waits for exactly the branches that started. Rules stay unconfirmed until you confirm them. Generated projects check that a plan is a valid token flow and list the rules of the branches it chose; they do not evaluate those rules.'));
     host.appendChild(button('Refresh graph preview',()=>renderEditor()));
     renderDifferenceReview(host);
+    renderTokenAssurance(host);
     const mutate=fn=>{fn();changed();renderEditor();};
+    renderDecisionDomainLab(host);
     model.activities.forEach((activity,index)=>{
       const row=el('fieldset');row.appendChild(el('legend',activity.id));
       const label=field(row,'Activity '+activity.id,activity.label,value=>activity.label=value);label.id='owgCatalogActivity'+index;
@@ -1146,6 +1428,7 @@
     }
     function invalidate(){
       sourceGeneration++;
+      resetReview();
       output.replaceChildren(el('p','Documents changed. Run clarification again before recording any answer.'));
     }
     function appendDocument(values={}){
@@ -1264,7 +1547,72 @@
         output.append(box);
       }
     };
-    section.append(sources,add,button('Find open questions across sources',()=>locked(run)),output);
+    const revisionPanel=el('details');revisionPanel.append(el('summary','Compare previous and current policy source bundles'),
+      el('p','Use the current documents above as the candidate bundle. Enter the previous exact source bundle below as JSON with title and text per document. This is a temporary comparison, not a new ledger decision.','muted'));
+    const previous=el('textarea');previous.rows=8;previous.maxLength=700000;previous.setAttribute('aria-label','Previous policy source bundle JSON');
+    previous.placeholder='[{"title":"Previous SOP","text":"Exact prior text"}]';
+    const oldFile=el('input');oldFile.type='file';oldFile.accept='.json,application/json';oldFile.setAttribute('aria-label','Load previous policy bundle JSON');
+    const reviewOutput=el('div');reviewOutput.setAttribute('role','status');
+    let reviewSerial=0,reviewPin=null,reviewBasis=null,reviewResult=null;
+    const resetReview=()=>{reviewSerial++;reviewPin=reviewBasis=reviewResult=null;reviewOutput.replaceChildren(el('p','Review inputs again after changes.','muted'));};
+    previous.oninput=resetReview;
+    oldFile.onchange=()=>locked(async()=>{const file=oldFile.files?.[0];if(!file)return;
+      if(file.size>400*1024)throw Error('Choose previous bundle JSON no larger than 400 KiB.');
+      previous.value=await file.text();oldFile.value='';resetReview();});
+    const revisionDownload=button('Download current comparison page JSON',()=>{
+      if(!reviewResult||record!==reviewBasis?.record||sourceGeneration!==reviewBasis?.generation)return;
+      const url=URL.createObjectURL(new Blob([JSON.stringify(reviewResult,null,2)],{type:'application/json'}));
+      const a=el('a');a.href=url;a.download='owg-policy-source-revision-review.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    });
+    const compareButton=button('Compare exact source bundles',()=>locked(async()=>{
+      resetReview();const selected=record,generation=sourceGeneration;
+      let baseline;try{baseline=JSON.parse(previous.value);}catch{throw Error('Previous bundle must be valid JSON.');}
+      const candidate=docs();
+      if(!selected?.workflow_id||!Array.isArray(baseline)||baseline.length<1||baseline.length>5||!candidate.length)
+        throw Error('Provide a saved revision and one to five documents in each bundle.');
+      reviewBasis={record:selected,generation,baseline,candidate};
+      await pageReview(0,'all',null);
+    }));
+    async function pageReview(offset,kind,subject){
+      const basis=reviewBasis;if(!basis||record!==basis.record||sourceGeneration!==basis.generation){resetReview();return;}
+      const ticket=++reviewSerial;reviewOutput.replaceChildren(el('p','Comparing exact retained revision and supplied sources…'));
+      try{
+        const value=await request('/v1/process-catalog/clarify/source-revision-review'+queryFor(basis.record),
+          {expected_content_sha256:basis.record.content_sha256,baseline:basis.baseline,candidate:basis.candidate,
+           change_kind:kind,offset,limit:25,...(subject?{subject_type:subject.subject_type,target_id:subject.target_id}:{}),
+           ...(reviewPin?{expected_review_sha256:reviewPin}:{})});
+        if(ticket!==reviewSerial||record!==basis.record||sourceGeneration!==basis.generation)return;
+        if(reviewPin&&value.review_sha256!==reviewPin)throw Error('Source comparison changed.');
+        reviewPin=value.review_sha256;reviewResult=value;
+        const counts=value.indexed_statement_occurrence_counts,p=value.page;
+        reviewOutput.replaceChildren(el('h5','Exact indexed statement comparison'),
+          el('p',counts.added+' added · '+counts.removed+' removed · '+counts.retained+' identical-text occurrences retained.'),
+          el('p',value.both_bounded_document_scans_complete?'Bounded document scans complete.':'Incomplete indexed source coverage; do not treat this as a complete change inventory.','note'),
+          el('p',value.subjects_with_review_flags+' process subjects flagged for renewed review. Bundle identical: '+String(value.document_bundles_identical)+'.'),
+          el('p','Review SHA-256 '+value.review_sha256,'muted'));
+        const subjectPicker=el('select');subjectPicker.setAttribute('aria-label','Source revision subject');
+        const choices=[null,...value.subjects];choices.forEach((s,i)=>{const o=el('option',s?s.subject_type+' · '+s.target_id:'All subjects / raw statements');o.value=String(i);subjectPicker.append(o);});
+        subjectPicker.value=String(subject?choices.findIndex(s=>s&&s.subject_type===subject.subject_type&&s.target_id===subject.target_id):0);
+        const kindPicker=el('select');kindPicker.setAttribute('aria-label','Source revision change type');
+        for(const k of ['all','added','removed','retained']){const o=el('option',k);o.value=k;kindPicker.append(o);}kindPicker.value=kind;
+        const filter=()=>locked(()=>pageReview(0,kindPicker.value,choices[Number(subjectPicker.value)]));
+        subjectPicker.onchange=kindPicker.onchange=filter;
+        const subjectsList=el('ul');
+        value.subjects.forEach(s=>subjectsList.append(el('li',s.subject_type+' '+s.target_id+' · '+s.added_matching_occurrences+' added / '+s.removed_matching_occurrences+' removed · '+(s.review_flags.join(', ')||'No listed flags'))));
+        const details=el('details');details.append(el('summary','All process subject review flags'),subjectsList);
+        reviewOutput.append(details,subjectPicker,kindPicker,el('p',p.matching_occurrences+' matching occurrences · offset '+p.offset));
+        for(const row of p.rows){const item=el('section');item.append(el('h6',row.kind));
+          for(const [label,cite] of [['Previous',row.baseline],['Current',row.candidate]])if(cite)item.append(el('p',label+' · '+cite.document_title+' · characters '+cite.start+'–'+cite.end+(cite.instruction_like?' · instruction-like (excluded from matching)':'')+': '+cite.text));
+          reviewOutput.append(item);}
+        const prev=button('Previous source evidence page',()=>locked(()=>pageReview(Math.max(0,p.offset-25),kind,subject)));
+        const next=button('Next source evidence page',()=>locked(()=>pageReview(p.next_offset,kind,subject)));
+        prev.disabled=p.offset===0;next.disabled=p.next_offset===null;
+        const notes=el('ul');value.interpretation.forEach(t=>notes.append(el('li',t)));
+        reviewOutput.append(prev,next,revisionDownload,notes);
+      }catch(error){if(ticket===reviewSerial){resetReview();reviewOutput.replaceChildren(el('p',error.message,'note'));}}
+    }
+    revisionPanel.append(previous,oldFile,compareButton,reviewOutput);
+    section.append(sources,add,button('Find open questions across sources',()=>locked(run)),output,revisionPanel);
     host.append(section);
     appendDocument();
   }
