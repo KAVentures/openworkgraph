@@ -2535,6 +2535,114 @@
       entries=[makeEntry()];drawInputs();
       panel.append(inputs,submit,resultHost);target.appendChild(panel);
     };
+    const remediationSection=el('details');remediationSection.append(el('summary','Local audit remediation registers'),
+      el('p','Opt-in persistent tracking of minimized findings and declared progress. Historical rollback flags are never cleared. Original archives and independent pins remain separate.'));
+    const remediationOutput=el('div');remediationOutput.setAttribute('aria-live','polite');
+    let remediationGeneration=0;
+    const remediationCall=(action,body)=>inboxCall('remediation-'+action,JSON.stringify(body));
+    const showRemediation=value=>{
+      const attempt=++remediationGeneration;remediationOutput.replaceChildren(
+        el('h5','Retained audit remediation register'),el('p','Worklist: '+value.worklist_sha256),
+        el('p','Revision '+value.revision+' · history '+value.history_sha256),
+        el('p',value.finding_count+' findings · '+value.rollback_referrals_retained+' historical rollback referrals retained'),
+        el('p',Object.entries(value.counts_by_state).map(([k,v])=>k.replaceAll('_',' ')+': '+v).join(' · ')),
+        el('p','Reported follow-up is not verified completion or incident clearance.'));
+      const reviewer=el('input');reviewer.maxLength=80;reviewer.setAttribute('aria-label','Remediation reviewer alias');
+      const filter=el('select');filter.setAttribute('aria-label','Remediation finding state');
+      for(const v of ['all',...Object.keys(value.counts_by_state)]){const opt=el('option',v.replaceAll('_',' '));opt.value=v;filter.appendChild(opt);}
+      const query=el('input');query.type='search';query.maxLength=80;query.setAttribute('aria-label','Search remediation findings');
+      const rows=el('div'),message=el('div');message.setAttribute('aria-live','polite');let page=0,busy=false;
+      const validAlias=v=>/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/.test(v);
+      const transitions={unassigned:['assigned'],assigned:['investigating','awaiting_evidence','assigned'],
+        investigating:['awaiting_evidence','follow_up_reported','assigned'],awaiting_evidence:['investigating','assigned'],
+        follow_up_reported:['investigating','assigned']};
+      const pins={worklist_sha256:value.worklist_sha256,expected_revision:value.revision,expected_history_sha256:value.history_sha256};
+      const draw=()=>{
+        const q=query.value.trim().toLowerCase();
+        const matches=value.findings.filter(r=>(filter.value==='all'||r.state===filter.value)&&(!q||r.finding_id.includes(q)||String(r.scope.installation_alias||'').toLowerCase().includes(q)||String(r.scope.journal_tag||'').includes(q)));
+        const per=20,pages=Math.max(1,Math.ceil(matches.length/per));page=Math.min(page,pages-1);
+        rows.replaceChildren(el('p',matches.length+' remediation findings · page '+(page+1)+' of '+pages));
+        for(const row of matches.slice(page*per,(page+1)*per)){
+          const item=el('details');item.append(el('summary',row.kind.replaceAll('_',' ')+' · '+row.state.replaceAll('_',' ')),
+            el('p','Scope: '+Object.values(row.scope).join(' · ')),el('p','Finding: '+row.finding_id),
+            el('p','Current owner: '+(row.owner_alias||'unassigned')+' · evidence reference: '+(row.evidence_reference||'none')));
+          const state=el('select');state.setAttribute('aria-label','Next remediation state '+row.finding_id);
+          for(const s of transitions[row.state]){const opt=el('option',s.replaceAll('_',' '));opt.value=s;state.appendChild(opt);}
+          const owner=el('input');owner.maxLength=80;owner.value=row.owner_alias||'';owner.setAttribute('aria-label','Remediation owner '+row.finding_id);
+          const ref=el('input');ref.maxLength=80;ref.setAttribute('aria-label','Remediation evidence reference '+row.finding_id);
+          item.append(auditLabel('Next state',state),auditLabel('Declared owner',owner),auditLabel('Opaque evidence reference',ref),
+            button('Record remediation progress',async()=>{
+              if(busy||attempt!==remediationGeneration)return;
+              try{
+                if(!validAlias(reviewer.value)||!validAlias(owner.value)||(ref.value&&!validAlias(ref.value)))throw new Error('Provide valid opaque reviewer, owner and optional evidence aliases.');
+                if(state.value==='follow_up_reported'&&!ref.value)throw new Error('Reported follow-up requires a declared evidence reference.');
+                if(!window.confirm('Retain this exact follow-up transition locally? This does not clear an incident or create an external assignment.'))return;
+                busy=true;
+                const updated=await remediationCall('change',{...pins,finding_id:row.finding_id,expected_finding_sha256:row.finding_sha256,state:state.value,owner_alias:owner.value,reviewer_alias:reviewer.value,evidence_reference:ref.value||null,confirmed:true});
+                if(attempt===remediationGeneration&&remediationOutput.isConnected)showRemediation(updated);
+              }catch(error){if(attempt===remediationGeneration)message.replaceChildren(el('p','Progress refused: '+error.message+' · reload register before retrying.'));}
+              finally{busy=false;}
+            }));
+          rows.appendChild(item);
+        }
+        const prev=button('Previous remediation page',()=>{if(page>0){page--;draw();}});
+        const next=button('Next remediation page',()=>{if(page+1<pages){page++;draw();}});
+        prev.disabled=page===0;next.disabled=page+1===pages;rows.append(prev,next);
+      };
+      filter.addEventListener('change',()=>{page=0;draw();});query.addEventListener('input',()=>{page=0;draw();});
+      const history=el('details');history.append(el('summary','Local progress history ('+value.events.length+')'));
+      const events=el('div');let offset=0;
+      const drawEvents=()=>{
+        const subset=value.events.slice(offset,offset+25);
+        events.replaceChildren(el('p','History entries '+(subset.length?offset+1:0)+'–'+(offset+subset.length)+' of '+value.events.length));
+        for(const e of subset)events.appendChild(el('p','#'+e.revision+' · '+e.finding_id.slice(0,12)+' · '+e.previous_state+' → '+e.state+' · '+e.owner_alias+' · '+e.declared_reviewer_alias+' · '+(e.evidence_reference||'no reference')+' · '+e.event_sha256));
+        const prev=button('Previous history page',()=>{offset=Math.max(0,offset-25);drawEvents();});
+        const next=button('Next history page',()=>{offset+=25;drawEvents();});
+        prev.disabled=offset===0;next.disabled=offset+25>=value.events.length;events.append(prev,next);
+      };history.appendChild(events);drawEvents();
+      remediationOutput.append(auditLabel('Declared reviewer',reviewer),auditLabel('Filter state',filter),auditLabel('Search',query),message,rows,history,
+        download(value,'owg-workforce-remediation-register'),
+        button('Reload register',async()=>{const token=++remediationGeneration;try{const current=await remediationCall('status',{worklist_sha256:value.worklist_sha256});if(token===remediationGeneration)showRemediation(current);}catch(e){if(token===remediationGeneration)remediationOutput.replaceChildren(el('p',e.message));}}),
+        button('Remove local remediation register',async()=>{
+          if(busy||attempt!==remediationGeneration)return;
+          if(!window.confirm('Confirm you exported this exact register history and want to remove its local records. Existing backups and exports are not erased.'))return;
+          busy=true;try{await remediationCall('forget',{...pins,confirmed_exported:true});if(attempt===remediationGeneration)await listRemediation();}
+          catch(error){if(attempt===remediationGeneration)message.replaceChildren(el('p',error.message));}finally{busy=false;}
+        }));draw();
+    };
+    const listRemediation=async()=>{
+      const attempt=++remediationGeneration;remediationOutput.replaceChildren();
+      try{
+        const result=await remediationCall('list',{});
+        if(attempt!==remediationGeneration||!remediationOutput.isConnected)return;
+        remediationOutput.appendChild(el('p',result.registers.length+' retained registers'));
+        for(const r of result.registers){
+          const item=el('div');item.append(el('p',r.worklist_sha256+' · '+r.finding_count+' findings · revision '+r.revision),
+            button('Open remediation register '+r.worklist_sha256.slice(0,12),async()=>{
+              const token=++remediationGeneration;
+              try{const value=await remediationCall('status',{worklist_sha256:r.worklist_sha256});if(token===remediationGeneration)showRemediation(value);}
+              catch(error){if(token===remediationGeneration)remediationOutput.replaceChildren(el('p',error.message));}
+            }));remediationOutput.appendChild(item);
+        }
+      }catch(error){if(attempt===remediationGeneration)remediationOutput.replaceChildren(el('p',error.message));}
+    };
+    remediationSection.append(button('Load retained remediation registers',listRemediation),remediationOutput);
+    const addRemediationCreate=(target,value,document,attempt)=>{
+      const result=el('div');
+      const create=button('Retain exact worklist for local remediation',async()=>{
+        try{
+          if(!value.worklist.finding_count)throw new Error('No findings to retain.');
+          if(!window.confirm('Retain this exact minimized worklist and its future declared progress in the local database? No signed packets, source case tags or trust keys will be retained by this register.'))return;
+          const body=document.slice(0,-1)+',"expected_worklist_sha256":'+JSON.stringify(value.worklist.worklist_sha256)+',"confirm_local_retention":true}';
+          if(new TextEncoder().encode(body).length>auditMax)throw new Error('Combined retention request exceeds the browser limit.');
+          const token=++remediationGeneration;
+          const saved=await inboxCall('remediation-create',body);
+          if(attempt!==auditGeneration||token!==remediationGeneration||!result.isConnected)return;
+          result.replaceChildren(el('p','Exact remediation register retained locally.'));remediationSection.open=true;showRemediation(saved);
+        }catch(error){if(attempt===auditGeneration&&result.isConnected)result.replaceChildren(el('p','Retention refused: '+error.message));}
+      });
+      target.append(create,result);
+    };
     const verifyAudit=button('Recompute selected historical audit evidence',async()=>{
       const attempt=++auditGeneration;auditOutput.replaceChildren();
       try{
@@ -2562,7 +2670,7 @@
             el('p','Historical review clock: '+new Date(receipt.reviewed_as_of_ms).toISOString()+' · current freshness and trusted timestamp not verified.'),
             download(value,'owg-workforce-verified-audit-dossier'));
           renderReview(auditOutput,value.report);
-        }else{renderAuditTimeline(auditOutput,value);renderAuditTriage(auditOutput,value,document,attempt);renderAuditReconciliation(auditOutput,document,attempt);}
+        }else{renderAuditTimeline(auditOutput,value);renderAuditTriage(auditOutput,value,document,attempt);renderAuditReconciliation(auditOutput,document,attempt);addRemediationCreate(auditOutput,value,document,attempt);}
       }catch(error){if(attempt===auditGeneration&&auditOutput.isConnected)auditOutput.replaceChildren(el('p','Historical review refused. Check file ordering, independent pins and size limits. '+error.message));}
     });
     auditMode.addEventListener('change',resetAuditFiles);auditDigest.addEventListener('input',invalidateAudit);auditTrust.addEventListener('change',invalidateAudit);
@@ -2584,7 +2692,7 @@
     file.addEventListener('change',()=>{generation++;output.replaceChildren();});
     signingMode.addEventListener('change',()=>{generation++;output.replaceChildren();});
     registered.addEventListener('change',()=>{generation++;output.replaceChildren();});
-    section.append(signingLabel,registeredLabel,identity,button('Load local trust registry',refreshTrust),trustPanel,inboxSection,auditSection,aliasLabel,secretLabel,runExport,el('p','Review bundle: combine downloaded packets with separately obtained pins, the expected correlation namespace and either the expected registry revision (registered review) or an explicit public-key trust list (stateless signed review) (see AGENT_PROCUREMENT_WORKFORCE_EXCHANGE.md).'),file,runReview,output);host.appendChild(section);
+    section.append(signingLabel,registeredLabel,identity,button('Load local trust registry',refreshTrust),trustPanel,inboxSection,auditSection,remediationSection,aliasLabel,secretLabel,runExport,el('p','Review bundle: combine downloaded packets with separately obtained pins, the expected correlation namespace and either the expected registry revision (registered review) or an explicit public-key trust list (stateless signed review) (see AGENT_PROCUREMENT_WORKFORCE_EXCHANGE.md).'),file,runReview,output);host.appendChild(section);
   }
   function installWorkforceSchedule(host){
     const section=el('details');section.append(el('summary','Schedule local workforce deadline reviews'),
