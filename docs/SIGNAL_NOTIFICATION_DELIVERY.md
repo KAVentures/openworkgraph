@@ -48,3 +48,34 @@ For generic webhook receivers and text-based incoming webhooks such as Slack, th
 ## Acceptance gates
 
 Synthetic regression covers independent consents, no default send, strict auth, single-recipient lifecycle, HMAC integrity, no identifiers in the payload, stale/acknowledged/snoozed suppression, repeat dedupe, exponential backoff, disabled schedules, credentials in the auth folder, deleting source logs, URL/DNS safety and actual Chromium UI state/WCAG. Production testing still requires an owner-controlled webhook and representative scheduled logs; do not infer that a specific third-party service accepts every message until its own receipt is observed.
+
+## Local queue review and manual delivery pause
+
+Refresh the webhook status to inspect up to 50 pending groups: opaque ID,
+queued count, creation and retry times, attempts and a queue-state pin. The
+count reflects the queued group, not a fresh rule evaluation. No rule IDs,
+state fingerprints, case evidence or receiver credentials are returned.
+**Pause webhook without deleting queue** stops new queueing and sending after
+any in-flight attempt finishes. It retains the signing key, queued groups and
+deduplication history; local scheduled signal evaluations continue normally.
+An explicitly confirmed resume uses the reviewed channel ID in the dashboard;
+older clients may continue to use the existing resume request.
+
+While paused, dismiss an individual exact pending group. The operation checks
+the current channel and the exact group pin (including attempt state), refuses
+stale selections and writes the suppression keys and audit together. Those
+exact states cannot be queued again in this channel; a changed state can.
+Dismissals are not successful sends and do not acknowledge, snooze or clear
+local signal reviews. A previously attempted message may already have been
+received. Removing the channel also removes dismissal history. Up to 2,000
+explicit dismissal keys per channel are retained; capacity refusal leaves the
+prior ledger untouched, rather than silently re-enabling dismissed states.
+
+Dashboard-session-only POST routes under /v1/schedules/signal-delivery/{log_id}:
+- /pause: expected_channel_id.
+- /dismiss: expected_channel_id, notification_id, expected_queue_sha256,
+  confirm_dismiss (true).
+- /resume: confirm_external_delivery (true), optionally expected_channel_id.
+
+Queue inspection and control never send a network request or change source
+rules. The existing sender still rechecks schedule and current signal states.

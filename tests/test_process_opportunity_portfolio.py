@@ -201,3 +201,67 @@ def test_authenticated_http_budget_preview_bound_to_active_saved_revisions(tmp_p
                            content='{"currency":"USD","currency":"EUR"}').status_code == 422
         assert client.post(base, headers={"Authorization": "Bearer reader", "Content-Type": "application/json"},
                            content=" " * 17000).status_code == 413
+
+
+def test_stress_scenarios_current_exact_selection_and_withheld(store):
+    opps=SharedOpportunityStore(store)
+    p1,p2=root(store),root(store)
+    save(opps,store,p1);save(opps,store,p2)
+    decide(opps,store,p1,"approved")
+    a,b=selected(opps,p1),selected(opps,p2)
+    scenario={"label":"Pressure","approved_multiplier":"1.1",
+              "unapproved_multiplier":"1.3","contingency":"100.00"}
+    spec=Preview(currency="USD",ceiling="4500",selections=[a,b],user_confirmed=True,
+                 stress_scenarios=[scenario])
+    result=SelectedOpportunityBudget(store).preview(person("reader"),spec)
+    s=result["stress_review"]
+    r=s["scenarios"][0]
+    assert r["scenario_total_including_contingency"]=="4900.00"
+    assert r["headroom"]=="-400.00"
+    assert r["largest_feasible_uniform_multiplier_on_grid"]=="1.1000"
+    assert not s["all_tested_scenarios_within_envelope"]
+    assert result["totals"]["selected_budget_estimate"]=="4000.00"
+    changed=spec.model_copy(update={"stress_scenarios":None})
+    base=SelectedOpportunityBudget(store).preview(person("reader"),changed)
+    assert result["selection_reference_digest"]!=base["selection_reference_digest"]
+    assert "stress_review" not in base
+    b={**b,"content_sha256":"f"*64}
+    blocked=Preview(currency="USD",ceiling="4500",selections=[a,b],user_confirmed=True,
+                    stress_scenarios=[scenario])
+    s=SelectedOpportunityBudget(store).preview(person("reader"),blocked)["stress_review"]
+    assert s["status"]=="withheld" and s["scenarios"] is None
+
+
+def test_stress_per_item_rounding_and_zero_budget_and_ties():
+    from shared.process_opportunity_portfolio import stress_review
+    rows=[{"workflow_id":i,"implementation_budget":"0.01","current_approved_assessment":True,"blockers":[]}
+          for i in ("one","two")]
+    a={"label":"A","approved_multiplier":"0.5","unapproved_multiplier":"1","contingency":"0"}
+    b={**a,"label":"B"}
+    s=stress_review(rows,"0.01","SEK",[a,b])
+    assert s["scenarios"][0]["scenario_total_including_contingency"]=="0.02"
+    assert s["scenarios"][0]["largest_feasible_uniform_multiplier_on_grid"]=="0.4999"
+    assert s["worst_headroom_scenario_labels"]==["A","B"]
+    assert s["headroom_range"]=={"lower":"-0.01","upper":"-0.01"}
+    impossible=stress_review(rows,"0","SEK",[{**a,"contingency":"0.01"}])
+    assert impossible["scenarios"][0]["largest_feasible_uniform_multiplier_on_grid"] is None
+    zero=[{**rows[0],"implementation_budget":"0"}]
+    assert stress_review(zero,"0","SEK",[a])["scenarios"][0]["uniform_multiplier_search_capped"]
+
+
+@pytest.mark.parametrize("patch",[
+    {"approved_multiplier":1.1},{"approved_multiplier":"-1"},{"approved_multiplier":"100"},
+    {"unapproved_multiplier":"1e2"},{"contingency":"0.001"},{"label":" "},{"extra":True}])
+def test_invalid_stress_scenario_rejected(patch):
+    from shared.process_opportunity_portfolio import StressScenario
+    with pytest.raises(ValidationError):
+        StressScenario.model_validate({**{"label":"Test","approved_multiplier":"1",
+             "unapproved_multiplier":"1","contingency":"0"},**patch})
+
+
+def test_duplicate_stress_labels_and_empty_scenarios_rejected():
+    a={"label":"Stress","approved_multiplier":"1","unapproved_multiplier":"1","contingency":"0"}
+    for scenarios in ([],[a,{**a,"label":"stress"}],[a]*9):
+        with pytest.raises(ValidationError):
+            Preview(currency="USD",ceiling="100",selections=[{"workflow_id":"process_A",
+                "revision":1,"content_sha256":"a"*64}],user_confirmed=True,stress_scenarios=scenarios)
