@@ -78,6 +78,7 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 | `get_process_footprints` | Footprint matrices (→, ←, ||, #) from the recorded cases and from the discovered model, the share of cells that agree, and the orderings only the log has (with case counts) or only the model allows (aggregates level). See "Footprints" in EVENT_LOG_WORKSPACE.md. |
 | `get_process_data_quality` | How far the log can be trusted: accepted and rejected rows by reason over all imports and appends, duplicates, shared timestamps, events without resource, future-dated events, single-event cases, attribute coverage, content integrity and the per-batch trend. | aggregates |
 | `get_process_model_quality` | Fitness, precision, their F-score, generalization and simplicity of the discovered net at several noise levels (default 0, 0.1, 0.2, 0.3, 0.5), and the level with the best F-score, to choose a noise level before asking for the model (aggregates level). See "Model quality" in EVENT_LOG_WORKSPACE.md. |
+| `get_process_model` | The discovered process model itself, to plan an automation or explain the process: steps, decisions, loops and parallel branches with their transitions, the observed share of cases per branch (unconfirmed rules), the model as a process tree in PM4Py notation, and how many cases it replays. Choose `noise` with `get_process_model_quality`; `activities` keeps the most frequent share. A reviewable draft that authorizes nothing (aggregates level, no case IDs or resources). |
 | `get_process_deviations` | Optimal alignments of the cases on the discovered net at a noise level: alignment fitness, the steps cases took that the model does not allow there and the steps it requires that cases skipped (with case counts), and the step-by-step explanation of the most common non-fitting variants (aggregates level). See "Step-by-step explanation (alignments)" in EVENT_LOG_WORKSPACE.md. |
 | `list_process_reference_nets` | The reference process models (Petri nets) the owner saved for the log, by id and name; the nets themselves are not returned. | aggregates |
 | `get_process_reference_deviations` | Where cases depart from one saved reference model, from optimal alignments: extra and skipped steps with case counts, fitness overall and by month, and each non-fitting variant explained. | aggregates |
@@ -94,13 +95,15 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 | `get_process_brief` | **Start here.** One bounded briefing: the overview (size, timing, KPIs, top paths, top insights), the discovered model at its best noise level (fitness, precision, F-score), the steps cases most often add or skip against it, unusual-case counts by reason, and suggested next tools. Parts that cannot be computed are listed in `parts_unavailable` (aggregates level). |
 | `get_process_model_change` | How the discovered model differs before and after a date (default: the median case start): changed footprint relations between activities, activities in only one period, and the cross-fit of each period's cases on the other period's model (aggregates level). See "Model change" in EVENT_LOG_WORKSPACE.md. |
 | `compare_process_models` | The same comparison between two groups chosen by case attribute values ("region=EU" vs "region=US"): differing orderings, activities only one group has, and cross-fit of each group on the other's model (aggregates level). |
+| `compare_process_logs` | Two shared logs side by side (regions, systems, before and after a migration): case counts, events per case, rework rate and durations, activities and paths only one log has, and the activities, paths and variants whose case share differs most, with 95% intervals. Optional case filters per side need at least 5 cases; rows where either log has 1 to 4 cases are withheld and counted. Both logs must be shared. | aggregates |
 | `compare_process_cases` | Two cases side by side: aligned steps (shared or only in one), hours from each start, and where the second fell furthest behind (cases level only). |
 | `get_process_activity_profile` | One activity from every side: share of cases, repeats, what comes before and after (with median gaps), time into the case, weekday and hour, and case durations with and without it (aggregates level). |
 | `get_process_rework` | Rework: share of cases that repeat an activity, the activities repeated most, loop patterns (self-loop, short, longer), and how long cases with rework take compared with cases without (median difference with a 95% interval). | aggregates |
-| `get_process_waiting_times` | Processing and waiting time per activity when the log records start/complete (lifecycle) or an end-time attribute; says so when it does not. | aggregates |
+| `get_process_waiting_times` | Processing and waiting time per activity when the log records start/complete (lifecycle) or an end-time attribute; says so when it does not. Optional `working_calendar` (timezone, weekly hours, holidays) adds the same figures in working time. | aggregates |
 | `get_process_drift` | Concept drift: cases grouped by start week or month, adjacent windows compared on their paths with a permutation test, and for each change point the paths whose share moved most. | aggregates |
 | `get_stuck_process_cases` | Open cases idle much longer than usual after their latest activity, with how many times the usual wait they exceed. | cases |
 | `get_process_signal_scorecard` | The owner's KPI, conformance and due-date signals month by month (by case start), with each month's value and whether the condition held; read-only (aggregates level). |
+| `get_process_attributes` | Which case and event attributes the log records, to choose filters, breakdowns and root-cause features: coverage, numeric or categorical, case- or event-level, quartiles, and the most frequent values with their case share and median duration. Values in fewer than 5 cases, minimum and maximum, and values of identifier-like attributes are withheld. | aggregates |
 | `get_process_breakdown` | Case figures by one or two dimensions (start month or weekday, first or last activity, a case or event attribute), like a pivot table: cases, share, median and p90 duration, events per case, rework rate and optionally the share doing an activity. Cells and totals with fewer than 5 cases are withheld. | aggregates |
 | `find_similar_process_cases` | The recorded cases whose path is closest to a chosen case, with what each does more or less often, its duration and start, and the median duration of those found. | cases |
 | `get_process_cooccurrence` | Which activities happen in the same cases, regardless of order: cases with both, the share of cases with one that also have the other, lift, and the pairs that go together most or never. Activities in fewer than 5 cases and pair counts below 5 are withheld. | aggregates |
@@ -112,6 +115,14 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 All tools except `tag_process_cases` are read-only. All are idempotent. Their answers repeat that
 durations are elapsed time between recorded events, that associations are not causes, and that
 nothing authorizes an action.
+
+### Prompt: `investigate_process`
+
+When a log is shared, the MCP server also offers the prompt `investigate_process(question, log_id)`. It gives the
+connected AI a step-by-step playbook: overview, data quality, variants, where time goes, why cases differ, change
+over time, then options and simulation. It sets the rules for reporting: associations rather than causes, withheld
+counts acknowledged, people never named, simulations as model outputs. It is plain text; every tool keeps its own
+sharing checks.
 
 ## HTTP
 

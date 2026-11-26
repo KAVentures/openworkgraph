@@ -103,10 +103,33 @@ async def create_signal_delivery(request: Request, log_id: str):
 async def resume_signal_delivery(request: Request, log_id: str):
     _require_dashboard(request)
     data = await _body(request)
-    if set(data) != {"confirm_external_delivery"}:
+    if set(data) not in ({"confirm_external_delivery"}, {"confirm_external_delivery", "expected_channel_id"}):
         raise HTTPException(status_code=422, detail="explicit resumed delivery confirmation required")
     return await _delivery_call(notification_delivery.resume, log_id,
-                                confirm_external_delivery=data["confirm_external_delivery"])
+                                confirm_external_delivery=data["confirm_external_delivery"],
+                                expected_channel_id=data.get("expected_channel_id"))
+
+
+@router.post("/v1/schedules/signal-delivery/{log_id}/pause")
+async def pause_signal_delivery(request: Request, log_id: str):
+    _require_dashboard(request)
+    data = await _body(request)
+    if set(data) != {"expected_channel_id"} or not isinstance(data["expected_channel_id"], str):
+        raise HTTPException(status_code=422, detail="expected channel identifier required")
+    return await _delivery_call(notification_delivery.pause, log_id,
+                                expected_channel_id=data["expected_channel_id"])
+
+
+@router.post("/v1/schedules/signal-delivery/{log_id}/dismiss")
+async def dismiss_signal_delivery(request: Request, log_id: str):
+    _require_dashboard(request)
+    data = await _body(request)
+    pins = {"expected_channel_id", "notification_id", "expected_queue_sha256"}
+    if set(data) != pins | {"confirm_dismiss"} or not all(isinstance(data[k], str) for k in pins):
+        raise HTTPException(status_code=422, detail="exact channel, notification and queue pins required")
+    if data["confirm_dismiss"] is not True:
+        raise HTTPException(status_code=403, detail="explicit pending-notification dismissal required")
+    return await _delivery_call(notification_delivery.dismiss, log_id, **data)
 
 
 @router.post("/v1/schedules/signal-delivery/{log_id}/remove")

@@ -436,24 +436,31 @@ def preview_rule(log_id: str, spec: Any) -> dict[str, Any]:
             **workspace.DESCRIPTIVE_ONLY}
 
 
-def evaluate(log_id: str) -> dict[str, Any]:
-    """Evaluate every rule on the log as it is now and remember the result."""
+def evaluate(log_id: str, *, rule_id: str | None = None) -> dict[str, Any]:
+    """Record the current result for one saved rule, or every rule on the log."""
     with workspace._LOCK:
         conn = workspace._connect()
         try:
             info = workspace._check_log(conn, log_id)
+            params = [log_id]
+            rule_filter = ""
+            if rule_id is not None:
+                rule_filter = " AND rule_id = ?"
+                params.append(rule_id)
             rows = conn.execute("SELECT rule_id, definition, last_state FROM signal_rules "
-                                "WHERE log_id = ? ORDER BY created_at, rule_id", [log_id]).fetchall()
+                                f"WHERE log_id = ?{rule_filter} ORDER BY created_at, rule_id", params).fetchall()
+            if rule_id is not None and not rows:
+                raise workspace.EventLogWorkspaceError("unknown signal rule")
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             log_basis = signal_inbox.log_basis(conn, log_id)
             signals = []
             recorded_transitions = False
             conn.execute("BEGIN")
-            for rule_id, definition, last_state in rows:
+            for saved_id, definition, last_state in rows:
                 rule = SignalRule.model_validate_json(definition)
                 previous = json.loads(last_state) if last_state else None
                 result, state = _evaluate_rule(conn, log_id, rule)
-                result["rule_id"] = rule_id
+                result["rule_id"] = saved_id
                 if "matching_cases" in state:
                     comparison = _new_case_comparison(state["matching_cases"], state["case_ids"], previous)
                     result.update(new_cases_since_last_evaluation=comparison["count"], new_cases_comparison=comparison)
@@ -466,11 +473,11 @@ def evaluate(log_id: str) -> dict[str, Any]:
                 # A new state is a new review event even if it later cycles
                 # back to an old value. Do not resurrect an obsolete approval.
                 if previous is None or previous != state:
-                    conn.execute("DELETE FROM signal_snoozes WHERE log_id=? AND rule_id=?", [log_id, rule_id])
-                    conn.execute("DELETE FROM signal_reviews WHERE log_id=? AND rule_id=?", [log_id, rule_id])
+                    conn.execute("DELETE FROM signal_snoozes WHERE log_id=? AND rule_id=?", [log_id, saved_id])
+                    conn.execute("DELETE FROM signal_reviews WHERE log_id=? AND rule_id=?", [log_id, saved_id])
                 conn.execute("UPDATE signal_rules SET last_evaluated_at = ?, last_state = ? WHERE log_id = ? AND rule_id = ?",
-                             [now, json.dumps(state), log_id, rule_id])
-                if signal_transitions.append(conn, log_id, rule_id, previous, state, now):
+                             [now, json.dumps(state), log_id, saved_id])
+                if signal_transitions.append(conn, log_id, saved_id, previous, state, now):
                     recorded_transitions = True
                 signals.append(result)
             if recorded_transitions:

@@ -19,6 +19,7 @@ through the normal catalog flow.
 from __future__ import annotations
 
 import hashlib
+from decimal import Decimal, InvalidOperation
 import re
 from typing import Any
 
@@ -30,9 +31,13 @@ MAX_DOCUMENTS = 5
 MAX_DOCUMENT_CHARS = 60_000
 MAX_STATEMENTS = 1500
 MAX_CITATIONS = 5
-_SENTENCE = re.compile(r"[^.!?\n]+(?:[.!?]+|\n|$)")
-_WORD = re.compile(r"[a-z][a-z0-9-]{2,}")
-_NUMBER = re.compile(r"(?<![\w.])(\d{1,3}(?:[ ,]\d{3})+|\d+)(?:\.\d+)?\s*(%|percent|days?|hours?|eur|usd|sek|gbp|kr)?", re.I)
+# A dot between digits is a decimal separator, not a sentence break.
+_BOUNDARY = re.compile(r"(?<!\d)\.|\.(?!\d)|[!?]+|\n")
+_WORD = re.compile(r"[^\W\d_][\w-]{2,}", re.UNICODE)
+_NUMBER = re.compile(r"(?<![\w.,])(\d{1,3}(?:[ ,]\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(?!\d|[.,]\d)\s*(%|percent\b|days?\b|hours?\b|eur\b|usd\b|sek\b|gbp\b|kr\b)?", re.I)
+MAX_STATEMENT_CHARS = 600
+MAX_CONFLICT_CANDIDATES = 80
+ANALYSIS_VERSION = "clarification-coverage-v2"
 _REQUIRE = re.compile(r"\b(must|shall|always|required|requires|mandatory|need to|needs to|has to|have to)\b", re.I)
 _FORBID = re.compile(r"\b(must not|mustn't|shall not|never|not allowed|prohibited|forbidden|may not|cannot|no longer)\b", re.I)
 _INSTRUCTION = re.compile(r"\b(ignore (?:all|previous|the above)|disregard|grant (?:access|permission|admin)|"
@@ -89,43 +94,88 @@ def _terms(text: str) -> set[str]:
     return {w for w in _WORD.findall(text.lower()) if w not in _STOP}
 
 
-def statements(documents: list[Document]) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    for index, document in enumerate(documents):
-        doc_id = "d" + _digest(document.title, document.text)[:8]
-        for match in _SENTENCE.finditer(document.text):
-            raw = match.group(0)
-            text = raw.strip()
-            if len(text) < 8:
-                continue
-            start = match.start() + (len(raw) - len(raw.lstrip()))
-            out.append({
-                "statement_id": "s_" + _digest(doc_id, str(start), text),
-                "document_index": index, "document_title": document.title,
-                "start": start, "end": start + len(text), "text": text[:600],
-                "terms": _terms(text),
-                "modality": "forbids" if _FORBID.search(text) else "requires" if _REQUIRE.search(text) else "states",
-                "numbers": [(m.group(1).replace(",", "").replace(" ", ""), (m.group(2) or "").lower().rstrip("s"))
-                            for m in _NUMBER.finditer(text)],
-                "instruction_like": bool(_INSTRUCTION.search(text)),
-            })
-            if len(out) >= MAX_STATEMENTS:
-                return out
+def _segments(text: str):
+    start = 0
+    for match in _BOUNDARY.finditer(text):
+        yield start, match.end()
+        start = match.end()
+    if start < len(text):
+        yield start, len(text)
+
+
+def _numbers(text: str):
+    out = []
+    for match in _NUMBER.finditer(text):
+        # Decimal preserves 500.25 vs 500.75 and equates 500.0 with 500.
+        # English-style grouped digits only; no implicit currency conversion.
+        try:
+            value = Decimal(match.group(1).replace(",", "").replace(" ", ""))
+        except InvalidOperation:
+            continue
+        unit = (match.group(2) or "").lower()
+        unit = {"percent": "%", "days": "day", "hours": "hour", "kr": "kr"}.get(unit, unit)
+        normalized = format(value, "f")
+        if "." in normalized:
+            normalized = normalized.rstrip("0").rstrip(".")
+        out.append((normalized, unit))
     return out
 
 
+def _statement_inventory(documents: list[Document]):
+    pool = []
+    coverage = []
+    for index, document in enumerate(documents):
+        doc_id = "d" + _digest(document.title, document.text)[:8]
+        stats = {"document_index": index, "candidate_statements": 0,
+                 "indexed_statements": 0, "overlong_statements": 0,
+                 "omitted_by_budget": 0}
+        for left, right in _segments(document.text):
+            raw = document.text[left:right]
+            text = raw.strip()
+            if len(text) < 8:
+                continue
+            stats["candidate_statements"] += 1
+            if len(text) > MAX_STATEMENT_CHARS:
+                stats["overlong_statements"] += 1
+                continue  # Never present a clipped excerpt as an exact full statement.
+            if len(pool) >= MAX_STATEMENTS:
+                stats["omitted_by_budget"] += 1
+                continue
+            start = left + len(raw) - len(raw.lstrip())
+            pool.append({
+                "statement_id": "s_" + _digest(doc_id, str(index), str(start), text),
+                "document_index": index, "document_title": document.title,
+                "start": start, "end": start + len(text), "text": text,
+                "terms": _terms(text),
+                "modality": "forbids" if _FORBID.search(text) else "requires" if _REQUIRE.search(text) else "states",
+                "numbers": _numbers(text),
+                "instruction_like": bool(_INSTRUCTION.search(text)),
+            })
+            stats["indexed_statements"] += 1
+        coverage.append(stats)
+    return pool, coverage
+
+
+def statements(documents: list[Document]) -> list[dict[str, Any]]:
+    return _statement_inventory(documents)[0]
+
+
 def _cite(statement: dict[str, Any]) -> dict[str, Any]:
-    return {key: statement[key] for key in ("statement_id", "document_title", "start", "end", "text",
+    return {key: statement[key] for key in ("statement_id", "document_index", "document_title", "start", "end", "text",
                                             "modality", "instruction_like")}
 
 
-def _matches(subject: str, pool: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _candidates(subject: str, pool: list[dict[str, Any]]) -> list[dict[str, Any]]:
     wanted = _terms(subject)
     if not wanted:
         return []
     need = 1 if len(wanted) <= 2 else 2
     scored = [(len(wanted & s["terms"]), s) for s in pool if not s["instruction_like"]]
-    return [s for score, s in sorted(scored, key=lambda pair: -pair[0]) if score >= need][:MAX_CITATIONS]
+    return [s for score, s in sorted(scored, key=lambda pair: -pair[0]) if score >= need]
+
+
+def _matches(subject: str, pool: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return _candidates(subject, pool)[:MAX_CITATIONS]
 
 
 def _contradictions(cited: list[dict[str, Any]], subject: str) -> list[dict[str, Any]]:
@@ -139,10 +189,13 @@ def _contradictions(cited: list[dict[str, Any]], subject: str) -> list[dict[str,
             if {a["modality"], b["modality"]} == {"requires", "forbids"}:
                 found.append({"kind": "requirement_conflict", "statements": [_cite(a), _cite(b)]})
                 continue
-            units_a = {unit: value for value, unit in a["numbers"]}
-            units_b = {unit: value for value, unit in b["numbers"]}
-            for unit in units_a.keys() & units_b.keys():
-                if units_a[unit] != units_b[unit]:
+            units_a, units_b = {}, {}
+            for value, unit in a["numbers"]:
+                units_a.setdefault(unit, set()).add(value)
+            for value, unit in b["numbers"]:
+                units_b.setdefault(unit, set()).add(value)
+            for unit in sorted(units_a.keys() & units_b.keys()):
+                if len(units_a[unit]) == len(units_b[unit]) == 1 and units_a[unit] != units_b[unit]:
                     found.append({"kind": "threshold_conflict", "unit": unit or "number",
                                   "statements": [_cite(a), _cite(b)]})
                     break
@@ -150,78 +203,129 @@ def _contradictions(cited: list[dict[str, Any]], subject: str) -> list[dict[str,
 
 
 def _question(kind: str, target: str, prompt: str, citations: list[dict[str, Any]],
-              contradictions: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    return {"question_id": "q_" + _digest(kind, target), "kind": kind, "target_id": target, "prompt": prompt,
+              contradictions: list[dict[str, Any]] | None = None, *, subject_type: str,
+              coverage: dict[str, Any], complete: bool) -> dict[str, Any]:
+    return {"question_id": "q_" + _digest(ANALYSIS_VERSION, subject_type, kind, target),
+            "kind": kind, "target_id": target, "prompt": prompt,
             "citations": [_cite(c) for c in citations], "contradictions": contradictions or [],
-            "allowed_decisions": list(DECISIONS)}
+            "source_coverage": coverage, "coverage_blocked": not complete,
+            "allowed_decisions": list(DECISIONS) if complete else ["reject", "defer"]}
 
 
 def clarify(record: dict[str, Any], request: ClarificationRequest,
             decisions: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
-    """Questions for one exact process revision; answered questions are not asked again."""
+    """Questions for one exact process revision and bounded evidence analysis."""
     model = ProcessModel.model_validate(record["process_model"])
-    pool = statements(request.documents)
-    questions: list[dict[str, Any]] = []
-    reported: set[frozenset[str]] = set()
+    pool, documents = _statement_inventory(request.documents)
+    source_complete = not any(d["overlong_statements"] or d["omitted_by_budget"] for d in documents)
+    questions = []
+    subjects = []
 
-    def fresh(conflicts: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        # Each conflicting statement pair is asked about once, on its first subject.
-        out = []
-        for conflict in conflicts:
-            pair = frozenset(c["statement_id"] for c in conflict["statements"])
-            if pair not in reported:
-                reported.add(pair)
-                out.append(conflict)
-        return out
+    def evidence(kind, target, subject):
+        candidates = _candidates(subject, pool)
+        checked = candidates[:MAX_CONFLICT_CANDIDATES]
+        conflicts = _contradictions(checked, subject)
+        distinct = {s["statement_id"] for conflict in conflicts for s in conflict["statements"]}
+        # Display all conflict witnesses when they fit the existing five-citation
+        # decision contract; otherwise require narrowing the source set.
+        # Include both sides of at least one contradiction even if dozens
+        # of higher-ranked statements all repeat the same policy wording.
+        by_id = {s["statement_id"]: s for s in checked}
+        selected = [by_id[s["statement_id"]] for s in conflicts[0]["statements"]] if conflicts else []
+        selected_ids = {s["statement_id"] for s in selected}
+        selected += [s for s in checked if s["statement_id"] in distinct
+                     and s["statement_id"] not in selected_ids][:MAX_CITATIONS-len(selected)]
+        selected_ids = {s["statement_id"] for s in selected}
+        selected += [s for s in candidates if s["statement_id"] not in selected_ids][:MAX_CITATIONS-len(selected)]
+        visible = {s["statement_id"] for s in selected}
+        visible_conflicts = [conflict for conflict in conflicts
+                             if all(s["statement_id"] in visible for s in conflict["statements"])]
+        complete = (source_complete and len(checked) == len(candidates)
+                    and len(visible_conflicts) == len(conflicts))
+        coverage = {"subject_type": kind, "target_id": target,
+                    "matching_statements": len(candidates), "conflict_candidates_checked": len(checked),
+                    "citation_count": len(selected), "possible_conflict_count": len(conflicts),
+                    "displayed_conflict_count": len(visible_conflicts),
+                    "conflict_review_complete": complete}
+        subjects.append(coverage)
+        # The same source pair may concern two distinct rules. Each subject
+        # needs its own human resolution rather than inheriting another rule's.
+        return selected, visible_conflicts, coverage, complete
+
+    def add(kind, target, prompt, cited, conflicts, subject_type, coverage, complete):
+        questions.append(_question(kind, target, prompt, cited, conflicts,
+            subject_type=subject_type, coverage=coverage, complete=complete))
 
     for rule in model.business_rules:
-        cited = _matches(rule.text, pool)
-        conflicts = fresh(_contradictions(cited, rule.text))
+        cited, conflicts, coverage, complete = evidence("rule", rule.id, rule.text)
         if conflicts:
-            questions.append(_question("contradiction", rule.id,
+            add("contradiction", rule.id,
                 f"The documents disagree about rule {rule.id!r}: {rule.text[:200]}. Which statement applies?",
-                cited, conflicts))
+                cited, conflicts, "rule", coverage, complete)
+        elif not complete:
+            add("source_coverage", rule.id, f"Review narrower source evidence for rule {rule.id!r}.",
+                cited, [], "rule", coverage, complete)
         elif not rule.user_confirmed:
-            questions.append(_question("unconfirmed_rule", rule.id,
+            add("unconfirmed_rule", rule.id,
                 f"Confirm, revise or reject rule {rule.id!r}: {rule.text[:200]}"
-                + ("" if cited else " (no supporting statement found in the documents)"), cited))
+                + ("" if cited else " (no supporting statement found in the documents)"),
+                cited, [], "rule", coverage, complete)
         elif not cited and pool:
-            questions.append(_question("uncited_rule", rule.id,
-                f"Rule {rule.id!r} is confirmed but no supplied document mentions it. Keep it as is?", []))
+            add("uncited_rule", rule.id,
+                f"Rule {rule.id!r} is confirmed but no supplied document mentions it. Keep it as is?",
+                [], [], "rule", coverage, complete)
     for activity in model.activities:
         if activity.kind not in {"activity", "decision"}:
             continue
-        cited = _matches(activity.label, pool)
-        conflicts = fresh(_contradictions(cited, activity.label))
+        cited, conflicts, coverage, complete = evidence("activity", activity.id, activity.label)
         if conflicts:
-            questions.append(_question("contradiction", activity.id,
+            add("contradiction", activity.id,
                 f"The documents disagree about step {activity.label!r}. Which statement applies?",
-                cited, conflicts))
+                cited, conflicts, "activity", coverage, complete)
+        elif not complete:
+            add("source_coverage", activity.id, f"Review narrower source evidence for step {activity.label!r}.",
+                cited, [], "activity", coverage, complete)
         if not activity.responsibility_label:
-            questions.append(_question("responsibility", activity.id,
-                f"Who is responsible for step {activity.label!r}?", cited))
+            add("responsibility", activity.id, f"Who is responsible for step {activity.label!r}?",
+                cited, [], "activity", coverage, complete)
     confirmed = {e.terminal_activity_id for e in model.outcome_expectations if e.user_confirmed}
     labels = {a.id: a.label for a in model.activities}
     for terminal in model.terminal_activity_ids:
         if terminal not in confirmed:
-            questions.append(_question("outcome", terminal,
+            cited, conflicts, coverage, complete = evidence("outcome", terminal, labels.get(terminal, ""))
+            if conflicts:
+                add("contradiction", terminal,
+                    f"The documents disagree about outcome {labels.get(terminal, terminal)!r}. Which statement applies?",
+                    cited, conflicts, "outcome", coverage, complete)
+            add("outcome", terminal,
                 f"What source-verifiable outcome confirms the process ended at {labels.get(terminal, terminal)!r}?",
-                _matches(labels.get(terminal, ""), pool)))
+                cited, [], "outcome", coverage, complete)
     answered = decisions or {}
-    open_questions = [q for q in questions if q["question_id"] not in answered]
+    # A rejection or deferral is review history, not a resolved policy finding.
+    open_questions = [q for q in questions if q["question_id"] not in answered
+        or answered[q["question_id"]].get("decision") in {"reject", "defer"}]
+    for q in open_questions:
+        if q["question_id"] in answered:
+            q["previous_decision"] = answered[q["question_id"]].get("decision")
     return {
         "format": "openworkgraph.process-clarification.v1",
+        "analysis_version": ANALYSIS_VERSION,
         "workflow_id": record["workflow_id"], "revision": record["revision"],
         "content_sha256": record["content_sha256"],
         "documents_sha256": documents_sha256(request.documents),
         "decisions_are_pinned_to_exact_documents": True,
         "documents": [{"title": d.title, "characters": len(d.text)} for d in request.documents],
         "statement_count": len(pool),
+        "source_coverage": {"document_scan_complete": source_complete,
+                            "all_subject_conflict_reviews_complete": all(s["conflict_review_complete"] for s in subjects),
+                            "documents": documents, "subjects": subjects,
+                            "statement_limit": MAX_STATEMENTS,
+                            "statement_character_limit": MAX_STATEMENT_CHARS,
+                            "conflict_candidate_limit_per_subject": MAX_CONFLICT_CANDIDATES},
         "instruction_like_statements": [_cite(s) for s in pool if s["instruction_like"]][:20],
         "questions": open_questions, "answered_question_count": len(questions) - len(open_questions),
         "documents_are_untrusted_data": True, "model_changed": False, "permissions_changed": False,
     }
-
 
 
 def validate_decision_evidence(question: dict[str, Any], decision: Decision) -> None:
@@ -232,6 +336,8 @@ def validate_decision_evidence(question: dict[str, Any], decision: Decision) -> 
     explanation. A decision is still only a ledger entry, never executable
     policy or a change to the saved process model.
     """
+    if question.get("coverage_blocked") and decision.decision in ("confirm", "revise"):
+        raise ValueError("source review is incomplete; narrow the documents before confirming or revising")
     if question.get("kind") != "contradiction" or decision.decision not in ("confirm", "revise"):
         return
     chosen = decision.cited_statement_ids
@@ -247,7 +353,8 @@ def validate_decision_evidence(question: dict[str, Any], decision: Decision) -> 
 
 def proposed_change(record: dict[str, Any], question: dict[str, Any], decision: Decision) -> dict[str, Any] | None:
     """A model change the owner may save; never applied automatically."""
-    if decision.decision != "confirm" or question["kind"] != "unconfirmed_rule":
+    if (question.get("coverage_blocked") or decision.decision != "confirm"
+            or question["kind"] != "unconfirmed_rule"):
         return None
     model = dict(record["process_model"])
     model["business_rules"] = [dict(rule, user_confirmed=True) if rule["id"] == question["target_id"] else rule
