@@ -65,3 +65,5 @@ Retained-only journal list, detail, consent withdrawal, producer revocation and
 removal remain available by exact workflow/revision scope even after the
 reviewed process has been deleted. In that case the API reports a null current
 revision; the local workforce overview identifies the orphaned journal.
+
+The workforce overview now exposes a direct retained-journal workbench for each exact scope, including historical or orphaned journals. List or reload the current head, refresh the cutoff, change scheduled consent, record a review disposition, issue/revoke scoped producer credentials or remove the journal without preparing JSON files. All mutations require explicit confirmation and use the displayed head; stale actions fail and must be reloaded. One-time credentials are shown separately from downloadable evidence. The advanced JSON import path remains available.

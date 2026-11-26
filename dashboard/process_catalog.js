@@ -1430,6 +1430,7 @@
             history.appendChild(item);
           }
           output.append(history,el('p','Locally retained declarations, not authenticated production telemetry or a tamper-proof external audit log. No deployment or rollback performed.'));
+          installJournalWorkbench(output,{workflow_id:selected.workflow_id,revision:selected.revision});
         }
       }else if(routerMonitorMode){
         if(operation==='router-monitor-freeze'){
@@ -1900,6 +1901,102 @@
       button('Clear procurement review',()=>{documentFile.value='';planFile.value='';clearProcurementReview();}),output);
     host.appendChild(section);
   }
+  function installJournalWorkbench(host,scope,initialId=''){
+    const section=el('details');section.open=Boolean(initialId);
+    section.append(el('summary','Manage retained monitoring journals'),
+      el('p','Exact saved revision '+scope.revision+'. Actions use the latest explicitly displayed audit head. No provider, deployment or business operation is performed.'));
+    const output=el('div');output.setAttribute('aria-live','polite');
+    let serial=0,working=false;
+    const valid=attempt=>attempt===serial&&section.isConnected;
+    const call=(op,document)=>request('/v1/process-catalog/procurement/'+op+'?'+new URLSearchParams({workflow_id:scope.workflow_id,revision:String(scope.revision)}),{document:JSON.stringify(document)}).then(e=>e.result);
+    const perform=async(fn)=>{
+      if(working||!section.isConnected)return;
+      working=true;
+      try{await fn();}catch(error){output.appendChild(el('p','Action failed: '+error.message+' · reload the journal before retrying.'));}
+      finally{working=false;}
+    };
+    const download=(value,name)=>button('Download '+name,()=>{
+      const url=URL.createObjectURL(new Blob([JSON.stringify(value,null,2)+'\n'],{type:'application/json'}));
+      const link=el('a');link.href=url;link.download=name+'.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    });
+    const loadList=async()=>{
+      const attempt=++serial;
+      const value=await call('router-journal-list',{});
+      if(!valid(attempt))return;
+      output.replaceChildren(el('p',value.journals.length+' retained journals for this revision.'));
+      for(const row of value.journals){
+        output.appendChild(button('Open journal '+row.monitor_id,()=>perform(()=>loadDetail(row.monitor_id))));
+      }
+    };
+    const loadDetail=async(id)=>{
+      const attempt=++serial;
+      const value=await call('router-journal-detail',{monitor_id:id});
+      if(!valid(attempt))return;
+      draw(value);
+    };
+    const draw=value=>{
+      output.replaceChildren(el('h5',value.monitor_id),el('p','Current audit head: '+value.head_sha256),
+        el('p',value.entry_count+' audit entries · '+value.ordinary_entries_remaining+' ordinary entries remaining · '+value.reserved_disable_entries+' reserved for disable actions'),
+        el('p',value.eligible_for_continued_monitoring_review?'Eligible for separate continuation review':'Continuation blocked or incomplete'),
+        el('p','Latest monitoring cutoff: '+new Date(value.latest_report.as_of_ms).toISOString()),
+        el('p','Recorded rollback referral: '+(value.rollback_referral_recorded?'yes':'no')+' · sticky incidents: '+value.sticky_rollback_triggers.length));
+      const base={monitor_id:value.monitor_id,expected_head_sha256:value.head_sha256,confirmed:true};
+      const change=(op,extra,message)=>perform(async()=>{
+        if(!window.confirm(message))return;
+        const attempt=++serial;
+        await call(op,{...base,...extra});
+        if(valid(attempt))await loadDetail(value.monitor_id);
+      });
+      output.append(button('Reload current journal',()=>perform(()=>loadDetail(value.monitor_id))),
+        button('Refresh monitoring cutoff',()=>change('router-journal-refresh',{},'Reevaluate retained evidence using the current local clock?')),
+        button(value.scheduled_deadline_review_enabled?'Withdraw scheduled review consent':'Enable journal scheduled review consent',()=>change('router-journal-schedule',{enabled:!value.scheduled_deadline_review_enabled},'Change scheduled review consent for this exact retained journal?')),
+        download(value,'owg-monitor-journal'));
+      const reviewer=el('input');reviewer.maxLength=80;reviewer.setAttribute('aria-label','Monitoring reviewer alias');
+      const label=el('label','Distinct reviewer alias ');label.appendChild(reviewer);
+      const disposition=el('select');disposition.setAttribute('aria-label','Monitoring review disposition');
+      for(const [key,name] of [['hold','Hold'],['refer_for_rollback_review','Refer for rollback review'],['refer_for_continued_monitoring_review','Refer for continuation review']]){
+        const opt=el('option',name);opt.value=key;if(key==='refer_for_continued_monitoring_review'&&!value.eligible_for_continued_monitoring_review)opt.disabled=true;disposition.appendChild(opt);
+      }
+      const dispositionLabel=el('label','Disposition ');dispositionLabel.appendChild(disposition);
+      output.append(label,dispositionLabel,button('Record monitoring review decision',()=>change('router-journal-decide',{reviewer_alias:reviewer.value,disposition:disposition.value},'Record this review referral or hold? This does not execute a rollback or deployment.')));
+      output.appendChild(el('h6','Producer credential management'));
+      for(const g of value.producer_grants){
+        const row=el('div');row.appendChild(el('p',g.producer_alias+' · '+g.window_id+' / '+g.arm+' · '+(g.revoked?'revoked':g.expires_ms<=Date.now()?'expired':'active')));
+        if(!g.revoked)row.appendChild(button('Revoke '+g.grant_id,()=>change('router-producer-revoke',{grant_id:g.grant_id},'Revoke this producer credential? Previously accepted evidence remains retained.')));
+        output.appendChild(row);
+      }
+      const name=el('input');name.maxLength=80;name.setAttribute('aria-label','Producer alias');
+      const windowSelect=el('select');windowSelect.setAttribute('aria-label','Producer monitoring window');
+      for(const w of value.latest_report.windows){const opt=el('option',w.window_id);opt.value=w.window_id;windowSelect.appendChild(opt);}
+      const arm=el('select');arm.setAttribute('aria-label','Producer arm');
+      for(const a of ['incumbent','challenger']){const opt=el('option',a);opt.value=a;arm.appendChild(opt);}
+      const ttl=el('input');ttl.type='number';ttl.min='60';ttl.max='604800';ttl.step='1';ttl.value='3600';ttl.setAttribute('aria-label','Producer credential lifetime seconds');
+      for(const [text,input] of [['Producer alias',name],['Window',windowSelect],['Arm',arm],['Credential lifetime seconds',ttl]]){const l=el('label',text+' ');l.appendChild(input);output.appendChild(l);}
+      output.appendChild(button('Issue scoped producer credential',()=>perform(async()=>{
+        const seconds=Number(ttl.value);
+        if(!Number.isInteger(seconds)||seconds<60||seconds>604800)throw new Error('Choose a lifetime from 60 to 604800 seconds.');
+        if(!window.confirm('Issue a write-only credential for this exact window and arm? It will be shown only once.'))return;
+        const attempt=++serial;
+        const grant=await call('router-producer-grant',{...base,producer_alias:name.value,window_id:windowSelect.value,arm:arm.value,ttl_seconds:seconds});
+        if(!valid(attempt))return;
+        // Never put this value in download state, storage, or a URL.
+        output.replaceChildren(el('p','Credential issued. Copy it now; leaving this view discards the displayed secret.'));
+        const input=el('input');input.type='password';input.readOnly=true;input.autocomplete='off';input.value=grant.producer_token;input.setAttribute('aria-label','One-time producer credential');
+        output.append(input,button('Show or hide credential',()=>{input.type=input.type==='password'?'text':'password';}),button('Copy producer credential',()=>navigator.clipboard.writeText(input.value)),
+          button('Dismiss credential and reload journal',()=>perform(()=>{input.value='';return loadDetail(value.monitor_id);})));
+      })));
+      output.appendChild(el('h6','Window review'));
+      const windows=el('ul');for(const w of value.latest_report.windows)windows.appendChild(el('li',w.window_id+' · '+w.state+' · '+w.recorded_cases+'/'+w.scheduled_cases+' recorded'));output.appendChild(windows);
+      output.appendChild(button('Remove retained journal',()=>perform(async()=>{
+        if(!window.confirm('Permanently remove this local journal and its producer credentials? Existing backups and exports are not erased.'))return;
+        const attempt=++serial;await call('router-journal-forget',base);
+        if(valid(attempt))await loadList();
+      })));
+    };
+    section.append(button('List retained journals',()=>perform(loadList)),output);
+    host.appendChild(section);
+    if(initialId)perform(()=>loadDetail(initialId));
+  }
   function installWorkforceExchange(host){
     const section=el('details');section.append(el('summary','Exchange minimized monitoring summaries across installations'),
       el('p','Explicit offline export or review. Use the same high-entropy correlation key at each source, and obtain packet pins separately from trusted operators. No automatic network transfer. Signed packets can be verified against separately obtained public keys.'));
@@ -2114,6 +2211,7 @@
             el('p','Rollback referral: '+(r.rollback_referral_recorded?'recorded':'not recorded')+' · due for review: '+(r.due_for_review_windows.join(', ')||'none')),
             el('p','Declared finance statements: '+(r.finance_reconciled_windows.join(', ')||'none')+' · scheduled review consent '+(r.scheduled_deadline_review_enabled?'enabled':'disabled')),
             button('Open saved revision',()=>load(r.workflow_id,r.revision)));
+          installJournalWorkbench(section,{workflow_id:r.workflow_id,revision:r.revision});
           for(const [name,a] of Object.entries(r.arms))section.appendChild(armLine(name,a,r.currency));
           list.appendChild(section);
         }
