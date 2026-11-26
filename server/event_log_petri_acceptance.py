@@ -280,3 +280,58 @@ def review(baseline: bytes, spec, candidate: bytes | None = None):
                        "suffix_activities": MAX_SUFFIX, "marking_states": language.soundness.MAX_STATES},
             "caveat": "Acceptance scenarios are declared expectations over visible activity sequences. "
                       "Passing the suite is not full model equivalence, policy compliance, or evidence of real execution."}
+
+
+def _read_bounded(path, limit):
+    with open(path, "rb") as stream:
+        data = stream.read(limit + 1)
+    if len(data) > limit:
+        _invalid("input file exceeds the supported byte limit")
+    return data
+
+
+def _strict_json(data):
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError("duplicate JSON key")
+            result[key] = value
+        return result
+
+    def constant(_):
+        raise ValueError("nonfinite JSON value")
+    try:
+        return json.loads(data.decode("utf-8"), object_pairs_hook=pairs, parse_constant=constant)
+    except (ValueError, UnicodeError, RecursionError):
+        _invalid("suite must be strict UTF-8 JSON")
+
+
+def main(argv=None):
+    """Customer-operated, no-network CI entry point; JSON to stdout."""
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(description="Run exact PNML workflow acceptance scenarios locally")
+    parser.add_argument("--baseline", required=True, help="baseline PNML file")
+    parser.add_argument("--suite", required=True, help="acceptance suite JSON file")
+    parser.add_argument("--candidate", help="optional candidate PNML file")
+    args = parser.parse_args(argv)
+    try:
+        limit = language.soundness.replay.MAX_BYTES
+        baseline = _read_bounded(args.baseline, limit)
+        candidate = _read_bounded(args.candidate, limit) if args.candidate else None
+        spec = _strict_json(_read_bounded(args.suite, MAX_SUITE_BYTES))
+        result = review(baseline, spec, candidate)
+    except (EventLogWorkspaceError, OSError, UnicodeError) as exc:
+        print("Acceptance input refused: " + str(exc), file=sys.stderr)
+        return 2
+    print(json.dumps(result, sort_keys=True, ensure_ascii=True, allow_nan=False))
+    # Candidate is the target if supplied; baseline failures remain visible in
+    # the report but do not prevent an improved candidate from passing.
+    target = result["candidate"] if args.candidate else result["baseline"]
+    return 0 if target["suite_passed"] is True else (1 if target["suite_passed"] is False else 3)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
