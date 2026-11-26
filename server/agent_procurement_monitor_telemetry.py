@@ -8,25 +8,21 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import re
 import secrets
 import time
 from typing import Annotated, Literal
 
-from pydantic import Field, StrictBool, StrictInt, model_validator
+from pydantic import Field, StrictBool, StrictInt
 
 from shared.agent_procurement import Alias, Strict, digest
-from shared.agent_procurement_router_pilot import Observation
+from shared.agent_procurement_monitor_protocol import Batch, GrantID, MAX_BATCH, TOKEN_RE
 from shared.agent_procurement_router_monitor import _normalize, _review_verified
 from shared.process_shadow_review import Hash
 from . import agent_procurement_monitor_journal as journal
 from . import db
 
 MAX_GRANTS=48
-MAX_BATCH=100
 MAX_TTL_SECONDS=7*24*3600
-TOKEN_RE=re.compile(r"^owgmon_[0-9a-f]{24}\.[A-Za-z0-9_-]{64}$")
-GrantID=Annotated[str,Field(pattern=r"^[0-9a-f]{24}$")]
 
 
 class Grant(Strict):
@@ -52,18 +48,6 @@ class ManifestRequest(Strict):
     grant_id: GrantID
     confirmed: StrictBool
 
-
-class Batch(Strict):
-    format: Literal["openworkgraph.procurement-monitor-producer-batch.v1"]
-    batch_id: Alias
-    observations: list[Observation]=Field(min_length=1,max_length=MAX_BATCH)
-
-    @model_validator(mode="after")
-    def unique(self):
-        for k in ("slot_id","case_token_sha256","source_evidence_sha256"):
-            if len({getattr(o,k) for o in self.observations})!=len(self.observations):
-                raise ValueError("duplicate observation")
-        return self
 
 
 def _now():

@@ -84,3 +84,31 @@ no bearer secret, reviewed category, intended destination, other-arm slots,
 raw inputs or outcomes. Send it separately from the producer credential over
 an approved channel. It is not proof of actual execution or authorization to
 run an agent. The producer endpoint itself still has no manifest/read access.
+
+## Native producer helper
+
+The installed package includes `python -m shared.agent_procurement_monitor_client`.
+It prepares already-observed evidence, never launches an agent or fabricates outcomes.
+Supply the downloaded assignment and a JSON array of exact Observation objects.
+
+```sh
+python -m shared.agent_procurement_monitor_client prepare \\
+  --assignment assignment.json --observations observations.json --out-dir batches
+python -m shared.agent_procurement_monitor_client submit \\
+  --assignment assignment.json --batch batches/batch-001.json \\
+  --base-url http://127.0.0.1:8000 --confirm-submit
+```
+
+Replace port 8000 with the actual local OWG API port. The tool prompts for the
+scoped credential without echo, or reads OWG_MONITOR_PRODUCER_TOKEN from the
+environment. Do not put credentials in command-line arguments or output files.
+Preparation checks the assignment digest, assigned slot/case and time bounds,
+unique evidence references and recorded flags; writes an exclusive local batch
+directory with deterministic IDs and no bearer. Wrong router versions and
+adverse outcomes remain unchanged. Submission checks the exact batch ID and
+credential grant, uses numeric loopback only, disables environment proxies and
+redirects, and validates a bounded receipt against the submitted batch. No
+automatic retry: on ambiguous transport failure, retain and explicitly resubmit
+the identical batch while the credential is valid. The server remains the
+authoritative scope and duplicate-evidence checker. The assignment digest is
+not a signature; obtain the manifest through the trusted local operator.
