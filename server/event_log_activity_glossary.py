@@ -16,6 +16,8 @@ new import); the listing marks them ``in_log: false``. Deleting the log deletes 
 from __future__ import annotations
 
 import csv
+import hashlib
+import json
 import io
 import re
 from datetime import datetime, timezone
@@ -175,7 +177,7 @@ def _uncell(value: str) -> str:
     return value
 
 
-def import_csv(log_id: str, text: Any) -> dict[str, Any]:
+def import_csv(log_id: str, text: Any, *, preview: bool = False, expected_fingerprint: str | None = None) -> dict[str, Any]:
     """Fill the glossary from CSV with an ``activity`` column and any of description, owner_team, system and
     automation. Rows for activities not in the log are skipped and listed. A downloaded glossary imports as is;
     columns it does not know (in_log, events) are ignored. Imported values replace the activity's entry."""
@@ -192,7 +194,7 @@ def import_csv(log_id: str, text: Any) -> dict[str, Any]:
     for number, row in enumerate(reader, start=2):
         if len(notes) >= MAX_NOTES_PER_LOG:
             raise EventLogWorkspaceError(f"a glossary has at most {MAX_NOTES_PER_LOG} entries")
-        activity = _uncell((row.get("activity") or "").strip())
+        activity = row.get("activity") or ""
         if not activity:
             continue
         word = (row.get("automation") or "").strip().lower()
@@ -208,11 +210,46 @@ def import_csv(log_id: str, text: Any) -> dict[str, Any]:
 
     def run(conn):
         known = {a for (a,) in conn.execute("SELECT DISTINCT activity FROM events WHERE log_id = ?", [log_id]).fetchall()}
-        chosen = [n for a, n in notes.items() if a in known]
-        unknown = sorted(a for a in notes if a not in known)
+        resolved: dict[str, Note] = {}
+        unknown = []
+        for source, note in notes.items():
+            unguarded = _uncell(source)
+            if source != unguarded and source in known and unguarded in known:
+                raise EventLogWorkspaceError("a spreadsheet-guarded activity label is ambiguous in this log")
+            activity = source if source in known else unguarded
+            if activity not in known:
+                unknown.append(activity)
+                continue
+            if activity in resolved:
+                raise EventLogWorkspaceError("the CSV contains more than one row for an activity")
+            resolved[activity] = note.model_copy(update={"activity": activity})
+        chosen = list(resolved.values())
+        unknown.sort()
         existing = {a for (a,) in conn.execute("SELECT activity FROM activity_notes WHERE log_id = ?", [log_id]).fetchall()}
         if len(existing | {n.activity for n in chosen}) > MAX_NOTES_PER_LOG:
             raise EventLogWorkspaceError(f"a log keeps at most {MAX_NOTES_PER_LOG} glossary entries")
+        previous = {row["activity"]: row for row in _rows(conn, log_id)}
+        changes = []
+        for note in chosen:
+            old = previous[note.activity]
+            values = {"description": note.description.strip(), "owner_team": note.owner_team.strip(),
+                      "system": note.system.strip(), "automation": note.automation}
+            before = {key: old[key] for key in values}
+            empty = not any(values.values())
+            action = ("remove" if old["described"] and empty else
+                      "add" if not old["described"] and not empty else
+                      "unchanged" if before == values else "update")
+            changes.append({"activity": note.activity, "action": action, "before": before, "after": values})
+        fingerprint = hashlib.sha256(json.dumps({
+            "log_id": log_id, "file_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "changes": changes, "unknown": unknown,
+        }, sort_keys=True, ensure_ascii=True, separators=(",", ":")).encode()).hexdigest()
+        if preview:
+            return {"format": "openworkgraph.glossary-import-preview.v1", "fingerprint": fingerprint,
+                    "changes": changes, "skipped_not_in_log": unknown[:50],
+                    "skipped_not_in_log_total": len(unknown)}
+        if expected_fingerprint is not None and expected_fingerprint != fingerprint:
+            raise EventLogWorkspaceError("The glossary or file changed. Preview the import again.")
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         conn.execute("BEGIN")
         try:

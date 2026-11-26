@@ -1,0 +1,285 @@
+"""Synthetic queue acceptance against the actual executor, no network."""
+import asyncio
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import unittest
+from unittest.mock import patch
+
+from execute import ImplementationError, digest, prepare, reference, review_template, execute_approved
+from run_queue import load_queue, inspect_state, run_approved_queue, read_object, write_once
+from test_execution import fixture, FakeTools, receipt
+
+
+def write(path, value):
+    Path(path).write_text(json.dumps(value), encoding='utf-8')
+
+
+def queue_fixture(root, count=3):
+    spec, plan, original, bindings, _ = fixture()
+    entries, intents = [], []
+    for index in range(count):
+        identifier = 'case_' + str(index + 1)
+        case = {**original, 'issue': 'PRIVATE_CASE_' + str(index),
+                'request_id': 'synthetic-key-' + str(index),
+                'record_ref': 'owg:r:' + str(index + 1)*32}
+        prepared = prepare(spec, plan, case, bindings)
+        disabled = review_template(spec, prepared, case, bindings)
+        review = {'format': 'openworkgraph.prepared-reviewed-case.v1',
+                  'spec_sha256': digest(spec), 'suite_sha256': 'b'*64,
+                  'case_sha256': digest(case), 'plan_sha256': digest(plan),
+                  'bindings_sha256': digest(bindings), 'disabled_intent_sha256': digest(disabled),
+                  'selected_batch_case_id': identifier, 'selected_route_sha256': digest(plan['activity_ids']),
+                  'batch_review_sha256': 'c'*64, 'batch_review_recomputed': True,
+                  'offline_requirements_clear': True, 'execution_authorized': False}
+        folder = root / identifier
+        folder.mkdir()
+        for name, value in [('case.json',case),('plan.json',plan),('bindings.json',bindings),
+                            ('customer-intent.json',disabled),('preparation-review.json',review)]:
+            write(folder / name, value)
+        entries.append({'case_id':identifier,'case_sha256':digest(case),'route_sha256':digest(plan['activity_ids']),
+                        'preparation_review_sha256':digest(review),'disabled_intent_sha256':digest(disabled)})
+        intents.append({'case_id':identifier,'intent':{**disabled,
+            'customer_authorization_confirmed':True,'source_reads_confirmed':True,
+            'expires_at':(datetime.now(timezone.utc)+timedelta(minutes=10)).isoformat()}})
+    manifest = {'format':'openworkgraph.prepared-execution-queue.v1','process_reference':reference(spec),
+                'spec_sha256':digest(spec),'suite_sha256':'b'*64,'bindings_sha256':digest(bindings),
+                'batch_review_sha256':'c'*64,'selection_sha256':'d'*64,'case_count':len(entries),
+                'cases':entries,'declared_cross_case_collisions_detected':False,
+                'provider_collision_freedom_verified':False,'execution_authorized':False,
+                'automatic_execution_enabled':False,'business_tools_called':False,'review_required':True}
+    write(root/'queue-review.json', manifest)
+    pin=digest(manifest)
+    return spec,pin,{'format':'openworkgraph.queue-authorizations.v1','queue_sha256':pin,'intents':intents}
+
+
+class QueueCases(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.temp=TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name)
+        self.spec,self.pin,self.auth=queue_fixture(self.root)
+        self.calls=[]
+        self.receipts=[]
+        self.fail_case=None
+        self.raise_case=None
+        self.environment=patch.dict('os.environ',{'OWG_EXECUTION_MCP_TOKEN':'SYNTHETIC_TOOL_TOKEN',
+            'OWG_EXECUTION_SOURCE_READ_TOKEN':'SYNTHETIC_SOURCE_TOKEN'})
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+
+    async def runner(self,spec,plan,case,bindings,intent,*,journal_directory):
+        self.calls.append(case['issue'])
+        if case['issue']==self.raise_case:
+            raise RuntimeError('SYNTHETIC_TRANSPORT_FAILURE')
+        tools=FakeTools()
+        if case['issue']==self.fail_case:
+            tools.failure=RuntimeError('SYNTHETIC_UNCERTAIN_EFFECT')
+        async def reader(base,token,request):
+            self.receipts.append(request['resource_ref'])
+            value=receipt(request)
+            if not tools.resolved:
+                value.update(operation_verified=False,availability='unknown',
+                             reason='provider_state_not_expected_operation')
+            return value
+        return await execute_approved(spec,plan,case,bindings,intent,journal_directory=journal_directory,
+             client_factory=lambda *args:tools,receipt_reader=reader)
+
+    def status(self):
+        root,packets=load_queue(self.spec,self.root,self.pin)
+        return inspect_state(self.spec,root,packets,self.pin)
+
+    async def run_queue(self,auth=None,limit=1):
+        return await run_approved_queue(self.spec,self.root,self.pin,self.auth if auth is None else auth,
+                                        max_cases=limit,runner=self.runner)
+
+    async def test_real_synthetic_executor_serial_resume_and_no_replay(self):
+        self.assertEqual(self.status()['reported_complete_count'],0)
+        self.assertFalse((self.root/'queue-state').exists())
+        first=await self.run_queue()
+        self.assertEqual(first['reported_complete_count'],1)
+        self.assertEqual(self.calls,['PRIVATE_CASE_0'])
+        second=await self.run_queue(limit=2)
+        self.assertEqual(second['reported_complete_count'],3)
+        self.assertEqual(self.calls,['PRIVATE_CASE_0','PRIVATE_CASE_1','PRIVATE_CASE_2'])
+        self.assertEqual(len(set(self.receipts)),3)
+        self.assertFalse(second['business_outcomes_verified'])
+        self.assertNotIn('PRIVATE_',json.dumps(second))
+        self.assertEqual(await self.run_queue(limit=3),second)
+        self.assertEqual(len(self.calls),3)
+        self.assertEqual(len(list((self.root/'queue-state'/'journals').glob('*.jsonl'))),3)
+
+    async def test_all_selected_authorizations_preflight_before_any_execution(self):
+        for mutation in ('missing','disabled','wrong_case','expired'):
+            auth=deepcopy(self.auth)
+            if mutation=='missing':
+                auth['intents'].pop(1)
+            elif mutation=='disabled':
+                auth['intents'][1]['intent']['customer_authorization_confirmed']=False
+            elif mutation=='wrong_case':
+                auth['intents'][1]['intent']['case_sha256']='f'*64
+            else:
+                auth['intents'][1]['intent']['expires_at']='2000-01-01T00:00:00Z'
+            with self.subTest(mutation=mutation),self.assertRaises(ImplementationError):
+                await self.run_queue(auth,limit=2)
+            self.assertEqual(self.calls,[])
+            self.assertEqual(self.receipts,[])
+            self.assertFalse(list((self.root/'queue-state').glob('*.claim.json')))
+        self.assertEqual((await self.run_queue(limit=2))['reported_complete_count'],2)
+
+    async def test_missing_execution_credentials_do_not_claim_any_case(self):
+        for token in ('OWG_EXECUTION_MCP_TOKEN','OWG_EXECUTION_SOURCE_READ_TOKEN'):
+            with patch.dict('os.environ',{token:''}):
+                with self.assertRaises(ImplementationError):
+                    await self.run_queue(limit=2)
+            self.assertEqual(self.calls,[])
+            self.assertFalse(list((self.root/'queue-state').glob('*.claim.json')))
+        self.assertEqual((await self.run_queue(limit=2))['reported_complete_count'],2)
+
+    async def test_uncertain_result_stops_queue_and_changed_expiry_cannot_retry(self):
+        self.fail_case='PRIVATE_CASE_1'
+        result=await self.run_queue(limit=3)
+        self.assertEqual([r['status'] for r in result['cases']],
+                         ['reported_complete','reconciliation_required','waiting'])
+        self.assertEqual(self.calls,['PRIVATE_CASE_0','PRIVATE_CASE_1'])
+        self.assertTrue(result['reconciliation_required'])
+        changed=deepcopy(self.auth)
+        changed['intents'][1]['intent']['expires_at']=(datetime.now(timezone.utc)+timedelta(minutes=20)).isoformat()
+        with self.assertRaises(ImplementationError):
+            await self.run_queue(changed,limit=3)
+        self.assertEqual(len(self.calls),2)
+        self.assertFalse((self.root/'queue-state'/'runner.lock').exists())
+
+    async def test_exception_before_journal_still_leaves_durable_claim(self):
+        self.raise_case='PRIVATE_CASE_0'
+        result=await self.run_queue(limit=3)
+        self.assertTrue(result['reconciliation_required'])
+        self.assertEqual(self.calls,['PRIVATE_CASE_0'])
+        self.assertTrue((self.root/'queue-state'/'case_1.claim.json').exists())
+        self.assertFalse((self.root/'queue-state'/'case_1.complete.json').exists())
+        with self.assertRaises(ImplementationError):
+            await self.run_queue(limit=3)
+        self.assertEqual(len(self.calls),1)
+
+    async def test_tampered_prepared_input_and_pinned_manifest_are_refused(self):
+        path=self.root/'case_2'/'case.json'
+        original=read_object(path)
+        write(path,{**original,'issue':'changed'})
+        with self.assertRaises(ImplementationError):
+            await self.run_queue(limit=3)
+        self.assertFalse(self.calls)
+        write(path,original)
+        manifest=read_object(self.root/'queue-review.json')
+        write(self.root/'queue-review.json',{**manifest,'case_count':2})
+        with self.assertRaises(ImplementationError):
+            self.status()
+        write(self.root/'queue-review.json',manifest)
+        self.assertEqual(self.status()['case_count'],3)
+
+    async def test_completed_journal_edit_or_missing_receipt_blocks_progress(self):
+        await self.run_queue()
+        journal=next((self.root/'queue-state'/'journals').glob('*.jsonl'))
+        original=journal.read_bytes()
+        journal.write_bytes(original+b'{')
+        self.assertTrue(self.status()['reconciliation_required'])
+        with self.assertRaises(ImplementationError):
+            await self.run_queue()
+        journal.write_bytes(original)
+        self.assertEqual(self.status()['reported_complete_count'],1)
+        (self.root/'queue-state'/'case_1.complete.json').unlink()
+        self.assertTrue(self.status()['reconciliation_required'])
+        self.assertEqual(len(self.calls),1)
+
+    async def test_lock_stop_and_orphan_journal_block_additional_starts(self):
+        await self.run_queue()
+        state=self.root/'queue-state'
+        lock=state/'runner.lock'
+        write_once(lock,{'queue_sha256':self.pin})
+        self.assertTrue(self.status()['runner_lock_present'])
+        with self.assertRaises(ImplementationError):
+            await self.run_queue()
+        lock.unlink()
+        marker=state/'journals'/'.owg-stop'
+        marker.write_text('stop')
+        self.assertTrue(self.status()['operator_stop_active'])
+        with self.assertRaises(ImplementationError):
+            await self.run_queue()
+        marker.unlink()
+        orphan=state/'journals'/('f'*64+'.jsonl')
+        orphan.write_text('orphan')
+        self.assertEqual(self.status()['unclaimed_journal_entry_count'],1)
+        with self.assertRaises(ImplementationError):
+            await self.run_queue()
+        self.assertEqual(len(self.calls),1)
+
+    async def test_offline_recovery_of_complete_journal_never_replays_actions(self):
+        from run_queue import reconcile_completed_case
+        import hashlib
+        from unittest.mock import patch
+        # Simulate a durable journal but a crash at completion-receipt write.
+        from run_queue import write_once as actual_write
+        def fail_receipt(path,value):
+            if path.name.endswith('.complete.json'):
+                raise OSError('SYNTHETIC_RECEIPT_FAILURE')
+            return actual_write(path,value)
+        with patch('run_queue.write_once',side_effect=fail_receipt):
+            result=await self.run_queue(limit=3)
+        self.assertTrue(result['reconciliation_required'])
+        self.assertEqual(self.calls,['PRIVATE_CASE_0'])
+        state=self.root/'queue-state'
+        journal=next((state/'journals').glob('*.jsonl'))
+        pin=hashlib.sha256(journal.read_bytes()).hexdigest()
+        for case_id,sha in [('case_1','f'*64),('case_2',pin)]:
+            with self.assertRaises(ImplementationError):
+                reconcile_completed_case(self.spec,self.root,self.pin,case_id,sha)
+        self.assertFalse((state/'case_1.complete.json').exists())
+        recovered=reconcile_completed_case(self.spec,self.root,self.pin,'case_1',pin)
+        self.assertFalse(recovered['reconciliation_required'])
+        self.assertEqual(recovered['recovered_completion_count'],1)
+        self.assertTrue(recovered['cases'][0]['completion_recovered_from_journal'])
+        self.assertEqual(self.calls,['PRIVATE_CASE_0'])
+        with self.assertRaises(ImplementationError):
+            reconcile_completed_case(self.spec,self.root,self.pin,'case_1',pin)
+        self.assertEqual((await self.run_queue(limit=2))['reported_complete_count'],3)
+        self.assertEqual(self.calls,['PRIVATE_CASE_0','PRIVATE_CASE_1','PRIVATE_CASE_2'])
+
+    async def test_recovery_refuses_uncertain_journal_even_with_matching_digest(self):
+        from run_queue import reconcile_completed_case
+        import hashlib
+        self.fail_case='PRIVATE_CASE_0'
+        await self.run_queue(limit=3)
+        journal=next((self.root/'queue-state'/'journals').glob('*.jsonl'))
+        with self.assertRaises(ImplementationError):
+            reconcile_completed_case(self.spec,self.root,self.pin,'case_1',hashlib.sha256(journal.read_bytes()).hexdigest())
+        self.assertTrue(self.status()['reconciliation_required'])
+        self.assertEqual(self.calls,['PRIVATE_CASE_0'])
+
+    async def test_journal_identity_argument_and_source_checks_are_required(self):
+        await self.run_queue()
+        state=self.root/'queue-state'
+        journal=next((state/'journals').glob('*.jsonl'))
+        original=journal.read_bytes()
+        records=[json.loads(line) for line in original.splitlines()]
+        for mutation in ('argument','source','identity'):
+            changed=deepcopy(records)
+            if mutation=='argument':
+                next(r for r in changed if r['phase']=='attempt_pending')['arguments_sha256']='f'*64
+            elif mutation=='source':
+                next(r for r in changed if r['phase']=='source_checked')['operation_verified']=False
+            else:
+                changed[0]['execution_id']='f'*64
+            journal.write_text(''.join(json.dumps(row)+'\n' for row in changed))
+            # Even a locally recomputed receipt cannot hide an inconsistent
+            # route/argument/source journal under the pinned case contract.
+            import hashlib
+            path=state/'case_1.complete.json'
+            value=read_object(path)
+            write(path,{**value,'journal_sha256':hashlib.sha256(journal.read_bytes()).hexdigest()})
+            self.assertTrue(self.status()['reconciliation_required'])
+        self.assertEqual(len(self.calls),1)
+
+
+if __name__=='__main__':
+    unittest.main()

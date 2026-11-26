@@ -42,6 +42,18 @@ const path=require('node:path');const zlib=require('node:zlib');
    await page.locator('#owgEventLogStatus').filter({hasText:'Imported 12 events'}).waitFor();
    const logs=await page.evaluate(async()=>(await (await fetch('/v1/event-logs')).json()).logs.map(l=>[l.source_format,l.events]).sort());
    assert.deepEqual(logs,[['csv',12],['xes',12]]);
+   // An XES file whose times have no UTC offset (as PM4Py writes naive times): the offset is proposed, then used.
+   const naiveXes=xes.replace(/(key="time:timestamp" value="[^"]+?)(Z|[+-]\d\d:\d\d)"/g,'$1"');
+   assert.notEqual(naiveXes,xes);
+   await page.locator('#owgEventLogName').fill('naive');
+   await page.locator('#owgEventLogFile').setInputFiles({name:'naive.xes',mimeType:'application/xml',buffer:Buffer.from(naiveXes)});
+   await page.locator('#owgEventLogStatus').filter({hasText:'Times in this file have no UTC offset'}).waitFor();
+   assert.equal(await page.locator('#owgEventLogStandardOffset').isVisible(),true);
+   await page.locator('#owgEventLogStandardOffset').fill('Z');
+   await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Imported 12 events'}).waitFor();
+   const naiveLog=await page.evaluate(async()=>(await (await fetch('/v1/event-logs')).json()).logs.find(l=>l.name==='naive'));
+   assert.equal(naiveLog.events,12);
    const file=page.locator('#owgEventLogFile'),pick=page.locator('#owgEventLogPick');
    const consent=page.locator('#owgEventLogConsent'),saveStatus=page.locator('#owgEventLogSaveStatus');
    const importButton=page.locator('#owgEventLogImport'),appendButton=page.locator('#owgEventLogAppend');
@@ -90,6 +102,6 @@ const path=require('node:path');const zlib=require('node:zlib');
      .find(log=>log.log_id===id),csvId);
    assert.equal(saved.events,13);
    assert.deepEqual(errors,[]);
-   console.log('Gzip import browser acceptance passed: .csv.gz columns read in the browser, .csv.gz and .xes.gz imported.');
+   console.log('Gzip import browser acceptance passed: .csv.gz columns read in the browser, .csv.gz and .xes.gz imported, XES without offsets imported with a chosen offset.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});

@@ -150,9 +150,9 @@ review current full schemas, permissions, result predicates, fresh preconditions
 conditional writes, idempotency and independent outcome checks separately.'''
 
 
-def validate_catalog(spec, catalog):
+def validate_catalog(spec, catalog, *, require_fresh=True):
     validate_spec(spec)
-    if (catalog.get('format') != 'openworkgraph.customer-tool-catalog.v1'
+    if (not isinstance(catalog,dict) or catalog.get('format') != 'openworkgraph.customer-tool-catalog.v1'
             or digest(catalog.get('process_reference')) != digest(reference(spec))
             or catalog.get('spec_sha256') != digest(spec)
             or not isinstance(catalog.get('tools'), list) or len(catalog['tools']) > 100):
@@ -161,7 +161,7 @@ def validate_catalog(spec, catalog):
     try:
         when = datetime.fromisoformat(str(catalog.get('inspected_at') or '').replace('Z','+00:00'))
         age = (datetime.now(timezone.utc)-when).total_seconds()
-        if when.tzinfo is None or not -300 <= age <= 86400:
+        if when.tzinfo is None or age < -300 or (require_fresh and age > 86400):
             raise ValueError('stale')
     except (ValueError,TypeError,OverflowError):
         raise ImplementationError('Inspect a fresh tool catalog before requesting mappings') from None
@@ -251,6 +251,745 @@ async def propose_bindings(spec, catalog, case, *, model):
             'case_values_sent_to_model':False,'business_tools_called':False,'execution_authorized':False}}
 
 
+MAX_REVIEW_ROUTES = 80
+
+
+def _json_kind(value):
+    return ('null' if value is None else 'boolean' if type(value) is bool else
+            'integer' if type(value) is int else 'number' if type(value) is float else
+            'string' if isinstance(value, str) else 'object' if isinstance(value, dict) else
+            'array' if isinstance(value, list) else 'unknown')
+
+
+def _metadata_findings(contract, tools, *, role):
+    """Compare resolved arguments with the inspected top-level projection.
+
+    Metadata omits schema constraints; even a matching digest cannot establish
+    semantics or permission. Do not copy names, arguments or endpoint URLs.
+    """
+    findings = set()
+    tool = tools.get(contract.get('tool_name'))
+    if tool is None:
+        return {role + ':tool_not_in_inspected_projection'}
+    if not contract.get('tool_schema_sha256'):
+        findings.add(role + ':schema_pin_missing')
+    elif contract['tool_schema_sha256'] != tool['input_schema_sha256']:
+        findings.add(role + ':schema_pin_changed')
+    fields = {row['name']: row for row in tool['input_fields']}
+    arguments = contract['arguments']
+    if any(field['required'] and name not in arguments for name, field in fields.items()):
+        findings.add(role + ':required_argument_missing')
+    for name, value in arguments.items():
+        field = fields.get(name)
+        if field is None:
+            findings.add(role + ':argument_not_in_inspected_projection')
+            continue
+        expected, actual = field['type'], _json_kind(value)
+        if expected == 'unknown':
+            findings.add(role + ':argument_type_not_established')
+        elif actual != expected and not (expected == 'number' and actual == 'integer'):
+            findings.add(role + ':argument_type_mismatch')
+    return findings
+
+
+def _contract_finding(code, activity=None):
+    return {'code': code, 'activity_id': activity}
+
+
+def _validate_audit_projection(catalog):
+    if (type(catalog.get('omitted_tool_count')) is not int
+            or catalog['omitted_tool_count'] < 0
+            or not isinstance(catalog.get('inspected_at'), str)):
+        raise ImplementationError('Binding audits require an inspected catalog with bounded coverage metadata')
+
+
+def _mapped_catalog_changes(spec, previous, current, mapping):
+    """Compare only tools referenced by mappings, including write preconditions.
+
+    A missing tool in a bounded catalog is not proof of provider deletion.
+    Descriptions, defaults, argument values, tool names and endpoint URLs are
+    deliberately excluded from this output.
+    """
+    validate_catalog(spec, previous, require_fresh=False)
+    _validate_audit_projection(previous)
+    if endpoint(previous['tool_server_url']) != endpoint(current['tool_server_url']):
+        raise ImplementationError('Previous and current catalogs must identify the same tool endpoint')
+    old_time = datetime.fromisoformat(previous['inspected_at'].replace('Z', '+00:00'))
+    new_time = datetime.fromisoformat(current['inspected_at'].replace('Z', '+00:00'))
+    if old_time > new_time:
+        raise ImplementationError('Previous catalog must not be newer than the current catalog')
+    old = {row['name']: row for row in previous['tools']}
+    new = {row['name']: row for row in current['tools']}
+    rows = []
+    for identifier, binding in sorted(mapping.items()):
+        for role, contract in (('action', binding), ('precondition', binding.get('precondition'))):
+            if not isinstance(contract, dict) or not tool_name(contract.get('tool_name')):
+                continue
+            name = contract['tool_name']
+            before, after = old.get(name), new.get(name)
+            if before is None or after is None:
+                status = ('not_in_either_projection' if before is None and after is None else
+                          'not_in_previous_projection' if before is None else 'not_in_current_projection')
+                changes = None
+            else:
+                a = {f['name']: (f['type'], f['required']) for f in before['input_fields']}
+                b = {f['name']: (f['type'], f['required']) for f in after['input_fields']}
+                status = ('schema_pin_changed' if before['input_schema_sha256'] != after['input_schema_sha256']
+                          else 'projection_inconsistent' if a != b else 'schema_pin_unchanged')
+                changes = {
+                    'added_field_count': len(b.keys() - a.keys()),
+                    'removed_field_count': len(a.keys() - b.keys()),
+                    'changed_type_count': sum(a[k][0] != b[k][0] for k in a.keys() & b.keys()),
+                    'changed_required_count': sum(a[k][1] != b[k][1] for k in a.keys() & b.keys()),
+                    'new_required_field_count': sum(b[k][1] for k in b.keys() - a.keys()) +
+                                                sum(not a[k][1] and b[k][1] for k in a.keys() & b.keys()),
+                }
+            rows.append({'activity_id': identifier, 'role': role, 'status': status,
+                         'field_changes': changes,
+                         'schema_pin_review_required': status != 'schema_pin_unchanged'})
+    return {'previous_catalog_sha256': digest(previous),
+            'current_catalog_sha256': digest(current),
+            'previous_inspected_at': previous['inspected_at'],
+            'current_inspected_at': current['inspected_at'],
+            'previous_omitted_tool_count': previous['omitted_tool_count'],
+            'current_omitted_tool_count': current['omitted_tool_count'],
+            'mapped_contracts': rows,
+            'mapped_contracts_requiring_review': sum(r['schema_pin_review_required'] for r in rows),
+            'provider_tool_removal_verified': False}
+
+
+def _reviewed_edge_indices(spec, route):
+    model = spec['process_model']
+    if spec.get('control_flow_contract') == 'openworkgraph.parallel-node-firing-plan.v1':
+        # A firing sequence can interleave independent branch nodes. Adjacent
+        # nodes are not necessarily edges: use the actual token replay indices.
+        from owg_model.process_model import ProcessModel
+        from owg_model.process_parallel import replay_node_ids
+        return set(replay_node_ids(route, ProcessModel.model_validate(model))['transition_indices'])
+    edges = {(edge['source'], edge['target']): index for index, edge in enumerate(model['transitions'])}
+    return {edges[pair] for pair in zip(route, route[1:])}
+
+
+def audit_bindings(spec, catalog, suite, bindings, *, previous_catalog=None):
+    """Offline review of exact reviewed route alternatives against current mapping.
+
+    A reviewed route is an expectation, not a captured execution or a model
+    result. Review every alternative, not just the easiest one. This is never
+    an execution intent, a permission check or a live provider/schema test.
+    """
+    from evaluate import validate_suite
+    from execute import prepare, arguments_for, schema_reference
+    validate_catalog(spec, catalog)
+    _validate_audit_projection(catalog)
+    cases = validate_suite(spec, suite, allow_current_source_rules=True)
+    if (not isinstance(bindings, dict)
+            or bindings.get('format') != 'openworkgraph.customer-mcp-bindings.v1'
+            or digest(bindings.get('process_reference')) != digest(reference(spec))):
+        raise ImplementationError('Bindings must identify this exact process revision')
+    if endpoint(bindings.get('tool_server_url')) != endpoint(catalog['tool_server_url']):
+        raise ImplementationError('Bindings and inspected catalog must identify the same tool endpoint')
+    mapped = bindings.get('bindings')
+    if not isinstance(mapped, list) or len(mapped) > 40 or any(not isinstance(row, dict) for row in mapped):
+        raise ImplementationError('Supply at most 40 explicit activity bindings')
+    activities = {a['id']: a for a in spec['process_model']['activities'] if a['kind'] == 'activity'}
+    identifiers = [row.get('activity_id') for row in mapped]
+    if (any(not isinstance(i, str) or i not in activities for i in identifiers)
+            or len(set(identifiers)) != len(identifiers)):
+        raise ImplementationError('Bindings require unique existing activity IDs')
+    mapping = dict(zip(identifiers, mapped))
+    catalog_changes = (_mapped_catalog_changes(spec, previous_catalog, catalog, mapping)
+                       if previous_catalog is not None else None)
+    # Reject duplicate or over-budget inputs instead of inflating coverage or silently dropping alternatives.
+    if any(len({digest(route) for route in case['expected']['accepted_routes']}) != len(case['expected']['accepted_routes']) for case in cases):
+        raise ImplementationError('Reviewed route alternatives must be distinct within each case')
+    route_count = sum(len(case['expected']['accepted_routes']) for case in cases)
+    if route_count > MAX_REVIEW_ROUTES:
+        raise ImplementationError('Select at most 80 reviewed route alternatives per binding audit')
+    tools = {tool['name']: tool for tool in catalog['tools']}
+    covered = set()
+    covered_edges = set()
+    report_cases = []
+    all_route_rows = []
+    for case in cases:
+        route_rows = []
+        for index, route in enumerate(case['expected']['accepted_routes']):
+            covered.update(i for i in route if i in activities)
+            covered_edges.update(_reviewed_edge_indices(spec, route))
+            plan = {'revision': spec['revision'], 'content_sha256': spec['content_sha256'],
+                    'status': 'proposal', 'activity_ids': route, 'missing_business_inputs': []}
+            findings = []
+            # Inspect candidate mappings even when deliberately disabled. This
+            # gives operators actionable schema/pointer feedback before they
+            # authorize anything, including when prepare() refuses a route.
+            for identifier in sorted(set(route) & set(activities)):
+                if activities[identifier]['implementation'] == 'human':
+                    continue
+                binding = mapping.get(identifier)
+                if not binding or not tool_name(binding.get('tool_name')):
+                    findings.append(_contract_finding('action:tool_mapping_missing', identifier))
+                    continue
+                for role, contract in (('action', binding), ('precondition', binding.get('precondition'))):
+                    if role == 'precondition' and contract is None:
+                        continue
+                    try:
+                        if not isinstance(contract, dict) or not tool_name(contract.get('tool_name')):
+                            raise ImplementationError('Invalid tool contract')
+                        inspected = {'tool_name': contract['tool_name'],
+                                     'tool_schema_sha256': schema_reference(contract.get('tool_schema_sha256')),
+                                     'arguments': arguments_for(contract, case['input'])}
+                        for code in sorted(_metadata_findings(inspected, tools, role=role)):
+                            findings.append(_contract_finding(code, identifier))
+                    except (ImplementationError, ValueError, TypeError, RecursionError):
+                        findings.append(_contract_finding(role + ':argument_or_schema_reference_invalid', identifier))
+            counts = {'actions': 0, 'human_activities': 0, 'manual_conditions': 0,
+                      'source_outcomes': 0, 'source_rules': 0, 'decision_tables': 0}
+            try:
+                prepared = prepare(spec, plan, case['input'], bindings)
+            except (ImplementationError, ValueError, TypeError, KeyError, OverflowError, RecursionError):
+                # Do not echo exception text or customer values; a refused
+                # route cannot be counted as a complete contract.
+                findings.append(_contract_finding('offline_preparation_refused'))
+            else:
+                for requirement in prepared['requirements']:
+                    code, _, activity = requirement.partition(':')
+                    findings.append(_contract_finding(code, activity if activity in activities else None))
+                counts = {'actions': len(prepared['actions']),
+                          'human_activities': len(prepared['human_activity_ids']),
+                          'manual_conditions': len(prepared['manual_condition_ids']),
+                          'source_outcomes': len(prepared['outcomes']),
+                          'source_rules': len(prepared['source_rules']),
+                          'decision_tables': len(prepared.get('decision_tables', []))}
+                if counts['source_outcomes'] or counts['source_rules'] or counts['decision_tables']:
+                    try:
+                        endpoint(bindings.get('source_api_url'), source=True)
+                    except ImplementationError:
+                        findings.append(_contract_finding('source_endpoint_missing_or_invalid'))
+                if spec.get('organization_catalog_reference'):
+                    try:
+                        endpoint(bindings.get('process_catalog_url'))
+                    except ImplementationError:
+                        findings.append(_contract_finding('shared_catalog_endpoint_missing_or_invalid'))
+            # Stable bounded per-route report; duplicate findings from repeated
+            # visits are deduplicated rather than inflating the issue counts.
+            findings = [dict(items) for items in sorted(
+                {tuple(sorted(f.items())) for f in findings},
+                key=lambda items: (dict(items)['code'], dict(items)['activity_id'] or ''))]
+            row = {'alternative': index + 1, 'route_sha256': digest(route),
+                   'static_contract_checks_clear': not findings,
+                   'requires_separate_human_resolution': bool(counts['human_activities'] or counts['manual_conditions']),
+                   'counts': counts, 'findings': findings}
+            route_rows.append(row)
+            all_route_rows.append(row)
+        report_cases.append({'case_id': case['id'], 'category': case['category'],
+                             'case_sha256': digest(case['input']),
+                             'expected_status': case['expected']['status'],
+                             'route_review_applicable': bool(route_rows), 'routes': route_rows,
+                             'all_reviewed_routes_clear': all(r['static_contract_checks_clear'] for r in route_rows)
+                                 if route_rows else None})
+    category_counts = {category: sum(c['category'] == category for c in report_cases)
+                       for category in ('normal', 'exception', 'missing_facts')}
+    counts = {}
+    for row in all_route_rows:
+        for f in row['findings']:
+            counts[f['code']] = counts.get(f['code'], 0) + 1
+    uncovered = sorted(i for i, a in activities.items() if a['implementation'] != 'human' and i not in covered)
+    model_edges = spec['process_model']['transitions']
+    uncovered_edges = [{'source': edge['source'], 'target': edge['target'],
+                        'rule_id': edge.get('rule_id')} for index, edge in enumerate(model_edges)
+                       if index not in covered_edges]
+    clear = sum(r['static_contract_checks_clear'] for r in all_route_rows)
+    return {'format': 'openworkgraph.customer-binding-readiness.v1',
+            'process_reference': reference(spec), 'spec_sha256': digest(spec),
+            'catalog_sha256': digest(catalog), 'suite_sha256': digest(suite),
+            'bindings_sha256': digest(bindings), 'catalog_inspected_at': catalog['inspected_at'],
+            'catalog_omitted_tool_count': catalog['omitted_tool_count'],
+            'mapped_catalog_changes': catalog_changes,
+            'case_count': len(cases), 'reviewed_route_count': route_count,
+            'routes_with_clear_static_checks': clear,
+            'routes_with_findings': route_count - clear,
+            'routes_requiring_human_resolution': sum(r['requires_separate_human_resolution'] for r in all_route_rows),
+            'clarification_only_cases_not_route_tested': sum(not c['route_review_applicable'] for c in report_cases),
+            'category_counts': category_counts,
+            'missing_categories': [category for category, n in category_counts.items() if not n],
+            'uncovered_nonhuman_activity_ids': uncovered,
+            'structural_transition_coverage': {'total': len(model_edges), 'covered': len(covered_edges),
+                                               'uncovered': uncovered_edges,
+                                               'basis': 'reviewed_route_alternatives_not_observed_execution'},
+            'finding_counts': dict(sorted(counts.items())), 'cases': report_cases,
+            'review_required': (not route_count or clear != route_count or bool(uncovered)
+                                or bool(uncovered_edges) or any(not n for n in category_counts.values())
+                                or bool(catalog_changes and catalog_changes['mapped_contracts_requiring_review'])),
+            'schema_constraints_fully_validated': False,
+            'provider_semantics_or_permissions_verified': False,
+            'live_catalog_refreshed': False, 'business_tools_called': False,
+            'execution_authorized': False, 'business_outcomes_verified': False,
+            'case_values_and_tool_arguments_included': False,
+            'expectations_are_customer_declarations': True}
+
+
+def _paired_audit_delta(before, after):
+    """Compare the same reviewed alternatives, including findings that change
+    without changing the binary clear/not-clear status."""
+    for key in ('process_reference', 'spec_sha256', 'catalog_sha256', 'suite_sha256'):
+        if before[key] != after[key]:
+            raise ImplementationError('Paired binding audit requires an identical review basis')
+    def index(report):
+        return {(case['case_id'], route['alternative'], route['route_sha256']): route
+                for case in report['cases'] for route in case['routes']}
+    old, new = index(before), index(after)
+    if old.keys() != new.keys():
+        raise ImplementationError('Paired binding audit requires identical reviewed alternatives')
+    rows = []
+    counts = {key: 0 for key in ('improved', 'regressed', 'unchanged_clear', 'unchanged_findings')}
+    for key in sorted(old):
+        a, b = old[key], new[key]
+        clear_before, clear_after = a['static_contract_checks_clear'], b['static_contract_checks_clear']
+        disposition = ('unchanged_clear' if clear_before else 'unchanged_findings') if clear_before == clear_after else (
+            'improved' if clear_after else 'regressed')
+        counts[disposition] += 1
+        def findings(route):
+            return {(f['code'], f['activity_id'] or '') for f in route['findings']}
+        previous, current = findings(a), findings(b)
+        def public(items):
+            return [{'code': code, 'activity_id': identifier or None} for code, identifier in sorted(items)]
+        rows.append({'case_id': key[0], 'alternative': key[1], 'route_sha256': key[2],
+                     'disposition': disposition, 'findings_added': public(current - previous),
+                     'findings_removed': public(previous - current),
+                     'retained_finding_count': len(previous & current),
+                     'human_resolution_requirement_changed': a['requires_separate_human_resolution'] != b['requires_separate_human_resolution'],
+                     'contract_counts_changed': sorted(k for k in a['counts'] if a['counts'][k] != b['counts'][k])})
+    return {'disposition_counts': counts, 'routes': rows,
+            'routes_with_new_findings': sum(bool(r['findings_added']) for r in rows),
+            'routes_with_removed_findings': sum(bool(r['findings_removed']) for r in rows),
+            'routes_with_changed_human_resolution_requirement': sum(r['human_resolution_requirement_changed'] for r in rows),
+            'routes_with_changed_contract_counts': sum(bool(r['contract_counts_changed']) for r in rows)}
+
+
+def compare_binding_configurations(spec, catalog, suite, baseline, candidate):
+    """Run both offline audits on one frozen catalog and case suite.
+
+    A changed binding is a review requirement even when both static audits
+    are clear: the same type projection can conceal different write semantics.
+    """
+    before = audit_bindings(spec, catalog, suite, baseline)
+    after = audit_bindings(spec, catalog, suite, candidate)
+    delta = _paired_audit_delta(before, after)
+    def index(bindings):
+        return {row['activity_id']: digest(row) for row in bindings['bindings']}
+    old, new = index(baseline), index(candidate)
+    changed = {'added_activity_ids': sorted(new.keys() - old.keys()),
+               'removed_activity_ids': sorted(old.keys() - new.keys()),
+               'changed_activity_ids': sorted(k for k in old.keys() & new.keys() if old[k] != new[k]),
+               'retained_binding_order_changed': [k for k in old if k in new] != [k for k in new if k in old],
+               'other_binding_fields_changed': digest({k: v for k, v in baseline.items() if k != 'bindings'}) !=
+                                               digest({k: v for k, v in candidate.items() if k != 'bindings'})}
+    different = before['bindings_sha256'] != after['bindings_sha256']
+    return {'format': 'openworkgraph.paired-binding-readiness.v1',
+            'process_reference': before['process_reference'], 'spec_sha256': before['spec_sha256'],
+            'catalog_sha256': before['catalog_sha256'], 'suite_sha256': before['suite_sha256'],
+            'baseline_bindings_sha256': before['bindings_sha256'],
+            'candidate_bindings_sha256': after['bindings_sha256'],
+            'binding_configuration_changed': different, 'binding_changes': changed,
+            'baseline_review_required': before['review_required'],
+            'candidate_static_review_required': after['review_required'],
+            'review_required': different or after['review_required'],
+            'reviewed_route_count': after['reviewed_route_count'], **delta,
+            'business_tools_called': False, 'execution_authorized': False,
+            'provider_semantics_or_permissions_verified': False,
+            'runtime_behavior_compatibility_verified': False,
+            'case_values_and_tool_arguments_included': False}
+
+
+def _reviewed_route_inventory(cases, case_hash):
+    """Group identical reviewed routes; exact case matches are not inferred."""
+    routes, exact = {}, []
+    for case in cases:
+        same_input = digest(case['input']) == case_hash
+        if same_input:
+            exact.append(case)
+        for index, route in enumerate(case['expected']['accepted_routes'], 1):
+            key = tuple(route)
+            row = routes.setdefault(key, {'route': route, 'references': [], 'exact_references': []})
+            reference_row = {'case_id': case['id'], 'alternative': index}
+            row['references'].append(reference_row)
+            if same_input:
+                row['exact_references'].append(reference_row)
+    exact_sets = [{tuple(route) for route in case['expected']['accepted_routes']} for case in exact]
+    common = set.intersection(*exact_sets) if exact_sets else set()
+    return routes, exact, common
+
+
+def shortlist_reviewed_routes(spec, suite, bindings, case):
+    """Prepare each distinct reviewed route against a newly selected case.
+
+    Exact duplicate inputs support only the intersection of their reviewed
+    alternatives. Other reference cases are examples, never applicability
+    evidence. No plan or intent is created for execution by this command.
+    """
+    from evaluate import validate_suite
+    from execute import prepare
+    cases = validate_suite(spec, suite, allow_current_source_rules=True)
+    if not isinstance(case, dict) or len(json.dumps(case, allow_nan=False).encode('utf-8')) > 65536:
+        raise ImplementationError('Select a bounded JSON object for the execution case')
+    if sum(len(row['expected']['accepted_routes']) for row in cases) > MAX_REVIEW_ROUTES:
+        raise ImplementationError('Select at most 80 reviewed route alternatives')
+    if (not isinstance(bindings, dict)
+            or bindings.get('format') != 'openworkgraph.customer-mcp-bindings.v1'
+            or digest(bindings.get('process_reference')) != digest(reference(spec))):
+        raise ImplementationError('Bindings must identify this exact process revision')
+    case_hash = digest(case)
+    inventory, exact, common = _reviewed_route_inventory(cases, case_hash)
+    clarification = any(row['expected']['status'] == 'needs_clarification' for row in exact)
+    conflicting = bool(exact and not common and not all(
+        row['expected']['status'] == 'needs_clarification' for row in exact))
+    rows = []
+    for key, item in sorted(inventory.items()):
+        route = item['route']
+        plan = {'revision': spec['revision'], 'content_sha256': spec['content_sha256'],
+                'status': 'proposal', 'activity_ids': route, 'missing_business_inputs': []}
+        try:
+            prepared = prepare(spec, plan, case, bindings)
+        except (ImplementationError, ValueError, TypeError, KeyError, OverflowError, RecursionError):
+            requirements, human, source, actions = ['offline_preparation_refused'], None, None, None
+        else:
+            requirements = prepared['requirements']
+            human = bool(prepared['human_activity_ids'] or prepared['manual_condition_ids'])
+            source = bool(prepared['outcomes'] or prepared['source_rules'] or prepared.get('decision_tables'))
+            actions = len(prepared['actions'])
+        rows.append({'route_sha256': digest(route), 'activity_ids': route,
+                     'reviewed_references': item['references'],
+                     'exact_input_references': item['exact_references'],
+                     'supported_by_all_exact_reviews': key in common,
+                     'offline_requirements_clear': not requirements,
+                     'requirements': requirements, 'separate_human_resolution_needed': human,
+                     'source_checks_needed': source, 'mapped_action_count': actions})
+    rows.sort(key=lambda r: (not r['supported_by_all_exact_reviews'], not r['offline_requirements_clear'],
+                             r['route_sha256']))
+    matches = [row for row in rows if row['supported_by_all_exact_reviews']]
+    if conflicting:
+        status = 'conflicting_exact_input_reviews'
+    elif clarification:
+        status = 'exact_input_requires_clarification'
+    elif not exact:
+        status = 'new_input_requires_route_review'
+    elif len(matches) != 1:
+        status = 'multiple_reviewed_alternatives'
+    elif not matches[0]['offline_requirements_clear']:
+        status = 'reviewed_route_has_implementation_blockers'
+    else:
+        status = 'one_exact_reviewed_route_static_checks_clear'
+    return {'format': 'openworkgraph.reviewed-route-shortlist.v1',
+            'process_reference': reference(spec), 'spec_sha256': digest(spec),
+            'suite_sha256': digest(suite), 'case_sha256': case_hash, 'bindings_sha256': digest(bindings),
+            'status': status, 'exact_input_review_count': len(exact),
+            'exact_input_clarification_count': sum(r['expected']['status'] == 'needs_clarification' for r in exact),
+            'exact_input_reviewed_route_intersection_count': len(common),
+            'distinct_reviewed_route_count': len(rows),
+            'routes_with_clear_offline_requirements': sum(r['offline_requirements_clear'] for r in rows),
+            'routes': rows, 'review_required': True, 'automatic_route_selected': False,
+            'route_applicability_independently_verified': False,
+            'case_values_and_tool_arguments_included': False,
+            'model_called': False, 'business_tools_called': False, 'execution_authorized': False}
+
+
+def shortlist_case_batch(spec, suite, bindings, batch):
+    """Triage a bounded queue of explicitly selected local cases offline."""
+    from evaluate import validate_suite
+    cases = validate_suite(spec, suite, allow_current_source_rules=True)
+    if (not isinstance(batch, dict) or set(batch) != {'format', 'case_inputs_authorized', 'cases'}
+            or batch['format'] != 'openworkgraph.selected-route-cases.v1'
+            or batch['case_inputs_authorized'] is not True):
+        raise ImplementationError('Select an explicitly authorized local case batch')
+    selected = batch['cases']
+    if not isinstance(selected, list) or not 1 <= len(selected) <= 20:
+        raise ImplementationError('Select 1 to 20 local cases')
+    seen = set()
+    for row in selected:
+        if (not isinstance(row, dict) or set(row) != {'id', 'input'}
+                or not isinstance(row['id'], str) or not re.fullmatch(r'case_[0-9]{1,4}', row['id'])
+                or row['id'] in seen or not isinstance(row['input'], dict)
+                or len(json.dumps(row['input'], allow_nan=False).encode('utf-8')) > 65536):
+            raise ImplementationError('Selected cases require unique opaque IDs and bounded JSON inputs')
+        seen.add(row['id'])
+    if len(json.dumps(batch, allow_nan=False).encode('utf-8')) > 262144:
+        raise ImplementationError('Selected case batch exceeds its size limit')
+    alternatives = sum(len(row['expected']['accepted_routes']) for row in cases)
+    distinct = len({tuple(route) for row in cases for route in row['expected']['accepted_routes']})
+    if alternatives > MAX_REVIEW_ROUTES or distinct * len(selected) > 400:
+        raise ImplementationError('Narrow the selected cases or reviewed routes to at most 400 distinct case-route checks')
+    rows, statuses, input_counts = [], {}, {}
+    for row in selected:
+        result = shortlist_reviewed_routes(spec, suite, bindings, row['input'])
+        status, case_hash = result['status'], result['case_sha256']
+        statuses[status] = statuses.get(status, 0) + 1
+        input_counts[case_hash] = input_counts.get(case_hash, 0) + 1
+        options = []
+        for route in result['routes']:
+            options.append({
+                'route_sha256': route['route_sha256'],
+                'reviewed_reference': (route['exact_input_references'] or route['reviewed_references'])[0],
+                'supported_by_all_exact_reviews': route['supported_by_all_exact_reviews'],
+                'offline_requirements_clear': route['offline_requirements_clear'],
+                'requirements': route['requirements'],
+                'separate_human_resolution_needed': route['separate_human_resolution_needed'],
+                'source_checks_needed': route['source_checks_needed'],
+                'mapped_action_count': route['mapped_action_count']})
+        rows.append({'case_id': row['id'], 'case_sha256': case_hash, 'status': status,
+                     'exact_input_review_count': result['exact_input_review_count'],
+                     'routes_with_clear_offline_requirements': result['routes_with_clear_offline_requirements'],
+                     'routes': options})
+    for row in rows:
+        row['duplicate_selected_input'] = input_counts[row['case_sha256']] > 1
+    return {'format': 'openworkgraph.reviewed-route-batch.v1',
+            'process_reference': reference(spec), 'spec_sha256': digest(spec),
+            'suite_sha256': digest(suite), 'bindings_sha256': digest(bindings),
+            'selected_batch_sha256': digest(batch), 'selected_case_count': len(rows),
+            'distinct_selected_input_count': len(input_counts),
+            'case_route_check_count': len(rows) * distinct,
+            'status_counts': dict(sorted(statuses.items())), 'cases': rows,
+            'review_required': True, 'automatic_route_selected': False,
+            'duplicate_business_records_independently_identified': False,
+            'case_values_and_tool_arguments_included': False,
+            'model_called': False, 'business_tools_called': False, 'execution_authorized': False}
+
+
+def prepare_reviewed_case(spec, suite, bindings, case_id, alternative, *, new_case=None):
+    """Materialize one explicitly selected human-reviewed route for execute.py.
+
+    No model is needed to reproduce an already reviewed route. The selected
+    input remains local; the generated execution intent is always disabled.
+    Optionally reuse only the reviewed route with a separately selected new
+    case. The original case review does not establish applicability to it.
+    """
+    from evaluate import validate_suite
+    from execute import prepare, review_template
+    cases = validate_suite(spec, suite, allow_current_source_rules=True)
+    matches = [case for case in cases if case['id'] == case_id]
+    if len(matches) != 1:
+        raise ImplementationError('Choose one exact reviewed case ID')
+    case = matches[0]
+    routes = case['expected']['accepted_routes']
+    if case['expected']['status'] != 'proposal' or type(alternative) is not int or not 1 <= alternative <= len(routes):
+        raise ImplementationError('Choose an explicit reviewed route alternative; clarification cases cannot be prepared')
+    plan = {'revision': spec['revision'], 'content_sha256': spec['content_sha256'],
+            'status': 'proposal', 'activity_ids': routes[alternative - 1],
+            'missing_business_inputs': []}
+    selected = case['input'] if new_case is None else new_case
+    if not isinstance(selected, dict) or len(json.dumps(selected, allow_nan=False).encode('utf-8')) > 65536:
+        raise ImplementationError('Select a bounded JSON object for the execution case')
+    prepared = prepare(spec, plan, selected, bindings)
+    intent = review_template(spec, prepared, selected, bindings)
+    review = {'format': 'openworkgraph.prepared-reviewed-case.v1',
+              'process_reference': reference(spec), 'spec_sha256': digest(spec),
+              'suite_sha256': digest(suite), 'case_id': case_id, 'alternative': alternative,
+              'case_sha256': digest(selected), 'plan_sha256': digest(plan),
+              'reviewed_reference_case_sha256': digest(case['input']),
+              'route_reused_for_new_case': new_case is not None,
+              'selected_input_is_reviewed_reference_case': new_case is None,
+              'new_case_route_applicability_established': False,
+              'bindings_sha256': digest(bindings), 'disabled_intent_sha256': digest(intent),
+              'requirements': prepared['requirements'],
+              'human_activity_ids': prepared['human_activity_ids'],
+              'manual_condition_ids': prepared['manual_condition_ids'],
+              'mapped_action_count': len(prepared['actions']),
+              'source_outcome_count': len(prepared['outcomes']),
+              'source_rule_count': len(prepared['source_rules']),
+              'decision_table_count': len(prepared.get('decision_tables', [])),
+              'offline_requirements_clear': not prepared['requirements'],
+              'review_required': True, 'execution_authorized': False,
+              'business_tools_called': False, 'model_called': False,
+              'provider_permissions_verified': False, 'business_outcomes_verified': False}
+    return {'case.json': selected, 'plan.json': plan, 'bindings.json': bindings,
+            'customer-intent.json': intent, 'preparation-review.json': review}
+
+
+def prepare_batch_selection(spec, suite, bindings, batch, saved_review, selected_id, route_sha256):
+    """Recompute a retained triage report before materializing one selected route."""
+    current = shortlist_case_batch(spec, suite, bindings, batch)
+    if not isinstance(saved_review, dict) or digest(current) != digest(saved_review):
+        raise ImplementationError('Batch review changed; regenerate the review before preparing a case')
+    return _prepare_batch_selection(spec, suite, bindings, batch, current, selected_id, route_sha256)
+
+
+def _prepare_batch_selection(spec, suite, bindings, batch, current, selected_id, route_sha256):
+    """Recompute a retained triage report before materializing one selected route."""
+    if (not isinstance(selected_id, str) or not isinstance(route_sha256, str)
+            or not re.fullmatch(r'[0-9a-f]{64}', route_sha256)):
+        raise ImplementationError('Select an exact batch case and reviewed route digest')
+    matches = [row for row in current['cases'] if row['case_id'] == selected_id]
+    if len(matches) != 1:
+        raise ImplementationError('Choose one exact selected batch case')
+    row = matches[0]
+    if row['status'] in {'conflicting_exact_input_reviews', 'exact_input_requires_clarification'}:
+        raise ImplementationError('Resolve conflicting reviews or clarification before preparing a route')
+    if row['duplicate_selected_input']:
+        raise ImplementationError('Resolve duplicate selected inputs before preparing a batch case')
+    options = [option for option in row['routes'] if option['route_sha256'] == route_sha256]
+    if len(options) != 1:
+        raise ImplementationError('Choose a route from the exact selected case review')
+    option = options[0]
+    if not option['offline_requirements_clear']:
+        raise ImplementationError('Resolve offline implementation requirements before preparing a batch case')
+    if row['exact_input_review_count'] and not option['supported_by_all_exact_reviews']:
+        raise ImplementationError('Selected route conflicts with the exact input reviews')
+    selected = next(item['input'] for item in batch['cases'] if item['id'] == selected_id)
+    ref = option['reviewed_reference']
+    documents = prepare_reviewed_case(spec, suite, bindings, ref['case_id'], ref['alternative'], new_case=selected)
+    review = documents['preparation-review.json']
+    if (review['case_sha256'] != row['case_sha256']
+            or digest(documents['plan.json']['activity_ids']) != route_sha256
+            or not review['offline_requirements_clear']):
+        raise ImplementationError('Prepared case differs from the reviewed route or input')
+    review.update(batch_review_sha256=digest(current), selected_batch_sha256=digest(batch),
+                  selected_batch_case_id=selected_id, selected_route_sha256=route_sha256,
+                  batch_review_recomputed=True)
+    return documents
+
+
+def _queue_collision_check(records):
+    """Conservatively refuse shared write keys or outcome targets across cases."""
+    owners = {}
+    for case_id, identities in records:
+        for identity in identities:
+            owner = owners.setdefault(identity, case_id)
+            if owner != case_id:
+                raise ImplementationError('Selected queue cases share a declared write key or outcome target; review separately')
+
+
+def prepare_execution_queue(spec, suite, bindings, batch, saved_review, selection):
+    """Prepare multiple explicit cases together; no execution or authorization."""
+    from execute import prepare
+    if (not isinstance(selection, dict) or set(selection) != {'format', 'selections'}
+            or selection['format'] != 'openworkgraph.execution-queue-selection.v1'):
+        raise ImplementationError('Choose an explicit execution queue selection')
+    rows = selection['selections']
+    if not isinstance(rows, list) or not 1 <= len(rows) <= 20:
+        raise ImplementationError('Select 1 to 20 cases for preparation')
+    seen = set()
+    for row in rows:
+        if (not isinstance(row, dict) or set(row) != {'case_id', 'route_sha256'}
+                or not isinstance(row['case_id'], str)
+                or not re.fullmatch(r'case_[0-9]{1,4}', row['case_id'])
+                or row['case_id'] in seen
+                or not isinstance(row['route_sha256'], str)
+                or not re.fullmatch(r'[0-9a-f]{64}', row['route_sha256'])):
+            raise ImplementationError('Queue selections require unique case IDs and exact route digests')
+        seen.add(row['case_id'])
+    current = shortlist_case_batch(spec, suite, bindings, batch)
+    if not isinstance(saved_review, dict) or digest(saved_review) != digest(current):
+        raise ImplementationError('Batch review changed; regenerate it before preparing a queue')
+    packets, records, entries = {}, [], []
+    mapped = {row['activity_id']: row for row in bindings['bindings']}
+    for row in rows:
+        case_id = row['case_id']
+        packet = _prepare_batch_selection(spec, suite, bindings, batch, current, case_id, row['route_sha256'])
+        prepared = prepare(spec, packet['plan.json'], packet['case.json'], bindings)
+        identities = set()
+        for action in prepared['actions']:
+            if action['operation_kind'] != 'write':
+                continue
+            contract = mapped[action['activity_id']]['idempotency']
+            if contract['mode'] == 'argument_key':
+                # Provider scoping may be narrower or broader than the tool.
+                # Treat equal keys across ANY mapped write tools as a blocker.
+                identities.add(('write_key', digest(action['arguments'][contract['argument']])))
+        for outcome in prepared['outcomes']:
+            identities.add(('outcome_target', digest(outcome['resource_ref'])))
+        records.append((case_id, identities))
+        packets[case_id] = packet
+        entries.append({'case_id': case_id, 'route_sha256': row['route_sha256'],
+                        'case_sha256': digest(packet['case.json']),
+                        'preparation_review_sha256': digest(packet['preparation-review.json']),
+                        'disabled_intent_sha256': digest(packet['customer-intent.json'])})
+    _queue_collision_check(records)
+    manifest = {'format': 'openworkgraph.prepared-execution-queue.v1',
+                'process_reference': reference(spec), 'spec_sha256': digest(spec),
+                'suite_sha256': digest(suite), 'bindings_sha256': digest(bindings),
+                'batch_review_sha256': digest(current), 'selection_sha256': digest(selection),
+                'case_count': len(entries), 'cases': entries,
+                'declared_cross_case_collisions_detected': False,
+                'provider_collision_freedom_verified': False,
+                'execution_authorized': False, 'business_tools_called': False,
+                'automatic_execution_enabled': False, 'review_required': True}
+    return packets, manifest
+
+
+def write_reviewed_case_directory(path, documents):
+    """Create only a new private directory with executor-loadable JSON files."""
+    names = {'case.json', 'plan.json', 'bindings.json', 'customer-intent.json', 'preparation-review.json'}
+    if set(documents) != names:
+        raise ImplementationError('Invalid reviewed-case package')
+    # Serialize before creating anything. The executor loads each input with
+    # a 64 KiB limit, so compact encoding prevents avoidable whitespace growth.
+    payloads = {name: json.dumps(value, separators=(',', ':'), allow_nan=False).encode('utf-8')
+                for name, value in documents.items()}
+    if any(len(value) > 65536 for value in payloads.values()):
+        raise ImplementationError('Prepared case or configuration exceeds the executor input limit')
+    root = Path(path)
+    root.mkdir(mode=0o700)
+    written = []
+    try:
+        # Review last: an incomplete package never contains its review receipt.
+        for name in ('case.json', 'plan.json', 'bindings.json', 'customer-intent.json', 'preparation-review.json'):
+            target = root / name
+            descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            written.append(target)
+            with os.fdopen(descriptor, 'wb') as stream:
+                stream.write(payloads[name])
+    except BaseException:
+        for target in reversed(written):
+            try:
+                target.unlink()
+            except OSError:
+                pass
+        try:
+            root.rmdir()
+        except OSError:
+            pass
+        raise
+
+
+def write_execution_queue(path, packets, manifest):
+    """Materialize an all-or-nothing local queue with a final review receipt."""
+    root = Path(path)
+    root.mkdir(mode=0o700)
+    created = []
+    try:
+        for case_id, packet in packets.items():
+            if not re.fullmatch(r'case_[0-9]{1,4}', case_id):
+                raise ImplementationError('Invalid queue case ID')
+            folder = root / case_id
+            write_reviewed_case_directory(folder, packet)
+            created.append(folder)
+        payload = json.dumps(manifest, separators=(',', ':'), allow_nan=False).encode('utf-8')
+        if len(payload) > 65536:
+            raise ImplementationError('Queue receipt exceeds its size limit')
+        receipt = root / 'queue-review.json'
+        fd = os.open(receipt, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(payload)
+        except BaseException:
+            receipt.unlink(missing_ok=True)
+            raise
+    except BaseException:
+        for folder in reversed(created):
+            for name in ('case.json', 'plan.json', 'bindings.json', 'customer-intent.json', 'preparation-review.json'):
+                try:
+                    (folder / name).unlink()
+                except OSError:
+                    pass
+            try:
+                folder.rmdir()
+            except OSError:
+                pass
+        try:
+            root.rmdir()
+        except OSError:
+            pass
+        raise
+
+
 def write_new(path, value, *, limit=262144):
     payload=json.dumps(value,indent=2,allow_nan=False).encode('utf-8')
     if len(payload)>limit:
@@ -266,12 +1005,113 @@ def main():
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--inspect-tools',action='store_true')
     mode.add_argument('--propose-bindings',action='store_true')
+    mode.add_argument('--prepare-execution-queue',action='store_true',help='Prepare multiple explicitly selected cases from an exact batch review')
+    mode.add_argument('--prepare-batch-selection',action='store_true',help='Prepare one explicitly selected route from an exact recomputed batch review')
+    mode.add_argument('--shortlist-case-batch',action='store_true',help='Triage selected local cases against reviewed routes offline')
+    mode.add_argument('--shortlist-reviewed-routes',action='store_true',help='Compare reviewed route alternatives for a selected new case offline')
+    mode.add_argument('--prepare-reviewed-case',action='store_true',help='Materialize one reviewed route as local executor inputs and disabled intent')
+    mode.add_argument('--audit-bindings',action='store_true',help='Offline reviewed-case binding contract audit')
     parser.add_argument('--tool-server-url');parser.add_argument('--catalog');parser.add_argument('--case');parser.add_argument('--model')
-    parser.add_argument('--output',required=True,help='New output JSON file; existing files are never overwritten')
+    parser.add_argument('--cases');parser.add_argument('--bindings')
+    parser.add_argument('--queue-selection',help='Explicit case IDs and reviewed route digests for queue preparation')
+    parser.add_argument('--batch-review',help='Saved batch shortlist report for exact recomputation')
+    parser.add_argument('--route-sha256',help='Exact selected route digest from the batch review')
+    parser.add_argument('--case-batch',help='Explicitly authorized local case batch for offline triage')
+    parser.add_argument('--case-id');parser.add_argument('--alternative',type=int)
+    parser.add_argument('--new-case',help='Optional new authorized local case to prepare using the explicitly selected reviewed route; requires separate case-specific review')
+    parser.add_argument('--confirm-retain-case-inputs',action='store_true',help='Explicitly retain selected case values and bindings in a new local directory')
+    parser.add_argument('--baseline-bindings',help='Compare an earlier binding configuration against --bindings on the same reviewed suite')
+    parser.add_argument('--previous-catalog',help='Optional older inspected catalog for mapped contract drift review')
+    parser.add_argument('--output',required=True,help='New output JSON file, or new directory for --prepare-reviewed-case; existing paths are never overwritten')
     args = parser.parse_args()
     if Path(args.output).exists():
         raise ImplementationError('Choose a new output file; existing configuration is never overwritten')
     spec = load_object(Path(__file__).parent/'workflow.spec.json',limit=262144)
+    if args.previous_catalog and not args.audit_bindings:
+        parser.error('--previous-catalog requires --audit-bindings')
+    if args.baseline_bindings and (not args.audit_bindings or args.previous_catalog):
+        parser.error('--baseline-bindings requires --audit-bindings without --previous-catalog')
+    if not (args.prepare_reviewed_case or args.prepare_batch_selection or args.prepare_execution_queue) and (args.case_id is not None or args.alternative is not None or args.new_case is not None or args.confirm_retain_case_inputs):
+        parser.error('Case selection and retention confirmation require --prepare-reviewed-case')
+    if args.case_batch and not (args.shortlist_case_batch or args.prepare_batch_selection or args.prepare_execution_queue):
+        parser.error('--case-batch requires batch triage or batch preparation')
+    if not (args.prepare_batch_selection or args.prepare_execution_queue) and (args.batch_review is not None or args.route_sha256 is not None):
+        parser.error('Batch review and route digest require --prepare-batch-selection')
+    if args.queue_selection is not None and not args.prepare_execution_queue:
+        parser.error('--queue-selection requires --prepare-execution-queue')
+    if args.prepare_execution_queue:
+        if (not all((args.cases,args.bindings,args.case_batch,args.batch_review,args.queue_selection,args.confirm_retain_case_inputs))
+                or any((args.catalog,args.case,args.model,args.tool_server_url,args.new_case,args.case_id,args.route_sha256))
+                or args.alternative is not None):
+            parser.error('Choose exact batch review, explicit queue selection and local retention confirmation')
+        packets, manifest = prepare_execution_queue(spec,load_object(args.cases,limit=262144),
+            load_object(args.bindings),load_object(args.case_batch,limit=262144),
+            load_object(args.batch_review,limit=2*1024*1024),load_object(args.queue_selection))
+        write_execution_queue(args.output,packets,manifest)
+        return {'mode':'offline_execution_queue_preparation','output_written':True,
+                'case_count':manifest['case_count'],'queue_sha256':digest(manifest),'review_required':True,
+                'execution_authorized':False,'business_tools_called':False}
+    if args.prepare_batch_selection:
+        if (not all((args.cases,args.bindings,args.case_batch,args.batch_review,args.case_id,
+                     args.route_sha256,args.confirm_retain_case_inputs))
+                or any((args.catalog,args.case,args.model,args.tool_server_url,args.new_case))
+                or args.alternative is not None):
+            parser.error('Choose an exact batch review, case ID, route digest and explicit local input retention')
+        documents = prepare_batch_selection(spec,load_object(args.cases,limit=262144),
+                    load_object(args.bindings),load_object(args.case_batch,limit=262144),
+                    load_object(args.batch_review,limit=2*1024*1024),args.case_id,args.route_sha256)
+        write_reviewed_case_directory(args.output,documents)
+        return {'mode':'offline_batch_case_preparation','output_written':True,
+                'batch_review_recomputed':True,'review_required':True,
+                'execution_authorized':False,'business_tools_called':False}
+    if args.shortlist_case_batch:
+        if not all((args.cases,args.bindings,args.case_batch)) or any((args.catalog,args.case,args.model,args.tool_server_url)):
+            parser.error('Choose a reviewed suite, bindings and a selected local case batch')
+        report = shortlist_case_batch(spec,load_object(args.cases,limit=262144),
+                    load_object(args.bindings),load_object(args.case_batch,limit=262144))
+        write_new(args.output,report,limit=2*1024*1024)
+        return {'mode':'offline_reviewed_route_batch','output_written':True,
+                'selected_case_count':report['selected_case_count'],'status_counts':report['status_counts'],
+                'review_required':True,'execution_authorized':False,'business_tools_called':False}
+    if args.shortlist_reviewed_routes:
+        if not all((args.cases,args.bindings,args.case)) or any((args.catalog,args.model,args.tool_server_url)):
+            parser.error('Choose a reviewed suite, bindings and a selected local case for route shortlisting')
+        report = shortlist_reviewed_routes(spec, load_object(args.cases,limit=262144),
+                     load_object(args.bindings), load_object(args.case))
+        write_new(args.output,report,limit=2*1024*1024)
+        return {'mode':'offline_reviewed_route_shortlist','output_written':True,
+                'status':report['status'],'review_required':True,
+                'execution_authorized':False,'business_tools_called':False}
+    if args.prepare_reviewed_case:
+        if (not all((args.cases, args.bindings, args.case_id, args.confirm_retain_case_inputs))
+                or args.alternative is None or any((args.catalog, args.case, args.model, args.tool_server_url))):
+            parser.error('Choose reviewed cases, bindings, case ID, route alternative and explicit local input retention')
+        documents = prepare_reviewed_case(spec, load_object(args.cases,limit=262144),
+                    load_object(args.bindings), args.case_id, args.alternative,
+                    new_case=load_object(args.new_case) if args.new_case is not None else None)
+        write_reviewed_case_directory(args.output, documents)
+        review = documents['preparation-review.json']
+        return {'mode':'offline_reviewed_case_preparation','output_written':True,
+                'offline_requirements_clear':review['offline_requirements_clear'],
+                'route_reused_for_new_case':review['route_reused_for_new_case'],
+                'review_required':True,'execution_authorized':False,'business_tools_called':False}
+    if args.audit_bindings:
+        if not all((args.catalog, args.cases, args.bindings)) or any((args.model, args.case, args.tool_server_url)):
+            raise ImplementationError('Choose only a saved inspected catalog, reviewed case suite and bindings for offline audit')
+        if args.baseline_bindings:
+            result = compare_binding_configurations(spec, load_object(args.catalog,limit=262144),
+                load_object(args.cases,limit=262144), load_object(args.baseline_bindings,limit=262144),
+                load_object(args.bindings,limit=262144))
+            write_new(args.output,result,limit=2*1024*1024)
+            return {'mode':'offline_binding_audit','output_written':True,'review_required':result['review_required'],
+                    'business_tools_called':False,'execution_authorized':False}
+        result = audit_bindings(spec, load_object(args.catalog, limit=262144),
+                                load_object(args.cases, limit=262144), load_object(args.bindings),
+                                previous_catalog=load_object(args.previous_catalog,limit=262144) if args.previous_catalog else None)
+        write_new(args.output, result, limit=2*1024*1024)
+        return {'mode':'offline_binding_audit','output_written':True,
+                'review_required':result['review_required'],
+                'business_tools_called':False,'execution_authorized':False}
     if args.inspect_tools:
         result = asyncio.run(inspect_tools(spec,args.tool_server_url))
     else:
@@ -284,6 +1124,10 @@ def main():
 
 
 if __name__=='__main__':
-    try:print(json.dumps(main(),indent=2))
+    try:
+        result = main()
+        print(json.dumps(result,indent=2))
+        if result.get('mode') == 'offline_binding_audit' and result['review_required']:
+            raise SystemExit(2)
     except ImplementationError as exc:raise SystemExit(str(exc)) from None
     except Exception:raise SystemExit('Tool configuration stopped. Review the exact specification, catalog, selected case and credentials; no execution was approved.') from None

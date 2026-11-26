@@ -104,6 +104,122 @@ def test_stale_and_reviewed_alerts_are_suppressed_before_any_http(isolated, stat
     assert called == []
 
 
+def test_partial_stale_group_preserves_current_alerts_without_reusing_body_identity(isolated):
+    make()
+    notices.queue_current(LOG)
+    before = notices._read()["channels"][LOG]["pending"][0]
+    isolated[0]["status"] = "acknowledged"
+    isolated[0]["requires_review"] = False
+    called = []
+    result = notices.deliver_due(transport=lambda *args: called.append(args) or 200)
+    assert result["surviving_states_requeued"] == 1
+    assert not result["previous_delivery_may_have_arrived"]
+    assert not called
+    after = notices._read()["channels"][LOG]["pending"][0]
+    assert after["notification_id"] != before["notification_id"]
+    assert after["states"] == before["states"][1:]
+    assert notices.queue_current(LOG)["queued"] == 0
+    assert notices.deliver_due(transport=lambda *args: called.append(args) or 200)["sent"] == 1
+    assert json.loads(called[0][1])["unreviewed_signal_states"] == 1
+    assert notices.status(LOG)["pending_notifications"] == 0
+
+
+def test_partial_reconciliation_after_ambiguous_attempt_uses_new_id(isolated):
+    make()
+    notices.queue_current(LOG)
+    sent = []
+    assert notices.deliver_due(transport=lambda *args: sent.append(args) or 503)["retry_pending"]
+    previous = notices._read()["channels"][LOG]["pending"][0]
+    isolated[0]["requires_review"] = False
+    now = previous["next_attempt_epoch"] + 1
+    result = notices.deliver_due(now=now, transport=lambda *args: sent.append(args) or 204)
+    assert result["previous_delivery_may_have_arrived"]
+    assert len(sent) == 1
+    assert notices.deliver_due(now=now, transport=lambda *args: sent.append(args) or 204)["sent"] == 1
+    assert sent[0][2]["X-OWG-Notification-ID"] != sent[1][2]["X-OWG-Notification-ID"]
+    assert [json.loads(row[1])["unreviewed_signal_states"] for row in sent] == [2, 1]
+
+
+def test_unavailable_preflight_preserves_group_and_backoff_without_network(isolated, monkeypatch):
+    make()
+    notices.queue_current(LOG)
+    first = notices._read()["channels"][LOG]["pending"][0]
+    previous = inbox.list_inbox
+    def unavailable(_):
+        raise OSError("PRIVATE_DATABASE_ERROR")
+    monkeypatch.setattr(inbox, "list_inbox", unavailable)
+    now = first["next_attempt_epoch"] + 1
+    called = []
+    assert notices.deliver_due(now=now, transport=lambda *a: called.append(a))["deferred_preflight_unavailable"]
+    after = notices._read()["channels"][LOG]["pending"][0]
+    assert after["notification_id"] == first["notification_id"]
+    assert after["states"] == first["states"]
+    assert after["attempts"] == 0
+    assert after["next_attempt_epoch"] == now + notices.PREFLIGHT_RETRY_SECONDS
+    assert not called
+    assert "PRIVATE_DATABASE_ERROR" not in json.dumps(notices.status(LOG))
+    monkeypatch.setattr(inbox, "list_inbox", previous)
+    assert notices.deliver_due(now=after["next_attempt_epoch"], transport=lambda *_: 204)["sent"] == 1
+
+
+@pytest.mark.parametrize("blocked", ["quiet", "unavailable"])
+def test_oldest_blocked_channel_does_not_starve_another_log(isolated, monkeypatch, blocked):
+    other = "log_" + "b"*16
+    monkeypatch.setattr(scheduler, "scheduled", lambda kind, target: True)
+    monkeypatch.setattr(scheduler, "status", lambda: {"schedules": [
+        {"kind":"event_log_signals","target_id":key,"enabled":True} for key in (LOG,other)]})
+    make()
+    notices.configure(other, "https://example.com/other", confirm_external_delivery=True, confirm_counts_only=True)
+    notices.queue_current(LOG)
+    notices.queue_current(other)
+    if blocked == "quiet":
+        monkeypatch.setattr(notices, "_delivery_quiet", lambda key, _: key == LOG)
+    else:
+        original = inbox.list_inbox
+        def inspect(key):
+            if key == LOG:
+                raise OSError("unavailable")
+            return original(key)
+        monkeypatch.setattr(inbox, "list_inbox", inspect)
+    calls = []
+    assert notices.deliver_due(transport=lambda *args: calls.append(args) or 204)["sent"] == 1
+    assert calls[0][0] == "https://example.com/other"
+    assert notices.status(LOG)["pending_notifications"] == 1
+    assert notices.status(other)["pending_notifications"] == 0
+
+
+def test_attempt_is_durable_before_transport_and_process_interruption_retries_same_identity(isolated):
+    make()
+    notices.queue_current(LOG)
+    first = notices._read()["channels"][LOG]["pending"][0]
+    calls = []
+    def interrupted(url, body, headers):
+        pending = notices._read()["channels"][LOG]["pending"][0]
+        assert pending["attempts"] == 1
+        assert pending["next_attempt_epoch"] > first["next_attempt_epoch"]
+        calls.append((body, headers))
+        raise KeyboardInterrupt()
+    with pytest.raises(KeyboardInterrupt):
+        notices.deliver_due(now=first["next_attempt_epoch"]+1, transport=interrupted)
+    pending = notices._read()["channels"][LOG]["pending"][0]
+    assert pending["notification_id"] == first["notification_id"]
+    assert notices.status(LOG)["consecutive_failures"] == 1
+    assert notices.deliver_due(now=pending["next_attempt_epoch"]-1, transport=lambda *_: 200)["attempted"] == 0
+    assert notices.deliver_due(now=pending["next_attempt_epoch"], transport=lambda u,b,h: calls.append((b,h)) or 204)["sent"] == 1
+    assert calls[0] == calls[1]
+    assert notices.status(LOG)["consecutive_failures"] == 0
+
+
+def test_bounded_ledger_write_refusal_does_not_replace_last_valid_state(isolated, monkeypatch):
+    make()
+    baseline = notices._path().read_bytes()
+    monkeypatch.setattr(notices, "MAX_LEDGER_BYTES", len(baseline)+10)
+    with pytest.raises(notices.DeliveryError, match="capacity"):
+        notices.queue_current(LOG)
+    assert notices._path().read_bytes() == baseline
+    assert notices.status(LOG)["pending_notifications"] == 0
+
+
 def test_changed_state_after_success_queues_once_and_requires_fresh_review(isolated):
     make()
     notices.queue_current(LOG)
@@ -252,6 +368,13 @@ with TestClient(app) as client:
     assert client.post(path,json={'receiver_url':'https://example.com/hooks'},headers=owner).status_code==422
     assert client.post(path+'/remove',json={'confirm_remove':False},headers=owner).status_code==403
     assert client.post(path+'/resume',json={'confirm_external_delivery':False},headers=owner).status_code==409
+    assert client.post(path+'/pause',json={'expected_channel_id':'ndl_missing'},headers=bearer).status_code in (401,403)
+    assert client.post(path+'/pause',json={},headers=owner).status_code==422
+    assert client.post(path+'/pause',json={'expected_channel_id':'ndl_missing'},headers=owner).status_code==409
+    pins={'expected_channel_id':'ndl_missing','notification_id':'ntf_missing','expected_queue_sha256':'0'*64}
+    assert client.post(path+'/dismiss',json={**pins,'confirm_dismiss':True},headers=bearer).status_code in (401,403)
+    assert client.post(path+'/dismiss',json={**pins,'confirm_dismiss':False},headers=owner).status_code==403
+    assert client.post(path+'/dismiss',json={**pins,'confirm_dismiss':True},headers=owner).status_code==409
 """
     env = os.environ.copy()
     env.update({"WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"),
@@ -261,3 +384,89 @@ with TestClient(app) as client:
         cwd=Path(__file__).resolve().parents[1], env=env,
         capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+
+def test_manual_pause_keeps_queue_and_does_not_send_or_queue(isolated):
+    channel=make()
+    notices.queue_current(LOG)
+    pending=notices.status(LOG)["pending_groups"]
+    paused=notices.pause(LOG,expected_channel_id=channel["channel_id"])
+    assert paused["pending_groups"]==pending
+    assert not paused["enabled"] and paused["paused_reason"]=="owner_paused_delivery"
+    assert notices.queue_current(LOG)["queued"]==0
+    assert notices.deliver_due(transport=lambda *_: pytest.fail("paused send"))["attempted"]==0
+    assert notices.resume(LOG,confirm_external_delivery=True,
+                          expected_channel_id=channel["channel_id"])["enabled"]
+    assert notices.deliver_due(transport=lambda *_: 204)["sent"]==1
+
+
+def test_dismiss_pinned_group_never_claims_delivery_or_reviews_signals(isolated):
+    channel=make()
+    notices.queue_current(LOG)
+    group=notices.status(LOG)["pending_groups"][0]
+    kwargs={"expected_channel_id":channel["channel_id"],"notification_id":group["notification_id"],
+            "expected_queue_sha256":group["expected_queue_sha256"],"confirm_dismiss":True}
+    with pytest.raises(notices.DeliveryError,match="pause"):
+        notices.dismiss(LOG,**kwargs)
+    notices.pause(LOG,expected_channel_id=channel["channel_id"])
+    with pytest.raises(notices.DeliveryError,match="explicit"):
+        notices.dismiss(LOG,**{**kwargs,"confirm_dismiss":1})
+    result=notices.dismiss(LOG,**kwargs)
+    assert result["dismissed_states"]==2 and not result["signal_review_changed"]
+    assert result["pending_notifications"]==result["delivered_notifications"]==0
+    assert result["dismissed_state_keys"]==2
+    assert all(r["status"]=="unreviewed" for r in isolated)
+    with pytest.raises(notices.DeliveryError,match="changed"):
+        notices.dismiss(LOG,**kwargs)
+    notices.resume(LOG,confirm_external_delivery=True)
+    assert notices.queue_current(LOG)["queued"]==0
+    isolated[0]["state_fingerprint"]="c"*64
+    assert notices.queue_current(LOG)["queued"]==1
+    assert notices.deliver_due(transport=lambda *_: 204)["sent"]==1
+
+
+def test_queue_pins_detect_attempt_and_channel_changes(isolated):
+    channel=make()
+    notices.queue_current(LOG)
+    old=notices.status(LOG)["pending_groups"][0]
+    assert notices.deliver_due(transport=lambda *_: 503)["retry_pending"]
+    new=notices.pause(LOG,expected_channel_id=channel["channel_id"])["pending_groups"][0]
+    assert new["notification_id"]==old["notification_id"]
+    assert new["expected_queue_sha256"]!=old["expected_queue_sha256"]
+    assert new["previous_delivery_may_have_arrived"]
+    kwargs={"expected_channel_id":channel["channel_id"],"notification_id":old["notification_id"],
+            "expected_queue_sha256":old["expected_queue_sha256"],"confirm_dismiss":True}
+    with pytest.raises(notices.DeliveryError,match="changed"):
+        notices.dismiss(LOG,**kwargs)
+    result=notices.dismiss(LOG,**{**kwargs,"expected_queue_sha256":new["expected_queue_sha256"]})
+    assert result["previous_delivery_may_have_arrived"]
+    notices.remove(LOG); replacement=make()
+    assert replacement["channel_id"]!=channel["channel_id"]
+    for action,extra in [(notices.pause,{}),(notices.resume,{"confirm_external_delivery":True})]:
+        with pytest.raises(notices.DeliveryError,match="changed"):
+            action(LOG,expected_channel_id=channel["channel_id"],**extra)
+    assert notices.status(LOG)["enabled"]
+
+
+def test_dismissal_capacity_refuses_atomically_without_eviction(isolated,monkeypatch):
+    channel=make();notices.queue_current(LOG)
+    group=notices.pause(LOG,expected_channel_id=channel["channel_id"])["pending_groups"][0]
+    baseline=notices._path().read_bytes()
+    monkeypatch.setattr(notices,"MAX_DISMISSED",1)
+    with pytest.raises(notices.DeliveryError,match="capacity"):
+        notices.dismiss(LOG,expected_channel_id=channel["channel_id"],
+                        notification_id=group["notification_id"],
+                        expected_queue_sha256=group["expected_queue_sha256"],confirm_dismiss=True)
+    assert notices._path().read_bytes()==baseline
+
+
+def test_pending_queue_summary_contains_no_rule_or_state_details(isolated):
+    channel=make();notices.queue_current(LOG)
+    response=notices.status(LOG)
+    assert len(response["pending_groups"])==1
+    group=response["pending_groups"][0]
+    assert set(group)=={"notification_id","expected_queue_sha256","created_at","next_attempt_at",
+                       "attempts","unreviewed_signal_states_at_queue","previous_delivery_may_have_arrived"}
+    raw=json.dumps(response)
+    assert not any(x in raw for x in (STATE_A,STATE_B,"sig_","private-customer-name",
+                                      URL,channel["notification_secret"]))
