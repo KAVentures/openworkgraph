@@ -1392,6 +1392,7 @@
         }else{
           output.append(el('p',result.monitor_id+' · '+result.checkpoint_count+' checkpoints / '+result.entry_count+' audit entries'),
             el('p','Current head: '+result.head_sha256),
+            el('p','Ordinary audit entries remaining: '+result.ordinary_entries_remaining+' · reserved disable entries: '+result.reserved_disable_entries),
             el('p',result.eligible_for_continued_monitoring_review?'Eligible for separate continuation review.':'Retained evidence blocks continuation or remains incomplete.'),
             el('p','Rollback referral previously recorded: '+(result.rollback_referral_recorded?'yes':'no')),
             el('p','Sticky rollback triggers: '+(result.sticky_rollback_triggers.map(x=>(x.window_id||'cumulative')+': '+x.reason).join(' · ')||'none recorded')),

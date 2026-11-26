@@ -84,3 +84,5 @@ artifacts, not authenticated production execution, actual traffic assignment,
 customer identity, independent approval or real-world causal improvement.
 
 After a passing pilot and separate expansion referral, see [multi-window monitoring](AGENT_PROCUREMENT_ROUTER_MONITOR.md) for a finite cumulative schedule and retained checkpoint comparisons.
+
+Positive expansion and subsequent monitor continuation require resolved business outcomes and explicit fallback observations for every enrolled case, independently of the configurable aggregate success and fallback rate thresholds. A terminal completed attempt with an unresolved or absent outcome remains insufficient. These are completeness requirements for declared evidence, not independent outcome verification.

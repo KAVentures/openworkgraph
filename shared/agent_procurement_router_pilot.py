@@ -293,6 +293,8 @@ def _review_verified(plan,captures):
         categories.append({"category":cat,"incumbent":a,"challenger":b,**_comparison(a,b,req.policy)})
     checks={"window_closed":"pass" if ledger.as_of_ms>=req.window_end_exclusive_ms else "unknown",
         "all_cases_terminal":"pass" if all(r["status"] in ("completed","failed") for r in rows) else "unknown",
+        "all_business_outcomes_resolved":"pass" if all(r["status"] in ("completed","failed") and r["declared_business_outcome"] in ("success","failure") for r in rows) else "unknown",
+        "all_fallback_measurements_resolved":"pass" if all(r["fallback"]["lower"]==r["fallback"]["upper"] for r in rows) else "unknown",
         "all_version_attribution":_combine([r["attribution"] for r in rows]),
         "all_category_comparisons":_combine([x["status"] for x in categories])}
     immediate=[]

@@ -140,3 +140,22 @@ def test_decision_pins_and_reviewer_separation(pilot):
     with pytest.raises(ValueError):decide(*pilot,req)
     req=receipt_request(result);req["expected_report_sha256"]="f"*64
     with pytest.raises(ValueError):decide(*pilot,req)
+
+
+def test_resolved_outcomes_and_fallback_required_even_with_permissive_rates(pilot):
+    from shared.agent_procurement_router_pilot import _review_verified
+    packet,u,p,c=pilot
+    p=deepcopy(p)
+    # Exercise exact observation review with a permissive frozen policy, so
+    # aggregate rate gates alone do not rule out an unknown business outcome.
+    p["request"]["policy"].update(minimum_challenger_success_basis_points=0,
+        minimum_success_change_basis_points=-10000,maximum_challenger_fallback_basis_points=10000)
+    assert _review_verified(p,c)["eligible_for_expanded_pilot_review"]
+    for field in ("business_outcome","used_fallback"):
+        modified=deepcopy(c)
+        modified["observations"][0][field]=None
+        result=_review_verified(p,modified)
+        assert result["checks"]["all_cases_terminal"]=="pass"
+        assert result["checks"]["all_business_outcomes_resolved" if field=="business_outcome" else "all_fallback_measurements_resolved"]=="unknown"
+        assert not result["eligible_for_expanded_pilot_review"]
+        assert result["recommended_review"]=="hold"
