@@ -10,6 +10,7 @@ from typing import Any
 
 from . import event_log_domain_pack_benchmark as benchmark
 from . import event_log_domain_packs as packs
+from . import event_log_domain_pack_population as population
 from . import event_log_compliance as compliance
 from . import event_log_workspace as workspace
 from . import event_log_activity_mappings as mappings
@@ -85,6 +86,7 @@ def _basis(log_id, pack_id, kind, indices):
                  "version": record["version"], "installation_token": packs._installation_token(record),
                  "definitions_sha256": record["definitions_sha256"], "case_type": kind,
                  "rules": [{"index": i, "rule": choices[i]["rule"]} for i in indices],
+                 "population": population.counts(conn, log_id, kind),
                  "source_rows": rows, "source_sha256": provenance.source_digest(conn, log_id),
                  "source_fingerprint_basis": "stored_events_objects_and_event_object_links"}
         return basis
@@ -122,6 +124,7 @@ def available(log_id, pack_id):
 def _materialize(conn, basis):
     compliance.positions(conn)
     n = conn.execute("SELECT count(DISTINCT case_id) FROM cp").fetchone()[0]
+    population.require_count(basis["population"], n)
     if n * len(basis["rules"]) > MAX_OUTCOME_ROWS:
         _fail("Selected rule/case population exceeds the complete outcome-row budget")
     conn.execute("CREATE OR REPLACE TEMP TABLE ov AS SELECT DISTINCT case_id, 0::BIGINT AS violated, 0::BIGINT AS unknown, 0::BIGINT AS activated FROM cp")

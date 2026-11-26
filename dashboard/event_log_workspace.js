@@ -4921,6 +4921,12 @@
     return panel;
   }
 
+  function domainPackPopulationLine(p){
+    return el('p',p.case_type+': '+p.projected_cases+' of '+p.retained_objects+
+      ' retained objects have linked events and are evaluated; '+p.objects_without_linked_events+
+      ' without linked events are excluded, not counted as passes. Source completeness is not verified.','muted');
+  }
+
   function domainPackDeadlinePanel(current,logId){
     const panel=el('details');panel.id='owgDomainPackDeadlineSensitivity';
     const load=button('Load installed packs','secondary');
@@ -4999,6 +5005,7 @@
         };
         evidence.onclick=()=>page(null);more.onclick=()=>page(cursor);
         out.replaceChildren(el('h4','Deadline sensitivity ('+basis.parameter_unit+')'),
+          ...Object.values(basis.case_populations).map(domainPackPopulationLine),
           el('p','Fixed source digest: '+basis.source_sha256,'muted'),
           table(['Rule','Object type','Deadline','Activated','Missing response','Late complete','Violating','Newly satisfied','Newly violating'],rows),
           ...result.rules.map(r=>el('p','Rule '+(r.rule_index+1)+': every '+r.rule.a+' followed by '+r.rule.b+' within the selected deadline.','muted')),
@@ -5215,6 +5222,7 @@
         };
         inspect.onclick=()=>page(null);more.onclick=()=>page(cursor);
         out.replaceChildren(el('h4','Unique affected cases'),
+          domainPackPopulationLine(r.basis.population),
           el('p',r.unique_cases_with_confirmed_violation+' confirmed affected cases; up to '+r.unique_cases_with_confirmed_or_unknown_violation+' including unknowns, out of '+r.cases+' projected cases. '+r.rule_violation_instances+' rule-violation instances (not unique cases).'),
           table(['Confirmed violated rules per case','Cases'],r.confirmed_violation_count_histogram.map(h=>[h.violated_rule_count,h.cases])),
           el('h4','Rule outcomes'),table(['Rule','Activated','Confirmed violations','Unknown','Satisfied','Nonactivated'],r.rules.map(x=>[label(x.rule_index),x.activated,x.violated,x.unknown,x.satisfied,x.nonactivated])),
@@ -5292,6 +5300,7 @@
           (body.expected_basis_sha256&&r.basis_sha256!==body.expected_basis_sha256))throw new Error('Reviewed basis changed.');
         report=r;
         out.replaceChildren(el('h4','Priority worklist'),
+          domainPackPopulationLine(r.basis.population),
           el('p',r.cases_evaluated+' evaluated · '+r.confirmed_threshold_cases+' confirmed above threshold · '+r.uncertain_threshold_cases+' uncertain · '+r.below_threshold_cases+' below threshold.'),
           el('p',r.matching_cases+' matching cases; '+r.cases.length+' on this page. Export contains this page only.','muted'),
           table(['Case','Confirmed points','Possible points','Status','Violated rules','Unknown rules'],r.cases.map(c=>[

@@ -10,6 +10,7 @@ from typing import Any
 
 from . import event_log_domain_pack_benchmark as benchmark
 from . import event_log_domain_packs as packs
+from . import event_log_domain_pack_population as population
 from . import event_log_workspace as workspace
 from . import event_log_compliance as compliance
 from . import event_log_activity_mappings as mappings
@@ -136,7 +137,9 @@ def _prepare(log_id, pack_id, name, values):
                  "alternatives": alternatives, "source_rows": rows,
                  "source_sha256": provenance.source_digest(conn, log_id),
                  "source_fingerprint_basis": "stored_events_objects_and_event_object_links",
-                 "omitted_rules": omitted_rules}
+                 "omitted_rules": omitted_rules,
+                 "case_populations": {kind: population.counts(conn, log_id, kind)
+                                      for kind in sorted({item["case_type"] for _, item in affected})}}
         return basis, affected
     finally:
         conn.close()
@@ -221,22 +224,27 @@ def review(log_id, pack_id, spec):
                 rule = item["rule"]
                 def run(conn):
                     _profile(conn, rule["a"], rule["b"])
+                    population.require_count(basis["case_populations"][item["case_type"]],
+                                             conn.execute("SELECT count(*) FROM deadline_profile").fetchone()[0])
                     return {"page": _page(conn, baseline, row["seconds"], evidence)}
                 page = workspace._query(log_id, item["case_type"], run)["page"]
                 return {"format": FORMAT, "basis_sha256": pin, "rule_index": index,
                         "value": row["value"], "seconds": row["seconds"], **page,
+                        "population": basis["case_populations"][item["case_type"]],
                         "resource_names_returned": False, "execution_authorized": False}
             results = []
             for index, item in rules:
                 rule = item["rule"]
                 def run(conn):
                     _profile(conn, rule["a"], rule["b"])
+                    population.require_count(basis["case_populations"][item["case_type"]],
+                                             conn.execute("SELECT count(*) FROM deadline_profile").fetchone()[0])
                     return {"baseline": _counts(conn, baseline, baseline),
                             "alternatives": [{**row, **_counts(conn, baseline, row["seconds"])}
                                              for row in basis["alternatives"]]}
                 output = workspace._query(log_id, item["case_type"], run)
                 results.append({"rule_index": index, "case_type": item["case_type"],
-                                "rule": rule, "baseline": output["baseline"],
+                                "rule": rule, "population": basis["case_populations"][item["case_type"]], "baseline": output["baseline"],
                                 "alternatives": output["alternatives"]})
             return {"format": FORMAT, "basis": basis, "basis_sha256": pin, "rules": results,
                     "configuration_modified": False, "source_system_validated": False,

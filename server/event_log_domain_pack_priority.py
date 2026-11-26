@@ -10,6 +10,7 @@ from typing import Any
 
 from . import event_log_domain_pack_benchmark as benchmark
 from . import event_log_domain_packs as packs
+from . import event_log_domain_pack_population as population
 from . import event_log_workspace as workspace
 from . import event_log_compliance as compliance
 from . import event_log_activity_mappings as mappings
@@ -114,6 +115,7 @@ def _basis(log_id, pack_id, kind, weights, spec):
                 "definitions_sha256":record["definitions_sha256"], "case_type":kind,
                 "rules":[{**x,"rule":rules[x["rule_index"]]} for x in weights],
                 "minimum_confirmed":spec["minimum_confirmed"],"include_uncertain":spec["include_uncertain"],
+                "population":population.counts(conn,log_id,kind),
                 "source_rows":rows,"source_sha256":provenance.source_digest(conn, log_id)}
     finally:
         conn.close()
@@ -122,6 +124,7 @@ def _basis(log_id, pack_id, kind, weights, spec):
 def _materialize(conn, basis):
     compliance.positions(conn)
     n = conn.execute("SELECT count(DISTINCT case_id) FROM cp").fetchone()[0]
+    population.require_count(basis["population"], n)
     if n*len(basis["rules"]) > MAX_OUTCOMES:
         _fail("Case-rule population exceeds the complete priority outcome budget")
     conn.execute("""CREATE OR REPLACE TEMP TABLE priority_cases AS
