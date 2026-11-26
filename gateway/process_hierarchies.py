@@ -176,3 +176,23 @@ class ProcessHierarchies:
         self.db.audit(organization_id=p.organization_id,principal_id=p.audit_id,action='process.hierarchy.inventory.read',details={'returned':len(items)})
         return {'maps':items,'has_more':len(rows)>limit,'next_after':rows[limit-1][0] if len(rows)>limit else None,
             'filter_scope':'loaded_page_only','execution_authorized':False}
+
+    def compare(self,p,workflow_id,body):
+        from shared.process_hierarchy_comparison import compare
+        with self.reading(p) as c:
+            self.store._meta(c,p,workflow_id)
+            items=[self.get(c,p,workflow_id,pin.revision) for pin in (body.baseline,body.candidate)]
+            if any(item is None for item in items):
+                raise Error('Selected repository map revision not found',404)
+            if any(item['content_sha256']!=pin.expected_content_sha256
+                   for item,pin in zip(items,(body.baseline,body.candidate))):
+                raise Error('Selected map digest changed; reopen both revisions',409)
+            result=compare(*items)
+            result['report_sha256']=content_digest(result)
+        self.db.audit(organization_id=p.organization_id,principal_id=p.audit_id,
+            action='process.hierarchy.compared',details={'workflow_id':workflow_id,
+                'baseline_revision':body.baseline.revision,'candidate_revision':body.candidate.revision,
+                'baseline_sha256':body.baseline.expected_content_sha256,
+                'candidate_sha256':body.candidate.expected_content_sha256,
+                'report_sha256':result['report_sha256'],'counts':result['counts']})
+        return result

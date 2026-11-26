@@ -69,3 +69,165 @@ def test_geometry_rejects_unknown_endpoints_instead_of_drawing_invented_nodes():
     ET.SubElement(process,'{'+MODEL+'}sequenceFlow',{'id':'flow','sourceRef':'known','targetRef':'missing'})
     with pytest.raises(ValueError,match='existing activities'):
         add_process_diagram(root,process,entry_id='known')
+
+
+def _diagram_fixture(nodes, flows, lanes=None):
+    root=ET.Element('{'+MODEL+'}definitions')
+    process=ET.SubElement(root,'{'+MODEL+'}process',{'id':'p','isExecutable':'false'})
+    if lanes:
+        lane_set=ET.SubElement(process,'{'+MODEL+'}laneSet',{'id':'lanes'})
+        for index,members in enumerate(lanes):
+            lane=ET.SubElement(lane_set,'{'+MODEL+'}lane',{'id':f'lane_{index}'})
+            for member in members:
+                ET.SubElement(lane,'{'+MODEL+'}flowNodeRef').text=member
+    for name,kind in nodes:
+        ET.SubElement(process,'{'+MODEL+'}'+kind,{'id':name,'name':name})
+    for index,(source,target) in enumerate(flows):
+        ET.SubElement(process,'{'+MODEL+'}sequenceFlow',
+                      {'id':f'f{index}','sourceRef':source,'targetRef':target})
+    def semantic_snapshot():
+        return [(node.tag, dict(node.attrib), node.text, len(node)) for node in process.iter()]
+    semantic=semantic_snapshot()
+    add_process_diagram(root,process,entry_id=nodes[0][0])
+    assert semantic_snapshot()==semantic
+    return root
+
+
+def _geometry(root):
+    shapes={}
+    for shape in root.findall('.//{'+BPMNDI+'}BPMNShape'):
+        if shape.get('id').startswith('LaneShape_'):
+            continue
+        bounds=shape.find('{'+DC+'}Bounds')
+        shapes[shape.get('bpmnElement')]=tuple(int(bounds.get(k)) for k in ('x','y','width','height'))
+    edges={e.get('bpmnElement'):[(int(p.get('x')),int(p.get('y')))
+           for p in e.findall('{'+DI+'}waypoint')]
+           for e in root.findall('.//{'+BPMNDI+'}BPMNEdge')}
+    return shapes,edges
+
+
+def _assert_clear_routes(root):
+    shapes,edges=_geometry(root)
+    for edge in edges.values():
+        for (ax,ay),(bx,by) in zip(edge,edge[1:]):
+            assert (ax,ay)!=(bx,by)
+            assert ax==bx or ay==by
+            for name,(x,y,w,h) in shapes.items():
+                if ax==bx:
+                    intersects=x<ax<x+w and max(min(ay,by),y)<min(max(ay,by),y+h)
+                else:
+                    intersects=y<ay<y+h and max(min(ax,bx),x)<min(max(ax,bx),x+w)
+                assert not intersects, (name,(ax,ay),(bx,by))
+    for flow in root.findall('.//{'+MODEL+'}sequenceFlow'):
+        points=edges[flow.get('id')]
+        for point,ref in ((points[0],flow.get('sourceRef')),(points[-1],flow.get('targetRef'))):
+            x,y,w,h=shapes[ref]
+            a,b=point
+            assert (a in (x,x+w) and y<=b<=y+h) or (b in (y,y+h) and x<=a<=x+w)
+    return shapes
+
+
+def test_join_rank_follows_longest_predecessor_not_shortcut():
+    nodes=[('start','startEvent'),('split','parallelGateway'),('short','task'),
+           ('long1','task'),('long2','task'),('long3','task'),('join','parallelGateway'),('end','endEvent')]
+    flows=[('start','split'),('split','short'),('split','long1'),('short','join'),
+           ('long1','long2'),('long2','long3'),('long3','join'),('join','end')]
+    root=_diagram_fixture(nodes,flows)
+    shapes=_assert_clear_routes(root)
+    assert shapes['join'][0]>shapes['long3'][0]
+    assert shapes['end'][0]>shapes['join'][0]
+    assert ET.tostring(root)==ET.tostring(_diagram_fixture(nodes,flows))
+
+
+def test_loops_keep_exit_after_component_and_avoid_cross_lane_task_rectangles():
+    nodes=[('start','startEvent'),('branch','exclusiveGateway'),('task_a','task'),
+           ('retry','exclusiveGateway'),('task_b','task'),('end','endEvent'),
+           ('other','task'),('other_end','endEvent')]
+    flows=[('start','branch'),('branch','task_a'),('task_a','retry'),('retry','task_b'),
+           ('task_b','task_a'),('retry','retry'),('retry','end'),('branch','other'),
+           ('other','other_end'),('other','end')]
+    lanes=[['start','branch','retry','end'],['task_a','task_b','other','other_end']]
+    root=_diagram_fixture(nodes,flows,lanes)
+    shapes=_assert_clear_routes(root)
+    assert shapes['end'][0]>max(shapes[n][0] for n in ('task_a','retry','task_b'))
+    assert ET.tostring(root)==ET.tostring(_diagram_fixture(nodes,flows,lanes))
+
+
+def test_same_column_back_edges_and_disconnected_nodes_stay_visible():
+    nodes=[('start','task'),('left','exclusiveGateway'),('right','task'),
+           ('end','endEvent'),('standalone','manualTask')]
+    flows=[('start','left'),('left','right'),('right','left'),('left','end'),
+           ('right','right')]
+    root=_diagram_fixture(nodes,flows)
+    shapes=_assert_clear_routes(root)
+    assert set(shapes)=={name for name,_ in nodes}
+    assert shapes['end'][0]>shapes['right'][0]
+
+
+def test_maximum_supported_graph_layout_is_bounded_and_deterministic():
+    nodes=[(f'n{i}','task') for i in range(120)]
+    flows=[(f'n{i}',f'n{i+1}') for i in range(119)]
+    flows += [(f'n{i}',f'n{i+2}') for i in range(81)]
+    root=_diagram_fixture(nodes,flows)
+    shapes=_assert_clear_routes(root)
+    assert len(shapes)==120
+    assert shapes['n119'][0]>shapes['n118'][0]
+    assert len(_geometry(root)[1])==200
+
+
+def test_dense_fanout_fanin_uses_distinct_gap_tracks_and_task_ports():
+    nodes=[('start','task')]+[(f'branch{i}','task') for i in range(20)]+[('end','task')]
+    flows=[('start',f'branch{i}') for i in range(20)]+[(f'branch{i}','end') for i in range(20)]
+    root=_diagram_fixture(nodes,flows)
+    shapes=_assert_clear_routes(root)
+    _,edges=_geometry(root)
+    first=[edges[f'f{i}'] for i in range(20)]
+    last=[edges[f'f{i}'] for i in range(20,40)]
+    assert len({p[0] for p in first})==20
+    assert len({p[-1] for p in last})==20
+    assert len({p[1][0] for p in first})==20
+    assert len({p[-2][0] for p in last})==20
+    assert shapes['branch0'][0] - (shapes['start'][0]+shapes['start'][2])>100
+    assert ET.tostring(root)==ET.tostring(_diagram_fixture(nodes,flows))
+
+
+def test_back_edges_same_column_and_adjacent_use_independent_gap_tracks():
+    from shared.process_diagram import _gap_layout
+    root=ET.Element('root')
+    endpoints=[('a','b'),('a','c'),('b','a'),('b','d'),('c','c'),('d','a'),('a','d')]
+    levels={'a':0,'b':1,'c':1,'d':2}
+    flows=[ET.SubElement(root,'flow',{'sourceRef':a,'targetRef':b}) for a,b in endpoints]
+    lefts,tracks=_gap_layout(flows,levels)
+    assert len(tracks)==len(set(tracks.values()))
+    assert lefts[0]>100
+    assert 100<tracks[(2,'target')]<lefts[0]
+    assert tracks[(2,'target')]!=tracks[(5,'target')]
+    for i,(a,b) in enumerate(endpoints):
+        assert tracks[(i,'source')]>lefts[levels[a]]+180
+        if a!=b and levels[b]!=levels[a]+1:
+            assert tracks[(i,'target')]<lefts[levels[b]]
+
+
+def test_gateway_event_center_ports_and_cross_lane_dense_routes():
+    nodes=[('start','startEvent'),('fork','parallelGateway')]+[(f't{i}','task') for i in range(10)]+[('join','parallelGateway'),('end','endEvent')]
+    flows=[('start','fork')]+[('fork',f't{i}') for i in range(10)]+[(f't{i}','join') for i in range(10)]+[('join','end')]
+    lanes=[['start','fork','join','end'],[f't{i}' for i in range(10)]]
+    root=_diagram_fixture(nodes,flows,lanes)
+    shapes=_assert_clear_routes(root)
+    _,edges=_geometry(root)
+    x,y,w,h=shapes['fork']
+    assert {edges[f'f{i}'][0] for i in range(1,11)}=={(x+w,y+h//2)}
+    x,y,w,h=shapes['join']
+    assert {edges[f'f{i}'][-1] for i in range(11,21)}=={(x,y+h//2)}
+    assert len({edges[f'f{i}'][1][0] for i in range(1,11)})==10
+
+
+def test_port_spacing_capacity_and_single_port_center():
+    from shared.process_diagram import _spread_ports
+    assert _spread_ports(100,80,0)==[]
+    assert _spread_ports(100,80,1)==[140]
+    assert len(set(_spread_ports(100,80,65)))==65
+    values=_spread_ports(100,80,200)
+    assert values==sorted(values)
+    assert min(values)==108 and max(values)==172
+    assert len(set(values))<=65

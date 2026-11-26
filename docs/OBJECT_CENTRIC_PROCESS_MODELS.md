@@ -50,6 +50,10 @@ body may be up to 256 KiB, because eight types at the catalog bound take about 1
   - an involved type the activity has no arc for (`type_without_arc`).
 - **Summary:** the fitting objects and fitting events overall.
 
+## Event-time state checks
+
+[Event-time object state review](OBJECT_EVENT_TIME_STATE_CHECK.md) evaluates an exact retained attribute at the selected activity timestamp, with all/any object quantification, unknown states and revision-pinned evidence pages. This complements structural lifecycle and arc conformance; it does not independently verify policy compliance.
+
 ## Limits and interpretation
 
 - **Projection-based:** lifecycles are replayed per type, and how types meet is checked through the arcs

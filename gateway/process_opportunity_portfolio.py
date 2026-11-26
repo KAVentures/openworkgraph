@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from shared.analysis_snapshot import content_digest
 
-from shared.process_opportunity_portfolio import Preview, summarize
+from shared.process_opportunity_portfolio import Preview, summarize, stress_review
 from .process_collaboration import ProcessCollaborationError as Error
 from .process_opportunity_review import SharedOpportunityStore
 
@@ -79,11 +79,15 @@ class SelectedOpportunityBudget:
                     row["current_approved_assessment"] = False
                 rows.append(row)
         result = summarize(rows, body.ceiling, body.currency)
+        if body.stress_scenarios is not None:
+            result["stress_review"] = stress_review(rows,body.ceiling,body.currency,body.stress_scenarios)
         result["snapshot_checked_at"] = datetime.now(timezone.utc).isoformat()
         result["selection_reference_digest"] = content_digest({
             "currency": body.currency,
             "ceiling": body.ceiling,
             "selections": [selection.model_dump(mode="json") for selection in body.selections],
+            **({"stress_scenarios":[s.model_dump(mode="json") for s in body.stress_scenarios]}
+               if body.stress_scenarios is not None else {}),
         })
         result["reference_digest_is_not_source_authentication"] = True
         self.store.db.audit(

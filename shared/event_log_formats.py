@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import re
 from typing import IO, Any, Iterable, Iterator
@@ -72,6 +72,10 @@ class ReadStats:
     object_attribute_values: int = 0              # timed values kept in object histories
     object_attribute_values_without_time: int = 0  # values whose time is missing or not timezone-qualified
     object_attribute_values_over_limit: int = 0    # values past MAX_OBJECT_ATTRIBUTE_VALUES for one object
+    # An explicit offset ("+01:00", "Z") for XES/OCEL times written without one; "" rejects them.
+    assumed_offset: str = ""
+    timestamps_with_assumed_offset: int = 0         # event and attribute times read with assumed_offset
+    timestamps_without_offset: int = 0              # ISO times without an offset, left unread for lack of a decision
 
 
 def _text(value: Any, limit: int) -> str:
@@ -104,6 +108,31 @@ def parse_timestamp(value: Any) -> datetime | None:
     return stamp.astimezone(timezone.utc)
 
 
+def _read_stamp(value: Any, stats: ReadStats) -> datetime | None:
+    """``parse_timestamp``, and under an explicit ``stats.assumed_offset`` also ISO times written without one."""
+    stamp = parse_timestamp(value)
+    if stamp is not None:
+        return stamp
+    raw = _text(value, 64)
+    try:
+        naive = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if naive.tzinfo is not None:
+        return None
+    if not stats.assumed_offset:
+        stats.timestamps_without_offset += 1
+        return None
+    offset = stats.assumed_offset
+    if offset == "Z":
+        zone = timezone.utc
+    else:
+        sign = -1 if offset[0] == "-" else 1
+        zone = timezone(sign * timedelta(hours=int(offset[1:3]), minutes=int(offset[4:6])))
+    stats.timestamps_with_assumed_offset += 1
+    return naive.replace(tzinfo=zone).astimezone(timezone.utc)
+
+
 def _attributes(pairs: Iterable[tuple[Any, Any]]) -> dict[str, str]:
     out: dict[str, str] = {}
     for key, value in pairs:
@@ -125,8 +154,20 @@ def _iso(stamp: datetime) -> str:
 MAX_HEADER_CHARS = 1024 * 1024
 
 
+# The name given to an unnamed last column, as a delimiter at the end of every line produces
+# ("case;activity;time;"). Such a column must hold no values; it is never mapped.
+TRAILING_UNNAMED = "(unnamed trailing column)"
+
+
+TRAILING_VALUES = ("the last column has no name but holds values; give it a name in the header row, "
+                   "or remove the delimiter at the end of each line")
+
+
 def read_csv_header(stream: IO[str], delimiter: str = ",") -> list[str]:
-    """Read one bounded logical record without accepting ambiguous columns."""
+    """Read one bounded logical record without accepting ambiguous columns.
+
+    A single unnamed last column (a trailing delimiter) is named ``TRAILING_UNNAMED``; readers check
+    that it holds no values. Any other empty or duplicate name refuses the file."""
     def lines():
         remaining=MAX_HEADER_CHARS
         while remaining:
@@ -137,9 +178,13 @@ def read_csv_header(stream: IO[str], delimiter: str = ",") -> list[str]:
             yield line
     try:
         header=next(csv.reader(lines(),delimiter=delimiter),[])
-    except (csv.Error,UnicodeError):
+    except UnicodeError:
+        raise EventLogFormatError("the file is not UTF-8 text; choose its encoding (for example windows-1252)") from None
+    except csv.Error:
         raise EventLogFormatError("CSV header could not be parsed") from None
     if header:header[0]=header[0].removeprefix("\ufeff")
+    if len(header)>1 and not header[-1].strip() and header[-2].strip() and TRAILING_UNNAMED not in header:
+        header[-1]=TRAILING_UNNAMED
     if not header or any(not name.strip() for name in header) or len({name.casefold() for name in header})!=len(header):
         raise EventLogFormatError("CSV requires nonempty unambiguous column names without duplicate casing")
     return header
@@ -161,7 +206,10 @@ def read_csv(stream: IO[str], *, case_column: str, activity_column: str, timesta
         raise EventLogFormatError("missing required columns: " + ", ".join(sorted(missing))[:300])
     extra = [name for name in attribute_columns if name in header][:MAX_ATTRIBUTES]
     seen: set[str] = set()
+    trailing = TRAILING_UNNAMED in header
     for index, row in enumerate(reader, 1):
+        if trailing and (row.get(TRAILING_UNNAMED) or "").strip():
+            raise EventLogFormatError(TRAILING_VALUES)
         case_id = _exact_key(row.get(case_column))
         activity = _exact_key(row.get(activity_column), MAX_ACTIVITY)
         stamp = parse_timestamp(row.get(timestamp_column))
@@ -187,6 +235,47 @@ def write_csv(events: Iterable[dict[str, Any]], out: IO[str], *, spreadsheet_rev
     for event in events:
         row = [event["case_id"], event["activity"], _iso(event["timestamp"]), event.get("resource") or ""]
         writer.writerow([review_cell(value) for value in row] if spreadsheet_review else row)
+
+
+CSV_FIELDS = ("case_id", "activity", "timestamp", "resource")
+MAX_CSV_ATTRIBUTE_COLUMNS = 500
+
+
+def write_csv_attributes(events: Iterable[dict[str, Any]], names: list[str], out: IO[str]) -> None:
+    """Flat CSV with the four CSV fields, then one column per retained event attribute in ``names``.
+
+    Text values are written as stored; other JSON values (numbers, booleans, lists) as compact JSON.
+    A missing attribute is an empty cell. Importing the file with the extra columns kept gives the
+    same events and attribute values back.
+    """
+    if len(names) > MAX_CSV_ATTRIBUTE_COLUMNS:
+        raise EventLogFormatError(f"the log has more than {MAX_CSV_ATTRIBUTE_COLUMNS} distinct event attributes, "
+                                  "more than the CSV attribute export writes; use OCEL instead")
+    clash = sorted(set(names) & set(CSV_FIELDS))
+    if clash:
+        raise EventLogFormatError(f"an event attribute is named {clash[0]!r} like a CSV export column; use OCEL instead")
+    writer = csv.writer(out)
+    writer.writerow([*CSV_FIELDS, *names])
+
+    def cell(value: Any) -> str:
+        if value is None:
+            return ""
+        return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    for event in events:
+        attributes = event.get("attributes") or {}
+        writer.writerow([event["case_id"], event["activity"], _iso(event["timestamp"]), event.get("resource") or "",
+                         *(cell(attributes.get(name)) for name in names)])
+
+
+def write_jsonl(events: Iterable[dict[str, Any]], out: IO[str]) -> None:
+    """JSON Lines for one case notion: one object per event with the CSV export's four fields.
+
+    A missing resource is ``null``; the JSON Lines import reads the file back to the same CSV.
+    """
+    for event in events:
+        out.write(json.dumps({"case_id": event["case_id"], "activity": event["activity"],
+                              "timestamp": _iso(event["timestamp"]), "resource": event.get("resource") or None},
+                             ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
 # ---------------------------------------------------------------- XES
@@ -235,7 +324,7 @@ def read_xes(stream: IO[bytes], *, stats: ReadStats | None = None) -> Iterator[E
                 fields = list(_xes_key_values(event))
                 lookup = {k: v for _, k, v in fields}
                 activity = _exact_key(lookup.get("concept:name"), MAX_ACTIVITY)
-                stamp = parse_timestamp(lookup.get("time:timestamp"))
+                stamp = _read_stamp(lookup.get("time:timestamp"), stats)
                 if not activity or stamp is None:
                     stats.rejected_events += 1
                     continue
@@ -297,10 +386,35 @@ def write_xes(cases: Iterable[tuple[str, list[dict[str, Any]]] |
 
 # ---------------------------------------------------------------- OCEL 2.0 JSON
 
-def _ocel_attributes(items: Any) -> dict[str, str]:
-    if not isinstance(items, list):
-        return {}
-    return _attributes((item.get("name"), item.get("value")) for item in items if isinstance(item, dict))
+# OCEL 2.0 has no resource field. PM4Py and the XES standard carry the performer as the event attribute
+# ``org:resource``; OWG reads it as the event's resource and writes the resource back the same way, so a
+# log keeps its resources through an OCEL export and import.
+OCEL_RESOURCE_ATTRIBUTE = "org:resource"
+
+
+def _ocel_resource(pairs: list[tuple[Any, Any]]) -> tuple[str, dict[str, str]]:
+    """The resource from an OCEL event's ``org:resource`` attribute, and its other attributes.
+
+    The resource is taken out before the attribute bound applies, so it never costs an attribute
+    slot. A value that is not a valid resource (not text, too long or with control characters)
+    stays an ordinary attribute, so reading resources never refuses a file that was readable before."""
+    for index, (name, value) in enumerate(pairs):
+        if _text(name, 80) != OCEL_RESOURCE_ATTRIBUTE:
+            continue
+        try:
+            resource = _exact_key(value)
+        except EventLogFormatError:
+            break
+        return resource, _attributes(pairs[:index] + pairs[index + 1:])
+    return "", _attributes(pairs)
+
+
+def _ocel_event_attributes(event: dict[str, Any]) -> list[tuple[str, str]]:
+    """An event's attributes for OCEL output, with its resource first as ``org:resource``."""
+    attributes = sorted((event.get("attributes") or {}).items())
+    if event.get("resource") and all(k != OCEL_RESOURCE_ATTRIBUTE for k, _ in attributes):
+        attributes.insert(0, (OCEL_RESOURCE_ATTRIBUTE, event["resource"]))
+    return attributes
 
 
 def _object_history(values: list[tuple[Any, Any, Any]], attributes: dict[str, str],
@@ -319,7 +433,7 @@ def _object_history(values: list[tuple[Any, Any, Any]], attributes: dict[str, st
             continue
         first = name not in seen
         seen.add(name)
-        stamp = parse_timestamp(time)
+        stamp = _read_stamp(time, stats)
         if stamp is None:
             stats.object_attribute_values_without_time += 1
         elif not first and others >= MAX_OBJECT_ATTRIBUTE_VALUES:
@@ -432,7 +546,7 @@ def read_ocel_json(stream: IO[bytes], *, stats: ReadStats | None = None) -> Iter
             stats.rejected_events += 1
             continue
         event_id, activity = _exact_key(item.get("id")), _exact_key(item.get("type"), MAX_ACTIVITY)
-        stamp = parse_timestamp(item.get("time"))
+        stamp = _read_stamp(item.get("time"), stats)
         if not event_id or not activity or stamp is None:
             stats.rejected_events += 1
             continue
@@ -441,7 +555,9 @@ def read_ocel_json(stream: IO[bytes], *, stats: ReadStats | None = None) -> Iter
             if isinstance(link, dict) and _exact_key(link.get("objectId")) in types:
                 links.append((_exact_key(link.get("objectId")), _exact_key(link.get("qualifier"), 80)))
         stats.events += 1
-        yield EventRecord(event_id, activity, stamp, "", _ocel_attributes(item.get("attributes")), links)
+        items = item.get("attributes") if isinstance(item.get("attributes"), list) else []
+        resource, attributes = _ocel_resource([(a.get("name"), a.get("value")) for a in items if isinstance(a, dict)])
+        yield EventRecord(event_id, activity, stamp, resource, attributes, links)
 
 
 def write_ocel_json(objects: Iterable[dict[str, Any]], events: Iterable[dict[str, Any]], out: IO[str]) -> None:
@@ -455,17 +571,11 @@ def write_ocel_json(objects: Iterable[dict[str, Any]], events: Iterable[dict[str
                      "relationships": [{"objectId": target, "qualifier": qualifier}
                                        for target, qualifier in o.get("relationships", [])]} for o in objects],
         "events": [{"id": e["event_id"], "type": e["activity"], "time": _iso(e["timestamp"]),
-                    "attributes": [{"name": k, "value": v} for k, v in sorted((e.get("attributes") or {}).items())],
+                    "attributes": [{"name": k, "value": v} for k, v in _ocel_event_attributes(e)],
                     "relationships": [{"objectId": oid, "qualifier": q} for oid, q in e.get("objects") or []]}
                    for e in events],
     }
     json.dump(document, out, ensure_ascii=False)
-
-
-def _ocel_xml_attributes(element: ET.Element | None) -> dict[str, str]:
-    if element is None:
-        return {}
-    return _attributes((child.get("name"), child.text or "") for child in element if child.tag == "attribute")
 
 
 def read_ocel_xml(stream: IO[bytes], *, stats: ReadStats | None = None) -> Iterator[EventRecord | ObjectRecord]:
@@ -510,7 +620,7 @@ def read_ocel_xml(stream: IO[bytes], *, stats: ReadStats | None = None) -> Itera
                     yield record
             elif section == "events" and element.tag == "event":
                 event_id, activity = _exact_key(element.get("id")), _exact_key(element.get("type"), MAX_ACTIVITY)
-                stamp = parse_timestamp(element.get("time"))
+                stamp = _read_stamp(element.get("time"), stats)
                 if not event_id or not activity or stamp is None:
                     stats.rejected_events += 1
                 else:
@@ -519,7 +629,10 @@ def read_ocel_xml(stream: IO[bytes], *, stats: ReadStats | None = None) -> Itera
                              for link in (related if related is not None else [])
                              if link.tag == "relationship" and _exact_key(link.get("object-id")) in types]
                     stats.events += 1
-                    yield EventRecord(event_id, activity, stamp, "", _ocel_xml_attributes(element.find("attributes")), links)
+                    found = element.find("attributes")
+                    resource, attributes = _ocel_resource([(c.get("name"), c.text or "") for c in
+                                                           (found if found is not None else []) if c.tag == "attribute"])
+                    yield EventRecord(event_id, activity, stamp, resource, attributes, links)
             if container is not None:
                 container.remove(element)
     except ET.ParseError:
@@ -559,7 +672,7 @@ def write_ocel_xml(objects: Iterable[dict[str, Any]], events: Iterable[dict[str,
     out.write("</objects>\n<events>\n")
     for e in events:
         out.write(f"<event id={quoteattr(e['event_id'])} type={quoteattr(e['activity'])} time={quoteattr(_iso(e['timestamp']))}><attributes>")
-        for key, value in sorted((e.get("attributes") or {}).items()):
+        for key, value in _ocel_event_attributes(e):
             out.write(f"<attribute name={quoteattr(key)}>{escape(value)}</attribute>")
         out.write("</attributes><objects>")
         for object_id, qualifier in e.get("objects") or []:
@@ -581,5 +694,5 @@ def detect_format(head: bytes) -> str:
 __all__ = [
     "CASE_TYPE", "EventLogFormatError", "EventRecord", "ObjectRecord", "ReadStats",
     "detect_format", "parse_timestamp", "read_csv", "read_ocel_json", "read_ocel_xml", "read_xes",
-    "write_csv", "write_ocel_json", "write_ocel_xml", "write_xes",
+    "write_csv", "write_csv_attributes", "write_jsonl", "write_ocel_json", "write_ocel_xml", "write_xes",
 ]
