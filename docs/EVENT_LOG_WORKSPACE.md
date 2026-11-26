@@ -3517,6 +3517,50 @@ For surviving mutations, the completed-visible-language checker attempts an exac
 
 The owner-only `POST /v1/event-logs/petri-mutation-review` endpoint accepts `application/octet-stream`: four unsigned big-endian bytes giving the UTF-8 JSON settings byte count, that many JSON bytes, then the reference PNML bytes. JSON is `{"suite": <acceptance suite>, "settings": {"max_mutants": 4, "operators": ["hide_activity", "rename_activity"]}}`; settings can omit either key to use its default. The JSON frame is limited to 256 KiB + 4 KiB and PNML to 2 MiB. Each of at most eight mutations uses existing bounded marking exploration, acceptance and completed-language comparison budgets. Results are non-retained and downloadable as digest-pinned JSON. Mutation testing makes no real business changes, executes no agents and does not certify independently authored business policy.
 
+### Review a model release against pinned criteria
+
+Open **Review a model release against pinned criteria** in the structural and behavioral validation panel. The model just replayed is the baseline. Upload a candidate and explicitly copy the current acceptance suite and policy rules, or edit the proposed specification. For example:
+
+```json
+{
+  "format": "openworkgraph.petri_release_spec.v1",
+  "suite": {
+    "format": "openworkgraph.petri_acceptance_suite.v1",
+    "cases": [
+      {"id": "approved", "trace": ["Register", "Check", "Pay"], "expect": {"completed": true}}
+    ]
+  },
+  "rules": [{"template": "precedence", "a": "Check", "b": "Pay"}],
+  "criteria": {
+    "language": "equivalent",
+    "require_baseline_acceptance": true,
+    "require_candidate_termination": false,
+    "require_candidate_one_safe": false,
+    "require_rule_activation": true,
+    "mutation": {"min_detected_basis_points": 7500, "min_mutants": 4,
+                 "settings": {"max_mutants": 4}}
+  }
+}
+```
+
+**Freeze model release specification** validates and normalizes the inputs and adds the exact baseline and candidate SHA-256 digests. Pinning does not run exploration or assert approval. Download the frozen specification to reproduce the review later. Editing the proposed specification, changing the candidate file, or replaying a different baseline invalidates the dashboard freeze. The copied suite and rules are independent of their source editors; copying them again is an explicit change.
+
+**Review frozen release** recomputes the checks from the submitted model bytes; it refuses either model if its digest does not match. Candidate soundness and the acceptance suite must pass. Baseline acceptance is required by default; set it to false when deliberately changing requirements (not compatible with a mutation adequacy gate). Language criteria can be `equivalent` (default), `preserve_baseline`, `no_new_traces` or `not_required`. Guaranteed termination and one-safeness are optional. Every supplied untimed policy rule and the joint suite must hold on completed candidate traces; by default each individual rule must also have an activated satisfying trace, not merely vacuous satisfaction. An empty policy array means no policy gate, not proven policy compliance.
+
+The optional mutation criterion uses the baseline acceptance suite, and a selected-mutant minimum of 1–8 and threshold of 0–10,000 basis points. It passes only when the minimum sample is met and the observed detection lower bound reaches the threshold; if the upper bound is below the threshold it fails, otherwise it is inconclusive. This is a synthetic test adequacy gate, not a statistical real-world risk estimate.
+
+The report is **blocked** when any required gate fails, **inconclusive** when no gate fails but at least one is unknown, and **model criteria met** only when every required gate passes. The report contains the normalized specification, gate results and independently recomputed component reports. SHA-256 binds the specification and report using compact sorted-key JSON with ASCII escapes (the report digest excludes its own digest field). It is not a signature, an external attestation or execution approval.
+
+Offline CLI with the normal repository dependencies:
+
+```sh
+python -m server.event_log_petri_release pin --baseline before.pnml --candidate after.pnml --spec proposal.json > pin.json
+# Extract the "spec" object from pin.json to frozen.json; preserve the original models.
+python -m server.event_log_petri_release review --baseline before.pnml --candidate after.pnml --spec frozen.json > review.json
+```
+
+Review exit codes: 0 criteria met, 1 blocked, 2 invalid input (including changed model hashes), 3 inconclusive. The owner-only, non-retained API is `POST /v1/event-logs/petri-release/pin` or `/review` with `application/octet-stream`: four unsigned big-endian bytes giving the UTF-8 JSON specification length, those bytes, four unsigned big-endian bytes giving the baseline PNML length, those PNML bytes, and the nonempty candidate PNML bytes. The specification is limited to 384 KiB; each model to 2 MiB. Existing component work limits and the optional eight-mutation maximum apply. Reports include model labels and declared criteria; share them deliberately. No real business work or agents are executed, and a model release report cannot authorize deployment or verify real-world outcomes.
+
 ### Process trees (PTML) from PM4Py and ProM
 
 The file picker also accepts a **process tree** in PTML, as `pm4py.write_ptml` and ProM's Inductive
