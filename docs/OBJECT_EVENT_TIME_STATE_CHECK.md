@@ -105,6 +105,17 @@ be read, updated with `expected_revision`, or deleted with an
 only check settings; result filters, page offsets, results and source event
 data are not stored in them.
 
+## Restrict the event review period
+
+Optional UTC calendar dates select events from the inclusive start date to the
+exclusive end date. Either boundary may be omitted. The end must follow the
+start when both are supplied. The event limit applies after this selection;
+object history before the start remains available to establish each selected
+event's recorded state. Saved and transferred definitions preserve the dates,
+and worklist rows include both boundaries. Label lookup and transfer preview
+still search the whole retained log, so presence there does not imply presence
+inside the selected period.
+
 ## Transfer definitions between logs
 
 Open **Transfer a check definition** to download the current named check as

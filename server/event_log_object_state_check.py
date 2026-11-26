@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import csv
+from datetime import date
+import re
 from typing import IO, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from shared.event_log_formats import _exact_key, EventLogFormatError
 from shared.spreadsheet_review import review_cell
 from . import event_log_workspace as workspace
@@ -28,10 +30,27 @@ class Spec(BaseModel):
     operator: Literal["eq", "ne"] = "eq"
     quantifier: Literal["all", "any"] = "all"
     event_qualifier: str | None = Field(default=None, max_length=80)
+    from_date: str | None = None
+    until_date: str | None = None
     status: Literal["matched", "not_matched", "unknown", "no_linked_object"] | None = None
     offset: int = Field(default=0, ge=0, le=MAX_EVENTS)
     limit: int = Field(default=30, ge=1, le=100)
     expected_revision: int | None = Field(default=None, ge=0)
+
+    @field_validator("from_date", "until_date")
+    @classmethod
+    def calendar_date(cls, value):
+        if value is not None:
+            if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value):
+                raise ValueError("Use a UTC calendar date")
+            date.fromisoformat(value)
+        return value
+
+    @model_validator(mode="after")
+    def date_window(self):
+        if self.from_date and self.until_date and self.from_date >= self.until_date:
+            raise ValueError("The exclusive end date must be after the start date")
+        return self
 
     @field_validator("activity", "object_type", "attribute", "event_qualifier")
     @classmethod
@@ -141,17 +160,17 @@ def _write_worklist(conn, log_id: str, spec: ExportSpec, revision: int, out: IO[
                      'expected_value_review','operator','quantifier','qualifier_present','qualifier_review','result_filter',
                      'event_id_review','event_time_utc','event_result','linked_objects','matched_objects',
                      'not_matched_objects','unknown_objects','object_id_review','object_result','recorded_from_utc',
-                     'recorded_value_review','recorded_value_present'])
+                     'recorded_value_review','recorded_value_present','from_date_utc','until_date_exclusive_utc'])
     prefix = [log_id,revision,spec.activity,spec.object_type,spec.attribute,spec.expected_value,spec.operator,
               spec.quantifier,str(spec.event_qualifier is not None).lower(),spec.event_qualifier,spec.status]
     writer.writerow([review_cell(value) for value in ['check',*prefix,None,None,None,None,None,None,None,
-                                                       None,None,None,None,'false']])
+                                                       None,None,None,None,'false',spec.from_date,spec.until_date]])
     written = 0
     while batch := cursor.fetchmany(5000):
         for eid,at,status,n,yes,no,unknown,oid,object_status,valid_from,recorded in batch:
             kind = 'event' if spec.kind == 'events' else ('event_without_object' if oid is None else 'event_object')
             values = [kind,*prefix,eid,_stamp(at),status,n,yes,no,unknown,oid,
-                      object_status if oid is not None else None,_stamp(valid_from),recorded,str(recorded is not None).lower()]
+                      object_status if oid is not None else None,_stamp(valid_from),recorded,str(recorded is not None).lower(),spec.from_date,spec.until_date]
             writer.writerow([review_cell(value) for value in values])
             written += 1
     if written != expected:
@@ -170,12 +189,18 @@ def _analyze(log_id, spec, witness=False, export=None):
             revision = relationships._revision(conn, log_id)
             if spec.expected_revision is not None and revision != spec.expected_revision:
                 raise workspace.EventLogWorkspaceError("log changed; restart the event-time state check")
-            events = conn.execute("SELECT count(*) FROM events WHERE log_id=? AND activity=?",
-                                  [log_id,spec.activity]).fetchone()[0]
+            event_scope = "log_id=? AND activity=?"
+            event_args = [log_id, spec.activity]
+            if spec.from_date is not None:
+                event_scope += " AND ts>=?"
+                event_args.append(date.fromisoformat(spec.from_date))
+            if spec.until_date is not None:
+                event_scope += " AND ts<?"
+                event_args.append(date.fromisoformat(spec.until_date))
+            events = conn.execute("SELECT count(*) FROM events WHERE " + event_scope, event_args).fetchone()[0]
             if events > MAX_EVENTS:
                 raise workspace.EventLogWorkspaceError("selected activity exceeds event-time state check event bound")
-            conn.execute("""CREATE TEMP TABLE st_events AS SELECT event_id,ts FROM events
-                            WHERE log_id=? AND activity=?""",[log_id,spec.activity])
+            conn.execute("CREATE TEMP TABLE st_events AS SELECT event_id,ts FROM events WHERE " + event_scope, event_args)
             # A repeated event-object relationship under several qualifiers must
             # not duplicate an object decision or change the quantifier result.
             predicate = "eo.log_id=? AND o.object_type=?"

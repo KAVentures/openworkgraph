@@ -4236,7 +4236,7 @@
   // Plain reading of an object-centric conformance result.
   function objectStateCheckSection(){
     const box=el('div');box.id='owgObjectStateCheck';
-    box.append(el('h4','Event-time object state check'),el('p','Check recorded object attribute values at each event of an exact stored activity. This uses the whole retained object log, not the case filter or activity mappings. Value lookup searches retained history for the selected type, including values from other times. Missing, future-only and conflicting values are unknown; recorded values do not verify policy compliance or business state.','muted'));
+    box.append(el('h4','Event-time object state check'),el('p','Check recorded object attribute values at each event of an exact stored activity. This uses the retained object log and optional UTC date window, not the case filter or activity mappings. Value lookup searches retained history for the selected type, including values from other times. Missing, future-only and conflicting values are unknown; recorded values do not verify policy compliance or business state.','muted'));
     const activity=input('owgObjectStateActivity','text','Exact stored activity');activity.maxLength=400;
     const types=(state.objectTypes||[]).map(t=>[t.object_type,t.object_type.trim()===t.object_type?t.object_type:JSON.stringify(t.object_type)]);
     const objectType=select('owgObjectStateType',types);if(state.caseType&&types.some(([value])=>value===state.caseType))objectType.value=state.caseType;
@@ -4297,9 +4297,10 @@
     objectType.addEventListener('change',()=>{attributeLookup.reset();valueLookup.reset();qualifierLookup.reset();});
     attribute.addEventListener('input',valueLookup.reset);
     qualifierField.append(qualifierLookup.wrap);
+    const fromDate=input('owgObjectStateFromDate','date'),untilDate=input('owgObjectStateUntilDate','date');
     const run=button('Check recorded state');run.id='owgObjectStateRun';
     const form=el('div',null,'row');form.style.alignItems='end';
-    form.append(field('Stored activity',activity),activityLookup.wrap,field('Object type',objectType),field('Attribute',attribute),attributeLookup.wrap,field('Comparison',operator),field('Expected value (empty is allowed)',value),valueNote,valueLookup.wrap,field('Match',quantifier),field('Match an exact event-link qualifier',exact),qualifierField,run);
+    form.append(field('Stored activity',activity),activityLookup.wrap,field('From date (UTC, inclusive)',fromDate),field('Until date (UTC, exclusive)',untilDate),field('Object type',objectType),field('Attribute',attribute),attributeLookup.wrap,field('Comparison',operator),field('Expected value (empty is allowed)',value),valueNote,valueLookup.wrap,field('Match',quantifier),field('Match an exact event-link qualifier',exact),qualifierField,run);
     const savedPick=select('owgObjectStateSaved',[]),savedName=input('owgObjectStateSavedName','text','Name this check');savedName.maxLength=120;
     const savedLoad=button('Load saved check','secondary'),savedRefresh=button('Refresh saved checks','secondary'),savedCreate=button('Save as new check','secondary'),savedUpdate=button('Update loaded check','secondary'),savedDelete=button('Delete loaded check','secondary');
     const savedRow=el('div',null,'row');savedRow.style.alignItems='end';savedRow.append(field('Saved state checks',savedPick),savedLoad,savedRefresh,field('Saved check name',savedName),savedCreate,savedUpdate,savedDelete);
@@ -4308,7 +4309,7 @@
     const transferFile=input('owgObjectStateTemplateFile','file');transferFile.accept='.json,application/json';
     const transferPreview=button('Preview definition file','secondary'),transferApply=button('Load previewed definition','secondary'),transferDownload=button('Download current definition','secondary');
     const transferStatus=el('div',null,'muted');transferStatus.setAttribute('role','status');const transferChecks=el('div');
-    transfer.append(el('summary','Transfer a check definition'),el('p','The JSON contains the check name and settings, including its expected value. It does not include event IDs, object IDs or results. Previewing does not save or run it.','muted'),field('Object state definition JSON',transferFile),transferPreview,transferApply,transferDownload,transferStatus,transferChecks);
+    transfer.append(el('summary','Transfer a check definition'),el('p','The JSON contains the check name and settings, including its expected value. It does not include event IDs, object IDs or results. Previewing does not save or run it. Label presence covers the whole retained log, regardless of any date window.','muted'),field('Object state definition JSON',transferFile),transferPreview,transferApply,transferDownload,transferStatus,transferChecks);
     const notice=el('div',null,'muted');notice.id='owgObjectStateStatus';notice.setAttribute('role','status');
     const summary=el('div');summary.id='owgObjectStateSummary';
     const resultFilter=select('owgObjectStateResultFilter',[['','All results'],['matched','Matched'],['not_matched','Not matched'],['unknown','Unknown'],['no_linked_object','No linked object']]);
@@ -4333,11 +4334,12 @@
         if(!entry.value.trim())throw new Error('Enter '+name.toLowerCase()+'.');
         if(Array.from(entry.value).length>200)throw new Error(name+' must have at most 200 characters.');
       }
+      if(fromDate.value&&untilDate.value&&fromDate.value>=untilDate.value)throw new Error('The exclusive end date must be after the start date.');
       const exactValue=preservedValue&&preservedValue.display===value.value?preservedValue.raw:value.value;
       if(Array.from(exactValue).length>4096)throw new Error('Expected value must have at most 4,096 characters.');
       if(exact.checked&&Array.from(qualifier.value).length>80)throw new Error('Qualifier must have at most 80 characters.');
       return {activity:activity.value,object_type:objectType.value,attribute:attribute.value,expected_value:exactValue,
-        operator:operator.value,quantifier:quantifier.value,...(exact.checked?{event_qualifier:qualifier.value}:{})};
+        operator:operator.value,quantifier:quantifier.value,...(fromDate.value?{from_date:fromDate.value}:{}),...(untilDate.value?{until_date:untilDate.value}:{}),...(exact.checked?{event_qualifier:qualifier.value}:{})};
     };
     let savedTurn=0,savedBusy=false,loadedSaved=null;
     const savedCurrent=t=>generation===state.generation&&logId===state.logId&&box.isConnected&&t===savedTurn;
@@ -4356,7 +4358,7 @@
     function applyDefinition(d,name){
       clear();activityLookup.reset();attributeLookup.reset();valueLookup.reset();qualifierLookup.reset();
       if(![...objectType.options].some(option=>option.value===d.object_type)){const option=el('option',JSON.stringify(d.object_type)+' (not currently present)');option.value=d.object_type;objectType.appendChild(option);}
-      activity.value=d.activity;objectType.value=d.object_type;attribute.value=d.attribute;value.value=d.expected_value;rememberValue(d.expected_value);
+      fromDate.value=d.from_date??'';untilDate.value=d.until_date??'';activity.value=d.activity;objectType.value=d.object_type;attribute.value=d.attribute;value.value=d.expected_value;rememberValue(d.expected_value);
       operator.value=d.operator;quantifier.value=d.quantifier;exact.checked=Object.hasOwn(d,'event_qualifier');qualifier.value=d.event_qualifier??'';show(qualifierField,exact.checked);
       savedName.value=name;
     }
@@ -4469,7 +4471,7 @@
         settings=spec;revision=response.revision;offset=start;following=response.next_offset;
         notice.textContent='Checked '+Number(response.selected_events).toLocaleString()+' recorded events; '+Number(response.matching_events).toLocaleString()+' match the result filter.';
         summary.replaceChildren(table(['Matched','Not matched','Unknown','No linked object'],[[...['matched','not_matched','unknown','no_linked_object'].map(key=>Number(response.event_counts[key]).toLocaleString())]]),
-          ...(response.selected_events===0?[el('p','No events have this stored activity. This does not establish compliance.','muted')]:[]),
+          ...(response.selected_events===0?[el('p',spec.from_date||spec.until_date?'No events have this stored activity in the selected date window. This does not establish compliance.':'No events have this stored activity. This does not establish compliance.','muted')]:[]),
           el('p','Values at the event timestamp apply immediately. 1970-01-01 denotes an initial value without a known time. Counts describe retained data, not verified source completeness or compliance.','muted'));
         const headers=['Event','Timestamp (UTC)','Result','Linked objects','Matched','Not matched','Unknown','Evidence'];
         results.replaceChildren(response.rows.length?table(headers,response.rows.map(item=>{

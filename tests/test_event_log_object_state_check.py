@@ -274,3 +274,30 @@ with TestClient(app) as c:
     result=subprocess.run([sys.executable,"-c","import sys;sys.path.insert(0,'tests');"+code],
         cwd=Path(__file__).resolve().parents[1],env=env,capture_output=True,text=True,timeout=120)
     assert result.returncode==0,result.stdout+result.stderr
+
+
+def test_utc_date_window_bounds_evidence_exports_and_full_history(monkeypatch):
+    doc = fixture()
+    doc['events'][0]['time'] = '2023-12-31T23:59:59Z'
+    doc['events'][1]['time'] = '2024-01-02T00:00:00Z'
+    log = w.import_log(BytesIO(json.dumps(doc).encode()), name='window', source_format='ocel')['log_id']
+    request = spec(from_date='2024-01-01', until_date='2024-01-02')
+    report = s.analyze(log, request)
+    assert report['selected_events'] == 6
+    assert {r['event_id'] for r in report['rows']} == {'e3', 'e4', 'e5', 'e6', 'e7', 'e8'}
+    assert next(r for r in report['rows'] if r['event_id'] == 'e3')['status'] == 'matched'
+    with pytest.raises(w.EventLogWorkspaceError, match='not in'):
+        s.witnesses(log, {**request, 'event_id':'e2', 'expected_revision':report['revision']})
+    out = StringIO()
+    s.export_worklist(log, {**request, 'expected_revision':report['revision'], 'kind':'events'}, out)
+    rows = list(csv.DictReader(StringIO(out.getvalue())))
+    assert len(rows) == 7 and all(r['from_date_utc'] == '2024-01-01' and r['until_date_exclusive_utc'] == '2024-01-02' for r in rows)
+    for dates in ({'from_date':'2024-02-30'}, {'until_date':'2024-1-02'},
+                  {'from_date':'2024-01-02','until_date':'2024-01-02'},
+                  {'from_date':'2024-01-03','until_date':'2024-01-02'}):
+        with pytest.raises(w.EventLogWorkspaceError, match='invalid'):
+            s.analyze(log, spec(**dates))
+    monkeypatch.setattr(s, 'MAX_EVENTS', 6)
+    with pytest.raises(w.EventLogWorkspaceError, match='event bound'):
+        s.analyze(log, spec())
+    assert s.analyze(log, request)['selected_events'] == 6

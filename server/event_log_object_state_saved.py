@@ -15,7 +15,7 @@ from .event_log_object_relationships import _revision
 
 MAX_CHECKS = 50
 TEMPLATE_FORMAT = 'openworkgraph.object-state-check.v1'
-_DEFINITION_KEYS = {'activity', 'object_type', 'attribute', 'expected_value', 'operator', 'quantifier', 'event_qualifier'}
+_DEFINITION_KEYS = {'activity', 'object_type', 'attribute', 'expected_value', 'operator', 'quantifier', 'event_qualifier', 'from_date', 'until_date'}
 
 
 class NewCheck(BaseModel):
