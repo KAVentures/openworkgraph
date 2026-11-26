@@ -2572,6 +2572,28 @@ async def event_log_domain_pack_benchmark(request: Request, log_id: str, pack_id
     return response
 
 
+@router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}/portfolio/preview")
+async def event_log_domain_pack_portfolio_preview(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_portfolio as portfolio
+    _require_dashboard(request)
+    spec = await _json_body(request, "domain pack portfolio preview", strict=True, limit=8192)
+    _require_dashboard(request)
+    response = await run_in_threadpool(_respond, portfolio.preflight, log_id, pack_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}/portfolio")
+async def event_log_domain_pack_portfolio(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_portfolio as portfolio
+    _require_dashboard(request)
+    spec = await _json_body(request, "domain pack portfolio comparison", strict=True, limit=8192)
+    _require_dashboard(request)
+    response = await run_in_threadpool(_respond, portfolio.compare, log_id, pack_id, spec)
+    _require_dashboard(request)
+    return response
+
+
 @router.get("/v1/event-logs/{log_id}/domain-packs/{pack_id}/report")
 def event_log_domain_pack_report(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
     _require_dashboard(request)
