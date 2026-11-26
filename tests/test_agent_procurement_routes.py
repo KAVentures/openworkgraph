@@ -67,6 +67,12 @@ with TestClient(app) as client:
     assert client.post(signing_path,json={}).status_code==401
     assert client.post(signing_path,json={},headers=bearer).status_code==403
     assert client.post(signing_path,json={'document':'{"confirmed":false}'},headers=h).status_code==422
+    for action in ("inbox-status","inbox-admit","inbox-review","inbox-forget"):
+        path="/v1/process-catalog/procurement-workforce/exchange/"+action
+        assert client.post(path,json={"document":"{}"}).status_code==401
+        assert client.post(path,json={"document":"{}"},headers=bearer).status_code==403
+        assert client.post(path,json={"document":"{}"},headers={**h,"X-OpenWorkGraph-Context":"ai"}).status_code==403
+        assert client.post(path,json={"document":"{}"},headers=h).status_code==422
     trust_path='/v1/process-catalog/procurement-workforce/exchange/trust-status'
     assert client.post(trust_path,json={'document':'{}'}).status_code==401
     assert client.post(trust_path,json={'document':'{}'},headers=bearer).status_code==403

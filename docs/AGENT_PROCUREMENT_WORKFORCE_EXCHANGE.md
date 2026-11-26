@@ -135,3 +135,36 @@ not mutate the registry. Only public keys, aliases, namespace and latest
 accepted timestamps/digests are retained, not packet contents. A restored
 or administrator-modified database can bypass these local watermarks.
 No external synchronization or proof of signer identity is established.
+
+## Retained signed packet inbox
+
+Use the Retained signed installation inbox in the exchange panel to admit
+separately delivered signed packets. It retains only the latest signed packet
+per exact alias and namespace (4 MiB canonical per packet; 32 MiB total).
+No new remote endpoint, automatic transport or background synchronization is
+provided. The local dashboard operator must explicitly admit each packet.
+Keys must already be enrolled in the local registry. Signature, namespace,
+exact alias, freshness and monotonic checks apply before admission; admission
+alone does not advance accepted review watermarks. Repeated exact packets
+are idempotent. A rotated key needs a fresh verified packet (or exact same
+packet signed by the new key); revoked aliases cannot participate.
+
+The inbox shows missing, available, stale/future, changed-key, superseded,
+corrupt and inactive entries. Review requires fresh available packets for
+all active aliases. Both registry and inbox revisions are checked inside the
+same SQLite write transaction, and all signatures and overlap/financial
+checks are rerun before accepted registry watermarks advance. Separate
+stateless registered reviews may supersede retained packets. No partial
+cohort is silently presented as a complete review.
+
+Explicit namespace removal deletes retained packet contents, not accepted
+registry watermarks; unreviewed staging history is discarded. Physical
+backup/export erasure is not established. The inbox retains latest content,
+not an append-only remote incident history. All results retain the existing
+source authenticity, completeness, causal and organization identity limits.
+
+API (dashboard-only, standard JSON-text envelope): inbox-status accepts
+correlation_namespace_sha256 and maximum_packet_age_ms. inbox-admit adds
+expected_revision, expected_inbox_revision, confirmed=true, signed_packet.
+inbox-review uses the same fields without signed_packet. inbox-forget uses
+namespace, the two revisions and confirmed=true, without maximum age.

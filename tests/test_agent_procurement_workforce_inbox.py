@@ -1,0 +1,93 @@
+"""Real SQLite inbox integration with actual signed packets and trust registry."""
+from copy import deepcopy
+from concurrent.futures import ThreadPoolExecutor
+
+import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+from server import agent_procurement_workforce_inbox as inbox
+from server import agent_procurement_workforce_trust as trust
+from server import agent_procurement_monitor_journal as journal
+from test_agent_procurement_monitor_journal import local_db
+from test_agent_procurement_workforce_trust import NS, configure, packet, review
+
+
+def status():
+    return inbox.status({"correlation_namespace_sha256":NS,"maximum_packet_age_ms":100},now=150)
+
+
+def scope(view):
+    return {"correlation_namespace_sha256":NS,"maximum_packet_age_ms":100,
+        "expected_revision":view["registry_revision"],"expected_inbox_revision":view["inbox_revision"],"confirmed":True}
+
+
+def admit(view,p):
+    return inbox.admit({**scope(view),"signed_packet":p},now=150)
+
+
+def test_separate_arrivals_complete_review_and_replays(local_db):
+    a,b=Ed25519PrivateKey.generate(),Ed25519PrivateKey.generate()
+    configure(0,"a",a);configure(1,"b",b)
+    initial=status()
+    assert not initial["ready_for_complete_review"]
+    pa,pb=packet("a",a),packet("b",b)
+    first=admit(initial,pa)
+    assert first["inbox_revision"]==1 and first["registry_revision"]==2
+    assert {r["status"] for r in first["entries"]}=={"available","missing"}
+    with pytest.raises(journal.JournalError):inbox.review(scope(first),now=150)
+    assert admit(first,pa)["idempotent_replay"]
+    with pytest.raises(journal.JournalError):admit(initial,pb)
+    second=admit(first,pb)
+    assert second["ready_for_complete_review"]
+    result=inbox.review(scope(second),now=150)
+    assert result["accepted_new_packets"]==2 and result["registry_revision"]==3
+    assert result["inbox_revision"]==2
+    assert inbox.review(scope(status()),now=150)["exact_repeated_packets"]==2
+
+
+def test_revoke_rotate_and_forget(local_db):
+    a,b=Ed25519PrivateKey.generate(),Ed25519PrivateKey.generate()
+    configure(0,"a",a)
+    staged=admit(status(),packet("a",a))
+    inbox.review(scope(staged),now=150)
+    configure(2,"a",None,"revoke")
+    assert status()["entries"][0]["status"]=="not_active"
+    configure(3,"a",b,"rotate")
+    assert status()["entries"][0]["status"]=="key_changed"
+    with pytest.raises(ValueError):admit(status(),packet("a",a,101))
+    with pytest.raises(ValueError):admit(status(),packet("a",b,99))
+    current=admit(status(),packet("a",b,101))
+    assert current["ready_for_complete_review"]
+    s=scope(current);s.pop("maximum_packet_age_ms")
+    removed=inbox.forget(s)
+    assert removed["removed_packets"]==1
+    assert status()["entries"][0]["status"]=="missing"
+    with pytest.raises(ValueError):admit(status(),packet("a",b,99))
+
+
+def test_superseded_tampered_and_stale_packets(local_db):
+    a=Ed25519PrivateKey.generate();configure(0,"a",a)
+    v=admit(status(),packet("a",a))
+    review(1,packet("a",a,101))
+    assert status()["entries"][0]["status"]=="superseded"
+    current=admit(status(),packet("a",a,102))
+    with pytest.raises(ValueError):admit(current,packet("a",a,151))
+    with pytest.raises(ValueError):admit(current,packet("a",a,49))
+    bad=deepcopy(packet("a",a,103));bad["signature_hex"]="0"*128
+    with pytest.raises(ValueError):admit(current,bad)
+    assert status()["inbox_revision"]==current["inbox_revision"]
+    with local_db() as conn:conn.execute("UPDATE procurement_workforce_inbox SET packet_json='{}'")
+    assert status()["entries"][0]["status"]=="corrupt"
+    assert not status()["ready_for_complete_review"]
+
+
+def test_two_writers_same_revision_only_one_advances(local_db):
+    a,b=Ed25519PrivateKey.generate(),Ed25519PrivateKey.generate()
+    configure(0,"a",a);configure(1,"b",b)
+    v=status()
+    def attempt(p):
+        try:admit(v,p);return True
+        except journal.JournalError:return False
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        result=list(pool.map(attempt,[packet("a",a),packet("b",b)]))
+    assert sum(result)==1 and status()["inbox_revision"]==1

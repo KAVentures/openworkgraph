@@ -2173,19 +2173,12 @@
         if(signed)output.append(el('p','Signing public key fingerprint: '+result.public_key_sha256),el('p','Distribute the public key fingerprint separately; do not treat a packet as its own trust anchor.'));
       }catch(error){if(attempt===generation)output.replaceChildren(el('p',error.message));}
     });
-    const runReview=button('Review pinned installation packets',async()=>{
-      const attempt=++generation;output.replaceChildren();
-      try{
-        const selected=file.files?.[0];if(!selected||selected.size>8*1024*1024)throw new Error('Choose a review bundle of at most 8 MiB.');
-        if(!window.confirm('Review these explicitly selected offline installation packets?'))return;
-        const signed=signingMode.checked;
-        const result=await request('/v1/process-catalog/procurement-workforce/exchange/'+(signed?(registered.checked?'registered-review':'signed-review'):'review'),{document:await selected.text()});
-        if(attempt!==generation||!output.isConnected)return;
-        output.append(el('h4','Multi-installation review'),el('p',result.installations.length+' declared installations · '+result.included_journals+' included journals · '+result.excluded_journals+' excluded · '+result.unreadable_journals+' unreadable'),
+    const renderReview=(target,result)=>{
+        target.append(el('h4','Multi-installation review'),el('p',result.installations.length+' declared installations · '+result.included_journals+' included journals · '+result.excluded_journals+' excluded · '+result.unreadable_journals+' unreadable'),
           el('p',result.totals_may_be_incomplete?'Totals may be incomplete.':'No exclusions identified in the supplied packets; completeness is not independently verified.'));
-        output.appendChild(el('p',result.all_packet_signatures_verified_against_operator_pins?'All signatures verified against explicit operator-pinned keys.':'Unsigned content-digest review only.'));
-        for(const pin of result.trusted_key_fingerprints||[])output.appendChild(el('p',pin.installation_alias+' · key fingerprint '+pin.public_key_sha256));
-        if(result.local_monotonic_packet_pins_checked)output.appendChild(el('p','Registry revision '+result.registry_revision+' · '+result.accepted_new_packets+' new packets · '+result.exact_repeated_packets+' exact repeats'));
+        target.appendChild(el('p',result.all_packet_signatures_verified_against_operator_pins?'All signatures verified against explicit operator-pinned keys.':'Unsigned content-digest review only.'));
+        for(const pin of result.trusted_key_fingerprints||[])target.appendChild(el('p',pin.installation_alias+' · key fingerprint '+pin.public_key_sha256));
+        if(result.local_monotonic_packet_pins_checked)target.appendChild(el('p','Registry revision '+result.registry_revision+' · '+result.accepted_new_packets+' new packets · '+result.exact_repeated_packets+' exact repeats'));
         const money=(v,c)=>{
           if(v==null)return 'unbounded';
           const n=BigInt(v.numerator),d=BigInt(v.denominator),r=(2n*n+d)/(2n*d);
@@ -2194,17 +2187,83 @@
         for(const g of result.currency_totals){
           const sub=el('section');sub.append(el('h5',g.currency),el('p',g.recorded_cases+' recorded / '+g.started_cases+' started / '+g.scheduled_cases+' scheduled'));
           for(const [name,a] of Object.entries(g.arms))sub.appendChild(el('p',name+': '+a.recorded+'/'+a.cases+' recorded · declared variable cost '+money(a.variable_cost.lower_microunits,g.currency)+' to '+money(a.variable_cost.upper_microunits,g.currency)));
-          output.appendChild(sub);
+          target.appendChild(sub);
         }
         const list=el('ul');for(const r of result.journals)list.appendChild(el('li',r.installation_alias+' · '+r.journal_tag.slice(0,12)+' · '+(r.rollback_review?'rollback review · ':r.attention?'attention · ':'')+(r.included_in_totals?'included':r.exclusion_reasons.join(', '))));
-        output.append(el('h5','Incident and overlap queue'),list,download(result,'owg-workforce-exchange-review'),
+        target.append(el('h5','Incident and overlap queue'),list,download(result,'owg-workforce-exchange-review'),
           el('p','Source identity, actual business outcomes and financial benefits remain unverified. No deployment or spending authorization.'));
+    };
+    const inboxSection=el('details');inboxSection.append(el('summary','Retained signed installation inbox'),
+      el('p','Admit signed packets individually from an approved transfer channel. Review requires fresh verified snapshots from every active site in this namespace. No automatic remote transport.'));
+    const inboxNs=el('input');inboxNs.maxLength=64;inboxNs.setAttribute('aria-label','Inbox correlation namespace');
+    const age=el('input');age.type='number';age.min='1';age.max='8784';age.step='1';age.value='24';age.setAttribute('aria-label','Maximum packet age in hours');
+    const inboxFile=el('input');inboxFile.type='file';inboxFile.accept='.json,application/json';inboxFile.setAttribute('aria-label','Signed installation packet');
+    const inboxOutput=el('div');inboxOutput.setAttribute('aria-live','polite');let inboxState=null,inboxBusy=false;
+    const inboxScope=()=>{
+      const hours=Number(age.value);
+      if(!/^[a-f0-9]{64}$/.test(inboxNs.value)||!Number.isInteger(hours)||hours<1||hours>8784)throw new Error('Enter a namespace digest and maximum age of 1–8784 hours.');
+      return {correlation_namespace_sha256:inboxNs.value,maximum_packet_age_ms:hours*3600000};
+    };
+    const inboxCall=(action,document)=>request('/v1/process-catalog/procurement-workforce/exchange/'+action,{document});
+    const inboxPerform=async(fn)=>{
+      if(inboxBusy)return;inboxBusy=true;
+      try{await fn();}catch(error){inboxState=null;inboxOutput.replaceChildren(el('p','Inbox action failed: '+error.message+' · reload status before retrying.'));}
+      finally{inboxBusy=false;}
+    };
+    const drawInbox=value=>{
+      inboxState=value;inboxOutput.replaceChildren(el('p','Registry revision '+value.registry_revision+' · inbox revision '+value.inbox_revision),
+        el('p',value.ready_for_complete_review?'Every active site has a fresh verified packet.':'Complete review blocked: missing, stale, changed-key or superseded packets.'),
+        el('p','Active installations: '+value.active_installations));
+      const list=el('ul');for(const entry of value.entries)list.appendChild(el('li',entry.installation_alias+' · '+entry.status+(entry.exported_at_ms!==null?' · '+new Date(entry.exported_at_ms).toISOString():'')+(entry.packet_sha256?' · '+entry.packet_sha256:'')));inboxOutput.appendChild(list);
+    };
+    const loadInbox=async()=>{
+      const scope=inboxScope();const value=await inboxCall('inbox-status',JSON.stringify(scope));
+      if(inboxOutput.isConnected&&JSON.stringify(scope)===JSON.stringify(inboxScope()))drawInbox(value);
+    };
+    const pinnedScope=()=>{
+      const scope=inboxScope();
+      if(!inboxState||inboxState.correlation_namespace_sha256!==scope.correlation_namespace_sha256||inboxState.maximum_packet_age_ms!==scope.maximum_packet_age_ms)throw new Error('Load current inbox status first.');
+      return {...scope,expected_revision:inboxState.registry_revision,expected_inbox_revision:inboxState.inbox_revision,confirmed:true};
+    };
+    const admit=button('Admit signed installation packet',()=>inboxPerform(async()=>{
+      const scope=pinnedScope();const f=inboxFile.files?.[0];
+      if(!f||f.size>8*1024*1024)throw new Error('Choose a signed packet JSON file of at most 8 MiB.');
+      if(!window.confirm('Retain this minimized signed packet locally? The registered public key and monotonic packet checks must pass.'))return;
+      const prefix=JSON.stringify(scope);
+      const value=await inboxCall('inbox-admit',prefix.slice(0,-1)+',"signed_packet":'+await f.text()+'}');
+      if(inboxOutput.isConnected&&inboxScope().correlation_namespace_sha256===scope.correlation_namespace_sha256){drawInbox(value);inboxFile.value='';}
+    }));
+    const reviewInbox=button('Review complete retained cohort',()=>inboxPerform(async()=>{
+      const scope=pinnedScope();
+      if(!inboxState.ready_for_complete_review)throw new Error('Every active installation must have an available packet.');
+      if(!window.confirm('Review all active retained installation packets and advance accepted registry pins?'))return;
+      const result=await inboxCall('inbox-review',JSON.stringify(scope));
+      if(!inboxOutput.isConnected||inboxScope().correlation_namespace_sha256!==scope.correlation_namespace_sha256)return;
+      await loadInbox();renderReview(inboxOutput,result);
+    }));
+    const forgetInbox=button('Remove retained packets in namespace',()=>inboxPerform(async()=>{
+      const scope=pinnedScope();delete scope.maximum_packet_age_ms;
+      if(!window.confirm('Remove this namespace’s retained packet contents? Accepted registry watermarks remain. Backups and exports are not erased.'))return;
+      await inboxCall('inbox-forget',JSON.stringify(scope));await loadInbox();
+    }));
+    for(const [label,input] of [['Correlation namespace',inboxNs],['Maximum age in hours',age]]){const l=el('label',label+' ');l.appendChild(input);inboxSection.appendChild(l);}
+    for(const input of [inboxNs,age])input.addEventListener('change',()=>{inboxState=null;inboxOutput.replaceChildren();});
+    inboxSection.append(button('Load inbox status',()=>inboxPerform(loadInbox)),inboxFile,admit,reviewInbox,forgetInbox,inboxOutput);
+    const runReview=button('Review pinned installation packets',async()=>{
+      const attempt=++generation;output.replaceChildren();
+      try{
+        const selected=file.files?.[0];if(!selected||selected.size>8*1024*1024)throw new Error('Choose a review bundle of at most 8 MiB.');
+        if(!window.confirm('Review these explicitly selected offline installation packets?'))return;
+        const signed=signingMode.checked;
+        const result=await request('/v1/process-catalog/procurement-workforce/exchange/'+(signed?(registered.checked?'registered-review':'signed-review'):'review'),{document:await selected.text()});
+        if(attempt!==generation||!output.isConnected)return;
+        renderReview(output,result);
       }catch(error){if(attempt===generation)output.replaceChildren(el('p',error.message));}
     });
     file.addEventListener('change',()=>{generation++;output.replaceChildren();});
     signingMode.addEventListener('change',()=>{generation++;output.replaceChildren();});
     registered.addEventListener('change',()=>{generation++;output.replaceChildren();});
-    section.append(signingLabel,registeredLabel,identity,button('Load local trust registry',refreshTrust),trustPanel,aliasLabel,secretLabel,runExport,el('p','Review bundle: combine downloaded packets with separately obtained pins, the expected correlation namespace and either the expected registry revision (registered review) or an explicit public-key trust list (stateless signed review) (see AGENT_PROCUREMENT_WORKFORCE_EXCHANGE.md).'),file,runReview,output);host.appendChild(section);
+    section.append(signingLabel,registeredLabel,identity,button('Load local trust registry',refreshTrust),trustPanel,inboxSection,aliasLabel,secretLabel,runExport,el('p','Review bundle: combine downloaded packets with separately obtained pins, the expected correlation namespace and either the expected registry revision (registered review) or an explicit public-key trust list (stateless signed review) (see AGENT_PROCUREMENT_WORKFORCE_EXCHANGE.md).'),file,runReview,output);host.appendChild(section);
   }
   function installWorkforceSchedule(host){
     const section=el('details');section.append(el('summary','Schedule local workforce deadline reviews'),
