@@ -13,6 +13,7 @@ from . import agent_procurement_workforce_dossier as audit
 from . import agent_procurement_workforce_timeline as timeline
 from . import agent_procurement_workforce_audit_triage as triage
 from . import agent_procurement_workforce_audit_reconcile as reconciliation
+from . import agent_procurement_workforce_remediation as remediation
 
 
 class VerifyRequest(Strict):
@@ -89,3 +90,19 @@ def reconcile_receipts(document):
     return reconciliation.reconcile(document["dossiers"],document["manifest"],
                                     document["receipt_set"],
                                     expected_manifest_sha256=req.expected_manifest_sha256)
+
+
+class RemediationCreate(TimelineRequest):
+    expected_worklist_sha256: Hash
+    confirm_local_retention: StrictBool
+
+
+def create_remediation(document):
+    _bounded(document)
+    req = RemediationCreate.model_validate(document)
+    if not req.confirmed or not req.confirm_local_retention:
+        raise ValueError("explicit local register retention confirmation required")
+    return remediation.create(document["dossiers"],document["manifest"],
+                              expected_manifest_sha256=req.expected_manifest_sha256,
+                              expected_worklist_sha256=req.expected_worklist_sha256,
+                              confirmed=True)
