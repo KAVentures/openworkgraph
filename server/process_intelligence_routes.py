@@ -595,3 +595,10 @@ async def agent_handovers(request: Request, log_id: str, limit: int = Query(defa
                           case_type: str | None = Query(default=None, max_length=200)):
     _require_agent_access(request)
     return await _answer(sharing.handovers, log_id, case_type, limit)
+
+
+@router.get("/v1/process-intelligence/{log_id}/roles")
+async def agent_roles(request: Request, log_id: str, threshold: float = Query(default=0.65, gt=0, lt=1),
+                      case_type: str | None = Query(default=None, max_length=200)):
+    _require_agent_access(request)
+    return await _answer(sharing.roles, log_id, case_type, threshold)

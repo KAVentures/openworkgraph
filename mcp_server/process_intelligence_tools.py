@@ -998,6 +998,18 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         return _get("get_process_handovers", f"/v1/process-intelligence/{_log(log_id)}/handovers",
                     {"limit": limit, "case_type": case_type})
 
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_process_roles(log_id: str, threshold: float = 0.65, case_type: str | None = None) -> dict[str, Any]:
+        """Roles in a shared log, mined by grouping resources that perform a similar mix of activities (groups merge
+        while their activity profiles correlate at or above threshold, 0-1). Each role gives how many resources it
+        has, its activity mix and the activities only it performs. Members are never listed or named. Roles
+        describe recorded work, not job titles or performance. Aggregates only.
+        """
+        if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not 0 < threshold < 1:
+            raise ToolError("threshold must be between 0 and 1")
+        return _get("get_process_roles", f"/v1/process-intelligence/{_log(log_id)}/roles",
+                    {"threshold": threshold, "case_type": case_type})
+
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
     def tag_process_cases(log_id: str, tag: str, case_ids: list[str], note: str = "") -> dict[str, Any]:
         """Record a decision about cases as a case tag, for example "needs review" or "duplicate invoice".

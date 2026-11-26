@@ -1457,3 +1457,28 @@ def handovers(log_id: str, case_type: str | None = None, limit: int = 50) -> dic
         "interpretation": full["interpretation"],
         "format": FORMAT, "log_id": log_id,
     }
+
+
+def roles(log_id: str, case_type: str | None = None, threshold: float = 0.65) -> dict[str, Any]:
+    """Roles mined from which activities resources perform (aggregates level). Members are only counted, never
+    listed, and activities a role did fewer than AGENT_MIN_CELL_CASES times are left out of its mix."""
+    require(log_id, "aggregates")
+    from . import event_log_roles as rl
+    threshold = float(threshold)
+    if not 0 < threshold < 1:
+        raise EventLogWorkspaceError("threshold must be between 0 and 1")
+    full = rl.roles(log_id, case_type, threshold=threshold, names="pseudonymous")
+    keep = AGENT_MIN_CELL_CASES
+    out, hidden = [], 0
+    for role in full["roles"]:
+        if role["events"] < keep:
+            hidden += 1
+            continue
+        out.append({"role": role["role"], "member_count": role["member_count"], "events": role["events"],
+                    "activity_mix": [a for a in role["activity_mix"] if a["events"] >= keep],
+                    "activities": role["activities"], "exclusive_activities": role["exclusive_activities"]})
+    return {"roles": out, "withheld_roles": hidden, "min_events": keep, "threshold": full["threshold"],
+            "merges": full["merges"], "coverage": full["coverage"], "method": full["method"],
+            "privacy": {"names_returned": False, "members_listed": False,
+                        "per_person_durations_or_speed_computed": False, "ranking_or_performance_scoring": False},
+            "interpretation": full["interpretation"], "format": FORMAT, "log_id": log_id}
