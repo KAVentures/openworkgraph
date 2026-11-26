@@ -1899,6 +1899,61 @@
       button('Clear procurement review',()=>{documentFile.value='';planFile.value='';clearProcurementReview();}),output);
     host.appendChild(section);
   }
+  function installWorkforceExchange(host){
+    const section=el('details');section.append(el('summary','Exchange minimized monitoring summaries across installations'),
+      el('p','Explicit offline export or review. Use the same high-entropy correlation key at each source, and obtain packet pins separately from trusted operators. No network transfer or source authentication.'));
+    const alias=el('input');alias.setAttribute('aria-label','Installation alias');alias.maxLength=80;
+    const secret=el('input');secret.type='password';secret.autocomplete='off';secret.maxLength=64;secret.setAttribute('aria-label','Shared 32-byte correlation key in hexadecimal');
+    const aliasLabel=el('label','Installation alias ');aliasLabel.append(alias);
+    const secretLabel=el('label','Shared correlation key (64 hex characters) ');secretLabel.append(secret);
+    const file=el('input');file.type='file';file.accept='.json,application/json';file.setAttribute('aria-label','Pinned workforce exchange review bundle');
+    const output=el('div');let generation=0;
+    const download=(value,name)=>button('Download '+name,()=>{
+      const url=URL.createObjectURL(new Blob([JSON.stringify(value,null,2)+'\n'],{type:'application/json'}));
+      const link=el('a');link.href=url;link.download=name+'.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    });
+    const runExport=button('Create minimized exchange packet',async()=>{
+      const attempt=++generation;output.replaceChildren();
+      try{
+        if(!window.confirm('Export minimized aggregate monitoring evidence with linkable correlation tags?'))return;
+        if(!/^[a-f0-9]{64}$/.test(secret.value))throw new Error('Provide a randomly generated 32-byte key as lowercase hex.');
+        const document=JSON.stringify({installation_alias:alias.value,correlation_key_hex:secret.value,confirmed:true});
+        secret.value='';
+        const result=await request('/v1/process-catalog/procurement-workforce/exchange/export',{document});
+        if(attempt!==generation||!output.isConnected)return;
+        output.append(el('p',result.packet.rows.length+' minimized journal rows · '+result.packet.unreadable_journals+' unreadable'),
+          el('p','Packet SHA-256: '+result.packet_sha256),
+          el('p','Correlation namespace: '+result.packet.correlation_namespace_sha256),
+          download({expected_packet_sha256:result.packet_sha256,packet:result.packet},'owg-workforce-exchange-packet'));
+      }catch(error){if(attempt===generation)output.replaceChildren(el('p',error.message));}
+    });
+    const runReview=button('Review pinned installation packets',async()=>{
+      const attempt=++generation;output.replaceChildren();
+      try{
+        const selected=file.files?.[0];if(!selected||selected.size>8*1024*1024)throw new Error('Choose a review bundle of at most 8 MiB.');
+        if(!window.confirm('Review these explicitly selected offline installation packets?'))return;
+        const result=await request('/v1/process-catalog/procurement-workforce/exchange/review',{document:await selected.text()});
+        if(attempt!==generation||!output.isConnected)return;
+        output.append(el('h4','Multi-installation review'),el('p',result.installations.length+' declared installations · '+result.included_journals+' included journals · '+result.excluded_journals+' excluded · '+result.unreadable_journals+' unreadable'),
+          el('p',result.totals_may_be_incomplete?'Totals may be incomplete.':'No exclusions identified in the supplied packets; completeness is not independently verified.'));
+        const money=(v,c)=>{
+          if(v==null)return 'unbounded';
+          const n=BigInt(v.numerator),d=BigInt(v.denominator),r=(2n*n+d)/(2n*d);
+          return String(r/1000000n)+'.'+String(r%1000000n).padStart(6,'0')+' '+c+' (rounded)';
+        };
+        for(const g of result.currency_totals){
+          const sub=el('section');sub.append(el('h5',g.currency),el('p',g.recorded_cases+' recorded / '+g.started_cases+' started / '+g.scheduled_cases+' scheduled'));
+          for(const [name,a] of Object.entries(g.arms))sub.appendChild(el('p',name+': '+a.recorded+'/'+a.cases+' recorded · declared variable cost '+money(a.variable_cost.lower_microunits,g.currency)+' to '+money(a.variable_cost.upper_microunits,g.currency)));
+          output.appendChild(sub);
+        }
+        const list=el('ul');for(const r of result.journals)list.appendChild(el('li',r.installation_alias+' · '+r.journal_tag.slice(0,12)+' · '+(r.rollback_review?'rollback review · ':r.attention?'attention · ':'')+(r.included_in_totals?'included':r.exclusion_reasons.join(', '))));
+        output.append(el('h5','Incident and overlap queue'),list,download(result,'owg-workforce-exchange-review'),
+          el('p','Source identity, actual business outcomes and financial benefits remain unverified. No deployment or spending authorization.'));
+      }catch(error){if(attempt===generation)output.replaceChildren(el('p',error.message));}
+    });
+    file.addEventListener('change',()=>{generation++;output.replaceChildren();});
+    section.append(aliasLabel,secretLabel,runExport,el('p','Review bundle: combine downloaded packet objects with separately obtained pins and the expected correlation namespace (see AGENT_PROCUREMENT_WORKFORCE_EXCHANGE.md).'),file,runReview,output);host.appendChild(section);
+  }
   function installWorkforceSchedule(host){
     const section=el('details');section.append(el('summary','Schedule local workforce deadline reviews'),
       el('p','Only journals with separate explicit consent are reviewed, and only crossed frozen boundaries create a checkpoint. No external source reads, messages or deployment actions.'));
@@ -2175,6 +2230,7 @@
     const backlogHost=el('div');backlogHost.id='owgCatalogBacklog';host.appendChild(backlogHost);
     host.appendChild(button('Review AI workforce monitoring',()=>workforceOverview()));
     const workforceHost=el('div');workforceHost.id='owgWorkforceOverview';host.appendChild(workforceHost);
+    installWorkforceExchange(host);
     installWorkforceSchedule(host);
     installWorkforceAllocation(host);
     const message=el('p','No saved process has been loaded.');message.id='owgCatalogStatus';message.setAttribute('role','status');host.appendChild(message);

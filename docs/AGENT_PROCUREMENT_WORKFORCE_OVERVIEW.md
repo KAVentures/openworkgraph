@@ -44,3 +44,5 @@ performed. Authentication is that of the local dashboard session, not
 an organization role system, and submitted outcomes remain unverified.
 
 For constrained comparison of multiple explicitly selected conditional operating portfolios, see [workforce allocation](AGENT_PROCUREMENT_WORKFORCE_ALLOCATION.md). This is a separate scenario-planning operation, not a financial inference from monitoring totals.
+
+For explicitly shared offline monitoring summaries across installations, use [workforce exchange](AGENT_PROCUREMENT_WORKFORCE_EXCHANGE.md). The common correlation key enables exact overlap detection without exporting raw case references or workflow titles.
