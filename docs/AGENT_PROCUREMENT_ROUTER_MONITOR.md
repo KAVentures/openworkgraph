@@ -84,3 +84,5 @@ Any rollback trigger in the supplied prior checkpoint blocks continuation
 at the next review even if current pooled checks recover. This is not a
 persistent incident history: retain all checkpoints and refer for separate
 review rather than discarding an earlier trigger.
+
+For local persistence with automatic prior-checkpoint lookup, chained audit entries and sticky incident flags, use [the monitoring journal](AGENT_PROCUREMENT_MONITOR_JOURNAL.md). Offline snapshot review remains nonpersistent.

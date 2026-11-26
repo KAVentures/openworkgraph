@@ -7,7 +7,6 @@ case inputs or provider credentials. No network, polling or deployment.
 from __future__ import annotations
 
 import json
-import sqlite3
 import time
 from typing import Annotated, Literal
 
@@ -150,7 +149,15 @@ def _unique(values):
     return [v for _,v in sorted({digest(v):v for v in values}.items())]
 
 
-def append(packet,workflow_id,revision,doc,*,ensure_current):
+def _require_current(conn,workflow_id,revision):
+    # Same SQLite write transaction as journal mutation: no TOCTOU gap or
+    # nested catalog connection acquiring a schema/write lock.
+    current=conn.execute("SELECT MAX(revision) FROM workflow_knowledge WHERE owner=? AND workflow_id=?",
+                         ("local",workflow_id)).fetchone()[0]
+    if current!=revision:raise JournalError("Open latest saved process revision before recording monitoring evidence",409)
+
+
+def append(packet,workflow_id,revision,doc):
     if not isinstance(doc,dict) or set(doc)!={"initial","monitor_plan","snapshot","request"}:
         raise JournalError("Exact monitoring checkpoint bundle required")
     req=Append.model_validate(doc["request"])
@@ -160,7 +167,7 @@ def append(packet,workflow_id,revision,doc,*,ensure_current):
     snapshot=_normalize(doc["snapshot"])
     # Do expensive evidence verification outside the SQLite write lock.
     with db.connect() as conn:
-        _schema(conn);state,history=_read(conn,key)
+        conn.execute("BEGIN");_schema(conn);state,history=_read(conn,key)
         _check_head(history,req.expected_head_sha256)
     if state is not None and state["plan_sha256"]!=plan["monitor_plan_sha256"]:
         raise JournalError("Monitor ID already binds another plan",409)
@@ -177,7 +184,7 @@ def append(packet,workflow_id,revision,doc,*,ensure_current):
     with db.connect() as conn:
         conn.execute("BEGIN IMMEDIATE");_schema(conn);current,history=_read(conn,key)
         _check_head(history,req.expected_head_sha256)
-        ensure_current()
+        _require_current(conn,workflow_id,revision)
         if current is None and conn.execute("SELECT COUNT(*) FROM procurement_monitor_journals").fetchone()[0]>=MAX_MONITORS:
             raise JournalError("Local monitoring journal capacity reached",409)
         return _save(conn,key,new_state,history,"checkpoint",{
@@ -190,19 +197,19 @@ def append(packet,workflow_id,revision,doc,*,ensure_current):
 def detail(workflow_id,revision,doc):
     req=Identify.model_validate(doc);key=_key(workflow_id,revision,req.monitor_id)
     with db.connect() as conn:
-        _schema(conn);state,history=_read(conn,key)
+        conn.execute("BEGIN");_schema(conn);state,history=_read(conn,key)
         if state is None:raise JournalError("Monitoring journal not found",404)
         return _view(key,state,history)
 
 
-def decide(workflow_id,revision,doc,*,ensure_current):
+def decide(workflow_id,revision,doc):
     req=Decision.model_validate(doc)
     if not req.confirmed:raise JournalError("Explicit review confirmation required",403)
     key=_key(workflow_id,revision,req.monitor_id)
     with db.connect() as conn:
         conn.execute("BEGIN IMMEDIATE");_schema(conn);state,history=_read(conn,key)
         if state is None:raise JournalError("Monitoring journal not found",404)
-        _check_head(history,req.expected_head_sha256);ensure_current()
+        _check_head(history,req.expected_head_sha256);_require_current(conn,workflow_id,revision)
         if state["coordinator_alias"].casefold()==req.reviewer_alias.casefold():
             raise JournalError("Distinct declared reviewer alias required")
         if req.disposition=="refer_for_continued_monitoring_review" and not _view(key,state,history)["eligible_for_continued_monitoring_review"]:
@@ -229,9 +236,25 @@ def forget(workflow_id,revision,doc):
             "backup_erasure_verified":False,"deployment_changed":False,"execution_authorized":False}
 
 
-def operation(packet,workflow_id,revision,action,doc,*,ensure_current):
-    if action=="router-journal-append":return append(packet,workflow_id,revision,doc,ensure_current=ensure_current)
+def list_journals(workflow_id,revision,doc):
+    if doc!={}:raise JournalError("Empty object required for journal list")
+    with db.connect() as conn:
+        conn.execute("BEGIN");_schema(conn)
+        keys=conn.execute("SELECT monitor_id FROM procurement_monitor_journals WHERE workflow_id=? AND revision=? ORDER BY monitor_id",
+                          (workflow_id,revision)).fetchall()
+        rows=[]
+        for k in keys:
+            key=_key(workflow_id,revision,k[0]);state,history=_read(conn,key)
+            view=_view(key,state,history)
+            rows.append({x:view[x] for x in ("monitor_id","plan_sha256","head_sha256","entry_count","checkpoint_count",
+                         "sticky_rollback_triggers","rollback_referral_recorded","eligible_for_continued_monitoring_review")})
+    return {"format":FORMAT,"journals":rows,"result_persisted":False,"execution_authorized":False}
+
+
+def operation(packet,workflow_id,revision,action,doc):
+    if action=="router-journal-list":return list_journals(workflow_id,revision,doc)
+    if action=="router-journal-append":return append(packet,workflow_id,revision,doc)
     if action=="router-journal-detail":return detail(workflow_id,revision,doc)
-    if action=="router-journal-decide":return decide(workflow_id,revision,doc,ensure_current=ensure_current)
+    if action=="router-journal-decide":return decide(workflow_id,revision,doc)
     if action=="router-journal-forget":return forget(workflow_id,revision,doc)
     raise JournalError("Unknown monitoring journal operation")

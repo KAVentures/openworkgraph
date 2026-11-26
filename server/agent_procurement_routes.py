@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -88,10 +89,7 @@ def _inspect(operation, workflow_id, revision, payload):
                 raise HTTPException(409,"Open latest saved process revision before monitoring decision")
             result=monitor.operation(packet,operation,document)
         elif operation.startswith("router-journal-"):
-            def ensure_current():
-                if catalog.get(workflow_id)["revision"]!=revision:
-                    raise HTTPException(409,"Open latest saved process revision before recording monitoring evidence")
-            result=journal.operation(packet,workflow_id,revision,operation,document,ensure_current=ensure_current)
+            result=journal.operation(packet,workflow_id,revision,operation,document)
         elif operation in ("deployment-review","deployment-decide"):
             if catalog.get(workflow_id)["revision"]!=revision:
                 raise HTTPException(409,"Open the latest saved process revision before deployment review")
@@ -113,6 +111,8 @@ def _inspect(operation, workflow_id, revision, payload):
         latest=catalog.get(workflow_id)["revision"]
         if operation in ("nominate","decide","rollout-review","deployment-review","deployment-decide","router-freeze","router-change-freeze","router-change-decide","router-pilot-freeze","router-pilot-decide","router-monitor-freeze","router-monitor-decide") and latest!=revision:
             raise HTTPException(409,"Saved process revision changed during review; reopen the latest revision")
+    except sqlite3.Error:
+        raise HTTPException(503,"Local procurement storage temporarily unavailable") from None
     except journal.JournalError as exc:
         raise HTTPException(exc.status,str(exc)) from None
     except LookupError:
@@ -130,7 +130,7 @@ def _inspect(operation, workflow_id, revision, payload):
 
 
 @router.post("/v1/process-catalog/procurement/{operation}")
-async def inspect_procurement(request: Request, operation: Literal["compare","freeze","review","nominate","assess","decide","outcome-review","rollout-review","deployment-review","deployment-decide","operating-cost","router-freeze","router-review","router-change-freeze","router-change-assess","router-change-decide","router-pilot-freeze","router-pilot-review","router-pilot-decide","router-monitor-freeze","router-monitor-review","router-monitor-decide","router-journal-append","router-journal-detail","router-journal-decide","router-journal-forget"],
+async def inspect_procurement(request: Request, operation: Literal["compare","freeze","review","nominate","assess","decide","outcome-review","rollout-review","deployment-review","deployment-decide","operating-cost","router-freeze","router-review","router-change-freeze","router-change-assess","router-change-decide","router-pilot-freeze","router-pilot-review","router-pilot-decide","router-monitor-freeze","router-monitor-review","router-monitor-decide","router-journal-list","router-journal-append","router-journal-detail","router-journal-decide","router-journal-forget"],
                               workflow_id: str = Query(pattern=r"^[A-Za-z0-9_-]{1,80}$"),
                               revision: int = Query(ge=1,le=2**31-1)):
     _require_dashboard(request)
