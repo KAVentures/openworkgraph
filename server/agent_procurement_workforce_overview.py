@@ -90,8 +90,9 @@ def _row(key,state,history,current,now,overlap):
             if now>=w["end_exclusive_ms"]+delay and w["state"]!="complete_pass" and w["state"]!="rollback_review":
                 due.append(w["window_id"])
     sticky=view["sticky_rollback_triggers"]
-    if sticky or view["rollback_referral_recorded"]:priority="rollback_review"
-    elif due or report["recommended_review"]=="rollback_review":priority="attention"
+    corroboration=view["outcome_corroboration"]
+    if sticky or corroboration["triggers"] or view["rollback_referral_recorded"]:priority="rollback_review"
+    elif due or corroboration["blocks_continuation"] or report["recommended_review"]=="rollback_review":priority="attention"
     elif reasons:priority="excluded_review"
     elif view["eligible_for_continued_monitoring_review"]:priority="continuation_review"
     else:priority="monitoring"
@@ -105,6 +106,7 @@ def _row(key,state,history,current,now,overlap):
         "recorded_cases":report["recorded_cases"],
         "credential_authenticated_observations":view["credential_authenticated_observations"],
         "finance_reconciled_windows":[r["window_id"] for r in state.get("finance_reconciliations",[])],
+        "outcome_corroboration":{k:corroboration[k] for k in ("required","enrolled","reviewed","matched","conflicts","unresolved","source_overlap","complete","blocks_continuation")},
         "scheduled_deadline_review_enabled":view["scheduled_deadline_review_enabled"],
         "ordinary_entries_remaining":view["ordinary_entries_remaining"],
         "reserved_disable_entries":view["reserved_disable_entries"],
