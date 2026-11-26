@@ -107,7 +107,8 @@ def _max_gate(v,limit,n):
 
 
 def _combine(states):
-    return "fail" if "fail" in states else "unknown" if "unknown" in states else "pass"
+    values=set(states)
+    return "fail" if "fail" in values else "unknown" if "unknown" in values else "pass"
 
 
 def evaluate(policy, annual_cases, manual_fixed, fixed_costs, summaries, money, labor_hourly):
