@@ -244,3 +244,93 @@ def test_global_depth_and_node_limits(monkeypatch):
     monkeypatch.setattr(importer, "MAX_NODES", 5)
     with pytest.raises(EventLogWorkspaceError, match="across scopes"):
         importer.to_pnml(wrapped(body))
+
+
+def call(ident, ref):
+    return node(ident, "callActivity")[0], "callActivity", f' calledElement="{ref}"'
+
+
+def called_definition(ref="worker"):
+    body = inner(ref, [node(ref+"s", "startEvent"), node(ref+"a", "task", "Work"),
+                       node(ref+"e", "endEvent")],
+                 [(ref+"s", ref+"a"), (ref+"a", ref+"e")])
+    return f'<process id="{ref}">{body}</process>'
+
+
+def call_file(parallel=False):
+    if parallel:
+        nodes = [START, SPLIT, call("c1", "worker"), call("c2", "worker"), JOIN, END]
+        edges = [("s", "x"), ("x", "c1"), ("x", "c2"), ("c1", "j"), ("c2", "j"), ("j", "e")]
+    else:
+        nodes = [START, call("c1", "worker"), A, call("c2", "worker"), END]
+        edges = [("s", "c1"), ("c1", "a"), ("a", "c2"), ("c2", "e")]
+    return bpmn(nodes, edges, root_extra=called_definition())
+
+
+def test_explicit_definition_selection_and_separate_call_instances(monkeypatch):
+    data = call_file()
+    preview = importer.inspect_processes(data)
+    assert [p["id"] for p in preview["processes"]] == ["p", "worker"]
+    with pytest.raises(EventLogWorkspaceError, match="explicitly select"):
+        importer.to_pnml(data)
+    with pytest.raises(EventLogWorkspaceError, match="not present"):
+        importer.to_pnml(data, "missing")
+    result = importer.to_pnml(data, "p")
+    assert result == importer.to_pnml(data, "p")
+    assert result["available_process_ids"] == ["p", "worker"]
+    assert len(result["call_boundaries"]) == 2
+    assert result["nodes"] == 11
+    assert result["definition_nodes"] == 8
+    instances = [row for row in result["node_instances"] if row["source_id"] == "workera"]
+    assert [row["call_path"] for row in instances] == [["c1"], ["c2"]]
+    assert instances[0]["transition_ids"] != instances[1]["transition_ids"]
+    flows = [row for row in result["flow_instances"] if row["source_id"] == "worker_f0"]
+    assert len({row["place_id"] for row in flows}) == 2
+    original = importer.to_pnml
+    monkeypatch.setattr(importer, "to_pnml", lambda data: original(data, "p"))
+    assert traces(data) == {("Work", "A", "Work")}
+
+
+def test_concurrent_calls_do_not_share_tokens(monkeypatch):
+    data = call_file(parallel=True)
+    original = importer.to_pnml
+    result = original(data, "p")
+    assert len(result["call_boundaries"]) == 2
+    assert len({row["entry_place_id"] for row in result["call_boundaries"].values()}) == 2
+    monkeypatch.setattr(importer, "to_pnml", lambda data: original(data, "p"))
+    assert traces(data) == {("Work", "Work")}
+
+
+def test_reusable_definition_is_independently_selectable(monkeypatch):
+    data = call_file()
+    original = importer.to_pnml
+    result = original(data, "worker")
+    assert result["nodes"] == 3
+    assert not result["call_boundaries"]
+    monkeypatch.setattr(importer, "to_pnml", lambda data: original(data, "worker"))
+    assert traces(data) == {("Work",)}
+
+
+@pytest.mark.parametrize("ref", ["missing", "external:worker", "p", ""])
+def test_unresolved_qualified_and_recursive_calls_refused(ref):
+    data = call_file().replace(b'calledElement="worker"', f'calledElement="{ref}"'.encode(), 1)
+    with pytest.raises(EventLogWorkspaceError):
+        importer.to_pnml(data, "p")
+
+
+def test_indirect_recursion_refused():
+    data = call_file().replace(b'<task id="workera" name="Work"/>',
+                               b'<callActivity id="workera" calledElement="p"/>')
+    with pytest.raises(EventLogWorkspaceError, match="recursive"):
+        importer.to_pnml(data, "p")
+
+
+def test_expansion_budget_counts_reused_definitions(monkeypatch):
+    monkeypatch.setattr(importer, "MAX_EXPANDED_NODES", 10)
+    with pytest.raises(EventLogWorkspaceError, match="expanded"):
+        importer.to_pnml(call_file(), "p")
+
+
+def test_nested_call_instance_keys_do_not_alias():
+    assert importer._instance_key((), '["a","b"]') != importer._instance_key(("a",), "b")
+    assert importer._instance_key(("a:b",), "c") != importer._instance_key(("a",), "b:c")
