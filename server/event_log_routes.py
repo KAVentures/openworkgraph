@@ -2659,6 +2659,17 @@ async def event_log_domain_pack_priority(request: Request, log_id: str, pack_id:
     return response
 
 
+@router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}/priority/export")
+async def event_log_domain_pack_priority_export(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_priority as priority
+    _require_dashboard(request)
+    spec = await _json_body(request, "complete priority worklist export", strict=True, limit=8192)
+    _require_dashboard(request)
+    response = await run_in_threadpool(_respond, priority.export, log_id, pack_id, spec)
+    _require_dashboard(request)
+    return response
+
+
 @router.get("/v1/event-logs/{log_id}/domain-packs/{pack_id}/report")
 def event_log_domain_pack_report(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
     _require_dashboard(request)

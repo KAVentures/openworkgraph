@@ -113,3 +113,43 @@ def test_complete_work_budgets(monkeypatch):
     monkeypatch.setattr(priority,"MAX_SOURCE_ROWS",1)
     with pytest.raises(workspace.EventLogWorkspaceError,match="source-row budget"):
         priority.review(log,"order_to_cash",request())
+
+
+def test_complete_export_exact_and_pinned(monkeypatch):
+    log,spec,_=installed()
+    req=request(minimum_confirmed=1)
+    first=priority.review(log,"order_to_cash",req)
+    export={k:v for k,v in req.items() if k!="limit"}
+    export["expected_basis_sha256"]=first["basis_sha256"]
+    result=priority.export(log,"order_to_cash",export)
+    assert result["complete_export"] is True
+    assert result["basis_sha256"]==first["basis_sha256"]
+    assert result["cases"]==first["cases"]
+    assert len(result["cases"])==result["matching_cases"]
+    assert result["next_after"] is None
+    assert first["complete_export"] is False
+    monkeypatch.setattr(priority,"MAX_EXPORT_CASES",0)
+    with pytest.raises(workspace.EventLogWorkspaceError,match="Complete export exceeds"):
+        priority.export(log,"order_to_cash",export)
+    monkeypatch.setattr(priority,"MAX_EXPORT_CASES",5000)
+    packs.install(log,"order_to_cash",{**spec,"parameters":{"payment_terms_days":20}})
+    with pytest.raises(workspace.EventLogWorkspaceError,match="changed"):
+        priority.export(log,"order_to_cash",export)
+
+
+def test_complete_export_requires_pin():
+    log,_,_=installed()
+    req={k:v for k,v in request().items() if k!="limit"}
+    with pytest.raises(workspace.EventLogWorkspaceError,match="exact reviewed selection"):
+        priority.export(log,"order_to_cash",req)
+
+
+def test_complete_export_empty_population():
+    log,_,_=installed()
+    req=request(case_type=TYPES["order"],weights=[{"rule_index":0,"weight":1}],
+                minimum_confirmed=1)
+    first=priority.review(log,"order_to_cash",req)
+    result=priority.export(log,"order_to_cash",{
+        **{k:v for k,v in req.items() if k!="limit"},"expected_basis_sha256":first["basis_sha256"]})
+    assert result["complete_export"] is True
+    assert result["matching_cases"]==0 and result["cases"]==[] and result["next_after"] is None

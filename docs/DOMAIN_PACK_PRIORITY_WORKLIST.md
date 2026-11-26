@@ -53,3 +53,7 @@ Regression tests cover weighted invoice violations, exact ordering and
 unknown-state bounds, stale installation/selection pins, invalid input,
 work limits and a Chromium worklist journey. Synthetic fixtures do
 not establish operational priority validity or real customer acceptance.
+
+## Complete reviewed export
+
+The separate complete JSON download re-evaluates the exact reviewed selection under the workspace lock and requires its basis digest. POST the same selection without limit or cursor, with expected_basis_sha256, to the priority/export endpoint. It returns every matching case (up to 5,000), or refuses without a partial result. A changed configuration or retained source requires a fresh review. Ordinary JSON and CSV downloads still contain just the current page. Complete exports can contain sensitive case identifiers; store and share them only with authorized recipients.

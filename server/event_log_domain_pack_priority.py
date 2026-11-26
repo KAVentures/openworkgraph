@@ -20,6 +20,7 @@ FORMAT = "openworkgraph.domain-pack-priority.v1"
 MAX_RULES = 12
 MAX_SOURCE_ROWS = 500_000
 MAX_OUTCOMES = 2_000_000
+MAX_EXPORT_CASES = 5_000
 _GUARD = BoundedSemaphore(1)
 
 
@@ -171,7 +172,15 @@ def _page(conn, basis, after, limit):
             "next_after":{"case_id":page[-1][0],"lower":page[-1][1],"upper":page[-1][2]} if len(rows)>limit else None}
 
 
-def review(log_id, pack_id, spec):
+def _review(log_id, pack_id, spec, *, complete_export=False):
+    export_pin = None
+    if complete_export:
+        if not isinstance(spec, dict) or set(spec) != {"case_type", "weights", "minimum_confirmed", "include_uncertain", "expected_basis_sha256"}:
+            _fail("Complete export requires the exact reviewed selection and basis digest")
+        export_pin = spec["expected_basis_sha256"]
+        if not isinstance(export_pin, str) or len(export_pin) != 64 or any(c not in "0123456789abcdef" for c in export_pin):
+            _fail("Invalid reviewed export digest")
+        spec = {**{k:v for k,v in spec.items() if k != "expected_basis_sha256"}, "limit": 1}
     kind, weights, after = _parse(spec)
     if not _GUARD.acquire(blocking=False):
         _fail("Another priority review is running")
@@ -179,15 +188,36 @@ def review(log_id, pack_id, spec):
         with workspace._LOCK:
             basis = _basis(log_id, pack_id, kind, weights, spec)
             pin = provenance.digest(basis)
-            if after is not None and spec["expected_basis_sha256"] != pin:
+            if (after is not None and spec["expected_basis_sha256"] != pin) or (complete_export and export_pin != pin):
                 _fail("Reviewed source or installation changed; rerun priority review")
             def run(conn):
                 _materialize(conn,basis)
+                if complete_export:
+                    # Refuse before materializing identifiers; never label a partial page complete.
+                    column = "hi" if basis["include_uncertain"] else "lo"
+                    count = conn.execute("SELECT count(*) FROM priority_cases WHERE " + column + ">=?",
+                                         [basis["minimum_confirmed"]]).fetchone()[0]
+                    if count > MAX_EXPORT_CASES:
+                        _fail(f"Complete export exceeds {MAX_EXPORT_CASES:,} matching cases; use exact pages or narrow the threshold")
+                    result = _page(conn,basis,None,max(1,count))
+                    if result["next_after"] is not None or len(result["cases"]) != count:
+                        _fail("Complete export population does not match the reviewed cases")
+                    return {"result":result}
                 return {"result":_page(conn,basis,after,spec["limit"])}
             output = workspace._query(log_id,kind,run)["result"]
             return {"format":FORMAT,"basis":basis,"basis_sha256":pin,**output,
                     "maximum_score":sum(x["weight"] for x in weights),
                     "configuration_modified":False,"execution_authorized":False,
+                    "complete_export":complete_export,"export_case_limit":MAX_EXPORT_CASES,
                     "interpretation":"User-declared review points, not probability, financial loss or verified policy breach. Unknown outcomes contribute only to the upper bound. Ordering is confirmed points descending, possible points descending, then case ID. No business actions are performed."}
     finally:
         _GUARD.release()
+
+
+def review(log_id, pack_id, spec):
+    return _review(log_id, pack_id, spec)
+
+
+def export(log_id, pack_id, spec):
+    """Recompute a bounded complete worklist against its reviewed basis."""
+    return _review(log_id, pack_id, spec, complete_export=True)
