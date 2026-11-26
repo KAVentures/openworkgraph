@@ -11,6 +11,7 @@ from shared.agent_procurement import Strict, MAX_BYTES, digest
 from shared.process_shadow_review import Hash
 from . import agent_procurement_workforce_dossier as audit
 from . import agent_procurement_workforce_timeline as timeline
+from . import agent_procurement_workforce_audit_triage as triage
 
 
 class VerifyRequest(Strict):
@@ -57,6 +58,19 @@ def review_timeline(document):
     result = timeline.review(document["dossiers"], document["manifest"],
                              expected_manifest_sha256=req.expected_manifest_sha256)
     body = {"format": "openworkgraph.workforce-audit-dashboard-timeline.v1",
-            "timeline": result, "result_persisted": False,
+            "timeline": result, "worklist": triage.from_timeline(result), "result_persisted": False,
             "local_trust_registry_used": False, "execution_authorized": False}
     return {**body, "review_sha256": digest(body)}
+
+
+class TriageRequest(TimelineRequest):
+    decision: triage.Decision
+
+
+def record_triage(document):
+    _bounded(document)
+    req = TriageRequest.model_validate(document)
+    if not req.confirmed:
+        raise ValueError("explicit historical evidence review confirmation required")
+    return triage.record(document["dossiers"], document["manifest"], document["decision"],
+                         expected_manifest_sha256=req.expected_manifest_sha256)
