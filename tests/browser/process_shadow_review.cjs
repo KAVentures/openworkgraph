@@ -235,14 +235,14 @@ print(json.dumps({"a":a[0],"b":b[0],"trust":a[1]["trust"],"manifest":m,"pin":dig
   page.once('dialog',d=>d.accept());
   const receiptResponse=page.waitForResponse(r=>r.url().endsWith('/audit-triage')&&r.status()===200);
   await page.getByRole('button',{name:'Record selected audit follow-up referrals',exact:true}).click();
-  const receipt=await (await receiptResponse).json();
+  const auditReceipt=await (await receiptResponse).json();
   await page.getByText('Evidence-pinned follow-up receipt',{exact:true}).waitFor();
   await page.getByText('1 declared referrals · 0 unselected findings · 0 unselected rollback referrals',{exact:true}).waitFor();
   await page.getByLabel('Declared audit reviewer alias',{exact:true}).fill('different');
   assert.equal(await page.getByText('Evidence-pinned follow-up receipt',{exact:true}).count(),0);
   await page.getByText('Reconcile follow-up receipts from multiple reviewers',{exact:true}).click();
-  await page.getByLabel('Reconciliation receipt 1',{exact:true}).setInputFiles(upload(receipt));
-  await page.getByLabel('Independent receipt digest 1',{exact:true}).fill(receipt.triage_sha256);
+  await page.getByLabel('Reconciliation receipt 1',{exact:true}).setInputFiles(upload(auditReceipt));
+  await page.getByLabel('Independent receipt digest 1',{exact:true}).fill(auditReceipt.triage_sha256);
   page.once('dialog',d=>d.accept());
   await page.getByRole('button',{name:'Recompute and reconcile selected receipts',exact:true}).click();
   await page.getByText('Recomputed audit receipt reconciliation',{exact:true}).waitFor();
