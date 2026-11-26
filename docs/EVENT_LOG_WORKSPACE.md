@@ -3620,6 +3620,14 @@ tagged. Tagging again with the same tag does not duplicate it.
 body, plus the case-filter parameters (`tag` there is the filter for cases already tagged, so the
 new tag is `new_tag`). A tag is the analyst's label, not a finding.
 
+### Exact completed-trace membership audit
+
+After replaying a net, open **Exact completed-trace membership audit** and run the separate audit. Unlike greedy token replay, it explores reachable (marking, trace offset) states without inserting missing tokens. A trace is accepted only when an enabled firing sequence consumes the entire trace and reaches the declared final marking. Exhaustive failure proves rejection under the parsed ordinary P/T semantics. Search cutoffs remain inconclusive. A declared final marking is required.
+
+The report checks up to 200 retained variants of at most 500 activities, with 5,000 states per variant, 500,000 shared charged work units and 1,000 tokens per place. Cases outside the selected variant/length budget remain excluded. The accepted-share interval includes excluded and inconclusive cases in its upper bound, not its lower bound. Prefix length records the longest observed executable prefix, not necessarily the maximum if exploration was cut off. Accepted traces include a bounded transition firing witness. Download the exact model byte hash, results, limits and witnesses as JSON, and inspect the corresponding retained cases using the existing case filter.
+
+The owner-only, non-retained `POST /v1/event-logs/{log_id}/petri-trace-audit` endpoint takes raw PNML XML and the usual case selection. It does not replace heuristic fitness or establish actual execution, timing or business-policy compliance. The result concerns the net as parsed by the existing PNML reader, not arbitrary extended Petri-net semantics.
+
 ### Direct replay of supported BPMN 2.0 control flow
 
 The Petri net file picker accepts `.bpmn` files. OWG converts the supported control-flow subset into a marked PNML net, then uses the existing replay, alignment, evidence and saved-reference-net paths. The conversion does not execute BPMN tasks or certify their implementations.
