@@ -183,6 +183,65 @@ const path=require('node:path');
   await page.locator('#owgCatalogProcurementResult').getByText('Rehearsal decision receipt',{exact:true}).waitFor();
 
 
+  // Generate real signed audit dossiers using the same installed Python implementation.
+  const auditFixture=spawnSync(python,['-c',`import sys,json
+sys.path.insert(0,"tests")
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from test_agent_procurement_workforce_timeline import snapshot,manifest
+from test_agent_procurement_workforce_exchange import row
+from shared.agent_procurement import digest
+key=Ed25519PrivateKey.generate()
+a=snapshot({"site":(key,[row("site",incident=True)])},100)
+b=snapshot({"site":(key,[row("site")])},120)
+m=manifest(a,b)
+print(json.dumps({"a":a[0],"b":b[0],"trust":a[1]["trust"],"manifest":m,"pin":digest(m)}))
+`],{encoding:'utf8'});
+  assert.equal(auditFixture.status,0,auditFixture.stderr);
+  const archives=JSON.parse(auditFixture.stdout);
+  const exchangePanel=page.getByText('Exchange minimized monitoring summaries across installations',{exact:true});
+  await exchangePanel.click();
+  await page.getByText('Independently verify historical workforce audit evidence',{exact:true}).click();
+  const auditInput=page.getByLabel('Independent audit trust file or timeline manifest',{exact:true});
+  const auditPin=page.getByLabel('Independently obtained audit digest',{exact:true});
+  const upload=(value)=>({name:'audit.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(value))});
+  let auditRequests=0;
+  page.on('request',r=>{if(new URL(r.url()).pathname.includes('/exchange/audit-'))auditRequests++;});
+  await auditInput.setInputFiles(upload(archives.trust));
+  await auditPin.fill(archives.a.dossier_sha256);
+  await page.getByLabel('Historical dossier 1',{exact:true}).setInputFiles(upload(archives.a));
+  assert.equal(auditRequests,0);
+  page.once('dialog',d=>d.accept());
+  await page.getByRole('button',{name:'Recompute selected historical audit evidence',exact:true}).click();
+  await page.getByText('Historical dossier independently recomputed',{exact:true}).waitFor();
+  assert.equal(auditRequests,1);
+  await auditPin.fill('0'.repeat(64));
+  assert.equal(await page.getByText('Historical dossier independently recomputed',{exact:true}).count(),0);
+  page.once('dialog',d=>d.accept());
+  await page.getByRole('button',{name:'Recompute selected historical audit evidence',exact:true}).click();
+  await page.getByText(/Historical review refused/).waitFor();
+  await page.getByLabel('Historical audit operation',{exact:true}).selectOption('timeline');
+  await auditInput.setInputFiles(upload(archives.manifest));
+  await auditPin.fill(archives.pin);
+  await page.getByLabel('Historical dossier 1',{exact:true}).setInputFiles(upload(archives.a));
+  await page.getByLabel('Historical dossier 2',{exact:true}).setInputFiles(upload(archives.b));
+  assert.equal(auditRequests,2);
+  page.once('dialog',d=>d.accept());
+  await page.getByRole('button',{name:'Recompute selected historical audit evidence',exact:true}).click();
+  await page.getByText('Independently recomputed historical timeline',{exact:true}).waitFor();
+  await page.getByLabel('Historical journal review filter',{exact:true}).selectOption('rollback');
+  await page.getByText('1 matching journals · page 1 of 1',{exact:true}).waitFor();
+  await page.getByText(/site · .*rollback referral observed/).click();
+  await page.getByText('Rollback referral snapshots: 1',{exact:true}).waitFor();
+  await page.getByLabel('Search historical installation or journal tag',{exact:true}).fill('nonexistent');
+  await page.getByText('0 matching journals · page 1 of 1',{exact:true}).waitFor();
+  await page.getByLabel('Historical dossier 2',{exact:true}).setInputFiles(upload(archives.a));
+  assert.equal(await page.getByText('Independently recomputed historical timeline',{exact:true}).count(),0);
+  page.once('dialog',d=>d.accept());
+  await page.getByRole('button',{name:'Recompute selected historical audit evidence',exact:true}).click();
+  await page.getByText(/Historical review refused/).waitFor();
+  assert.equal(auditRequests,4);
+  await exchangePanel.click();
+
   await page.getByLabel('Business goal',{exact:true}).fill('Revised draft only');
   assert.equal(await page.locator('#owgCatalogShadowResult').textContent(),'');
   assert.equal(await page.locator('#owgCatalogProcurementResult').textContent(),'');
