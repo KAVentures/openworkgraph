@@ -79,7 +79,7 @@ def test_converted_net_replays_recorded_cases():
     (b'<!DOCTYPE x [<!ENTITY e "x">]><ptml/>', "DOCTYPE"),
     (b"<ptml><processTree", "well-formed"),
     (b"<pnml/>", "no <processTree>"),
-    (_doc([("or", "n0", ""), ("manualTask", "n1", "A")], [("n0", "n1")]), "<or> is not supported"),
+    (_doc([("def", "n0", ""), ("manualTask", "n1", "A")], [("n0", "n1")]), "<def> is not supported"),
     (_doc([("sequence", "n0", ""), ("manualTask", "n1", "A")], [("n0", "n1"), ("n0", "n1")]), "more than one parent"),
     (_doc([("sequence", "n0", ""), ("manualTask", "n1", "A")], [("n0", "n9")]), "not in the tree"),
     (_doc([("sequence", "n0", ""), ("sequence", "n1", "")], [("n1", "n0"), ("n0", "n1")], root="n0"), "has a parent"),
@@ -125,8 +125,6 @@ def test_pm4py_notation_matches_the_ptml_tree():
 
 @pytest.mark.parametrize("text,message", [
     ("", "paste a process tree"),
-    ("O( 'A', 'B' )", "O \\(or\\) is not supported"),
-    ("<>( 'A', 'B' )", "interleaving"),
     ("->( 'A', 'B'", "expected , or \\)"),
     ("->( 'A )", "not closed"),
     ("->( 'A' ) extra", "after the tree"),
@@ -182,7 +180,9 @@ with TestClient(app) as client:
     assert client.post(text_path, json={"notation": "->( 'A', 'B' )"}, headers=bearer).status_code == 403
     r = client.post(text_path, json={"notation": "->( 'A', 'B' )"}, headers=owner)
     assert r.status_code == 200 and r.json()["activities"] == ["A", "B"], r.text
-    assert client.post(text_path, json={"notation": "O( 'A' )"}, headers=owner).status_code == 422
+    assert client.post(text_path, json={"notation": "O( 'A' )"}, headers=owner).status_code == 200
+    assert client.post(text_path, json={"notation": "<>( 'A', 'B' )"}, headers=owner).status_code == 200
+    assert client.post(text_path, json={"notation": "O()"}, headers=owner).status_code == 422
     assert client.post(text_path, json={"tree": "x"}, headers=owner).status_code == 422
 print("ok")
 '''
@@ -191,3 +191,100 @@ print("ok")
     done = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1], env=env,
                           capture_output=True, text=True, timeout=180)
     assert done.returncode == 0 and done.stdout.strip().endswith("ok"), f"stdout={done.stdout}\nstderr={done.stderr}"
+
+
+def test_ptml_and_notation_extended_operators_agree():
+    for tag, notation, op in [("or", "O( 'A', 'B' )", "or"),
+                              ("interleaved", "<>( 'A', 'B' )", "interleaved")]:
+        doc = _doc([(tag, "n0", ""), ("manualTask", "n1", "A"), ("manualTask", "n2", "B")],
+                   [("n0", "n1"), ("n0", "n2")])
+        tree = ptml.read_tree(doc)[0]
+        assert tree["op"] == op
+        assert tree == ptml.read_notation(notation)
+        assert ptml.to_pnml(doc)["activities"] == ["A", "B"]
+        assert ptml.notation_to_pnml(notation)["activities"] == ["A", "B"]
+
+
+def test_ptml_deep_and_non_ascii_compatible_xml_refused():
+    nodes = [("sequence", f"n{i}", "") for i in range(ptml.MAX_DEPTH + 1)]
+    nodes.append(("manualTask", f"n{ptml.MAX_DEPTH + 1}", "A"))
+    edges = [(f"n{i}", f"n{i+1}") for i in range(len(nodes) - 1)]
+    with pytest.raises(EventLogWorkspaceError, match="nested too deeply"):
+        ptml.read_tree(_doc(nodes, edges))
+    with pytest.raises(EventLogWorkspaceError, match="ASCII-compatible"):
+        ptml.read_tree('<!DOCTYPE x [<!ENTITY e "x">]><ptml/>'.encode("utf-16"))
+
+
+def _complete_language(notation):
+    """Exhaustive independent firing oracle for small, acyclic test nets.
+
+    Check one-safeness, proper completion, and no reachable deadlock. Unlike
+    greedy token replay this explores every enabled transition and marking.
+    """
+    from collections import deque
+    from server import event_log_pnml as pnml
+
+    raw = pnml.tree_to_net(ptml.read_notation(notation))
+    parsed = pr.parse_pnml(pnml.to_pnml(raw, "oracle").encode())
+    initial = frozenset(parsed["initial"])
+    final = frozenset(parsed["final"])
+    todo = deque([(initial, ())])
+    seen = {(initial, ())}
+    accepted = set()
+    while todo:
+        marking, trace = todo.popleft()
+        if marking == final:
+            accepted.add(trace)
+        else:
+            assert raw["sink"] not in marking
+        enabled = []
+        for tid, label in parsed["transitions"].items():
+            pre, post = parsed["pre"][tid], parsed["post"][tid]
+            assert all(v == 1 for v in pre.values())
+            assert all(v == 1 for v in post.values())
+            if not set(pre) <= marking:
+                continue
+            enabled.append(tid)
+            remaining = marking - set(pre)
+            assert not remaining.intersection(post), "unsafe duplicate token"
+            nxt = (frozenset(remaining.union(post)), trace + ((label,) if label is not None else ()))
+            if nxt not in seen:
+                seen.add(nxt)
+                todo.append(nxt)
+        assert bool(enabled) == (marking != final), "deadlock or enabled transition at final"
+        assert len(seen) < 100_000, "unexpected state explosion"
+    return accepted
+
+
+def test_inclusive_choice_exact_nonempty_subsets_and_parallel_orders():
+    from itertools import permutations
+    expected = {p for n in range(1, 4) for p in permutations(("A", "B", "C"), n)}
+    assert _complete_language("O( 'A', 'B', 'C' )") == expected
+    assert _complete_language("O( tau, 'A' )") == {(), ("A",)}
+    assert _complete_language("O( 'A' )") == {("A",)}
+
+
+def test_interleaving_preserves_whole_child_blocks():
+    assert _complete_language("<>( ->( 'A', 'B' ), ->( 'C', 'D' ) )") == {
+        ("A", "B", "C", "D"), ("C", "D", "A", "B")}
+    assert _complete_language("<>( tau, 'A' )") == {("A",)}
+    assert _complete_language("<>( 'A' )") == {("A",)}
+
+
+def test_nested_extended_operators_are_compositional():
+    assert _complete_language("->( 'S', O( <>( 'A', 'B' ), 'C' ), 'E' )") == {
+        ("S", *middle, "E") for middle in [
+            ("C",), ("A", "B"), ("B", "A"),
+            ("A", "B", "C"), ("A", "C", "B"), ("C", "A", "B"),
+            ("B", "A", "C"), ("B", "C", "A"), ("C", "B", "A"),
+        ]
+    }
+
+
+def test_extended_net_size_linear_in_branch_count():
+    from server import event_log_pnml as pnml
+    for op in ("O", "<>"):
+        tree = ptml.read_notation(op + "(" + ",".join(f"'A{i}'" for i in range(100)) + ")")
+        net = pnml.tree_to_net(tree)
+        assert len(net["places"]) + len(net["transitions"]) < 1000
+        assert len(net["arcs"]) < 2000

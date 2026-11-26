@@ -10,17 +10,17 @@ Supported operators:
 
 * ``manualTask``: an activity, named by its ``name`` attribute;
 * ``automaticTask``: a silent step;
-* ``sequence``, ``xor`` and ``and``;
+* ``sequence``, ``xor``, ``and``, ``or`` and ``interleaved``;
 * ``xorLoop``: with three children (ProM: do, redo, exit) or two (PM4Py: do, redo). The exit runs
   once after the loop.
 
-Other operators (``or``, ``interleaved``, ``def``…) are refused with their name rather than
+Other operators (``def``…) are refused with their name rather than
 approximated. Child order follows the ``parentsNode`` elements. A node with two parents, a cycle,
 a missing root or an unknown reference is refused. As with PNML input, XML with a DOCTYPE or
 entity declaration is refused, and size and node counts are bounded.
 
 ``read_notation`` reads the same trees in PM4Py's printed notation (``print(tree)``), with the same
-operators and the same refusals (``O`` and ``<>`` are not supported).
+operators, including ``O`` (inclusive choice) and ``<>`` (interleaving).
 """
 from __future__ import annotations
 
@@ -32,8 +32,9 @@ from .event_log_workspace import EventLogWorkspaceError
 
 MAX_BYTES = 2 * 1024 * 1024
 MAX_NODES = 5_000
+MAX_DEPTH = 250
 _FORBIDDEN = re.compile(rb"<!\s*(DOCTYPE|ENTITY)", re.IGNORECASE)
-_OPERATORS = {"sequence": "seq", "xor": "xor", "and": "and", "xorLoop": "loop"}
+_OPERATORS = {"sequence": "seq", "xor": "xor", "and": "and", "or": "or", "interleaved": "interleaved", "xorLoop": "loop"}
 _LEAVES = {"manualTask", "automaticTask"}
 
 
@@ -45,6 +46,8 @@ def read_tree(data: bytes) -> tuple[dict[str, Any], str]:
     """The process tree (``op``/``children``/``activity`` dicts) and the tree's name."""
     if len(data) > MAX_BYTES:
         raise EventLogWorkspaceError(f"the process tree file is larger than {MAX_BYTES // (1024 * 1024)} MB")
+    if b"\x00" in data:
+        raise EventLogWorkspaceError("PTML must use an ASCII-compatible XML encoding")
     if _FORBIDDEN.search(data):
         raise EventLogWorkspaceError("XML with a DOCTYPE or entity declaration is not accepted")
     try:
@@ -90,7 +93,9 @@ def read_tree(data: bytes) -> tuple[dict[str, Any], str]:
 
     seen: set[str] = set()
 
-    def build(node_id: str) -> dict[str, Any]:
+    def build(node_id: str, depth: int = 0) -> dict[str, Any]:
+        if depth > MAX_DEPTH:
+            raise EventLogWorkspaceError("the process tree is nested too deeply")
         if node_id in seen:
             raise EventLogWorkspaceError("the process tree contains a cycle")
         seen.add(node_id)
@@ -103,11 +108,11 @@ def read_tree(data: bytes) -> tuple[dict[str, Any], str]:
             if kind == "automaticTask":
                 return {"op": "tau"}
             name = (element.get("name") or "").strip()
-            if not name or len(name) > 200:
+            if not name or len(name) > 200 or any(ord(c) < 32 for c in name):
                 raise EventLogWorkspaceError("an activity needs a name of 1 to 200 characters")
             return {"op": "activity", "activity": name}
         op = _OPERATORS[kind]
-        built = [build(k) for k in kids]
+        built = [build(k, depth + 1) for k in kids]
         if op == "loop":
             if len(built) not in (2, 3):
                 raise EventLogWorkspaceError("a loop needs two children (do, redo) or three (do, redo, exit)")
@@ -125,8 +130,7 @@ def read_tree(data: bytes) -> tuple[dict[str, Any], str]:
     return result, (tree.get("name") or "").strip()[:200]
 
 
-_NOTATION_OPS = {"->": "seq", "X": "xor", "+": "and", "*": "loop"}
-_REFUSED_NOTATION = {"O": "or", "<>": "interleaving"}
+_NOTATION_OPS = {"->": "seq", "X": "xor", "+": "and", "*": "loop", "O": "or", "<>": "interleaved"}
 MAX_NOTATION_CHARS = 200_000
 
 
@@ -149,7 +153,7 @@ def read_notation(text: str) -> dict[str, Any]:
 
     def node(depth: int) -> dict[str, Any]:
         nonlocal pos, count
-        if depth > 500:
+        if depth > MAX_DEPTH:
             raise EventLogWorkspaceError("the process tree is nested too deeply")
         count += 1
         if count > MAX_NODES:
@@ -175,12 +179,9 @@ def read_notation(text: str) -> dict[str, Any]:
         if text.startswith("tau", pos) and not text[pos + 3:pos + 4].isalnum():
             pos += 3
             return {"op": "tau"}
-        for symbol, name in _REFUSED_NOTATION.items():
-            if text.startswith(symbol + "(", pos) or text.startswith(symbol + " (", pos):
-                raise EventLogWorkspaceError(f"the process tree operator {symbol} ({name}) is not supported")
         symbol = next((s for s in _NOTATION_OPS if text.startswith(s, pos)), None)
         if symbol is None:
-            raise EventLogWorkspaceError(f"unexpected text at character {pos + 1}: expected ->, X, +, *, tau or a quoted label")
+            raise EventLogWorkspaceError(f"unexpected text at character {pos + 1}: expected ->, X, +, *, O, <>, tau or a quoted label")
         pos += len(symbol)
         skip()
         if not text.startswith("(", pos):
