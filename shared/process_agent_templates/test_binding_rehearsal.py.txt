@@ -3,6 +3,12 @@ import json
 import asyncio
 from unittest.mock import patch
 import unittest
+from importlib.util import find_spec
+
+# The dependency-free (-S) smoke run cannot load configure's Pydantic models.
+# Installed runtime acceptance must still run this suite with its dependencies.
+if find_spec('pydantic') is None:
+    raise unittest.SkipTest('Install requirements.txt for binding rehearsal tests')
 from copy import deepcopy
 from datetime import datetime,timezone
 
