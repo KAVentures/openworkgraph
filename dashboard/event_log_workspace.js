@@ -4333,9 +4333,42 @@
       wrap.addEventListener('input',event=>event.stopPropagation());wrap.addEventListener('change',event=>event.stopPropagation());
       return {wrap,reset};
     })();
+    const objectLookup=(()=>{
+      const wrap=document.createElement('details');wrap.id='owgObjectStateObjectLookup';
+      const find=button('Find object IDs','secondary'),more=button('More object IDs','secondary'),use=button('Use selected object ID','secondary');
+      const choices=select('owgObjectStateObjectLookupChoice',[]),choiceField=field('Matching object IDs',choices),status=el('div',null,'muted');status.setAttribute('role','status');
+      wrap.append(el('summary','Find an object ID'),el('p','Only objects linked to the selected activity, date window, optional event ID and exact qualifier are shown. Results are ordered by exact ID.','muted'),find,choiceField,use,more,status);
+      show(choiceField,false);show(use,false);show(more,false);
+      let lookupTurn=0,nextAfter=null,lookupRevision=null,items=[];
+      const reset=()=>{++lookupTurn;nextAfter=null;lookupRevision=null;items=[];choices.replaceChildren();find.disabled=more.disabled=use.disabled=false;show(choiceField,false);show(use,false);show(more,false);status.textContent='';};
+      const active=t=>box.isConnected&&generation===state.generation&&logId===state.logId&&t===lookupTurn;
+      async function load(after){
+        const text=scopeObject.value,label=activity.value,type=objectType.value,from=fromDate.value,until=untilDate.value,eventId=scopeEvent.value,qualified=exact.checked,linkQualifier=qualifier.value;
+        if(!label.trim()||Array.from(label).length>200||!type){status.textContent='Enter an exact stored activity and choose an object type first.';return;}
+        if(Array.from(text).length>200){status.textContent='Object ID search is too long.';return;}
+        if(eventId&&(!eventId.trim()||Array.from(eventId).length>200)){status.textContent='Enter an exact event ID of at most 200 characters.';return;}
+        if(from&&until&&from>=until){status.textContent='The exclusive end date must be after the start date.';return;}
+        const ticket=++lookupTurn;find.disabled=more.disabled=use.disabled=true;status.textContent='Searching linked objects…';
+        const payload={activity:label,object_type:type,search:text,...(eventId?{scope_event_id:eventId}:{}),...(qualified?{event_qualifier:linkQualifier}:{}),...(from?{from_date:from}:{}),...(until?{until_date:until}:{}),...(after!==null?{after,expected_revision:lookupRevision}:{})};
+        try{
+          const result=await (await api(base+'/objects/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).json();
+          if(!active(ticket)||scopeObject.value!==text||activity.value!==label||objectType.value!==type||fromDate.value!==from||untilDate.value!==until||scopeEvent.value!==eventId||exact.checked!==qualified||qualifier.value!==linkQualifier)return;
+          items=result.objects;lookupRevision=result.revision;nextAfter=result.next_after;
+          setOptions(choices,items.map((item,index)=>[String(index),JSON.stringify(item)]));
+          show(choiceField,items.length>0);show(use,items.length>0);show(more,nextAfter!==null);
+          status.textContent=items.length+(items.length===1?' match':' matches')+' on this page. Matching is case-sensitive and literal.';use.disabled=choices.selectedIndex<0;
+        }catch(error){if(active(ticket)){items=[];nextAfter=null;lookupRevision=null;choices.replaceChildren();show(choiceField,false);show(use,false);show(more,false);status.textContent=error.message;}}
+        finally{if(active(ticket)){find.disabled=more.disabled=false;use.disabled=choices.selectedIndex<0;}}
+      }
+      find.onclick=()=>{reset();load(null);};more.onclick=()=>{if(nextAfter!==null)load(nextAfter);};
+      use.onclick=()=>{if(choices.selectedIndex<0)return;const selected=items[Number(choices.value)];scopeObject.value=selected;scopeObject.dispatchEvent(new Event('input',{bubbles:true}));scopeObject.focus();};
+      scopeObject.addEventListener('input',reset);scopeEvent.addEventListener('input',reset);activity.addEventListener('input',reset);objectType.addEventListener('change',reset);exact.addEventListener('change',reset);qualifier.addEventListener('input',reset);fromDate.addEventListener('input',reset);fromDate.addEventListener('change',reset);untilDate.addEventListener('input',reset);untilDate.addEventListener('change',reset);
+      wrap.addEventListener('input',event=>event.stopPropagation());wrap.addEventListener('change',event=>event.stopPropagation());
+      return {wrap,reset};
+    })();
     const run=button('Check recorded state');run.id='owgObjectStateRun';
     const form=el('div',null,'row');form.style.alignItems='end';
-    form.append(field('Stored activity',activity),activityLookup.wrap,field('Only this event ID (optional)',scopeEvent),eventLookup.wrap,field('From date (UTC, inclusive)',fromDate),field('Until date (UTC, exclusive)',untilDate),field('Object type',objectType),field('Only this object ID (optional)',scopeObject),field('Attribute',attribute),attributeLookup.wrap,field('Comparison',operator),field('Expected value (empty is allowed)',value),valueNote,valueLookup.wrap,field('Match',quantifier),field('Match an exact event-link qualifier',exact),qualifierField,run);
+    form.append(field('Stored activity',activity),activityLookup.wrap,field('Only this event ID (optional)',scopeEvent),eventLookup.wrap,field('From date (UTC, inclusive)',fromDate),field('Until date (UTC, exclusive)',untilDate),field('Object type',objectType),field('Only this object ID (optional)',scopeObject),objectLookup.wrap,field('Attribute',attribute),attributeLookup.wrap,field('Comparison',operator),field('Expected value (empty is allowed)',value),valueNote,valueLookup.wrap,field('Match',quantifier),field('Match an exact event-link qualifier',exact),qualifierField,run);
     const savedPick=select('owgObjectStateSaved',[]),savedName=input('owgObjectStateSavedName','text','Name this check');savedName.maxLength=120;
     const savedLoad=button('Load saved check','secondary'),savedRefresh=button('Refresh saved checks','secondary'),savedCreate=button('Save as new check','secondary'),savedUpdate=button('Update loaded check','secondary'),savedDelete=button('Delete loaded check','secondary');
     const savedRow=el('div',null,'row');savedRow.style.alignItems='end';savedRow.append(field('Saved state checks',savedPick),savedLoad,savedRefresh,field('Saved check name',savedName),savedCreate,savedUpdate,savedDelete);
@@ -4404,7 +4437,7 @@
     const resetTransfer=()=>{++transferTurn;transferCandidate=null;transferPreview.disabled=!transferFile.files.length;transferApply.disabled=true;transferDownload.disabled=false;transferStatus.textContent='';transferChecks.replaceChildren();};
     transferFile.onchange=resetTransfer;form.addEventListener('input',resetTransfer);form.addEventListener('change',resetTransfer);savedName.addEventListener('input',resetTransfer);resetTransfer();
     function applyDefinition(d,name){
-      clear();activityLookup.reset();attributeLookup.reset();valueLookup.reset();qualifierLookup.reset();eventLookup.reset();
+      clear();activityLookup.reset();attributeLookup.reset();valueLookup.reset();qualifierLookup.reset();eventLookup.reset();objectLookup.reset();
       if(![...objectType.options].some(option=>option.value===d.object_type)){const option=el('option',JSON.stringify(d.object_type)+' (not currently present)');option.value=d.object_type;objectType.appendChild(option);}
       scopeEvent.value='';scopeObject.value='';fromDate.value=d.from_date??'';untilDate.value=d.until_date??'';activity.value=d.activity;objectType.value=d.object_type;attribute.value=d.attribute;value.value=d.expected_value;rememberValue(d.expected_value);
       operator.value=d.operator;quantifier.value=d.quantifier;exact.checked=Object.hasOwn(d,'event_qualifier');qualifier.value=d.event_qualifier??'';show(qualifierField,exact.checked);
@@ -4564,7 +4597,7 @@
             const from=settings.from_date&&settings.from_date>row.start_utc?settings.from_date:row.start_utc;
             const until=settings.until_date&&(!endDate||settings.until_date<endDate)?settings.until_date:endDate;
             const spec={...settings,from_date:from};if(until)spec.until_date=until;else delete spec.until_date;
-            const filter=resultFilter.value,pin=revision;fromDate.value=from;untilDate.value=until||'';eventLookup.reset();resetTransfer();clear();load(spec,0,filter,pin,true);
+            const filter=resultFilter.value,pin=revision;fromDate.value=from;untilDate.value=until||'';eventLookup.reset();objectLookup.reset();resetTransfer();clear();load(spec,0,filter,pin,true);
           };
           return [row.start_utc,row.events,row.matched,row.not_matched,row.unknown,row.no_linked_object,inspect];
         })));
