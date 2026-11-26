@@ -1142,11 +1142,19 @@ def compare_cases(log_id: str, case_a: str, case_b: str, case_type: str | None =
     return {**cc.compare_cases(log_id, case_a, case_b, case_type), "format": FORMAT, "log_id": log_id}
 
 
-def activity_profile(log_id: str, activity: str, case_type: str | None = None) -> dict[str, Any]:
-    """One activity from every side (aggregates level)."""
+def activity_profile(log_id: str, activity: str, case_type: str | None = None,
+                     case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
+    """One activity from every side (aggregates level). An optional case filter (at least
+    AGENT_MIN_FILTERED_CASES cases) profiles the activity within one group."""
     require(log_id, "aggregates")
     from . import event_log_activity_profile as ap
-    return {**ap.activity_profile(log_id, activity, case_type), "format": FORMAT, "log_id": log_id}
+    if case_filter is not None:
+        if not isinstance(case_filter, dict) or not case_filter:
+            raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+        if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
+            raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
+    result = ap.activity_profile(log_id, activity, case_type, cohort=case_filter)
+    return {**result, "format": FORMAT, "log_id": log_id}
 
 
 def activity_glossary(log_id: str) -> dict[str, Any]:
@@ -1277,12 +1285,18 @@ AGENT_MIN_CELL_CASES = 5
 
 
 def breakdown(log_id: str, rows: str, columns: str | None = None, case_type: str | None = None,
-              with_activity: str | None = None) -> dict[str, Any]:
+              with_activity: str | None = None, case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
     """Case figures by one or two dimensions (aggregates level). Cells and totals with fewer than
-    AGENT_MIN_CELL_CASES cases are withheld, so a rare attribute value cannot single out a case."""
+    AGENT_MIN_CELL_CASES cases are withheld, so a rare attribute value cannot single out a case. An optional
+    case filter (at least AGENT_MIN_FILTERED_CASES cases) breaks down one group."""
     require(log_id, "aggregates")
     from . import event_log_breakdown as bd
-    result = bd.breakdown(log_id, rows, columns, case_type, with_activity=with_activity)
+    if case_filter is not None:
+        if not isinstance(case_filter, dict) or not case_filter:
+            raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+        if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
+            raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
+    result = bd.breakdown(log_id, rows, columns, case_type, with_activity=with_activity, cohort=case_filter)
     keep = lambda items: [x for x in items if x["cases"] >= AGENT_MIN_CELL_CASES]  # noqa: E731
     cells, row_totals, column_totals = keep(result["cells"]), keep(result["row_totals"]), keep(result["column_totals"])
     shown_rows = {t["row"] for t in row_totals}
