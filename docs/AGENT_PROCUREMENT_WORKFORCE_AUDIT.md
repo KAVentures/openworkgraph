@@ -509,9 +509,12 @@ identifiers. The plan preview also displays the destination.
 The server checks exact register and ticket revisions, finding and preview
 digests, tenant and grant before durably reserving an operation. It sends at
 most one POST per retained operation reservation. Create is reserved once per
-finding within a worklist; comments once per finding per register-history
-revision. A new worklist is a separate scope; operators must avoid creating
-duplicate external tickets across worklists. A timeout, malformed response,
+stable finding identity across all retained local worklists, including changed
+evidence and uncertain previous attempts; comments once per finding per
+register-history revision. The conservative identity match may block creation
+in an unrelated worklist with the same structural finding ID. This is not
+semantic ticket matching or cross-installation deduplication. Reuse an existing
+observed Jira record by explicitly binding it to the successor. A timeout, malformed response,
 non-201 result or crash is uncertain, not proof of failure. Inspect Jira and
 the retained attempt history manually. No automatic retry or rollback is
 provided, and a reservation cannot be cleared via ordinary register deletion.
