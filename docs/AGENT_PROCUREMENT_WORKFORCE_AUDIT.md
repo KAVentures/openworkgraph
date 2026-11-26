@@ -471,3 +471,64 @@ Dashboard-only POST actions under
 
 Existing session-only, no-store and JSON-text request bounds apply.
 No automatic scheduled refresh or external write is introduced.
+
+
+## Explicit Jira write handoff (default off)
+
+Administrators may separately provision Jira Cloud write capability. This is
+not enabled by a read-only connector grant. The local server requires:
+
+- OWG_JIRA_REMEDIATION_WRITE_ENABLED=1
+- OWG_JIRA_HOST and OWG_JIRA_CLOUD_ID (exact configured tenant)
+- OWG_JIRA_REMEDIATION_PROJECT (one project key)
+- OWG_JIRA_REMEDIATION_ISSUE_TYPE_ID (one issue type ID)
+- OWG_JIRA_REMEDIATION_WRITE_TOKEN (separately provisioned OAuth token)
+
+Supply the token through local secret configuration, never a request body,
+repository file or browser. The site grant must explicitly include
+write:jira-work; Jira also enforces its own project permissions and required
+fields. This path does not provision or renew a write token, alter the
+existing read connector, or automatically broaden its scopes.
+
+After assigning a finding, open **Explicit Jira ticket creation and follow-up
+comments**, load attempts and preview the desired operation. The preview
+displays the exact destination and generated Atlassian Document Format
+payload. The operator must explicitly confirm that payload. It contains
+structural finding kind, opaque finding and worklist digests, and declared
+local state, not raw evidence, actor names, case tags or source text.
+
+Create submits one issue to the configured project/type; comment appends
+one review note to an already bound, exactly observed issue in that project.
+No external assignment, transition, resolution, or edit of prior comments is
+performed. A newly created issue must be observed locally and explicitly
+bound before using the existing read-only status synchronization or comment
+path. The provider-reported issue key/comment ID is retained in the attempt
+history; unlike the read-only ledger, this history can contain native Jira
+identifiers. The plan preview also displays the destination.
+
+The server checks exact register and ticket revisions, finding and preview
+digests, tenant and grant before durably reserving an operation. It sends at
+most one POST per retained operation reservation. Create is reserved once per
+finding within a worklist; comments once per finding per register-history
+revision. A new worklist is a separate scope; operators must avoid creating
+duplicate external tickets across worklists. A timeout, malformed response,
+non-201 result or crash is uncertain, not proof of failure. Inspect Jira and
+the retained attempt history manually. No automatic retry or rollback is
+provided, and a reservation cannot be cleared via ordinary register deletion.
+Registers with write attempts therefore cannot currently be deleted through
+the ordinary removal action. There is a global 400-attempt cap.
+
+Session-only POST actions (standard JSON-text document envelope) under
+/v1/process-catalog/procurement-workforce/exchange/:
+
+- remediation-jira-preview: exact register/ticket/finding pins used by
+  remediation-ticket-check (without confirm_source_read), plus operation
+  (create or comment).
+- remediation-jira-dispatch: same request, expected_plan_sha256, and
+  confirm_external_write=true.
+- remediation-jira-status: worklist_sha256.
+
+No write establishes actual remediation, incident clearance or independent
+business outcome. The implementation uses Jira Cloud REST v3 issue creation
+and add-comment endpoints; required custom fields, project-specific policies,
+and live tenant compatibility must be validated before enabling it.
