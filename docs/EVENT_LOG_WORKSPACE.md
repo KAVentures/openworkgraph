@@ -3844,6 +3844,15 @@ events. The workspace's Parquet import reads the file back to the same events.
 
 The local rework report shows the total number of repeated activities and recorded loop patterns, with an adjustable display limit of 20, 50 or 100. JSON and CSV downloads contain the displayed results and the JSON includes the selected cohort and analysis settings. The report offers explicit case-evidence links for repeated activities and exact closed activity loops. Selectors respect the active case cohort and retain literal event order; timestamp ties do not establish business order.
 
+### Keeping hidden-activity selections intact
+
+The hide-activities picker includes all currently hidden labels, even when they
+fall outside the initial 2,000 frequent activities. Search original labels and
+page through matches to add other activities to the picker without changing
+the current selection. The dashboard checks that
+the saved hidden set has not changed since it loaded. If another view changed
+it, reload before saving; the stale selection is not applied.
+
 ### Reusing activity groupings across logs
 
 Under **Group activities**, download a saved mapping as JSON. In another log,

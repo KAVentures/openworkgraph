@@ -3814,6 +3814,16 @@ def event_log_hidden_activities(request: Request, log_id: str):
     return _respond(hidden_activities.hidden, log_id)
 
 
+@router.post("/v1/event-logs/{log_id}/hidden-activities/search")
+async def event_log_search_hidden_activity_choices(request: Request, log_id: str):
+    from . import event_log_hidden_activities as hidden_activities
+    _require_dashboard(request)
+    spec = await _json_body(request, "original activity search", strict=True, limit=4096)
+    response = await run_in_threadpool(_respond, hidden_activities.search_original_activities, log_id, spec)
+    _require_dashboard(request)
+    return response
+
+
 @router.post("/v1/event-logs/{log_id}/hidden-activities")
 async def event_log_set_hidden_activities(request: Request, log_id: str):
     """Body ``{"activities": [...]}`` replaces the hidden list; an empty list shows every activity."""
@@ -3822,6 +3832,8 @@ async def event_log_set_hidden_activities(request: Request, log_id: str):
     spec = await _json_body(request, "hidden activities", strict=True, limit=131072)
     try:
         result = await run_in_threadpool(hidden_activities.set_hidden, log_id, spec)
+    except hidden_activities.HiddenActivitiesConflict as exc:
+        raise HTTPException(409, str(exc)) from None
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
