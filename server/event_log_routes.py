@@ -2523,6 +2523,24 @@ def event_log_domain_pack_configurations(request: Request, log_id: str, pack_id:
     return _respond(domain_packs.configuration_history, log_id, pack_id)
 
 
+@router.get("/v1/event-logs/{log_id}/domain-packs/{pack_id}/template")
+def event_log_domain_pack_template_export(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_template as template
+    _require_dashboard(request)
+    return _respond(template.export_template, log_id, pack_id)
+
+
+@router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}/template/review")
+async def event_log_domain_pack_template_review(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_template as template
+    _require_dashboard(request)
+    spec = await _json_body(request, "portable domain pack setup", strict=True, limit=131072)
+    _require_dashboard(request)
+    response = await run_in_threadpool(_respond, template.review_template, log_id, pack_id, spec)
+    _require_dashboard(request)
+    return response
+
+
 @router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}/preflight")
 async def event_log_domain_pack_preflight(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
     from . import event_log_domain_pack_preflight as preflight
@@ -2568,6 +2586,75 @@ async def event_log_domain_pack_benchmark(request: Request, log_id: str, pack_id
     _require_dashboard(request)
     spec = await _json_body(request, "domain benchmark", strict=True, limit=4096)
     response = await run_in_threadpool(_respond, benchmark.compare, log_id, pack_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}/deadline-sensitivity")
+async def event_log_domain_pack_deadline_sensitivity(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_deadlines as deadlines
+    _require_dashboard(request)
+    spec = await _json_body(request, "domain pack deadline sensitivity", strict=True, limit=8192)
+    _require_dashboard(request)
+    response = await run_in_threadpool(_respond, deadlines.review, log_id, pack_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}/portfolio/preview")
+async def event_log_domain_pack_portfolio_preview(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_portfolio as portfolio
+    _require_dashboard(request)
+    spec = await _json_body(request, "domain pack portfolio preview", strict=True, limit=8192)
+    _require_dashboard(request)
+    response = await run_in_threadpool(_respond, portfolio.preflight, log_id, pack_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}/portfolio")
+async def event_log_domain_pack_portfolio(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_portfolio as portfolio
+    _require_dashboard(request)
+    spec = await _json_body(request, "domain pack portfolio comparison", strict=True, limit=8192)
+    _require_dashboard(request)
+    response = await run_in_threadpool(_respond, portfolio.compare, log_id, pack_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.get("/v1/event-logs/{log_id}/domain-packs/{pack_id}/overlap")
+def event_log_domain_pack_overlap_available(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_overlap as overlap
+    _require_dashboard(request)
+    return _respond(overlap.available, log_id, pack_id)
+
+
+@router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}/overlap")
+async def event_log_domain_pack_overlap(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_overlap as overlap
+    _require_dashboard(request)
+    spec = await _json_body(request, "domain pack compliance overlap", strict=True, limit=8192)
+    _require_dashboard(request)
+    response = await run_in_threadpool(_respond, overlap.review, log_id, pack_id, spec)
+    _require_dashboard(request)
+    return response
+
+
+@router.get("/v1/event-logs/{log_id}/domain-packs/{pack_id}/priority")
+def event_log_domain_pack_priority_available(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_priority as priority
+    _require_dashboard(request)
+    return _respond(priority.available, log_id, pack_id)
+
+
+@router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}/priority")
+async def event_log_domain_pack_priority(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_priority as priority
+    _require_dashboard(request)
+    spec = await _json_body(request, "domain pack priority worklist", strict=True, limit=8192)
+    _require_dashboard(request)
+    response = await run_in_threadpool(_respond, priority.review, log_id, pack_id, spec)
     _require_dashboard(request)
     return response
 
