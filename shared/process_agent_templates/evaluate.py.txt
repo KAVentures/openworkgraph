@@ -161,6 +161,241 @@ def evaluation_report(spec,suite,results,rows):
         'process_model_updated': False, 'review_required': any(row['review_required'] for row in rows)}
 
 
+def compare_candidates(spec, suite, baseline_results, candidate_results):
+    """Paired, offline comparison on the identical reviewed specification and cases.
+
+    Recompute both reports rather than trusting externally supplied scores.
+    A matching aggregate does not hide a newly failed case. This is a
+    descriptive regression review, not business or deployment authorization.
+    """
+    baseline = compare(spec, suite, baseline_results)
+    candidate = compare(spec, suite, candidate_results)
+    old = {row['case_id']: row for row in baseline['cases']}
+    rows = []
+    counts = Counter()
+    by_category = {}
+    for new in candidate['cases']:
+        before = old[new['case_id']]
+        a, b = before['matches_reviewed_expectation'], new['matches_reviewed_expectation']
+        change = ('unchanged_match' if a and b else 'regressed' if a
+                  else 'improved' if b else 'unchanged_mismatch')
+        counts[change] += 1
+        group = by_category.setdefault(new['category'], Counter())
+        group[change] += 1
+        rows.append({
+            'case_id': new['case_id'], 'category': new['category'],
+            'case_sha256': new['case_sha256'], 'change': change,
+            'baseline_reason': before['reason'], 'candidate_reason': new['reason'],
+            'candidate_review_required': not b,
+        })
+    transitions = ('unchanged_match', 'improved', 'regressed', 'unchanged_mismatch')
+
+    def partition(counter):
+        return {name: counter[name] for name in transitions}
+
+    categories = {}
+    for category in ('normal', 'exception', 'missing_facts'):
+        group = by_category.get(category, Counter())
+        n = sum(group.values())
+        categories[category] = {
+            'case_count': n, 'represented': n > 0, **partition(group),
+            'baseline_matches': group['unchanged_match'] + group['regressed'],
+            'candidate_matches': group['unchanged_match'] + group['improved'],
+        }
+    # Candidate results may improve overall while newly bypassing an expected
+    # clarification or a review condition. Keep these visible separately.
+    critical_reasons = ('expected_clarification', 'unresolved_review_bypassed')
+    critical = [row for row in rows if row['candidate_reason'] in critical_reasons]
+    new_critical = [row for row in critical if row['baseline_reason'] not in critical_reasons]
+    return {
+        'format': 'openworkgraph.paired-shadow-evaluation.v1',
+        'process_reference': reference(spec), 'spec_sha256': digest(spec),
+        'suite_sha256': digest(suite),
+        'baseline_results_sha256': baseline['results_sha256'],
+        'candidate_results_sha256': candidate['results_sha256'],
+        'evaluated_at': datetime.now(timezone.utc).isoformat(),
+        'case_count': len(rows),
+        'baseline_matching_case_count': baseline['matching_case_count'],
+        'candidate_matching_case_count': candidate['matching_case_count'],
+        'matching_case_count_change': candidate['matching_case_count'] - baseline['matching_case_count'],
+        'paired_transitions': partition(counts), 'by_category': categories,
+        'candidate_critical_review_failure_count': len(critical),
+        'new_critical_review_failure_count': len(new_critical),
+        'missing_categories': [name for name, group in categories.items() if not group['represented']],
+        'no_new_case_regressions': counts['regressed'] == 0,
+        'candidate_all_reviewed_expectations_matched': not candidate['review_required'],
+        'review_required': candidate['review_required'] or counts['regressed'] > 0,
+        'cases': rows,
+        'expectations_are_customer_declarations': True,
+        'independent_business_ground_truth_verified': False,
+        'representative_population_coverage_established': False,
+        'case_inputs_and_model_text_included': False,
+        'business_tools_called': False, 'execution_authorized': False,
+        'source_outcomes_verified': False, 'process_model_updated': False,
+        'model_identity_independently_verified': False,
+    }
+
+
+def _repeatability_summary(reports):
+    """Summarize repeated matched-case scores without assuming independence."""
+    if not 2 <= len(reports) <= 10:
+        raise ImplementationError('Select 2 to 10 captured result documents')
+    first = reports[0]
+    basis = ('process_reference', 'spec_sha256', 'suite_sha256')
+    indexed = []
+    for report in reports:
+        if any(report[key] != first[key] for key in basis):
+            raise ImplementationError('Repeated review requires an identical specification and suite')
+        rows = {row['case_id']: row for row in report['cases']}
+        if len(rows) != len(report['cases']) or not rows:
+            raise ImplementationError('Repeated review requires unique selected cases')
+        indexed.append(rows)
+    ids = set(indexed[0])
+    if any(set(rows) != ids for rows in indexed):
+        raise ImplementationError('Repeated review requires identical case coverage')
+    critical = {'expected_clarification', 'unresolved_review_bypassed'}
+    result = []
+    for case_id in sorted(ids):
+        rows = [capture[case_id] for capture in indexed]
+        base = rows[0]
+        if any((r['case_sha256'], r['category']) != (base['case_sha256'], base['category']) for r in rows):
+            raise ImplementationError('Repeated review requires identical case identity and category')
+        matches = sum(r['matches_reviewed_expectation'] for r in rows)
+        n = len(rows)
+        result.append({
+            'case_id': case_id, 'case_sha256': base['case_sha256'], 'category': base['category'],
+            'matching_captures': matches, 'mismatching_captures': n - matches,
+            'status': 'always_matches' if matches == n else 'never_matches' if not matches else 'intermittent_match',
+            'critical_review_failure_captures': sum(r['reason'] in critical for r in rows),
+            'reason_counts': dict(sorted(Counter(r['reason'] for r in rows).items())),
+            'capture_results': [{'capture_index': i + 1, 'reason': r['reason'],
+                                 'matches_reviewed_expectation': r['matches_reviewed_expectation']}
+                                for i, r in enumerate(rows)],
+        })
+    def summarize(rows):
+        counts = Counter(r['status'] for r in rows)
+        return {'case_count': len(rows), 'always_matches': counts['always_matches'],
+                'intermittent_match': counts['intermittent_match'], 'never_matches': counts['never_matches'],
+                'cases_with_any_critical_failure': sum(r['critical_review_failure_captures'] > 0 for r in rows)}
+    totals = [sum(r['matches_reviewed_expectation'] for r in capture.values()) for capture in indexed]
+    hashes = Counter(r['results_sha256'] for r in reports)
+    return {
+        'capture_count': len(reports), 'distinct_result_document_count': len(hashes),
+        'duplicate_result_document_occurrences': len(reports) - len(hashes),
+        'captures': [{'capture_index': i + 1, 'results_sha256': r['results_sha256'],
+                      'matching_case_count': totals[i]} for i, r in enumerate(reports)],
+        'minimum_matching_case_count': min(totals), 'maximum_matching_case_count': max(totals),
+        'mean_matching_case_fraction': round(sum(totals) / (len(ids) * len(reports)), 6),
+        'case_summary': summarize(result), 'by_category': {
+            category: summarize([r for r in result if r['category'] == category])
+            for category in ('normal', 'exception', 'missing_facts')},
+        'cases': result,
+        'review_required': any(r['status'] != 'always_matches' for r in result),
+    }
+
+
+def compare_repeated_results(spec, suite, captures):
+    """Recompute every offline result using the same reviewed case contract."""
+    if not isinstance(captures, (list, tuple)) or not 2 <= len(captures) <= 10:
+        raise ImplementationError('Select 2 to 10 captured result documents')
+    reports = [compare(spec, suite, capture) for capture in captures]
+    summary = _repeatability_summary(reports)
+    return {'format': 'openworkgraph.repeated-shadow-evaluation.v1',
+            'process_reference': reference(spec), 'spec_sha256': digest(spec), 'suite_sha256': digest(suite),
+            'evaluated_at': datetime.now(timezone.utc).isoformat(), **summary,
+            'case_count': summary['case_summary']['case_count'],
+            'missing_categories': [key for key, row in summary['by_category'].items() if not row['case_count']],
+            'expectations_are_customer_declarations': True,
+            'capture_independence_verified': False, 'same_model_or_configuration_verified': False,
+            'statistical_confidence_interval': False, 'model_identity_independently_verified': False,
+            'representative_population_coverage_established': False, 'independent_business_ground_truth_verified': False,
+            'case_inputs_and_model_text_included': False, 'business_tools_called': False,
+            'execution_authorized': False, 'source_outcomes_verified': False, 'process_model_updated': False}
+
+
+def compare_capture_cohorts(spec, suite, baseline_captures, candidate_captures):
+    """Offline robustness review of two finite, explicitly selected capture sets.
+
+    Cross-capture pairs preserve whole documents. Per-case envelopes instead
+    permit independent selection of an observed capture for each case; these
+    are different sensitivity models, not probability distributions.
+    """
+    for captures in (baseline_captures,candidate_captures):
+        if not isinstance(captures,(list,tuple)) or not 2<=len(captures)<=10:
+            raise ImplementationError('Select 2 to 10 captured result documents per cohort')
+    old=[compare(spec,suite,c) for c in baseline_captures]
+    new=[compare(spec,suite,c) for c in candidate_captures]
+    a,b=_repeatability_summary(old),_repeatability_summary(new)
+    # Externally provided scores are never trusted; all captures have been
+    # rescored against the exact same reviewed specification and suite.
+    old_rows=[{r['case_id']:r for r in x['cases']} for x in old]
+    new_rows=[{r['case_id']:r for r in x['cases']} for x in new]
+    ids=sorted(old_rows[0])
+    critical={'expected_clarification','unresolved_review_bypassed'}
+    rows=[]
+    for key in ids:
+        left=[r[key] for r in old_rows];right=[r[key] for r in new_rows]
+        l=[int(r['matches_reviewed_expectation']) for r in left]
+        r=[int(x['matches_reviewed_expectation']) for x in right]
+        lc=[int(x['reason'] in critical) for x in left]
+        rc=[int(x['reason'] in critical) for x in right]
+        rows.append({'case_id':key,'category':left[0]['category'],'case_sha256':left[0]['case_sha256'],
+            'baseline_matches':sum(l),'candidate_matches':sum(r),
+            'baseline_critical_captures':sum(lc),'candidate_critical_captures':sum(rc),
+            'possible_regression':max(l)>min(r),
+            'universal_regression':min(l)>max(r),
+            'possible_improvement':max(r)>min(l),
+            'universal_improvement':min(r)>max(l),
+            'possible_new_critical_failure':max(rc)>min(lc),
+            'critical_failure_new_to_observed_candidate_set':max(rc)>0 and max(lc)==0,
+            'case_match_difference_bounds':{'lower':min(r)-max(l),'upper':max(r)-min(l)}})
+    def summarize(items):
+        return {'case_count':len(items),
+            **{k:sum(x[k] for x in items) for k in ('possible_regression','universal_regression',
+                'possible_improvement','universal_improvement','possible_new_critical_failure',
+                'critical_failure_new_to_observed_candidate_set')},
+            'independent_case_choice_match_count_difference_bounds':{
+                'lower':sum(x['case_match_difference_bounds']['lower'] for x in items),
+                'upper':sum(x['case_match_difference_bounds']['upper'] for x in items)}}
+    pairs=[]
+    for i,left in enumerate(old_rows):
+        for j,right in enumerate(new_rows):
+            reg=imp=crit=0
+            for key in ids:
+                x,y=left[key],right[key]
+                reg+=x['matches_reviewed_expectation'] and not y['matches_reviewed_expectation']
+                imp+=not x['matches_reviewed_expectation'] and y['matches_reviewed_expectation']
+                crit+=y['reason'] in critical and x['reason'] not in critical
+            pairs.append({'baseline_capture_index':i+1,'candidate_capture_index':j+1,
+                'regressed_cases':reg,'improved_cases':imp,'new_critical_cases':crit,
+                'match_count_difference':imp-reg})
+    hashes_a={r['results_sha256'] for r in old}
+    hashes_b={r['results_sha256'] for r in new}
+    summary=summarize(rows)
+    return {'format':'openworkgraph.capture-cohort-shadow-review.v1',
+        'process_reference':reference(spec),'spec_sha256':digest(spec),'suite_sha256':digest(suite),
+        'evaluated_at':datetime.now(timezone.utc).isoformat(),'case_count':len(ids),
+        'baseline':{k:a[k] for k in ('capture_count','distinct_result_document_count','duplicate_result_document_occurrences','captures','case_summary')},
+        'candidate':{k:b[k] for k in ('capture_count','distinct_result_document_count','duplicate_result_document_occurrences','captures','case_summary')},
+        'shared_distinct_result_documents':len(hashes_a&hashes_b),
+        'summary':summary,'by_category':{k:summarize([x for x in rows if x['category']==k])
+            for k in ('normal','exception','missing_facts')},
+        'missing_categories':[k for k in ('normal','exception','missing_facts') if not any(x['category']==k for x in rows)],
+        'whole_capture_pair_count':len(pairs),'whole_capture_pairs':pairs,
+        'whole_capture_match_count_difference_bounds':{
+            'lower':min(x['match_count_difference'] for x in pairs),
+            'upper':max(x['match_count_difference'] for x in pairs)},
+        'whole_capture_pairs_with_regressions':sum(x['regressed_cases']>0 for x in pairs),
+        'whole_capture_pairs_with_new_critical_failures':sum(x['new_critical_cases']>0 for x in pairs),
+        'cases':rows,'review_required':b['review_required'],
+        'expectations_are_customer_declarations':True,'capture_independence_verified':False,
+        'same_model_or_configuration_verified':False,'choice_counts_are_probabilities':False,
+        'statistical_confidence_interval':False,'independent_business_ground_truth_verified':False,
+        'representative_population_coverage_established':False,'model_identity_independently_verified':False,
+        'case_inputs_and_model_text_included':False,'business_tools_called':False,
+        'execution_authorized':False,'source_outcomes_verified':False,'process_model_updated':False}
+
+
 async def run_planner(spec, suite, *, model):
     cases = validate_suite(spec, suite)
     from agent import propose
@@ -180,20 +415,68 @@ def main():
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--results', help='Offline previously captured plans bound to the exact suite')
     mode.add_argument('--model', help='Explicit provider opt-in: sends case inputs through the no-tools planner')
+    parser.add_argument('--baseline-results', help='Optional offline baseline plans for the identical reviewed suite; requires --results')
+    parser.add_argument('--repeat-results', action='append', help='Additional offline result document; repeat up to nine times with --results')
+    parser.add_argument('--baseline-repeat-results', action='append', help='Additional baseline document for offline two-cohort review; requires baseline and candidate repetitions')
+    parser.add_argument('--capture-results', help='Explicitly retain live model plans in a new private file for later paired evaluation; may include sensitive model text')
+    parser.add_argument('--confirm-retain-model-output', action='store_true', help='Confirm local retention of possibly sensitive model output')
     parser.add_argument('--output', required=True, help='New minimized report file; never overwrites existing files')
     args = parser.parse_args()
+    cohort_mode=bool(args.baseline_repeat_results)
+    if cohort_mode and (not args.results or not args.baseline_results or not args.repeat_results or len(args.baseline_repeat_results)>9):
+        parser.error('Two-cohort review requires offline baseline and candidate, with 1 to 9 additional captures per side')
+    if args.repeat_results and (not args.results or (args.baseline_results and not cohort_mode) or len(args.repeat_results) > 9):
+        parser.error('--repeat-results requires offline --results, at most nine additions and no --baseline-results')
+    if args.baseline_results and not args.results:
+        parser.error('--baseline-results requires offline --results')
+    if args.capture_results and (not args.model or not args.confirm_retain_model_output):
+        parser.error('--capture-results requires --model and --confirm-retain-model-output')
+    if args.confirm_retain_model_output and not args.capture_results:
+        parser.error('--confirm-retain-model-output requires --capture-results')
     if Path(args.output).exists():
         raise ImplementationError('Choose a new evaluation report file')
+    if args.capture_results and (Path(args.capture_results).exists() or
+            Path(args.capture_results).resolve() == Path(args.output).resolve()):
+        raise ImplementationError('Choose a separate new captured-results file')
     spec = load_object(Path(__file__).parent / 'workflow.spec.json', limit=262144)
     suite = load_object(args.cases, limit=262144)
     validate_suite(spec, suite)
     results = (asyncio.run(run_planner(spec, suite, model=args.model)) if args.model
                else load_object(args.results, limit=262144))
-    report = compare(spec, suite, results)
+    if cohort_mode:
+        report=compare_capture_cohorts(spec,suite,[load_object(path,limit=262144) for path in [args.baseline_results,*args.baseline_repeat_results]],
+            [results]+[load_object(path,limit=262144) for path in args.repeat_results])
+    elif args.repeat_results:
+        report = compare_repeated_results(spec, suite, [results] + [
+            load_object(path, limit=262144) for path in args.repeat_results])
+    else:
+        report = (compare_candidates(spec, suite, load_object(args.baseline_results, limit=262144), results)
+                  if args.baseline_results else compare(spec, suite, results))
+    if args.capture_results:
+        # These are raw planner outputs, unlike the minimized evaluation report.
+        # Exclusive creation and a private mode on POSIX; Windows inherits ACLs.
+        import os
+        payload = json.dumps(results, separators=(',', ':'), allow_nan=False).encode('utf-8')
+        if len(payload) > 262144:
+            raise ImplementationError('Captured plans exceed the supported offline results size; select fewer cases')
+        fd = os.open(args.capture_results, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write(payload)
     with Path(args.output).open('x', encoding='utf-8') as stream:
         json.dump(report, stream, indent=2, allow_nan=False)
-    print(json.dumps({'case_count': report['case_count'], 'matching_case_count': report['matching_case_count'],
-                      'review_required': report['review_required'], 'business_tools_called': False}))
+    summary = {'case_count': report['case_count'], 'review_required': report['review_required'],
+               'business_tools_called': False}
+    if cohort_mode:
+        summary.update(whole_capture_pair_count=report['whole_capture_pair_count'],case_summary=report['summary'])
+    elif args.repeat_results:
+        summary.update(capture_count=report['capture_count'],case_summary=report['case_summary'])
+    elif args.baseline_results:
+        summary.update(baseline_matching_case_count=report['baseline_matching_case_count'],
+                       candidate_matching_case_count=report['candidate_matching_case_count'],
+                       paired_transitions=report['paired_transitions'])
+    else:
+        summary['matching_case_count'] = report['matching_case_count']
+    print(json.dumps(summary))
     return 2 if report['review_required'] else 0
 
 

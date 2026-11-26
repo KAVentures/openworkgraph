@@ -106,6 +106,28 @@ const path=require('node:path');
    await page.locator('#owgPetriStatus').filter({hasText:'DOCTYPE'}).waitFor();
    assert.equal(await page.locator('#owgPetriAlign').isDisabled(),true);
    assert.equal(await page.locator('#owgPetriAlignResults').textContent(),'');
+   // A process tree from PM4Py or ProM (PTML) is converted to its workflow net and replayed the same way.
+   const tasks=labels.map((a,i)=>`<manualTask id="t${i}" name="${a}"/><parentsNode id="e${i}" sourceId="s" targetId="t${i}"/>`).join('');
+   const ptml=`<?xml version="1.0" encoding="UTF-8"?><ptml><processTree id="x" name="strict tree" root="s"><sequence id="s" name=""/>${tasks}</processTree></ptml>`;
+   await page.locator('#owgPetriFile').setInputFiles({name:'strict.ptml',mimeType:'application/xml',buffer:Buffer.from(ptml)});
+   await page.locator('#owgPetriRun').click();
+   await page.locator('#owgPetriStatus').filter({hasText:'on strict.ptml (process tree): 24 of 30 cases'}).waitFor();
+   await page.locator('#owgPetriFile').setInputFiles({name:'or.ptml',mimeType:'application/xml',buffer:Buffer.from('<ptml><processTree id="x" root="o"><or id="o" name=""/></processTree></ptml>')});
+   await page.locator('#owgPetriRun').click();
+   await page.locator('#owgPetriStatus').filter({hasText:'<or> node has no children'}).waitFor();
+   // The same tree pasted as PM4Py prints it.
+   await page.locator('#owgPetriTreeText').fill("->( 'Register', 'Check', 'Pay', 'Close' )");
+   await page.locator('#owgPetriTreeRun').click();
+   await page.locator('#owgPetriStatus').filter({hasText:'on the pasted process tree: 24 of 30 cases'}).waitFor();
+   await page.locator('#owgPetriTreeText').fill("->( 'Register', O( 'Check', tau ), 'Pay', 'Close' )");
+   await page.locator('#owgPetriTreeRun').click();
+   await page.locator('#owgPetriStatus').filter({hasText:'on the pasted process tree: 30 of 30 cases'}).waitFor();
+   await page.locator('#owgPetriTreeText').fill("->( 'Register', <>( 'Check', 'Pay' ), 'Close' )");
+   await page.locator('#owgPetriTreeRun').click();
+   await page.locator('#owgPetriStatus').filter({hasText:'on the pasted process tree: 24 of 30 cases'}).waitFor();
+   await page.locator('#owgPetriTreeText').fill('O()');
+   await page.locator('#owgPetriTreeRun').click();
+   await page.locator('#owgPetriStatus').filter({hasText:'unexpected text'}).waitFor();
    // The most common path (Register, Check, Pay, Close; 24 of 30 cases) as the reference model.
    await page.locator('#owgPetriHappy').click();
    await page.locator('#owgPetriStatus').filter({hasText:'on the most common path (followed by 80% of cases): 24 of 30 cases'}).waitFor();
@@ -124,6 +146,6 @@ const path=require('node:path');
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgPetri'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Petri net replay browser acceptance passed: missing tokens and skipped steps, exact evidence and filtered saved-net review, deviation causes, unsafe XML refusal, conformance signals, WCAG audit.');
+   console.log('Petri net replay browser acceptance passed: missing tokens and skipped steps, exact evidence and filtered saved-net review, deviation causes, unsafe XML refusal, PTML and pasted PM4Py process trees, conformance signals, WCAG audit.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exit(1);});

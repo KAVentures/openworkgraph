@@ -106,7 +106,8 @@ def delete(log_id: str, metric_id: str) -> dict:
             conn.close()
     return {"deleted": True, "metric_id": metric_id}
 
-def evaluate(log_id: str, metric_id: str, cohort: Any, case_type: str | None = None) -> dict:
+def evaluate(log_id: str, metric_id: str, cohort: Any, case_type: str | None = None, *,
+             include_case_values: bool = False) -> dict:
     """Evaluate an existing saved expression against the caller's selected cohort.
 
     Hold the workspace lock across lookup and evaluation so concurrent deletion,
@@ -128,7 +129,8 @@ def evaluate(log_id: str, metric_id: str, cohort: Any, case_type: str | None = N
             raise workspace.EventLogWorkspaceError("unknown saved cohort metric")
         name, raw = row
         result = cohort_metrics.summarize(
-            log_id, {"definition": json.loads(raw), "cohort": cohort}, case_type
+            log_id, {"definition": json.loads(raw), "cohort": cohort}, case_type,
+            include_case_values=include_case_values,
         )
         result["saved_metric"] = {"metric_id": metric_id, "name": name,
                                   "definition_sha256": _definition_digest(json.loads(raw))}

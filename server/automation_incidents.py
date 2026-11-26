@@ -18,7 +18,7 @@ from typing import Any
 
 from .db import DATA_DIR
 
-KINDS = ("run_failures", "run_handoffs", "signature_rejected", "replay_conflict", "lost_reports", "version_drift")
+KINDS = ("run_failures", "run_handoffs", "signature_rejected", "replay_conflict", "lost_reports", "version_drift", "run_revision_conflict")
 STATUSES = ("open", "acknowledged", "resolved")
 MAX_INCIDENTS = 500
 MAX_SAMPLES = 10

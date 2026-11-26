@@ -36,9 +36,10 @@ For generic webhook receivers and text-based incoming webhooks such as Slack, th
 
 ## Staleness, retry and limits
 
-- Only current triggered, unsnoozed, unacknowledged states are queued. After a rule changes or a dataset append makes an evaluation stale, a fresh evaluation is required. An already queued notification is suppressed if its selected states are no longer unreviewed at the delivery preflight.
-- Identical states are deduplicated by local hashes derived from the receiver channel ID, rule ID and exact review-state fingerprint. Up to 2,000 acknowledged state keys, 50 pending notification groups and 50 states per group are kept. No automatic rewind after this bounded history.
-- A failed, non-2xx or uncertain HTTP response retains the same notification ID and message for an explicit retry by the local scheduler, with exponential 60-second to 1-hour backoff. Five failures pause the delivery channel until a separately confirmed **Resume**. The scheduler never repeats a business operation.
+- Only current triggered, unsnoozed, unacknowledged states are queued. After a rule changes or a dataset append makes an evaluation stale, a fresh evaluation is required. If only part of a pending group is still current, OWG supersedes the old group and stages the surviving subset with a new notification ID, without sending the stale states. If no states survive, it suppresses the group. If the prior group had an unacknowledged attempt, the receiver might already have seen it; the new group is a distinct notice, not exactly-once delivery.
+- A temporary failure to read current review state is not evidence that the signal cleared. Delivery defers that group by 60 seconds and preserves its exact identity and state selection. Local audit outcomes distinguish unavailable preflight, partial supersession and full suppression. A quiet or unavailable log does not block another due log's delivery.
+- Identical states are deduplicated by local hashes derived from the receiver channel ID, rule ID and exact review-state fingerprint. Up to 2,000 acknowledged state keys, 50 pending notification groups and 50 states per group are kept. The private ledger has a 32 MiB read/write limit compatible with the bounded multi-channel queue. An oversized update fails without replacing the prior valid ledger. No automatic rewind after bounded history.
+- Before network I/O, OWG durably records the attempt count, next retry time and attempt-start audit entry. An interrupted process retains the same notification ID and exact message; a failed, non-2xx or uncertain response retries with exponential 60-second to 1-hour backoff. Five consecutive attempts without a recorded acknowledgement pause the channel until a separately confirmed **Resume**; a successful acknowledgement clears the failure count. A crash after receiver acceptance but before local acknowledgement can result in duplicate receipt; receivers should deduplicate by ID. The scheduler never repeats a business operation.
 - Quiet hours on the signal evaluation schedule delay **both** new checks and outbound notification attempts. Queued messages remain pending until the existing named timezone's next permitted window; delivery uses the schedule's DST-aware quiet-hour rules. Remove the webhook to revoke queued delivery; pausing the evaluation schedule also suppresses sending.
 - Only HTTPS on port 443 (or HTTP on loopback port 8787) is accepted. URLs with credentials, queries, fragments, restricted IP addresses or redirects are refused. The HTTP client disables proxies, validates all resolved addresses, pins the chosen public/loopback IP for the socket connection, and verifies HTTPS certificates against the intended hostname. This limits SSRF and DNS-rebinding attacks; it does not assert the recipient is trustworthy.
 - Removing a source log also removes the channel, signing secret, pending alerts and delivered-state hashes. No third-party deletion can be performed by OWG after delivery.
@@ -47,3 +48,34 @@ For generic webhook receivers and text-based incoming webhooks such as Slack, th
 ## Acceptance gates
 
 Synthetic regression covers independent consents, no default send, strict auth, single-recipient lifecycle, HMAC integrity, no identifiers in the payload, stale/acknowledged/snoozed suppression, repeat dedupe, exponential backoff, disabled schedules, credentials in the auth folder, deleting source logs, URL/DNS safety and actual Chromium UI state/WCAG. Production testing still requires an owner-controlled webhook and representative scheduled logs; do not infer that a specific third-party service accepts every message until its own receipt is observed.
+
+## Local queue review and manual delivery pause
+
+Refresh the webhook status to inspect up to 50 pending groups: opaque ID,
+queued count, creation and retry times, attempts and a queue-state pin. The
+count reflects the queued group, not a fresh rule evaluation. No rule IDs,
+state fingerprints, case evidence or receiver credentials are returned.
+**Pause webhook without deleting queue** stops new queueing and sending after
+any in-flight attempt finishes. It retains the signing key, queued groups and
+deduplication history; local scheduled signal evaluations continue normally.
+An explicitly confirmed resume uses the reviewed channel ID in the dashboard;
+older clients may continue to use the existing resume request.
+
+While paused, dismiss an individual exact pending group. The operation checks
+the current channel and the exact group pin (including attempt state), refuses
+stale selections and writes the suppression keys and audit together. Those
+exact states cannot be queued again in this channel; a changed state can.
+Dismissals are not successful sends and do not acknowledge, snooze or clear
+local signal reviews. A previously attempted message may already have been
+received. Removing the channel also removes dismissal history. Up to 2,000
+explicit dismissal keys per channel are retained; capacity refusal leaves the
+prior ledger untouched, rather than silently re-enabling dismissed states.
+
+Dashboard-session-only POST routes under /v1/schedules/signal-delivery/{log_id}:
+- /pause: expected_channel_id.
+- /dismiss: expected_channel_id, notification_id, expected_queue_sha256,
+  confirm_dismiss (true).
+- /resume: confirm_external_delivery (true), optionally expected_channel_id.
+
+Queue inspection and control never send a network request or change source
+rules. The existing sender still rechecks schedule and current signal states.

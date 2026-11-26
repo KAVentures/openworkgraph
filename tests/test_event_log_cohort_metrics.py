@@ -271,6 +271,7 @@ def test_real_duckdb_composed_metric_authenticated_and_cohort_scoped(monkeypatch
                 ("b", "b2", "2026-01-01 11:00:00", "end", "team-b"),
                 ("c", "c1", "2026-01-01 12:00:00", "start", "team-a"),
                 ("c", "c2", "2026-01-01 12:00:20", "end", "team-a"),
+                ("zero", "z1", "2026-01-01 13:00:00", "start", "team-a"),
             ],
         )
         monkeypatch.setattr(workspace, "_query", lambda log_id, case_type, callback: callback(conn))
@@ -293,12 +294,23 @@ def test_real_duckdb_composed_metric_authenticated_and_cohort_scoped(monkeypatch
         )
         assert response.status_code == 200, response.text
         body = response.json()
-        assert body["metric"]["rows"] == 2
+        assert body["metric"]["rows"] == 3
+        assert body["metric"]["null"] == 1
         assert body["metric"]["sum"] == "0.3"
         assert body["metric"]["mean"] == "0.15"
-        assert body["cases_before_filter"] == 3
+        assert body["cases_before_filter"] == 4
         assert body["raw_cases_returned"] is False
         assert response.headers["cache-control"] == "no-store"
         assert all(value not in str(body) for value in ('"a"', '"b"', '"c"', "team-b"))
+        assert "case_values" not in body
+        review_path = path + "?include_case_values=true"
+        assert client.post(review_path, json=request).status_code == 403
+        reviewed = client.post(review_path, json=request, headers={"Authorization": "OWG-Session valid"})
+        assert reviewed.status_code == 200 and reviewed.headers["cache-control"] == "no-store"
+        values = reviewed.json()["case_values"]
+        assert reviewed.json()["metric"] == body["metric"]
+        assert values == [{"case_id": "c", "value": "0.1"}, {"case_id": "a", "value": "0.2"},
+                          {"case_id": "zero", "value": None}]
+        assert all(set(row) == {"case_id", "value"} for row in values)
     finally:
         conn.close()

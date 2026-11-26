@@ -200,3 +200,47 @@ def test_dashboard_controls_show_bounded_trace_and_exact_source_navigation():
     assert '@router.post("/v1/event-logs/{log_id}/object-relationships/trace")' in routes
     assert "_require_dashboard(request)" in routes.split(
         "def event_log_object_relationship_trace(")[1].split("@router.get", 1)[0]
+
+
+def test_target_routes_preserve_direction_and_literal_assertions():
+    log = imported()
+    result = trace(log, direction="outgoing", max_hops=3, target_object_id="payment1")
+    route = result["target_route"]
+    assert route["status"] == "reached" and route["shortest_hops"] == 3
+    assert route["shortest_assertion_routes"] == 1 and route["route_count_complete"]
+    assert [step["qualifier"] for step in route["example_route"]] == ["contains","billed_by","settled_by"]
+    assert all(step["traversal"] == "forward" for step in route["example_route"])
+    reverse = paths.trace(log, {"object_id":"payment1","target_object_id":"order1",
+                               "direction":"incoming","max_hops":3})["target_route"]
+    assert reverse["shortest_hops"] == 3
+    assert all(step["traversal"] == "reverse" for step in reverse["example_route"])
+    both = trace(log, direction="both", max_hops=1, target_object_id="item1")["target_route"]
+    assert both["shortest_assertion_routes"] == 2
+    assert both["route_count_complete"]
+
+
+def test_target_absence_limits_and_exact_edge_budget():
+    log = imported()
+    missed = trace(log, direction="outgoing", max_hops=1,target_object_id="payment1")["target_route"]
+    assert missed["status"] == "not_reached_within_depth"
+    unknown = trace(log,direction="outgoing",max_hops=3,max_edges=1,target_object_id="payment1")["target_route"]
+    assert unknown["status"] == "unknown_due_to_limit" and not unknown["route_count_complete"]
+    same = trace(log,max_edges=1,target_object_id="order1")["target_route"]
+    assert same["shortest_hops"] == 0 and same["shortest_assertion_routes"] == 1 and same["route_count_complete"]
+    exact = trace(log,direction="both",qualifier="contains",max_hops=3,max_edges=2,target_object_id="item1")
+    assert not exact["truncated"] and exact["shown_edges"] == 2
+    assert exact["target_route"]["route_count_complete"]
+    with pytest.raises(workspace.EventLogWorkspaceError,match="target object"):
+        trace(log,target_object_id="missing")
+
+
+def test_route_counts_diamond_and_parallel_assertions():
+    from shared.ocel_trace_route import explain
+    nodes=[{"object_id":n,"hop":h} for n,h in [("A",0),("B",1),("C",1),("D",2)]]
+    edges=[{"source_id":a,"target_id":b,"qualifier":q} for a,b,q in
+           [("A","B","x"),("A","B","y"),("A","C","z"),("B","D","x"),("C","D","x"),("B","C","cross")]]
+    first=explain(nodes,edges,"A","D","outgoing",False,2)
+    assert first["shortest_assertion_routes"]==3 and first["shortest_hops"]==2
+    assert first==explain(list(reversed(nodes)),list(reversed(edges)),"A","D","outgoing",False,2)
+    limited=explain(nodes,edges,"A","D","outgoing",True,2)
+    assert limited["shortest_assertion_routes"]==3 and not limited["route_count_complete"]
