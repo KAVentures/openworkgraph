@@ -368,6 +368,13 @@ with TestClient(app) as client:
     assert client.post(path,json={'receiver_url':'https://example.com/hooks'},headers=owner).status_code==422
     assert client.post(path+'/remove',json={'confirm_remove':False},headers=owner).status_code==403
     assert client.post(path+'/resume',json={'confirm_external_delivery':False},headers=owner).status_code==409
+    assert client.post(path+'/pause',json={'expected_channel_id':'ndl_missing'},headers=bearer).status_code in (401,403)
+    assert client.post(path+'/pause',json={},headers=owner).status_code==422
+    assert client.post(path+'/pause',json={'expected_channel_id':'ndl_missing'},headers=owner).status_code==409
+    pins={'expected_channel_id':'ndl_missing','notification_id':'ntf_missing','expected_queue_sha256':'0'*64}
+    assert client.post(path+'/dismiss',json={**pins,'confirm_dismiss':True},headers=bearer).status_code in (401,403)
+    assert client.post(path+'/dismiss',json={**pins,'confirm_dismiss':False},headers=owner).status_code==403
+    assert client.post(path+'/dismiss',json={**pins,'confirm_dismiss':True},headers=owner).status_code==409
 """
     env = os.environ.copy()
     env.update({"WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"),
@@ -377,3 +384,89 @@ with TestClient(app) as client:
         cwd=Path(__file__).resolve().parents[1], env=env,
         capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+
+def test_manual_pause_keeps_queue_and_does_not_send_or_queue(isolated):
+    channel=make()
+    notices.queue_current(LOG)
+    pending=notices.status(LOG)["pending_groups"]
+    paused=notices.pause(LOG,expected_channel_id=channel["channel_id"])
+    assert paused["pending_groups"]==pending
+    assert not paused["enabled"] and paused["paused_reason"]=="owner_paused_delivery"
+    assert notices.queue_current(LOG)["queued"]==0
+    assert notices.deliver_due(transport=lambda *_: pytest.fail("paused send"))["attempted"]==0
+    assert notices.resume(LOG,confirm_external_delivery=True,
+                          expected_channel_id=channel["channel_id"])["enabled"]
+    assert notices.deliver_due(transport=lambda *_: 204)["sent"]==1
+
+
+def test_dismiss_pinned_group_never_claims_delivery_or_reviews_signals(isolated):
+    channel=make()
+    notices.queue_current(LOG)
+    group=notices.status(LOG)["pending_groups"][0]
+    kwargs={"expected_channel_id":channel["channel_id"],"notification_id":group["notification_id"],
+            "expected_queue_sha256":group["expected_queue_sha256"],"confirm_dismiss":True}
+    with pytest.raises(notices.DeliveryError,match="pause"):
+        notices.dismiss(LOG,**kwargs)
+    notices.pause(LOG,expected_channel_id=channel["channel_id"])
+    with pytest.raises(notices.DeliveryError,match="explicit"):
+        notices.dismiss(LOG,**{**kwargs,"confirm_dismiss":1})
+    result=notices.dismiss(LOG,**kwargs)
+    assert result["dismissed_states"]==2 and not result["signal_review_changed"]
+    assert result["pending_notifications"]==result["delivered_notifications"]==0
+    assert result["dismissed_state_keys"]==2
+    assert all(r["status"]=="unreviewed" for r in isolated)
+    with pytest.raises(notices.DeliveryError,match="changed"):
+        notices.dismiss(LOG,**kwargs)
+    notices.resume(LOG,confirm_external_delivery=True)
+    assert notices.queue_current(LOG)["queued"]==0
+    isolated[0]["state_fingerprint"]="c"*64
+    assert notices.queue_current(LOG)["queued"]==1
+    assert notices.deliver_due(transport=lambda *_: 204)["sent"]==1
+
+
+def test_queue_pins_detect_attempt_and_channel_changes(isolated):
+    channel=make()
+    notices.queue_current(LOG)
+    old=notices.status(LOG)["pending_groups"][0]
+    assert notices.deliver_due(transport=lambda *_: 503)["retry_pending"]
+    new=notices.pause(LOG,expected_channel_id=channel["channel_id"])["pending_groups"][0]
+    assert new["notification_id"]==old["notification_id"]
+    assert new["expected_queue_sha256"]!=old["expected_queue_sha256"]
+    assert new["previous_delivery_may_have_arrived"]
+    kwargs={"expected_channel_id":channel["channel_id"],"notification_id":old["notification_id"],
+            "expected_queue_sha256":old["expected_queue_sha256"],"confirm_dismiss":True}
+    with pytest.raises(notices.DeliveryError,match="changed"):
+        notices.dismiss(LOG,**kwargs)
+    result=notices.dismiss(LOG,**{**kwargs,"expected_queue_sha256":new["expected_queue_sha256"]})
+    assert result["previous_delivery_may_have_arrived"]
+    notices.remove(LOG); replacement=make()
+    assert replacement["channel_id"]!=channel["channel_id"]
+    for action,extra in [(notices.pause,{}),(notices.resume,{"confirm_external_delivery":True})]:
+        with pytest.raises(notices.DeliveryError,match="changed"):
+            action(LOG,expected_channel_id=channel["channel_id"],**extra)
+    assert notices.status(LOG)["enabled"]
+
+
+def test_dismissal_capacity_refuses_atomically_without_eviction(isolated,monkeypatch):
+    channel=make();notices.queue_current(LOG)
+    group=notices.pause(LOG,expected_channel_id=channel["channel_id"])["pending_groups"][0]
+    baseline=notices._path().read_bytes()
+    monkeypatch.setattr(notices,"MAX_DISMISSED",1)
+    with pytest.raises(notices.DeliveryError,match="capacity"):
+        notices.dismiss(LOG,expected_channel_id=channel["channel_id"],
+                        notification_id=group["notification_id"],
+                        expected_queue_sha256=group["expected_queue_sha256"],confirm_dismiss=True)
+    assert notices._path().read_bytes()==baseline
+
+
+def test_pending_queue_summary_contains_no_rule_or_state_details(isolated):
+    channel=make();notices.queue_current(LOG)
+    response=notices.status(LOG)
+    assert len(response["pending_groups"])==1
+    group=response["pending_groups"][0]
+    assert set(group)=={"notification_id","expected_queue_sha256","created_at","next_attempt_at",
+                       "attempts","unreviewed_signal_states_at_queue","previous_delivery_may_have_arrived"}
+    raw=json.dumps(response)
+    assert not any(x in raw for x in (STATE_A,STATE_B,"sig_","private-customer-name",
+                                      URL,channel["notification_secret"]))

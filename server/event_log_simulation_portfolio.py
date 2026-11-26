@@ -11,13 +11,14 @@ import json
 from typing import Any
 
 from . import event_log_simulation as simulation
+from . import event_log_simulation_variability as variability
 from .event_log_workspace import EventLogWorkspaceError
 
 FORMAT = "openworkgraph.simulation-portfolio.v1"
 MAX_ALTERNATIVES = 4
 MAX_CASES_PER_RUN = 5000
 BASE_FIELDS = frozenset((
-    "cases", "seed", "activity_time_basis", "calendar", "arrivals_per_hour",
+    "cases", "seed", "activity_time_basis", "calendar", "arrivals_per_hour", "distribution",
 ))
 OVERRIDE_FIELDS = frozenset((
     "label", "activities", "paths", "distribution", "arrivals_per_hour",
@@ -117,7 +118,9 @@ def compare(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, A
     object even if the source subsequently changes.
     """
     common, variants = _validate(spec)
-    base = simulation.calibrate(log_id, case_type)
+    measured_gamma = common.get("distribution") == variability.DISTRIBUTION or any(
+        item.get("distribution") == variability.DISTRIBUTION for item in variants)
+    base = simulation.calibrate(log_id, case_type, measure_variability=True) if measured_gamma else simulation.calibrate(log_id, case_type)
     if not base["paths"]:
         raise EventLogWorkspaceError("No complete calibrated paths support this comparison")
     if base["arrivals_per_hour"] is None and "arrivals_per_hour" not in common:
@@ -157,7 +160,7 @@ def compare(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, A
             field: base[field]
             for field in ("arrivals_per_hour", "paths", "paths_cover_cases_share",
                           "activities", "observed_cases", "calibrated_cases",
-                          "excluded_case_reasons", "limits", "arrival_rate_basis")
+                          "excluded_case_reasons", "limits", "arrival_rate_basis", "service_time_variability")
             if field in base
         },
         "shared_inputs": common,
@@ -190,7 +193,13 @@ def compare(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, A
         "causal_attribution_or_production_forecast": False,
         "execution_authorized": False,
         "auto_selected_recommended_alternative": False,
-        "assumptions": [
+        **({"service_time_variability": base["service_time_variability"],
+            "service_time_models": {"baseline": {a: v.get("service_time_model", {"model": baseline["distribution"]})
+                                                for a, v in baseline["activities"].items()},
+                                    "alternatives": {m["label"]: {a: v.get("service_time_model", {"model": m["distribution"]})
+                                                                 for a, v in m["activities"].items()} for m in models}}}
+           if measured_gamma else {}),
+        "assumptions": ([variability.ASSUMPTION] if measured_gamma else []) + [
             "Every result is simulated from one selected, static event-log calibration. It is not a verified real workflow.",
             "Every run uses the same case count and seeded random streams; changed routing and arrivals can still alter per-case paths or time windows.",
             "Cycle-time differences are withheld if any compared run has incomplete post-warm-up completion, abandonment, unfilled batching or overloaded pools.",
