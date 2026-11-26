@@ -36,6 +36,8 @@ class Spec(BaseModel):
     from_date: str | None = None
     until_date: str | None = None
     result_event_id: str | None = Field(default=None, min_length=1, max_length=200)
+    object_status_filter: Literal['matched','not_matched','missing_history','before_first_value','ambiguous_value'] | None = None
+    object_value_filter: str | None = Field(default=None, max_length=4096)
     status: Literal["matched", "not_matched", "unknown", "no_linked_object"] | None = None
     offset: int = Field(default=0, ge=0, le=MAX_EVENTS)
     limit: int = Field(default=30, ge=1, le=100)
@@ -54,6 +56,15 @@ class Spec(BaseModel):
     def date_window(self):
         if self.from_date and self.until_date and self.from_date >= self.until_date:
             raise ValueError("The exclusive end date must be after the start date")
+        if self.object_status_filter in ('matched', 'not_matched'):
+            if self.object_value_filter is None:
+                raise ValueError("Known object result filters require an exact value")
+            try:
+                self.object_value_filter.encode('utf-8')
+            except UnicodeEncodeError:
+                raise ValueError("Object value must be valid UTF-8") from None
+        elif self.object_value_filter is not None:
+            raise ValueError("Unknown object result filters do not have a value")
         return self
 
     @field_validator("result_event_id")
@@ -209,6 +220,14 @@ def _result_predicate(spec, alias=""):
     if spec.result_event_id is not None:
         terms.append(prefix + "event_id=?")
         params.append(spec.result_event_id)
+    if spec.object_status_filter is not None:
+        event_ref = prefix + "event_id" if alias else "st_result.event_id"
+        condition = "g.event_id=" + event_ref + " AND g.status=?"
+        params.append(spec.object_status_filter)
+        if spec.object_value_filter is not None:
+            condition += " AND g.value_then=?"
+            params.append(spec.object_value_filter)
+        terms.append("EXISTS (SELECT 1 FROM st_object g WHERE " + condition + ")")
     return (" WHERE " + " AND ".join(terms) if terms else ""), params
 
 
@@ -231,17 +250,17 @@ def _write_worklist(conn, log_id: str, spec: ExportSpec, revision: int, out: IO[
                      'expected_value_review','operator','quantifier','qualifier_present','qualifier_review','result_filter',
                      'event_id_review','event_time_utc','event_result','linked_objects','matched_objects',
                      'not_matched_objects','unknown_objects','object_id_review','object_result','recorded_from_utc',
-                     'recorded_value_review','recorded_value_present','from_date_utc','until_date_exclusive_utc','event_id_filter_review'])
+                     'recorded_value_review','recorded_value_present','from_date_utc','until_date_exclusive_utc','event_id_filter_review','object_status_filter','object_value_filter_present','object_value_filter_review'])
     prefix = [log_id,revision,spec.activity,spec.object_type,spec.attribute,spec.expected_value,spec.operator,
               spec.quantifier,str(spec.event_qualifier is not None).lower(),spec.event_qualifier,spec.status]
     writer.writerow([review_cell(value) for value in ['check',*prefix,None,None,None,None,None,None,None,
-                                                       None,None,None,None,'false',spec.from_date,spec.until_date,spec.result_event_id]])
+                                                       None,None,None,None,'false',spec.from_date,spec.until_date,spec.result_event_id,spec.object_status_filter,str(spec.object_value_filter is not None).lower(),spec.object_value_filter]])
     written = 0
     while batch := cursor.fetchmany(5000):
         for eid,at,status,n,yes,no,unknown,oid,object_status,valid_from,recorded in batch:
             kind = 'event' if spec.kind == 'events' else ('event_without_object' if oid is None else 'event_object')
             values = [kind,*prefix,eid,_stamp(at),status,n,yes,no,unknown,oid,
-                      object_status if oid is not None else None,_stamp(valid_from),recorded,str(recorded is not None).lower(),spec.from_date,spec.until_date,spec.result_event_id]
+                      object_status if oid is not None else None,_stamp(valid_from),recorded,str(recorded is not None).lower(),spec.from_date,spec.until_date,spec.result_event_id,spec.object_status_filter,str(spec.object_value_filter is not None).lower(),spec.object_value_filter]
             writer.writerow([review_cell(value) for value in values])
             written += 1
     if written != expected:
@@ -354,13 +373,13 @@ def _analyze(log_id, spec, witness=False, export=None, timeline=False, timeline_
                     writer.writerow(['record_type','log_id','log_revision','activity_review','object_type_review',
                         'attribute_review','expected_value_review','operator','quantifier','qualifier_present',
                         'qualifier_review','from_date_utc','until_date_exclusive_utc','result_filter',
-                        'event_id_filter_review','object_result','recorded_value_present','recorded_value_review','event_object_links'])
+                        'event_id_filter_review','object_result','recorded_value_present','recorded_value_review','event_object_links','object_status_filter','object_value_filter_present','object_value_filter_review'])
                     prefix = [log_id,revision,spec.activity,spec.object_type,spec.attribute,spec.expected_value,
                         spec.operator,spec.quantifier,str(spec.event_qualifier is not None).lower(),spec.event_qualifier,
                         spec.from_date,spec.until_date,spec.status,spec.result_event_id]
-                    writer.writerow([review_cell(v) for v in ['check',*prefix,None,'false',None,None]])
+                    writer.writerow([review_cell(v) for v in ['check',*prefix,None,'false',None,None,spec.object_status_filter,str(spec.object_value_filter is not None).lower(),spec.object_value_filter]])
                     for status,value,number in conn.execute(query).fetchall():
-                        writer.writerow([review_cell(v) for v in ['group',*prefix,status,str(value is not None).lower(),value,number]])
+                        writer.writerow([review_cell(v) for v in ['group',*prefix,status,str(value is not None).lower(),value,number,spec.object_status_filter,str(spec.object_value_filter is not None).lower(),spec.object_value_filter]])
                     return {'rows':count}
                 rows = conn.execute(query + ' LIMIT ? OFFSET ?', [spec.limit, spec.offset]).fetchall()
                 return {'format':'openworkgraph.ocel-state-check-distribution.v1','log_id':log_id,'revision':revision,
@@ -387,13 +406,13 @@ def _analyze(log_id, spec, witness=False, export=None, timeline=False, timeline_
                         'attribute_review','expected_value_review','operator','quantifier','qualifier_present',
                         'qualifier_review','from_date_utc','until_date_exclusive_utc','result_filter',
                         'event_id_filter_review','period','period_start_utc','events','matched','not_matched',
-                        'unknown','no_linked_object'])
+                        'unknown','no_linked_object','object_status_filter','object_value_filter_present','object_value_filter_review'])
                     prefix = [log_id,revision,spec.activity,spec.object_type,spec.attribute,spec.expected_value,
                         spec.operator,spec.quantifier,str(spec.event_qualifier is not None).lower(),spec.event_qualifier,
                         spec.from_date,spec.until_date,spec.status,spec.result_event_id,spec.bucket]
-                    writer.writerow([review_cell(v) for v in ['check',*prefix,None,None,None,None,None,None]])
+                    writer.writerow([review_cell(v) for v in ['check',*prefix,None,None,None,None,None,None,spec.object_status_filter,str(spec.object_value_filter is not None).lower(),spec.object_value_filter]])
                     for at,n,yes,no,unknown,none in conn.execute('SELECT * FROM st_buckets ORDER BY bucket_start').fetchall():
-                        writer.writerow([review_cell(v) for v in ['period',*prefix,at.isoformat()[:10],n,yes,no,unknown,none]])
+                        writer.writerow([review_cell(v) for v in ['period',*prefix,at.isoformat()[:10],n,yes,no,unknown,none,spec.object_status_filter,str(spec.object_value_filter is not None).lower(),spec.object_value_filter]])
                     return {'rows':count}
                 rows = conn.execute('SELECT * FROM st_buckets ORDER BY bucket_start LIMIT ? OFFSET ?',
                                     [spec.limit, spec.offset]).fetchall()

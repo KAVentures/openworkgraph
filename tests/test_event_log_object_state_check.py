@@ -450,3 +450,43 @@ def test_distribution_csv_escapes_recorded_values():
     out=StringIO(newline='');s.export_distribution(log,spec(expected_revision=report['revision']),out)
     records=list(csv.DictReader(StringIO(out.getvalue())))
     assert any(row['recorded_value_review']=="'=formula" for row in records)
+    selected=spec(expected_revision=report['revision'],object_status_filter='not_matched',object_value_filter='=formula')
+    for fn, extra in ((s.export_worklist,{'kind':'events'}),(s.export_timeline,{'bucket':'day'}),(s.export_distribution,{})):
+        output=StringIO(newline='');fn(log,{**selected,**extra},output)
+        assert all(row['object_value_filter_review']=="'=formula" for row in csv.DictReader(StringIO(output.getvalue())))
+
+
+def test_value_group_filter_preserves_event_context_and_all_object_evidence():
+    doc=fixture();doc['objects'][0]['attributes'][0]['value']=''
+    log=w.import_log(BytesIO(json.dumps(doc).encode()),name='group',source_format='ocel')['log_id']
+    baseline=s.analyze(log,spec());revision=baseline['revision']
+    missing=spec(object_status_filter='missing_history',expected_revision=revision)
+    result=s.analyze(log,missing)
+    assert result['selected_events']==8 and result['matching_events']==2
+    assert {row['event_id'] for row in result['rows']}=={'e6','e8'}
+    witnesses=s.witnesses(log,{**missing,'event_id':'e8'})
+    assert {row['object_id'] for row in witnesses['witnesses']}=={'a','d'}
+    with pytest.raises(w.EventLogWorkspaceError,match='not in'):
+        s.witnesses(log,{**missing,'event_id':'e1'})
+    assert s.analyze(log,{**missing,'status':'unknown'})['matching_events']==1
+    assert s.analyze(log,{**missing,'result_event_id':'e8'})['matching_events']==1
+    exact=spec(object_status_filter='not_matched',object_value_filter='',expected_revision=revision)
+    assert {r['event_id'] for r in s.analyze(log,exact)['rows']}=={'e1','e8'}
+    assert s.timeline(log,{**exact,'bucket':'day'})['matching_events']==2
+    dist=s.distribution(log,exact)
+    assert dist['event_object_links']==3 and dist['matching_events']==2
+    for kind in ('events','objects'):
+        out=StringIO(newline='');meta=s.export_worklist(log,{**exact,'kind':kind},out)
+        assert meta['rows']==(2 if kind=='events' else 3)
+        rows=list(csv.DictReader(StringIO(out.getvalue())))
+        assert all(r['object_status_filter']=='not_matched' and r['object_value_filter_present']=='true' and r['object_value_filter_review']=='' for r in rows)
+    for fn, extra in ((s.export_timeline,{'bucket':'day'}),(s.export_distribution,{})):
+        out=StringIO(newline='');fn(log,{**exact,**extra},out)
+        assert all(r['object_value_filter_present']=='true' and r['object_value_filter_review']=='' for r in csv.DictReader(StringIO(out.getvalue())))
+    for invalid in ({'object_status_filter':'matched'}, {'object_status_filter':'missing_history','object_value_filter':''},
+                    {'object_value_filter':'x'}, {'object_status_filter':'fake'},
+                    {'object_status_filter':'matched','object_value_filter':'\ud800'}):
+        with pytest.raises(w.EventLogWorkspaceError,match='invalid'):
+            s.analyze(log,spec(**invalid))
+    with pytest.raises(w.EventLogWorkspaceError,match='changed'):
+        s.analyze(log,{**exact,'expected_revision':revision+1})

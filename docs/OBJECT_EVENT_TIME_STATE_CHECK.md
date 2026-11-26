@@ -114,6 +114,16 @@ separate unknown categories; events with no linked object add no links. Counts
 are links, not distinct objects. The reviewed revision and current date,
 status, and event-ID filters apply to the table and complete CSV export.
 
+Select **Inspect value group** to find events with at least one object in that
+group. Other linked objects remain in each event's evidence and object CSV,
+so reviewers retain the full event context. The event's result status is still
+computed from all selected linked objects. The temporary group filter combines
+with the event and date filters, applies to timelines and exports, and is not
+saved in check definitions. Clear it explicitly to return to all events.
+Distribution counts under a group filter include all links of the matching
+events, including links outside that group. CSV metadata records the group
+filter and distinguishes an empty exact value from no value.
+
 The distribution refuses more than 1,000 groups or any recorded value longer
 than 4,096 characters, rather than silently truncating. The CSV includes the
 check settings and filters, escapes spreadsheet formulas, and may contain

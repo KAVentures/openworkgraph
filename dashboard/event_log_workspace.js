@@ -4314,9 +4314,9 @@
     const summary=el('div');summary.id='owgObjectStateSummary';
     const resultFilter=select('owgObjectStateResultFilter',[['','All results'],['matched','Matched'],['not_matched','Not matched'],['unknown','Unknown'],['no_linked_object','No linked object']]);
     const eventIdFilter=input('owgObjectStateEventFilter','text','Exact event ID');eventIdFilter.maxLength=400;
-    const findEvent=button('Apply event ID filter','secondary'),clearEvent=button('Clear event ID filter','secondary');
+    const findEvent=button('Apply event ID filter','secondary'),clearEvent=button('Clear event ID filter','secondary'),clearGroup=button('Clear object value filter','secondary');
     const resultControls=el('div',null,'row'),previous=button('Previous state results','secondary'),next=button('Next state results','secondary');
-    resultControls.append(field('Result status',resultFilter),field('Exact event ID filter',eventIdFilter),findEvent,clearEvent,previous,next);show(resultControls,false);
+    resultControls.append(field('Result status',resultFilter),field('Exact event ID filter',eventIdFilter),findEvent,clearEvent,clearGroup,previous,next);show(resultControls,false);
     const exportBar=el('div');exportBar.id='owgObjectStateExports';
     const exportEvents=button('Download event results (CSV)','secondary'),exportObjects=button('Download object evidence (CSV)','secondary');
     const exportStatus=el('div',null,'muted');exportStatus.setAttribute('role','status');
@@ -4329,7 +4329,7 @@
     const distribution=document.createElement('details');distribution.id='owgObjectStateDistribution';
     const distRun=button('Show recorded value distribution','secondary'),distDownload=button('Download value distribution (CSV)','secondary'),distPrev=button('Previous value groups','secondary'),distNext=button('Next value groups','secondary');
     const distStatus=el('div',null,'muted');distStatus.setAttribute('role','status');const distRows=el('div');
-    distribution.append(el('summary','Recorded values at events'),el('p','Counts are event-object links, not distinct objects. Missing history, future-only history and conflicting values are separate unknown groups. Events without a linked object have no link to count. The current result filters apply.','muted'),distRun,distDownload,distPrev,distNext,distStatus,distRows);show(distribution,false);
+    distribution.append(el('summary','Recorded values at events'),el('p','Counts are event-object links, not distinct objects. Missing history, future-only history and conflicting values are separate unknown groups. Events without a linked object have no link to count. Inspecting a group finds events with at least one matching object; their evidence still includes every selected object. The current result filters apply.','muted'),distRun,distDownload,distPrev,distNext,distStatus,distRows);show(distribution,false);
     const results=el('div');results.id='owgObjectStateResults';
     const witness=el('div');witness.id='owgObjectStateWitness';
     box.append(form,el('p','Saved checks are stored locally with this log and can include exact recorded values. Loading one does not run it.','muted'),savedRow,savedStatus,transfer,notice,summary,resultControls,trend,distribution,exportBar,results,witness);
@@ -4475,7 +4475,7 @@
       prev.onclick=()=>page(index-1);nextPage.onclick=()=>{cursors[index+1]=following;page(index+1);};page(0);
     }
     async function load(spec,start,filter,pin,focusResult=false){
-      const request=++turn;++exportTurn;resetTrend();resetDistribution();run.disabled=true;resultFilter.disabled=findEvent.disabled=clearEvent.disabled=previous.disabled=next.disabled=true;show(exportBar,false);exportStatus.textContent='';
+      const request=++turn;++exportTurn;resetTrend();resetDistribution();run.disabled=true;resultFilter.disabled=findEvent.disabled=clearEvent.disabled=clearGroup.disabled=previous.disabled=next.disabled=true;show(exportBar,false);exportStatus.textContent='';
       notice.textContent='Checking recorded state…';summary.replaceChildren();results.replaceChildren();witness.replaceChildren();
       try{
         const payload={...spec,offset:start,limit:30,...(filter?{status:filter}:{}),...(pin!==null?{expected_revision:pin}:{})};
@@ -4485,14 +4485,14 @@
         notice.textContent='Checked '+Number(response.selected_events).toLocaleString()+' recorded events; '+Number(response.matching_events).toLocaleString()+' match the result filter.';
         summary.replaceChildren(table(['Matched','Not matched','Unknown','No linked object'],[[...['matched','not_matched','unknown','no_linked_object'].map(key=>Number(response.event_counts[key]).toLocaleString())]]),
           ...(response.selected_events===0?[el('p',spec.from_date||spec.until_date?'No events have this stored activity in the selected date window. This does not establish compliance.':'No events have this stored activity. This does not establish compliance.','muted')]:[]),
-          el('p','Summary counts cover all selected events before result filters. '+(spec.result_event_id?'Applied exact event ID: '+JSON.stringify(spec.result_event_id)+'. ':'')+'Values at the event timestamp apply immediately. 1970-01-01 denotes an initial value without a known time. Counts describe retained data, not verified source completeness or compliance.','muted'));
+          el('p','Summary counts cover all selected events before result filters. '+(spec.result_event_id?'Applied exact event ID: '+JSON.stringify(spec.result_event_id)+'. ':'')+(spec.object_status_filter?'Object filter: '+(statusLabel[spec.object_status_filter]||spec.object_status_filter)+(Object.hasOwn(spec,'object_value_filter')?' '+JSON.stringify(spec.object_value_filter):'')+'. Events include all linked object evidence. ':'')+'Values at the event timestamp apply immediately. 1970-01-01 denotes an initial value without a known time. Counts describe retained data, not verified source completeness or compliance.','muted'));
         const headers=['Event','Timestamp (UTC)','Result','Linked objects','Matched','Not matched','Unknown','Evidence'];
         results.replaceChildren(response.rows.length?table(headers,response.rows.map(item=>{
           const inspect=button('View object evidence','secondary');inspect.setAttribute('aria-label','View object evidence for event '+JSON.stringify(item.event_id));
           inspect.onclick=()=>inspectWitnesses(item,spec,filter,response.revision,request);
           return [item.event_id,item.at,statusLabel[item.status]||item.status,Number(item.linked_objects).toLocaleString(),Number(item.matched_objects).toLocaleString(),Number(item.not_matched_objects).toLocaleString(),Number(item.unknown_objects).toLocaleString(),inspect];
         })):el('p','No events match this result filter.','muted'));
-        show(resultControls,true);show(trend,true);show(distribution,true);resultFilter.disabled=findEvent.disabled=clearEvent.disabled=false;previous.disabled=offset===0;next.disabled=following===null;
+        show(resultControls,true);show(trend,true);show(distribution,true);resultFilter.disabled=findEvent.disabled=clearEvent.disabled=false;clearGroup.disabled=!spec.object_status_filter;previous.disabled=offset===0;next.disabled=following===null;
         exportEvents.disabled=exportObjects.disabled=false;show(exportBar,true);if(focusResult)notice.focus();
       }catch(error){if(current(request)){settings=null;revision=null;notice.textContent=error.message;show(resultControls,false);}}
       finally{if(current(request))run.disabled=false;}
@@ -4505,6 +4505,7 @@
       load({...settings,result_event_id:id},0,resultFilter.value,revision);
     };
     clearEvent.onclick=()=>{if(settings){const spec={...settings};delete spec.result_event_id;eventIdFilter.value='';load(spec,0,resultFilter.value,revision);}};
+    clearGroup.onclick=()=>{if(settings){const spec={...settings};delete spec.object_status_filter;delete spec.object_value_filter;load(spec,0,resultFilter.value,revision,true);}};
     resultFilter.onchange=()=>{if(settings)load(settings,0,resultFilter.value,revision);};
     previous.onclick=()=>{if(settings)load(settings,Math.max(0,offset-30),resultFilter.value,revision);};
     next.onclick=()=>{if(settings&&following!==null)load(settings,following,resultFilter.value,revision);};
@@ -4560,7 +4561,13 @@
         const result=await (await api(base+'/distribution',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).json();
         if(!active())return;distOffset=start;distFollowing=result.next_offset;
         distStatus.textContent=result.total_groups?'Showing '+(start+1)+'–'+(start+result.rows.length)+' of '+result.total_groups+' groups across '+result.event_object_links+' event-object links.':'No event-object links match the applied filters.';
-        if(result.rows.length)distRows.replaceChildren(table(['Object result','Recorded value','Event-object links'],result.rows.map(row=>[statusLabel[row.status]||row.status,row.recorded_value===null?'—':JSON.stringify(row.recorded_value),row.event_object_links])));
+        if(result.rows.length)distRows.replaceChildren(table(['Object result','Recorded value','Event-object links','Evidence'],result.rows.map(row=>{
+          const inspect=button('Inspect value group','secondary');inspect.setAttribute('aria-label','Inspect '+(statusLabel[row.status]||row.status)+(row.recorded_value===null?'': ' value '+JSON.stringify(row.recorded_value)));
+          inspect.onclick=()=>{if(!active()||!settings||revision===null)return;const spec={...settings,object_status_filter:row.status};
+            if(row.recorded_value===null)delete spec.object_value_filter;else spec.object_value_filter=row.recorded_value;
+            load(spec,0,resultFilter.value,revision,true);};
+          return [statusLabel[row.status]||row.status,row.recorded_value===null?'—':JSON.stringify(row.recorded_value),row.event_object_links,inspect];
+        })));
         distDownload.disabled=false;distPrev.disabled=start===0;distNext.disabled=distFollowing===null;
       }catch(error){if(active())distStatus.textContent=error.message;}
       finally{if(active())distRun.disabled=false;}
