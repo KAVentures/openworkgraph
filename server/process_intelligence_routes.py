@@ -173,6 +173,22 @@ async def agent_overview_for_cases(request: Request, log_id: str):
     return await _answer(sharing.overview_for_cases, log_id, spec["case_filter"], case_type, sla)
 
 
+@router.post("/v1/process-intelligence/{log_id}/compare-cohorts")
+async def agent_compare_cohorts(request: Request, log_id: str):
+    """Body: {"first": case filter, "second": case filter, "case_type"?: text, "sla_hours"?: number}."""
+    _require_agent_access(request)
+    spec = await _json_body(request, "cohort comparison", strict=True, limit=32768)
+    if (not isinstance(spec, dict) or not {"first", "second"} <= set(spec)
+            or set(spec) - {"first", "second", "case_type", "sla_hours"}):
+        raise HTTPException(422, 'send {"first": {...}, "second": {...}} with optional case_type and sla_hours')
+    case_type, sla = spec.get("case_type"), spec.get("sla_hours")
+    if case_type is not None and (not isinstance(case_type, str) or not 0 < len(case_type) <= 200):
+        raise HTTPException(422, "case_type must be a short text")
+    if sla is not None and (isinstance(sla, bool) or not isinstance(sla, (int, float)) or not 0 < sla <= 100000):
+        raise HTTPException(422, "sla_hours must be a number of hours above 0")
+    return await _answer(sharing.compare_cohorts, log_id, spec["first"], spec["second"], case_type, sla)
+
+
 @router.get("/v1/process-intelligence/{log_id}/root-cause")
 async def agent_root_cause(request: Request, log_id: str,
                            outcome: str = Query(pattern="^(duration_over|rework|contains_activity|ends_with)$"),
