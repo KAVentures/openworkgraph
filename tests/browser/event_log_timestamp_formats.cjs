@@ -93,6 +93,18 @@ const path=require('node:path');
    await page.locator('#owgEventLogStatus').filter({hasText:'Imported 2 events'}).waitFor();
    summary=await summaryOf('unix');
    assert.equal(summary.first_event_at,'2024-03-04T14:05:00Z');
+   // Date and time in separate columns: both preselected, the format detected from the joined value.
+   await page.locator('#owgEventLogName').fill('split');
+   await page.locator('#owgEventLogNaiveOffset').fill('');
+   await page.locator('#owgEventLogFile').setInputFiles({name:'split.csv',mimeType:'text/csv',buffer:Buffer.from('Order;Step;Posting Date;Time\n4711;Create;04.03.2024;14:05:00\n4711;Ship;05.03.2024;08:30:15\n')});
+   await page.waitForFunction(()=>document.querySelector('#owgEventLogTimeOfDay').value==='Time'&&document.querySelector('#owgEventLogTime').value==='Posting Date');
+   await page.waitForFunction(()=>document.querySelector('#owgEventLogTimeFormat').value==='%d.%m.%Y %H:%M:%S');
+   await page.locator('#owgEventLogCase').selectOption('Order');await page.locator('#owgEventLogActivity').selectOption('Step');
+   await page.locator('#owgEventLogNaiveOffset').fill('Z');
+   await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Imported 2 events'}).waitFor();
+   summary=await summaryOf('split');
+   assert.equal(summary.first_event_at,'2024-03-04T14:05:00Z');
    // ISO files keep the default and get no format message.
    await page.locator('#owgEventLogName').fill('');
    await page.locator('#owgEventLogFile').setInputFiles({name:'iso.csv',mimeType:'text/csv',buffer:Buffer.from('case,activity,time\nx,A,2024-03-04T08:00:00Z\nx,,2024-03-04T09:00:00Z\n')});
@@ -107,6 +119,6 @@ const path=require('node:path');
    const audit=await page.evaluate(async()=>window.axe.run({include:[['#owgEventLogTimeFormat'],['#owgEventLogImportPreviewExamples']]},{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
    assert.deepEqual(errors,[]);
-   console.log('Event-log timestamp format browser acceptance passed: day-first format suggested with an offset, ambiguous dates left to the user, Unix seconds read as UTC, ISO files unchanged.');
+   console.log('Event-log timestamp format browser acceptance passed: day-first format suggested with an offset, ambiguous dates left to the user, Unix seconds read as UTC, separate date and time columns joined, ISO files unchanged.');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -559,7 +559,8 @@ async def convert_parquet_event_log(request: Request):
 
 @router.post("/v1/event-logs/timestamp-formats")
 async def detect_timestamp_formats(request: Request, column: str = Query(min_length=1, max_length=200),
-                                   delimiter: str = Query(default=",", max_length=1)):
+                                   delimiter: str = Query(default=",", max_length=1),
+                                   time_column: str = Query(default="", max_length=200)):
     """Which known timestamp formats read every value of one column, from the start of a CSV file (body,
     at most 256 KB). Nothing is stored."""
     from . import event_log_timestamp_formats as formats
@@ -568,7 +569,8 @@ async def detect_timestamp_formats(request: Request, column: str = Query(min_len
     if len(body) > 256 * 1024:
         raise HTTPException(413, "send at most the first 256 KB of the file")
     try:
-        samples = formats.sample_column(body.decode("utf-8", errors="replace"), "\t" if delimiter == "t" else delimiter, column)
+        samples = formats.sample_column(body.decode("utf-8", errors="replace"), "\t" if delimiter == "t" else delimiter, column,
+                                        time_column=time_column)
         result = await run_in_threadpool(formats.detect, samples)
     except formats.TimestampFormatError as exc:
         raise HTTPException(422, str(exc)) from None
@@ -628,6 +630,7 @@ async def preview_event_log_import(
     naive_timestamp_offset: str = Query(default="", max_length=6),
     timestamp_format: str = Query(default="", max_length=64),
     encoding: str = Query(default="", pattern="^(|utf-8|windows-1252|utf-16)$"),
+    time_column: str = Query(default="", max_length=200),
     identity: dict = Depends(_source_identity_mapping),
 ):
     _require_dashboard(request)
@@ -643,7 +646,8 @@ async def preview_event_log_import(
                "attribute_columns": attribute_column[:64], "delimiter": "\t" if delimiter == "t" else delimiter,
                **({"header_row": header_row} if header_row > 1 else {}),
                "keep_rejected": keep_rejected, "naive_timestamp_offset": naive_timestamp_offset,
-               "timestamp_format": timestamp_format, **({"encoding": encoding} if encoding else {}), **identity}
+               "timestamp_format": timestamp_format, **({"encoding": encoding} if encoding else {}),
+               **({"time_column": time_column} if time_column else {}), **identity}
     return await run_in_threadpool(_respond, preview.preview_csv, bytes(body), mapping, partial=partial)
 
 
@@ -663,6 +667,7 @@ async def import_event_log(
     naive_timestamp_offset: str = Query(default="", max_length=6),
     timestamp_format: str = Query(default="", max_length=64),
     encoding: str = Query(default="", pattern="^(|utf-8|windows-1252|utf-16)$"),
+    time_column: str = Query(default="", max_length=200),
     identity: dict = Depends(_source_identity_mapping),
 ):
     _require_dashboard(request)
@@ -685,7 +690,8 @@ async def import_event_log(
                    **({"keep_rejected": True} if keep_rejected else {}),
                    **({"naive_timestamp_offset": naive_timestamp_offset} if naive_timestamp_offset else {}),
                    **({"timestamp_format": timestamp_format} if timestamp_format else {}),
-                   **({"encoding": encoding} if encoding else {})}
+                   **({"encoding": encoding} if encoding else {}),
+                   **({"time_column": time_column} if time_column else {})}
         mapping.update(identity)
         return _respond(workspace.import_log, spool, name=name, source_format=format, mapping=mapping)
 
@@ -705,6 +711,7 @@ async def append_event_log(
     naive_timestamp_offset: str = Query(default="", max_length=6),
     timestamp_format: str = Query(default="", max_length=64),
     encoding: str = Query(default="", pattern="^(|utf-8|windows-1252|utf-16)$"),
+    time_column: str = Query(default="", max_length=200),
     identity: dict = Depends(_source_identity_mapping),
 ):
     _require_dashboard(request)
@@ -726,7 +733,8 @@ async def append_event_log(
                    **({"keep_rejected": True} if keep_rejected else {}),
                    **({"naive_timestamp_offset": naive_timestamp_offset} if naive_timestamp_offset else {}),
                    **({"timestamp_format": timestamp_format} if timestamp_format else {}),
-                   **({"encoding": encoding} if encoding else {})}
+                   **({"encoding": encoding} if encoding else {}),
+                   **({"time_column": time_column} if time_column else {})}
         mapping.update(identity)
         try:
             result = await run_in_threadpool(workspace.append_log, log_id, spool, source_format=format, mapping=mapping)
@@ -1460,6 +1468,28 @@ def event_log_automation_candidates(request: Request, log_id: str, case_type: st
     return _respond(automation.candidates, log_id, case_type, limit=limit, cohort=cohort)
 
 
+@router.post("/v1/event-logs/{log_id}/automation-estimate")
+async def event_log_automation_estimate(request: Request, log_id: str,
+                                        case_type: str | None = Query(default=None, max_length=200),
+                                        cohort: dict[str, Any] = Depends(_case_filter)):
+    """Hours-per-week ranges for the automation candidates from the owner's stated assumptions.
+
+    Body: {"handling_minutes": [low, high], "automatable_share"?: {...}, "hourly_cost"?: number, "limit"?: 1-50}."""
+    from . import event_log_automation_estimate as estimate
+    _require_dashboard(request)
+    spec = await _json_body(request, "automation estimate", strict=True, limit=8192)
+    allowed = {"handling_minutes", "automatable_share", "hourly_cost", "limit"}
+    if not isinstance(spec, dict) or "handling_minutes" not in spec or set(spec) - allowed:
+        raise HTTPException(422, "Send handling_minutes with optional automatable_share, hourly_cost and limit")
+    limit = spec.get("limit", 15)
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
+        raise HTTPException(422, "limit must be 1 to 50")
+    return await run_in_threadpool(_respond, estimate.estimate, log_id, case_type,
+                                   handling_minutes=spec["handling_minutes"],
+                                   automatable_share=spec.get("automatable_share"),
+                                   hourly_cost=spec.get("hourly_cost"), limit=limit, cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/decision-points")
 def event_log_decision_points(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                               cohort: dict[str, Any] = Depends(_case_filter)):
@@ -1863,26 +1893,28 @@ def event_log_case_alignment(request: Request, log_id: str, case_id: str = Query
 @router.get("/v1/event-logs/{log_id}/model-change")
 def event_log_model_change(request: Request, log_id: str, split: str | None = Query(default=None, max_length=64),
                            noise: float = Query(default=0.2, ge=0, lt=1),
+                           activities: float = Query(default=1.0, gt=0, le=1),
                            case_type: str | None = Query(default=None, max_length=200),
                            cohort: dict = Depends(_case_filter)):
     """How the discovered model differs before and after a date: orderings, activities and cross-fit."""
     from . import event_log_model_change as change
     _require_dashboard(request)
     return _respond(change.model_change, log_id, case_type, split=split, noise=noise, cohort=cohort,
-                    include_case_evidence=True)
+                    include_case_evidence=True, activities=activities)
 
 
 @router.get("/v1/event-logs/{log_id}/model-comparison")
 def event_log_model_comparison(request: Request, log_id: str, group_a: str = Query(min_length=3, max_length=400),
                                group_b: str = Query(min_length=3, max_length=400),
                                noise: float = Query(default=0.2, ge=0, lt=1),
+                               activities: float = Query(default=1.0, gt=0, le=1),
                                case_type: str | None = Query(default=None, max_length=200),
                                cohort: dict = Depends(_case_filter)):
     """The discovered models of two groups of cases (case attribute values) compared."""
     from . import event_log_model_change as change
     _require_dashboard(request)
     return _respond(change.model_comparison, log_id, group_a, group_b, case_type, noise=noise, cohort=cohort,
-                    include_case_evidence=True)
+                    include_case_evidence=True, activities=activities)
 
 
 @router.get("/v1/event-logs/{log_id}/story")
