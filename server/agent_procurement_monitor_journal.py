@@ -115,6 +115,7 @@ def _view(key,state,history):
         "source_evidence_authenticated":False,
         "credential_authenticated_observations":len(state.get("producer_attribution",{})),
         "producer_attribution":state.get("producer_attribution",{}),
+        "finance_reconciliations":state.get("finance_reconciliations",[]),
         "producer_grants":[{**e["details"],"revoked":any(x["kind"]=="producer_revoke" and x["details"]["grant_id"]==e["details"]["grant_id"] for x in history)} for e in history if e["kind"]=="producer_grant"],"tamper_resistant_against_database_owner":False,
         "deployment_changed":False,"execution_authorized":False}
 
@@ -176,7 +177,8 @@ def _next_state(state,plan,snapshot,report,initial_sources):
         "snapshot":snapshot,"report":report,"sticky_rollback_triggers":sticky,"overdue_window_history":overdue,
         "rollback_referral_recorded":state["rollback_referral_recorded"] if state else False,
         "monitor_plan":plan,"initial_sources":sorted(initial_sources),
-        "producer_attribution":state.get("producer_attribution",{}) if state else {}}
+        "producer_attribution":state.get("producer_attribution",{}) if state else {},
+        "finance_reconciliations":state.get("finance_reconciliations",[]) if state else []}
 
 
 def append(packet,workflow_id,revision,doc):
