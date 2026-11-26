@@ -70,8 +70,8 @@ router = APIRouter()
 XLSX_MAX_BYTES = 64 * 1024 * 1024
 SQLITE_MAX_BYTES = 256 * 1024 * 1024
 _SCRIPT = Path(__file__).resolve().parents[1] / "dashboard" / "event_log_workspace.js"
-_TYPES = {"csv": "text/csv", "sourcecsv": "text/csv", "sourcecsv-review": "text/csv", "csv-review": "text/csv", "xes": "application/xml", "xes-attributes": "application/xml", "ocel": "application/json", "ocelxml": "application/xml"}
-_SUFFIX = {"csv": "csv", "sourcecsv": "csv", "sourcecsv-review": "review.csv", "csv-review": "review.csv", "xes": "xes", "xes-attributes": "xes", "ocel": "jsonocel", "ocelxml": "xmlocel"}
+_TYPES = {"csv": "text/csv", "sourcecsv": "text/csv", "sourcecsv-review": "text/csv", "csv-review": "text/csv", "xes": "application/xml", "xes-attributes": "application/xml", "ocel": "application/json", "ocelxml": "application/xml", "jsonl": "application/x-ndjson", "csv-attributes": "text/csv"}
+_SUFFIX = {"csv": "csv", "sourcecsv": "csv", "sourcecsv-review": "review.csv", "csv-review": "review.csv", "xes": "xes", "xes-attributes": "xes", "ocel": "jsonocel", "ocelxml": "xmlocel", "jsonl": "jsonl", "csv-attributes": "csv"}
 
 
 def _source_identity_mapping(
@@ -317,6 +317,22 @@ def event_log_signal_timeline(
     return _respond(signal_timeline.timeline, transition=transition, limit=limit, before=before)
 
 
+@router.get("/v1/event-logs/signal-episode-review")
+def event_log_signal_episode_review(
+    request: Request, start_date: str = Query(max_length=10), end_date: str = Query(max_length=10),
+    status: str = Query(default="all",max_length=60),
+    log_id: str | None = Query(default=None,pattern=r"^[A-Za-z0-9_-]{1,128}$"),
+    rule_id: str | None = Query(default=None,pattern=r"^[A-Za-z0-9_-]{1,128}$"),
+    offset: int = Query(default=0,ge=0,le=100000), limit: int = Query(default=50,ge=1,le=100),
+    expected_review_sha256: str | None = Query(default=None,pattern=r"^[0-9a-f]{64}$"),
+):
+    """Bounded local journal episode review; no evaluation or action."""
+    from . import event_log_signal_episode_review as episodes
+    _require_dashboard(request)
+    return _respond(episodes.review,start_date=start_date,end_date=end_date,status=status,
+                    offset=offset,limit=limit,expected_review_sha256=expected_review_sha256,log_id=log_id,rule_id=rule_id)
+
+
 @router.post("/v1/event-logs/xlsx-to-csv")
 async def convert_xlsx_event_log(request: Request, sheet: str | None = Query(default=None, max_length=200)):
     """Convert one worksheet of an .xlsx file to CSV for the ordinary CSV import. Nothing is stored."""
@@ -354,6 +370,38 @@ async def convert_sqlite_event_log(request: Request, table: str | None = Query(d
             result = await run_in_threadpool(sqlite_import.to_csv, spool, table, folder=DATA_DIR)
         except sqlite_import.SqliteError as exc:
             raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/ptml-to-pnml")
+async def convert_ptml_process_tree(request: Request):
+    """Convert a PTML process tree (ProM, PM4Py) to a PNML workflow net for replay. Nothing is stored."""
+    from . import event_log_ptml_import as ptml_import
+    _require_dashboard(request)
+    data = bytearray()
+    async for chunk in request.stream():
+        data += chunk
+        if len(data) > ptml_import.MAX_BYTES:
+            raise HTTPException(413, "the process tree file is larger than 2 MB")
+    try:
+        result = await run_in_threadpool(ptml_import.to_pnml, bytes(data))
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/process-tree-to-pnml")
+async def convert_process_tree_notation(request: Request):
+    """Convert a process tree in PM4Py's printed notation to a PNML net: {"notation": "->( 'A', 'B' )"}."""
+    from . import event_log_ptml_import as ptml_import
+    _require_dashboard(request)
+    spec = await _json_body(request, "process tree", strict=True, limit=ptml_import.MAX_NOTATION_CHARS * 2)
+    if not isinstance(spec, dict) or set(spec) != {"notation"}:
+        raise HTTPException(422, "send the tree as notation")
+    try:
+        result = await run_in_threadpool(ptml_import.notation_to_pnml, spec["notation"])
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
@@ -473,8 +521,10 @@ async def preview_event_log_import(
     attribute_column: list[str] = Query(default=[], max_length=200),
     delimiter: str = Query(default=",", max_length=1),
     keep_rejected: bool = Query(default=False),
+    header_row: int = Query(default=1, ge=1, le=50),
     naive_timestamp_offset: str = Query(default="", max_length=6),
     timestamp_format: str = Query(default="", max_length=64),
+    encoding: str = Query(default="", pattern="^(|utf-8|windows-1252|utf-16)$"),
     identity: dict = Depends(_source_identity_mapping),
 ):
     _require_dashboard(request)
@@ -488,8 +538,9 @@ async def preview_event_log_import(
     mapping = {"case_column": case_column, "activity_column": activity_column,
                "timestamp_column": timestamp_column, "resource_column": resource_column,
                "attribute_columns": attribute_column[:64], "delimiter": "\t" if delimiter == "t" else delimiter,
+               **({"header_row": header_row} if header_row > 1 else {}),
                "keep_rejected": keep_rejected, "naive_timestamp_offset": naive_timestamp_offset,
-               "timestamp_format": timestamp_format, **identity}
+               "timestamp_format": timestamp_format, **({"encoding": encoding} if encoding else {}), **identity}
     return await run_in_threadpool(_respond, preview.preview_csv, bytes(body), mapping, partial=partial)
 
 
@@ -505,8 +556,10 @@ async def import_event_log(
     attribute_column: list[str] = Query(default=[], max_length=200),
     delimiter: str = Query(default=",", max_length=1),
     keep_rejected: bool = Query(default=False),
+    header_row: int = Query(default=1, ge=1, le=50),
     naive_timestamp_offset: str = Query(default="", max_length=6),
     timestamp_format: str = Query(default="", max_length=64),
+    encoding: str = Query(default="", pattern="^(|utf-8|windows-1252|utf-16)$"),
     identity: dict = Depends(_source_identity_mapping),
 ):
     _require_dashboard(request)
@@ -525,9 +578,11 @@ async def import_event_log(
                    "timestamp_column": timestamp_column, "resource_column": resource_column,
                    "attribute_columns": attribute_column[:64],
                    "delimiter": "\t" if delimiter == "t" else delimiter,
+                   **({"header_row": header_row} if header_row > 1 else {}),
                    **({"keep_rejected": True} if keep_rejected else {}),
                    **({"naive_timestamp_offset": naive_timestamp_offset} if naive_timestamp_offset else {}),
-                   **({"timestamp_format": timestamp_format} if timestamp_format else {})}
+                   **({"timestamp_format": timestamp_format} if timestamp_format else {}),
+                   **({"encoding": encoding} if encoding else {})}
         mapping.update(identity)
         return _respond(workspace.import_log, spool, name=name, source_format=format, mapping=mapping)
 
@@ -543,8 +598,10 @@ async def append_event_log(
     attribute_column: list[str] = Query(default=[], max_length=200),
     delimiter: str = Query(default=",", max_length=1),
     keep_rejected: bool = Query(default=False),
+    header_row: int = Query(default=1, ge=1, le=50),
     naive_timestamp_offset: str = Query(default="", max_length=6),
     timestamp_format: str = Query(default="", max_length=64),
+    encoding: str = Query(default="", pattern="^(|utf-8|windows-1252|utf-16)$"),
     identity: dict = Depends(_source_identity_mapping),
 ):
     _require_dashboard(request)
@@ -562,9 +619,11 @@ async def append_event_log(
                    "timestamp_column": timestamp_column, "resource_column": resource_column,
                    "attribute_columns": attribute_column[:64],
                    "delimiter": "\t" if delimiter == "t" else delimiter,
+                   **({"header_row": header_row} if header_row > 1 else {}),
                    **({"keep_rejected": True} if keep_rejected else {}),
                    **({"naive_timestamp_offset": naive_timestamp_offset} if naive_timestamp_offset else {}),
-                   **({"timestamp_format": timestamp_format} if timestamp_format else {})}
+                   **({"timestamp_format": timestamp_format} if timestamp_format else {}),
+                   **({"encoding": encoding} if encoding else {})}
         mapping.update(identity)
         try:
             result = await run_in_threadpool(workspace.append_log, log_id, spool, source_format=format, mapping=mapping)
@@ -822,6 +881,33 @@ async def export_event_log_matching_cases(request: Request, log_id: str,
         raise HTTPException(422, str(exc)) from None
     return FileResponse(filename, media_type=_TYPES[format], filename=f"{log_id}-matching-cases.{suffix}",
                         headers={"Cache-Control": "no-store"}, background=BackgroundTask(os.unlink, filename))
+
+
+@router.post("/v1/event-logs/{log_id}/export/matching-cases.xlsx")
+async def export_event_log_matching_cases_xlsx(request: Request, log_id: str):
+    """The matching-case CSV export's rows as an Excel workbook. Not stored."""
+    import shutil
+    from . import event_log_xlsx_export as xlsx_export
+    _require_dashboard(request)
+    spec = await _json_body(request, "matching-case export settings", strict=True, limit=32768)
+
+    def prepare():
+        folder = tempfile.mkdtemp(prefix="owg-xlsx-matching-", dir=str(DATA_DIR))
+        try:
+            xlsx_export.write_matching(log_id, spec, Path(folder) / "events.xlsx")
+        except BaseException:
+            shutil.rmtree(folder, ignore_errors=True)
+            raise
+        return folder
+
+    try:
+        folder = await run_in_threadpool(prepare)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return FileResponse(str(Path(folder) / "events.xlsx"),
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        filename=f"{log_id}-matching-cases.xlsx", headers={"Cache-Control": "no-store"},
+                        background=BackgroundTask(shutil.rmtree, folder, ignore_errors=True))
 
 
 def _anonymized(log_id: str, case_type: str | None, cohort: dict[str, Any], min_cases: int, time_mode: str,
@@ -1246,6 +1332,22 @@ async def event_log_stuck_cases(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/stuck-cases.csv")
+async def event_log_stuck_cases_csv(request: Request, log_id: str):
+    """Every stuck case, not only the first ``limit``, as a CSV worklist."""
+    from . import event_log_stuck as stuck
+    _require_dashboard(request)
+    spec = await _json_body(request, "stuck-case settings", strict=True, limit=16384)
+    try:
+        text, meta = await run_in_threadpool(stuck.stuck_cases_csv, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(text, media_type="text/csv; charset=utf-8", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-stuck-cases.csv"',
+        "X-OWG-Stuck-Cases": f"stuck={meta['stuck_cases']}; judged={meta['judged_open_cases']}; "
+                             f"not_judged={meta['not_judged_open_cases']}"})
+
+
 @router.get("/v1/event-logs/{log_id}/automation-candidates")
 def event_log_automation_candidates(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                                     limit: int = Query(default=15, ge=1, le=50),
@@ -1550,6 +1652,22 @@ def event_log_unusual_cases(request: Request, log_id: str, limit: int = Query(de
     from . import event_log_unusual_cases as unusual
     _require_dashboard(request)
     return _respond(unusual.unusual_cases, log_id, case_type, limit=limit, cohort=cohort, signal=signal, offset=offset)
+
+
+@router.get("/v1/event-logs/{log_id}/unusual-cases.csv")
+def event_log_unusual_cases_csv(request: Request, log_id: str, signal: str | None = Query(default=None, max_length=32),
+                                case_type: str | None = Query(default=None, max_length=200),
+                                cohort: dict = Depends(_case_filter)):
+    """Every unusual case, not only one page, as a CSV worklist."""
+    from . import event_log_unusual_cases as unusual
+    _require_dashboard(request)
+    try:
+        text, meta = unusual.unusual_cases_csv(log_id, case_type, cohort=cohort, signal=signal)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(text, media_type="text/csv; charset=utf-8", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-unusual-cases.csv"',
+        "X-OWG-Unusual-Cases": f"rows={meta['rows']}; unusual={meta['unusual_cases']}; cases={meta['cases']}"})
 
 
 @router.get("/v1/event-logs/{log_id}/due-dates")
@@ -1982,6 +2100,22 @@ def event_log_process_map(request: Request, log_id: str, case_type: str | None =
     return _respond(process_maps.process_map, log_id, case_type, activities=activities, paths=paths, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/process-map.dot")
+def event_log_process_map_dot(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                              activities: float = Query(default=1.0, gt=0, le=1), paths: float = Query(default=1.0, gt=0, le=1),
+                              cohort: dict[str, Any] = Depends(_case_filter)):
+    """The simplified map at the same slider settings as a Graphviz DOT graph."""
+    from . import event_log_map_dot as map_dot
+    _require_dashboard(request)
+    try:
+        dot, meta = map_dot.map_dot(log_id, case_type, activities=activities, paths=paths, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(dot, media_type="text/vnd.graphviz", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-map.dot"',
+        "X-OWG-Map": f"activities={meta['activities']}; transitions={meta['transitions']}"})
+
+
 @router.get("/v1/event-logs/{log_id}/playback")
 def event_log_playback(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                        activities: float = Query(default=1.0, gt=0, le=1),
@@ -2128,6 +2262,27 @@ def event_log_organization(request: Request, log_id: str, case_type: str | None 
     _require_dashboard(request)
     return _respond(organization.organization, log_id, case_type, names=names, cohort=cohort,
                     automation_resources=automation_resource, limit=limit)
+
+
+@router.get("/v1/event-logs/{log_id}/organization.graphml")
+def event_log_organization_graphml(request: Request, log_id: str,
+                                   case_type: str | None = Query(default=None, max_length=200),
+                                   names: str = Query(default="pseudonymous", max_length=20),
+                                   automation_resource: list[str] | None = Query(default=None, max_length=50),
+                                   limit: int = Query(default=100, ge=1, le=organization.MAX_EDGES),
+                                   cohort: dict[str, Any] = Depends(_case_filter)):
+    """The handover and working-together network as GraphML, pseudonymous unless names are asked for."""
+    from . import event_log_organization_graphml as graphml
+    _require_dashboard(request)
+    try:
+        xml, meta = graphml.organization_graphml(log_id, case_type, names=names, cohort=cohort,
+                                                 automation_resources=automation_resource, limit=limit)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(xml, media_type="application/graphml+xml", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-resources.graphml"',
+        "X-OWG-Network": f"resources={meta['resources']}; handovers={meta['handovers']}; "
+                         f"working_together={meta['working_together']}; names={meta['names']}"})
 
 
 @router.post("/v1/event-logs/{log_id}/organization/cases")
@@ -2366,6 +2521,15 @@ def event_log_domain_packs_installed(request: Request, log_id: str):
 def event_log_domain_pack_configurations(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
     _require_dashboard(request)
     return _respond(domain_packs.configuration_history, log_id, pack_id)
+
+
+@router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}/preflight")
+async def event_log_domain_pack_preflight(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_preflight as preflight
+    _require_dashboard(request)
+    spec = await _json_body(request, "domain pack preflight", strict=True)
+    _require_dashboard(request)
+    return await run_in_threadpool(_respond, preflight.preview, log_id, pack_id, spec)
 
 
 @router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}")
@@ -2943,6 +3107,15 @@ async def event_log_import_filter_set(request: Request, log_id: str):
     return await run_in_threadpool(_respond, filters.import_set, log_id, spec)
 
 
+@router.post("/v1/event-logs/{log_id}/filter-sets/{set_id}/update")
+async def event_log_update_filter_set(request: Request, log_id: str, set_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "saved filter update", strict=True, limit=65536)
+    response = await run_in_threadpool(_respond, filter_sets.update, log_id, set_id, spec)
+    _require_dashboard(request)
+    return response
+
+
 @router.post("/v1/event-logs/{log_id}/filter-sets/{set_id}/delete")
 def event_log_delete_filter_set(request: Request, log_id: str, set_id: str):
     _require_dashboard(request)
@@ -3081,6 +3254,22 @@ async def event_log_trace_cluster_cases(request: Request, log_id: str):
     return await run_in_threadpool(_respond, trace_clusters.cluster_cases, log_id, spec)
 
 
+@router.post("/v1/event-logs/{log_id}/trace-clusters/cases.csv")
+async def event_log_trace_cluster_cases_csv(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "trace cluster export settings", strict=True, limit=32768)
+    try:
+        content, info = await run_in_threadpool(trace_clusters.cluster_cases_csv, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    _require_dashboard(request)
+    headers = {"Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-cluster-cases.csv"',
+               "X-OWG-Cluster-Cases": f"total={info['total']}; written={info['written']}; truncated={str(info['truncated']).lower()}"}
+    if info["next_after"] is not None:
+        headers["X-OWG-Next-Cursor"] = info["next_after"]
+    return Response(content, media_type="text/csv; charset=utf-8", headers=headers)
+
+
 @router.post("/v1/event-logs/{log_id}/conformance")
 async def event_log_conformance(request: Request, log_id: str,
                                 case_type: str | None = Query(default=None, max_length=200),
@@ -3099,6 +3288,23 @@ def event_log_model_discovery(request: Request, log_id: str, case_type: str | No
     return _respond(model_discovery.discover, log_id, case_type, noise=noise, activities=activities, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/model-discovery.ptml")
+def event_log_model_discovery_ptml(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                                   noise: float = Query(default=0.2, ge=0, lt=1),
+                                   activities: float = Query(default=1.0, gt=0, le=1),
+                                   cohort: dict[str, Any] = Depends(_case_filter)):
+    """The discovered process tree as PTML, for PM4Py and ProM."""
+    from . import event_log_ptml as ptml
+    _require_dashboard(request)
+    try:
+        xml, meta = ptml.discovered_ptml(log_id, case_type, noise=noise, activities=activities, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(xml, media_type="application/xml", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-discovered.ptml"',
+        "X-OWG-Process-Tree": f"nodes={meta['nodes']}; activities={meta['activities']}"})
+
+
 @router.get("/v1/event-logs/{log_id}/model-discovery.pnml")
 def event_log_model_discovery_pnml(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                                    noise: float = Query(default=0.2, ge=0, lt=1),
@@ -3113,6 +3319,23 @@ def event_log_model_discovery_pnml(request: Request, log_id: str, case_type: str
     return Response(xml, media_type="application/xml", headers={
         "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-discovered.pnml"',
         "X-OWG-Petri-Net": f"places={meta['places']}; transitions={meta['transitions']}; silent={meta['silent_transitions']}"})
+
+
+@router.get("/v1/event-logs/{log_id}/model-discovery.bpmn")
+def event_log_model_discovery_bpmn(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                                   noise: float = Query(default=0.2, ge=0, lt=1),
+                                   activities: float = Query(default=1.0, gt=0, le=1),
+                                   cohort: dict[str, Any] = Depends(_case_filter)):
+    """The discovered model as BPMN 2.0 with diagram interchange, for process designers."""
+    from . import event_log_bpmn_export as bpmn
+    _require_dashboard(request)
+    try:
+        xml, meta = bpmn.discovered_bpmn(log_id, case_type, noise=noise, activities=activities, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(xml, media_type="application/xml", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-discovered.bpmn"',
+        "X-OWG-BPMN": f"tasks={meta['tasks']}; gateways={meta['gateways']}; flows={meta['flows']}"})
 
 
 @router.get("/v1/event-logs/{log_id}/variant.pnml")
@@ -3267,8 +3490,29 @@ def export_event_log_xlsx(request: Request, log_id: str, case_type: str | None =
                         background=BackgroundTask(shutil.rmtree, folder, ignore_errors=True))
 
 
+@router.get("/v1/event-logs/{log_id}/events.parquet")
+def export_event_log_parquet(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200)):
+    """The log's events as a typed Apache Parquet file (the CSV export's rows). Not stored."""
+    import shutil
+    from . import event_log_parquet_export as parquet_export
+    _require_dashboard(request)
+    folder = tempfile.mkdtemp(prefix="owg-parquet-export-", dir=str(DATA_DIR))
+    path = Path(folder) / "events.parquet"
+    try:
+        meta = parquet_export.write(log_id, path, case_type)
+    except workspace.EventLogWorkspaceError as exc:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise HTTPException(422, str(exc)) from None
+    except BaseException:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+    return FileResponse(str(path), media_type="application/vnd.apache.parquet", filename=f"{log_id}.parquet",
+                        headers={"Cache-Control": "no-store", "X-OWG-Rows": str(meta["rows"])},
+                        background=BackgroundTask(shutil.rmtree, folder, ignore_errors=True))
+
+
 @router.get("/v1/event-logs/{log_id}/export")
-def export_event_log(request: Request, log_id: str, format: str = Query(pattern="^(csv|sourcecsv|csv-review|sourcecsv-review|xes|xes-attributes|ocel|ocelxml)$"),
+def export_event_log(request: Request, log_id: str, format: str = Query(pattern="^(csv|csv-attributes|sourcecsv|csv-review|sourcecsv-review|jsonl|xes|xes-attributes|ocel|ocelxml)$"),
                      case_type: str | None = Query(default=None, max_length=200)):
     _require_dashboard(request)
     handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix="." + _SUFFIX[format],

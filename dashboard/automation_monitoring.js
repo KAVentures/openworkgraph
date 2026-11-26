@@ -58,11 +58,13 @@
     mrow.append(field('Deployment',pick),field('Recent days',recent),field('Baseline days',baseline),view);
     const channelButton=button('Signed report channel','secondary');channelButton.id='owgMonitorChannel';
     const incidentButton=button('Show incidents','secondary');incidentButton.id='owgMonitorIncidents';
+    const objectiveButton=button('Service objectives','secondary');objectiveButton.id='owgMonitorObjectives';
     const releaseButton=button('Release inventory','secondary');releaseButton.id='owgMonitorRelease';
-    const arow=el('div',null,'row');arow.style.alignItems='end';arow.append(field('Attach reviewed design (workflow.spec.json)',design),toLog,channelButton,incidentButton,releaseButton,remove);
+    const arow=el('div',null,'row');arow.style.alignItems='end';arow.append(field('Attach reviewed design (workflow.spec.json)',design),toLog,channelButton,incidentButton,releaseButton,objectiveButton,remove);
     const channelHost=el('div');channelHost.id='owgMonitorChannelPanel';const incidentHost=el('div');incidentHost.id='owgMonitorIncidentPanel';
     const releaseHost=el('div');releaseHost.id='owgMonitorReleasePanel';
-    manage.append(mrow,arow,channelHost,incidentHost,releaseHost);show(manage,false);
+    const objectiveHost=el('div');objectiveHost.id='owgMonitorObjectivePanel';
+    manage.append(mrow,arow,channelHost,incidentHost,releaseHost,objectiveHost);show(manage,false);
     const portfolio=el('div');portfolio.id='owgMonitorPortfolio';
     const portfolioDays=input('owgMonitorPortfolioDays','number');portfolioDays.min='1';portfolioDays.max='365';portfolioDays.value='30';
     const portfolioButton=button('Review all deployment evidence','secondary');portfolioButton.id='owgMonitorPortfolioShow';
@@ -75,7 +77,7 @@
 
     let deployments=[],renderVersion=0,loadVersion=0,incidentVersion=0,releaseVersion=0,portfolioVersion=0;
     let incidentScope='selected',incidentStatus='',incidentSearch='';
-    const clearResults=()=>{portfolioVersion++;portfolio.replaceChildren();renderVersion++;incidentVersion++;incidentScope='selected';incidentStatus='';incidentSearch='';results.replaceChildren();channelHost.replaceChildren();incidentHost.replaceChildren();releaseVersion++;releaseHost.replaceChildren();document.getElementById('owgMonitorRunEvidencePanel')?.replaceChildren();};
+    const clearResults=()=>{portfolioVersion++;portfolio.replaceChildren();renderVersion++;incidentVersion++;incidentScope='selected';incidentStatus='';incidentSearch='';results.replaceChildren();channelHost.replaceChildren();incidentHost.replaceChildren();releaseVersion++;releaseHost.replaceChildren();objectiveHost.replaceChildren();document.getElementById('owgMonitorRunEvidencePanel')?.replaceChildren();};
     const refresh=()=>{importButton.disabled=!(file.files&&file.files[0]&&consent.checked);};
     file.onchange=refresh;consent.onchange=refresh;
     async function load(select){
@@ -185,11 +187,75 @@
         if(scope.value==='all'){const deployment=deployments.find(d=>d.deployment_id===i.deployment_id);box.appendChild(el('div','Deployment: '+(deployment?deployment.name:'Unavailable deployment'),'muted'));}
         box.appendChild(el('div',i.fingerprint.replace(/^step:/,'Step: ')+' · '+i.occurrences+(i.count_basis==='distinct_retained_run_ids'?' distinct retained runs':' occurrences')+' · first '+i.first_seen+' · last '+i.last_seen+(i.reopened_count?' · reopened '+i.reopened_count+'×':'')+(i.sample_refs.length?' · runs '+i.sample_refs.join(', '):''),'muted'));
         i.notes.forEach(n=>box.appendChild(el('div',n.at+' · '+n.status+' · '+n.note)));
+        let inspectedPopulation=null,evidenceBusy=false;
+        if(i.count_basis==='distinct_retained_run_ids'&&i.run_membership_sha256){
+          const evidenceHost=el('div');
+          evidenceHost.setAttribute('aria-live','polite');
+          const inspect=button('Inspect retained run evidence','secondary');
+          inspect.setAttribute('aria-label','Inspect retained run evidence for incident '+i.incident_id);
+          let evidenceVersion=0;
+          const current=v=>v===evidenceVersion&&version===incidentVersion&&pick.value===selected&&box.isConnected;
+          async function evidencePage(offset,population){
+            const v=++evidenceVersion;inspect.disabled=true;evidenceBusy=true;
+            evidenceHost.replaceChildren(el('div','Loading retained run evidence…','muted'));
+            try{
+              const result=await api('/v1/automation-monitoring/incidents/'+encodeURIComponent(i.incident_id)+'/evidence',{
+                method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+                  expected_last_seen:i.last_seen,expected_review_revision:i.review_revision,
+                  expected_membership_sha256:i.run_membership_sha256,expected_population_sha256:population,
+                  offset,limit:20})});
+              if(!current(v))return;
+              inspectedPopulation=result.population_sha256;
+              const parts=[el('p',result.matching_runs+' matching retained runs · '+result.matching_steps+' reported steps. Current reports, not verified outcomes. A triage decision from this view will require this exact population to remain current.','muted')];
+              const runList=el('div');
+              for(const r of result.rows){
+                const details=el('details');
+                details.appendChild(el('summary',r.run_id+' · '+r.status+' · '+r.started_at));
+                const issue=r.first_reported_issue;
+                details.appendChild(el('div',issue?'First reported issue: '+issue.activity+' · '+issue.status+' · step '+issue.step_id:'No matching problem step reported','muted'));
+                const load=button('Read exact retained report','secondary');
+                const exact=el('div');exact.setAttribute('aria-live','polite');
+                load.onclick=async()=>{
+                  load.disabled=true;
+                  try{
+                    const d=await api('/v1/automation-monitoring/deployments/'+encodeURIComponent(r.reference.deployment_id)+'/runs/detail?run_id='+encodeURIComponent(r.run_id)+'&expected_sha256='+encodeURIComponent(r.reference.run_sha256));
+                    if(!current(v)||!details.isConnected)return;
+                    exact.replaceChildren(el('p','Reported spec: '+(d.run.reported_spec_sha256||'Unknown')+' · '+d.attribution,'muted'),
+                      d.run.steps.length?table(['Position','Activity','Status','Reported time'],d.run.steps.map(s=>[s.seq+1,s.activity,s.status,s.at])):el('p','No steps reported.'));
+                  }catch(error){if(current(v)&&details.isConnected)exact.replaceChildren(el('p',error.message,'note'));}
+                  finally{if(current(v)&&details.isConnected)load.disabled=false;}
+                };
+                details.append(load,exact);runList.appendChild(details);
+              }
+              parts.push(runList);
+              const nav=el('div',null,'row');
+              if(offset>0){const previous=button('Previous evidence page','secondary');previous.onclick=()=>evidencePage(Math.max(0,offset-20),result.population_sha256);nav.appendChild(previous);}
+              if(result.next_offset!==null){const next=button('Next evidence page','secondary');next.onclick=()=>evidencePage(result.next_offset,result.population_sha256);nav.appendChild(next);}
+              parts.push(el('div',result.rows.length?'Showing '+(offset+1)+'–'+(offset+result.rows.length)+' of '+result.matching_runs:'No currently retained matching runs. Historical reviews are not erased.','muted'),nav);
+              evidenceHost.replaceChildren(...parts);
+            }catch(error){if(current(v))evidenceHost.replaceChildren(el('p',error.message,'note'));}
+            finally{if(current(v)){inspect.disabled=false;evidenceBusy=false;}}
+          }
+          inspect.onclick=()=>evidencePage(0,null);
+          box.append(inspect,evidenceHost);
+        }
+
         const note=input('owgMonitorIncidentNote_'+i.incident_id,'text','Note (optional)');note.maxLength=500;note.setAttribute('aria-label','Note for incident '+i.incident_id);box.appendChild(note);
         for(const [to,label] of [['acknowledged','Acknowledge'],['resolved','Resolve'],['open','Reopen']]){
           if(to===i.status)continue;
           const b=button(label,'secondary');b.setAttribute('aria-label',label+' incident '+i.incident_id);
-          b.onclick=async()=>{b.disabled=true;try{await api('/v1/automation-monitoring/incidents/'+encodeURIComponent(i.incident_id)+'/triage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:to,note:note.value,expected_last_seen:i.last_seen,expected_review_revision:i.review_revision})});if(version===incidentVersion&&pick.value===selected)await renderIncidents();}catch(error){if(version===incidentVersion&&pick.value===selected)status.textContent=error.message;b.disabled=false;}};
+          b.onclick=async()=>{
+            if(evidenceBusy){status.textContent='Wait for the incident evidence to finish loading before triage.';return;}
+            b.disabled=true;
+            const payload={status:to,note:note.value,expected_last_seen:i.last_seen,expected_review_revision:i.review_revision};
+            const pinned=inspectedPopulation!==null;
+            if(pinned){payload.expected_membership_sha256=i.run_membership_sha256;payload.expected_population_sha256=inspectedPopulation;}
+            try{
+              await api('/v1/automation-monitoring/incidents/'+encodeURIComponent(i.incident_id)+(pinned?'/evidence/triage':'/triage'),{
+                method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+              if(version===incidentVersion&&pick.value===selected&&box.isConnected)await renderIncidents();
+            }catch(error){if(version===incidentVersion&&pick.value===selected&&box.isConnected)status.textContent=error.message;b.disabled=false;}
+          };
           box.appendChild(b);
         }
         list.appendChild(box);
@@ -473,6 +539,61 @@
     };
     evidenceButton.onclick=openRunEvidence;
     portfolioButton.onclick=renderPortfolio;
+    objectiveButton.onclick=()=>{
+      const selected=pick.value;if(!selected)return;
+      const root=el('section');objectiveHost.replaceChildren(root);
+      let generation=0,report=null,settings=null,offset=0;
+      const active=()=>root.isConnected&&pick.value===selected;
+      const start=input('owgObjectiveStart','datetime-local'),end=input('owgObjectiveEnd','datetime-local'),asOf=input('owgObjectiveAsOf','datetime-local');
+      const localStamp=d=>{const t=new Date(d.getTime()-d.getTimezoneOffset()*60000);return t.toISOString().slice(0,16);};
+      const now=new Date();end.value=asOf.value=localStamp(now);start.value=localStamp(new Date(now.getTime()-7*86400000));
+      const deadline=input('owgObjectiveDeadline','number');deadline.min='1';deadline.max='2592000';deadline.value='3600';
+      const target=input('owgObjectiveTarget','number');target.min='1';target.max='10000';target.value='9500';
+      const verified=input('owgObjectiveVerified','checkbox');const digest=input('owgObjectiveSpec','text','Optional exact specification SHA-256');digest.maxLength=64;
+      const filter=el('select');filter.id='owgObjectiveFilter';setOptions(filter,[['','All runs'],['met','Met'],['missed','Missed'],['pending','Pending'],['unknown','Unknown']]);
+      const run=button('Evaluate service objective','secondary'),prev=button('Previous page','secondary'),next=button('Next page','secondary'),download=button('Download current evidence page','secondary');
+      const note=el('p');note.setAttribute('role','status');const output=el('div');
+      const grid=el('div',null,'row');grid.append(field('Cohort start (local time)',start),field('Cohort end (exclusive)',end),field('Observation cutoff (local time)',asOf),
+        field('Deadline in seconds',deadline),field('Target in basis points (9500 = 95%)',target),field('Require reported verified outcome',verified),field('Exact spec digest',digest),field('Evidence filter',filter));
+      const reset=()=>{generation++;report=null;settings=null;offset=0;output.replaceChildren();prev.disabled=next.disabled=download.disabled=true;run.disabled=false;note.textContent='Settings changed; evaluate again.';};
+      grid.addEventListener('input',reset);grid.addEventListener('change',reset);
+      async function page(n){
+        const k=++generation;run.disabled=prev.disabled=next.disabled=download.disabled=true;note.textContent='Reading the retained run cohort…';
+        try{
+          const result=await api('/v1/automation-monitoring/deployments/'+encodeURIComponent(selected)+'/service-objectives',
+            {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...settings,offset:n,limit:30,...(report?{expected_population_sha256:report.population_sha256}:{})})});
+          if(!active()||k!==generation)return;
+          if(result.deployment_id!==selected||(report&&result.population_sha256!==report.population_sha256))throw Error('Retained cohort changed.');
+          report=result;offset=n;const a=result.summary;
+          output.replaceChildren(el('h4','Retained cohort objective'),el('p',a.verdict.replaceAll('_',' ')),
+            el('p','Objective attainment bounds: '+pct(a.lower_met_fraction)+' to '+pct(a.upper_met_fraction)+' · '+a.runs+' retained starts.'),
+            table(['Met','Missed','Pending','Unknown','Required met','Permitted misses','Remaining budget (known misses)','Remaining budget (worst case)'],
+              [[a.counts.met,a.counts.missed,a.counts.pending,a.counts.unknown,a.required_met_runs,a.permitted_misses,a.remaining_error_budget_after_known_misses,a.remaining_error_budget_if_unresolved_miss]]),
+            el('h4','Daily start cohorts'),
+            table(['Start (UTC)','End (UTC)','Runs','Met','Missed','Pending','Unknown','Attainment bounds','Verdict'],result.daily_start_cohorts.map(d=>[d.start,d.end,d.runs,d.counts.met,d.counts.missed,d.counts.pending,d.counts.unknown,pct(d.lower_met_fraction)+' – '+pct(d.upper_met_fraction),d.verdict])),
+            el('h4','Run evidence · '+result.matching_runs+' matching rows'),
+            table(['Run ID','Start','Finish','Reported status','Reported verified outcome','Objective','Reason'],result.rows.map(r=>[r.run_id,r.started_at,r.finished_at??'Unknown',r.reported_status,r.reported_outcome_verified===null?'Unknown':String(r.reported_outcome_verified),r.objective_status,r.reason])),
+            el('p',result.interpretation,'muted'));
+          note.textContent='Exact retained population digest: '+result.population_sha256;
+          prev.disabled=n===0;next.disabled=result.next_offset===null;download.disabled=false;
+        }catch(error){if(active()&&k===generation){reset();note.textContent=error.message;}}
+        finally{if(active()&&k===generation)run.disabled=false;}
+      }
+      run.onclick=()=>{
+        reset();
+        if(!start.value||!end.value||!asOf.value||!deadline.value||!target.value||!deadline.checkValidity()||!target.checkValidity()||(digest.value&&!/^[a-f0-9]{64}$/.test(digest.value))){
+          note.textContent='Enter valid dates, integer deadline and target, and an optional lowercase SHA-256.';return;
+        }
+        settings={start:new Date(start.value).toISOString(),end:new Date(end.value).toISOString(),as_of:new Date(asOf.value).toISOString(),
+          deadline_seconds:Number(deadline.value),target_basis_points:Number(target.value),require_reported_verified_outcome:verified.checked};
+        if(digest.value)settings.exact_spec_sha256=digest.value;if(filter.value)settings.status=filter.value;
+        page(0);
+      };
+      prev.onclick=()=>page(Math.max(0,offset-30));next.onclick=()=>{if(report?.next_offset!==null&&report?.next_offset!==undefined)page(report.next_offset);};
+      download.onclick=()=>{if(!report||!active())return;const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));const a=el('a');a.href=url;a.download='owg-service-objective-page-'+offset+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+      prev.disabled=next.disabled=download.disabled=true;
+      root.append(el('h3','Reported automation service objectives'),el('p','This is a retrospective review of currently retained reports, not a live service guarantee or reconstructed historical reporting state. Unknown and pending runs remain in the denominator.','muted'),grid,run,note,output,prev,next,download);
+    };
     releaseButton.onclick=()=>renderRelease().catch(error=>{status.textContent=error.message;});
     channelButton.onclick=()=>renderChannel().catch(error=>{status.textContent=error.message;});
     incidentButton.onclick=()=>{incidentScope='selected';incidentStatus='';incidentSearch='';renderIncidents();};
