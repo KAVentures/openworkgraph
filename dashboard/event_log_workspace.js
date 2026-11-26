@@ -439,6 +439,8 @@
       try{
         const text=await headText(chosen,65536,encoding.value);
         const columns=csvHeader(text,sep);
+        // A delimiter at the end of every line leaves an unnamed last column; it holds nothing to map.
+        if(columns.length>1&&!columns[columns.length-1].trim()&&columns[columns.length-2].trim())columns.pop();
         if(sequence!==columnReadSequence||file.files?.[0]!==chosen||format.value!=='csv'||(delimiter.value==='t'?'\t':delimiter.value)!==sep)return;
         setMappingColumns(columns);
         status(columnsReady?'File mapping ready. Review the selected columns before storing.':'Choose a CSV with case, activity and time columns.');
@@ -2609,6 +2611,22 @@
           state.follows=follows;state.attr=attr;state.caseActivity=activity;
           analyse().catch(error=>status(error.message));
         };
+        const update=button('Update from active filter','secondary');
+        update.setAttribute('aria-label','Update saved filter '+set.name+' from active filter');
+        update.disabled=!filterOn();
+        update.onclick=async()=>{
+          if(!window.confirm('Replace the saved filter “'+set.name+'” with the current active filter?'))return;
+          update.disabled=true;
+          try{
+            const body={name:set.name,cohort:globalCohort(),case_type:state.caseType||null,
+              expected_definition_sha256:set.definition_sha256};
+            await api(base()+'/'+encodeURIComponent(set.set_id)+'/update',{
+              method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+            if(generation!==state.generation)return;
+            message.textContent='Updated "'+set.name+'" from the active filter.';await refresh();
+          }catch(error){if(generation===state.generation){message.textContent=error.message;await refresh();}}
+          finally{if(generation===state.generation&&update.isConnected)update.disabled=!filterOn();}
+        };
         const del=button('Delete','secondary');del.setAttribute('aria-label','Delete saved filter '+set.name);
         del.onclick=async()=>{try{await api(base()+'/'+encodeURIComponent(set.set_id)+'/delete',{method:'POST'});message.textContent='Saved filter deleted.';await refresh();}catch(error){message.textContent=error.message;}};
         const notes=[...(!available?['Saved case notion is unavailable']:[]),
@@ -2623,7 +2641,7 @@
         };
         const showCases=button('Preview','secondary');showCases.setAttribute('aria-label','Preview saved filter '+set.name);
         showCases.disabled=!available;showCases.onclick=()=>previewFilter(set);
-        const actions=el('span');actions.append(use,' ',showCases,' ',exportButton,' ',del);
+        const actions=el('span');actions.append(use,' ',showCases,' ',update,' ',exportButton,' ',del);
         return [set.name,set.case_type||'Current selection',[...follows.map(followText),...(activity?['contains activity '+JSON.stringify(activity)]:[]),attr.attribute||'',attr.attribute_range?rangeText(attr.attribute_range):'',attr.starts_with?'starts with '+JSON.stringify(attr.starts_with):'',attr.ends_with?'ends with '+JSON.stringify(attr.ends_with):'',attr.duration?durationText(attr.duration):'',moreFilterText(attr)].filter(Boolean).join('; ')||'—',notes.join('. ')||'—',actions];
       })):el('div','No saved filters yet.','muted'));
     }
@@ -8921,6 +8939,19 @@
             const boundary=b?(b.change_point?'Change point · ':'')+'distance '+b.distance.toFixed(3)+', p '+p(b.p_value):skip?'Skipped · '+reason(skip)+(side?' ('+side+')':''):'—';
             return [w.window,Number(w.cases).toLocaleString(),Number(w.sampled_cases).toLocaleString(),Number(w.sampled_cases_with_paths).toLocaleString(),duration(w.median_case_duration_seconds),boundary,inspect(w.window)];
           })));
+        if(windowKind.value!=='cases'){
+          const note=el('div');note.id='owgConceptDriftMarkers';out.appendChild(note);
+          getJSON('/v1/event-logs/'+encodeURIComponent(state.logId)+'/change-markers').then(m=>{
+            if(!current()||!m.markers.length)return;
+            const starts=r.windows.map(w=>w.window);
+            const windowOf=day=>{let found=null;starts.forEach(s=>{if(s<=day)found=s;});return found;};
+            const points=new Set(r.change_points.map(c=>c.after));
+            note.append(el('h4','Your recorded changes'),table(['Change','Date','Window','At a change point'],m.markers.map(x=>{
+              const day=x.marked_at.slice(0,10),w=x.within_log?windowOf(day):null;
+              return [x.label,day,w||'Outside the analysed windows',w&&(points.has(w)||points.has(starts[starts.indexOf(w)+1]))?'Yes':'No'];
+            })),el('div','A change you recorded near a change point may help explain it; it does not prove the cause.','muted'));
+          }).catch(()=>{});
+        }
         r.change_points.forEach(c=>{
           out.appendChild(el('h4','Paths that moved most: '+c.before+' → '+c.after));
           out.appendChild(table(['Path','Sampled share before','Sampled share after','Before cases','After cases'],c.paths_that_moved.map(m=>[

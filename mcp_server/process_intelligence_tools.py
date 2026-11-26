@@ -50,6 +50,58 @@ def investigate_process_prompt(question: str = "", log_id: str = "") -> str:
     ])
 
 
+def propose_monitors_prompt(goal: str = "", log_id: str = "") -> str:
+    """A playbook for proposing monitoring signals to the owner from evidence. Pure text: nothing is saved."""
+    goal = " ".join(str(goal or "").split())[:500] or "Catch problems in this process early."
+    log_id = str(log_id or "").strip()
+    target = (f"Use the shared log {log_id}." if _LOG_ID.fullmatch(log_id)
+              else "Start with list_process_logs and pick the log that matches the goal; ask if it is unclear.")
+    return "\n".join([
+        f"Goal: {goal}",
+        target,
+        "",
+        "1. get_process_signals: see what the owner already monitors, so you do not propose duplicates.",
+        "2. get_process_overview (weekly trend, KPIs), get_process_drift and get_stuck_process_cases or "
+        "get_process_due_dates where shared: find what has gone wrong before or tends to.",
+        "3. For each candidate, write a draft rule and run preview_process_signal on it: a KPI threshold (for "
+        "example median_throughput_seconds above a level), a case condition (duration_over, has_rework, "
+        "open_longer_than) with a minimum_cases, or a compliance rule. Tune the threshold so it would not "
+        "trigger on every evaluation.",
+        "4. Propose at most five monitors to the owner. For each give its name, the exact rule, what the "
+        "preview showed now, why it matters, and what the owner should do when it triggers.",
+        "",
+        "Rules: you cannot save, evaluate saved rules, acknowledge or snooze; the owner decides. A triggered "
+        "preview is not a verified problem. Do not name people. Say when a figure was withheld for small counts.",
+    ])
+
+
+def evaluate_change_prompt(change: str = "", log_id: str = "") -> str:
+    """A playbook for weighing a proposed process change with evidence and simulation. Pure text."""
+    change = " ".join(str(change or "").split())[:500] or "A change the owner is considering."
+    log_id = str(log_id or "").strip()
+    target = (f"Use the shared log {log_id}." if _LOG_ID.fullmatch(log_id)
+              else "Start with list_process_logs and pick the log that matches; ask if it is unclear.")
+    return "\n".join([
+        f"Proposed change: {change}",
+        target,
+        "",
+        "1. get_process_overview and get_process_waiting_times: the baseline and where time goes now.",
+        "2. If some cases already work the proposed way, compare them with the rest using compare_process_cohorts "
+        "(or get_process_overview_for_cases): an observed, not simulated, difference.",
+        "3. Turn the change into 2 to 4 named alternatives (for example the change, a smaller version, and a "
+        "different fix for the same bottleneck) and run compare_process_scenarios; use simulate_process_scenario "
+        "with uncertainty replications for the most promising one.",
+        "4. Check side effects: rework (get_process_rework), handovers (get_process_handovers) and whether "
+        "waiting simply moves to another step.",
+        "",
+        "Answer with: the expected effect and its range, the evidence behind it (observed vs simulated), the "
+        "assumptions that matter most, and what to measure after the change (a monitor to preview with "
+        "preview_process_signal). Skip steps whose tools are not listed. A simulation is a model output, not a "
+        "forecast; an observed difference between groups is an association, not a cause; nothing here "
+        "authorises making the change.",
+    ])
+
+
 def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
     sid = id(mcp)
     if sid in _REGISTERED:
@@ -85,6 +137,16 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
         """Ask the connected AI to investigate a shared process log with the process tools, step by step."""
         return investigate_process_prompt(question=question, log_id=log_id)
 
+    @mcp.prompt()
+    def propose_process_monitors(goal: str = "", log_id: str = "") -> str:
+        """Ask the connected AI to propose monitoring signals for a shared process log, tested on the log first."""
+        return propose_monitors_prompt(goal=goal, log_id=log_id)
+
+    @mcp.prompt()
+    def evaluate_process_change(change: str = "", log_id: str = "") -> str:
+        """Ask the connected AI to weigh a proposed process change with observed evidence and simulation."""
+        return evaluate_change_prompt(change=change, log_id=log_id)
+
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_brief(log_id: str, sla_hours: float | None = None, case_type: str | None = None) -> dict[str, Any]:
         """Start here: one compact briefing on a shared log. Size, timing and KPIs, the most common paths, the top
@@ -99,15 +161,23 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
                     {"sla_hours": sla_hours, "case_type": case_type})
 
     @mcp.tool(annotations=_READ_ONLY)
-    def get_process_overview(log_id: str, case_type: str | None = None, sla_hours: float | None = None) -> dict[str, Any]:
+    def get_process_overview(log_id: str, case_type: str | None = None, sla_hours: float | None = None,
+                             automation_resources: list[str] | None = None) -> dict[str, Any]:
         """Overview of a shared process: case counts, durations, KPIs, top variants and automatic insights.
 
         Use when asked how a process performs, where time goes or what to look at first.
         case_type picks the case notion (object type) for object-centric logs; sla_hours adds
-        SLA breach rates. Insights include a case filter (cohort) describing their cases.
+        SLA breach rates. Insights include a case filter (cohort) describing their cases. completed_per_week
+        gives the last 52 weeks of completed cases and their median duration (withheld for weeks under 5 cases).
+        automation_resources names resources that are bots or systems (as the user describes them); the KPIs
+        then include the share of events they performed. The names are not echoed back.
         """
+        if automation_resources is not None and (not isinstance(automation_resources, list)
+                                                 or len(automation_resources) > 50
+                                                 or any(not isinstance(r, str) or not r for r in automation_resources)):
+            raise ToolError("automation_resources must be a list of up to 50 resource names")
         return _get("get_process_overview", f"/v1/process-intelligence/{_log(log_id)}/overview",
-                    {"case_type": case_type, "sla_hours": sla_hours})
+                    {"case_type": case_type, "sla_hours": sla_hours, "automation_resource": automation_resources})
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_overview_for_cases(log_id: str, case_filter: dict[str, Any], case_type: str | None = None,
@@ -949,6 +1019,18 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
             raise ToolError("limit must be 1 to 200")
         return _get("get_process_handovers", f"/v1/process-intelligence/{_log(log_id)}/handovers",
                     {"limit": limit, "case_type": case_type})
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def get_process_roles(log_id: str, threshold: float = 0.65, case_type: str | None = None) -> dict[str, Any]:
+        """Roles in a shared log, mined by grouping resources that perform a similar mix of activities (groups merge
+        while their activity profiles correlate at or above threshold, 0-1). Each role gives how many resources it
+        has, its activity mix and the activities only it performs. Members are never listed or named. Roles
+        describe recorded work, not job titles or performance. Aggregates only.
+        """
+        if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not 0 < threshold < 1:
+            raise ToolError("threshold must be between 0 and 1")
+        return _get("get_process_roles", f"/v1/process-intelligence/{_log(log_id)}/roles",
+                    {"threshold": threshold, "case_type": case_type})
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
     def tag_process_cases(log_id: str, tag: str, case_ids: list[str], note: str = "") -> dict[str, Any]:

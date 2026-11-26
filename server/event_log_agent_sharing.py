@@ -225,6 +225,30 @@ def require(log_id: Any, level: str) -> None:
     shared = _level(log_id)
     if shared is None or (level == "cases" and shared != "cases"):
         raise NotShared("no process log shared with agents at that level has this id")
+    if level == "aggregates" and shared == "aggregates" and _case_count(log_id) < AGENT_MIN_FILTERED_CASES:
+        # Every aggregate of a log this small describes a handful of identifiable cases.
+        raise NotAllowed(f"this log has fewer than {AGENT_MIN_FILTERED_CASES} cases, too few to share as "
+                         "aggregates; the owner can share it at the cases level instead")
+
+
+def check_answer_size(log_id: str, result: Any) -> None:
+    """Refuse an aggregates-level answer that describes fewer than AGENT_MIN_FILTERED_CASES cases, for example
+    one about a small object type inside a larger object-centric log."""
+    cases = result.get("cases") if isinstance(result, dict) else None
+    if (isinstance(cases, int) and not isinstance(cases, bool) and 0 < cases < AGENT_MIN_FILTERED_CASES
+            and _level(log_id) == "aggregates"):
+        raise NotAllowed(f"this selection has fewer than {AGENT_MIN_FILTERED_CASES} cases, too few to describe "
+                         "as aggregates; pick a larger case type or ask the owner to share at the cases level")
+
+
+def _case_count(log_id: str) -> int:
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            row = conn.execute("SELECT objects FROM logs WHERE log_id = ?", [log_id]).fetchone()
+        finally:
+            conn.close()
+    return int(row[0]) if row else 0
 
 
 def shared_logs() -> dict[str, Any]:
@@ -235,37 +259,53 @@ def shared_logs() -> dict[str, Any]:
         try:
             rows = conn.execute("""SELECT s.log_id, l.name, s.level, l.events, l.objects FROM event_log_agent_shares s
                 JOIN logs l USING (log_id) ORDER BY l.name""").fetchall()
-            types = {log_id: [t for (t,) in conn.execute(
-                "SELECT DISTINCT object_type FROM objects WHERE log_id = ? ORDER BY 1 LIMIT 20", [log_id]).fetchall()]
-                for log_id, *_ in rows}
+            counts = {log_id: conn.execute("""SELECT object_type, count(*) FROM objects WHERE log_id = ?
+                GROUP BY 1 ORDER BY 1 LIMIT 20""", [log_id]).fetchall() for log_id, *_ in rows}
+            types = {log_id: [t for t, _ in found] for log_id, found in counts.items()}
             taggable = {r[0] for r in conn.execute("SELECT log_id FROM event_log_agent_tag_grants").fetchall()}
         finally:
             conn.close()
     return {"format": FORMAT, "logs": [{"log_id": i, "name": n, "level": lv, "events": e, "objects": o,
-                                        "case_notions": types[i], "agents_may_tag_cases": i in taggable}
+                                        "case_notions": types[i], "agents_may_tag_cases": i in taggable,
+                                        "case_notions_too_small_for_aggregates": [] if lv == "cases" else [
+                                            t for t, c in counts[i] if c < AGENT_MIN_FILTERED_CASES]}
                      for i, n, lv, e, o in rows],
-            "note": "Only logs the owner shared with agents are listed."}
+            "note": ("Only logs the owner shared with agents are listed. A case notion with fewer than "
+                     f"{AGENT_MIN_FILTERED_CASES} objects answers no aggregates-level request.")}
 
 
 def _top(items: list[Any], n: int) -> list[Any]:
     return list(items or [])[:n]
 
 
-def overview(log_id: str, case_type: str | None = None, sla_hours: float | None = None) -> dict[str, Any]:
+def overview(log_id: str, case_type: str | None = None, sla_hours: float | None = None,
+             automation_resources: list[str] | None = None) -> dict[str, Any]:
     require(log_id, "aggregates")
     from . import event_log_analytics as analytics
     from . import event_log_insights as insights
     sla = int(sla_hours * 3600) if sla_hours else None
     summary = workspace.summary(log_id, case_type)
     variants = workspace.variants(log_id, case_type, 5)
-    kpis = analytics.kpis(log_id, case_type, sla)
+    if automation_resources is not None and (not isinstance(automation_resources, list)
+                                             or len(automation_resources) > 50
+                                             or any(not isinstance(r, str) or not r or len(r) > 200
+                                                    for r in automation_resources)):
+        raise EventLogWorkspaceError("automation_resources must be up to 50 resource names")
+    kpis = analytics.kpis(log_id, case_type, sla, automation_resources or None)
+    automation = kpis.get("automation")
     found = insights.insights(log_id, {"case_type": case_type, "limit": 5, **({"sla_seconds": sla} if sla else {})})
     return {
         "format": FORMAT, "log_id": log_id, "case_notion": summary["case_notion"],
         "cases": summary["cases"], "events": summary["events"], "activities": summary["activities"],
         "first_event_at": summary["first_event_at"], "last_event_at": summary["last_event_at"],
         "case_duration_seconds": summary["case_duration_seconds"],
-        "kpis": {k: kpis.get(k) for k in ("throughput_seconds", "rework_rate", "sla") if k in kpis},
+        "kpis": {**{k: kpis.get(k) for k in ("throughput_seconds", "rework_rate", "sla") if k in kpis},
+                 **({"automation": {k: automation[k] for k in ("events", "automated_events", "automation_rate")}}
+                    if automation else {})},
+        "completed_per_week": [
+            {"week_starting": w["week_starting"], "cases": w["cases"],
+             "median_throughput_seconds": w["median_throughput_seconds"] if w["cases"] >= AGENT_MIN_CELL_CASES else None}
+            for w in kpis.get("completed_per_week") or []],
         "top_variants": [{"path": v["path"], "cases": v["cases"], "share": v.get("share")}
                          for v in _top(variants.get("variants"), 5)],
         "variants_total": variants.get("distinct_variants"),
@@ -343,6 +383,10 @@ def brief(log_id: str, case_type: str | None = None, sla_hours: float | None = N
                              "by_signal": unusual["by_signal"]}
     except EventLogWorkspaceError as exc:
         parts_unavailable["unusual"] = str(exc)
+    from . import event_log_change_markers as cm
+    markers = cm.markers(log_id)["markers"]
+    result["owner_change_markers"] = [{"label": m["label"], "marked_at": m["marked_at"], "within_log": m["within_log"]}
+                                      for m in markers[-10:]]
     result["parts_unavailable"] = parts_unavailable
     result["next_tools"] = [
         {"tool": "get_process_insights", "for": "every ranked finding with the case filter that reproduces it"},
@@ -351,6 +395,7 @@ def brief(log_id: str, case_type: str | None = None, sla_hours: float | None = N
         {"tool": "get_process_next_steps", "for": "walking the process one step at a time"},
         {"tool": "get_process_root_cause", "for": "what goes with slow, reworked or other outcomes"},
         {"tool": "get_unusual_process_cases", "for": "the cases that stand out and why"},
+        {"tool": "get_process_drift", "for": "whether the process changed around the owner's change markers"},
     ]
     result["interpretation"] = ("A starting summary of recorded events, not a diagnosis. Model figures describe a "
                                 "draft discovered from this log; deviations and outliers are not errors.")
@@ -1205,8 +1250,10 @@ def variants(log_id: str, case_type: str | None = None, limit: int = 20) -> dict
     listed = result["variants"]
     shown = [v for v in listed if v["cases"] >= AGENT_MIN_CELL_CASES]
     rare = result["distinct_variants"] - len(shown)
+    from . import event_log_variant_coverage as coverage
+    targets = coverage.coverage(log_id, case_type, 1)["coverage_targets"]
     return {"format": FORMAT, "log_id": log_id, "case_notion": result.get("case_notion"), "cases": result["cases"],
-            "distinct_variants": result["distinct_variants"],
+            "distinct_variants": result["distinct_variants"], "coverage_targets": targets,
             "variants": [{"rank": i + 1, "path": v["path"], "cases": v["cases"], "share": v["share"],
                           "median_duration_seconds": v.get("median_duration_seconds")} for i, v in enumerate(shown[:limit])],
             "shown_cases_share": round(sum(v["cases"] for v in shown[:limit]) / result["cases"], 4) if result["cases"] else 0.0,
@@ -1583,3 +1630,28 @@ def handovers(log_id: str, case_type: str | None = None, limit: int = 50) -> dic
         "interpretation": full["interpretation"],
         "format": FORMAT, "log_id": log_id,
     }
+
+
+def roles(log_id: str, case_type: str | None = None, threshold: float = 0.65) -> dict[str, Any]:
+    """Roles mined from which activities resources perform (aggregates level). Members are only counted, never
+    listed, and activities a role did fewer than AGENT_MIN_CELL_CASES times are left out of its mix."""
+    require(log_id, "aggregates")
+    from . import event_log_roles as rl
+    threshold = float(threshold)
+    if not 0 < threshold < 1:
+        raise EventLogWorkspaceError("threshold must be between 0 and 1")
+    full = rl.roles(log_id, case_type, threshold=threshold, names="pseudonymous")
+    keep = AGENT_MIN_CELL_CASES
+    out, hidden = [], 0
+    for role in full["roles"]:
+        if role["events"] < keep:
+            hidden += 1
+            continue
+        out.append({"role": role["role"], "member_count": role["member_count"], "events": role["events"],
+                    "activity_mix": [a for a in role["activity_mix"] if a["events"] >= keep],
+                    "activities": role["activities"], "exclusive_activities": role["exclusive_activities"]})
+    return {"roles": out, "withheld_roles": hidden, "min_events": keep, "threshold": full["threshold"],
+            "merges": full["merges"], "coverage": full["coverage"], "method": full["method"],
+            "privacy": {"names_returned": False, "members_listed": False,
+                        "per_person_durations_or_speed_computed": False, "ranking_or_performance_scoring": False},
+            "interpretation": full["interpretation"], "format": FORMAT, "log_id": log_id}
