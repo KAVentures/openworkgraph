@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 from hashlib import sha256
+import json
 import re
 from xml.etree import ElementTree as ET
 
@@ -132,7 +133,7 @@ def _parallel_pairs(nodes, successors, predecessors, end):
     return pairs
 
 
-def to_pnml(data: bytes, process_id: str | None = None):
+def _definitions(data: bytes):
     if len(data) > MAX_BYTES:
         _fail("BPMN file is larger than 2 MB")
     if b"\x00" in data or FORBIDDEN.search(data):
@@ -161,6 +162,19 @@ def to_pnml(data: bytes, process_id: str | None = None):
         if process.get("processType") not in (None, "None", "Private") or process.get("isClosed") not in (None, "false", "0"):
             _fail("only independent private process control flow is supported")
         definitions[pid] = process
+    return definitions
+
+
+def inspect_processes(data: bytes):
+    definitions = _definitions(data)
+    return {"format": "openworkgraph.bpmn_process_selection.v1", "bpmn_sha256": sha256(data).hexdigest(),
+            "processes": [{"id": ident, "name": (element.get("name") or ident)[:200]}
+                          for ident, element in sorted(definitions.items())],
+            "caveat": "Process identities only; conversion compatibility has not yet been established."}
+
+
+def to_pnml(data: bytes, process_id: str | None = None):
+    definitions = _definitions(data)
     if process_id is not None and (not isinstance(process_id, str) or process_id not in definitions):
         _fail("selected BPMN process is not present")
     if process_id is None:
@@ -184,7 +198,7 @@ def to_pnml(data: bytes, process_id: str | None = None):
     evidence = {"node_transition_ids": {}, "flow_place_ids": {}, "parallel_pairs": {},
                 "scope_by_node": {}, "scope_by_flow": {}, "subprocess_boundaries": {},
                 "call_boundaries": {}, "node_instances": [], "flow_instances": [],
-                "parallel_pair_instances": []}
+                "parallel_pair_instances": [], "subprocess_boundary_instances": []}
     _emit_scope(net, scope, source, sink, evidence, scopes, ())
     result_net = {"places": net.places, "transitions": net.transitions, "arcs": net.arcs,
                   "source": source, "sink": sink}
@@ -336,9 +350,8 @@ def _expanded_size(scope, scopes, ancestors, depth, totals):
 
 
 def _instance_key(path, ident):
-    # Source IDs can contain arbitrary punctuation; length-prefix each call
-    # segment to avoid aliasing between distinct expansion paths.
-    return ident if not path else "@" + "".join(f"{len(x)}:{x}" for x in (*path, ident))
+    # Encode every path, including root calls, to avoid source-ID aliases.
+    return json.dumps([*path, ident], ensure_ascii=True, separators=(",", ":"))
 
 
 def _emit_scope(net, scope, source, sink, evidence, scopes, path):
@@ -370,8 +383,11 @@ def _emit_scope(net, scope, source, sink, evidence, scopes, path):
             _emit_scope(net, scope["children"][ident], entry, exit, evidence, scopes, path)
             leave = net.transition(None, exit, outputs[0])
             tids = [enter, leave]
-            evidence["subprocess_boundaries"].setdefault(ident, {"entry_place_id": entry, "exit_place_id": exit,
-                                                        "entry_transition_id": enter, "exit_transition_id": leave})
+            boundary = {"entry_place_id": entry, "exit_place_id": exit,
+                        "entry_transition_id": enter, "exit_transition_id": leave}
+            evidence["subprocess_boundaries"].setdefault(ident, boundary)
+            evidence["subprocess_boundary_instances"].append({"source_id": ident,
+                                                               "call_path": list(path), **boundary})
         elif kind == "callActivity":
             ref = scope["calls"][ident]
             entry, exit = net.place(), net.place()
