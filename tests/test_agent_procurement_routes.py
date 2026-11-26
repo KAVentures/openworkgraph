@@ -67,7 +67,7 @@ with TestClient(app) as client:
     assert client.post(signing_path,json={}).status_code==401
     assert client.post(signing_path,json={},headers=bearer).status_code==403
     assert client.post(signing_path,json={'document':'{"confirmed":false}'},headers=h).status_code==422
-    for action in ("inbox-status","inbox-admit","inbox-review","inbox-forget","inbox-retire","inbox-dossier","audit-verify","audit-timeline","audit-triage"):
+    for action in ("inbox-status","inbox-admit","inbox-review","inbox-forget","inbox-retire","inbox-dossier","audit-verify","audit-timeline","audit-triage","audit-reconcile"):
         path="/v1/process-catalog/procurement-workforce/exchange/"+action
         assert client.post(path,json={"document":"{}"}).status_code==401
         assert client.post(path,json={"document":"{}"},headers=bearer).status_code==403
@@ -118,6 +118,15 @@ with TestClient(app) as client:
     assert referred.headers["cache-control"]=="no-store"
     assert referred.json()["selected_count"]==1
     assert not referred.json()["incident_clearance_established"]
+    receipt=referred.json()
+    entry={"expected_triage_sha256":receipt["triage_sha256"],"receipt":receipt}
+    reconciled=audit_call("audit-reconcile",{**timeline_body,"receipt_set":{"confirmed":True,"receipts":[entry]}})
+    assert reconciled.status_code==200,reconciled.text
+    assert reconciled.headers["cache-control"]=="no-store"
+    assert reconciled.json()["counts_by_status"]["one_declaration"]==1
+    assert not reconciled.json()["conflicts_resolved"]
+    assert audit_call("audit-reconcile",{**timeline_body,"receipt_set":{"confirmed":True,"receipts":[entry,entry]}}).status_code==422
+
     assert audit_call("audit-triage",{**timeline_body,"decision":{**decision,"expected_worklist_sha256":"0"*64}}).status_code==422
     assert audit_call("audit-verify",{**historical,"confirmed":False}).status_code==422
     assert audit_call("audit-verify",{**historical,"expected_dossier_sha256":"0"*64}).status_code==422
