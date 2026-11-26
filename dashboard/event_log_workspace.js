@@ -4921,6 +4921,123 @@
     return panel;
   }
 
+  function domainPackPortfolioPanel(valid,logId){
+    const panel=el('details');panel.id='owgDomainPackPortfolio';
+    const pack=select('owgPortfolioPack',[['','Load installed packs first']]);
+    const choices=el('fieldset');choices.append(el('legend','Comparison logs (choose two to seven)'));
+    const selected=new Map();
+    for(const log of state.logs.filter(x=>x.log_id!==logId)){
+      const label=el('label'),check=el('input');check.type='checkbox';check.value=log.log_id;
+      label.append(check,document.createTextNode(' '+log.name+' ('+log.log_id+')'));choices.append(el('div'));choices.lastChild.append(label);
+      selected.set(log.log_id,check);
+    }
+    const load=button('Load baseline packs','secondary'),preview=button('Review portfolio sources','secondary'),run=button('Compare reviewed portfolio');
+    const status=el('p',null,'muted'),basis=el('div'),out=el('div');status.setAttribute('role','status');
+    let revision=0,pin=null,report=null;
+    const active=t=>valid()&&panel.isConnected&&t===revision;
+    const ids=()=>Array.from(selected).filter(([,c])=>c.checked).map(([id])=>id);
+    const ready=()=>!!pack.value&&ids().length>=2&&ids().length<=7;
+    const endpoint=suffix=>'/v1/event-logs/'+encodeURIComponent(logId)+'/domain-packs/'+encodeURIComponent(pack.value)+'/portfolio'+suffix;
+    const post=async(suffix,body)=>(await api(endpoint(suffix),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+    const num=x=>x==null?'—':Number(x).toLocaleString(undefined,{maximumFractionDigits:2});
+    const rate=x=>x==null?'—':pct(x);
+    const signed=x=>x==null?'—':(x>0?'+':'')+num(x);
+    const pp=x=>x==null?'—':signed(x*100)+' pp';
+    const label=row=>{
+      const d=row.canonical_definition,r=d.rule||d;
+      return d.metric?d.metric.name:[r.template,r.a||r.activity||r.object_type,r.b||r.related_type].filter(Boolean).join(' · ');
+    };
+    const exportReport=exportButtons('owg-domain-portfolio',()=>report,r=>[
+      ['Section','Definition index','Definition','Log ID','Log name','Baseline','Unit','Cases or units','Observed or decided','Unknown','Median or rate','Delta vs baseline','Lower rate change bound','Upper rate change bound','Comparison status','Report digest'],
+      ...[['metrics',r.metrics],['case rules',r.compliance],['object rules',r.object_rules]].flatMap(([kind,rows])=>rows.flatMap(row=>r.sources.map((source,i)=>{
+        const v=row.values[i],d=i?row.baseline_comparisons[i-1]:null;
+        return [kind,row.definition_index,label(row),source.log_id,source.name,i===0,v?.unit||'',
+          v?.cases??v?.units,v?.coverage?.cases_with_value??v?.decided_cases??v?.activated,v?.unknown_cases,
+          kind==='metrics'?v?.median:v?.violation_rate,kind==='metrics'?d?.changes?.median:d?.changes?.violation_rate_change,
+          d?.changes?.activated_violation_share_change_bounds?.lower,d?.changes?.activated_violation_share_change_bounds?.upper,
+          i?(d.comparable?'comparable':d.not_comparable_reason):'baseline',r.report_sha256];
+      })))]);
+    function clear(){
+      revision++;pin=null;report=null;basis.replaceChildren();out.replaceChildren();
+      run.disabled=true;preview.disabled=!ready();exportReport.enable(false);
+    }
+    function changed(){clear();status.textContent='Selection changed; review all source installations again.';}
+    for(const c of selected.values())c.onchange=changed;
+    pack.onchange=changed;
+    load.onclick=async()=>{
+      clear();const t=revision;load.disabled=true;preview.disabled=true;
+      try{
+        const r=await getJSON('/v1/event-logs/'+encodeURIComponent(logId)+'/domain-packs');
+        if(!active(t))return;
+        setOptions(pack,[['','Choose baseline pack'],...r.installs.map(i=>[i.pack_id,i.pack_id+' · '+i.version])]);
+        status.textContent=r.installs.length?'Choose a pack and two to seven comparison logs.':'Install a pack on the baseline log first.';
+        preview.disabled=!ready();
+      }catch(error){if(active(t))status.textContent=error.message;}
+      finally{if(panel.isConnected)load.disabled=false;}
+    };
+    preview.onclick=async()=>{
+      clear();const t=revision;preview.disabled=true;status.textContent='Reviewing exact installation and source fingerprints…';
+      try{
+        const r=await post('/preview',{other_log_ids:ids()});
+        if(!active(t))return;
+        if(r.baseline_log_id!==logId||r.pack_id!==pack.value||!Array.isArray(r.sources)||r.sources.length!==ids().length+1||
+          !/^[a-f0-9]{64}$/.test(r.preflight_sha256||''))throw new Error('Unexpected portfolio review.');
+        pin=r;
+        const names=r.sources.map((s,i)=>(i===0?'Baseline: ':'')+s.name);
+        basis.replaceChildren(table(['Source','Log ID','Version','Events','Objects','First event','Last event'],
+          r.sources.map((s,i)=>[names[i],s.log_id,s.version,s.events,s.objects,s.first_event_at??'—',s.last_event_at??'—'])),
+          table(['Parameter',...names],Array.from(new Set(r.sources.flatMap(s=>Object.keys(s.parameters)))).map(k=>[k,...r.sources.map(s=>s.parameters[k]??'—')])),
+          table(['Role kind','Role',...names],r.role_alignment.map(x=>[x.kind,x.role,...x.labels.map(v=>v??'Unmapped')])),
+          ...(r.identical_content_pairs.length?[el('p','Identical retained content detected in '+r.identical_content_pairs.length+' source pair(s). Never pool these populations.','note'),
+            table(['Identical content: left','Right'],r.identical_content_pairs.map(x=>[x.left_log_id,x.right_log_id]))]:[]),
+          ...(r.blockers.length?[table(['Blocked source','Reason'],r.blockers.map(b=>[b.log_id,b.reasons.join(', ')]))]:[]),
+          el('p','Source periods and populations may differ or overlap. Confirm the role meanings before comparison.','muted'));
+        run.disabled=!r.ready_to_compare;
+        status.textContent=r.ready_to_compare?'All selected versions and parameters match.':'Portfolio blocked; review incompatible installations.';
+      }catch(error){if(active(t))status.textContent=error.message;}
+      finally{if(active(t))preview.disabled=!ready();}
+    };
+    run.onclick=async()=>{
+      const t=revision,p=pin;
+      if(!p?.ready_to_compare)return;
+      run.disabled=true;report=null;exportReport.enable(false);out.replaceChildren();
+      status.textContent='Computing each installed pack report once…';
+      try{
+        const r=await post('',{other_log_ids:ids(),expected_preflight_sha256:p.preflight_sha256});
+        if(!active(t))return;
+        if(r.preflight_sha256!==p.preflight_sha256||!/^[a-f0-9]{64}$/.test(r.report_sha256||''))throw new Error('Unexpected portfolio report.');
+        report=r;
+        const rows=(section,items)=>items.flatMap(row=>r.sources.map((s,i)=>{
+          const v=row.values[i],d=i?row.baseline_comparisons[i-1]:null;
+          const metric=section==='metrics',cases=section==='case';
+          const observed=metric?v?.coverage?.cases_with_value:cases?v?.decided_cases:v?.activated;
+          const support=v?(num(observed)+' / '+num(v.cases??v.units)):'—';
+          const status=i?(d.comparable?'Comparable':d.not_comparable_reason):'Baseline';
+          const bounds=d?.changes?.activated_violation_share_change_bounds;
+          return [label(row),s.name+' ('+s.log_id+')',metric?(v?.unit||'—'):'Rate',
+            metric?num(v?.median):rate(v?.violation_rate),support,cases?num(v?.unknown_cases):'—',
+            metric?signed(d?.changes?.median):pp(d?.changes?.violation_rate_change),bounds?pp(bounds.lower)+' to '+pp(bounds.upper):'—',status];
+        }));
+        const head=['Definition','Source','Unit','Median or rate','Observed / population','Unknown','Delta vs baseline','Rate change bounds','Status'];
+        const notes=el('ul');r.interpretation.forEach(x=>notes.append(el('li',x)));
+        out.replaceChildren(el('h4','Role-aligned metrics'),table(head,rows('metrics',r.metrics)),
+          el('h4','Case rule results'),table(head,rows('case',r.compliance)),
+          el('h4','Object rule results'),table(head,rows('object',r.object_rules)),
+          el('h4','Reference lifecycle coverage by source'),
+          table(['Source','Role','Objects','Replayed','Fitting','Unknown'],r.object_models.flatMap(m=>
+            (m.model?.types||[]).map(x=>[r.sources.find(s=>s.log_id===m.log_id).name,x.role,x.objects,x.replayed_objects,x.fitting_objects,x.unknown_objects]))),
+          notes,el('p','Report digest: '+r.report_sha256,'muted'));
+        exportReport.enable(true);status.textContent='Portfolio comparison complete. No pooled population or ranking inferred.';
+      }catch(error){if(active(t)){pin=null;status.textContent=error.message+' Review the sources again.';}}
+      finally{if(active(t))run.disabled=!pin?.ready_to_compare;}
+    };
+    preview.disabled=run.disabled=true;
+    panel.append(el('summary','Compare a portfolio of installed packs'),
+      el('p','Compare a baseline with up to seven other logs. Every source retains its own denominator and coverage. Identical source content is flagged; no ranking or pooled case total is produced.','muted'),
+      load,field('Baseline installed pack',pack),choices,preview,status,basis,run,exportReport.node,out);
+    return panel;
+  }
+
   function domainPackSection(){
     const box=section('Domain packs');box.id='owgDomainPacks';
     box.appendChild(el('div','Apply ready-made definitions for a well-known process to this log: case metrics, compliance and object rules and a reference object model. Map each role to the names your log uses; the pack states its assumptions and is not validated against your source system.','muted'));
@@ -4934,6 +5051,7 @@
     const generation=state.generation,logId=state.logId,base='/v1/event-logs/'+encodeURIComponent(logId)+'/domain-packs';
     let turn=0;const current=t=>generation===state.generation&&box.isConnected&&t===turn;
     box.append(domainPackBenchmarkPanel(()=>generation===state.generation&&box.isConnected,logId));
+    box.append(domainPackPortfolioPanel(()=>generation===state.generation&&box.isConnected,logId));
     const post=(url,body)=>api(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     setup.onclick=async()=>{
       const t=++turn;setup.disabled=true;historyTurn++;historyOut.replaceChildren();form.replaceChildren();out.replaceChildren();status.textContent='Loading…';
