@@ -84,18 +84,31 @@ const path=require('node:path');
   const trialReview=(await trialRes.json()).result;
   await page.locator('#owgCatalogProcurementResult h5').first().waitFor();
   const times={routine_ms:3600000,review_ms:0,rework_ms:0,fallback_ms:0,escalation_ms:0,other_direct_cost_microunits:0,observed_business_outcome:'success'};
+  const categories=['normal','exception','missing_facts'];
+  const actualCategory=discovery.basis.reference_report.cases[0].category;
+  const portfolio={category_volumes:categories.map(category=>({category,annual_cases:category===actualCategory?100:0})),
+    portfolios:[{portfolio_id:'selective',assignments:categories.map(category=>({category,candidate_id:category===actualCategory?'current':null})),
+      routing_annual_microunits:0,routing_one_time_microunits:0,routing_cost_per_ai_case_microunits:0,routing_human_ms_per_ai_case:0},
+      {portfolio_id:'manual-only',assignments:categories.map(category=>({category,candidate_id:null})),
+      routing_annual_microunits:0,routing_one_time_microunits:0,routing_cost_per_ai_case_microunits:0,routing_human_ms_per_ai_case:0}],
+    confirm_conditional_category_assignment:true,confirm_non_overlapping_routing_costs:true};
   const economics=await submit('operating-cost',{plan:discovery,captures:costCaptures,request:{
     format:'openworkgraph.procurement-operating-cost.v1',plan_sha256:discovery.plan_sha256,ledger_sha256:trialReview.ledger_sha256,currency:'USD',
     confirm_non_overlapping_cost_boundary:true,rates:Object.fromEntries(['routine','review','rework','fallback','escalation'].map(k=>[k+'_hourly_microunits',1000000])),
     manual:[1,2].map(repeat=>({case_id:'case_1',repeat,...times})),
     interventions:discovery.slots.filter(s=>s.candidate_id==='current').map(s=>({slot_id:s.slot_id,...times,routine_ms:0,review_ms:1800000})),
-    scenario:{annual_cases:100,manual_annual_microunits:0,candidate_fixed_costs:configs.map(c=>({candidate_id:c.candidate_id,annual_microunits:0,one_time_microunits:0}))}}});
+    scenario:{annual_cases:100,manual_annual_microunits:0,portfolio,candidate_fixed_costs:configs.map(c=>({candidate_id:c.candidate_id,annual_microunits:0,one_time_microunits:0}))}}});
   assert.equal(economics.manual_baseline.total_cost.lower_microunits.numerator,'2000000');
   await page.getByText('Human and AI operating cost comparison',{exact:true}).waitFor();
   assert.equal(await page.getByText('Mixed-adoption economics',{exact:true}).count(),2);
   assert.match(await page.locator('#owgCatalogProcurementResult').textContent(),/25 adopted \/ 75 manual cases/);
   assert.match(await page.locator('#owgCatalogProcurementResult').textContent(),/Declared outcome risk: unknown/);
   assert.match(await page.locator('#owgCatalogProcurementResult').textContent(),/Conditional released capacity/);
+  await page.getByText('Conditional multi-agent portfolios',{exact:true}).waitFor();
+  assert.equal(economics.conditional_portfolios.portfolios[0].ai_cases,100);
+  assert.equal(economics.conditional_portfolios.portfolios[1].first_year_savings.lower_microunits.numerator,'0');
+  assert.match(await page.locator('#owgCatalogProcurementResult').textContent(),/100 AI-assigned \/ 0 manual cases/);
+  assert.match(await page.locator('#owgCatalogProcurementResult').textContent(),/Retrospective case labels are not proven available before execution/);
   await page.getByLabel('Operating cost candidate',{exact:true}).selectOption('other');
   await page.getByLabel('Show incomplete operating cost evidence',{exact:true}).check();
   await page.locator('#owgCatalogProcurementResult').getByText('Showing 1–2 of 2 cost rows',{exact:true}).waitFor();

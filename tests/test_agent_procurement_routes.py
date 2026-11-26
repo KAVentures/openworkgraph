@@ -74,6 +74,24 @@ with TestClient(app) as client:
     assert e['result']['candidates'][0]['paired_trial_savings']=={'lower_microunits':None,'upper_microunits':None}
     wrong=deepcopy(economics);wrong['request']['ledger_sha256']='f'*64
     assert client.post(base+'operating-cost',params=params,json={'document':json.dumps(wrong)},headers=h).status_code==422
+    actual=report['cases'][0]['category']
+    cats=('normal','exception','missing_facts')
+    portfolio={'category_volumes':[{'category':c,'annual_cases':100 if c==actual else 0} for c in cats],
+               'portfolios':[{'portfolio_id':'manual-only','assignments':[{'category':c,'candidate_id':None} for c in cats],
+                 'routing_annual_microunits':0,'routing_one_time_microunits':0,
+                 'routing_cost_per_ai_case_microunits':0,'routing_human_ms_per_ai_case':0}],
+               'confirm_conditional_category_assignment':True,'confirm_non_overlapping_routing_costs':True}
+    economics['request']['scenario']['portfolio']=portfolio
+    p=client.post(base+'operating-cost',params=params,json={'document':json.dumps(economics)},headers=h)
+    assert p.status_code==200,p.text
+    result=p.json()['result']['conditional_portfolios']
+    assert not result['execution_authorized']
+    assert result['portfolios'][0]['annual_declared_regression_count']['upper']['numerator']=='0'
+    assert result['portfolios'][0]['recurring_savings']['lower_microunits']['numerator']=='0'
+    assert p.headers['cache-control']=='no-store'
+    for row in portfolio['category_volumes']:
+        row['annual_cases']=0 if row['category']==actual else 50
+    assert client.post(base+'operating-cost',params=params,json={'document':json.dumps(economics)},headers=h).status_code==422
     held=deepcopy(design)
     held['reference_report']['suite_sha256']='e'*64
     held['reference_report']['cases'][0]['case_sha256']='f'*64

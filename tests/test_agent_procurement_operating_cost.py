@@ -322,3 +322,27 @@ def test_portfolio_rejects_bad_inputs(trial,kind):
     elif kind=="unconfirmed":p["confirm_conditional_category_assignment"]=False
     elif kind=="negative":mixed["routing_human_ms_per_ai_case"]=-1
     with pytest.raises(ValueError):assess(packet,plan,captures,req)
+
+
+def test_portfolio_unobserved_category_refused(trial):
+    packet,original,design,_=trial
+    from shared.agent_procurement_trials import freeze
+    # Keep one observed category in reference and captured reports.
+    def one(report):
+        row=report["cases"][0]
+        report.update(cases=[row],case_count=1,matching_case_count=int(row["matches_reviewed_expectation"]),
+                      review_required=row["review_required"],reason_counts={row["reason"]:1})
+        return report
+    design=deepcopy(design)
+    design["reference_report"]=one(design["reference_report"])
+    design["gates"]["require_all_categories"]=False
+    plan=freeze(packet,design)
+    captures=ledger(plan,[])
+    req={"format":"openworkgraph.procurement-operating-cost.v1","plan_sha256":plan["plan_sha256"],
+         "ledger_sha256":review(packet,plan,captures)["ledger_sha256"],"currency":"USD",
+         "rates":{k+"_hourly_microunits":0 for k in ("routine","review","rework","fallback","escalation")},
+         "manual":[],"interventions":[],"confirm_non_overlapping_cost_boundary":True,
+         "scenario":{"annual_cases":60,"manual_annual_microunits":100,
+           "candidate_fixed_costs":[{"candidate_id":cid,"annual_microunits":0,"one_time_microunits":0} for cid in ("baseline","cheap")]}}
+    _portfolio_request(req)
+    with pytest.raises(ValueError,match="unobserved category"):assess(packet,plan,captures,req)
