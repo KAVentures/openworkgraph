@@ -107,6 +107,11 @@ data are not stored in them.
 
 ## Analyze one exact event
 
+Use **Find an event ID** to browse or search exact IDs for the stored activity
+and date window. Search is case-sensitive and literal; pages are ordered by ID
+and pinned to the log revision. A changed log requires restarting the lookup.
+Each result includes the event timestamp, and selecting it fills the scope field.
+
 Optionally enter an exact event ID before running the check. The activity,
 UTC date window, and exact ID jointly define the analysis scope, and the event
 limit applies after this selection. This differs from the result event-ID

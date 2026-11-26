@@ -4299,9 +4299,41 @@
     qualifierField.append(qualifierLookup.wrap);
     const fromDate=input('owgObjectStateFromDate','date'),untilDate=input('owgObjectStateUntilDate','date');
     const scopeEvent=input('owgObjectStateScopeEvent','text','Exact event ID');scopeEvent.maxLength=400;
+    const eventLookup=(()=>{
+      const wrap=document.createElement('details');wrap.id='owgObjectStateEventLookup';
+      const find=button('Find event IDs','secondary'),more=button('More event IDs','secondary'),use=button('Use selected event ID','secondary');
+      const choices=select('owgObjectStateEventLookupChoice',[]),choiceField=field('Matching event IDs',choices),status=el('div',null,'muted');status.setAttribute('role','status');
+      wrap.append(el('summary','Find an event ID'),el('p','Search the selected stored activity and UTC date window. Results are ordered by exact ID.','muted'),find,choiceField,use,more,status);
+      show(choiceField,false);show(use,false);show(more,false);
+      let lookupTurn=0,nextAfter=null,lookupRevision=null,items=[];
+      const reset=()=>{++lookupTurn;nextAfter=null;lookupRevision=null;items=[];choices.replaceChildren();find.disabled=more.disabled=use.disabled=false;show(choiceField,false);show(use,false);show(more,false);status.textContent='';};
+      const active=t=>box.isConnected&&generation===state.generation&&logId===state.logId&&t===lookupTurn;
+      async function load(after){
+        const text=scopeEvent.value,label=activity.value,from=fromDate.value,until=untilDate.value;
+        if(!label.trim()||Array.from(label).length>200){status.textContent='Enter an exact stored activity first.';return;}
+        if(Array.from(text).length>200){status.textContent='Event ID search is too long.';return;}
+        if(from&&until&&from>=until){status.textContent='The exclusive end date must be after the start date.';return;}
+        const ticket=++lookupTurn;find.disabled=more.disabled=use.disabled=true;status.textContent='Searching retained events…';
+        const payload={activity:label,search:text,...(from?{from_date:from}:{}),...(until?{until_date:until}:{}),...(after!==null?{after,expected_revision:lookupRevision}:{})};
+        try{
+          const result=await (await api(base+'/events/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).json();
+          if(!active(ticket)||scopeEvent.value!==text||activity.value!==label||fromDate.value!==from||untilDate.value!==until)return;
+          items=result.events;lookupRevision=result.revision;nextAfter=result.next_after;
+          setOptions(choices,items.map((item,index)=>[String(index),JSON.stringify(item.event_id)+' · '+item.at]));
+          show(choiceField,items.length>0);show(use,items.length>0);show(more,nextAfter!==null);
+          status.textContent=items.length+(items.length===1?' match':' matches')+' on this page. Matching is case-sensitive and literal.';use.disabled=choices.selectedIndex<0;
+        }catch(error){if(active(ticket)){items=[];nextAfter=null;lookupRevision=null;choices.replaceChildren();show(choiceField,false);show(use,false);show(more,false);status.textContent=error.message;}}
+        finally{if(active(ticket)){find.disabled=more.disabled=false;use.disabled=choices.selectedIndex<0;}}
+      }
+      find.onclick=()=>{reset();load(null);};more.onclick=()=>{if(nextAfter!==null)load(nextAfter);};
+      use.onclick=()=>{if(choices.selectedIndex<0)return;const selected=items[Number(choices.value)];scopeEvent.value=selected.event_id;scopeEvent.dispatchEvent(new Event('input',{bubbles:true}));scopeEvent.focus();};
+      scopeEvent.addEventListener('input',reset);activity.addEventListener('input',reset);fromDate.addEventListener('input',reset);fromDate.addEventListener('change',reset);untilDate.addEventListener('input',reset);untilDate.addEventListener('change',reset);
+      wrap.addEventListener('input',event=>event.stopPropagation());wrap.addEventListener('change',event=>event.stopPropagation());
+      return {wrap,reset};
+    })();
     const run=button('Check recorded state');run.id='owgObjectStateRun';
     const form=el('div',null,'row');form.style.alignItems='end';
-    form.append(field('Stored activity',activity),activityLookup.wrap,field('Only this event ID (optional)',scopeEvent),field('From date (UTC, inclusive)',fromDate),field('Until date (UTC, exclusive)',untilDate),field('Object type',objectType),field('Attribute',attribute),attributeLookup.wrap,field('Comparison',operator),field('Expected value (empty is allowed)',value),valueNote,valueLookup.wrap,field('Match',quantifier),field('Match an exact event-link qualifier',exact),qualifierField,run);
+    form.append(field('Stored activity',activity),activityLookup.wrap,field('Only this event ID (optional)',scopeEvent),eventLookup.wrap,field('From date (UTC, inclusive)',fromDate),field('Until date (UTC, exclusive)',untilDate),field('Object type',objectType),field('Attribute',attribute),attributeLookup.wrap,field('Comparison',operator),field('Expected value (empty is allowed)',value),valueNote,valueLookup.wrap,field('Match',quantifier),field('Match an exact event-link qualifier',exact),qualifierField,run);
     const savedPick=select('owgObjectStateSaved',[]),savedName=input('owgObjectStateSavedName','text','Name this check');savedName.maxLength=120;
     const savedLoad=button('Load saved check','secondary'),savedRefresh=button('Refresh saved checks','secondary'),savedCreate=button('Save as new check','secondary'),savedUpdate=button('Update loaded check','secondary'),savedDelete=button('Delete loaded check','secondary');
     const savedRow=el('div',null,'row');savedRow.style.alignItems='end';savedRow.append(field('Saved state checks',savedPick),savedLoad,savedRefresh,field('Saved check name',savedName),savedCreate,savedUpdate,savedDelete);
@@ -4370,7 +4402,7 @@
     const resetTransfer=()=>{++transferTurn;transferCandidate=null;transferPreview.disabled=!transferFile.files.length;transferApply.disabled=true;transferDownload.disabled=false;transferStatus.textContent='';transferChecks.replaceChildren();};
     transferFile.onchange=resetTransfer;form.addEventListener('input',resetTransfer);form.addEventListener('change',resetTransfer);savedName.addEventListener('input',resetTransfer);resetTransfer();
     function applyDefinition(d,name){
-      clear();activityLookup.reset();attributeLookup.reset();valueLookup.reset();qualifierLookup.reset();
+      clear();activityLookup.reset();attributeLookup.reset();valueLookup.reset();qualifierLookup.reset();eventLookup.reset();
       if(![...objectType.options].some(option=>option.value===d.object_type)){const option=el('option',JSON.stringify(d.object_type)+' (not currently present)');option.value=d.object_type;objectType.appendChild(option);}
       scopeEvent.value='';fromDate.value=d.from_date??'';untilDate.value=d.until_date??'';activity.value=d.activity;objectType.value=d.object_type;attribute.value=d.attribute;value.value=d.expected_value;rememberValue(d.expected_value);
       operator.value=d.operator;quantifier.value=d.quantifier;exact.checked=Object.hasOwn(d,'event_qualifier');qualifier.value=d.event_qualifier??'';show(qualifierField,exact.checked);
@@ -4530,7 +4562,7 @@
             const from=settings.from_date&&settings.from_date>row.start_utc?settings.from_date:row.start_utc;
             const until=settings.until_date&&(!endDate||settings.until_date<endDate)?settings.until_date:endDate;
             const spec={...settings,from_date:from};if(until)spec.until_date=until;else delete spec.until_date;
-            const filter=resultFilter.value,pin=revision;fromDate.value=from;untilDate.value=until||'';resetTransfer();clear();load(spec,0,filter,pin,true);
+            const filter=resultFilter.value,pin=revision;fromDate.value=from;untilDate.value=until||'';eventLookup.reset();resetTransfer();clear();load(spec,0,filter,pin,true);
           };
           return [row.start_utc,row.events,row.matched,row.not_matched,row.unknown,row.no_linked_object,inspect];
         })));
