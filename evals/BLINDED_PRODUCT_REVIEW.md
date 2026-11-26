@@ -84,3 +84,5 @@ proper matched study.
 ```sh
 python -m unittest discover -s tests -p test_blinded_product_review.py
 ```
+
+For two independent reviewers and third-reviewer adjudication of all differing entries, see [MULTI_REVIEWER_PRODUCT_REVIEW.md](MULTI_REVIEWER_PRODUCT_REVIEW.md).

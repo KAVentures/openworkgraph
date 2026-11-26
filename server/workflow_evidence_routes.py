@@ -858,12 +858,8 @@ def process_catalog_script() -> Response:
     return FileResponse(ROOT / 'dashboard' / 'process_catalog.js', media_type='application/javascript')
 
 
-@app.post('/v1/process-catalog/import-bpmn')
-async def import_process_bpmn_draft(request: Request) -> Response:
-    from .local_source_routes import _require_dashboard
-    from shared.process_bpmn_import import BPMNImportError, MAX_BYTES, import_bpmn
-    from starlette.concurrency import run_in_threadpool
-    _require_dashboard(request)
+async def _bpmn_body(request: Request) -> bytes:
+    from shared.process_bpmn_import import MAX_BYTES
     content_type=request.headers.get('content-type','').split(';',1)[0].strip().lower()
     if content_type not in {'application/xml','text/xml','application/bpmn+xml'}:
         raise HTTPException(415,'BPMN import requires XML content')
@@ -872,11 +868,56 @@ async def import_process_bpmn_draft(request: Request) -> Response:
         if len(payload)+len(chunk)>MAX_BYTES:
             raise HTTPException(413,'BPMN exceeds the 128 KiB limit')
         payload.extend(chunk)
+    return bytes(payload)
+
+
+@app.post('/v1/process-catalog/import-bpmn')
+async def import_process_bpmn_draft(
+    request: Request, process_id: str | None = Query(default=None, min_length=1, max_length=200),
+    expected_source_sha256: str | None = Query(default=None, pattern=r'^[a-f0-9]{64}$'),
+) -> Response:
+    from .local_source_routes import _require_dashboard
+    from shared.process_bpmn_import import BPMNImportError, import_bpmn
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    if (process_id is None) != (expected_source_sha256 is None):
+        raise HTTPException(422, 'Supply both the inspected process and the BPMN file digest')
+    payload = await _bpmn_body(request)
     try:
-        result=await run_in_threadpool(import_bpmn,bytes(payload))
+        result = await run_in_threadpool(import_bpmn, payload, process_id=process_id,
+                                        expected_source_sha256=expected_source_sha256)
     except BPMNImportError as exc:
-        raise HTTPException(422,str(exc)) from None
-    return JSONResponse(result,headers={'Cache-Control':'no-store'})
+        raise HTTPException(422, str(exc)) from None
+    _require_dashboard(request)
+    return JSONResponse(result, headers={'Cache-Control':'no-store'})
+
+
+@app.post('/v1/process-catalog/import-bpmn/inspect')
+async def inspect_process_bpmn(request: Request) -> Response:
+    from .local_source_routes import _require_dashboard
+    from shared.process_bpmn_import import BPMNImportError, inspect_bpmn
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    payload = await _bpmn_body(request)
+    try:
+        result = await run_in_threadpool(inspect_bpmn, payload)
+    except BPMNImportError as exc:
+        raise HTTPException(422, str(exc)) from None
+    _require_dashboard(request)
+    return JSONResponse(result, headers={'Cache-Control':'no-store'})
+
+
+async def _dmn_body(request: Request) -> bytes:
+    from shared.process_dmn import MAX_BYTES
+    content_type=request.headers.get('content-type','').split(';',1)[0].strip().lower()
+    if content_type not in {'application/xml','text/xml','application/dmn+xml'}:
+        raise HTTPException(415,'DMN import requires XML content')
+    payload=bytearray()
+    async for chunk in request.stream():
+        if len(payload)+len(chunk)>MAX_BYTES:
+            raise HTTPException(413,'DMN exceeds the 256 KiB limit')
+        payload.extend(chunk)
+    return bytes(payload)
 
 
 @app.post('/v1/process-catalog/import-dmn')
@@ -886,28 +927,68 @@ async def import_process_dmn_preview(request: Request, workflow_id: str = Query(
                                      effective_from: str = Query(min_length=10, max_length=10),
                                      effective_until: str | None = Query(default=None, min_length=10, max_length=10),
                                      decision_name: str | None = Query(default=None, max_length=200)) -> Response:
-    """Preview a DMN decision table as unconfirmed rules for one decision; nothing is saved."""
+    """Preview a DMN decision table as unconfirmed rules for one decision."""
     from .local_source_routes import _require_dashboard
-    from shared.process_dmn import DMNError, MAX_BYTES, import_dmn
+    from shared.process_dmn import DMNError, import_dmn
     from starlette.concurrency import run_in_threadpool
     _require_dashboard(request)
-    content_type=request.headers.get('content-type','').split(';',1)[0].strip().lower()
-    if content_type not in {'application/xml','text/xml','application/dmn+xml'}:
-        raise HTTPException(415,'DMN import requires XML content')
-    payload=bytearray()
-    async for chunk in request.stream():
-        if len(payload)+len(chunk)>MAX_BYTES:
-            raise HTTPException(413,'DMN exceeds the 256 KiB limit')
-        payload.extend(chunk)
-    record=_catalog_record(workflow_id,revision)
+    payload = await _dmn_body(request)
+    record = _catalog_record(workflow_id, revision)
     try:
-        result=await run_in_threadpool(import_dmn,bytes(payload),record['process_model'],decision_activity_id,
-                                       effective_from=effective_from,effective_until=effective_until,
-                                       decision_name=decision_name)
+        result = await run_in_threadpool(import_dmn, payload, record['process_model'], decision_activity_id,
+                                        effective_from=effective_from, effective_until=effective_until,
+                                        decision_name=decision_name)
     except DMNError as exc:
-        raise HTTPException(422,str(exc)) from None
-    result['based_on']={'workflow_id':workflow_id,'revision':revision,'content_sha256':record['content_sha256']}
-    return JSONResponse(result,headers={'Cache-Control':'no-store'})
+        raise HTTPException(422, str(exc)) from None
+    _require_dashboard(request)
+    result['based_on'] = {'workflow_id': workflow_id, 'revision': revision, 'content_sha256': record['content_sha256']}
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
+@app.post('/v1/process-catalog/import-dmn/inspect')
+async def inspect_process_dmn(request: Request) -> Response:
+    """List the table choices in a local DMN file."""
+    from .local_source_routes import _require_dashboard
+    from shared.process_dmn import DMNError, inspect_dmn
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    payload = await _dmn_body(request)
+    try:
+        result = await run_in_threadpool(inspect_dmn, payload)
+    except DMNError as exc:
+        raise HTTPException(422, str(exc)) from None
+    _require_dashboard(request)
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
+@app.post('/v1/process-catalog/import-dmn/batch')
+async def import_process_dmn_batch_preview(
+    request: Request, workflow_id: str = Query(pattern=_PROCESS_ID), revision: int = Query(ge=1),
+    document_sha256: str = Query(pattern=r'^[a-f0-9]{64}$'),
+    assignments: str = Query(min_length=2, max_length=2048),
+    effective_from: str = Query(min_length=10, max_length=10),
+    effective_until: str | None = Query(default=None, min_length=10, max_length=10),
+) -> Response:
+    """Preview all chosen tables in one unconfirmed design draft."""
+    from .local_source_routes import _require_dashboard
+    from shared.process_dmn import DMNError, import_dmn_batch
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    payload = await _dmn_body(request)
+    try:
+        mapping = json.loads(assignments, object_pairs_hook=_process_object, parse_constant=_invalid_process_constant)
+    except (ValueError, RecursionError):
+        raise HTTPException(422, 'DMN assignments must be valid JSON') from None
+    record = _catalog_record(workflow_id, revision)
+    try:
+        result = await run_in_threadpool(import_dmn_batch, payload, record['process_model'], mapping,
+                                        document_sha256=document_sha256, effective_from=effective_from,
+                                        effective_until=effective_until)
+    except DMNError as exc:
+        raise HTTPException(422, str(exc)) from None
+    _require_dashboard(request)
+    result['based_on'] = {'workflow_id': workflow_id, 'revision': revision, 'content_sha256': record['content_sha256']}
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
 
 
 @app.get('/process-decision-editor.js')
@@ -975,6 +1056,39 @@ def list_process_catalog(after: str = Query(default='', max_length=80), limit: i
     return JSONResponse({'processes': summaries, 'has_more': page['has_more'], 'next_after': page['next_after']}, headers={'Cache-Control': 'no-store'})
 
 
+@app.post('/v1/process-catalog/policy-regression')
+async def process_policy_regression(request: Request,
+        workflow_id: str = Query(pattern=_PROCESS_ID),
+        before_revision: int = Query(ge=1), after_revision: int = Query(ge=1),
+        before_sha256: str = Query(pattern=r'^[a-f0-9]{64}$'),
+        after_sha256: str = Query(pattern=r'^[a-f0-9]{64}$'),
+        include_change_review: bool = Query(default=False)) -> Response:
+    from .local_source_routes import _require_dashboard
+    from shared.process_policy_regression import compare
+    from shared.process_change_review import review
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    if request.headers.get('x-owg-case-facts-authorized') != 'true':
+        raise HTTPException(403, 'explicit local case-fact analysis authorization required')
+    payload = await _process_json(request)
+    def pinned(revision, digest):
+        packet = _catalog_export(workflow_id, revision)
+        if packet['content_sha256'] != digest:
+            raise HTTPException(409, 'Saved revision reference changed; select it again')
+        return packet
+    before = pinned(before_revision, before_sha256)
+    after = pinned(after_revision, after_sha256)
+    try:
+        result = await run_in_threadpool(review if include_change_review else compare, before, after, payload)
+    except ValueError:
+        # Validation errors can contain supplied facts. Return no raw values.
+        raise HTTPException(422, 'Invalid reviewed decision regression suite or revision pairing') from None
+    pinned(before_revision, before_sha256)
+    pinned(after_revision, after_sha256)
+    _require_dashboard(request)
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
 @app.post('/v1/process-catalog')
 async def save_process_catalog(request: Request) -> Response:
     value = await _process_json(request)
@@ -989,15 +1103,111 @@ async def save_process_catalog(request: Request) -> Response:
     return JSONResponse(result, headers={'Cache-Control': 'no-store'})
 
 
+def _domain_assurance_packet(workflow_id: str, revision: int, digest: str):
+    packet = _catalog_export(workflow_id, revision)
+    if packet['content_sha256'] != digest:
+        raise HTTPException(409, 'Saved process reference changed; select the revision again')
+    return packet
+
+
+@app.get('/v1/process-catalog/decision-domain/suggestions')
+def decision_domain_suggestions(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
+                                revision: int = Query(ge=1),
+                                content_sha256: str = Query(pattern=r'^[a-f0-9]{64}$')) -> Response:
+    from .local_source_routes import _require_dashboard
+    from shared.process_decision_domain import suggested_domain
+    _require_dashboard(request)
+    packet = _domain_assurance_packet(workflow_id, revision, content_sha256)
+    try:
+        result = suggested_domain(ProcessModel.model_validate(packet['process_model']))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    _domain_assurance_packet(workflow_id, revision, content_sha256)
+    _require_dashboard(request)
+    return JSONResponse({**result, 'reference': {k: packet[k] for k in ('workflow_id','revision','content_sha256')}},
+                        headers={'Cache-Control': 'no-store'})
+
+
+@app.post('/v1/process-catalog/decision-domain')
+async def decision_domain_coverage(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
+                                   revision: int = Query(ge=1),
+                                   content_sha256: str = Query(pattern=r'^[a-f0-9]{64}$')) -> Response:
+    from .local_source_routes import _require_dashboard
+    from shared.process_decision_domain import analyze_saved
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    value = await _process_json(request, maximum=65536)
+    packet = _domain_assurance_packet(workflow_id, revision, content_sha256)
+    try:
+        result = await run_in_threadpool(analyze_saved, packet, value)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    _domain_assurance_packet(workflow_id, revision, content_sha256)
+    _require_dashboard(request)
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
 @app.get('/v1/process-catalog/revision')
 def get_process_catalog_revision(workflow_id: str = Query(pattern=_PROCESS_ID), revision: int | None = Query(default=None, ge=1)) -> Response:
     return JSONResponse(_catalog_record(workflow_id, revision), headers={'Cache-Control': 'no-store'})
+
+
+def _token_assurance_packet(workflow_id: str, revision: int, digest: str):
+    packet = _catalog_export(workflow_id, revision)
+    if packet['content_sha256'] != digest:
+        raise HTTPException(409, 'Saved process reference changed; select the revision again')
+    return packet
+
+
+@app.get('/v1/process-catalog/token-assurance')
+def process_token_assurance(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
+                            revision: int = Query(ge=1),
+                            content_sha256: str = Query(pattern=r'^[a-f0-9]{64}$')) -> Response:
+    from .local_source_routes import _require_dashboard
+    from shared.process_token_assurance import analyze_saved
+    _require_dashboard(request)
+    packet = _token_assurance_packet(workflow_id, revision, content_sha256)
+    try:
+        result = analyze_saved(packet)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    _token_assurance_packet(workflow_id, revision, content_sha256)
+    _require_dashboard(request)
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
 
 
 @app.get('/v1/process-catalog/history')
 def get_process_catalog_history(workflow_id: str = Query(pattern=_PROCESS_ID), before_revision: int | None = Query(default=None, ge=1), limit: int = Query(default=20, ge=1, le=100)) -> Response:
     _catalog_record(workflow_id)
     return JSONResponse(_knowledge.history('local', workflow_id, before_revision=before_revision, limit=limit), headers={'Cache-Control': 'no-store'})
+
+
+def _policy_assurance_packet(workflow_id: str, revision: int, digest: str):
+    packet = _catalog_export(workflow_id, revision)
+    if packet['content_sha256'] != digest:
+        raise HTTPException(409, 'Saved process reference changed; select the revision again')
+    return packet
+
+
+@app.get('/v1/process-catalog/policy-impact')
+def compare_process_policy_impact(request: Request,
+        workflow_id: str = Query(pattern=_PROCESS_ID),
+        before_revision: int = Query(ge=1), after_revision: int = Query(ge=1),
+        before_sha256: str = Query(pattern=r'^[a-f0-9]{64}$'),
+        after_sha256: str = Query(pattern=r'^[a-f0-9]{64}$')) -> Response:
+    from .local_source_routes import _require_dashboard
+    from shared.process_policy_impact import compare
+    _require_dashboard(request)
+    before = _policy_assurance_packet(workflow_id, before_revision, before_sha256)
+    after = _policy_assurance_packet(workflow_id, after_revision, after_sha256)
+    try:
+        result = compare(before, after)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    _policy_assurance_packet(workflow_id, before_revision, before_sha256)
+    _policy_assurance_packet(workflow_id, after_revision, after_sha256)
+    _require_dashboard(request)
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
 
 
 @app.get('/v1/process-catalog/export')
@@ -1017,6 +1227,40 @@ def export_process_catalog(workflow_id: str = Query(pattern=_PROCESS_ID), revisi
                     media_type='application/xml' if format == 'bpmn' else 'text/plain', headers=headers)
 
 
+def _local_dependency_response(request, operation, *args):
+    from .local_source_routes import _require_dashboard
+    _require_dashboard(request)
+    try:
+        result = operation(*args)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from None
+    except ValidationError:
+        raise HTTPException(422, 'Invalid prerequisite declaration') from None
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+    _require_dashboard(request)
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
+@app.get('/v1/process-catalog/prerequisites')
+def local_process_prerequisites(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID)):
+    from . import local_process_dependencies as prerequisites
+    return _local_dependency_response(request, prerequisites.detail, workflow_id)
+
+
+@app.post('/v1/process-catalog/prerequisites')
+async def save_local_process_prerequisites(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID)):
+    from . import local_process_dependencies as prerequisites
+    from .local_source_routes import _require_dashboard
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    try:
+        body = prerequisites.SaveDependencies.model_validate(await _process_json(request, maximum=32 * 1024))
+    except ValidationError:
+        raise HTTPException(422, 'Invalid prerequisite declaration') from None
+    return await run_in_threadpool(_local_dependency_response, request, prerequisites.save, workflow_id, body)
+
+
 @app.post('/v1/process-catalog/forget')
 async def forget_process_catalog(request: Request) -> Response:
     value = await _process_json(request)
@@ -1028,7 +1272,12 @@ async def forget_process_catalog(request: Request) -> Response:
     _catalog_record(workflow_id)
     from . import process_clarification_store
     process_clarification_store.forget(workflow_id)
-    return JSONResponse(_knowledge.forget('local', workflow_id), headers={'Cache-Control': 'no-store'})
+    from .local_process_dependencies import forget_process
+    try:
+        deleted = forget_process(workflow_id)
+    except LookupError:
+        raise HTTPException(404, 'Process revision not found') from None
+    return JSONResponse(deleted, headers={'Cache-Control': 'no-store'})
 
 
 @app.get('/v1/process-catalog/agent-project')
@@ -1073,6 +1322,26 @@ async def clarify_process_design(request: Request, workflow_id: str = Query(patt
     record = _catalog_record(workflow_id, revision)
     result = clarify(record, body, ledger.decisions(workflow_id, revision, record['content_sha256'],
                                                    documents_sha256(body.documents)))
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
+@app.post('/v1/process-catalog/clarify/source-revision-review')
+async def review_clarification_sources(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
+                                       revision: int = Query(ge=1)) -> Response:
+    from shared.process_source_revision import Review, compare
+    from .local_source_routes import _require_dashboard
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    try:
+        body = Review.model_validate(await _process_json(request, maximum=800 * 1024))
+    except (ValidationError, ValueError):
+        raise HTTPException(422, 'invalid bounded source revision review') from None
+    record = _catalog_record(workflow_id, revision)
+    try:
+        result = await run_in_threadpool(compare, record, body)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+    _require_dashboard(request)
     return JSONResponse(result, headers={'Cache-Control': 'no-store'})
 
 
@@ -1175,6 +1444,26 @@ async def link_rule_library_rule(request: Request, workflow_id: str = Query(patt
                              'content_sha256': record['content_sha256']},
                 'proposed_process_model': model, 'process_model_saved': False, 'evaluates_rules': False}
     return _rule_library_call(request, proposal)
+
+
+@app.post('/v1/process-catalog/rule-library/upgrade-review')
+async def review_rule_library_upgrade(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
+                                      revision: int = Query(ge=1)) -> Response:
+    """Preview or construct one exact-pin unsaved multi-rule upgrade proposal."""
+    from . import process_rule_library as library
+    from .local_source_routes import _require_dashboard
+    _require_dashboard(request)
+    value = await _process_json(request, maximum=16384)
+    if (not isinstance(value, dict) or not set(value) <= {'expected_content_sha256', 'selections'}
+            or not isinstance(value.get('expected_content_sha256'), str)
+            or ('selections' in value and not isinstance(value['selections'], list))):
+        raise HTTPException(422, 'Use an exact saved process digest and optional selected rule revisions')
+    record = _catalog_record(workflow_id, revision)
+    latest = _catalog_record(workflow_id)
+    if (value['expected_content_sha256'] != record['content_sha256']
+            or latest['revision'] != revision or latest['content_sha256'] != record['content_sha256']):
+        raise HTTPException(409, 'Saved process changed; reopen its latest revision before reviewing upgrades')
+    return _rule_library_call(request, library.upgrade_review, record, value.get('selections'))
 
 
 @app.get('/v1/process-catalog/rule-library/drift')

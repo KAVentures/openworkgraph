@@ -251,21 +251,34 @@ def _top(items: list[Any], n: int) -> list[Any]:
     return list(items or [])[:n]
 
 
-def overview(log_id: str, case_type: str | None = None, sla_hours: float | None = None) -> dict[str, Any]:
+def overview(log_id: str, case_type: str | None = None, sla_hours: float | None = None,
+             automation_resources: list[str] | None = None) -> dict[str, Any]:
     require(log_id, "aggregates")
     from . import event_log_analytics as analytics
     from . import event_log_insights as insights
     sla = int(sla_hours * 3600) if sla_hours else None
     summary = workspace.summary(log_id, case_type)
     variants = workspace.variants(log_id, case_type, 5)
-    kpis = analytics.kpis(log_id, case_type, sla)
+    if automation_resources is not None and (not isinstance(automation_resources, list)
+                                             or len(automation_resources) > 50
+                                             or any(not isinstance(r, str) or not r or len(r) > 200
+                                                    for r in automation_resources)):
+        raise EventLogWorkspaceError("automation_resources must be up to 50 resource names")
+    kpis = analytics.kpis(log_id, case_type, sla, automation_resources or None)
+    automation = kpis.get("automation")
     found = insights.insights(log_id, {"case_type": case_type, "limit": 5, **({"sla_seconds": sla} if sla else {})})
     return {
         "format": FORMAT, "log_id": log_id, "case_notion": summary["case_notion"],
         "cases": summary["cases"], "events": summary["events"], "activities": summary["activities"],
         "first_event_at": summary["first_event_at"], "last_event_at": summary["last_event_at"],
         "case_duration_seconds": summary["case_duration_seconds"],
-        "kpis": {k: kpis.get(k) for k in ("throughput_seconds", "rework_rate", "sla") if k in kpis},
+        "kpis": {**{k: kpis.get(k) for k in ("throughput_seconds", "rework_rate", "sla") if k in kpis},
+                 **({"automation": {k: automation[k] for k in ("events", "automated_events", "automation_rate")}}
+                    if automation else {})},
+        "completed_per_week": [
+            {"week_starting": w["week_starting"], "cases": w["cases"],
+             "median_throughput_seconds": w["median_throughput_seconds"] if w["cases"] >= AGENT_MIN_CELL_CASES else None}
+            for w in kpis.get("completed_per_week") or []],
         "top_variants": [{"path": v["path"], "cases": v["cases"], "share": v.get("share")}
                          for v in _top(variants.get("variants"), 5)],
         "variants_total": variants.get("distinct_variants"),
@@ -343,6 +356,10 @@ def brief(log_id: str, case_type: str | None = None, sla_hours: float | None = N
                              "by_signal": unusual["by_signal"]}
     except EventLogWorkspaceError as exc:
         parts_unavailable["unusual"] = str(exc)
+    from . import event_log_change_markers as cm
+    markers = cm.markers(log_id)["markers"]
+    result["owner_change_markers"] = [{"label": m["label"], "marked_at": m["marked_at"], "within_log": m["within_log"]}
+                                      for m in markers[-10:]]
     result["parts_unavailable"] = parts_unavailable
     result["next_tools"] = [
         {"tool": "get_process_insights", "for": "every ranked finding with the case filter that reproduces it"},
@@ -351,6 +368,7 @@ def brief(log_id: str, case_type: str | None = None, sla_hours: float | None = N
         {"tool": "get_process_next_steps", "for": "walking the process one step at a time"},
         {"tool": "get_process_root_cause", "for": "what goes with slow, reworked or other outcomes"},
         {"tool": "get_unusual_process_cases", "for": "the cases that stand out and why"},
+        {"tool": "get_process_drift", "for": "whether the process changed around the owner's change markers"},
     ]
     result["interpretation"] = ("A starting summary of recorded events, not a diagnosis. Model figures describe a "
                                 "draft discovered from this log; deviations and outliers are not errors.")
@@ -756,6 +774,120 @@ def model_quality(log_id: str, case_type: str | None = None, levels: str | None 
     return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
 
 
+def attributes(log_id: str, case_type: str | None = None, top_values: int = 10) -> dict[str, Any]:
+    """Which case and event attributes a shared log has, to choose filters, breakdowns and root-cause features
+    (aggregates level): coverage, numeric or categorical, case- or event-level, quartiles for numbers and the
+    most frequent values with their case share and median case duration. Values seen in fewer than
+    AGENT_MIN_CELL_CASES cases are withheld and counted; the minimum and maximum (single cases) and the values
+    of identifier-like attributes (a different value on every event) are not returned."""
+    require(log_id, "aggregates")
+    if isinstance(top_values, bool) or not isinstance(top_values, int) or not 1 <= top_values <= 50:
+        raise EventLogWorkspaceError("top_values must be a whole number from 1 to 50")
+    from . import event_log_attribute_profile as profiles
+    result = profiles.profile(log_id, {"top_values": 50, **({"case_type": case_type} if case_type else {})})
+    shown, withheld_values = [], 0
+    for entry in result["attributes"]:
+        values = [] if entry.get("unique_per_event") else entry.get("top_values") or []
+        kept = [v for v in values if v["cases"] >= AGENT_MIN_CELL_CASES]
+        withheld_values += max(int(entry.get("distinct_values") or 0) - len(kept), 0)
+        item = {k: entry[k] for k in ("attribute", "events", "cases", "case_coverage", "event_coverage",
+                                      "distinct_values", "kind", "level", "cases_where_value_changes",
+                                      "unique_per_event") if k in entry}
+        item["top_values"] = kept[:top_values]
+        if entry.get("numeric"):
+            item["numeric"] = {k: entry["numeric"][k] for k in ("p25", "median", "p75", "mean") if k in entry["numeric"]}
+        shown.append(item)
+    return {"format": FORMAT, "log_id": log_id, "case_notion": result.get("case_notion"), "cases": result["cases"],
+            "events": result["events"], "median_case_duration_seconds": result.get("median_case_duration_seconds"),
+            "attributes": shown, "attributes_truncated": result.get("attributes_truncated", False),
+            "withheld": {"values": withheld_values, "min_cases": AGENT_MIN_CELL_CASES,
+                         "numeric_min_max": True, "identifier_like_values": True},
+            "caveat": ("Use an attribute and value here as a case filter, for example {\"attribute\": \"region=EU\"} "
+                       "for a case-level attribute or {\"event_attribute\": \"amount=100\"}. Durations per value are "
+                       "descriptive: cases with a value can differ from the rest in many other ways.")}
+
+
+def compare_logs(baseline_log_id: str, comparison_log_id: str, *, baseline_case_type: str | None = None,
+                 comparison_case_type: str | None = None, baseline_filter: dict[str, Any] | None = None,
+                 comparison_filter: dict[str, Any] | None = None, limit: int = 25) -> dict[str, Any]:
+    """Two shared logs compared (aggregates level on both): KPIs, activities, paths and variants with share
+    differences and 95% intervals. A row where either log has 1 to AGENT_MIN_CELL_CASES - 1 cases is withheld
+    and counted, so a small group cannot be singled out; each filtered side needs AGENT_MIN_FILTERED_CASES cases."""
+    require(baseline_log_id, "aggregates")
+    require(comparison_log_id, "aggregates")
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+        raise EventLogWorkspaceError("limit must be a whole number from 1 to 100")
+    from . import event_log_cohorts as cohorts
+    from . import event_log_log_comparison as comparison
+    sides = {}
+    for name, log_id, case_type, case_filter in (("baseline", baseline_log_id, baseline_case_type, baseline_filter),
+                                                 ("comparison", comparison_log_id, comparison_case_type, comparison_filter)):
+        if case_filter not in (None, {}):
+            if not isinstance(case_filter, dict):
+                raise EventLogWorkspaceError(f"{name}_filter must be an object of case-filter keys")
+            cohorts.parse_cohort(case_filter)
+        sides[name] = {"log_id": log_id, "case_type": case_type, "cohort": case_filter or {}}
+    result = comparison.compare({**sides, "limit": 200})
+    for name in ("baseline", "comparison"):
+        if sides[name]["cohort"] and result["kpis"][name]["cases"] < AGENT_MIN_FILTERED_CASES:
+            raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match the {name} filter; widen it")
+    small = lambda row: 0 < row["baseline_cases"] < AGENT_MIN_CELL_CASES or 0 < row["comparison_cases"] < AGENT_MIN_CELL_CASES
+    withheld = {"min_cases": AGENT_MIN_CELL_CASES}
+    sections = {}
+    for section in ("activities", "paths", "variants"):
+        rows = result[section]["largest_share_differences"]
+        kept = [row for row in rows if not small(row)]
+        withheld[section] = len(rows) - len(kept)
+        sections[section] = {**result[section], "largest_share_differences": kept[:limit]}
+    activity_rows = [r for r in result["activities"]["largest_share_differences"] if not small(r)]
+    sections["activities"]["only_baseline"] = [r["activity"] for r in activity_rows if r["presence"] == "only_baseline"]
+    sections["activities"]["only_comparison"] = [r["activity"] for r in activity_rows if r["presence"] == "only_comparison"]
+    for row in sections["variants"]["largest_share_differences"]:
+        row.pop("variant_id", None)
+    return {"format": FORMAT, "baseline": result["baseline"], "comparison": result["comparison"],
+            "kpis": result["kpis"], "duration": result["duration"], **sections, "withheld": withheld,
+            "interpretation": result["interpretation"] +
+            f" Rows where either log has 1 to {AGENT_MIN_CELL_CASES - 1} cases are withheld and counted."}
+def _tree_notation(node: dict[str, Any]) -> str | None:
+    """A process tree in PM4Py's notation: ->( ) sequence, X( ) choice, +( ) parallel, *( ) loop, tau.
+    PM4Py's notation has no escaping, so a label containing a single quote cannot be written: None."""
+    op = node.get("op")
+    if op == "activity":
+        label = str(node["activity"])
+        return None if "'" in label else "'" + label + "'"
+    if op == "tau":
+        return "tau"
+    parts = [_tree_notation(child) for child in node.get("children", [])]
+    if any(part is None for part in parts):
+        return None
+    return {"seq": "->", "xor": "X", "and": "+", "loop": "*"}[op] + "( " + ", ".join(parts) + " )"
+
+
+def process_model(log_id: str, case_type: str | None = None, noise: float = 0.2,
+                  activities: float = 1.0) -> dict[str, Any]:
+    """The discovered process model itself (aggregates level): steps, decisions, loops and transitions of the
+    reviewable draft, the observed share of cases per branch as unconfirmed rules, the process tree in PM4Py
+    notation, and how well the draft replays the log. Case IDs and resources are never included."""
+    require(log_id, "aggregates")
+    from . import event_log_model_discovery as discovery
+    result = discovery.discover(log_id, case_type, noise=max(0.0, min(float(noise), 0.95)),
+                                activities=max(0.01, min(float(activities), 1.0)))
+    model = result["process_model"]
+    tree = _tree_notation(result["tree"]) if result.get("tree") else None
+    keep = ("activities", "transitions", "business_rules", "entry_activity_id", "terminal_activity_ids",
+            "baseline_path", "supporting_case_count")
+    return {"format": FORMAT, "log_id": log_id, "case_notion": result.get("case_notion"),
+            "settings": result.get("settings"), "model": {k: model[k] for k in keep if k in model},
+            "process_tree": tree,
+            **({} if tree or not result.get("tree") else
+               {"process_tree_unavailable": "an activity label contains a single quote, which PM4Py's notation cannot carry"}),
+            "quality": result.get("quality"), "simplifications": result.get("simplifications"),
+            "discovery_method": result.get("discovery_method"),
+            "process_model_sha256": result.get("process_model_sha256"),
+            "interpretation": result.get("interpretation"),
+            "observed_path_is_policy": False, "execution_authorized": False}
+
+
 def model_deviations(log_id: str, case_type: str | None = None, noise: float = 0.2) -> dict[str, Any]:
     """Optimal alignments of the log on its discovered net: which steps are extra or skipped (aggregates)."""
     require(log_id, "aggregates")
@@ -1060,8 +1192,10 @@ def variants(log_id: str, case_type: str | None = None, limit: int = 20) -> dict
     listed = result["variants"]
     shown = [v for v in listed if v["cases"] >= AGENT_MIN_CELL_CASES]
     rare = result["distinct_variants"] - len(shown)
+    from . import event_log_variant_coverage as coverage
+    targets = coverage.coverage(log_id, case_type, 1)["coverage_targets"]
     return {"format": FORMAT, "log_id": log_id, "case_notion": result.get("case_notion"), "cases": result["cases"],
-            "distinct_variants": result["distinct_variants"],
+            "distinct_variants": result["distinct_variants"], "coverage_targets": targets,
             "variants": [{"rank": i + 1, "path": v["path"], "cases": v["cases"], "share": v["share"],
                           "median_duration_seconds": v.get("median_duration_seconds")} for i, v in enumerate(shown[:limit])],
             "shown_cases_share": round(sum(v["cases"] for v in shown[:limit]) / result["cases"], 4) if result["cases"] else 0.0,
@@ -1186,11 +1320,14 @@ def rework(log_id: str, case_type: str | None = None, limit: int = 20) -> dict[s
     return {**rw.rework(log_id, spec), "format": FORMAT, "log_id": log_id}
 
 
-def waiting_times(log_id: str, case_type: str | None = None) -> dict[str, Any]:
-    """Processing and waiting time per activity from start/complete lifecycle data (aggregates level)."""
+def waiting_times(log_id: str, case_type: str | None = None,
+                  working_calendar: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Processing and waiting time per activity from start/complete lifecycle data (aggregates level). With a
+    working calendar (timezone, weekly hours, holidays) the same figures are also measured in working time."""
     require(log_id, "aggregates")
     from . import event_log_waiting as waiting
-    return {**waiting.waiting_time(log_id, case_type), "format": FORMAT, "log_id": log_id}
+    return {**waiting.waiting_time(log_id, case_type, working_calendar=working_calendar),
+            "format": FORMAT, "log_id": log_id}
 
 
 def drift(log_id: str, case_type: str | None = None, window: str = "month") -> dict[str, Any]:

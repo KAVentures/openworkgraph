@@ -37,6 +37,26 @@ def test_saved_rules_reload_and_check_without_losing_literal_fields():
     assert sets.listing(log)["sets"] == []
 
 
+def test_preview_portable_rules_checks_literal_labels_without_saving():
+    log = _ocel(_order_to_cash())
+    packet = {"format": sets.TEMPLATE_FORMAT, "definition": {
+        "name": " Transferable ", "rules": [RULE, SUPPLIED, {**RULE, "activity": " Pay ", "object_type": "missing"}]
+    }}
+    preview = sets.preview_template(log, packet)
+    assert preview["definition"]["name"] == "Transferable"
+    assert preview["definition"]["rules"][1]["qualifier"] == " "
+    assert preview["label_checks"][0]["missing_activities"] == []
+    assert preview["label_checks"][1]["missing_qualifiers"] == [" "]
+    assert preview["label_checks"][2]["missing_activities"] == [" Pay "]
+    assert preview["label_checks"][2]["missing_object_types"] == ["missing"]
+    assert sets.listing(log)["sets"] == []
+    assert sets.save(log, preview["definition"])["rules"] == preview["definition"]["rules"]
+    with pytest.raises(workspace.EventLogWorkspaceError, match="rule set file"):
+        sets.preview_template(log, {**packet, "case_id": "do not include"})
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        sets.preview_template(log, {"format": sets.TEMPLATE_FORMAT, "definition": {**packet["definition"], "results": []}})
+
+
 def test_set_names_are_scoped_and_deleting_a_log_removes_its_sets():
     log, other = _ocel(_order_to_cash()), _ocel(_order_to_cash())
     spec = {"name": "Rules", "rules": [RULE]}
@@ -93,6 +113,14 @@ with TestClient(app) as client:
     spec = {"name": "Review", "rules": [{"template": "event_cardinality", "activity": "A", "object_type": "case", "min": 1}]}
     assert client.get(base, headers=bearer).status_code == 403
     assert client.post(base, json=spec, headers=bearer).status_code == 403
+    template = {"format": "openworkgraph.object-rule-set.v1", "definition": spec}
+    path = base + "/template/preview"
+    assert client.post(path, json=template, headers=bearer).status_code == 403
+    preview = client.post(path, json=template, headers=owner)
+    assert preview.status_code == 200 and preview.headers["cache-control"] == "no-store", preview.text
+    assert preview.json()["label_checks"][0]["missing_activities"] == []
+    assert client.get(base, headers=owner).json() == {"sets": []}
+
     response = client.post(base, json=spec, headers=owner)
     assert response.status_code == 200 and response.headers["cache-control"] == "no-store", response.text
     key = base + "/" + response.json()["set_id"]

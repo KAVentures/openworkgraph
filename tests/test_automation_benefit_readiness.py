@@ -15,7 +15,7 @@ from server import automation_pipeline as pipeline
 from server import automation_benefits as benefits
 from server import automation_benefit_readiness as readiness
 
-TODAY = datetime.now(timezone.utc).date()
+TODAY = datetime(2026, 1, 15, tzinfo=timezone.utc).date()
 BEFORE = TODAY - timedelta(days=1)
 EASE = {key: 5 for key in pipeline.EASE_QUESTIONS}
 
@@ -23,6 +23,17 @@ EASE = {key: 5 for key in pipeline.EASE_QUESTIONS}
 @pytest.fixture(autouse=True)
 def isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline, "DATA_DIR", tmp_path)
+    # Keep implementation and measurement clocks on the same UTC day even if
+    # a long full-suite run crosses midnight after test collection.
+    instant = datetime(2026, 1, 15, 12, tzinfo=timezone.utc)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return instant.replace(tzinfo=None) if tz is None else instant.astimezone(tz)
+
+    monkeypatch.setattr(pipeline, "_now", lambda: instant.isoformat(timespec="seconds").replace("+00:00", "Z"))
+    monkeypatch.setattr(benefits, "datetime", FrozenDateTime)
 
 
 def implemented(title):

@@ -11,7 +11,7 @@ from xml.etree import ElementTree as ET
 import pytest
 from pydantic import ValidationError
 
-from shared.process_bpmn_import import BPMN, BPMNImportError, import_bpmn
+from shared.process_bpmn_import import BPMN, BPMNImportError, import_bpmn, inspect_bpmn
 from shared.process_catalog import process_bpmn, process_document
 from shared.process_conformance import compare_path
 from shared.process_model import ProcessModel
@@ -176,6 +176,51 @@ def test_bounds_entities_encoding_external_imports_and_multiple_processes_fail_c
     assert 'PRIVATE_EXPANSION' not in str(error.value)
 
 
+def _multi_bpmn(extra="", first_task=None):
+    first_task = first_task or '<task id="a1" name="Review invoice"/>'
+    return (f'<definitions xmlns="{BPMN}"><process id="first" name="Invoice review">{first_task}</process>'
+            f'<process id="second" name="Order review"><task id="b1" name="Review order"/></process>'
+            f'{extra}</definitions>').encode()
+
+
+def test_inspect_multiple_processes_then_import_only_the_exact_selection():
+    raw = _multi_bpmn()
+    inspected = inspect_bpmn(raw)
+    assert inspected["processes"] == [
+        {"id": "first", "name": "Invoice review", "blocking_reason": None},
+        {"id": "second", "name": "Order review", "blocking_reason": None},
+    ]
+    digest = inspected["source_sha256"]
+    selected = import_bpmn(raw, process_id="second", expected_source_sha256=digest)
+    assert selected["selected_process"]["name"] == "Order review"
+    assert selected["source_node_ids"] == {"b1": "import_step_1"}
+    assert [a["label"] for a in selected["process_model"]["activities"]] == ["Review order"]
+    assert selected["source_sha256"] == digest and not selected["process_model_saved"]
+    with pytest.raises(BPMNImportError, match="changed"):
+        import_bpmn(raw + b" ", process_id="second", expected_source_sha256=digest)
+    with pytest.raises(BPMNImportError, match="not in the inspected file"):
+        import_bpmn(raw, process_id="unknown", expected_source_sha256=digest)
+    with pytest.raises(BPMNImportError, match="choose an independent process"):
+        import_bpmn(raw)
+
+
+def test_multiple_processes_keep_linked_collaborations_and_calls_out_of_standalone_preview():
+    call = _multi_bpmn(first_task='<callActivity id="a1" name="Check order" calledElement="tns:second"/>')
+    inspected = inspect_bpmn(call)
+    assert "calls another process" in inspected["processes"][0]["blocking_reason"]
+    assert inspected["processes"][1]["blocking_reason"] is None
+    with pytest.raises(BPMNImportError, match="calls another process"):
+        import_bpmn(call, process_id="first", expected_source_sha256=inspected["source_sha256"])
+    assert import_bpmn(call, process_id="second",
+                       expected_source_sha256=inspected["source_sha256"])["selected_process"]["id"] == "second"
+    collaboration = _multi_bpmn('<collaboration id="c"><participant id="pool1" processRef="first"/>'
+                                '<participant id="pool2" processRef="second"/></collaboration>')
+    listed = inspect_bpmn(collaboration)
+    assert all("collaboration" in process["blocking_reason"] for process in listed["processes"])
+    with pytest.raises(BPMNImportError, match="collaboration"):
+        import_bpmn(collaboration, process_id="second", expected_source_sha256=listed["source_sha256"])
+
+
 def test_http_preview_auth_bounds_no_store_and_no_catalog_write(tmp_path):
     code=r'''
 from fastapi.testclient import TestClient
@@ -193,6 +238,16 @@ with TestClient(app) as client:
     assert response.headers['cache-control']=='no-store'
     draft=response.json()
     assert draft['process_model']['baseline_coverage']=='user_declared_design'
+    multi = raw.replace(b'</definitions>',b'<process id="second"><task id="s" name="Close"/></process></definitions>')
+    assert client.post(path+'/inspect',content=multi).status_code==401
+    listed=client.post(path+'/inspect',content=multi,headers=headers)
+    assert listed.status_code==200 and listed.headers['cache-control']=='no-store',listed.text
+    params={'process_id':'second','expected_source_sha256':listed.json()['source_sha256']}
+    selected=client.post(path,params=params,content=multi,headers=headers)
+    assert selected.status_code==200,selected.text
+    assert selected.json()['source_node_ids']=={'s':'import_step_1'}
+    assert client.post(path,params={'process_id':'second'},content=multi,headers=headers).status_code==422
+
     assert client.get('/v1/process-catalog',headers=headers).json()==before
     assert client.post(path,content=raw,headers={**headers,'Content-Type':'application/json'}).status_code==415
     assert client.post(path,content=b'x'*(128*1024+1),headers=headers).status_code==413

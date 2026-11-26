@@ -40,6 +40,25 @@ def _log():
     return _import(paths)
 
 
+def test_pair_list_coverage_discloses_truncation():
+    from io import BytesIO
+    rows = ["case,activity,time"]
+    for i in range(8):
+        for j in range(6):
+            rows.append(f"c{i},A{j},2024-01-01T00:{j:02d}:00Z")
+        for j in range(6):
+            rows.append(f"d{i},B{j},2024-01-01T00:{j:02d}:00Z")
+    log = workspace.import_log(BytesIO(("\n".join(rows) + "\n").encode()), name="pairs",
+                               source_format="csv", mapping=MAPPING)["log_id"]
+    result = co.cooccurrence(log, limit=8)
+    assert result["activities_in_scope"] == 12 and result["activities_truncated"]
+    assert result["qualifying_never_together_pairs"] == 12
+    assert result["pair_list_limit"] == 15
+    all_pairs = co.cooccurrence(log, limit=12)
+    assert all_pairs["qualifying_never_together_pairs"] == 36
+    assert len(all_pairs["never_together"]) == 15
+
+
 def test_matrix_lift_and_pairs():
     log = _log()
     r = co.cooccurrence(log, limit=6, min_support=3)

@@ -58,6 +58,33 @@ def test_tag_by_id_and_by_filter_then_filter_and_remove():
     assert [t["tag"] for t in tags.listing(log)["tags"]] == ["checked"]
 
 
+def test_preview_pins_membership_and_existing_notes():
+    log = _log()
+    tags.add(log, {"tag": "review set", "case_ids": ["c1"]})
+    spec = {"tag": "checked", "note": "batch note", "cohort": {"tag": "review set"}}
+    result = tags.preview(log, spec)
+    assert result["matched_cases"] == 1 and result["already_tagged"] == 0
+    assert result["examples"] == [{"case_id": "c1", "already_tagged": False, "note": None}]
+    assert tags.listing(log, "checked")["cases"] == []
+    tags.remove(log, {"tag": "review set"})
+    tags.add(log, {"tag": "review set", "case_ids": ["c2"]})
+    with pytest.raises(workspace.EventLogWorkspaceError, match="preview again"):
+        tags.add(log, {**spec, "expected_selection_sha256": result["selection_sha256"]})
+    refreshed = tags.preview(log, spec)
+    assert tags.add(log, {**spec, "expected_selection_sha256": refreshed["selection_sha256"]})["tagged"] == 1
+    next_preview = tags.preview(log, spec)
+    assert next_preview["already_tagged"] == 1
+    [observed] = tags.listing(log, "checked")["cases"]
+    edit = {"tag": "checked", "case_id": "c2", "note": "revised", "expected_note": observed["note"],
+            "expected_tagged_at": observed["tagged_at"]}
+    tags.edit_note(log, edit)
+    assert tags.listing(log, "checked")["cases"] == [{**observed, "note": "revised"}]
+    with pytest.raises(workspace.EventLogWorkspaceError, match="reopen the tagged cases"):
+        tags.edit_note(log, edit)
+    with pytest.raises(workspace.EventLogWorkspaceError, match="preview again"):
+        tags.add(log, {**spec, "expected_selection_sha256": next_preview["selection_sha256"]})
+
+
 def test_tags_are_per_log_and_deleted_with_the_log():
     first, second = _log("a"), _log("b")
     tags.add(first, {"tag": "x", "case_ids": ["c1"]})
@@ -139,10 +166,18 @@ with TestClient(app) as client:
     body = {"tag": "odd", "case_ids": ["c1"]}
     assert client.post(base + "/case-tags", json=body, headers=bearer).status_code == 403
     assert client.get(base + "/case-tags", headers=bearer).status_code == 403
-    added = client.post(base + "/case-tags", json=body, headers=owner)
+    assert client.post(base + "/case-tags/preview", json=body, headers=bearer).status_code == 403
+    review = client.post(base + "/case-tags/preview", json=body, headers=owner)
+    assert review.status_code == 200 and review.headers["cache-control"] == "no-store"
+    added = client.post(base + "/case-tags", json={**body, "expected_selection_sha256": review.json()["selection_sha256"]}, headers=owner)
     assert added.status_code == 200, added.text
     assert client.get(base + "/summary?tag=odd", headers=owner).json()["cases"] == 1
-    assert client.get(base + "/case-tags?tag=odd", headers=owner).json()["cases"][0]["case_id"] == "c1"
+    [case] = client.get(base + "/case-tags?tag=odd", headers=owner).json()["cases"]
+    assert case["case_id"] == "c1"
+    note = {"tag": "odd", "case_id": "c1", "note": "reviewed", "expected_note": "", "expected_tagged_at": case["tagged_at"]}
+    assert client.post(base + "/case-tags/note", json=note, headers=bearer).status_code == 403
+    assert client.post(base + "/case-tags/note", json=note, headers=owner).json()["note"] == "reviewed"
+    assert client.post(base + "/case-tags/note", json=note, headers=owner).status_code == 422
     assert client.get(base + "/case-tags?tag=odd&limit=1&offset=1", headers=owner).json()["page"] == {
         "total": 1, "offset": 1, "limit": 1, "next_offset": None}
     assert client.get(base + "/case-tags?offset=1", headers=owner).status_code == 422

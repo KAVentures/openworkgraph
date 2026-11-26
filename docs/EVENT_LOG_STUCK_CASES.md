@@ -30,3 +30,13 @@ simply end before the next step was recorded.
 `POST /v1/event-logs/{log_id}/stuck-cases` with
 `{"end_activities": [...], "percentile": 0.9, "min_support": 20, "limit": 50, "cohort": {...}, "case_type": "..."}`.
 All fields are optional.
+
+`POST /v1/event-logs/{log_id}/stuck-cases.csv` takes the same body and returns **every** stuck
+case, not only the first `limit`, as a CSV worklist, most overdue first. The dashboard's
+**Download all stuck cases (CSV)** button calls it with the current settings and case filter.
+
+Columns: `case_id`, `latest_activity`, `idle_seconds`, `usual_wait_seconds`,
+`stuck_after_seconds` (the percentile threshold), `times_stuck_threshold`, `events_so_far`,
+`case_age_seconds` and `as_of` (the log's last event, which idle time is measured to). Cells that
+a spreadsheet would read as a formula start with `'`. The `X-OWG-Stuck-Cases` header counts
+stuck, judged and not-judged open cases.

@@ -114,3 +114,56 @@ def test_unique_paths_are_not_unusual_when_most_paths_are_unique():
     r = uc.unusual_cases(log)
     assert r["baseline"]["distinct_paths"] == 60
     assert "rare_path" not in r["by_signal"]
+
+
+def test_csv_worklist_has_every_unusual_case_beyond_one_page():
+    import csv
+    from io import StringIO
+    cases = [_normal(i) for i in range(300)]
+    cases += [(f"=odd{k}", [("Open", 0), (f"Rare{k}", 30), ("Review", 60), ("Close", 120)]) for k in range(3)]
+    log = _import(cases)
+    assert uc.unusual_cases(log, limit=1)["page"]["next_offset"] == 1
+    text, meta = uc.unusual_cases_csv(log)
+    table = list(csv.reader(StringIO(text)))
+    assert table[0] == uc.CSV_COLUMNS and meta["rows"] == meta["unusual_cases"] == len(table) - 1 == 3
+    rows = [dict(zip(table[0], r)) for r in table[1:]]
+    assert all(r["case_id"].startswith("'=odd") for r in rows)   # formula-like case keys neutralized
+    assert all("rare_activity" in r["signals"].split(";") and "contains Rare" in r["reasons"] for r in rows)
+    assert all(r["path"].startswith("Open → Rare") and r["path_truncated"] == "False" for r in rows)
+    scores = [float(r["score"]) for r in rows]
+    assert scores == sorted(scores, reverse=True)
+    only, only_meta = uc.unusual_cases_csv(log, signal="heavy_rework")
+    assert only.strip() == ",".join(uc.CSV_COLUMNS) and only_meta["rows"] == 0
+    with pytest.raises(EventLogWorkspaceError):
+        uc.unusual_cases_csv(log, signal="nonsense")
+
+
+def test_csv_route_is_dashboard_only(tmp_path):
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    code = r'''
+from fastapi.testclient import TestClient
+from server.secure_app import app
+from server import local_auth
+rows = ["case,activity,time"] + [f"c{i:02d},{a},2024-03-{1 + i % 28:02d}T0{k}:00:00Z" for i in range(25) for k, a in enumerate(["A", "B"])]
+rows += ["odd,A,2024-03-01T01:00:00Z", "odd,Z,2024-03-01T02:00:00Z"]
+with TestClient(app) as client:
+    owner = {"Authorization": "OWG-Session " + local_auth.create_dashboard_session()}
+    bearer = {"Authorization": "Bearer " + local_auth.ensure_api_token()}
+    log_id = client.post("/v1/event-logs/import?format=csv&name=t&case_column=case&activity_column=activity&timestamp_column=time",
+                         content="\n".join(rows).encode(), headers={**owner, "X-OWG-Local-Storage-Confirmed": "true"}).json()["log_id"]
+    path = f"/v1/event-logs/{log_id}/unusual-cases.csv"
+    assert client.get(path, headers=bearer).status_code == 403
+    r = client.get(path, headers=owner)
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/csv"), r.text
+    assert r.text.startswith("case_id,score,signals,") and "\nodd," in r.text and r.headers["x-owg-unusual-cases"].startswith("rows=")
+    assert client.get(path + "?signal=nonsense", headers=owner).status_code == 422
+print("ok")
+'''
+    env = {**os.environ, "WORKFLOW_OBSERVER_DATA": str(tmp_path / "srv"), "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth"),
+           "WORKFLOW_OBSERVER_CONFIG": str(tmp_path / "config.json")}
+    done = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1], env=env,
+                          capture_output=True, text=True, timeout=180)
+    assert done.returncode == 0 and done.stdout.strip().endswith("ok"), f"stdout={done.stdout}\nstderr={done.stderr}"

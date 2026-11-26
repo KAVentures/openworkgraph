@@ -21,6 +21,7 @@ import threading
 from typing import Any
 
 from shared import communications_learning as learning
+from shared import communications_holdout_overlap as overlap
 from shared import communications_quality_gate as quality_gate
 from shared import communications_mining as mining
 from shared.core.sensitive_identifiers import redact_sensitive_identifiers
@@ -314,6 +315,10 @@ def train_model(intent_names: list[str]) -> dict[str, Any]:
     except learning.LearningError as exc:
         raise ReviewError(str(exc)) from None
     report = learning.evaluate(model, holdout)
+    diagnostic, eligible = overlap.audit(training, holdout)
+    report["lexical_overlap"] = diagnostic
+    report["without_detected_overlap"] = (
+        learning.evaluate(model, eligible) if diagnostic["complete"] else None)
     trained_at = _now()
     days = data["settings"]["retention_days"]
     body = {**model, "trained_at": trained_at.isoformat(),
@@ -331,6 +336,26 @@ def train_model(intent_names: list[str]) -> dict[str, Any]:
     return model_status(intent_names)
 
 
+def _holdout_gate(evaluation: dict[str, Any], intents: list[str], language: str) -> dict[str, Any]:
+    """New evaluations use the overlap-screened subset for the optional gate.
+
+    Preserve legacy gate behavior but identify its basis; absence of a
+    diagnostic is not proof of independence.
+    """
+    diagnostic = evaluation.get("lexical_overlap")
+    if diagnostic is None:
+        result = quality_gate.assess(evaluation, intents, language)
+        result["evaluation_basis"] = "legacy_unscreened_holdout"
+        return result
+    screened = evaluation.get("without_detected_overlap")
+    result = quality_gate.assess(screened if diagnostic.get("complete") else None,
+                                 intents, language)
+    result["evaluation_basis"] = "holdout_without_detected_lexical_overlap"
+    result["lexical_overlap_audit_complete"] = diagnostic.get("complete") is True
+    result["thread_or_semantic_independence_verified"] = False
+    return result
+
+
 def model_status(intent_names: list[str] | None = None) -> dict[str, Any]:
     with _LOCK:
         data = _load()
@@ -344,7 +369,7 @@ def model_status(intent_names: list[str] | None = None) -> dict[str, Any]:
         if not isinstance(code, str) or code == "und":
             continue
         try:
-            gates[code] = quality_gate.assess(model["evaluation"], model["taxonomy_intents"], code)
+            gates[code] = _holdout_gate(model["evaluation"], model["taxonomy_intents"], code)
         except quality_gate.QualityGateError:
             # Older review examples can hold non-standard language labels.
             # Model-status must remain readable, but they cannot pass a gate.
@@ -383,8 +408,8 @@ def learned_classifier(intent_names: list[str] | None = None, *,
         gate = None
         if require_holdout_language is not None:
             try:
-                gate = quality_gate.assess(model["evaluation"], model["taxonomy_intents"],
-                                           require_holdout_language)
+                gate = _holdout_gate(model["evaluation"], model["taxonomy_intents"],
+                                     require_holdout_language)
             except quality_gate.QualityGateError as exc:
                 raise ReviewError(str(exc)) from None
             if not gate["ready"]:

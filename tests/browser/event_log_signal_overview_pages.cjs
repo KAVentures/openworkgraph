@@ -22,6 +22,7 @@ const path=require('node:path');
   await page.locator('#owgSignalAllNext').click();await status.filter({hasText:'Showing 101–200 of 205 matching rules'}).waitFor();
   for(const n of await rows.locator('td:nth-child(2)').allTextContents()){assert.ok(!names.has(n));names.add(n);}
   const [lastResponse]=await Promise.all([page.waitForResponse(r=>r.url().includes('signal-overview?')&&new URL(r.url()).searchParams.get('offset')==='200'),page.locator('#owgSignalAllNext').click()]);
+  assert.match(new URL(lastResponse.url()).searchParams.get('expected_fingerprint'),/^[a-f0-9]{64}$/);
   const last=await lastResponse.json();await status.filter({hasText:'Showing 201–205 of 205 matching rules'}).waitFor();assert.equal(await rows.count(),5);
   for(const n of await rows.locator('td:nth-child(2)').allTextContents()){assert.ok(!names.has(n));names.add(n);}assert.equal(names.size,205);
   assert.equal(await page.locator('#owgSignalAllNext').isDisabled(),true);assert.equal(await page.locator('#owgSignalAllPrevious').isDisabled(),false);

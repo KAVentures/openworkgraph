@@ -224,6 +224,18 @@ def test_overview_pages_all_matches_without_changing_full_counts():
     assert [page['next_offset'] for page in pages] == [50, 100, 150, 200, None]
     assert [page['previous_offset'] for page in pages] == [None, 0, 50, 100, 150]
     assert all(page['matched_rules'] == 205 and page['counts']['not_evaluated'] == 205 for page in pages)
+    fingerprint = pages[0]["fingerprint"]
+    assert all(page["fingerprint"] == fingerprint for page in pages)
+    assert overview.overview(status="all", limit=50, offset=50, expected_fingerprint=fingerprint)["items"] == pages[1]["items"]
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            conn.execute("UPDATE signal_rules SET definition=? WHERE rule_id=?",
+                         [json.dumps({"name": "Changed"}), pages[0]["items"][0]["rule_id"]])
+        finally:
+            conn.close()
+    with pytest.raises(workspace.EventLogWorkspaceError, match="changed"):
+        overview.overview(status="all", limit=50, offset=50, expected_fingerprint=fingerprint)
     ids = [(item['log_id'], item['rule_id']) for page in pages for item in page['items']]
     assert len(ids) == len(set(ids)) == 205
     empty = overview.overview(status='cleared', limit=50, offset=200)
