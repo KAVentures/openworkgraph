@@ -8271,8 +8271,99 @@
       }catch(error){if(stillCurrent())policyStatus.textContent=error.message;}
       finally{policyBusy=false;policyRun.disabled=!lastNet||lastNet.generation!==state.generation;}
     };
+    const acceptanceBox=document.createElement('details');
+    acceptanceBox.append(el('summary','Run workflow acceptance scenarios'),
+      el('div','Test exact visible activity sequences, whether a prefix can finish, and which next activities can still lead to completion. These are declared test expectations, not automatically learned policy.','muted'));
+    const acceptanceId=input('owgPetriAcceptanceId','text');acceptanceId.maxLength=80;
+    const acceptanceTrace=document.createElement('textarea');acceptanceTrace.id='owgPetriAcceptanceTrace';acceptanceTrace.rows=2;acceptanceTrace.value='[]';acceptanceTrace.maxLength=25000;
+    const acceptanceExpected=select('owgPetriAcceptanceExpected',[
+      ['completed_true','Trace can complete'],['completed_false','Trace cannot complete'],
+      ['fireable_true','Prefix can execute'],['fireable_false','Prefix cannot execute'],
+      ['finishable_true','Prefix can still finish'],['finishable_false','Prefix cannot finish'],
+      ['required_next','Required next activities'],['forbidden_next','Forbidden next activities'],['exact_next','Exact set of next activities']]);
+    const acceptanceNext=document.createElement('textarea');acceptanceNext.id='owgPetriAcceptanceNext';acceptanceNext.rows=2;acceptanceNext.value='[]';acceptanceNext.maxLength=25000;
+    const acceptanceNextField=field('Next activities (JSON array)',acceptanceNext);
+    const syncAcceptance=()=>show(acceptanceNextField,acceptanceExpected.value.endsWith('_next'));
+    acceptanceExpected.onchange=syncAcceptance;syncAcceptance();
+    const acceptanceAdd=button('Add acceptance scenario','secondary');acceptanceAdd.id='owgPetriAcceptanceAdd';
+    const acceptanceText=document.createElement('textarea');acceptanceText.id='owgPetriAcceptanceSuite';acceptanceText.rows=8;acceptanceText.maxLength=262144;
+    acceptanceText.value=JSON.stringify({format:'openworkgraph.petri_acceptance_suite.v1',cases:[]},null,2);
+    acceptanceText.style.cssText='width:100%;font-family:monospace';
+    const acceptanceCandidate=input('owgPetriAcceptanceCandidate','file');acceptanceCandidate.accept='.pnml,application/xml,text/xml';
+    const acceptanceRun=button('Run acceptance suite','secondary');acceptanceRun.id='owgPetriAcceptanceRun';acceptanceRun.disabled=true;
+    const acceptanceStatus=el('div',null,'muted');acceptanceStatus.id='owgPetriAcceptanceStatus';acceptanceStatus.setAttribute('role','status');acceptanceStatus.setAttribute('aria-live','polite');
+    const acceptanceOut=el('div');acceptanceOut.id='owgPetriAcceptanceResults';
+    acceptanceBox.append(field('Scenario ID',acceptanceId),field('Visible trace or prefix (JSON array)',acceptanceTrace),
+      field('Expectation',acceptanceExpected),acceptanceNextField,acceptanceAdd,field('Editable acceptance suite JSON',acceptanceText),
+      field('Optional candidate model (.pnml)',acceptanceCandidate),acceptanceRun,acceptanceStatus,acceptanceOut);
+    soundBox.appendChild(acceptanceBox);
+    let acceptanceBusy=false,acceptanceRevision=0;
+    const clearAcceptance=()=>{acceptanceRevision++;acceptanceStatus.textContent='';acceptanceOut.replaceChildren();acceptanceRun.disabled=acceptanceBusy||!lastNet;};
+    acceptanceText.oninput=clearAcceptance;acceptanceCandidate.onchange=clearAcceptance;
+    acceptanceAdd.onclick=()=>{
+      try{
+        const suite=JSON.parse(acceptanceText.value),trace=JSON.parse(acceptanceTrace.value);
+        const id=acceptanceId.value,kind=acceptanceExpected.value;
+        if(suite?.format!=='openworkgraph.petri_acceptance_suite.v1'||!Array.isArray(suite.cases))throw new Error('Enter a valid acceptance suite.');
+        if(!/^[A-Za-z0-9._-]{1,80}$/.test(id)||suite.cases.some(c=>c.id===id))throw new Error('Use a distinct ASCII scenario ID.');
+        if(suite.cases.length>=40||!Array.isArray(trace)||trace.length>100||trace.some(x=>typeof x!=='string'))throw new Error('At most 40 scenarios and 100 activities per trace.');
+        let expect;
+        if(kind.endsWith('_next')){
+          const next=JSON.parse(acceptanceNext.value);
+          if(!Array.isArray(next)||next.length>100||next.some(x=>typeof x!=='string'))throw new Error('Next activities must be a JSON array of activity names.');
+          expect={[kind]:next};
+        }else{const [key,value]=kind.split('_');expect={[key]:value==='true'};}
+        suite.cases.push({id,trace,expect});acceptanceText.value=JSON.stringify(suite,null,2);clearAcceptance();
+      }catch(error){acceptanceStatus.textContent=error.message;}
+    };
+    acceptanceRun.onclick=async()=>{
+      const net=lastNet,revision=acceptanceRevision,chosen=acceptanceCandidate.files?.[0];
+      if(!net||acceptanceBusy||net.generation!==state.generation)return;
+      const stillCurrent=()=>lastNet===net&&state.generation===net.generation&&acceptanceRevision===revision;
+      acceptanceBusy=true;acceptanceRun.disabled=true;acceptanceOut.replaceChildren();acceptanceStatus.textContent='Running declared scenarios…';
+      try{
+        const spec=JSON.parse(acceptanceText.value),encoder=new TextEncoder(),suite=encoder.encode(JSON.stringify(spec)),baseline=encoder.encode(net.body);
+        if(suite.byteLength>262144||baseline.byteLength>2*1024*1024||chosen&&chosen.size>2*1024*1024)throw new Error('Suite or model exceeds the review limit.');
+        const size=n=>{const bytes=new Uint8Array(4);new DataView(bytes.buffer).setUint32(0,n);return bytes;};
+        const body=new Blob([size(suite.byteLength),suite,size(baseline.byteLength),baseline,...(chosen?[chosen]:[])],{type:'application/octet-stream'});
+        const r=await (await api('/v1/event-logs/petri-acceptance',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body})).json();
+        if(!stillCurrent())return;
+        const verdict=v=>v===true?'Yes':v===false?'No':'Inconclusive';
+        const render=(label,model)=>{
+          acceptanceOut.appendChild(el('h4',label));
+          acceptanceOut.appendChild(el('div',model.counts.passed+' passed · '+model.counts.failed+' failed · '+model.counts.inconclusive+' inconclusive'+(model.work_limit_reached?' · Work limit reached':'')));
+          acceptanceOut.appendChild(table(['Scenario','Status','Can complete','Can execute prefix','Can still finish','Viable next activities'],model.cases.map(c=>[
+            c.id,c.status,verdict(c.observed.completed),verdict(c.observed.fireable),verdict(c.observed.finishable),
+            JSON.stringify(c.observed.viable_next_activities)+(c.observed.next_activities_complete?'':' (incomplete)')
+          ])));
+          for(const c of model.cases){
+            const details=document.createElement('details');details.append(el('summary',c.id+' · assertion details'),
+              el('div','Supplied trace: '+JSON.stringify(c.trace),'muted'),
+              table(['Property','Expected','Observed','Passed'],c.assertions.map(a=>[a.property,JSON.stringify(a.expected),JSON.stringify(a.observed),verdict(a.passed)])));
+            const suffix=c.observed.completion_suffix;
+            if(suffix)details.appendChild(el('div','Completion suffix: '+JSON.stringify(suffix.activities)+(suffix.truncated?' (prefix only)':'')+(suffix.shortest_proven?' · shortest proven':' · shortest not established')));
+            acceptanceOut.appendChild(details);
+          }
+        };
+        render('Baseline acceptance',r.baseline);
+        if(r.candidate){
+          render('Candidate acceptance',r.candidate);
+          acceptanceOut.appendChild(el('h4','Scenario regression review'));
+          acceptanceOut.appendChild(table(['Scenario','Baseline','Candidate','Change'],r.changes.cases.map(c=>[c.id,c.baseline,c.candidate,c.change.replaceAll('_',' ')])));
+        }
+        acceptanceStatus.textContent='Acceptance suite: '+(r.baseline.suite_passed===true?'Passed':r.baseline.suite_passed===false?'Failed':'Inconclusive')+(r.candidate?' · Candidate: '+(r.candidate.suite_passed===true?'Passed':r.candidate.suite_passed===false?'Failed':'Inconclusive'):'')+'.';
+        acceptanceOut.appendChild(el('div',r.caveat,'muted'));
+        const download=button('Download acceptance report (JSON)','secondary');download.onclick=()=>{
+          if(!stillCurrent())return;
+          const url=URL.createObjectURL(new Blob([JSON.stringify(r,null,2)],{type:'application/json'}));
+          const link=document.createElement('a');link.href=url;link.download='petri-acceptance-'+r.suite_sha256.slice(0,12)+'.json';
+          document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+        };acceptanceOut.appendChild(download);
+      }catch(error){if(stillCurrent())acceptanceStatus.textContent=error.message;}
+      finally{acceptanceBusy=false;acceptanceRun.disabled=!lastNet||lastNet.generation!==state.generation;}
+    };
     let soundBusy=false;
-    const clearSound=()=>{soundStatus.textContent='';soundOut.replaceChildren();soundRun.disabled=true;clearCompare();clearPolicy();};
+    const clearSound=()=>{soundStatus.textContent='';soundOut.replaceChildren();soundRun.disabled=true;clearCompare();clearPolicy();clearAcceptance();};
     soundRun.onclick=async()=>{
       const net=lastNet;if(!net||soundBusy||net.generation!==state.generation)return;
       soundBusy=true;soundRun.disabled=true;soundOut.replaceChildren();soundStatus.textContent='Exploring reachable markings…';
@@ -8333,6 +8424,7 @@
         lastNet={body,label,generation,cohort};
         compareRun.disabled=compareBusy||!compareFile.files?.length;
         policyRun.disabled=policyBusy;
+        acceptanceRun.disabled=acceptanceBusy;
         const f=r.fitness;
         statusLine.textContent='Fitness '+pct(f.log)+' on '+label+': '+Number(f.fitting_cases).toLocaleString()+' of '+Number(r.cases).toLocaleString()+' cases ('+pct(f.fitting_case_share)+') replay without missing or remaining tokens.'+(r.precision.precision!==null?' Precision '+pct(r.precision.precision)+'.':'')+' The net has '+r.net.places+' places and '+r.net.transitions+' transitions ('+r.net.silent_transitions+' silent).'+(r.cases_excluded?' '+Number(r.cases_excluded).toLocaleString()+' cases beyond the length or variant limit were left out.':'');
         if(!r.net.final_marking_declared)out.appendChild(el('div','The file declares no final marking, so cases are expected to end with one token on each place nothing consumes from.','muted'));
