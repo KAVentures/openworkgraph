@@ -141,9 +141,19 @@ async def agent_compliance(request: Request, log_id: str):
 @router.get("/v1/process-intelligence/{log_id}/performance-spectrum")
 async def agent_performance_spectrum(request: Request, log_id: str, segment: list[str] = Query(default=[], max_length=12),
                                      top: int = Query(default=6, ge=1, le=12), bins: int = Query(default=30, ge=2, le=100),
-                                     case_type: str | None = Query(default=None, max_length=200)):
+                                     case_type: str | None = Query(default=None, max_length=200),
+                                     case_filter: str | None = Query(default=None, max_length=8192)):
     _require_agent_access(request)
-    return await _answer(sharing.performance_spectrum, log_id, case_type, segment, top, bins)
+    chosen = None
+    if case_filter is not None:
+        import json
+        try:
+            chosen = json.loads(case_filter)
+        except ValueError:
+            raise HTTPException(422, "case_filter must be a JSON object") from None
+        if not isinstance(chosen, dict):
+            raise HTTPException(422, "case_filter must be a JSON object")
+    return await _answer(sharing.performance_spectrum, log_id, case_type, segment, top, bins, chosen)
 
 
 @router.get("/v1/process-intelligence/{log_id}/overview")
