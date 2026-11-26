@@ -722,12 +722,19 @@ def object_map(log_id: str) -> dict[str, Any]:
             "activities_touching_several_types": shared, "withheld": withheld}
 
 
-def heuristics_net(log_id: str, case_type: str | None = None, dependency_threshold: float = 0.5) -> dict[str, Any]:
+def heuristics_net(log_id: str, case_type: str | None = None, dependency_threshold: float = 0.5,
+                   case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
     """The heuristics-miner dependency graph with AND/XOR splits and loops (aggregates level)."""
     require(log_id, "aggregates")
     from . import event_log_heuristics_miner as heuristics
+    if case_filter is not None:
+        if not isinstance(case_filter, dict) or not case_filter:
+            raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+        if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
+            raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
     result = heuristics.heuristics_net(log_id, case_type,
-                                       dependency_threshold=max(0.0, min(float(dependency_threshold), 1.0)))
+                                       dependency_threshold=max(0.0, min(float(dependency_threshold), 1.0)),
+                                       cohort=case_filter)
     keep = ("case_notion", "cases", "parameters", "activities", "start", "end", "start_activities",
             "end_activities", "edges", "splits", "joins", "loops", "coverage", "note")
     return {"format": FORMAT, "log_id": log_id, **{k: result[k] for k in keep if k in result}}
@@ -942,7 +949,8 @@ def model_comparison(log_id: str, group_a: str, group_b: str, case_type: str | N
             "format": FORMAT, "log_id": log_id}
 
 
-def trace_clusters(log_id: str, case_type: str | None = None, k: int | None = None, max_k: int = 8) -> dict[str, Any]:
+def trace_clusters(log_id: str, case_type: str | None = None, k: int | None = None, max_k: int = 8,
+                   case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
     """Groups of cases with similar behaviour (aggregates level). Clusters and variants with fewer than
     AGENT_MIN_CELL_CASES cases are withheld; the variant lists that would filter to a cluster are not returned."""
     require(log_id, "aggregates")
@@ -952,6 +960,12 @@ def trace_clusters(log_id: str, case_type: str | None = None, k: int | None = No
         spec["k"] = k
     if case_type:
         spec["case_type"] = case_type
+    if case_filter is not None:
+        if not isinstance(case_filter, dict) or not case_filter:
+            raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+        if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
+            raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
+        spec["cohort"] = case_filter
     result = tc.clusters(log_id, spec)
     floor = AGENT_MIN_CELL_CASES
     shown = []
