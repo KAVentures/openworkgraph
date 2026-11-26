@@ -488,9 +488,19 @@ async def agent_duration_distribution(request: Request, log_id: str,
 @router.get("/v1/process-intelligence/{log_id}/time-patterns")
 async def agent_time_patterns(request: Request, log_id: str, time_zone: str = Query(default="UTC", min_length=1, max_length=64),
                               activity: str | None = Query(default=None, min_length=1, max_length=200),
-                              case_type: str | None = Query(default=None, max_length=200)):
+                              case_type: str | None = Query(default=None, max_length=200),
+                              case_filter: str | None = Query(default=None, max_length=8192)):
     _require_agent_access(request)
-    return await _answer(sharing.time_patterns, log_id, case_type, time_zone, activity)
+    chosen = None
+    if case_filter is not None:
+        import json
+        try:
+            chosen = json.loads(case_filter)
+        except ValueError:
+            raise HTTPException(422, "case_filter must be a JSON object") from None
+        if not isinstance(chosen, dict):
+            raise HTTPException(422, "case_filter must be a JSON object")
+    return await _answer(sharing.time_patterns, log_id, case_type, time_zone, activity, chosen)
 
 
 @router.get("/v1/process-intelligence/{log_id}/breakdown")

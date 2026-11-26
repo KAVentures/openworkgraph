@@ -671,15 +671,21 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_time_patterns(log_id: str, time_zone: str = "UTC", activity: str | None = None,
-                                  case_type: str | None = None) -> dict[str, Any]:
+                                  case_type: str | None = None,
+                                  case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """When work happens in a shared log: events and case arrivals by weekday and hour in a time zone (an IANA
-        name such as Europe/Berlin), optionally for one activity, and the share outside working hours. Aggregates
-        only.
+        name such as Europe/Berlin), optionally for one activity, and the share outside working hours. case_filter
+        (the same keys as insight cohorts) limits it to one group of cases. Aggregates only.
         """
         if not isinstance(time_zone, str) or not 1 <= len(time_zone) <= 64:
             raise ToolError("time_zone must be an IANA time zone name")
-        return _get("get_process_time_patterns", f"/v1/process-intelligence/{_log(log_id)}/time-patterns",
-                    {"time_zone": time_zone, "activity": activity, "case_type": case_type})
+        params: dict[str, Any] = {"time_zone": time_zone, "activity": activity, "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
+        return _get("get_process_time_patterns", f"/v1/process-intelligence/{_log(log_id)}/time-patterns", params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_breakdown(log_id: str, rows: str, columns: str | None = None, with_activity: str | None = None,
