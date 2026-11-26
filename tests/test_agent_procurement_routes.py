@@ -32,6 +32,15 @@ with TestClient(app) as client:
     base='/v1/process-catalog/procurement/'
     body={'document':json.dumps(comparison)}
     assert client.post(base+'compare',params=params,json=body).status_code==401
+    journal_body={'document':'{}'}
+    assert client.post(base+'router-journal-list',params=params,json=journal_body).status_code==401
+    assert client.post(base+'router-journal-list',params=params,json=journal_body,headers=bearer).status_code==403
+    journals=client.post(base+'router-journal-list',params=params,json=journal_body,headers=h)
+    assert journals.status_code==200,journals.text
+    assert journals.headers['cache-control']=='no-store'
+    assert journals.json()['result']['journals']==[]
+    assert client.post(base+'router-journal-detail',params=params,json={'document':'{"monitor_id":"absent"}'},headers=h).status_code==404
+    assert client.post(base+'router-journal-forget',params=params,json={'document':'{"monitor_id":"absent","expected_head_sha256":"'+'f'*64+'","confirmed":false}'},headers=h).status_code==403
     assert client.post(base+'compare',params=params,json=body,headers=bearer).status_code==403
     result=client.post(base+'compare',params=params,json=body,headers=h)
     assert result.status_code==200,result.text
