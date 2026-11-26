@@ -78,6 +78,21 @@ const path=require('node:path');
   await page.locator('#owgDomainPackStatus').filter({hasText:'Reinstalled 1.0.0.'}).waitFor();
   await page.locator('#owgDomainPackRun').click();
   await report.getByRole('cell',{name:'every VF01 Billing is followed by Clear Payment within 1728000 s',exact:true}).waitFor();
+  // Installed invoice terms remain 20 days while testing 5/22/60 days.
+  const deadlines=page.locator('#owgDomainPackDeadlineSensitivity');
+  await deadlines.locator('summary').click();
+  await deadlines.getByRole('button',{name:'Load installed packs',exact:true}).click();
+  await deadlines.locator('#owgDeadlinePack').selectOption('order_to_cash');
+  await deadlines.locator('#owgDeadlineParameter').selectOption('payment_terms_days');
+  await deadlines.locator('#owgDeadlineAlternatives').fill('5, 22, 60');
+  await deadlines.getByRole('button',{name:'Review alternative deadlines',exact:true}).click();
+  await deadlines.getByText('Review complete. No configuration changed.',{exact:true}).waitFor();
+  await deadlines.locator('#owgDeadlineEvidenceValue').selectOption('60');
+  await deadlines.locator('#owgDeadlineEvidenceState').selectOption('missing_response');
+  await deadlines.getByRole('button',{name:'Inspect cases',exact:true}).click();
+  await deadlines.getByRole('cell',{name:'bd9',exact:true}).waitFor();
+  assert.equal(await page.locator('#owgDomainPackParam-payment_terms_days').inputValue(),'20');
+  await deadlines.locator('summary').click();
   await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
   const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgDomainPacks'),{
    runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
