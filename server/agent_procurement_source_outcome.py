@@ -71,9 +71,9 @@ def _identity(record,predicate="invoice_paid_in_window"):
         # Preserve the existing Stripe identity pin format.
         value="owg-source-invoice-v1:"+locator
     elif predicate=="jira_issue_resolved_in_window":
-        if (record.get("provider"),record.get("resource_kind"))!=("jira","issue") or not isinstance(host,str) or not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.atlassian\\.net",host):
+        if (record.get("provider"),record.get("resource_kind"))!=("jira","issue") or not isinstance(host,str) or not jira_source_evidence._TENANT.fullmatch(host):
             raise ValueError("observed Jira Cloud issue reference required")
-        if not isinstance(locator,str) or not re.fullmatch(r"[A-Z][A-Z0-9]{1,20}-[1-9][0-9]{0,10}",locator):
+        if not isinstance(locator,str) or not jira_source_evidence._ISSUE.fullmatch(locator):
             raise ValueError("invalid observed Jira issue locator")
         value="owg-source-jira-issue-v1:"+host+":"+locator
     elif predicate=="github_pr_merged_in_window":
