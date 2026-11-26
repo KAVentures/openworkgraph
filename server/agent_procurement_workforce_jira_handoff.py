@@ -125,11 +125,27 @@ def _plan(conn,req,config):
     return {**body,"plan_sha256":digest(body)}
 
 
+def _ensure_available(conn,plan):
+    # Creation keys intentionally exclude the worklist: the same stable
+    # finding identity in a successor must not create another ticket, even
+    # after an uncertain provider response or a changed evidence pin.
+    if plan["operation"]=="create":
+        prior=conn.execute("SELECT 1 FROM procurement_audit_jira_dispatch WHERE operation_key=?",
+                           (plan["operation_key"],)).fetchone()
+        if prior:
+            raise journal.JournalError("Creation already attempted for this finding; inspect prior Jira handoff history",409)
+    elif conn.execute("SELECT 1 FROM procurement_audit_jira_dispatch WHERE worklist_sha256=? AND operation_key=?",
+                      (plan["worklist_sha256"],plan["operation_key"])).fetchone():
+        raise journal.JournalError("Operation already attempted; inspect Jira manually",409)
+
+
 def preview(document):
     req=Preview.model_validate(document)
     with db.connect() as conn:
         conn.execute("BEGIN IMMEDIATE");_schema(conn)
-        return _plan(conn,req,_config())
+        plan=_plan(conn,req,_config())
+        _ensure_available(conn,plan)
+        return plan
 
 
 def _authorize(config,token):
@@ -182,9 +198,7 @@ def dispatch(document):
         plan=_plan(conn,req,config)
         if plan["plan_sha256"]!=req.expected_plan_sha256:
             raise ValueError("handoff preview changed")
-        if conn.execute("SELECT 1 FROM procurement_audit_jira_dispatch WHERE worklist_sha256=? AND operation_key=?",
-                        (req.worklist_sha256,plan["operation_key"])).fetchone():
-            raise journal.JournalError("Operation already attempted; inspect Jira manually",409)
+        _ensure_available(conn,plan)
     try:
         _authorize(config,token)
     except (httpx.HTTPError,OSError,TypeError,KeyError):
@@ -193,9 +207,7 @@ def dispatch(document):
         conn.execute("BEGIN IMMEDIATE");_schema(conn)
         if config!=_config() or token!=_token() or _plan(conn,req,config)!=plan:
             raise ValueError("handoff changed during authorization")
-        if conn.execute("SELECT 1 FROM procurement_audit_jira_dispatch WHERE worklist_sha256=? AND operation_key=?",
-                        (req.worklist_sha256,plan["operation_key"])).fetchone():
-            raise journal.JournalError("Operation already attempted; inspect Jira manually",409)
+        _ensure_available(conn,plan)
         if conn.execute("SELECT COUNT(*) FROM procurement_audit_jira_dispatch").fetchone()[0]>=MAX_ATTEMPTS:
             raise journal.JournalError("Jira dispatch attempt capacity reached",409)
         reserved={"status":"attempt_reserved_outcome_unknown","plan_sha256":plan["plan_sha256"],
