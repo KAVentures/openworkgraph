@@ -157,3 +157,37 @@ def test_site_write_grant_required(monkeypatch,kind):
     data=[resource,resource] if kind=="duplicate" else None if kind=="unavailable" else [resource]
     monkeypatch.setattr(handoff.jira,"_jira_get",lambda *args:data)
     with pytest.raises(ValueError):handoff._authorize(CONFIG,"test-token")
+
+
+@pytest.mark.parametrize("repeat_incident",[False,True])
+def test_successor_cannot_create_duplicate_ticket_even_after_uncertain_result(local_db,monkeypatch,repeat_incident):
+    from test_agent_procurement_workforce_remediation_continuity import setup_history,preview,carry
+    from server import agent_procurement_workforce_audit_review as workbench
+    _,after,prior,f,req=setup_history(repeat_incident=repeat_incident)
+    for name,value in zip(("OWG_JIRA_HOST","OWG_JIRA_CLOUD_ID","OWG_JIRA_REMEDIATION_PROJECT",
+                           "OWG_JIRA_REMEDIATION_ISSUE_TYPE_ID"),CONFIG):
+        monkeypatch.setenv(name,value)
+    monkeypatch.setenv("OWG_JIRA_REMEDIATION_WRITE_ENABLED","1")
+    monkeypatch.setenv("OWG_JIRA_REMEDIATION_WRITE_TOKEN","separate-test-token")
+    calls=[]
+    monkeypatch.setattr(handoff,"_authorize",lambda *args:None)
+    def post(*args):
+        calls.append(1)
+        return {"status":"unconfirmed","http_status":None}
+    monkeypatch.setattr(handoff,"_post",post)
+    prior_body={**ticket_scope(prior,tickets.status(scope(prior)),f),"operation":"create"}
+    _,approved_prior=approved(prior_body)
+    # Preview the successor before the first write, to test stale preview
+    # enforcement even when both worklists are otherwise unchanged.
+    comparison=preview(after,req)
+    successor=carry(after,req,comparison,[] if repeat_incident else [f["finding_id"]])
+    match=next(r for r in successor["findings"] if r["finding_id"]==f["finding_id"])
+    if repeat_incident:
+        successor=register.change(command(successor,match,"assigned"))
+    successor_body={**ticket_scope(successor,tickets.status(scope(successor)),match),"operation":"create"}
+    _,approved_successor=approved(successor_body)
+    assert handoff.dispatch(approved_prior)["status"]=="unconfirmed"
+    with pytest.raises(journal.JournalError):handoff.preview(successor_body)
+    with pytest.raises(journal.JournalError):handoff.dispatch(approved_successor)
+    assert calls==[1]
+    assert handoff.status(scope(successor))["attempts"]==[]
