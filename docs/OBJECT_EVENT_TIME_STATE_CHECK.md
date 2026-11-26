@@ -114,9 +114,17 @@ are displayed. The timeline recomputes the bounded analysis, and more than 1,000
 non-empty periods is refused with a prompt to choose a larger period or window.
 It does not establish source completeness or policy compliance.
 
+Selecting **Inspect period** intersects that period with the current date
+window and opens the corresponding event evidence at the same reviewed
+revision, retaining status and exact event filters. The complete timeline CSV
+includes the check settings, filters and revision, even for an empty result;
+formula-like cells are escaped for spreadsheet review.
+
 The owner-only endpoint is `POST
 /v1/event-logs/{log_id}/object-state-check/timeline`; it accepts the check
-settings, `expected_revision`, `bucket`, and bounded `offset` and `limit`.
+settings, `expected_revision`, `bucket`, and bounded `offset` and `limit`. The owner-only
+`/timeline/export` endpoint downloads all matching periods and does not accept
+custom pagination.
 
 ## Find a specific event in a result
 

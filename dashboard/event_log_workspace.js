@@ -4310,7 +4310,7 @@
     const transferPreview=button('Preview definition file','secondary'),transferApply=button('Load previewed definition','secondary'),transferDownload=button('Download current definition','secondary');
     const transferStatus=el('div',null,'muted');transferStatus.setAttribute('role','status');const transferChecks=el('div');
     transfer.append(el('summary','Transfer a check definition'),el('p','The JSON contains the check name and settings, including its expected value. It does not include event IDs, object IDs or results. Previewing does not save or run it. Label presence covers the whole retained log, regardless of any date window.','muted'),field('Object state definition JSON',transferFile),transferPreview,transferApply,transferDownload,transferStatus,transferChecks);
-    const notice=el('div',null,'muted');notice.id='owgObjectStateStatus';notice.setAttribute('role','status');
+    const notice=el('div',null,'muted');notice.id='owgObjectStateStatus';notice.setAttribute('role','status');notice.tabIndex=-1;
     const summary=el('div');summary.id='owgObjectStateSummary';
     const resultFilter=select('owgObjectStateResultFilter',[['','All results'],['matched','Matched'],['not_matched','Not matched'],['unknown','Unknown'],['no_linked_object','No linked object']]);
     const eventIdFilter=input('owgObjectStateEventFilter','text','Exact event ID');eventIdFilter.maxLength=400;
@@ -4323,16 +4323,16 @@
     exportBar.append(el('p','Downloads cover the applied result status and event ID filters and include event or object IDs and recorded values. Formula-like cells are escaped for spreadsheet review.','muted'),exportEvents,exportObjects,exportStatus);show(exportBar,false);
     const trend=document.createElement('details');trend.id='owgObjectStateTimeline';
     const trendBucket=select('owgObjectStateTimelineBucket',[['day','UTC day'],['week','UTC week (Monday start)'],['month','UTC month']]);
-    const trendRun=button('Show state timeline','secondary'),trendPrev=button('Previous timeline periods','secondary'),trendNext=button('Next timeline periods','secondary');
+    const trendRun=button('Show state timeline','secondary'),trendDownload=button('Download timeline (CSV)','secondary'),trendPrev=button('Previous timeline periods','secondary'),trendNext=button('Next timeline periods','secondary');
     const trendStatus=el('div',null,'muted');trendStatus.setAttribute('role','status');const trendRows=el('div');
-    trend.append(el('summary','Outcome timeline'),el('p','Counts cover non-empty UTC periods and the applied result filters. These describe retained data and do not establish compliance.','muted'),field('Timeline period',trendBucket),trendRun,trendPrev,trendNext,trendStatus,trendRows);show(trend,false);
+    trend.append(el('summary','Outcome timeline'),el('p','Counts cover non-empty UTC periods and the applied result filters. Inspecting a period narrows the date window while retaining the other filters. These describe retained data and do not establish compliance.','muted'),field('Timeline period',trendBucket),trendRun,trendDownload,trendPrev,trendNext,trendStatus,trendRows);show(trend,false);
     const results=el('div');results.id='owgObjectStateResults';
     const witness=el('div');witness.id='owgObjectStateWitness';
     box.append(form,el('p','Saved checks are stored locally with this log and can include exact recorded values. Loading one does not run it.','muted'),savedRow,savedStatus,transfer,notice,summary,resultControls,trend,exportBar,results,witness);
     const generation=state.generation,logId=state.logId,base='/v1/event-logs/'+encodeURIComponent(logId)+'/object-state-check';
     let turn=0,witnessTurn=0,exportTurn=0,trendTurn=0,formVersion=0,settings=null,revision=null,offset=0,following=null;
     const current=t=>generation===state.generation&&box.isConnected&&t===turn;
-    const resetTrend=()=>{++trendTurn;trendRows.replaceChildren();trendStatus.textContent='';trendRun.disabled=false;trendPrev.disabled=trendNext.disabled=true;show(trend,false);};
+    const resetTrend=()=>{++trendTurn;trendRows.replaceChildren();trendStatus.textContent='';trendRun.disabled=false;trendDownload.disabled=trendPrev.disabled=trendNext.disabled=true;show(trend,false);};
     const clear=()=>{++turn;++exportTurn;++formVersion;resetTrend();settings=null;revision=null;offset=0;following=null;run.disabled=false;notice.textContent='';exportStatus.textContent='';summary.replaceChildren();results.replaceChildren();witness.replaceChildren();show(resultControls,false);show(exportBar,false);};
     form.addEventListener('input',clear);form.addEventListener('change',clear);
     exact.addEventListener('change',()=>show(qualifierField,exact.checked));
@@ -4469,7 +4469,7 @@
       }
       prev.onclick=()=>page(index-1);nextPage.onclick=()=>{cursors[index+1]=following;page(index+1);};page(0);
     }
-    async function load(spec,start,filter,pin){
+    async function load(spec,start,filter,pin,focusResult=false){
       const request=++turn;++exportTurn;resetTrend();run.disabled=true;resultFilter.disabled=findEvent.disabled=clearEvent.disabled=previous.disabled=next.disabled=true;show(exportBar,false);exportStatus.textContent='';
       notice.textContent='Checking recorded state…';summary.replaceChildren();results.replaceChildren();witness.replaceChildren();
       try{
@@ -4488,7 +4488,7 @@
           return [item.event_id,item.at,statusLabel[item.status]||item.status,Number(item.linked_objects).toLocaleString(),Number(item.matched_objects).toLocaleString(),Number(item.not_matched_objects).toLocaleString(),Number(item.unknown_objects).toLocaleString(),inspect];
         })):el('p','No events match this result filter.','muted'));
         show(resultControls,true);show(trend,true);resultFilter.disabled=findEvent.disabled=clearEvent.disabled=false;previous.disabled=offset===0;next.disabled=following===null;
-        exportEvents.disabled=exportObjects.disabled=false;show(exportBar,true);
+        exportEvents.disabled=exportObjects.disabled=false;show(exportBar,true);if(focusResult)notice.focus();
       }catch(error){if(current(request)){settings=null;revision=null;notice.textContent=error.message;show(resultControls,false);}}
       finally{if(current(request))run.disabled=false;}
     }
@@ -4507,19 +4507,44 @@
     async function loadTrend(start){
       if(!settings||revision===null)return;
       const review=turn,ticket=++trendTurn,bucket=trendBucket.value,active=()=>current(review)&&ticket===trendTurn;
-      trendRun.disabled=trendPrev.disabled=trendNext.disabled=true;trendRows.replaceChildren();trendStatus.textContent='Calculating timeline…';
+      trendRun.disabled=trendDownload.disabled=trendPrev.disabled=trendNext.disabled=true;trendRows.replaceChildren();trendStatus.textContent='Calculating timeline…';
       const payload={...settings,expected_revision:revision,bucket,offset:start,limit:50,...(resultFilter.value?{status:resultFilter.value}:{})};
       try{
         const result=await (await api(base+'/timeline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).json();
         if(!active())return;trendOffset=start;trendFollowing=result.next_offset;
         trendStatus.textContent=result.total_buckets?'Showing '+(start+1)+'–'+(start+result.rows.length)+' of '+result.total_buckets+' non-empty periods; '+result.matching_events+' events match the applied filters.':'No events match the applied filters.';
-        if(result.rows.length)trendRows.replaceChildren(table(['Period start (UTC)','Events','Matched','Not matched','Unknown','No linked object'],result.rows.map(row=>[row.start_utc,row.events,row.matched,row.not_matched,row.unknown,row.no_linked_object])));
-        trendPrev.disabled=start===0;trendNext.disabled=trendFollowing===null;
+        if(result.rows.length)trendRows.replaceChildren(table(['Period start (UTC)','Events','Matched','Not matched','Unknown','No linked object','Evidence'],result.rows.map(row=>{
+          const inspect=button('Inspect period','secondary');inspect.setAttribute('aria-label','Inspect period starting '+row.start_utc);
+          inspect.onclick=()=>{
+            if(!active()||!settings||revision===null)return;
+            const end=new Date(row.start_utc+'T00:00:00Z');
+            if(bucket==='month')end.setUTCMonth(end.getUTCMonth()+1);else end.setUTCDate(end.getUTCDate()+(bucket==='week'?7:1));
+            const endDate=end.getUTCFullYear()>9999?null:end.toISOString().slice(0,10);
+            const from=settings.from_date&&settings.from_date>row.start_utc?settings.from_date:row.start_utc;
+            const until=settings.until_date&&(!endDate||settings.until_date<endDate)?settings.until_date:endDate;
+            const spec={...settings,from_date:from};if(until)spec.until_date=until;else delete spec.until_date;
+            const filter=resultFilter.value,pin=revision;fromDate.value=from;untilDate.value=until||'';resetTransfer();clear();load(spec,0,filter,pin,true);
+          };
+          return [row.start_utc,row.events,row.matched,row.not_matched,row.unknown,row.no_linked_object,inspect];
+        })));
+        trendDownload.disabled=false;trendPrev.disabled=start===0;trendNext.disabled=trendFollowing===null;
       }catch(error){if(active())trendStatus.textContent=error.message;}
       finally{if(active())trendRun.disabled=false;}
     }
-    trendBucket.onchange=()=>{++trendTurn;trendRows.replaceChildren();trendStatus.textContent='Period changed; show the timeline again.';trendRun.disabled=false;trendPrev.disabled=trendNext.disabled=true;};
+    trendBucket.onchange=()=>{++trendTurn;trendRows.replaceChildren();trendStatus.textContent='Period changed; show the timeline again.';trendRun.disabled=false;trendDownload.disabled=trendPrev.disabled=trendNext.disabled=true;};
     trendRun.onclick=()=>loadTrend(0);trendPrev.onclick=()=>loadTrend(Math.max(0,trendOffset-50));trendNext.onclick=()=>{if(trendFollowing!==null)loadTrend(trendFollowing);};
+    trendDownload.onclick=async()=>{
+      if(!settings||revision===null)return;
+      const review=turn,ticket=trendTurn,active=()=>current(review)&&ticket===trendTurn;
+      const payload={...settings,expected_revision:revision,bucket:trendBucket.value,...(resultFilter.value?{status:resultFilter.value}:{})};
+      trendRun.disabled=trendDownload.disabled=trendPrev.disabled=trendNext.disabled=true;trendStatus.textContent='Preparing timeline download…';
+      try{
+        const response=await api(base+'/timeline/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+        const blob=await response.blob();if(!active())return;
+        downloadBlob(blob,logId+'-object-state-timeline.review.csv');trendStatus.textContent='Downloaded '+(response.headers.get('X-OWG-Rows')||'the matching')+' periods.';
+      }catch(error){if(active())trendStatus.textContent=error.message;}
+      finally{if(active()){trendRun.disabled=trendDownload.disabled=false;trendPrev.disabled=trendOffset===0;trendNext.disabled=trendFollowing===null;}}
+    };
     async function downloadWorklist(kind){
       if(!settings||revision===null)return;
       const request=turn,ticket=++exportTurn,active=()=>current(request)&&ticket===exportTurn;

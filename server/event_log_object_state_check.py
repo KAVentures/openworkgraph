@@ -156,6 +156,16 @@ def timeline(log_id, value):
     return _analyze(log_id, spec, timeline=True)
 
 
+def export_timeline(log_id: str, value, out: IO[str]):
+    try:
+        spec = TimelineSpec.model_validate(value)
+    except ValidationError:
+        raise workspace.EventLogWorkspaceError('invalid event-time state timeline export request') from None
+    if spec.offset != 0 or spec.limit != 30:
+        raise workspace.EventLogWorkspaceError('timeline export always covers all matching periods')
+    return _analyze(log_id, spec, timeline=True, timeline_export=out)
+
+
 def export_worklist(log_id: str, value, out: IO[str]):
     try:
         spec = ExportSpec.model_validate(value)
@@ -215,7 +225,7 @@ def _write_worklist(conn, log_id: str, spec: ExportSpec, revision: int, out: IO[
     return {'rows':written}
 
 
-def _analyze(log_id, spec, witness=False, export=None, timeline=False):
+def _analyze(log_id, spec, witness=False, export=None, timeline=False, timeline_export=None):
     with workspace._LOCK:
         conn = workspace._connect()
         try:
@@ -312,6 +322,20 @@ def _analyze(log_id, spec, witness=False, export=None, timeline=False):
                 count = conn.execute('SELECT count(*) FROM st_buckets').fetchone()[0]
                 if count > MAX_TIMELINE_BUCKETS:
                     raise workspace.EventLogWorkspaceError('timeline exceeds 1,000 non-empty periods; choose a larger period or date window')
+                if timeline_export is not None:
+                    writer = csv.writer(_LimitedWorklist(timeline_export))
+                    writer.writerow(['record_type','log_id','log_revision','activity_review','object_type_review',
+                        'attribute_review','expected_value_review','operator','quantifier','qualifier_present',
+                        'qualifier_review','from_date_utc','until_date_exclusive_utc','result_filter',
+                        'event_id_filter_review','period','period_start_utc','events','matched','not_matched',
+                        'unknown','no_linked_object'])
+                    prefix = [log_id,revision,spec.activity,spec.object_type,spec.attribute,spec.expected_value,
+                        spec.operator,spec.quantifier,str(spec.event_qualifier is not None).lower(),spec.event_qualifier,
+                        spec.from_date,spec.until_date,spec.status,spec.result_event_id,spec.bucket]
+                    writer.writerow([review_cell(v) for v in ['check',*prefix,None,None,None,None,None,None]])
+                    for at,n,yes,no,unknown,none in conn.execute('SELECT * FROM st_buckets ORDER BY bucket_start').fetchall():
+                        writer.writerow([review_cell(v) for v in ['period',*prefix,at.isoformat()[:10],n,yes,no,unknown,none]])
+                    return {'rows':count}
                 rows = conn.execute('SELECT * FROM st_buckets ORDER BY bucket_start LIMIT ? OFFSET ?',
                                     [spec.limit, spec.offset]).fetchall()
                 return {'format':'openworkgraph.ocel-state-check-timeline.v1', 'log_id':log_id,

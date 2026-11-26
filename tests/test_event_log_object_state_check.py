@@ -264,6 +264,18 @@ with TestClient(app) as c:
     assert timeline.status_code==200 and timeline.headers['cache-control']=='no-store',timeline.text
     assert timeline.json()['matching_events']==8 and timeline.json()['rows'][0]['events']==8
     assert c.post(timeline_url,json=spec(bucket='day'),headers=h).status_code==422
+    timeline_export_url=timeline_url+'/export'
+    assert c.post(timeline_export_url,json=timeline_spec,headers=bearer).status_code in (401,403)
+    timeline_export=c.post(timeline_export_url,json=timeline_spec,headers=h)
+    assert timeline_export.status_code==200 and timeline_export.headers['cache-control']=='no-store',timeline_export.text
+    assert timeline_export.headers['x-owg-rows']=='1' and 'period_start_utc' in timeline_export.text
+    assert c.post(timeline_export_url,json=spec(bucket='day'),headers=h).status_code==422
+    from server import event_log_workspace as w
+    from server import event_log_object_state_check as state
+    state.MAX_WORKLIST_BYTES=1
+    assert c.post(timeline_export_url,json=timeline_spec,headers=h).status_code==422
+    assert not list(w.DATA_DIR.glob('*.review.csv'))
+    state.MAX_WORKLIST_BYTES=512*1024*1024
     export_url=url+'/export';export_spec=spec(expected_revision=r.json()['revision'],kind='events')
     assert c.post(export_url,json=export_spec,headers=bearer).status_code in (401,403)
     exported=c.post(export_url,json=export_spec,headers=h)
@@ -359,6 +371,23 @@ def test_revision_pinned_state_timeline_groups_filtered_events(monkeypatch):
                 {'bucket':'day','expected_revision':revision+1}):
         with pytest.raises(w.EventLogWorkspaceError):
             s.timeline(log,spec(**bad))
+    out=StringIO(newline='')
+    exported=s.export_timeline(log,{**req,'limit':30},out)
+    rows=list(csv.DictReader(StringIO(out.getvalue())))
+    assert exported['rows']==3 and len(rows)==4
+    assert rows[0]['record_type']=='check' and rows[0]['period']=='week'
+    assert [r['events'] for r in rows[1:]]==['3','1','4']
+    assert all(r['log_revision']==str(revision) for r in rows)
+    empty=StringIO(newline='')
+    assert s.export_timeline(log,{**req,'limit':30,'result_event_id':'=missing'},empty)['rows']==0
+    assert list(csv.DictReader(StringIO(empty.getvalue())))[0]['event_id_filter_review']=="'=missing"
+    for bad in ({'offset':1}, {'limit':1}, {'expected_revision':revision+1}):
+        with pytest.raises(w.EventLogWorkspaceError):
+            s.export_timeline(log,{**req,'limit':30,**bad},StringIO())
     monkeypatch.setattr(s,'MAX_TIMELINE_BUCKETS',2)
     with pytest.raises(w.EventLogWorkspaceError,match='non-empty periods'):
         s.timeline(log,req)
+    output=StringIO()
+    with pytest.raises(w.EventLogWorkspaceError,match='non-empty periods'):
+        s.export_timeline(log,{**req,'limit':30},output)
+    assert output.getvalue()==''
