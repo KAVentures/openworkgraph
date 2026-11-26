@@ -44,6 +44,11 @@ class Forget(Strict):
     confirmed: StrictBool
 
 
+class Retire(Forget):
+    expected_incident_history_sha256: Hash
+    confirm_exported_history: StrictBool
+
+
 def _schema(conn):
     trust._schema(conn)
     conn.execute("""CREATE TABLE IF NOT EXISTS procurement_workforce_inbox_revision
@@ -155,11 +160,13 @@ def _inventory(conn,ns,now,age):
             "status":status,"packet_sha256":item["packet_sha256"] if item else None,
             "exported_at_ms":item["exported_at_ms"] if item else None,
             "admitted_at_ms":item["admitted_at_ms"] if item else None})
+    incidents=_incidents(conn,ns)
     return {"format":"openworkgraph.workforce-inbox.v1","registry_revision":trust._revision(conn),
         "inbox_revision":_revision(conn),"correlation_namespace_sha256":ns,"as_of_ms":now,
         "maximum_packet_age_ms":age,"active_installations":len(active),
         "ready_for_complete_review":bool(active) and all(r["status"]=="available" for r in rows if r["active"]),
-        "entries":rows,"retained_rollback_signals":_incidents(conn,ns),"execution_authorized":False,"organization_identity_verified":False}
+        "entries":rows,"retained_rollback_signals":incidents,"incident_history_sha256":digest(incidents),
+        "incident_history_retirement_available":not active and not stored and bool(incidents),"execution_authorized":False,"organization_identity_verified":False}
 
 
 def status(document,*,now=None):
@@ -245,4 +252,22 @@ def forget(document):
         if count:_advance(conn)
         return {"removed_packets":count,"retained_rollback_signals_preserved":True,"inbox_revision":_revision(conn),
             "registry_revision":trust._revision(conn),"accepted_registry_watermarks_preserved":True,
+            "physical_erasure_verified":False,"execution_authorized":False}
+
+
+def retire(document):
+    req=Retire.model_validate(document);ns=req.correlation_namespace_sha256
+    if not req.confirm_exported_history:raise ValueError("explicit archived-history confirmation required")
+    with db.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE");_schema(conn);_check(conn,req)
+        if _active(conn,ns) or _stored(conn,ns):
+            raise journal.JournalError("Revoke every active alias and remove retained packet contents before retiring incident history",409)
+        incidents=_incidents(conn,ns)
+        if digest(incidents)!=req.expected_incident_history_sha256:
+            raise journal.JournalError("Incident history pin changed",409)
+        count=conn.execute("DELETE FROM procurement_workforce_inbox_incidents WHERE namespace=?",(ns,)).rowcount
+        if count:_advance(conn)
+        return {"removed_rollback_signals":count,"inbox_revision":_revision(conn),
+            "registry_revision":trust._revision(conn),"archived_history_sha256":req.expected_incident_history_sha256,
+            "archive_independently_verified":False,"accepted_registry_watermarks_preserved":True,
             "physical_erasure_verified":False,"execution_authorized":False}

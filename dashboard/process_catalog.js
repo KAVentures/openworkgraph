@@ -2219,6 +2219,12 @@
       inboxOutput.appendChild(el('h5','Retained rollback review signals: '+incidents.length));
       const retained=el('ul');for(const item of incidents)retained.appendChild(el('li',item.installation_alias+' · '+item.journal_tag.slice(0,12)+' · last reported '+new Date(item.last_exported_ms).toISOString()));
       inboxOutput.append(retained,download(value,'owg-workforce-inbox-status'));
+      if(value.incident_history_retirement_available)inboxOutput.appendChild(button('Retire inactive namespace incident history',()=>inboxPerform(async()=>{
+        const scope=pinnedScope();delete scope.maximum_packet_age_ms;
+        if(!window.confirm('Confirm you exported and reviewed this exact incident history, and want to remove its local retained signals. This does not erase backups or change accepted trust watermarks.'))return;
+        await inboxCall('inbox-retire',JSON.stringify({...scope,expected_incident_history_sha256:value.incident_history_sha256,confirm_exported_history:true}));
+        await loadInbox();
+      })));
     };
     const loadInbox=async()=>{
       const scope=inboxScope();const value=await inboxCall('inbox-status',JSON.stringify(scope));

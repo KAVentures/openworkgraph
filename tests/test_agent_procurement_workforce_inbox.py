@@ -125,3 +125,27 @@ def test_incident_capacity_rolls_back_packet_admission(local_db,monkeypatch):
     with pytest.raises(journal.JournalError,match="capacity"):
         admit(old,incident_packet("a",key,100,True))
     assert status()==old
+
+
+def test_retirement_requires_inactive_namespace_exact_history_and_consent(local_db):
+    key=Ed25519PrivateKey.generate();configure(0,"a",key)
+    v=admit(status(),incident_packet("a",key,100,True))
+    def request(view):
+        req=scope(view);req.pop("maximum_packet_age_ms")
+        return {**req,"expected_incident_history_sha256":view["incident_history_sha256"],
+                "confirm_exported_history":True}
+    with pytest.raises(journal.JournalError):inbox.retire(request(v))
+    configure(1,"a",None,"revoke")
+    v=status()
+    with pytest.raises(journal.JournalError):inbox.retire(request(v))
+    req=scope(v);req.pop("maximum_packet_age_ms")
+    inbox.forget(req);v=status()
+    assert v["incident_history_retirement_available"]
+    with pytest.raises(ValueError):inbox.retire({**request(v),"confirm_exported_history":False})
+    with pytest.raises(journal.JournalError):inbox.retire({**request(v),"expected_incident_history_sha256":"f"*64})
+    assert status()==v
+    result=inbox.retire(request(v))
+    assert result["removed_rollback_signals"]==1 and result["accepted_registry_watermarks_preserved"]
+    assert not result["archive_independently_verified"]
+    assert not status()["retained_rollback_signals"]
+    assert trust.status({})["entries"][0]["active"] is False

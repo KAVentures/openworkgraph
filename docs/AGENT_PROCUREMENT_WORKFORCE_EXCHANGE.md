@@ -178,3 +178,14 @@ signal global cap fails closed on new signals; no silent pruning or automatic
 clearance is implemented. An operator can export the minimized inbox status;
 no full historical packet is retained for each signal. A local database
 owner can alter this history; it is not an external immutable audit log.
+
+An explicit namespace retirement action permits removal of retained rollback
+signals only after all active aliases have been revoked and packet contents
+removed. It requires the exact current registry/inbox revisions, a digest of
+the entire minimized incident list and an operator declaration that the
+history has been exported and reviewed. OWG does not verify the archive.
+Accepted trust watermarks and retired-key history remain, and physical
+backup/export erasure is not established. This is retention cleanup of an
+inactive namespace, not clearance of a current operational incident.
+API: inbox-retire accepts the inbox-forget fields plus
+expected_incident_history_sha256 and confirm_exported_history=true.
