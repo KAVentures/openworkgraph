@@ -3490,6 +3490,16 @@ python -m server.event_log_petri_acceptance --baseline before.pnml --suite suite
 
 The CLI does not contact a service. Exit codes: 0 target suite passed, 1 at least one target case failed, 2 invalid input, 3 target suite inconclusive. The candidate is the target when supplied; baseline and change findings remain in the JSON report. SHA-256 identifies the exact submitted model bytes and the canonical normalized suite. The dashboard uses UTF-8 encoding of its current baseline replay text. Reports contain model labels and the declared suite, and should be shared only deliberately. Passing a finite acceptance suite does not establish full language equivalence, formal policy compliance, or real-world automation correctness.
 
+### Generate reference-model characterization scenarios
+
+Inside **Run workflow acceptance scenarios**, expand **Generate characterization scenarios from the baseline**. The generator requires a completely explored finite marking graph so negative assertions are established rather than guessed. It then explores reachable epsilon-closed marking subsets using breadth-first search, with one shortest representative prefix for each discovered subset. It derives exact completed/fireable/finishable and universal-prefix expectations, plus exact viable next sets when they fit the suite contract. Impossible next activities drawn from the reference alphabet provide negative examples.
+
+A bounded deterministic diversity selection prioritizes semantic categories, distinct markings, visible activities and viable next options. The report discloses candidate count, selected and omitted categories, graph and prefix exploration limits, selection and suite byte limits, exact model and suite digests. A finite selected suite is not exhaustive trace, transition or real-world execution coverage. The reference can itself be wrong or unsafe; generated expectations are characterization tests and require human review.
+
+The preview does not replace an existing editor suite automatically. Select **Replace editor with proposed suite** explicitly, edit as needed, and run the ordinary acceptance review against the baseline or candidate. Download generation evidence separately to retain provenance. A model with an incomplete marking graph does not generate a suite.
+
+The local owner-only endpoint is `POST /v1/event-logs/petri-test-generation?max_cases=20&max_depth=20` with raw PNML body (2 MiB maximum). The scenario limit is 1–40 and prefix depth 1–99. Prefix exploration is bounded to 2,000 subsets and 600,000 counted work units, and selection to 2,000,000 counted feature units. No model, suite or report is retained; the response uses `Cache-Control: no-store`. No agent execution or policy approval is authorized.
+
 ### Process trees (PTML) from PM4Py and ProM
 
 The file picker also accepts a **process tree** in PTML, as `pm4py.write_ptml` and ProM's Inductive
