@@ -4258,7 +4258,7 @@
     const witness=el('div');witness.id='owgObjectStateWitness';
     box.append(form,notice,summary,resultControls,results,witness);
     const generation=state.generation,logId=state.logId,base='/v1/event-logs/'+encodeURIComponent(logId)+'/object-state-check';
-    let turn=0,settings=null,revision=null,offset=0,following=null;
+    let turn=0,witnessTurn=0,settings=null,revision=null,offset=0,following=null;
     const current=t=>generation===state.generation&&box.isConnected&&t===turn;
     const clear=()=>{++turn;settings=null;revision=null;offset=0;following=null;run.disabled=false;notice.textContent='';summary.replaceChildren();results.replaceChildren();witness.replaceChildren();show(resultControls,false);};
     form.addEventListener('input',clear);form.addEventListener('change',clear);
@@ -4274,6 +4274,28 @@
       return {activity:activity.value,object_type:objectType.value,attribute:attribute.value,expected_value:value.value,
         operator:operator.value,quantifier:quantifier.value,...(exact.checked?{event_qualifier:qualifier.value}:{})};
     };
+    function inspectWitnesses(item,spec,filter,basis,reviewTurn){
+      const ticket=++witnessTurn,active=()=>current(reviewTurn)&&ticket===witnessTurn;
+      const heading=el('h4','Object evidence for event '+item.event_id);heading.tabIndex=-1;
+      const status=el('div',null,'muted');status.setAttribute('role','status');
+      const rows=el('div'),nav=el('div',null,'row'),prev=button('Previous objects','secondary'),nextPage=button('Next objects','secondary');nav.append(prev,nextPage);
+      witness.replaceChildren(heading,status,rows,nav);heading.focus();
+      const cursors=[null];let index=0,following=null;
+      async function page(target){
+        prev.disabled=nextPage.disabled=true;rows.replaceChildren();status.textContent='Loading object evidence…';
+        const payload={...spec,event_id:item.event_id,expected_revision:basis,witness_limit:50,
+          ...(filter?{status:filter}:{}),...(cursors[target]!==null?{after:cursors[target]}:{})};
+        try{
+          const response=await (await api(base+'/witnesses',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).json();
+          if(!active())return;
+          index=target;following=response.next_after;
+          const start=index*50;status.textContent=response.total_objects?'Showing '+(start+1).toLocaleString()+'–'+(start+response.witnesses.length).toLocaleString()+' of '+Number(response.total_objects).toLocaleString()+' linked objects.':'No objects of the selected type are linked to this event.';
+          if(response.witnesses.length)rows.replaceChildren(table(['Object ID','Result','Recorded from (UTC)','Value'],response.witnesses.map(w=>[w.object_id,statusLabel[w.status]||w.status,w.valid_from||'—',w.recorded_value===null?'—':JSON.stringify(w.recorded_value)])));
+          prev.disabled=index===0;nextPage.disabled=following===null;
+        }catch(error){if(active())status.textContent=error.message;}
+      }
+      prev.onclick=()=>page(index-1);nextPage.onclick=()=>{cursors[index+1]=following;page(index+1);};page(0);
+    }
     async function load(spec,start,filter,pin){
       const request=++turn;run.disabled=true;resultFilter.disabled=previous.disabled=next.disabled=true;
       notice.textContent='Checking recorded state…';summary.replaceChildren();results.replaceChildren();witness.replaceChildren();
@@ -4289,12 +4311,7 @@
         const headers=['Event','Timestamp (UTC)','Result','Linked objects','Matched','Not matched','Unknown','Evidence'];
         results.replaceChildren(response.rows.length?table(headers,response.rows.map(item=>{
           const inspect=button('View object evidence','secondary');inspect.setAttribute('aria-label','View object evidence for event '+JSON.stringify(item.event_id));
-          inspect.onclick=()=>{
-            const heading=el('h4','Object evidence for event '+item.event_id);heading.tabIndex=-1;
-            witness.replaceChildren(heading,el('p','Showing '+item.object_witnesses.length+' of '+Number(item.linked_objects).toLocaleString()+' linked objects'+(item.object_witnesses_truncated?'; additional objects are not shown.':'.'),'muted'),
-              item.object_witnesses.length?table(['Object ID','Result','Recorded from (UTC)','Value'],item.object_witnesses.map(w=>[w.object_id,statusLabel[w.status]||w.status,w.valid_from||'—',w.recorded_value===null?'—':JSON.stringify(w.recorded_value)])):el('p','No objects of the selected type are linked to this event.','muted'));
-            heading.focus();
-          };
+          inspect.onclick=()=>inspectWitnesses(item,spec,filter,response.revision,request);
           return [item.event_id,item.at,statusLabel[item.status]||item.status,Number(item.linked_objects).toLocaleString(),Number(item.matched_objects).toLocaleString(),Number(item.not_matched_objects).toLocaleString(),Number(item.unknown_objects).toLocaleString(),inspect];
         })):el('p','No events match this result filter.','muted'));
         show(resultControls,true);resultFilter.disabled=false;previous.disabled=offset===0;next.disabled=following===null;
