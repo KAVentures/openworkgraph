@@ -8534,10 +8534,40 @@
       return inspect;
     };
     let lastNet=null;
+    const auditBox=document.createElement('details');auditBox.append(el('summary','Exact completed-trace membership audit'),el('div','Unlike token fitness, this check explores every reachable marking consistent with each selected trace until it proves membership, proves nonmembership, or reaches a limit.','muted'));
+    const auditRun=button('Audit exact trace membership','secondary');auditRun.id='owgPetriAuditRun';auditRun.disabled=true;
+    const auditStatus=el('div',null,'muted');auditStatus.id='owgPetriAuditStatus';auditStatus.setAttribute('role','status');auditStatus.setAttribute('aria-live','polite');
+    const auditOut=el('div');auditOut.id='owgPetriAuditResults';auditBox.append(auditRun,auditStatus,auditOut);box.appendChild(auditBox);
+    let auditBusy=false;
+    const syncAudit=()=>{auditRun.disabled=auditBusy||!lastNet||lastNet.generation!==state.generation;};
+    const clearAudit=()=>{auditStatus.textContent='';auditOut.replaceChildren();auditRun.disabled=true;};
+    auditRun.onclick=async()=>{
+      const net=lastNet;if(!net||auditBusy||net.generation!==state.generation)return;
+      const current=()=>lastNet===net&&state.generation===net.generation;
+      auditBusy=true;syncAudit();auditOut.replaceChildren();auditStatus.textContent='Exploring trace membership…';
+      try{
+        const r=await (await api(logPath('petri-trace-audit',{}),{method:'POST',headers:{'Content-Type':'application/xml'},body:net.body})).json();
+        if(!current())return;
+        const c=r.counts;
+        auditStatus.textContent=c.accepted+' accepted · '+c.rejected+' rejected · '+c.inconclusive+' inconclusive · '+r.cases_excluded+' excluded';
+        if(r.accepted_fraction_bounds) auditOut.appendChild(el('div','Accepted share of all selected cases: '+pct(r.accepted_fraction_bounds.lower)+'–'+pct(r.accepted_fraction_bounds.upper)+'.','muted'));
+        const tbl=table(['Trace','Cases','Status','Observed prefix length'],r.variants.map(v=>[v.path.join(' → '),String(v.cases),v.status,v.longest_prefix===null?'—':String(v.longest_prefix)]));auditOut.appendChild(tbl);
+        for(const v of r.variants.filter(v=>v.status!=='accepted').slice(0,20)){
+          const inspect=button('Inspect '+v.status+' cases on '+v.path.join(' → '),'secondary');
+          inspect.onclick=()=>{if(current())inspection.variant(v.variant_id,null,net.cohort,'Exact trace audit: '+v.status);};auditOut.appendChild(inspect);
+        }
+        auditOut.appendChild(el('div',r.caveat,'muted'));
+        const dl=button('Download exact trace audit (JSON)','secondary');dl.onclick=()=>{
+          if(!current())return;
+          const url=URL.createObjectURL(new Blob([JSON.stringify(r,null,2)],{type:'application/json'}));const link=document.createElement('a');link.href=url;link.download='petri-trace-audit-'+r.pnml_sha256.slice(0,12)+'.json';document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+        };auditOut.appendChild(dl);
+      }catch(error){if(current())auditStatus.textContent=error.message;}
+      finally{auditBusy=false;syncAudit();}
+    };
     const replay=async(body,label)=>{
       if(sectionGeneration!==state.generation||run.disabled)return;
       const generation=sectionGeneration,cohort=globalCohort();
-      clearBpmnConversion();
+      clearBpmnConversion();clearAudit();
       run.disabled=own.disabled=happy.disabled=align.disabled=alertSave.disabled=true;aligned.replaceChildren();alertMessage.textContent='';lastNet=null;statusLine.textContent='Replaying on '+label+'…';out.replaceChildren();
       try{
         const r=await (await api(logPath('petri-net-replay',{}),{method:'POST',headers:{'Content-Type':'application/xml'},body})).json();
@@ -8560,7 +8590,7 @@
           ])));out.appendChild(more);}
         out.appendChild(el('div',r.caveat,'muted'));
       }catch(error){statusLine.textContent=error.message;}
-      finally{run.disabled=own.disabled=happy.disabled=false;align.disabled=alertSave.disabled=saveRun.disabled=!lastNet;}};
+      finally{run.disabled=own.disabled=happy.disabled=false;align.disabled=alertSave.disabled=saveRun.disabled=!lastNet;syncAudit();}};
     alertSave.onclick=async()=>{
       if(!lastNet)return;
       if(lastNet.body.length>60000){alertMessage.textContent='This net is too large to keep with a signal (over 60,000 characters).';return;}
