@@ -1,6 +1,10 @@
 from copy import deepcopy
 from io import BytesIO
 import json
+import os
+from pathlib import Path
+import subprocess
+import sys
 
 import duckdb
 import pytest
@@ -16,8 +20,14 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(workspace, "DATA_DIR", tmp_path)
 
 
-def installed():
-    log = workspace.import_log(BytesIO(json.dumps(order_to_cash()).encode()),
+def installed(*, missing_resource=False):
+    doc = order_to_cash()
+    if missing_resource:
+        # OCEL imports preserve org:resource. Remove the resource from the
+        # selected credit approval, not from an unrelated or nonactivated case.
+        event = next(e for e in doc["events"] if e["id"] == "so1-credit")
+        event["attributes"] = [a for a in event["attributes"] if a["name"] != "org:resource"]
+    log = workspace.import_log(BytesIO(json.dumps(doc).encode()),
                                name="priority", source_format="ocel")["log_id"]
     spec = {"version":"1.0.0","mapping":deepcopy(MAPPING)}
     saved = packs.install(log,"order_to_cash",spec)
@@ -181,7 +191,7 @@ def test_case_inspection_matches_reviewed_scores_and_details():
 
 
 def test_case_inspection_unknown_never_claims_same_resource():
-    log,_,_=installed()
+    log,_,_=installed(missing_resource=True)
     req=request(case_type=TYPES["order"],weights=[{"rule_index":2,"weight":9}],
                 minimum_confirmed=1,include_uncertain=True)
     first=priority.review(log,"order_to_cash",req)
@@ -203,3 +213,58 @@ def test_workbenches_share_nonblocking_execution_guard():
     with benchmark._GUARD:
         with pytest.raises(workspace.EventLogWorkspaceError,match="Another domain pack analysis"):
             priority.review(log,"order_to_cash",request())
+
+
+def test_dashboard_only_priority_http_contract(tmp_path):
+    code = r"""
+from fastapi.testclient import TestClient
+from server.secure_app import app
+from server import local_auth, event_log_domain_packs as packs
+from test_event_log_domain_pack_priority import installed, request
+log,spec,_=installed()
+url=f"/v1/event-logs/{log}/domain-packs/order_to_cash/priority"
+req=request()
+with TestClient(app) as c:
+    owner={"Authorization":"OWG-Session "+local_auth.create_dashboard_session()}
+    bearer={"Authorization":"Bearer "+local_auth.ensure_api_token()}
+    assert c.get(url,headers=bearer).status_code in (401,403)
+    catalog=c.get(url,headers=owner)
+    assert catalog.status_code==200,catalog.text
+    assert catalog.headers["cache-control"]=="no-store"
+    assert c.post(url,json=req,headers=bearer).status_code in (401,403)
+    r=c.post(url,json=req,headers=owner)
+    assert r.status_code==200,r.text
+    assert r.headers["cache-control"]=="no-store"
+    page=r.json()
+    reviewed={**{k:v for k,v in req.items() if k!="limit"},
+              "expected_basis_sha256":page["basis_sha256"]}
+    for suffix,body in (("/export",reviewed),("/case",{**reviewed,"case_id":"bd9"})):
+        assert c.post(url+suffix,json=body,headers=bearer).status_code in (401,403)
+        assert c.post(url+suffix,json=body).status_code in (401,403)
+        r=c.post(url+suffix,json=body,headers=owner)
+        assert r.status_code==200,r.text
+        assert r.headers["cache-control"]=="no-store"
+        assert r.json()["basis_sha256"]==page["basis_sha256"]
+        assert c.post(url+suffix,json={**body,"expected_basis_sha256":"0"*64},headers=owner).status_code==422
+        assert c.post(url+suffix,json={**body,"unexpected":True},headers=owner).status_code==422
+        headers={**owner,"Content-Type":"application/json"}
+        assert c.post(url+suffix,content=b'{"case_id":"a","case_id":"b"}',headers=headers).status_code==422
+        assert c.post(url+suffix,content=b"{}"+b" "*9000,headers=headers).status_code==413
+    detail=c.post(url+"/case",json={**reviewed,"case_id":"bd9"},headers=owner).json()
+    assert detail["lower"]==detail["upper"]==7
+    assert detail["resource_names_returned"] is False
+    exported=c.post(url+"/export",json=reviewed,headers=owner).json()
+    assert exported["complete_export"] is True
+    assert exported["cases"]==page["cases"]
+    packs.install(log,"order_to_cash",{**spec,"parameters":{"payment_terms_days":20}})
+    assert c.post(url+"/export",json=reviewed,headers=owner).status_code==422
+    assert c.post(url+"/case",json={**reviewed,"case_id":"bd9"},headers=owner).status_code==422
+"""
+    root=Path(__file__).resolve().parents[1]
+    env={**os.environ,"WORKFLOW_OBSERVER_DATA":str(tmp_path/"data"),
+         "WORKFLOW_OBSERVER_AUTH_DIR":str(tmp_path/"auth"),
+         "WORKFLOW_OBSERVER_CONFIG":str(tmp_path/"config.json"),
+         "PYTHONPATH":str(root/"tests")+os.pathsep+str(root)}
+    result=subprocess.run([sys.executable,"-c",code],cwd=root,env=env,
+                          capture_output=True,text=True,timeout=120)
+    assert result.returncode==0,result.stdout+result.stderr

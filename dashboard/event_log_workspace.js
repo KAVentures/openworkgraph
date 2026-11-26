@@ -5249,14 +5249,29 @@
     const status=el('p',null,'muted'),out=el('div'),choices=el('fieldset');status.setAttribute('role','status');
     let revision=0,groups=[],weights=[],report=null,request=null,busy=false,exporting=false,inspecting=false;
     const detailOut=el('div');detailOut.setAttribute('aria-live','polite');
-    const exportAll=button('Download complete worklist JSON','secondary');exportAll.disabled=true;
+    const exportAll=button('Download complete worklist JSON','secondary'),exportAllCsv=button('Download complete worklist CSV','secondary');
+    const enableComplete=on=>{exportAll.disabled=exportAllCsv.disabled=!on;};enableComplete(false);
     const active=t=>valid()&&panel.isConnected&&t===revision;
     const endpoint=()=>'/v1/event-logs/'+encodeURIComponent(logId)+'/domain-packs/'+encodeURIComponent(pack.value)+'/priority';
-    const downloads=exportButtons('owg-priority-worklist-page',()=>report,r=>[
-      ['Case','Confirmed points','Possible points','Threshold status','Violated rule indices (zero based)','Unknown rule indices (zero based)','Basis digest'],
-      ...r.cases.map(c=>[c.case_id,c.lower,c.upper,c.threshold_status,c.violated_rule_indices.join(';'),c.unknown_rule_indices.join(';'),r.basis_sha256])]);
+    // Include a summary row even for an empty export, so the exact scope
+    // and coverage remain visible when a spreadsheet contains no case rows.
+    const csvRows=r=>{
+      const b=r.basis,p=b.population;
+      const metadata=[b.log_id,b.pack_id,b.version,b.case_type,r.basis_sha256,b.minimum_confirmed,b.include_uncertain,
+        p.retained_objects,p.projected_cases,p.objects_without_linked_events,r.matching_cases,r.cases.length,r.complete_export,
+        JSON.stringify(b.rules.map(x=>({rule_index:x.rule_index,weight:x.weight})))];
+      return [
+        ['Row kind','Case','Confirmed points','Possible points','Threshold status','Violated rule indices (zero based)','Unknown rule indices (zero based)',
+          'Log ID','Pack','Version','Case type','Basis digest','Minimum points','Include uncertain','Retained objects','Evaluated cases',
+          'Objects without linked events','Matching cases','Rows in export','Complete export','Rule weights JSON'],
+        ['summary','','','','','','',...metadata],
+        ...r.cases.map(c=>['case',c.case_id,c.lower,c.upper,c.threshold_status,c.violated_rule_indices.join(';'),
+          c.unknown_rule_indices.join(';'),...metadata])
+      ];
+    };
+    const downloads=exportButtons('owg-priority-worklist-page',()=>report,csvRows);
     function clear(){
-      revision++;report=null;request=null;out.replaceChildren();detailOut.replaceChildren();next.hidden=true;downloads.enable(false);exportAll.disabled=true;
+      revision++;report=null;request=null;out.replaceChildren();detailOut.replaceChildren();next.hidden=true;downloads.enable(false);enableComplete(false);
       run.disabled=busy||!weights.some(w=>w.check.checked);
     }
     function edited(){clear();status.textContent='Selection changed; build a fresh worklist.';}
@@ -5292,7 +5307,7 @@
       finally{if(panel.isConnected)load.disabled=false;}
     };
     async function page(body,t){
-      busy=true;detailOut.replaceChildren();run.disabled=true;next.disabled=true;downloads.enable(false);exportAll.disabled=true;status.textContent='Evaluating retained cases…';
+      busy=true;detailOut.replaceChildren();run.disabled=true;next.disabled=true;downloads.enable(false);enableComplete(false);status.textContent='Evaluating retained cases…';
       try{
         const r=await (await api(endpoint(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
         if(!active(t))return;
@@ -5301,16 +5316,16 @@
         report=r;
         out.replaceChildren(el('h4','Priority worklist'),
           domainPackPopulationLine(r.basis.population),
-          el('p',r.cases_evaluated+' evaluated · '+r.confirmed_threshold_cases+' confirmed above threshold · '+r.uncertain_threshold_cases+' uncertain · '+r.below_threshold_cases+' below threshold.'),
-          el('p',r.matching_cases+' matching cases; '+r.cases.length+' on this page. Export contains this page only.','muted'),
+          el('p',r.cases_evaluated+' evaluated · '+r.confirmed_threshold_cases+' confirmed at or above threshold · '+r.uncertain_threshold_cases+' uncertain · '+r.below_threshold_cases+' below threshold.'),
+          el('p',r.matching_cases+' matching cases; '+r.cases.length+' on this page. Page downloads contain only these cases. Complete export is separately bounded to '+r.export_case_limit+' matching cases.','muted'),
           table(['Case','Confirmed points','Possible points','Status','Violated rules','Unknown rules'],r.cases.map(c=>[
             c.case_id,c.lower,c.upper,c.threshold_status,c.violated_rule_indices.map(i=>i+1).join(', ')||'—',c.unknown_rule_indices.map(i=>i+1).join(', ')||'—'])),
           ...r.cases.map(c=>{
             const b=button('Inspect '+c.case_id,'secondary');b.onclick=()=>inspect(c,b,r,t);return b;
           }),
           el('p',r.interpretation,'muted'));
-        next.hidden=!r.next_after;downloads.enable(true);exportAll.disabled=exporting||r.matching_cases>r.export_case_limit;status.textContent='Priority review complete. No configuration changed.';
-      }catch(error){if(active(t)){report=null;next.hidden=true;status.textContent=error.message;}}
+        next.hidden=!r.next_after;downloads.enable(true);enableComplete(!exporting&&r.matching_cases<=r.export_case_limit);status.textContent='Priority review complete. No configuration changed.';
+      }catch(error){if(active(t)){clear();status.textContent=error.message+' Build a fresh worklist.';}}
       finally{busy=false;if(panel.isConnected){run.disabled=!weights.some(w=>w.check.checked);next.disabled=false;}}
     }
     async function inspect(c,b,r,t){
@@ -5343,25 +5358,27 @@
       page(request,t);
     };
     next.onclick=()=>{if(!busy&&!inspecting&&!exporting&&report?.next_after&&request)page({...request,expected_basis_sha256:report.basis_sha256,after:report.next_after},revision);};
-    exportAll.onclick=async()=>{
+    async function exportComplete(format){
       if(exporting||busy||inspecting||!report||!request)return;
       const t=revision,reviewed=report,{limit,...selection}=request;
-      exporting=true;exportAll.disabled=true;status.textContent='Verifying and exporting every matching case…';
+      exporting=true;enableComplete(false);status.textContent='Verifying and exporting every matching case…';
       try{
         const result=await (await api(endpoint()+'/export',{method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify({...selection,expected_basis_sha256:reviewed.basis_sha256})})).json();
         if(!active(t))return;
         if(result.basis_sha256!==reviewed.basis_sha256||result.complete_export!==true||result.next_after!==null||
           result.cases.length!==result.matching_cases)throw new Error('Complete worklist verification failed.');
-        download('owg-complete-priority-worklist.json',JSON.stringify(result,null,2),'application/json');
+        if(format==='csv')download('owg-complete-priority-worklist.csv',toCSV(csvRows(result)),'text/csv');
+        else download('owg-complete-priority-worklist.json',JSON.stringify(result,null,2),'application/json');
         status.textContent='Complete reviewed worklist exported.';
       }catch(error){if(active(t)){clear();status.textContent=error.message+' Build a fresh worklist.';}}
-      finally{exporting=false;if(panel.isConnected)exportAll.disabled=busy||!report||report.matching_cases>report.export_case_limit;}
-    };
+      finally{exporting=false;if(panel.isConnected)enableComplete(!busy&&!!report&&report.matching_cases<=report.export_case_limit);}
+    }
+    exportAll.onclick=()=>exportComplete('json');exportAllCsv.onclick=()=>exportComplete('csv');
     run.disabled=true;next.hidden=true;
     panel.append(el('summary','Build a weighted compliance priority worklist'),el('p','Declare review points per rule. Unknown outcomes contribute only to possible points. Scores are not probabilities, financial losses or staff ratings.','muted'),
       load,field('Installed pack',pack),field('Object type',kind),choices,field('Minimum priority points',threshold),
-      field('Include cases that may reach the threshold',include),run,status,downloads.node,exportAll,out,next,detailOut);
+      field('Include cases that may reach the threshold',include),run,status,downloads.node,exportAll,exportAllCsv,out,next,detailOut);
     return panel;
   }
 
