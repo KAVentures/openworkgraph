@@ -3468,16 +3468,17 @@ Expand **Run workflow acceptance scenarios** in the model validation panel. Reus
 }
 ```
 
-The six expectation keys are:
+The seven expectation keys are:
 
 - `completed`: the exact supplied visible trace can end at the declared final marking.
 - `fireable`: at least one reachable firing sequence matches the visible trace, regardless of whether completion is possible.
 - `finishable`: at least one matched marking can still reach the final marking.
+- `all_prefix_states_finishable`: at least one marking matches the prefix and every such marking has a path to final. False for an impossible prefix on a complete graph; inconclusive on an incomplete graph. This is not a guarantee that all future executions terminate.
 - `required_next`: every listed visible next activity can extend this prefix to a completed trace, possibly with different continuations.
 - `forbidden_next`: none of the listed visible activities can be the next step on a completion path.
 - `exact_next`: the complete set of viable next visible activities equals the listed set.
 
-Silent transitions are traversed without consuming a visible activity. Duplicate labels use nondeterministic marking subsets; a prefix can be fireable but not finishable. The report returns the longest observed matching prefix, viable next activities, and a shortest observed completion suffix by visible length then transition firings. Only a completely explored marking graph certifies absence or shortest length. For a prefix that cannot execute, an empty exact-next set can pass; require fireability or finishability explicitly when needed. Multiple assertions in one case must all pass; failure and inconclusive states remain distinct. A candidate regression is a previously passing case that now fails; an unknown result does not count as a known regression or improvement.
+Silent transitions are traversed without consuming a visible activity. Duplicate labels use nondeterministic marking subsets; a prefix can be fireable but not finishable. The report returns the longest observed matching prefix, counts of matching and known completable markings, exact noncompletable counts when the graph is complete, viable next activities, and a shortest observed completion suffix by visible length then transition firings. Only a completely explored marking graph certifies absence or shortest length. For a prefix that cannot execute, an empty exact-next set can pass; require fireability or finishability explicitly when needed. Multiple assertions in one case must all pass; failure and inconclusive states remain distinct. A candidate regression is a previously passing case that now fails; an unknown result does not count as a known regression or improvement.
 
 The owner-only, non-retained endpoint is `POST /v1/event-logs/petri-acceptance`, with `Content-Type: application/octet-stream`. The frame is a four-byte unsigned big-endian suite JSON byte count, those UTF-8 bytes, a four-byte unsigned big-endian baseline byte count, those PNML bytes, and optional candidate PNML bytes. Strict JSON rejects duplicate keys, nonfinite values and invalid suite fields. Each model is limited to 2 MiB; suite to 256 KiB, 40 cases, 100 visible activities per trace and 100 per next-step expectation. The graph uses the existing marking exploration limits. A shared 600,000-unit work budget per model can leave later scenarios inconclusive; no unexplored behavior is treated as absent.
 
