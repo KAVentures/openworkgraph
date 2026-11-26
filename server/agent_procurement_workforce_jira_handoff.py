@@ -181,10 +181,13 @@ def dispatch(document):
         if conn.execute("SELECT 1 FROM procurement_audit_jira_dispatch WHERE worklist_sha256=? AND operation_key=?",
                         (req.worklist_sha256,plan["operation_key"])).fetchone():
             raise journal.JournalError("Operation already attempted; inspect Jira manually",409)
-    _authorize(config,token)
+    try:
+        _authorize(config,token)
+    except (httpx.HTTPError,OSError,TypeError,KeyError):
+        raise ValueError("Jira write grant verification unavailable") from None
     with db.connect() as conn:
         conn.execute("BEGIN IMMEDIATE");_schema(conn)
-        if config!=_config() or _plan(conn,req,config)!=plan:
+        if config!=_config() or token!=_token() or _plan(conn,req,config)!=plan:
             raise ValueError("handoff changed during authorization")
         if conn.execute("SELECT 1 FROM procurement_audit_jira_dispatch WHERE worklist_sha256=? AND operation_key=?",
                         (req.worklist_sha256,plan["operation_key"])).fetchone():
