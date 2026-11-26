@@ -190,3 +190,31 @@ print("ok")
     done = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1],
                           env=env, capture_output=True, text=True, timeout=180)
     assert done.returncode == 0 and done.stdout.strip().endswith("ok"), done.stderr + done.stdout
+
+
+def test_ambiguous_prefix_can_finish_but_not_from_every_matching_marking():
+    root = ET.fromstring(model(node("xor", A, A)))
+    page = root.find(".//page")
+    assert page is not None
+    ET.SubElement(page, "place", id="dead")
+    transitions = [t for t in page.findall("transition") if t.findtext("name/text") == "A"]
+    assert len(transitions) == 2
+    arc = next(a for a in page.findall("arc") if a.get("source") == transitions[0].get("id"))
+    arc.set("target", "dead")
+    result = check(ET.tostring(root), ["A"], fireable=True, finishable=True,
+                   all_prefix_states_finishable=False, completed=True)
+    assert result["status"] == "passed"
+    observed = result["observed"]
+    assert observed["matched_markings"] == 2
+    assert observed["known_completable_markings"] == 1
+    assert observed["noncompletable_markings"] == 1
+
+
+def test_all_prefix_states_finishable_is_nonvacuous_and_requires_complete_graph(monkeypatch):
+    net = model(node("seq", A, B))
+    assert check(net, ["A"], all_prefix_states_finishable=True)["status"] == "passed"
+    assert check(net, ["C"], all_prefix_states_finishable=False)["status"] == "passed"
+    monkeypatch.setattr(soundness, "MAX_STATES", 1)
+    result = check(net, [], all_prefix_states_finishable=False)
+    assert result["status"] == "inconclusive"
+    assert result["observed"]["noncompletable_markings"] is None
