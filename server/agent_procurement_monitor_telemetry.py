@@ -110,6 +110,8 @@ def grant(workflow_id,revision,doc):
         journal._check_head(history,req.expected_head_sha256);journal._require_current(conn,workflow_id,revision)
         if "monitor_plan" not in state:
             raise journal.JournalError("Retain a new verified checkpoint before enabling producers",409)
+        if req.producer_alias.casefold() in {b["reviewer_alias"].casefold() for b in state.get("outcome_corroborations",[])}:
+            raise journal.JournalError("Producer alias already used for separate outcome corroboration",409)
         window=next((w for w in state["monitor_plan"]["windows"] if w["window_id"]==req.window_id),None)
         if window is None or not any(s["arm"]==req.arm for s in window["plan"]["slots"]):
             raise journal.JournalError("Invalid producer scope")

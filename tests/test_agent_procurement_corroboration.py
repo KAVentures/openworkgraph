@@ -94,3 +94,15 @@ def test_pure_comparison_exhaustive():
         assert result["matched"]==int(matched)
         assert result["source_overlap"]==int(overlap)
         assert result["blocks_continuation"]==(conflict or overlap or review_critical or review_forbidden or required and not matched)
+
+
+def test_reviewer_alias_cannot_later_become_producer(local_db,monitor):
+    from server import agent_procurement_monitor_telemetry as telemetry
+    packet,initial,plan,snapshot=monitor
+    view=journal.append(packet,"process_1",1,doc(initial,plan,snapshot))
+    row=declaration(plan["windows"][0]["plan"]["slots"][0])
+    view=review.record("process_1",1,request(view,"w1",[row]))
+    with pytest.raises(journal.JournalError,match="already used"):
+        telemetry.grant("process_1",1,{"monitor_id":"monitor-1","expected_head_sha256":view["head_sha256"],
+            "producer_alias":"SEPARATE-REVIEWER","window_id":"w1","arm":"challenger","ttl_seconds":60,"confirmed":True})
+    assert journal.detail("process_1",1,{"monitor_id":"monitor-1"})==view

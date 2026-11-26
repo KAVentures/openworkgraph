@@ -60,3 +60,9 @@ Manifest adds window_id and expected_report_sha256. Record additionally
 requires reviewer_alias, confirm_separate_source_review=true, and rows.
 All require current process revision, local dashboard session and explicit
 operator context. No remote verification or financial outcome claims are made.
+
+An alias already used for corroboration cannot subsequently receive a producer
+grant in the same journal. Cross-journal source-reference checks occur at
+corroboration admission, not continuously across installations; a later source
+submission in another journal is not automatically reconciled against an old
+review. Same-journal overlap remains visible on subsequent journal reads.
