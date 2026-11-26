@@ -53,7 +53,7 @@ const path=require('node:path');
    await page.locator('#owgEventLogFile').setInputFiles({name:'february.csv',mimeType:'text/csv',buffer:Buffer.from(february.join('\n'))});
    await page.locator('#owgEventLogReuseMapping').waitFor();
    assert.equal(await page.locator('#owgEventLogReuseMapping').innerText(),'Use the mapping from “january”');
-   assert.equal(await page.locator('#owgEventLogDelimiter').inputValue(),',','delimiter changes only after applying');
+   assert.equal(await page.locator('#owgEventLogDelimiter').inputValue(),';','the delimiter is detected from the file before any mapping is applied');
    const choice=page.getByLabel('Compatible column mapping',{exact:true});
    assert.equal(await choice.locator('option').count(),2);
    const januaryId=await choice.inputValue();
