@@ -1518,6 +1518,25 @@ async def event_log_petri_net_replay(request: Request, log_id: str,
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/petri-trace-audit")
+async def event_log_petri_trace_audit(request: Request, log_id: str,
+                                      case_type: str | None = Query(default=None, max_length=200),
+                                      cohort: dict[str, Any] = Depends(_case_filter)):
+    """Audit retained trace membership without greedy token repair or model storage."""
+    from . import event_log_petri_trace_audit as audit
+    _require_dashboard(request)
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > audit.replay.MAX_BYTES:
+            raise HTTPException(413, "the Petri net file is larger than 2 MB")
+        body.extend(chunk)
+    try:
+        result = await run_in_threadpool(audit.audit, log_id, bytes(body), case_type, cohort=cohort)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/v1/event-logs/{log_id}/reference-nets")
 def event_log_reference_nets(request: Request, log_id: str):
     """Reference nets saved with this log (names and sizes, not contents)."""
