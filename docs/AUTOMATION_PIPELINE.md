@@ -75,6 +75,10 @@ budgets totalled per currency and basis (rejected ideas excluded), modeled hours
 ideas waiting on a dependency, open ideas per target quarter and how many ideas have no
 planning yet. The CSV export includes the planning columns.
 
+## Budget-constrained portfolio scenarios
+
+The [budget scenario planner](AUTOMATION_BUDGET_SCENARIO.md) evaluates selected opportunity combinations against a single budget currency/basis, explicit reviewer priorities and prerequisite closure. It does not sum benefits or approve implementation.
+
 ## Quality, adoption and conditional value
 
 The [quality and adoption benefit review](AUTOMATION_QUALITY_BENEFIT.md) extends existing implemented-idea measurements with explicit case denominators, review-effort accounting and conditional costs. Quality gates remain separate from financial arithmetic, and no verified savings or implementation approval is inferred.
@@ -320,3 +324,7 @@ No provider read, execution, persistence of the supplied document, or durable
 review occurs. Use a separately consented fresh check for current source state.
 
 The source-check review also distinguishes a matching historical expectation from the latest saved process status. An old pinned expectation may still exist even after a newer revision removes it; that does not make the old design current. Current design and run status are local snapshots, not a cross-store transaction.
+
+## Derive effort from retained event logs
+
+[Retained-log effort measurements](AUTOMATION_RETAINED_EFFORT.md) preview an exact case-start cohort using a reviewed additive event attribute, refuse incomplete or shared effort evidence and record a pinned measurement in the existing benefit store. Elapsed case time is never treated as labor effort.
