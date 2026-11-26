@@ -8,7 +8,7 @@ const path=require('node:path');
  const scratch=await fs.mkdtemp(path.join(tmpdir(),'owg-shadow-review-browser-'));
  const python=process.env.OWG_BROWSER_PYTHON||'python',base='http://127.0.0.1:8787';
  const server=spawn(python,['-m','uvicorn','process_shadow_review_app:app','--app-dir','tests/browser','--host','127.0.0.1','--port','8787'],{
-  env:{...process.env,OWG_BROWSER_TEST_DIR:scratch},stdio:['ignore','pipe','pipe']});
+  env:{...process.env,OWG_BROWSER_TEST_DIR:scratch,OWG_JIRA_REMEDIATION_WRITE_ENABLED:'0'},stdio:['ignore','pipe','pipe']});
  let logs='',browser,spawnError;
  server.on('error',error=>spawnError=error);for(const pipe of [server.stdout,server.stderr])pipe.on('data',chunk=>logs=(logs+chunk).slice(-8000));
  try{
@@ -267,6 +267,12 @@ print(json.dumps({"a":a[0],"b":b[0],"trust":a[1]["trust"],"manifest":m,"pin":dig
   await page.getByRole('button',{name:'Load retained remediation registers',exact:true}).click();
   await page.getByRole('button',{name:/Open remediation register /}).click();
   await page.getByText('rollback referral · assigned',{exact:true}).waitFor();
+  await page.getByText('Explicit Jira ticket creation and follow-up comments',{exact:true}).click();
+  await page.getByRole('button',{name:'Load Jira handoff attempts',exact:true}).click();
+  await page.getByText('0 retained external write attempts',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'Preview exact Jira handoff',exact:true}).click();
+  await page.getByText(/Preview refused:/).waitFor();
+  assert.equal(await page.getByRole('button',{name:'Confirm and send one Jira write',exact:true}).count(),0);
   page.once('dialog',d=>d.accept());
   await page.getByRole('button',{name:'Remove local remediation register',exact:true}).click();
   await page.getByText('0 retained registers',{exact:true}).waitFor();
