@@ -126,3 +126,33 @@ def test_clock_refresh_detects_overdue_without_new_producer_evidence(producer,mo
     assert result["credential_authenticated_observations"]==len(batch["observations"])
     assert result["overdue_window_history"]==["w1","w2"]
     assert not result["eligible_for_continued_monitoring_review"]
+
+
+def test_outstanding_grants_reserve_revocation_entries(producer,monkeypatch):
+    grant,batch,clock,_=producer
+    # Current history is first checkpoint plus grant, with one outstanding revoke.
+    monkeypatch.setattr(journal,"MAX_ENTRIES",3)
+    detail=journal.detail("process_1",1,{"monitor_id":"monitor-1"})
+    assert detail["reserved_disable_entries"]==1
+    assert detail["ordinary_entries_remaining"]==0
+    with pytest.raises(journal.JournalError,match="capacity reserved"):
+        telemetry.ingest(credential(grant),batch)
+    assert journal.detail("process_1",1,{"monitor_id":"monitor-1"})==detail
+    revoked=telemetry.revoke("process_1",1,{"monitor_id":"monitor-1","grant_id":grant["grant"]["grant_id"],
+        "expected_head_sha256":detail["head_sha256"],"confirmed":True})
+    final=journal.detail("process_1",1,{"monitor_id":"monitor-1"})
+    assert revoked["revoked"] and final["entry_count"]==3 and final["reserved_disable_entries"]==0
+    with pytest.raises(journal.JournalError):
+        credential(grant)
+
+
+def test_failed_grant_reservation_rolls_back_credential(producer,local_db,monkeypatch):
+    grant,batch,clock,_=producer
+    monkeypatch.setattr(journal,"MAX_ENTRIES",4)
+    detail=journal.detail("process_1",1,{"monitor_id":"monitor-1"})
+    with pytest.raises(journal.JournalError,match="capacity reserved"):
+        telemetry.grant("process_1",1,{"monitor_id":"monitor-1","expected_head_sha256":detail["head_sha256"],
+            "producer_alias":"adapter-b","window_id":"w1","arm":"incumbent","ttl_seconds":60,"confirmed":True})
+    with local_db() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM procurement_monitor_producers").fetchone()[0]==1
+    assert journal.detail("process_1",1,{"monitor_id":"monitor-1"})==detail

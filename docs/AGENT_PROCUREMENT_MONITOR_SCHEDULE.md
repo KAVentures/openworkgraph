@@ -47,3 +47,6 @@ explicit withdrawal. Capacity exhaustion cannot consume that reserved entry.
 An already deleted process design never receives a scheduled update; its
 retained journals remain inspectable and explicitly removable by exact scope
 through the dashboard-session API.
+
+Audit capacity is reserved jointly for every outstanding producer revocation
+and scheduled consent withdrawal; normal checkpoints cannot use it.

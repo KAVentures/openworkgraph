@@ -66,3 +66,11 @@ recompute missing/overdue windows without accepting new observations or
 uploading the upstream bundle. This is explicit, not a background scheduler.
 Credential management rejects AI-context-marked requests in addition to
 requiring the dashboard session. Clock refresh consumes a journal audit entry.
+
+Each outstanding producer grant reserves one future audit entry for explicit
+revocation, even if the grant has expired. Issuing a credential requires both
+its grant entry and its revocation reservation. Ordinary writes cannot consume
+these reservations; failed writes roll back atomically. Journal detail exposes
+reserved_disable_entries and ordinary_entries_remaining. For legacy journals
+already beyond the new reservation invariant, explicit journal removal remains
+available and removes associated credentials.

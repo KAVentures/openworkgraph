@@ -53,6 +53,13 @@ with TestClient(app) as client:
     assert client.post(signing_path,json={}).status_code==401
     assert client.post(signing_path,json={},headers=bearer).status_code==403
     assert client.post(signing_path,json={'document':'{"confirmed":false}'},headers=h).status_code==422
+    trust_path='/v1/process-catalog/procurement-workforce/exchange/trust-status'
+    assert client.post(trust_path,json={'document':'{}'}).status_code==401
+    assert client.post(trust_path,json={'document':'{}'},headers=bearer).status_code==403
+    trust_status=client.post(trust_path,json={'document':'{}'},headers=h)
+    assert trust_status.status_code==200,trust_status.text
+    assert trust_status.json()['revision']==0
+    assert trust_status.headers['cache-control']=='no-store'
     overview_path='/v1/process-catalog/procurement-workforce/overview'
     assert client.get(overview_path).status_code==401
     assert client.get(overview_path,headers=bearer).status_code==403

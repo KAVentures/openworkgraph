@@ -105,7 +105,9 @@ def _view(key,state,history):
     return {"format":FORMAT,"workflow_id":key[0],"revision":key[1],"monitor_id":key[2],
         "plan_sha256":state["plan_sha256"],"head_sha256":history[-1]["entry_sha256"],
         "checkpoint_count":sum(e["kind"] in ("checkpoint","producer_checkpoint","clock_checkpoint","scheduled_checkpoint") for e in history),"entry_count":len(history),
-        "capacity":MAX_ENTRIES,"latest_report":state["report"],
+        "capacity":MAX_ENTRIES,"reserved_disable_entries":_reserved_entries(state,history),
+        "ordinary_entries_remaining":max(0,MAX_ENTRIES-len(history)-_reserved_entries(state,history)),
+        "latest_report":state["report"],
         "sticky_rollback_triggers":state["sticky_rollback_triggers"],
         "rollback_referral_recorded":state["rollback_referral_recorded"],
         "overdue_window_history":state["overdue_window_history"],"history":history,
@@ -121,12 +123,34 @@ def _view(key,state,history):
         "deployment_changed":False,"execution_authorized":False}
 
 
+def _reserved_entries(state,history,kind=None,details=None):
+    """Count outstanding disable actions from the committed audit chain.
+
+    Expiration alone does not release a reservation: the operator must still
+    be able to explicitly revoke an expired grant. A proposed grant consumes
+    both an entry now and a reservation; revocation releases exactly one.
+    """
+    active=set()
+    for entry in history:
+        if entry["kind"]=="producer_grant":
+            active.add(entry["details"]["grant_id"])
+        elif entry["kind"]=="producer_revoke":
+            active.discard(entry["details"]["grant_id"])
+    if kind=="producer_grant":
+        active.add(details["grant_id"])
+    elif kind=="producer_revoke":
+        active.discard(details["grant_id"])
+    return len(active)+int(state.get("scheduled_deadline_review_enabled",False))
+
+
 def _save(conn,key,state,history,kind,details):
     if len(history)>=MAX_ENTRIES:
         raise JournalError("Monitoring journal capacity reached; export and review before creating a new plan",409)
-    # Reserve one audit entry for explicit withdrawal of scheduled consent.
-    if state.get("scheduled_deadline_review_enabled",False) and len(history)>=MAX_ENTRIES-1:
-        raise JournalError("Monitoring journal capacity reserved for scheduled consent withdrawal",409)
+    # Reserve capacity for every outstanding producer revocation and for
+    # scheduled consent withdrawal, including the effect of this proposed entry.
+    reserved=_reserved_entries(state,history,kind,details)
+    if len(history)+1+reserved>MAX_ENTRIES:
+        raise JournalError("Monitoring journal capacity reserved for credential revocation and consent withdrawal",409)
     encoded=_json(state)
     if len(encoded.encode("ascii"))>MAX_STATE_BYTES:
         raise JournalError("Monitoring journal state exceeds capacity",413)
