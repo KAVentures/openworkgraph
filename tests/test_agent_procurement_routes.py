@@ -144,6 +144,37 @@ with TestClient(app) as client:
     assert selection('router-review',route_bundle,bearer).status_code==403
     bad_route=deepcopy(route_bundle);bad_route['captures']['router_configuration_sha256']='f'*64
     assert selection('router-review',bad_route).status_code==422
+    change_request={'incumbent_configuration_sha256':digest('router'),
+                    'challenger_configuration_sha256':digest('router-new'),'portfolio_id':'selective',
+                    'router_policy':router_request['policy'],'comparison_policy':{},
+                    'nominator_alias':'operator-a','incremental_annual_switch_cost_microunits':0,
+                    'incremental_one_time_switch_cost_microunits':0,
+                    'confirm_manual_fallback_on_known_router_failure':True,
+                    'confirm_non_overlapping_router_measurements':True,
+                    'confirm_non_overlapping_incremental_switch_cost':True,'confirmed':True}
+    change_freeze_bundle={'discovery':economics,'holdout_plan':holdout,'request':change_request}
+    assert selection('router-change-freeze',change_freeze_bundle,bearer).status_code==403
+    change_frozen=selection('router-change-freeze',change_freeze_bundle)
+    assert change_frozen.status_code==200,change_frozen.text
+    change_plan=change_frozen.json()['result']
+    change_captures={k:{'format':'openworkgraph.procurement-router-captures.v1',
+        'router_plan_sha256':change_plan[k+'_plan']['router_plan_sha256'],
+        'router_configuration_sha256':change_plan[k+'_plan']['request']['router_configuration_sha256'],
+        'predictions':[]} for k in ('incumbent','challenger')}
+    change_bundle={'discovery':economics,'holdout':held_econ,'change_plan':change_plan,'captures':change_captures}
+    change_assessed=selection('router-change-assess',change_bundle)
+    assert change_assessed.status_code==200,change_assessed.text
+    assert change_assessed.headers['cache-control']=='no-store'
+    change_result=change_assessed.json()['result']
+    assert not change_result['eligible_for_controlled_change_review']
+    change_decision={**change_bundle,'request':{'disposition':'retain_incumbent','reviewer_alias':'reviewer-b',
+        'expected_plan_sha256':change_plan['change_plan_sha256'],'expected_report_sha256':change_result['report_sha256'],'confirmed':True}}
+    assert selection('router-change-decide',change_decision,bearer).status_code==403
+    change_receipt=selection('router-change-decide',change_decision)
+    assert change_receipt.status_code==200,change_receipt.text
+    assert change_receipt.json()['result']['referred_configuration_sha256'] is None
+    change_decision['request']['disposition']='refer_for_controlled_change_review'
+    assert selection('router-change-decide',change_decision).status_code==422
     assert selection('nominate',bundle,bearer).status_code==403
     nominated=selection('nominate',bundle)
     assert nominated.status_code==200,nominated.text
@@ -206,6 +237,9 @@ with TestClient(app) as client:
     assert 'PRIVATE_STATE' not in result.text
     updated=client.post('/v1/process-catalog',headers=h,json={'workflow_id':saved['workflow_id'],'title':'Updated','expected_revision':1,'user_confirmed':True,'process_model':model()})
     assert updated.status_code==200,updated.text
+    assert selection('router-change-freeze',change_freeze_bundle).status_code==409
+    assert selection('router-change-decide',change_decision).status_code==409
+    assert selection('router-change-assess',change_bundle).json()['references_latest_revision_at_inspection'] is False
     assert selection('router-freeze',router_bundle).status_code==409
     assert selection('router-review',route_bundle).json()['references_latest_revision_at_inspection'] is False
     assert selection('nominate',bundle).status_code==409

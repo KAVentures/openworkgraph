@@ -146,6 +146,30 @@ const path=require('node:path');
   assert.match(await page.locator('#owgCatalogProcurementResult').textContent(),/not_recorded/);
   await page.getByRole('button',{name:'Clear procurement review',exact:true}).click();
   assert.equal(await page.locator('#owgCatalogProcurementResult').textContent(),'');
+  const changeRequest={incumbent_configuration_sha256:routerRequest.router_configuration_sha256,challenger_configuration_sha256:'b'.repeat(64),
+    portfolio_id:'selective',router_policy:routerRequest.policy,comparison_policy:{},
+    nominator_alias:'operator-a',incremental_annual_switch_cost_microunits:0,incremental_one_time_switch_cost_microunits:0,
+    confirm_manual_fallback_on_known_router_failure:true,confirm_non_overlapping_router_measurements:true,
+    confirm_non_overlapping_incremental_switch_cost:true,confirmed:true};
+  const changePlan=await submit('router-change-freeze',{discovery:economicBundle,holdout_plan:holdout,request:changeRequest});
+  await page.getByText('Frozen router version comparison',{exact:true}).waitFor();
+  const versionCaptures=Object.fromEntries(['incumbent','challenger'].map(k=>[k,{
+    format:'openworkgraph.procurement-router-captures.v1',router_plan_sha256:changePlan[k+'_plan'].router_plan_sha256,
+    router_configuration_sha256:changePlan[k+'_plan'].request.router_configuration_sha256,predictions:[]}]));
+  const changeBundle={discovery:economicBundle,holdout:holdBundle,change_plan:changePlan,captures:versionCaptures};
+  const changeAssessment=await submit('router-change-assess',changeBundle);
+  await page.getByText('Paired router version assessment',{exact:true}).waitFor();
+  assert(!changeAssessment.eligible_for_controlled_change_review);
+  await page.getByText('Frozen checks block positive referral.',{exact:true}).waitFor();
+  await page.getByLabel('Show changed or potentially regressed routes',{exact:true}).check();
+  await page.getByText('Showing 1–2 of 2 paired change rows',{exact:true}).waitFor();
+  const changeReceipt=await submit('router-change-decide',{...changeBundle,request:{disposition:'retain_incumbent',
+    reviewer_alias:'reviewer-b',expected_plan_sha256:changePlan.change_plan_sha256,
+    expected_report_sha256:changeAssessment.report_sha256,confirmed:true}});
+  await page.getByText('Controlled router change receipt',{exact:true}).waitFor();
+  assert.equal(changeReceipt.referred_configuration_sha256,null);
+  assert(!changeReceipt.deployment_changed);
+  await page.getByRole('button',{name:'Clear procurement review',exact:true}).click();
   const common={discovery_plan:discovery,discovery_captures:complete(discovery),holdout_plan:holdout};
   const nomination=await submit('nominate',{...common,request:{candidate_id:'other',nominator_alias:'a',confirmed:true,
     policy:{minimum_discovery_cases:1,minimum_holdout_cases:1,minimum_candidate_match_basis_points:0,require_all_categories:false}}});
