@@ -107,7 +107,8 @@ def _row(key,state,history,current,now,overlap):
         "sticky_rollback_triggers":sticky,"rollback_referral_recorded":view["rollback_referral_recorded"],
         "overdue_window_history":view["overdue_window_history"],"due_for_review_windows":due,
         "clock_refresh_needed":bool(due and report["as_of_ms"]<now),
-        "eligible_for_continued_monitoring_review":view["eligible_for_continued_monitoring_review"],
+        "journal_eligible_for_continued_monitoring_review":view["eligible_for_continued_monitoring_review"],
+        "eligible_for_continued_monitoring_review":view["eligible_for_continued_monitoring_review"] and not reasons and not due,
         "arms":report["arms"]}
 
 
@@ -164,10 +165,12 @@ def overview():
             except journal.JournalError:
                 unreadable.append(key)
             if key[0] not in current:
+                current[key[0]]=None
                 row=conn.execute("""SELECT revision,payload FROM workflow_knowledge WHERE owner=? AND workflow_id=?
                                      ORDER BY revision DESC LIMIT 1""",("local",key[0])).fetchone()
                 if row is not None:
-                    payload=json.loads(row[1])
-                    if payload.get("process_model"):
+                    try:payload=json.loads(row[1])
+                    except (ValueError,TypeError):payload={}
+                    if isinstance(payload,dict) and payload.get("process_model"):
                         current[key[0]]={"revision":row[0],"title":payload.get("title",key[0])}
         return summarize(records,current,int(time.time()*1000),unreadable)

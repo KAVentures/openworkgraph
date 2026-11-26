@@ -41,6 +41,13 @@ with TestClient(app) as client:
     assert client.post(base+'router-producer-revoke',params=params,json={'document':'{}'},headers=bearer).status_code==403
     assert client.post(base+'router-producer-grant',params=params,json={'document':'{}'},headers={**h,'X-OpenWorkGraph-Context':'ai'}).status_code==403
     assert client.post(base+'router-journal-refresh',params=params,json={'document':'{}'},headers=bearer).status_code==403
+    overview_path='/v1/process-catalog/procurement-workforce/overview'
+    assert client.get(overview_path).status_code==401
+    assert client.get(overview_path,headers=bearer).status_code==403
+    overview_result=client.get(overview_path,headers=h)
+    assert overview_result.status_code==200,overview_result.text
+    assert overview_result.headers['cache-control']=='no-store'
+    assert overview_result.json()['journal_count']==0
     journal_body={'document':'{}'}
     assert client.post(base+'router-journal-list',params=params,json=journal_body).status_code==401
     assert client.post(base+'router-journal-list',params=params,json=journal_body,headers=bearer).status_code==403

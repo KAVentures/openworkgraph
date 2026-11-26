@@ -54,3 +54,5 @@ No live polling, authenticated source telemetry, actual traffic assignment,
 production execution, causal benefit, or rollback authority is established.
 
 The optional [scoped producer interface](AGENT_PROCUREMENT_MONITOR_PRODUCER.md) adds credential-authenticated observation batches to the retained journal. New checkpoints can retain the verified monitor plan and initial source-reference hashes (no raw trial inputs), enabling incremental evaluation without resupplying the upstream bundle. Grant secrets are never retained in journal history or report exports.
+
+The [local workforce overview](AGENT_PROCUREMENT_WORKFORCE_OVERVIEW.md) aggregates retained journals across saved workflows without combining currencies or counting exact overlapping cohorts. It also exposes a prioritized incident and deadline queue.
