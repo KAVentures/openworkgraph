@@ -798,19 +798,28 @@ def register_process_intelligence_tools(mcp: Any, runtime_module: Any) -> None:
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_work_in_progress(log_id: str, bucket: str = "week", end_activities: list[str] | None = None,
-                                     case_type: str | None = None) -> dict[str, Any]:
+                                     case_type: str | None = None,
+                                     case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
         """Work in progress of a shared log over time: cases arriving, completing and still open at the end of each
         day or week, with a Little's law check (average open cases against arrival rate times mean cycle time).
         end_activities optionally names the activities that complete a case; otherwise every case completes at its
-        last event. Not a capacity plan or a rating of anyone. Aggregates only.
+        last event. case_filter (the same keys as insight cohorts, for example {"started_from": "2018-01-01"})
+        narrows the cases, which helps when a few stray dates stretch the log beyond 400 buckets. Not a capacity
+        plan or a rating of anyone. Aggregates only.
         """
         if bucket not in ("day", "week"):
             raise ToolError("bucket must be day or week")
         ends = list(end_activities or [])
         if len(ends) > 20 or any(not isinstance(a, str) or not a for a in ends):
             raise ToolError("end_activities must be up to 20 activity names")
+        params: dict[str, Any] = {"bucket": bucket, "end_activity": ends or None, "case_type": case_type}
+        if case_filter is not None:
+            if not isinstance(case_filter, dict) or not case_filter:
+                raise ToolError("case_filter must be a non-empty object")
+            import json as _json
+            params["case_filter"] = _json.dumps(case_filter, separators=(",", ":"))
         return _get("get_process_work_in_progress", f"/v1/process-intelligence/{_log(log_id)}/work-in-progress",
-                    {"bucket": bucket, "end_activity": ends or None, "case_type": case_type})
+                    params)
 
     @mcp.tool(annotations=_READ_ONLY)
     def get_process_batching(log_id: str, gap_seconds: int = 60, min_batch_size: int = 3, by_resource: bool = True,

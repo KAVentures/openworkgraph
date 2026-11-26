@@ -42,6 +42,24 @@ from . import event_log_object_relationships as object_relationships
 from . import event_log_timestamp_formats as timestamp_formats
 from . import event_log_same_source as same_source
 
+
+def _remember_missing_pandas() -> None:
+    """Make a missing pandas fail fast for DuckDB.
+
+    When a query binds a Python list (``unnest(?)``), DuckDB tries ``import pandas`` once per
+    value. Without pandas installed, each attempt searches every import path again: on a
+    1.2-million-event log, trace clustering spent five of every six seconds in failed imports.
+    Recording the module as absent makes those attempts fail immediately. Nothing changes when
+    pandas is installed.
+    """
+    import importlib.util
+    import sys
+    if "pandas" not in sys.modules and importlib.util.find_spec("pandas") is None:
+        sys.modules["pandas"] = None  # type: ignore[assignment]
+
+
+_remember_missing_pandas()
+
 MAX_LOGS = 50
 MAX_IMPORT_BYTES = 4 * 1024 * 1024 * 1024
 _LOG_ID = re.compile(r"^log_[0-9a-f]{16}$")
