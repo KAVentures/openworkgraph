@@ -43,7 +43,7 @@ MAX_PATTERN = 64
 MAX_SAMPLES = 500
 _DIRECTIVES = set("dmYyHIMSfpbBz")
 _LITERALS = set(" /.-:,T")
-_ISO_OFFSET = r"(Z|[+-][0-9]{2}:?[0-9]{2})$"
+_ISO_OFFSET = r"([Zz]|[+-][0-9]{2}:?[0-9]{2})$"
 # Named Unix-time formats: (most integer digits, most decimals, microseconds per unit).
 UNIX: dict[str, tuple[int, int, int]] = {"unix-seconds": (10, 6, 1_000_000), "unix-milliseconds": (13, 3, 1_000)}
 EXCEL_SERIAL = "excel-serial"
