@@ -192,7 +192,7 @@ def _snapshot_review(plan,raw,initial_sources):
         result=pilot._review_verified(p,{"format":pilot.LEDGER,"pilot_plan_sha256":p["pilot_plan_sha256"],
                                           "as_of_ms":cut,"observations":observations})
         rows.extend(result["rows"])
-        overdue=cut>=end+req.maximum_reporting_delay_ms and result["checks"]["all_cases_terminal"]!="pass"
+        overdue=cut>=end+req.maximum_reporting_delay_ms and any(v=="unknown" for v in result["checks"].values())
         state="rollback_review" if result["rollback_review_triggers"] else "overdue" if overdue else (
             "complete_pass" if result["eligible_for_expanded_pilot_review"] else "hold" if cut>=end else "open")
         for reason in result["rollback_review_triggers"]:triggers.append({"window_id":wid,"reason":reason})
@@ -228,20 +228,22 @@ def review(packet,initial,monitor_plan,snapshot,previous_checkpoint):
         raise ValueError("monitoring plan or initial evidence changed")
     initial_sources={o["source_evidence_sha256"] for o in initial["captures"]["observations"]}
     latest=_snapshot_review(plan,snapshot,initial_sources)
-    previous_pin=None
+    previous_pin=None;prior_overdue=[]
     if previous_checkpoint is not None:
         if not isinstance(previous_checkpoint,dict) or set(previous_checkpoint)!={"snapshot","expected_snapshot_sha256"}:
             raise ValueError("exact retained previous checkpoint required")
         previous=_normalize(previous_checkpoint["snapshot"])
         if digest(previous)!=previous_checkpoint["expected_snapshot_sha256"]:
             raise ValueError("prior snapshot pin mismatch")
-        _snapshot_review(plan,previous,initial_sources)
+        prior_review=_snapshot_review(plan,previous,initial_sources)
+        prior_overdue=[w["window_id"] for w in prior_review["windows"] if w["state"]=="overdue"]
         _check_extension(previous,_normalize(snapshot))
         previous_pin=previous_checkpoint["expected_snapshot_sha256"]
     return router._seal({"format":REPORT,"monitor_plan_sha256":plan["monitor_plan_sha256"],
         "initial_receipt_sha256":plan["initial_receipt_sha256"],"currency":plan["currency"],
         "rollback_target_configuration_sha256":plan["rollback_target_configuration_sha256"],
         "previous_snapshot_sha256":previous_pin,"prior_checkpoint_extension_verified":previous_pin is not None,
+        "overdue_windows_at_previous_checkpoint":prior_overdue,
         **latest,"continuous_history_independently_verified":False,"live_telemetry_verified":False,
         "deployment_changed":False,"execution_authorized":False,
         "limitations":["Finite declared monitoring schedule; no live ingestion, background polling or deployment actions.",

@@ -82,3 +82,5 @@ python -m shared.agent_procurement_router_pilot router-pilot-review --process-ex
 All inputs are declarations. Hash pins detect changes relative to retained
 artifacts, not authenticated production execution, actual traffic assignment,
 customer identity, independent approval or real-world causal improvement.
+
+After a passing pilot and separate expansion referral, see [multi-window monitoring](AGENT_PROCUREMENT_ROUTER_MONITOR.md) for a finite cumulative schedule and retained checkpoint comparisons.
