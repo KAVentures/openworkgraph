@@ -162,7 +162,7 @@ def assess(document):
         "optimal_within_enumerated_scenarios":True,"rows":rows,
         "first_year_savings_lower_microunits":_amount(saving),"first_year_gross_ai_cost_upper_microunits":_amount(gross),
         "annual_ai_cases":cases,"annual_additional_person_ms_upper":_amount(extra),
-        "gross_ai_cost_headroom_microunits":_amount(limits[0]-gross),"ai_case_headroom":limits[1]-cases,
+        "gross_ai_cost_headroom_microunits":_amount(limits[0]-gross),"ai_case_headroom":str(limits[1]-cases),
         "additional_person_ms_headroom":_amount(limits[2]-extra),
         "selected_workflows":sum(x["id"] is not None for x in selection),
         "source_outcomes_verified":False,"realized_savings_verified":False,

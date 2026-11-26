@@ -182,10 +182,12 @@ async def workforce_overview(request: Request):
 @router.post("/v1/process-catalog/procurement-workforce/allocation")
 async def workforce_allocation(request: Request):
     _require_dashboard(request)
-    payload=await _envelope(request,max_bytes=8*1024*1024)
+    payload=await _envelope(request)
     _require_dashboard(request)
     try:
-        result=await run_in_threadpool(allocation.assess,payload)
+        if not isinstance(payload,dict) or set(payload)!={"document"} or not isinstance(payload["document"],str):
+            raise ValueError("exact JSON-text document required")
+        result=await run_in_threadpool(lambda:allocation.assess(single.loads(payload["document"])))
         return JSONResponse(result,headers={"Cache-Control":"no-store"})
     except LookupError:
         raise HTTPException(404,"Saved process revision not found") from None

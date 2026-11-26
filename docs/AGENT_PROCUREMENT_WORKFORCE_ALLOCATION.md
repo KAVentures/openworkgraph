@@ -3,7 +3,8 @@
 A bounded exact optimizer over explicitly selected current saved workflows.
 It does not scan all workflows, provision agents, spend money or claim
 realized savings. Open the Process catalog's allocation section or POST
-JSON to /v1/process-catalog/procurement-workforce/allocation with a local
+the existing JSON-text envelope (document: original JSON text) to
+/v1/process-catalog/procurement-workforce/allocation with a local
 dashboard session. The response is no-store and nonpersistent.
 
 ## Request
@@ -20,7 +21,7 @@ conditional portfolios from that report).
 Every operating report is recomputed against the exact saved revision.
 Stale revisions, changed report pins, mixed currencies, overlapping
 declared suite case hashes and unknown portfolio IDs refuse the request.
-The JSON body is limited to 8 MiB. The input reports are not persisted.
+The decoded JSON document is limited to 8 MiB. The browser uploads the original text so large integer amounts are not rounded or duplicate keys silently discarded. The input reports are not persisted.
 
 ## Eligibility and constraints
 
@@ -48,5 +49,5 @@ sum of first-year savings lower bounds, then minimize gross cost, additional
 person-time, AI cases, and lexicographic option IDs in workflow-ID order.
 All arithmetic is rational; JSON contains numerator/denominator strings.
 The response includes each option, exclusion reasons, selected scenario,
-resource headroom, search counts and report pins. No external authority
+resource headroom (AI-case headroom as a decimal string), search counts and report pins. No external authority
 or actual production outcome is established.

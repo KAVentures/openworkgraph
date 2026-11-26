@@ -1886,7 +1886,7 @@
       try{
         const selected=file.files?.[0];
         if(!selected||selected.size>8*1024*1024)throw new Error('Choose a JSON bundle of at most 8 MiB.');
-        const body=JSON.parse(await selected.text());
+        const body={document:await selected.text()};
         const result=await request('/v1/process-catalog/procurement-workforce/allocation',body);
         if(attempt!==generation||!output.isConnected)return;
         const amount=(v,unit)=>{
