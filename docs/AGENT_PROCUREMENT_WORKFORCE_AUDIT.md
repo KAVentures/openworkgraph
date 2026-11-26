@@ -280,3 +280,47 @@ same exact-text, 8 MiB request, explicit confirmation and no-store
 boundaries apply. The CLI has the historical timeline aggregate input cap,
 exclusive output and a maximum 30,000 findings; exceeding any cap is
 refused rather than silently truncating the worklist.
+
+
+## Reconcile follow-up receipts
+
+After reviewing the original historical timeline, expand **Reconcile
+follow-up receipts from multiple reviewers**. Select one to forty exported
+triage receipts and supply the separately communicated SHA-256 pin for
+each. The server independently recomputes the original worklist and every
+receipt, compares their exact canonical representations, and rejects
+duplicate pins, malformed or rewritten receipts and receipts belonging
+to a different worklist. Digest pins do not authenticate the reviewer.
+
+The reconciliation includes every original finding, including those with
+no submitted declaration. It distinguishes unaddressed, single declaration,
+matching declarations and conflicting declarations. Disagreement in
+disposition, owner or external reference is reported without choosing a
+winner. All competing declarations and their receipt pins remain visible.
+Case-folded reviewer alias variants and conflicting declarations under the
+same alias are identified; this is not identity resolution or proof of
+independent reviewers. Upload order does not affect the result.
+
+The dashboard offers status filtering, search, paginated detail and a
+minimized JSON download. Changing a receipt file or pin invalidates the
+visible result and ignores stale responses. No external tickets, assignments,
+incident clearances or production authorizations are created.
+
+For offline reconciliation, provide a receipt-set JSON object containing
+`confirmed: true` and a `receipts` list, where every entry contains
+`expected_triage_sha256` and the complete exported `receipt` object.
+Obtain pins from the relevant trusted administrative channel rather than
+assuming an uploaded receipt is its own trust anchor. Run:
+
+```sh
+python -m server.agent_procurement_workforce_audit_reconcile manifest.json --manifest-sha256 <independent-digest> --receipts receipts.json --output reconciliation.json first.json second.json
+```
+
+The dashboard-only POST action
+/v1/process-catalog/procurement-workforce/exchange/audit-reconcile accepts
+the original audit-timeline request plus this object as `receipt_set`.
+The same strict JSON-text, session authentication, explicit confirmation,
+no-store and 8 MiB request limits apply. The CLI has the historical aggregate
+dossier input cap and exclusive 40 MiB portable output cap. Larger output
+is refused instead of truncating findings. No reconciliation is retained
+by the server; separately preserve exports according to your audit policy.
