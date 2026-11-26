@@ -1306,7 +1306,7 @@
   function renderProcurement(host){
     const section=el('section');section.appendChild(el('h4','AI workforce procurement'));
     section.appendChild(el('p','Compare portable shadow evaluations, freeze a repeated trial, or review its full scheduled population. Files are inspected only on this computer and are not retained. Model identities, measurements and business outcomes remain unverified.'));
-    const mode=el('select');mode.id='owgCatalogProcurementMode';
+    const mode=el('select');mode.id='owgCatalogProcurementMode';mode.setAttribute('aria-label','Procurement operation');
     for(const [value,label] of [['compare','Compare completed shadow reports'],['freeze','Freeze a repeated trial plan'],['review','Review a frozen trial and captures'],['nominate','Nominate a candidate before holdout'],['assess','Assess the held-out trial'],['decide','Record a pinned rehearsal decision'],['outcome-review','Review controlled sandbox outcomes'],['rollout-review','Request separate rollout review'],['deployment-review','Review monitored deployment readiness'],['deployment-decide','Record deployment review referral']]){
       const option=el('option',label);option.value=value;mode.appendChild(option);
     }
