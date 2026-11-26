@@ -2606,6 +2606,58 @@
         }catch(e){if(token===ticketSerial&&attempt===remediationGeneration)ticketOutput.replaceChildren(el('p',e.message));}
       };
       ticketPanel.append(button('Load Jira ticket ledger',loadTickets),ticketOutput);
+      const handoffPanel=el('details');handoffPanel.append(el('summary','Explicit Jira ticket creation and follow-up comments'),
+        el('p','Separate write opt-in and grant required. Preview the exact destination and minimized payload before confirming one external write. Uncertain attempts must be inspected manually; no automatic retry.'));
+      const handoffOutput=el('div');handoffOutput.setAttribute('aria-live','polite');
+      let handoffSerial=0,handoffBusy=false;
+      const loadHandoff=async()=>{
+        const token=++handoffSerial;handoffOutput.replaceChildren();
+        try{
+          const scope={worklist_sha256:value.worklist_sha256};
+          const ledger=await remediationCall('ticket-status',scope);
+          const attempts=await remediationCall('jira-status',scope);
+          if(token!==handoffSerial||attempt!==remediationGeneration||!handoffOutput.isConnected)return;
+          if(ledger.register_history_sha256!==value.history_sha256)throw new Error('Register changed; reload it first.');
+          handoffOutput.append(el('p',attempts.attempts.length+' retained external write attempts'),download(attempts,'owg-jira-handoff-attempts'));
+          for(const row of attempts.attempts)handoffOutput.appendChild(el('p',row.operation+' · '+row.finding_id.slice(0,12)+' · '+row.status+(row.issue_key?' · '+row.issue_key:'')+(row.comment_id?' · comment '+row.comment_id:'')));
+          const finding=el('select');finding.setAttribute('aria-label','Jira handoff finding');
+          const eligible=value.findings.filter(r=>r.state!=='unassigned');
+          for(const r of eligible){const option=el('option',r.kind.replaceAll('_',' ')+' · '+r.finding_id.slice(0,12));option.value=r.finding_id;finding.appendChild(option);}
+          const operation=el('select');operation.setAttribute('aria-label','Jira handoff operation');
+          for(const [v,label] of [['create','Create review ticket'],['comment','Append review comment to observed bound ticket']]){const opt=el('option',label);opt.value=v;operation.appendChild(opt);}
+          const previewHost=el('div');let revision=0;
+          const reset=()=>{revision++;previewHost.replaceChildren();};
+          finding.addEventListener('change',reset);operation.addEventListener('change',reset);
+          const preview=button('Preview exact Jira handoff',async()=>{
+            const version=++revision;previewHost.replaceChildren();
+            try{
+              const row=eligible.find(r=>r.finding_id===finding.value);
+              if(!row)throw new Error('Assign a finding first.');
+              const body={...pins,expected_ticket_revision:ledger.ticket_revision,expected_ticket_history_sha256:ledger.ticket_history_sha256,
+                finding_id:row.finding_id,expected_finding_sha256:row.finding_sha256,operation:operation.value};
+              const plan=await remediationCall('jira-preview',body);
+              if(version!==revision||token!==handoffSerial||attempt!==remediationGeneration||!previewHost.isConnected)return;
+              const payload=el('pre',JSON.stringify(plan.payload,null,2));payload.style.whiteSpace='pre-wrap';payload.style.overflowWrap='anywhere';
+              previewHost.append(el('h5','Exact external write preview'),el('p',plan.operation+' · '+plan.destination.host+' · project '+plan.destination.project+
+                (plan.destination.bound_issue_key?' · issue '+plan.destination.bound_issue_key:' · issue type '+plan.destination.issue_type_id)),
+                el('p','Plan SHA-256: '+plan.plan_sha256),payload);
+              const send=button('Confirm and send one Jira write',async()=>{
+                if(handoffBusy||version!==revision||token!==handoffSerial||attempt!==remediationGeneration)return;
+                if(!window.confirm('Send this exact previewed payload to the specified Jira project? A durable attempt is recorded before the request; an uncertain result cannot be automatically retried.'))return;
+                handoffBusy=true;send.disabled=true;
+                try{
+                  const result=await remediationCall('jira-dispatch',{...body,expected_plan_sha256:plan.plan_sha256,confirm_external_write:true});
+                  if(token===handoffSerial&&attempt===remediationGeneration){previewHost.appendChild(el('p','Provider result: '+result.status+(result.issue_key?' · '+result.issue_key:'')));await loadHandoff();}
+                }catch(e){if(token===handoffSerial&&attempt===remediationGeneration)previewHost.appendChild(el('p','Write not confirmed: '+e.message+' · inspect retained attempts and Jira before taking further action.'));}
+                finally{handoffBusy=false;}
+              });previewHost.appendChild(send);
+            }catch(e){if(version===revision&&token===handoffSerial)previewHost.replaceChildren(el('p','Preview refused: '+e.message));}
+          });preview.disabled=!eligible.length;
+          handoffOutput.append(auditLabel('Finding',finding),auditLabel('Operation',operation),preview,previewHost);
+        }catch(e){if(token===handoffSerial&&attempt===remediationGeneration)handoffOutput.replaceChildren(el('p',e.message));}
+      };
+      handoffPanel.append(button('Load Jira handoff attempts',loadHandoff),handoffOutput);
+
       const draw=()=>{
         const q=query.value.trim().toLowerCase();
         const matches=value.findings.filter(r=>(filter.value==='all'||r.state===filter.value)&&(!q||r.finding_id.includes(q)||String(r.scope.installation_alias||'').toLowerCase().includes(q)||String(r.scope.journal_tag||'').includes(q)));
@@ -2649,7 +2701,7 @@
         const next=button('Next history page',()=>{offset+=25;drawEvents();});
         prev.disabled=offset===0;next.disabled=offset+25>=value.events.length;events.append(prev,next);
       };history.appendChild(events);drawEvents();
-      remediationOutput.append(auditLabel('Declared reviewer',reviewer),auditLabel('Filter state',filter),auditLabel('Search',query),message,rows,history,ticketPanel,
+      remediationOutput.append(auditLabel('Declared reviewer',reviewer),auditLabel('Filter state',filter),auditLabel('Search',query),message,rows,history,ticketPanel,handoffPanel,
         download(value,'owg-workforce-remediation-register'),
         button('Reload register',async()=>{const token=++remediationGeneration;try{const current=await remediationCall('status',{worklist_sha256:value.worklist_sha256});if(token===remediationGeneration)showRemediation(current);}catch(e){if(token===remediationGeneration)remediationOutput.replaceChildren(el('p',e.message));}}),
         button('Remove local remediation register',async()=>{
