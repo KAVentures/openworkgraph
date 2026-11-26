@@ -2455,6 +2455,86 @@
         submit,receipt,download(work,'owg-workforce-audit-findings'));
       count();draw();target.appendChild(panel);
     };
+    const renderAuditReconciliation=(target,document,attempt)=>{
+      const panel=el('details');panel.append(el('summary','Reconcile follow-up receipts from multiple reviewers'),
+        el('p','Supply each exported receipt and its separately communicated digest. Conflicting declarations remain unresolved; matching declarations do not establish reviewer independence or work completion.'));
+      const inputs=el('div'),resultHost=el('div');resultHost.setAttribute('aria-live','polite');
+      let entries=[],serial=0;
+      const invalidate=()=>{serial++;resultHost.replaceChildren();};
+      const makeEntry=()=>{
+        const file=makeFile('Follow-up receipt');
+        const pin=el('input');pin.type='text';pin.maxLength=64;pin.autocomplete='off';
+        file.addEventListener('change',invalidate);pin.addEventListener('input',invalidate);
+        return {file,pin};
+      };
+      const drawInputs=()=>{
+        inputs.replaceChildren();
+        entries.forEach(({file,pin},i)=>{
+          file.setAttribute('aria-label','Reconciliation receipt '+(i+1));
+          pin.setAttribute('aria-label','Independent receipt digest '+(i+1));
+          inputs.append(auditLabel('Receipt '+(i+1),file),auditLabel('Independent receipt digest '+(i+1),pin));
+        });
+        const add=button('Add receipt',()=>{if(entries.length<40){invalidate();entries.push(makeEntry());drawInputs();}});
+        const remove=button('Remove last receipt',()=>{if(entries.length>1){invalidate();entries.pop();drawInputs();}});
+        add.disabled=entries.length>=40;remove.disabled=entries.length<=1;
+        inputs.append(add,remove);
+      };
+      const show=value=>{
+        resultHost.append(el('h5','Recomputed audit receipt reconciliation'),
+          el('p',value.receipt_count+' receipts · '+value.finding_count+' findings'),
+          el('p',value.counts_by_status.unaddressed+' unaddressed · '+value.counts_by_status.one_declaration+' single declarations · '+value.counts_by_status.matching_declarations+' matching · '+value.counts_by_status.conflicting_declarations+' conflicting'),
+          el('p',value.unaddressed_rollback_referrals+' unaddressed rollback referrals · '+value.conflicting_rollback_referrals+' conflicting rollback referrals'),
+          el('p','Reconciliation SHA-256: '+value.reconciliation_sha256),
+          el('p','No conflict resolved, incident cleared or external assignment created.'));
+        for(const aliases of value.casefold_reviewer_alias_variants)resultHost.appendChild(el('p','Reviewer alias spelling variants: '+aliases.join(', ')));
+        const filter=el('select');filter.setAttribute('aria-label','Receipt reconciliation status');
+        for(const [v,label] of [['attention','Conflicting or unaddressed'],['all','All findings'],['conflicting_declarations','Conflicting declarations'],['unaddressed','Unaddressed'],['matching_declarations','Matching declarations'],['one_declaration','Single declaration']]){
+          const opt=el('option',label);opt.value=v;filter.appendChild(opt);
+        }
+        const query=el('input');query.type='search';query.setAttribute('aria-label','Search reconciled findings');query.maxLength=80;
+        const list=el('div');let page=0;
+        const draw=()=>{
+          const q=query.value.trim().toLowerCase();
+          const rows=value.findings.filter(r=>(filter.value==='all'||(filter.value==='attention'&&['unaddressed','conflicting_declarations'].includes(r.status))||r.status===filter.value)&&(!q||r.finding_id.includes(q)||String(r.scope.installation_alias||'').toLowerCase().includes(q)||String(r.scope.journal_tag||'').includes(q)));
+          const per=25,pages=Math.max(1,Math.ceil(rows.length/per));page=Math.min(page,pages-1);
+          list.replaceChildren(el('p',rows.length+' matching reconciliation findings · page '+(page+1)+' of '+pages));
+          for(const row of rows.slice(page*per,(page+1)*per)){
+            const item=el('details');item.append(el('summary',row.kind.replaceAll('_',' ')+' · '+row.status.replaceAll('_',' ')),
+              el('p','Scope: '+Object.values(row.scope).join(' · ')),
+              el('p','Finding: '+row.finding_id),
+              el('p','Conflicting fields: '+(row.conflict_dimensions.join(', ')||'none')),
+              el('p',row.declared_reviewer_alias_count+' distinct case-folded declared reviewer aliases'+(row.same_reviewer_conflict?' · same-alias conflict':'')));
+            for(const d of row.declarations)item.appendChild(el('p',d.declared_reviewer_alias+' · '+d.disposition+' · owner '+(d.owner_alias||'none')+' · reference '+(d.external_reference||'none')+' · receipt '+d.triage_sha256));
+            list.appendChild(item);
+          }
+          const prev=button('Previous reconciliation page',()=>{if(page>0){page--;draw();}});
+          const next=button('Next reconciliation page',()=>{if(page+1<pages){page++;draw();}});
+          prev.disabled=page===0;next.disabled=page+1===pages;list.append(prev,next);
+        };
+        filter.addEventListener('change',()=>{page=0;draw();});query.addEventListener('input',()=>{page=0;draw();});
+        resultHost.append(auditLabel('Status',filter),auditLabel('Search',query),list,download(value,'owg-workforce-audit-reconciliation'));draw();
+      };
+      const submit=button('Recompute and reconcile selected receipts',async()=>{
+        const version=++serial;resultHost.replaceChildren();
+        try{
+          const picked=entries.map(e=>({file:e.file.files?.[0],pin:e.pin.value}));
+          if(picked.some(e=>!e.file||!/^[a-f0-9]{64}$/.test(e.pin)))throw new Error('Select every receipt and enter its separately obtained digest.');
+          if(new Set(picked.map(e=>e.pin)).size!==picked.length)throw new Error('Duplicate receipt digest.');
+          if(new TextEncoder().encode(document).length+picked.reduce((n,e)=>n+e.file.size,0)>auditMax)throw new Error('Combined evidence and receipts exceed the browser limit; use the offline CLI.');
+          if(!window.confirm('Recompute the original historical evidence and every selected receipt? No declarations will be applied to external systems.'))return;
+          const raw=[];
+          for(const e of picked)raw.push('{"expected_triage_sha256":'+JSON.stringify(e.pin)+',"receipt":'+await auditRead(e.file)+'}');
+          if(version!==serial||attempt!==auditGeneration||!resultHost.isConnected)return;
+          const payload=document.slice(0,-1)+',"receipt_set":{"confirmed":true,"receipts":['+raw.join(',')+']}}';
+          if(new TextEncoder().encode(payload).length>auditMax)throw new Error('Combined evidence and receipts exceed the browser limit.');
+          const value=await inboxCall('audit-reconcile',payload);
+          if(version!==serial||attempt!==auditGeneration||!resultHost.isConnected)return;
+          show(value);
+        }catch(error){if(version===serial&&attempt===auditGeneration&&resultHost.isConnected)resultHost.replaceChildren(el('p','Reconciliation refused: '+error.message));}
+      });
+      entries=[makeEntry()];drawInputs();
+      panel.append(inputs,submit,resultHost);target.appendChild(panel);
+    };
     const verifyAudit=button('Recompute selected historical audit evidence',async()=>{
       const attempt=++auditGeneration;auditOutput.replaceChildren();
       try{
@@ -2482,7 +2562,7 @@
             el('p','Historical review clock: '+new Date(receipt.reviewed_as_of_ms).toISOString()+' · current freshness and trusted timestamp not verified.'),
             download(value,'owg-workforce-verified-audit-dossier'));
           renderReview(auditOutput,value.report);
-        }else{renderAuditTimeline(auditOutput,value);renderAuditTriage(auditOutput,value,document,attempt);}
+        }else{renderAuditTimeline(auditOutput,value);renderAuditTriage(auditOutput,value,document,attempt);renderAuditReconciliation(auditOutput,document,attempt);}
       }catch(error){if(attempt===auditGeneration&&auditOutput.isConnected)auditOutput.replaceChildren(el('p','Historical review refused. Check file ordering, independent pins and size limits. '+error.message));}
     });
     auditMode.addEventListener('change',resetAuditFiles);auditDigest.addEventListener('input',invalidateAudit);auditTrust.addEventListener('change',invalidateAudit);
