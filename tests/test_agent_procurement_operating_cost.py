@@ -79,6 +79,9 @@ def test_failure_and_withdrawal_cost_stay_in_population(trial):
     withdrawn=next(x for x in cheap["rows"] if x["trial_status"]=="withdrawn")
     assert timeout["candidate_missing"]==[]
     assert "provider_runtime_cost_microunits" in withdrawn["candidate_missing"]
+    assert cheap["candidate"]["provider_runtime_cost_lower_microunits"]==sum(
+        a["cost_microunits"] for a in captures["captures"][0]["attempts"]
+        if a["cost_microunits"] is not None)
     assert cheap["candidate"]["total_cost"]["upper_microunits"] is None
     assert cheap["trial_gate_status"]!="pass"
 

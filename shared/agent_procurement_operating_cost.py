@@ -103,7 +103,7 @@ def _money(x):
     return {"numerator": x.numerator, "denominator": x.denominator}
 
 
-def _cost_parts(observation, rates, direct):
+def _cost_parts(observation, rates, direct, *, provider_complete=True):
     values = {k: getattr(observation, k+"_ms") if observation is not None else None
               for k in CATEGORIES}
     extra = observation.other_direct_cost_microunits if observation is not None else None
@@ -113,7 +113,7 @@ def _cost_parts(observation, rates, direct):
     missing = [k+"_ms" for k,v in values.items() if v is None]
     if extra is None:
         missing.append("other_direct_cost_microunits")
-    if direct is None:
+    if direct is None or not provider_complete:
         missing.append("provider_runtime_cost_microunits")
     known = labor + (extra if extra is not None else 0) + (direct if direct is not None else 0)
     # A missing duration remains missing even if the assumed wage is zero:
@@ -211,12 +211,11 @@ def assess(packet, plan, captures, request):
     manual_parts={key:_cost_parts(manual.get(key),req.rates,0) for key in sorted(keys)}
     by_candidate=defaultdict(list)
     for slot in slots.values():
-        # Missing or withdrawn trial evidence cannot establish a zero provider
-        # charge, even if a withdrawal has a declared zero cost.
+        # Preserve any known incurred cost on withdrawal as a lower bound;
+        # unresolved attempts cannot establish complete provider spend.
         direct=slot["cost_microunits"]
-        if slot["status"] in ("not_recorded","withdrawn"):
-            direct=None
-        alt=_cost_parts(interventions.get(slot["slot_id"]),req.rates,direct)
+        alt=_cost_parts(interventions.get(slot["slot_id"]),req.rates,direct,
+                        provider_complete=slot["status"] not in ("not_recorded","withdrawn"))
         by_candidate[slot["candidate_id"]].append((slot,manual_parts[(slot["case_id"],slot["repeat"])],alt))
     n=len(keys)
     summaries=[]

@@ -54,6 +54,26 @@ with TestClient(app) as client:
     assert reviewed.status_code==200,reviewed.text
     assert reviewed.json()['result']['candidates'][0]['status_counts']['not_recorded']==2
     assert reviewed.json()['result']['pareto']['candidate_ids']==[]
+    economics={'plan':plan,'captures':captures,'request':{
+        'format':'openworkgraph.procurement-operating-cost.v1',
+        'plan_sha256':plan['plan_sha256'],'ledger_sha256':reviewed.json()['result']['ledger_sha256'],
+        'currency':'USD','confirm_non_overlapping_cost_boundary':True,
+        'rates':{k+'_hourly_microunits':100 for k in ('routine','review','rework','fallback','escalation')},
+        'manual':[],'interventions':[],
+        'scenario':{'annual_cases':100,'manual_annual_microunits':0,
+                    'candidate_fixed_costs':[{'candidate_id':cid,'annual_microunits':0,'one_time_microunits':0}
+                                             for cid in ('current','other')]}}}
+    economic_body={'document':json.dumps(economics)}
+    assert client.post(base+'operating-cost',params=params,json=economic_body,headers=bearer).status_code==403
+    economic=client.post(base+'operating-cost',params=params,json=economic_body,headers=h)
+    assert economic.status_code==200,economic.text
+    assert economic.headers['cache-control']=='no-store'
+    e=economic.json()
+    assert not e['result_persisted'] and not e['execution_authorized']
+    assert e['result']['manual_baseline']['attempts']==2
+    assert e['result']['candidates'][0]['paired_trial_savings']=={'lower_microunits':None,'upper_microunits':None}
+    wrong=deepcopy(economics);wrong['request']['ledger_sha256']='f'*64
+    assert client.post(base+'operating-cost',params=params,json={'document':json.dumps(wrong)},headers=h).status_code==422
     held=deepcopy(design)
     held['reference_report']['suite_sha256']='e'*64
     held['reference_report']['cases'][0]['case_sha256']='f'*64
