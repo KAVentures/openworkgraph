@@ -34,6 +34,7 @@ PAYLOAD_FORMAT = "openworkgraph.signal-attention.v1"
 MAX_CHANNELS = 20
 MAX_PENDING = 50
 MAX_SEEN = 2000
+MAX_DISMISSED = 2000
 MAX_AUDIT = 20
 MAX_STATES_PER_ALERT = 50
 MAX_FAILURES = 5
@@ -141,6 +142,23 @@ def _audit(item: dict, notification_id: str, outcome: str, at: float) -> None:
     }])[-MAX_AUDIT:]
 
 
+def _entry_pin(channel_id, entry):
+    # Pins bind the exact queue identity and attempt state, without returning
+    # the underlying rule IDs or state fingerprints to the dashboard.
+    return hashlib.sha256(json.dumps([channel_id, entry], sort_keys=True,
+                                    separators=(",", ":")).encode()).hexdigest()
+
+
+def _public_pending(item, entry):
+    return {"notification_id": entry["notification_id"],
+            "expected_queue_sha256": _entry_pin(item["channel_id"], entry),
+            "created_at": entry["created_at"],
+            "next_attempt_at": _now(entry["next_attempt_epoch"]),
+            "attempts": entry["attempts"],
+            "unreviewed_signal_states_at_queue": len(entry["states"]),
+            "previous_delivery_may_have_arrived": bool(entry["attempts"])}
+
+
 def _public(item: dict) -> dict:
     return {
         "format": FORMAT, "configured": True,
@@ -148,6 +166,9 @@ def _public(item: dict) -> dict:
         "recipient_host": _url(item["receiver_url"])[1],
         "enabled": item["enabled"], "created_at": item["created_at"],
         "pending_notifications": len(item["pending"]),
+        "pending_groups": [_public_pending(item, entry) for entry in item["pending"]],
+        "dismissed_state_keys": len(item.get("dismissed", [])),
+        "max_dismissed_state_keys": MAX_DISMISSED,
         "delivered_notifications": item["delivered"],
         "last_delivered_at": item.get("last_delivered_at"),
         "recent_delivery_attempts": list(item.get("audit", []))[-MAX_AUDIT:],
@@ -205,7 +226,7 @@ def configure(log_id: str, receiver_url: str, *,
             "channel_id": "ndl_" + secrets.token_hex(8), "log_id": log_id,
             "receiver_url": receiver_url, "signing_secret": secret,
             "enabled": True, "created_at": _now(),
-            "pending": [], "seen": [], "audit": [], "delivered": 0,
+            "pending": [], "seen": [], "dismissed": [], "audit": [], "delivered": 0,
             "last_delivered_at": None, "consecutive_failures": 0,
             "paused_reason": None,
         }
@@ -224,7 +245,60 @@ def remove(log_id: str) -> dict:
     return {"removed": deleted, "pending_erased": deleted, "secret_erased": deleted}
 
 
-def resume(log_id: str, *, confirm_external_delivery: bool) -> dict:
+def _pinned_channel(data, log_id, expected_channel_id):
+    item = data["channels"].get(log_id)
+    if item is None or item["channel_id"] != expected_channel_id:
+        raise DeliveryError("notification channel changed; refresh delivery status")
+    return item
+
+
+def pause(log_id: str, *, expected_channel_id: str) -> dict:
+    """Proactively stop new queuing and sending; retain keys and pending groups."""
+    with _LOCK:
+        data = _read()
+        item = _pinned_channel(data, log_id, expected_channel_id)
+        if item["enabled"]:
+            item["enabled"] = False
+            item["paused_reason"] = "owner_paused_delivery"
+            _audit(item, item["channel_id"], "owner_paused_delivery", time.time())
+            _save(data)
+        return _public(item)
+
+
+def dismiss(log_id: str, *, expected_channel_id: str, notification_id: str,
+            expected_queue_sha256: str, confirm_dismiss: bool) -> dict:
+    """Dismiss a pinned pending group while paused, never review its signals.
+
+    Persist separate suppression keys instead of treating a dismissal as a
+    successful delivery. Refuse a full suppression ledger rather than
+    silently evicting a previous explicit dismissal and re-sending it.
+    """
+    if confirm_dismiss is not True:
+        raise DeliveryError("explicit pending-notification dismissal required")
+    with _LOCK:
+        data = _read()
+        item = _pinned_channel(data, log_id, expected_channel_id)
+        if item["enabled"]:
+            raise DeliveryError("pause delivery before dismissing a pending group")
+        entry = next((e for e in item["pending"] if e["notification_id"] == notification_id), None)
+        if entry is None or _entry_pin(item["channel_id"], entry) != expected_queue_sha256:
+            raise DeliveryError("pending notification changed; refresh delivery status")
+        keys = list(dict.fromkeys([*item.get("dismissed", []),
+                                   *(s["key"] for s in entry["states"])]))
+        if len(keys) > MAX_DISMISSED:
+            raise DeliveryError("dismissal capacity reached; review signals locally or remove the channel")
+        item["dismissed"] = keys
+        item["pending"].remove(entry)
+        _audit(item, notification_id, "owner_dismissed_pending", time.time())
+        _save(data)
+        return {**_public(item), "dismissed_notification_id": notification_id,
+                "dismissed_states": len(entry["states"]),
+                "previous_delivery_may_have_arrived": bool(entry["attempts"]),
+                "signal_review_changed": False}
+
+
+def resume(log_id: str, *, confirm_external_delivery: bool,
+           expected_channel_id: str | None = None) -> dict:
     if confirm_external_delivery is not True:
         raise DeliveryError("explicit delivery reapproval is required")
     from . import local_scheduler
@@ -235,11 +309,14 @@ def resume(log_id: str, *, confirm_external_delivery: bool) -> dict:
         item = data["channels"].get(log_id)
         if item is None:
             raise DeliveryError("unknown notification channel")
+        if expected_channel_id is not None:
+            _pinned_channel(data, log_id, expected_channel_id)
         item["enabled"] = True
         item["paused_reason"] = None
         item["consecutive_failures"] = 0
         for row in item["pending"]:
             row["next_attempt_epoch"] = time.time()
+        _audit(item, item["channel_id"], "owner_resumed_delivery", time.time())
         _save(data)
         return _public(item)
 
@@ -258,7 +335,7 @@ def queue_current(log_id: str) -> dict:
         item = data["channels"].get(log_id)
         if not item or not item["enabled"] or item["channel_id"] != channel_id:
             return {"queued": 0, "delivery_enabled": False}
-        selected, known = [], set(item["seen"])
+        selected, known = [], set(item["seen"]) | set(item.get("dismissed", []))
         for message in item["pending"]:
             known.update(state["key"] for state in message["states"])
         for state in rows:
@@ -479,5 +556,5 @@ def deliver_due(*, now: float | None = None, transport=None) -> dict:
                 "case_data_included": False, "business_actions": False}
 
 
-__all__ = ["DeliveryError", "configure", "remove", "resume", "status", "enabled_for", "any_enabled", "queue_current",
+__all__ = ["DeliveryError", "configure", "remove", "pause", "dismiss", "resume", "status", "enabled_for", "any_enabled", "queue_current",
            "deliver_due", "FORMAT", "PAYLOAD_FORMAT"]

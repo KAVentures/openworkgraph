@@ -352,3 +352,57 @@ def test_unattributed_legacy_root_does_not_become_shared_by_migration(store):
     with pytest.raises(RuntimeError,match='lacks publication attribution'):OrganizationProcessStore(store.db).initialize()
     assert store.knowledge.history(legacy,wid)['workflows'][0]==root
     with store.db.connect() as c:assert store.db._execute(c,'SELECT count(*) FROM gateway_process_storage_migrations').fetchone()[0]==0
+
+
+def test_map_comparison_exact_paths_reused_ids_and_pins(store):
+    from shared.process_hierarchy_comparison import MapComparison
+    maps=ProcessHierarchies(store);root,a,b,c=[process(store,str(i)) for i in range(4)]
+    wid=root['workflow_id'];h=hierarchy(root,a,b)
+    h['nodes'].append({'id':'child','parent_id':'n1','process':pin(c)})
+    first=maps.save(person(),wid,save_body(h))
+    next_h=deepcopy(h);next_h['category']='New category'
+    next_h['nodes'][-1]['parent_id']='n2'
+    next_h['nodes'][1]['id']='renamed'
+    second=maps.save(person(),wid,save_body(next_h,1))
+    packet=MapComparison(baseline={'revision':1,'expected_content_sha256':first['content_sha256']},
+                         candidate={'revision':2,'expected_content_sha256':second['content_sha256']})
+    r=maps.compare(person('reader'),wid,packet)
+    assert r['counts']['matched_paths']==3
+    assert r['counts']['removed_paths']==r['counts']['added_paths']==1
+    assert r['counts']['changed_editor_ids']==1
+    assert r['counts']['editor_ids_with_changed_paths']==1
+    assert r['possible_relocation_groups'][0]['unique_unmatched_path_on_each_side']
+    assert not r['possible_relocation_groups'][0]['relocation_verified']
+    assert r['process_occurrence_count_changes']==[]
+    assert r['report_sha256']==maps.compare(person(),wid,packet)['report_sha256']
+    for p in (person(org='other'),person(scopes=frozenset())):
+        with pytest.raises(ProcessCollaborationError):maps.compare(p,wid,packet)
+    with pytest.raises(ProcessCollaborationError,match='digest'):
+        maps.compare(person(),wid,MapComparison(baseline={'revision':1,'expected_content_sha256':'0'*64},
+                     candidate=packet.candidate))
+    assert not r['execution_authorized']
+    with store.db.connect() as conn:
+        audit=store.db._execute(conn,"SELECT details_json FROM audit_log WHERE action=?",
+                  ('process.hierarchy.compared',)).fetchall()
+    assert audit and all('New category' not in x[0] for x in audit)
+
+
+def test_map_comparison_pin_change_and_historical_child_deleted(store):
+    from shared.process_hierarchy_comparison import MapComparison
+    maps=ProcessHierarchies(store);root=process(store);child=process(store,'Child')
+    wid=root['workflow_id'];cid=child['workflow_id']
+    first=maps.save(person(),wid,save_body(hierarchy(root,child)))
+    updated=store.save(person(),write('Updated child',1),cid)['process']
+    second=maps.save(person(),wid,save_body(hierarchy(root,updated),1))
+    request=MapComparison(baseline={'revision':1,'expected_content_sha256':first['content_sha256']},
+                         candidate={'revision':2,'expected_content_sha256':second['content_sha256']})
+    before=maps.compare(person(),wid,request)
+    assert before['counts']['changed_reference_paths']==1
+    store.delete(person(),cid,ProcessDeleteWrite(expected_revision=2,expected_access_revision=1,user_confirmed=True))
+    assert maps.compare(person(),wid,request)==before
+    with pytest.raises(ValidationError):
+        MapComparison(baseline=request.baseline,candidate=request.baseline)
+    with store.db.connect() as conn:
+        store.db._execute(conn,'UPDATE workflow_knowledge SET payload=? WHERE owner=? AND workflow_id=? AND revision=2',
+                          ('{}',map_namespace('acme'),wid))
+    with pytest.raises(ProcessCollaborationError):maps.compare(person(),wid,request)

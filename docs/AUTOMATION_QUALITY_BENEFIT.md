@@ -86,3 +86,34 @@ references and notes. Supplemental inputs are not persisted in OWG or
 sent to a provider. Explicit JSON download creates a separate user
 controlled copy; it contains entered counts and financial assumptions.
 No change to existing measurement, pipeline or approval semantics.
+
+## Whole-population quality and evidence resolution
+
+The report also includes `whole_population_quality`. Without assuming that
+checked cases were randomly sampled, the all-case failure count lies between
+known failures and known failures plus unchecked cases. Subtract opposite
+baseline and after extrema for the exact possible failure-rate difference.
+The declared threshold is established within when the upper bound is at or
+below it, established above when the lower bound exceeds it, otherwise
+unresolved. Comparisons use exact fractions before display rounding. This
+is separate from the existing checked-case quality/coverage gates; passing
+those gates does not establish whole-population quality.
+
+From the marginal totals alone, the number of cases both attempted without
+handoff and passing quality is bounded below by max(0, nonhandoff + known
+passes - total) and above by min(nonhandoff, total - known failures). The
+eligible-share denominator is explicit; zero eligible cases give null. This
+is not case linkage or evidence of autonomous completion.
+
+The report gives a minimum number of additional checks under the most
+favorable possible outcomes to establish the threshold, or under the most
+adverse possible outcomes to establish a breach. A newly checked after-pass
+or baseline-fail reduces the upper difference bound; after-fail or
+baseline-pass increases the lower bound. Each step is inverse cohort size;
+the exact minimum uses available steps of largest magnitude first. Null
+means unattainable even with every remaining check in that direction.
+These are best-case arithmetic diagnostics, not instructions on which cases
+to sample, confidence intervals, or guaranteed evidence resolution. No
+quality outcome is imputed, no new information retained, and financial
+arithmetic remains separate. Regression includes exhaustive small-population
+integer oracles and strict threshold boundary checks.

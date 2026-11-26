@@ -168,6 +168,55 @@ class EvaluationCases(unittest.TestCase):
             with self.assertRaises(ImplementationError):
                 _repeatability_summary([first,changed])
 
+    def test_capture_cohorts_distinguish_whole_capture_and_case_choice_bounds(self):
+        from evaluate import compare_capture_cohorts
+        left=deepcopy(self.results);left['results'][1]['plan']=deepcopy(left['results'][0]['plan'])
+        right=deepcopy(self.results);right['results'][0]['plan']=deepcopy(right['results'][1]['plan'])
+        r=compare_capture_cohorts(self.spec,self.suite,[left,right],[left,right])
+        self.assertEqual(r['whole_capture_pair_count'],4)
+        self.assertEqual(r['whole_capture_match_count_difference_bounds'],{'lower':0,'upper':0})
+        self.assertEqual(r['summary']['independent_case_choice_match_count_difference_bounds'],{'lower':-2,'upper':2})
+        self.assertEqual(r['summary']['possible_regression'],2)
+        self.assertEqual(r['summary']['universal_regression'],0)
+        self.assertEqual(r['shared_distinct_result_documents'],2)
+        self.assertEqual(r['whole_capture_pairs_with_regressions'],2)
+        self.assertTrue(r['review_required'])
+        self.assertNotIn('PRIVATE_',json.dumps(r))
+
+    def test_capture_cohort_universal_improvement_and_new_critical(self):
+        from evaluate import compare_capture_cohorts
+        wrong=deepcopy(self.results);wrong['results'][1]['plan']=deepcopy(wrong['results'][0]['plan'])
+        r=compare_capture_cohorts(self.spec,self.suite,[wrong,wrong],[self.results,self.results])
+        self.assertEqual(r['summary']['universal_improvement'],1)
+        self.assertFalse(r['review_required'])
+        self.assertEqual(r['baseline']['duplicate_result_document_occurrences'],1)
+        r=compare_capture_cohorts(self.spec,self.suite,[self.results,self.results],[wrong,wrong])
+        self.assertEqual(r['summary']['universal_regression'],1)
+        self.assertEqual(r['summary']['critical_failure_new_to_observed_candidate_set'],1)
+        self.assertEqual(r['whole_capture_pairs_with_new_critical_failures'],4)
+        for bad in ([wrong],[wrong]*11,[wrong,{**wrong,'suite_sha256':'0'*64}]):
+            with self.assertRaises(ImplementationError):
+                compare_capture_cohorts(self.spec,self.suite,bad,[wrong,wrong])
+
+    def test_capture_cohort_cli_offline_and_no_overwrite(self):
+        with TemporaryDirectory() as directory:
+            root=Path(directory)
+            wrong=deepcopy(self.results);wrong['results'][1]['plan']=deepcopy(wrong['results'][0]['plan'])
+            for name,value in [('workflow.spec.json',self.spec),('suite.json',self.suite),
+                               ('clean.json',self.results),('wrong.json',wrong)]:
+                (root/name).write_text(json.dumps(value),encoding='utf-8')
+            for name in ('evaluate.py','execute.py','runtime.py','process_source_state.py','process_rule_conditions.py'):
+                (root/name).write_bytes((Path(__file__).parent/name).read_bytes())
+            cmd=[sys.executable,'evaluate.py','--cases','suite.json','--baseline-results','clean.json',
+                 '--baseline-repeat-results','clean.json','--results','clean.json',
+                 '--repeat-results','wrong.json','--output','cohort.json']
+            run=subprocess.run(cmd,cwd=root,capture_output=True,text=True,timeout=20)
+            self.assertEqual(run.returncode,2,run.stdout+run.stderr)
+            r=json.loads((root/'cohort.json').read_text())
+            self.assertEqual(r['whole_capture_pair_count'],4)
+            self.assertEqual(r['summary']['possible_regression'],1)
+            self.assertNotEqual(subprocess.run(cmd,cwd=root,capture_output=True,timeout=20).returncode,0)
+
     def test_paired_cli_is_offline_and_returns_review_required_for_regression(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
