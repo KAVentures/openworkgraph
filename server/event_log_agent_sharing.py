@@ -1372,7 +1372,7 @@ def work_in_progress(log_id: str, case_type: str | None = None, bucket: str = "w
 
 
 def batching(log_id: str, case_type: str | None = None, gap_seconds: int = 60, min_batch_size: int = 3,
-             by_resource: bool = True) -> dict[str, Any]:
+             by_resource: bool = True, case_filter: dict[str, Any] | None = None) -> dict[str, Any]:
     """Batch processing per activity: share of events in batches, batch sizes and the wait before batched
     events (aggregates level). Resource labels are never returned, only how many resources batch."""
     require(log_id, "aggregates")
@@ -1380,6 +1380,12 @@ def batching(log_id: str, case_type: str | None = None, gap_seconds: int = 60, m
     spec: dict[str, Any] = {"gap_seconds": gap_seconds, "min_batch_size": min_batch_size, "by_resource": by_resource}
     if case_type:
         spec["case_type"] = case_type
+    if case_filter is not None:
+        if not isinstance(case_filter, dict) or not case_filter:
+            raise EventLogWorkspaceError("case_filter must be a non-empty object of case-filter keys")
+        if workspace.summary(log_id, case_type, case_filter)["cases"] < AGENT_MIN_FILTERED_CASES:
+            raise EventLogWorkspaceError(f"fewer than {AGENT_MIN_FILTERED_CASES} cases match this filter; widen it")
+        spec["cohort"] = case_filter
     result = bt.batching(log_id, spec)
     keep = AGENT_MIN_CELL_CASES
     for row in result.get("activities", []):

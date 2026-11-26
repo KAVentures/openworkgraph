@@ -105,7 +105,7 @@ restart. If every share is revoked, the tools stay listed but empty until that r
 | `find_similar_process_cases` | The recorded cases whose path is closest to a chosen case, with what each does more or less often, its duration and start, and the median duration of those found. | cases |
 | `get_process_cooccurrence` | Which activities happen in the same cases, regardless of order: cases with both, the share of cases with one that also have the other, lift, and the pairs that go together most or never. Activities in fewer than 5 cases and pair counts below 5 are withheld. | aggregates |
 | `get_process_work_in_progress` | Cases arriving, completing and open per day or week, optionally with the activities that complete a case, and a Little's law check. | aggregates |
-| `get_process_batching` | Batch processing per activity: share of events in batches, batch sizes, simultaneous or sequential batches, and the wait before batched events. Resources are counted, never named. | aggregates |
+| `get_process_batching` | Batch processing per activity: share of events in batches, batch sizes, simultaneous or sequential batches, and the wait before batched events. Resources are counted, never named. Optional `case_filter` limits it to one group of at least 5 cases. | aggregates |
 | `get_process_handovers` | Handover of work, subcontracting (ping-pong) and working together between pseudonymous resources, and who does which activity. Never names people; pairs or resources in fewer than 5 cases are withheld; no per-person durations or scoring. | aggregates |
 
 | `tag_process_cases` | Adds an `agent: ` tag with a note to cases (cases level and the tag permission). |
