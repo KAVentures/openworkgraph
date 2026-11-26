@@ -23,6 +23,10 @@ root causes or a judgement of how well any case was handled.
 from __future__ import annotations
 
 from collections import Counter
+import base64
+import binascii
+import csv
+import io
 from hashlib import sha256
 import json
 import math
@@ -37,6 +41,7 @@ MAX_K = 12
 MAX_VARIANTS = 500
 MAX_ACTIVITIES = 60
 MAX_ITERATIONS = 60
+MAX_EXPORT_CASES = 50_000
 
 
 class ClusterSpec(BaseModel):
@@ -47,6 +52,11 @@ class ClusterSpec(BaseModel):
     max_activities: int = Field(default=40, ge=2, le=MAX_ACTIVITIES)
     cohort: dict[str, Any] = Field(default_factory=dict)
     case_type: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+class _ClusterExportSpec(ClusterSpec):
+    cluster_key: str = Field(pattern=r"^[0-9a-f]{64}$")
+    after: str | None = Field(default=None, min_length=1, max_length=8192)
 
 
 class _ClusterCaseSpec(ClusterSpec):
@@ -174,7 +184,67 @@ def _case_page(conn, review: _ClusterCaseSpec, key_to_group: dict[str, int],
             "next_after": rows[review.limit - 1][0] if len(rows) > review.limit else None}
 
 
-def _analyse(log_id: str, settings: ClusterSpec, review: _ClusterCaseSpec | None = None) -> dict[str, Any]:
+def _export_scope(log_id: str, selected: _ClusterExportSpec) -> str:
+    document = {"log_id": log_id, "settings": selected.model_dump(exclude={"after"})}
+    return sha256(json.dumps(document, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _export_cursor(log_id: str, selected: _ClusterExportSpec, case_id: str, snapshot: str) -> str:
+    payload = json.dumps({"case_id": case_id, "scope": _export_scope(log_id, selected), "snapshot": snapshot}, ensure_ascii=True,
+                         sort_keys=True, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _cursor_case(log_id: str, selected: _ClusterExportSpec) -> tuple[str | None, str | None]:
+    if selected.after is None:
+        return None, None
+    try:
+        encoded = selected.after.encode("ascii")
+        payload = base64.b64decode(encoded + b"=" * (-len(encoded) % 4), altchars=b"-_", validate=True)
+        document = json.loads(payload)
+        if (not isinstance(document, dict) or set(document) != {"case_id", "scope", "snapshot"}
+                or not isinstance(document["case_id"], str) or not document["case_id"]
+                or len(document["case_id"]) > 200 or document["scope"] != _export_scope(log_id, selected)
+                or not isinstance(document["snapshot"], str) or len(document["snapshot"]) != 64
+                or any(c not in "0123456789abcdef" for c in document["snapshot"])
+                or _export_cursor(log_id, selected, document["case_id"], document["snapshot"]) != selected.after):
+            raise ValueError
+        return document["case_id"], document["snapshot"]
+    except (ValueError, TypeError, UnicodeError, binascii.Error, RecursionError):
+        raise workspace.EventLogWorkspaceError("invalid cluster export cursor or settings changed; start again") from None
+
+
+def _export_snapshot(conn, rank: int) -> str:
+    """Hash the entire ordered exported projection without retaining the case list."""
+    digest = sha256()
+    cursor = conn.execute("""SELECT t.case_id, CAST(t.seconds AS DOUBLE), t.events, t.path[1], t.path[-1]
+        FROM tc t JOIN tcv v USING (path) WHERE v.cluster = ? ORDER BY t.case_id""", [rank])
+    while batch := cursor.fetchmany(4096):
+        for row in batch:
+            encoded = json.dumps(row, ensure_ascii=True, separators=(",", ":"), allow_nan=False).encode()
+            digest.update(len(encoded).to_bytes(8, "big"))
+            digest.update(encoded)
+    return digest.hexdigest()
+
+
+def _case_export(conn, log_id: str, selected: _ClusterExportSpec, key_to_group: dict[str, int],
+                 sizes: Counter[int], ranks: dict[int, int]) -> dict[str, Any]:
+    if selected.cluster_key not in key_to_group:
+        raise workspace.EventLogWorkspaceError("the cluster has changed; run the cluster report again")
+    group = key_to_group[selected.cluster_key]
+    rank = ranks[group]
+    after, expected_snapshot = _cursor_case(log_id, selected)
+    snapshot = _export_snapshot(conn, rank) if after is not None or sizes[group] > MAX_EXPORT_CASES else None
+    if expected_snapshot is not None and expected_snapshot != snapshot:
+        raise workspace.EventLogWorkspaceError("cluster case export changed between pages; start again")
+    rows = conn.execute("""SELECT t.case_id, CAST(t.seconds AS DOUBLE), t.events, t.path[1], t.path[-1]
+        FROM tc t JOIN tcv v USING (path) WHERE v.cluster = ? AND (? IS NULL OR t.case_id > ?)
+        ORDER BY t.case_id LIMIT ?""", [rank, after, after, MAX_EXPORT_CASES + 1]).fetchall()
+    return {"cluster": rank, "cluster_key": selected.cluster_key, "total": sizes[group], "rows": rows, "snapshot": snapshot}
+
+
+def _analyse(log_id: str, settings: ClusterSpec, review: _ClusterCaseSpec | None = None,
+             export: _ClusterExportSpec | None = None) -> dict[str, Any]:
 
     def run(conn):
         cohorts.restrict(conn, cohorts.parse_cohort(settings.cohort), log_id)
@@ -185,7 +255,7 @@ def _analyse(log_id: str, settings: ClusterSpec, review: _ClusterCaseSpec | None
         rows = conn.execute("SELECT path, count(*) AS n FROM tc GROUP BY path ORDER BY n DESC, path").fetchall()
         cases = sum(n for _, n in rows)
         if not cases:
-            if review is not None:
+            if review is not None or export is not None:
                 raise workspace.EventLogWorkspaceError("the cluster has changed; run the cluster report again")
             return {"cases": 0, "clusters": [], "variants": 0}
         presence = Counter()
@@ -233,6 +303,8 @@ def _analyse(log_id: str, settings: ClusterSpec, review: _ClusterCaseSpec | None
                      [[p for p, _, _ in assigned], [rank[c] for _, _, c in assigned]])
         if review is not None:
             return _case_page(conn, review, {key: c for c, key in cluster_keys.items()}, sizes, rank)
+        if export is not None:
+            return _case_export(conn, log_id, export, {key: c for c, key in cluster_keys.items()}, sizes, rank)
         stats = {r[0]: r[1:] for r in conn.execute("""SELECT v.cluster, quantile_cont(t.seconds, 0.5), avg(t.seconds),
                 avg(t.events) FROM tc t JOIN tcv v USING (path) GROUP BY v.cluster""").fetchall()}
         out = []
@@ -292,4 +364,21 @@ def cluster_cases(log_id: str, spec: Any) -> dict[str, Any]:
     return {key: data[key] for key in ("case_notion", "cluster", "cluster_key", "total", "cases", "next_after")}
 
 
-__all__ = ["clusters", "cluster_cases"]
+def cluster_cases_csv(log_id: str, spec: Any) -> tuple[str, dict[str, Any]]:
+    from .event_log_variant_export import _cell
+    settings = _parse(spec, _ClusterExportSpec)
+    data = _analyse(log_id, settings, export=settings)
+    out = io.StringIO()
+    writer = csv.writer(out, lineterminator="\n")
+    writer.writerow(["case_id", "duration_seconds", "events", "first_activity", "last_activity"])
+    for case_id, seconds, events, first, last in data["rows"][:MAX_EXPORT_CASES]:
+        writer.writerow([_cell(case_id), seconds, events, _cell(first), _cell(last)])
+    return out.getvalue(), {"cluster": data["cluster"], "cluster_key": data["cluster_key"],
+                            "case_notion": data["case_notion"], "total": data["total"],
+                            "written": min(len(data["rows"]), MAX_EXPORT_CASES),
+                            "truncated": len(data["rows"]) > MAX_EXPORT_CASES,
+                            "next_after": _export_cursor(log_id, settings, data["rows"][MAX_EXPORT_CASES - 1][0], data["snapshot"])
+                            if len(data["rows"]) > MAX_EXPORT_CASES else None}
+
+
+__all__ = ["clusters", "cluster_cases", "cluster_cases_csv"]

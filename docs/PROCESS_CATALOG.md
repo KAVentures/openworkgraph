@@ -53,7 +53,18 @@ reachability, branch rules and paths to a terminal. Loops are supported when
 there is a route to a terminal. Up to 40 activities, 100 transitions and 40 rules
 are allowed. A graph revision request is bounded to 128 KiB.
 
+## Structural execution assurance
+
+Open a saved revision and expand **Structural execution assurance** to inspect
+reachable token markings, completed node and transition witnesses, dead-end
+prefixes and possible loops. Results bind the exact saved content digest and
+never evaluate policy or authorize execution. See [token-flow assurance](PROCESS_TOKEN_ASSURANCE.md)
+for the structural semantics, explicit limits and JSON export.
+
 ## Compare immutable saved revisions before handoff
+
+Use [policy revision impact review](PROCESS_POLICY_IMPACT.md) within a saved revision comparison to identify changed declarations, affected decision dependencies and potential downstream graph paths. The review does not establish actual execution or policy equivalence.
+
 
 Open a saved process in **Process catalog**, select **Load revision history**,
 then **Compare rN with opened rM** for a different saved revision. This explicitly

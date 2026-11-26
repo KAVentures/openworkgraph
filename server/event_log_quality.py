@@ -56,11 +56,16 @@ def transform(source_format: str, mapping: dict[str, Any] | None) -> dict[str, A
             "attribute_columns": list(dict.fromkeys(mapping.get("attribute_columns") or [])),
             "delimiter": mapping.get("delimiter") or ",",
         }
+        if (mapping.get("header_row") or 1) > 1:
+            declared["mapping"]["header_row"] = mapping["header_row"]
         if mapping.get("naive_timestamp_offset"):
             # An explicit decision changes what is stored, so it is part of the transform.
             declared["mapping"]["naive_timestamp_offset"] = mapping["naive_timestamp_offset"]
         if mapping.get("timestamp_format"):
             declared["mapping"]["timestamp_format"] = mapping["timestamp_format"]
+        if mapping.get("encoding") not in (None, "", "utf-8"):
+            # Decoding changes the text that is stored, so a non-default encoding is part of the transform.
+            declared["mapping"]["encoding"] = mapping["encoding"]
         identity=workspace.source_identity.settings(mapping)
         if identity:
             declared['mapping']['source_identity']={'format':workspace.source_identity.FORMAT,**vars(identity)}
@@ -69,6 +74,9 @@ def transform(source_format: str, mapping: dict[str, Any] | None) -> dict[str, A
             "xes": "XES concept:name / time:timestamp / org:resource; trace concept:name as case",
             "ocel": "OCEL 2.0 JSON event types, objects and qualified relationships",
             "ocelxml": "OCEL 2.0 XML event types, objects and qualified relationships"}[source_format]}
+        if mapping and mapping.get("naive_timestamp_offset"):
+            # An explicit decision changes what is stored, so it is part of the transform.
+            declared["mapping"]["naive_timestamp_offset"] = mapping["naive_timestamp_offset"]
     return {**declared, "transform_sha256": hashlib.sha256(_canonical(declared).encode()).hexdigest()}
 
 

@@ -505,8 +505,10 @@ async def preview_event_log_import(
     attribute_column: list[str] = Query(default=[], max_length=200),
     delimiter: str = Query(default=",", max_length=1),
     keep_rejected: bool = Query(default=False),
+    header_row: int = Query(default=1, ge=1, le=50),
     naive_timestamp_offset: str = Query(default="", max_length=6),
     timestamp_format: str = Query(default="", max_length=64),
+    encoding: str = Query(default="", pattern="^(|utf-8|windows-1252|utf-16)$"),
     identity: dict = Depends(_source_identity_mapping),
 ):
     _require_dashboard(request)
@@ -520,8 +522,9 @@ async def preview_event_log_import(
     mapping = {"case_column": case_column, "activity_column": activity_column,
                "timestamp_column": timestamp_column, "resource_column": resource_column,
                "attribute_columns": attribute_column[:64], "delimiter": "\t" if delimiter == "t" else delimiter,
+               **({"header_row": header_row} if header_row > 1 else {}),
                "keep_rejected": keep_rejected, "naive_timestamp_offset": naive_timestamp_offset,
-               "timestamp_format": timestamp_format, **identity}
+               "timestamp_format": timestamp_format, **({"encoding": encoding} if encoding else {}), **identity}
     return await run_in_threadpool(_respond, preview.preview_csv, bytes(body), mapping, partial=partial)
 
 
@@ -537,8 +540,10 @@ async def import_event_log(
     attribute_column: list[str] = Query(default=[], max_length=200),
     delimiter: str = Query(default=",", max_length=1),
     keep_rejected: bool = Query(default=False),
+    header_row: int = Query(default=1, ge=1, le=50),
     naive_timestamp_offset: str = Query(default="", max_length=6),
     timestamp_format: str = Query(default="", max_length=64),
+    encoding: str = Query(default="", pattern="^(|utf-8|windows-1252|utf-16)$"),
     identity: dict = Depends(_source_identity_mapping),
 ):
     _require_dashboard(request)
@@ -557,9 +562,11 @@ async def import_event_log(
                    "timestamp_column": timestamp_column, "resource_column": resource_column,
                    "attribute_columns": attribute_column[:64],
                    "delimiter": "\t" if delimiter == "t" else delimiter,
+                   **({"header_row": header_row} if header_row > 1 else {}),
                    **({"keep_rejected": True} if keep_rejected else {}),
                    **({"naive_timestamp_offset": naive_timestamp_offset} if naive_timestamp_offset else {}),
-                   **({"timestamp_format": timestamp_format} if timestamp_format else {})}
+                   **({"timestamp_format": timestamp_format} if timestamp_format else {}),
+                   **({"encoding": encoding} if encoding else {})}
         mapping.update(identity)
         return _respond(workspace.import_log, spool, name=name, source_format=format, mapping=mapping)
 
@@ -575,8 +582,10 @@ async def append_event_log(
     attribute_column: list[str] = Query(default=[], max_length=200),
     delimiter: str = Query(default=",", max_length=1),
     keep_rejected: bool = Query(default=False),
+    header_row: int = Query(default=1, ge=1, le=50),
     naive_timestamp_offset: str = Query(default="", max_length=6),
     timestamp_format: str = Query(default="", max_length=64),
+    encoding: str = Query(default="", pattern="^(|utf-8|windows-1252|utf-16)$"),
     identity: dict = Depends(_source_identity_mapping),
 ):
     _require_dashboard(request)
@@ -594,9 +603,11 @@ async def append_event_log(
                    "timestamp_column": timestamp_column, "resource_column": resource_column,
                    "attribute_columns": attribute_column[:64],
                    "delimiter": "\t" if delimiter == "t" else delimiter,
+                   **({"header_row": header_row} if header_row > 1 else {}),
                    **({"keep_rejected": True} if keep_rejected else {}),
                    **({"naive_timestamp_offset": naive_timestamp_offset} if naive_timestamp_offset else {}),
-                   **({"timestamp_format": timestamp_format} if timestamp_format else {})}
+                   **({"timestamp_format": timestamp_format} if timestamp_format else {}),
+                   **({"encoding": encoding} if encoding else {})}
         mapping.update(identity)
         try:
             result = await run_in_threadpool(workspace.append_log, log_id, spool, source_format=format, mapping=mapping)
@@ -1627,6 +1638,22 @@ def event_log_unusual_cases(request: Request, log_id: str, limit: int = Query(de
     return _respond(unusual.unusual_cases, log_id, case_type, limit=limit, cohort=cohort, signal=signal, offset=offset)
 
 
+@router.get("/v1/event-logs/{log_id}/unusual-cases.csv")
+def event_log_unusual_cases_csv(request: Request, log_id: str, signal: str | None = Query(default=None, max_length=32),
+                                case_type: str | None = Query(default=None, max_length=200),
+                                cohort: dict = Depends(_case_filter)):
+    """Every unusual case, not only one page, as a CSV worklist."""
+    from . import event_log_unusual_cases as unusual
+    _require_dashboard(request)
+    try:
+        text, meta = unusual.unusual_cases_csv(log_id, case_type, cohort=cohort, signal=signal)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Response(text, media_type="text/csv; charset=utf-8", headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-unusual-cases.csv"',
+        "X-OWG-Unusual-Cases": f"rows={meta['rows']}; unusual={meta['unusual_cases']}; cases={meta['cases']}"})
+
+
 @router.get("/v1/event-logs/{log_id}/due-dates")
 def event_log_due_dates(request: Request, log_id: str, due_activity: str = Query(min_length=1, max_length=500),
                         due_attribute: str | None = Query(default=None, max_length=200),
@@ -2480,6 +2507,15 @@ def event_log_domain_pack_configurations(request: Request, log_id: str, pack_id:
     return _respond(domain_packs.configuration_history, log_id, pack_id)
 
 
+@router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}/preflight")
+async def event_log_domain_pack_preflight(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    from . import event_log_domain_pack_preflight as preflight
+    _require_dashboard(request)
+    spec = await _json_body(request, "domain pack preflight", strict=True)
+    _require_dashboard(request)
+    return await run_in_threadpool(_respond, preflight.preview, log_id, pack_id, spec)
+
+
 @router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}")
 async def event_log_domain_pack_install(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
     _require_dashboard(request)
@@ -3191,6 +3227,22 @@ async def event_log_trace_cluster_cases(request: Request, log_id: str):
     _require_dashboard(request)
     spec = await _json_body(request, "trace cluster case settings", strict=True)
     return await run_in_threadpool(_respond, trace_clusters.cluster_cases, log_id, spec)
+
+
+@router.post("/v1/event-logs/{log_id}/trace-clusters/cases.csv")
+async def event_log_trace_cluster_cases_csv(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "trace cluster export settings", strict=True, limit=32768)
+    try:
+        content, info = await run_in_threadpool(trace_clusters.cluster_cases_csv, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    _require_dashboard(request)
+    headers = {"Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="{log_id}-cluster-cases.csv"',
+               "X-OWG-Cluster-Cases": f"total={info['total']}; written={info['written']}; truncated={str(info['truncated']).lower()}"}
+    if info["next_after"] is not None:
+        headers["X-OWG-Next-Cursor"] = info["next_after"]
+    return Response(content, media_type="text/csv; charset=utf-8", headers=headers)
 
 
 @router.post("/v1/event-logs/{log_id}/conformance")

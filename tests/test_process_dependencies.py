@@ -146,6 +146,120 @@ def test_reassessment_distinguishes_own_stale_pins_from_inherited_findings(store
     assert "PRIVATE_REASON" not in json.dumps(result)
 
 
+def test_focused_build_basis_ignores_unrelated_consumer_pins_and_tracks_exact_closure(store):
+    dep=ProcessDependencies(store)
+    a,b,c,d=[process(store,name) for name in "ABCD"]
+    for record in (a,b,c,d):
+        approve(store,record)
+    dep.save(person(),a["workflow_id"],body(a,b,access=2))
+    dep.save(person(),b["workflow_id"],body(b,access=2))
+    dep.save(person(),c["workflow_id"],body(c,b,access=2))
+    dep.save(person(),d["workflow_id"],body(d,access=2))
+    def basis():
+        return graph(store,a["workflow_id"])["focused_build_basis"]
+    first=basis()
+    assert first["all_declared_prerequisites_current"]
+    assert [r["workflow_id"] for r in first["processes"]]==[b["workflow_id"],a["workflow_id"]]
+    assert first["process_count"]==2 and first["prerequisite_count"]==1
+    assert not first["execution_authorized"]
+    assert "PRIVATE_REASON" not in json.dumps(first)
+    store.save(person(),write("Unrelated D changed",expected=1),d["workflow_id"])
+    assert basis()["basis_sha256"]==first["basis_sha256"]
+    new=store.save(person(),write("B changed",expected=1),b["workflow_id"])["process"]
+    changed=basis()
+    assert not changed["all_declared_prerequisites_current"]
+    assert changed["basis_sha256"]!=first["basis_sha256"]
+    dep.save(person(),b["workflow_id"],body(new,revision=1,access=2))
+    store.review(person("bob"),b["workflow_id"],review(new))
+    dep.save(person(),a["workflow_id"],body(a,new,revision=1,access=2))
+    repaired=basis()
+    assert repaired["all_declared_prerequisites_current"]
+    assert repaired["basis_sha256"]!=first["basis_sha256"]
+    assert graph(store)["current_basis"] is False
+    # Repairing the unrelated incoming consumer must not change A's basis.
+    dep.save(person(),c["workflow_id"],body(c,new,revision=1,access=2))
+    assert basis()["basis_sha256"]==repaired["basis_sha256"]
+
+
+def test_dependency_starter_export_requires_exact_current_basis_and_covers_sidecar(store,tmp_path):
+    from io import BytesIO
+    from zipfile import ZipFile
+    from hashlib import sha256
+    from shared.process_agent_release import verify_directory
+    dep=ProcessDependencies(store)
+    a,b=[process(store,name) for name in ("Root","Prerequisite")]
+    for record in (a,b):
+        approve(store,record)
+    dep.save(person(),a["workflow_id"],body(a,b,access=2))
+    first=graph(store,a["workflow_id"])["focused_build_basis"]
+    with pytest.raises(Error):
+        dep.build_bundle(person(),a["workflow_id"],a["revision"],first["basis_sha256"])
+    dep.save(person(),b["workflow_id"],body(b,access=2))
+    basis=graph(store,a["workflow_id"])["focused_build_basis"]
+    with pytest.raises(Error):
+        dep.build_bundle(person(),a["workflow_id"],a["revision"],first["basis_sha256"])
+    with pytest.raises(Error):
+        dep.build_bundle(person(),a["workflow_id"],a["revision"]+1,basis["basis_sha256"])
+    bundle=dep.build_bundle(person(),a["workflow_id"],a["revision"],basis["basis_sha256"])
+    assert bundle==dep.build_bundle(person(),a["workflow_id"],a["revision"],basis["basis_sha256"])
+    with ZipFile(BytesIO(bundle)) as archive:
+        saved=json.loads(archive.read("dependency-build-basis.json"))
+        assert saved==basis and not saved["execution_authorized"]
+        assert b"PRIVATE_REASON" not in archive.read("dependency-build-basis.json")
+        spec=json.loads(archive.read("workflow.spec.json"))
+        assert spec["workflow_id"]==a["workflow_id"] and not spec["execution_authorization"]
+        assert spec['dependency_build_basis_sha256']==basis['basis_sha256']
+        manifest=json.loads(archive.read("release-manifest.json"))
+        assert manifest["files"]["dependency-build-basis.json"]==sha256(archive.read("dependency-build-basis.json")).hexdigest()
+        manifest_pin=sha256(archive.read("release-manifest.json")).hexdigest()
+        archive.extractall(tmp_path)
+    verify_directory(tmp_path,expected_manifest_sha256=manifest_pin)
+    assert dep.check_build_basis(person(),a["workflow_id"],a["revision"],basis["basis_sha256"])["current_exact_reviewed_basis"]
+    assert not dep.check_build_basis(person(),a["workflow_id"],a["revision"],first["basis_sha256"])["current_exact_reviewed_basis"]
+    import subprocess
+    import sys
+    code="""
+import asyncio,sys
+from pathlib import Path
+from check_dependency_basis import check
+from execute import reference
+from runtime import load_spec
+from verify_release import ReleaseIntegrityError
+calls=[]
+async def reader(url,token,parameters):
+    assert url.endswith('/dependencies/build-status')
+    assert token=='SYNTHETIC_TOKEN'
+    calls.append(parameters)
+    return {'format':'openworkgraph.dependency-build-basis-status.v1',
+        'organization_id':'acme','workflow_id':sys.argv[2],'requested_revision':parameters['revision'],
+        'requested_basis_sha256':parameters['basis_sha256'],'status':'current',
+        'process_reference':reference(load_spec()),'process_model_sha256':load_spec()['process_model_sha256'],
+        'current_exact_reviewed_basis':True,'read_only':True,'execution_authorized':False,
+        'business_outcomes_verified':False}
+async def run():
+    assert await check(Path('.'),sys.argv[1],'https://catalog.example',reader=reader,token='SYNTHETIC_TOKEN')
+    async def foreign(*args):
+        return dict(await reader(*args),organization_id='foreign')
+    assert not await check(Path('.'),sys.argv[1],'https://catalog.example',reader=foreign,token='SYNTHETIC_TOKEN')
+    before=len(calls)
+    try:await check(Path('.'),'f'*64,'https://catalog.example',reader=reader,token='SYNTHETIC_TOKEN')
+    except ReleaseIntegrityError:pass
+    else:raise AssertionError('Wrong manifest pin accepted')
+    assert len(calls)==before
+asyncio.run(run())
+"""
+    run=subprocess.run([sys.executable,'-S','-c',code,manifest_pin,a["workflow_id"]],
+        cwd=tmp_path,capture_output=True,text=True,timeout=20)
+    assert run.returncode==0,run.stdout+run.stderr
+    (tmp_path/"dependency-build-basis.json").write_text("{}")
+    with pytest.raises(ValueError):
+        verify_directory(tmp_path,expected_manifest_sha256=manifest_pin)
+    store.save(person(),write("Changed prerequisite",expected=1),b["workflow_id"])
+    assert not dep.check_build_basis(person(),a["workflow_id"],a["revision"],basis["basis_sha256"])["current_exact_reviewed_basis"]
+    with pytest.raises(Error):
+        dep.build_bundle(person(),a["workflow_id"],a["revision"],basis["basis_sha256"])
+
+
 def test_cross_root_cycle_refused_and_existing_map_groupings_remain_independent(store):
     dep=ProcessDependencies(store);a=process(store,'A');b=process(store,'B');c=process(store,'C')
     dep.save(person(),a['workflow_id'],body(a,b));dep.save(person(),b['workflow_id'],body(b,c))
@@ -304,6 +418,104 @@ def test_human_api_exact_export_preflight_strict_parser_and_fresh_graph_fingerpr
         assert client.get(export,headers=headers).status_code==409
         script=client.get('/process-dependency-client.js');assert script.status_code==200 and script.headers['cache-control']=='no-store'
         assert client.get('/v1/human/process-dependency-graph',headers={'Authorization':'Bearer foreign'}).json()['status']=='empty'
+
+
+def test_focused_basis_randomized_graph_invariants():
+    from collections import defaultdict
+    from random import Random
+    from shared.process_dependency_build_basis import focused_basis
+    from shared.process_dependency_reassessment import reassessment
+    from shared.process_dependencies import content_digest, topology
+    rng=Random(2601125)
+    def make_graph(ids,pairs,revisions=None,reviewed=None):
+        revisions=revisions or {};reviewed=reviewed or {}
+        def ref(wid,rev=1):
+            return {'workflow_id':wid,'revision':rev,'content_sha256':content_digest([wid,rev])}
+        outgoing=defaultdict(list)
+        for a,b in pairs:outgoing[a].append(b)
+        items={}
+        for wid in ids:
+            declaration={'root_process':ref(wid),'links':[
+                {'id':wid+'_'+target,'prerequisite':ref(target),'relationship':'uses_output','reason':'Synthetic'}
+                for target in sorted(outgoing[wid])]}
+            items[wid]={'revision':1,'content_sha256':content_digest(declaration),'dependencies':declaration}
+        graph=topology([item['dependencies'] for item in items.values()])
+        graph['nodes']=[{**ref(wid,revisions.get(wid,1)),'available':True,'current':True,
+            'state':'current','independent_model_review':'reviewed_design' if reviewed.get(wid,True) else 'needs_review',
+            'active_latest_independently_reviewed_model':reviewed.get(wid,True)} for wid in ids]
+        for edge in graph['edges']:
+            root=items[edge['consumer']]
+            edge.update(consumer_process=ref(edge['consumer']),prerequisite_process=ref(edge['prerequisite']),
+                declaration_revision=root['revision'],declaration_sha256=root['content_sha256'])
+        graph['reassessment_worklist']=reassessment(graph,items)
+        return graph,items
+    for _ in range(100):
+        n=rng.randrange(3,30);ids=[str(i) for i in range(n)]
+        pairs=[(str(a),str(b)) for a in range(n) for b in range(a) if rng.random()<.15]
+        root=rng.choice(ids);graph,items=make_graph(ids,pairs)
+        baseline=focused_basis('acme',graph,items,root)
+        closure={r['workflow_id'] for r in baseline['processes']}
+        assert baseline['all_declared_prerequisites_current'] and not baseline['execution_authorized']
+        outside=set(ids)-closure
+        if outside:
+            changed=rng.choice(sorted(outside));g,d=make_graph(ids,pairs,{changed:2},{changed:False})
+            assert focused_basis('acme',g,d,root)['basis_sha256']==baseline['basis_sha256']
+        changed=rng.choice(sorted(closure))
+        for revisions,reviewed in [({changed:2},{}),({},{changed:False})]:
+            g,d=make_graph(ids,pairs,revisions,reviewed);result=focused_basis('acme',g,d,root)
+            assert not result['all_declared_prerequisites_current']
+            assert result['basis_sha256']!=baseline['basis_sha256']
+        assert focused_basis('foreign',graph,items,root)['basis_sha256']!=baseline['basis_sha256']
+
+
+def test_authenticated_dependency_build_and_status_refuse_withdrawn_reviews(tmp_path):
+    from io import BytesIO
+    from zipfile import ZipFile
+    with TestClient(app(tmp_path)) as client:
+        auth=lambda who:{'Authorization':'Bearer '+who}
+        roots=[]
+        for title in ('Root','Prerequisite'):
+            record=client.post('/v1/human/processes',headers=auth('alice'),
+                json=write(title).model_dump()).json()['process']
+            roots.append(record)
+            url='/v1/human/processes/'+record['workflow_id']
+            assert client.post(url+'/access',headers=auth('alice'),json={
+                'expected_access_revision':1,'members':[{'actor_id':'bob','role':'reviewer'}],
+                'user_confirmed':True}).status_code==200
+            assert client.post(url+'/reviews',headers=auth('bob'),
+                json=review(record).model_dump()).status_code==200
+        a,b=roots
+        base='/v1/human/processes/'+a['workflow_id']+'/dependencies'
+        child='/v1/human/processes/'+b['workflow_id']
+        assert client.post(base,headers=auth('alice'),json=body(a,b,access=2).model_dump()).status_code==200
+        assert client.post(child+'/dependencies',headers=auth('alice'),
+            json=body(b,access=2).model_dump()).status_code==200
+        graph=client.get('/v1/human/process-dependency-graph',headers=auth('reader'),
+            params={'focus':a['workflow_id']}).json()
+        basis=graph['focused_build_basis']
+        query={'revision':1,'basis_sha256':basis['basis_sha256']}
+        status=client.get(base+'/build-status',headers=auth('reader'),params=query)
+        assert status.status_code==200 and status.headers['cache-control']=='no-store'
+        assert status.json()['current_exact_reviewed_basis'] is True
+        assert status.json()['process_reference']==pin(a)
+        assert not status.json()['execution_authorized']
+        assert 'processes' not in status.json() and 'edges' not in status.json()
+        archive=client.get(base+'/build',headers=auth('reader'),params=query)
+        assert archive.status_code==200 and archive.headers['content-type']=='application/zip'
+        with ZipFile(BytesIO(archive.content)) as bundle:
+            assert json.loads(bundle.read('dependency-build-basis.json'))==basis
+        for endpoint in ('/build','/build-status'):
+            assert client.get(base+endpoint,params=query).status_code==401
+            assert client.get(base+endpoint,headers=auth('no-process'),params=query).status_code==403
+            assert client.get(base+endpoint,headers=auth('foreign'),params=query).status_code==404
+            assert client.get(base+endpoint,headers=auth('reader'),
+                params={**query,'basis_sha256':'bad'}).status_code==422
+        assert client.post(child+'/reviews',headers=auth('bob'),
+            json=review(b,decision='changes_requested',expected=1).model_dump()).status_code==200
+        status=client.get(base+'/build-status',headers=auth('reader'),params=query)
+        assert status.status_code==200 and status.json()['current_exact_reviewed_basis'] is False
+        assert status.json()['process_reference'] is None
+        assert client.get(base+'/build',headers=auth('reader'),params=query).status_code==409
 
 
 def test_dependency_and_root_erasure_roll_back_together_with_audit_failure(store,monkeypatch):

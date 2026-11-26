@@ -107,3 +107,38 @@ def test_work_limit_refuses_rather_than_partial_counts(monkeypatch):
     monkeypatch.setattr(paired,"MAX_HOLDOUT_CHARACTERS",1)
     with pytest.raises(learning.LearningError,match="work bound"):
         evaluate(monkeypatch,[example(1,"refund",["Refund"])])
+
+
+def test_probability_reliability_uses_same_screened_and_language_groups(monkeypatch):
+    training=[example(0,"invoice number 111 due today",["Billing"]),
+              example(9,"reimbursement request",["Refund"])]
+    holdout=[example(1,"Invoice number 222 due today",["Billing"]),
+             example(2,"refund",["Refund"],"sv"),
+             example(3,"no match",[],"sv")]
+    predictions={"Invoice number 222 due today":{"Billing":.8,"Refund":.2},
+                 "refund":{"Billing":.1,"Refund":.9},
+                 "no match":{"Billing":.1}}
+    result=evaluate(monkeypatch,holdout,training,predictions)
+    def get(report,name):
+        return next(x for x in report["probability_reliability"]["per_intent"]
+                    if x["intent"]==name)
+    full=get(result["all_holdout"],"Refund")["metrics"]
+    clean=get(result["without_detected_lexical_overlap"],"Refund")["metrics"]
+    sv=next(x for x in result["by_language"] if x["language"]=="sv")
+    assert full["holdout_examples"]==3 and full["scored_examples"]==2
+    assert clean["holdout_examples"]==2 and clean["missing_probabilities"]==1
+    assert clean["training_positive_rate"]==.5
+    assert get(sv["all_holdout"],"Refund")["metrics"]==clean
+    assert get(result["all_holdout"],"Other")["metrics"] is None
+    assert "Invoice number 222" not in str(result)
+
+
+def test_probability_diagnostics_are_strict_json_even_for_empty_holdout(monkeypatch):
+    import json
+    result=evaluate(monkeypatch,[])
+    json.dumps(result,allow_nan=False)
+    report=result["all_holdout"]["probability_reliability"]
+    assert report["macro_supported_intents"]==0
+    assert all(v is None for v in report["macro"].values())
+    assert not report["thresholds_selected"]
+    assert not report["external_calibration_verified"]
