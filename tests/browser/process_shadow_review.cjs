@@ -233,11 +233,28 @@ print(json.dumps({"a":a[0],"b":b[0],"trust":a[1]["trust"],"manifest":m,"pin":dig
   await page.getByRole('checkbox',{name:/Select finding /}).check();
   await page.getByRole('textbox',{name:/Follow-up owner /}).fill('ops');
   page.once('dialog',d=>d.accept());
+  const receiptResponse=page.waitForResponse(r=>r.url().endsWith('/audit-triage')&&r.status()===200);
   await page.getByRole('button',{name:'Record selected audit follow-up referrals',exact:true}).click();
+  const receipt=await (await receiptResponse).json();
   await page.getByText('Evidence-pinned follow-up receipt',{exact:true}).waitFor();
   await page.getByText('1 declared referrals · 0 unselected findings · 0 unselected rollback referrals',{exact:true}).waitFor();
   await page.getByLabel('Declared audit reviewer alias',{exact:true}).fill('different');
   assert.equal(await page.getByText('Evidence-pinned follow-up receipt',{exact:true}).count(),0);
+  await page.getByText('Reconcile follow-up receipts from multiple reviewers',{exact:true}).click();
+  await page.getByLabel('Reconciliation receipt 1',{exact:true}).setInputFiles(upload(receipt));
+  await page.getByLabel('Independent receipt digest 1',{exact:true}).fill(receipt.triage_sha256);
+  page.once('dialog',d=>d.accept());
+  await page.getByRole('button',{name:'Recompute and reconcile selected receipts',exact:true}).click();
+  await page.getByText('Recomputed audit receipt reconciliation',{exact:true}).waitFor();
+  await page.getByText('0 unaddressed · 1 single declarations · 0 matching · 0 conflicting',{exact:true}).waitFor();
+  await page.getByLabel('Receipt reconciliation status',{exact:true}).selectOption('all');
+  await page.getByText('rollback referral · one declaration',{exact:true}).click();
+  await page.getByText(/reviewer · investigate · owner ops/).waitFor();
+  await page.getByLabel('Independent receipt digest 1',{exact:true}).fill('0'.repeat(64));
+  assert.equal(await page.getByText('Recomputed audit receipt reconciliation',{exact:true}).count(),0);
+  page.once('dialog',d=>d.accept());
+  await page.getByRole('button',{name:'Recompute and reconcile selected receipts',exact:true}).click();
+  await page.getByText(/Reconciliation refused/).waitFor();
   await page.getByLabel('Historical journal review filter',{exact:true}).selectOption('rollback');
   await page.getByText('1 matching journals · page 1 of 1',{exact:true}).waitFor();
   await page.getByText(/site · .*rollback referral observed/).click();
@@ -249,7 +266,7 @@ print(json.dumps({"a":a[0],"b":b[0],"trust":a[1]["trust"],"manifest":m,"pin":dig
   page.once('dialog',d=>d.accept());
   await page.getByRole('button',{name:'Recompute selected historical audit evidence',exact:true}).click();
   await page.getByText(/Historical review refused/).waitFor();
-  assert.equal(auditRequests,5);
+  assert.equal(auditRequests,7);
   await exchangePanel.click();
 
   await page.getByLabel('Business goal',{exact:true}).fill('Revised draft only');
