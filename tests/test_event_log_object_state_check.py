@@ -258,6 +258,23 @@ with TestClient(app) as c:
     assert witness.status_code==200 and witness.headers['cache-control']=='no-store',witness.text
     assert witness.json()['witnesses'][0]['status']=='ambiguous_value'
     assert c.post(witness_url,json=spec(event_id='e4'),headers=h).status_code==422
+    distribution_url=url+'/distribution'; distribution_spec=spec(expected_revision=r.json()['revision'])
+    assert c.post(distribution_url,json=distribution_spec,headers=bearer).status_code in (401,403)
+    distribution=c.post(distribution_url,json=distribution_spec,headers=h)
+    assert distribution.status_code==200 and distribution.headers['cache-control']=='no-store',distribution.text
+    assert distribution.json()['event_object_links']==10
+    assert c.post(distribution_url,json=spec(),headers=h).status_code==422
+    distribution_export_url=distribution_url+'/export'
+    assert c.post(distribution_export_url,json=distribution_spec,headers=bearer).status_code in (401,403)
+    distribution_export=c.post(distribution_export_url,json=distribution_spec,headers=h)
+    assert distribution_export.status_code==200 and distribution_export.headers['cache-control']=='no-store',distribution_export.text
+    assert 'recorded_value_present' in distribution_export.text
+    from server import event_log_workspace as w
+    from server import event_log_object_state_check as state
+    state.MAX_WORKLIST_BYTES=1
+    assert c.post(distribution_export_url,json=distribution_spec,headers=h).status_code==422
+    assert not list(w.DATA_DIR.glob('*.review.csv'))
+    state.MAX_WORKLIST_BYTES=512*1024*1024
     timeline_url=url+'/timeline'; timeline_spec=spec(expected_revision=r.json()['revision'],bucket='day')
     assert c.post(timeline_url,json=timeline_spec,headers=bearer).status_code in (401,403)
     timeline=c.post(timeline_url,json=timeline_spec,headers=h)
@@ -391,3 +408,45 @@ def test_revision_pinned_state_timeline_groups_filtered_events(monkeypatch):
     with pytest.raises(w.EventLogWorkspaceError,match='non-empty periods'):
         s.export_timeline(log,{**req,'limit':30},output)
     assert output.getvalue()==''
+
+
+def test_state_value_distribution_counts_links_preserves_unknowns_and_exact_values(monkeypatch):
+    doc=fixture()
+    doc['objects'][0]['attributes'][0]['value']=''
+    log=w.import_log(BytesIO(json.dumps(doc).encode()),name='distribution',source_format='ocel')['log_id']
+    base=s.analyze(log,spec());request=spec(expected_revision=base['revision'])
+    result=s.distribution(log,{**request,'limit':2})
+    assert result['matching_events']==8 and result['event_object_links']==10 and result['total_groups']==5
+    rows=result['rows'];offset=result['next_offset']
+    while offset is not None:
+        page=s.distribution(log,{**request,'limit':2,'offset':offset});rows+=page['rows'];offset=page['next_offset']
+    groups={(r['status'],r['recorded_value']):r['event_object_links'] for r in rows}
+    assert groups=={('matched','approved'):4,('not_matched',''):2,('missing_history',None):2,
+                    ('before_first_value',None):1,('ambiguous_value',None):1}
+    selected=s.distribution(log,{**request,'status':'unknown'})
+    assert selected['matching_events']==3 and selected['event_object_links']==4
+    assert s.distribution(log,{**request,'result_event_id':'e7'})['event_object_links']==0
+    out=StringIO(newline='');assert s.export_distribution(log,request,out)['rows']==5
+    records=list(csv.DictReader(StringIO(out.getvalue())))
+    empty=next(r for r in records if r['object_result']=='not_matched')
+    assert empty['recorded_value_present']=='true' and empty['recorded_value_review']==''
+    assert next(r for r in records if r['object_result']=='ambiguous_value')['recorded_value_present']=='false'
+    for bad in ({'expected_revision':base['revision']+1},{'offset':1},{'limit':1}):
+        with pytest.raises(w.EventLogWorkspaceError):s.export_distribution(log,{**request,**bad},StringIO())
+    monkeypatch.setattr(s,'MAX_DISTRIBUTION_VALUE_LENGTH',1)
+    with pytest.raises(w.EventLogWorkspaceError,match='4,096 characters'):s.distribution(log,request)
+    monkeypatch.setattr(s,'MAX_DISTRIBUTION_VALUE_LENGTH',4096)
+    monkeypatch.setattr(s,'MAX_DISTRIBUTION_GROUPS',4)
+    output=StringIO()
+    with pytest.raises(w.EventLogWorkspaceError,match='1,000 groups'):s.export_distribution(log,request,output)
+    assert output.getvalue()==''
+
+
+def test_distribution_csv_escapes_recorded_values():
+    doc=fixture()
+    doc['objects'][0]['attributes'][0]['value']='=formula'
+    log=w.import_log(BytesIO(json.dumps(doc).encode()),name='formulas',source_format='ocel')['log_id']
+    report=s.analyze(log,spec())
+    out=StringIO(newline='');s.export_distribution(log,spec(expected_revision=report['revision']),out)
+    records=list(csv.DictReader(StringIO(out.getvalue())))
+    assert any(row['recorded_value_review']=="'=formula" for row in records)

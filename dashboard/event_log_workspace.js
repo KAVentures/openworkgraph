@@ -4326,14 +4326,19 @@
     const trendRun=button('Show state timeline','secondary'),trendDownload=button('Download timeline (CSV)','secondary'),trendPrev=button('Previous timeline periods','secondary'),trendNext=button('Next timeline periods','secondary');
     const trendStatus=el('div',null,'muted');trendStatus.setAttribute('role','status');const trendRows=el('div');
     trend.append(el('summary','Outcome timeline'),el('p','Counts cover non-empty UTC periods and the applied result filters. Inspecting a period narrows the date window while retaining the other filters. These describe retained data and do not establish compliance.','muted'),field('Timeline period',trendBucket),trendRun,trendDownload,trendPrev,trendNext,trendStatus,trendRows);show(trend,false);
+    const distribution=document.createElement('details');distribution.id='owgObjectStateDistribution';
+    const distRun=button('Show recorded value distribution','secondary'),distDownload=button('Download value distribution (CSV)','secondary'),distPrev=button('Previous value groups','secondary'),distNext=button('Next value groups','secondary');
+    const distStatus=el('div',null,'muted');distStatus.setAttribute('role','status');const distRows=el('div');
+    distribution.append(el('summary','Recorded values at events'),el('p','Counts are event-object links, not distinct objects. Missing history, future-only history and conflicting values are separate unknown groups. Events without a linked object have no link to count. The current result filters apply.','muted'),distRun,distDownload,distPrev,distNext,distStatus,distRows);show(distribution,false);
     const results=el('div');results.id='owgObjectStateResults';
     const witness=el('div');witness.id='owgObjectStateWitness';
-    box.append(form,el('p','Saved checks are stored locally with this log and can include exact recorded values. Loading one does not run it.','muted'),savedRow,savedStatus,transfer,notice,summary,resultControls,trend,exportBar,results,witness);
+    box.append(form,el('p','Saved checks are stored locally with this log and can include exact recorded values. Loading one does not run it.','muted'),savedRow,savedStatus,transfer,notice,summary,resultControls,trend,distribution,exportBar,results,witness);
     const generation=state.generation,logId=state.logId,base='/v1/event-logs/'+encodeURIComponent(logId)+'/object-state-check';
-    let turn=0,witnessTurn=0,exportTurn=0,trendTurn=0,formVersion=0,settings=null,revision=null,offset=0,following=null;
+    let turn=0,witnessTurn=0,exportTurn=0,trendTurn=0,distTurn=0,formVersion=0,settings=null,revision=null,offset=0,following=null;
     const current=t=>generation===state.generation&&box.isConnected&&t===turn;
     const resetTrend=()=>{++trendTurn;trendRows.replaceChildren();trendStatus.textContent='';trendRun.disabled=false;trendDownload.disabled=trendPrev.disabled=trendNext.disabled=true;show(trend,false);};
-    const clear=()=>{++turn;++exportTurn;++formVersion;resetTrend();settings=null;revision=null;offset=0;following=null;run.disabled=false;notice.textContent='';exportStatus.textContent='';summary.replaceChildren();results.replaceChildren();witness.replaceChildren();show(resultControls,false);show(exportBar,false);};
+    const resetDistribution=()=>{++distTurn;distRows.replaceChildren();distStatus.textContent='';distRun.disabled=false;distDownload.disabled=distPrev.disabled=distNext.disabled=true;show(distribution,false);};
+    const clear=()=>{++turn;++exportTurn;++formVersion;resetTrend();resetDistribution();settings=null;revision=null;offset=0;following=null;run.disabled=false;notice.textContent='';exportStatus.textContent='';summary.replaceChildren();results.replaceChildren();witness.replaceChildren();show(resultControls,false);show(exportBar,false);};
     form.addEventListener('input',clear);form.addEventListener('change',clear);
     exact.addEventListener('change',()=>show(qualifierField,exact.checked));
     const statusLabel={matched:'Matched',not_matched:'Not matched',unknown:'Unknown',no_linked_object:'No linked object',missing_history:'No timed history',before_first_value:'Before first value',ambiguous_value:'Conflicting values'};
@@ -4470,7 +4475,7 @@
       prev.onclick=()=>page(index-1);nextPage.onclick=()=>{cursors[index+1]=following;page(index+1);};page(0);
     }
     async function load(spec,start,filter,pin,focusResult=false){
-      const request=++turn;++exportTurn;resetTrend();run.disabled=true;resultFilter.disabled=findEvent.disabled=clearEvent.disabled=previous.disabled=next.disabled=true;show(exportBar,false);exportStatus.textContent='';
+      const request=++turn;++exportTurn;resetTrend();resetDistribution();run.disabled=true;resultFilter.disabled=findEvent.disabled=clearEvent.disabled=previous.disabled=next.disabled=true;show(exportBar,false);exportStatus.textContent='';
       notice.textContent='Checking recorded state…';summary.replaceChildren();results.replaceChildren();witness.replaceChildren();
       try{
         const payload={...spec,offset:start,limit:30,...(filter?{status:filter}:{}),...(pin!==null?{expected_revision:pin}:{})};
@@ -4487,7 +4492,7 @@
           inspect.onclick=()=>inspectWitnesses(item,spec,filter,response.revision,request);
           return [item.event_id,item.at,statusLabel[item.status]||item.status,Number(item.linked_objects).toLocaleString(),Number(item.matched_objects).toLocaleString(),Number(item.not_matched_objects).toLocaleString(),Number(item.unknown_objects).toLocaleString(),inspect];
         })):el('p','No events match this result filter.','muted'));
-        show(resultControls,true);show(trend,true);resultFilter.disabled=findEvent.disabled=clearEvent.disabled=false;previous.disabled=offset===0;next.disabled=following===null;
+        show(resultControls,true);show(trend,true);show(distribution,true);resultFilter.disabled=findEvent.disabled=clearEvent.disabled=false;previous.disabled=offset===0;next.disabled=following===null;
         exportEvents.disabled=exportObjects.disabled=false;show(exportBar,true);if(focusResult)notice.focus();
       }catch(error){if(current(request)){settings=null;revision=null;notice.textContent=error.message;show(resultControls,false);}}
       finally{if(current(request))run.disabled=false;}
@@ -4544,6 +4549,34 @@
         downloadBlob(blob,logId+'-object-state-timeline.review.csv');trendStatus.textContent='Downloaded '+(response.headers.get('X-OWG-Rows')||'the matching')+' periods.';
       }catch(error){if(active())trendStatus.textContent=error.message;}
       finally{if(active()){trendRun.disabled=trendDownload.disabled=false;trendPrev.disabled=trendOffset===0;trendNext.disabled=trendFollowing===null;}}
+    };
+    let distOffset=0,distFollowing=null;
+    async function loadDistribution(start){
+      if(!settings||revision===null)return;
+      const review=turn,ticket=++distTurn,active=()=>current(review)&&ticket===distTurn;
+      distRun.disabled=distDownload.disabled=distPrev.disabled=distNext.disabled=true;distRows.replaceChildren();distStatus.textContent='Calculating recorded values…';
+      const payload={...settings,expected_revision:revision,offset:start,limit:50,...(resultFilter.value?{status:resultFilter.value}:{})};
+      try{
+        const result=await (await api(base+'/distribution',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).json();
+        if(!active())return;distOffset=start;distFollowing=result.next_offset;
+        distStatus.textContent=result.total_groups?'Showing '+(start+1)+'–'+(start+result.rows.length)+' of '+result.total_groups+' groups across '+result.event_object_links+' event-object links.':'No event-object links match the applied filters.';
+        if(result.rows.length)distRows.replaceChildren(table(['Object result','Recorded value','Event-object links'],result.rows.map(row=>[statusLabel[row.status]||row.status,row.recorded_value===null?'—':JSON.stringify(row.recorded_value),row.event_object_links])));
+        distDownload.disabled=false;distPrev.disabled=start===0;distNext.disabled=distFollowing===null;
+      }catch(error){if(active())distStatus.textContent=error.message;}
+      finally{if(active())distRun.disabled=false;}
+    }
+    distRun.onclick=()=>loadDistribution(0);distPrev.onclick=()=>loadDistribution(Math.max(0,distOffset-50));distNext.onclick=()=>{if(distFollowing!==null)loadDistribution(distFollowing);};
+    distDownload.onclick=async()=>{
+      if(!settings||revision===null)return;
+      const review=turn,ticket=distTurn,active=()=>current(review)&&ticket===distTurn;
+      const payload={...settings,expected_revision:revision,...(resultFilter.value?{status:resultFilter.value}:{})};
+      distRun.disabled=distDownload.disabled=distPrev.disabled=distNext.disabled=true;distStatus.textContent='Preparing value distribution download…';
+      try{
+        const response=await api(base+'/distribution/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+        const blob=await response.blob();if(!active())return;
+        downloadBlob(blob,logId+'-object-state-values.review.csv');distStatus.textContent='Downloaded '+(response.headers.get('X-OWG-Rows')||'the matching')+' groups.';
+      }catch(error){if(active())distStatus.textContent=error.message;}
+      finally{if(active()){distRun.disabled=distDownload.disabled=false;distPrev.disabled=distOffset===0;distNext.disabled=distFollowing===null;}}
     };
     async function downloadWorklist(kind){
       if(!settings||revision===null)return;

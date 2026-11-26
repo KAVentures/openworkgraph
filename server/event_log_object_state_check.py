@@ -16,6 +16,8 @@ MAX_EVENTS = 200_000
 MAX_LINKS = 1_000_000
 MAX_HISTORY_ROWS = 2_000_000
 MAX_TIMELINE_BUCKETS = 1000
+MAX_DISTRIBUTION_GROUPS = 1000
+MAX_DISTRIBUTION_VALUE_LENGTH = 4096
 MAX_WORKLIST_BYTES = 512 * 1024 * 1024
 STATUSES = ("matched", "not_matched", "unknown", "no_linked_object")
 OBJECT_STATUSES = ("matched", "not_matched", "missing_history", "before_first_value", "ambiguous_value")
@@ -101,6 +103,10 @@ class TimelineSpec(Spec):
     bucket: Literal['day', 'week', 'month']
 
 
+class DistributionSpec(Spec):
+    expected_revision: int = Field(ge=0)
+
+
 class ExportSpec(Spec):
     expected_revision: int = Field(ge=0)
     kind: Literal['events', 'objects']
@@ -166,6 +172,24 @@ def export_timeline(log_id: str, value, out: IO[str]):
     return _analyze(log_id, spec, timeline=True, timeline_export=out)
 
 
+def distribution(log_id, value):
+    try:
+        spec = DistributionSpec.model_validate(value)
+    except ValidationError:
+        raise workspace.EventLogWorkspaceError('invalid event-time state distribution request') from None
+    return _analyze(log_id, spec, distribution=True)
+
+
+def export_distribution(log_id, value, out: IO[str]):
+    try:
+        spec = DistributionSpec.model_validate(value)
+    except ValidationError:
+        raise workspace.EventLogWorkspaceError('invalid event-time state distribution export request') from None
+    if spec.offset != 0 or spec.limit != 30:
+        raise workspace.EventLogWorkspaceError('distribution export always covers all matching groups')
+    return _analyze(log_id, spec, distribution=True, distribution_export=out)
+
+
 def export_worklist(log_id: str, value, out: IO[str]):
     try:
         spec = ExportSpec.model_validate(value)
@@ -225,7 +249,8 @@ def _write_worklist(conn, log_id: str, spec: ExportSpec, revision: int, out: IO[
     return {'rows':written}
 
 
-def _analyze(log_id, spec, witness=False, export=None, timeline=False, timeline_export=None):
+def _analyze(log_id, spec, witness=False, export=None, timeline=False, timeline_export=None,
+             distribution=False, distribution_export=None):
     with workspace._LOCK:
         conn = workspace._connect()
         try:
@@ -310,6 +335,40 @@ def _analyze(log_id, spec, witness=False, export=None, timeline=False, timeline_
             total=conn.execute("SELECT count(*) FROM st_result "+where,args).fetchone()[0]
             if export is not None:
                 return _write_worklist(conn, log_id, spec, revision, export)
+            if distribution:
+                selected_where, selected_args = _result_predicate(spec, 'r')
+                conn.execute("""CREATE TEMP TABLE st_distribution AS SELECT o.status,
+                    CASE WHEN o.status IN ('matched','not_matched') THEN o.value_then ELSE NULL END AS recorded_value,
+                    count(*) AS event_object_links
+                    FROM st_object o JOIN st_result r ON r.event_id=o.event_id """ + selected_where +
+                    " GROUP BY 1,2", selected_args)
+                count, links, max_length = conn.execute("""SELECT count(*),coalesce(sum(event_object_links),0),
+                    coalesce(max(length(recorded_value)),0) FROM st_distribution""").fetchone()
+                if count > MAX_DISTRIBUTION_GROUPS:
+                    raise workspace.EventLogWorkspaceError('distribution exceeds 1,000 groups; narrow the selection')
+                if max_length > MAX_DISTRIBUTION_VALUE_LENGTH:
+                    raise workspace.EventLogWorkspaceError('distribution contains a recorded value over 4,096 characters; no distribution was produced')
+                query = 'SELECT status,recorded_value,event_object_links FROM st_distribution ORDER BY status,recorded_value NULLS FIRST'
+                if distribution_export is not None:
+                    writer = csv.writer(_LimitedWorklist(distribution_export))
+                    writer.writerow(['record_type','log_id','log_revision','activity_review','object_type_review',
+                        'attribute_review','expected_value_review','operator','quantifier','qualifier_present',
+                        'qualifier_review','from_date_utc','until_date_exclusive_utc','result_filter',
+                        'event_id_filter_review','object_result','recorded_value_present','recorded_value_review','event_object_links'])
+                    prefix = [log_id,revision,spec.activity,spec.object_type,spec.attribute,spec.expected_value,
+                        spec.operator,spec.quantifier,str(spec.event_qualifier is not None).lower(),spec.event_qualifier,
+                        spec.from_date,spec.until_date,spec.status,spec.result_event_id]
+                    writer.writerow([review_cell(v) for v in ['check',*prefix,None,'false',None,None]])
+                    for status,value,number in conn.execute(query).fetchall():
+                        writer.writerow([review_cell(v) for v in ['group',*prefix,status,str(value is not None).lower(),value,number]])
+                    return {'rows':count}
+                rows = conn.execute(query + ' LIMIT ? OFFSET ?', [spec.limit, spec.offset]).fetchall()
+                return {'format':'openworkgraph.ocel-state-check-distribution.v1','log_id':log_id,'revision':revision,
+                        'matching_events':total,'event_object_links':links,'total_groups':count,'offset':spec.offset,
+                        'next_offset':spec.offset+len(rows) if spec.offset+len(rows)<count else None,
+                        'rows':[{'status':status,'recorded_value':value,'event_object_links':number}
+                                for status,value,number in rows],
+                        'historical_source_completeness_verified':False,'policy_compliance_verified':False}
             if timeline:
                 # Date truncation is UTC because imported timestamps are stored in UTC.
                 conn.execute("""CREATE TEMP TABLE st_buckets AS

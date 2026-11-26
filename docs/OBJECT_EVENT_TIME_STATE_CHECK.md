@@ -105,6 +105,23 @@ be read, updated with `expected_revision`, or deleted with an
 only check settings; result filters, page offsets, results and source event
 data are not stored in them.
 
+## Review recorded values at events
+
+**Recorded values at events** groups the selected event-object links by their
+object result and exact value at the event time. Empty strings remain distinct
+from unknowns. Missing history, future-only history, and conflicting values are
+separate unknown categories; events with no linked object add no links. Counts
+are links, not distinct objects. The reviewed revision and current date,
+status, and event-ID filters apply to the table and complete CSV export.
+
+The distribution refuses more than 1,000 groups or any recorded value longer
+than 4,096 characters, rather than silently truncating. The CSV includes the
+check settings and filters, escapes spreadsheet formulas, and may contain
+sensitive recorded values. Owner-only endpoints are `POST
+/v1/event-logs/{log_id}/object-state-check/distribution` and
+`/distribution/export`. Both recompute the bounded check; the export includes
+all matching groups and does not accept custom pagination.
+
 ## Review outcomes over time
 
 After a check, **Outcome timeline** groups matching events by UTC day, week
