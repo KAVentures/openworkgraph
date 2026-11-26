@@ -28,3 +28,12 @@ def test_change_playbook_separates_observed_and_simulated_evidence():
     assert "Add a second approver" in text and "compare_process_scenarios" in text
     assert "observed vs simulated" in text and "not a cause" in text
     assert "list_process_logs" in evaluate_change_prompt("", "nope")
+
+
+def test_playbooks_tell_the_agent_to_filter_to_a_named_group():
+    from mcp_server.process_intelligence_tools import (evaluate_change_prompt, investigate_process_prompt,
+                                                       propose_monitors_prompt)
+    for prompt in (investigate_process_prompt, propose_monitors_prompt, evaluate_change_prompt):
+        text = prompt("Why are EU orders slow?", "log_0123456789abcdef")
+        assert "case_filter" in text and "fewer than 5 cases is refused" in text
+    assert "stray dates" in investigate_process_prompt()

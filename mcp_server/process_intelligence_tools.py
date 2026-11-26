@@ -30,10 +30,14 @@ def investigate_process_prompt(question: str = "", log_id: str = "") -> str:
         f"Question: {question}",
         target,
         "",
+        "If the question is about one group of cases (a region, product, period or a cohort an insight returned), "
+        "pass it as case_filter (the same keys as insight cohorts) to every tool that takes one, and compare with "
+        "the whole log or compare_process_cohorts; a filter matching fewer than 5 cases is refused.",
         "Work through these steps, skipping those the question does not need or whose tools are not listed, and cite "
         "the tool behind each claim:",
         "1. get_process_overview: size, durations, KPIs, weekly trend and automatic insights. Note the case notion.",
-        "2. get_process_data_quality: check timestamps and missing values before trusting durations.",
+        "2. get_process_data_quality: check timestamps and missing values before trusting durations; if it "
+        "suggests a case_filter for stray dates, use that filter from here on.",
         "3. get_process_variants and get_process_map: the main paths and how standardised the process is.",
         "4. Where time goes: get_process_waiting_times (with a working_calendar for business hours where offered), "
         "get_process_performance_spectrum and get_process_rework.",
@@ -60,6 +64,9 @@ def propose_monitors_prompt(goal: str = "", log_id: str = "") -> str:
         f"Goal: {goal}",
         target,
         "",
+        "If the question is about one group of cases (a region, product, period or a cohort an insight returned), "
+        "pass it as case_filter (the same keys as insight cohorts) to every tool that takes one, and compare with "
+        "the whole log or compare_process_cohorts; a filter matching fewer than 5 cases is refused.",
         "1. get_process_signals: see what the owner already monitors, so you do not propose duplicates.",
         "2. get_process_overview (weekly trend, KPIs), get_process_drift and get_stuck_process_cases or "
         "get_process_due_dates where shared: find what has gone wrong before or tends to.",
@@ -85,6 +92,9 @@ def evaluate_change_prompt(change: str = "", log_id: str = "") -> str:
         f"Proposed change: {change}",
         target,
         "",
+        "If the question is about one group of cases (a region, product, period or a cohort an insight returned), "
+        "pass it as case_filter (the same keys as insight cohorts) to every tool that takes one, and compare with "
+        "the whole log or compare_process_cohorts; a filter matching fewer than 5 cases is refused.",
         "1. get_process_overview and get_process_waiting_times: the baseline and where time goes now.",
         "2. If some cases already work the proposed way, compare them with the rest using compare_process_cohorts "
         "(or get_process_overview_for_cases): an observed, not simulated, difference.",
