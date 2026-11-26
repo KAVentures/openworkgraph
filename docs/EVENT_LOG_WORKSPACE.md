@@ -2906,6 +2906,11 @@ notion. Import validates the rules and case notion against the destination log.
 Filter names are unique within each log.
 
 
+Use **Update from active filter** to replace a saved filter's criteria with the
+current selection. The saved filter keeps its identity and name. If another
+edit changed it since the list was loaded, OWG asks you to reload and review
+before updating.
+
 The case evidence drill-down also uses the active case filter, so browsing cases shows the same
 cases the filtered views count ("N matching cases (case filter applied)"). Object-type maps keep
 their own case notion and are not filtered.
