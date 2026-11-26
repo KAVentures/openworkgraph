@@ -111,6 +111,39 @@ with TestClient(app) as client:
                                  'minimum_candidate_match_basis_points':0,'require_all_categories':False}}}
     def selection(action,value,headers=h):
         return client.post(base+action,params=params,json={'document':json.dumps(value)},headers=headers)
+    # Router rehearsal uses the exact same authenticated saved revision,
+    # including a disjoint held-out trial and no assumed missing fallback.
+    for row in portfolio['category_volumes']:
+        row['annual_cases']=100 if row['category']==actual else 0
+    portfolio['portfolios'][0]['portfolio_id']='selective'
+    for row in portfolio['portfolios'][0]['assignments']:
+        row['candidate_id']='current' if row['category']==actual else None
+    router_request={'portfolio_id':'selective','router_configuration_sha256':digest('router'),
+                    'policy':{'minimum_distinct_cases_per_positive_category':1},
+                    'confirm_manual_fallback_on_known_router_failure':True,
+                    'confirm_non_overlapping_router_measurements':True,'confirmed':True}
+    router_bundle={'discovery':economics,'holdout_plan':holdout,'request':router_request}
+    assert selection('router-freeze',router_bundle,bearer).status_code==403
+    router_frozen=selection('router-freeze',router_bundle)
+    assert router_frozen.status_code==200,router_frozen.text
+    router_plan=router_frozen.json()['result']
+    held_econ=deepcopy(economics);held_econ['plan']=holdout
+    held_econ['captures']={'format':'openworkgraph.procurement-trial-captures.v1','plan_sha256':holdout['plan_sha256'],'captures':[]}
+    held_review=client.post(base+'review',params=params,headers=h,json={'document':json.dumps(held_econ['captures']),'plan':json.dumps(holdout)})
+    assert held_review.status_code==200,held_review.text
+    held_econ['request'].update(plan_sha256=holdout['plan_sha256'],ledger_sha256=held_review.json()['result']['ledger_sha256'])
+    router_captures={'format':'openworkgraph.procurement-router-captures.v1','router_plan_sha256':router_plan['router_plan_sha256'],
+                     'router_configuration_sha256':router_request['router_configuration_sha256'],'predictions':[]}
+    route_bundle={'discovery':economics,'holdout':held_econ,'router_plan':router_plan,'captures':router_captures}
+    routed=selection('router-review',route_bundle)
+    assert routed.status_code==200,routed.text
+    assert routed.headers['cache-control']=='no-store'
+    assert routed.json()['result']['checks']['router_capture_coverage']=='unknown'
+    assert routed.json()['result']['scheduled_attempts']==2
+    assert not routed.json()['execution_authorized']
+    assert selection('router-review',route_bundle,bearer).status_code==403
+    bad_route=deepcopy(route_bundle);bad_route['captures']['router_configuration_sha256']='f'*64
+    assert selection('router-review',bad_route).status_code==422
     assert selection('nominate',bundle,bearer).status_code==403
     nominated=selection('nominate',bundle)
     assert nominated.status_code==200,nominated.text
@@ -173,6 +206,8 @@ with TestClient(app) as client:
     assert 'PRIVATE_STATE' not in result.text
     updated=client.post('/v1/process-catalog',headers=h,json={'workflow_id':saved['workflow_id'],'title':'Updated','expected_revision':1,'user_confirmed':True,'process_model':model()})
     assert updated.status_code==200,updated.text
+    assert selection('router-freeze',router_bundle).status_code==409
+    assert selection('router-review',route_bundle).json()['references_latest_revision_at_inspection'] is False
     assert selection('nominate',bundle).status_code==409
     assert selection('decide',decision).status_code==409
     assert selection('rollout-review',rollout).status_code==409

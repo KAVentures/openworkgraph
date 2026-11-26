@@ -92,12 +92,13 @@ const path=require('node:path');
       {portfolio_id:'manual-only',assignments:categories.map(category=>({category,candidate_id:null})),
       routing_annual_microunits:0,routing_one_time_microunits:0,routing_cost_per_ai_case_microunits:0,routing_human_ms_per_ai_case:0}],
     confirm_conditional_category_assignment:true,confirm_non_overlapping_routing_costs:true};
-  const economics=await submit('operating-cost',{plan:discovery,captures:costCaptures,request:{
+  const economicBundle={plan:discovery,captures:costCaptures,request:{
     format:'openworkgraph.procurement-operating-cost.v1',plan_sha256:discovery.plan_sha256,ledger_sha256:trialReview.ledger_sha256,currency:'USD',
     confirm_non_overlapping_cost_boundary:true,rates:Object.fromEntries(['routine','review','rework','fallback','escalation'].map(k=>[k+'_hourly_microunits',1000000])),
     manual:[1,2].map(repeat=>({case_id:'case_1',repeat,...times})),
     interventions:discovery.slots.filter(s=>s.candidate_id==='current').map(s=>({slot_id:s.slot_id,...times,routine_ms:0,review_ms:1800000})),
-    scenario:{annual_cases:100,manual_annual_microunits:0,portfolio,candidate_fixed_costs:configs.map(c=>({candidate_id:c.candidate_id,annual_microunits:0,one_time_microunits:0}))}}});
+    scenario:{annual_cases:100,manual_annual_microunits:0,portfolio,candidate_fixed_costs:configs.map(c=>({candidate_id:c.candidate_id,annual_microunits:0,one_time_microunits:0}))}}};
+  const economics=await submit('operating-cost',economicBundle);
   assert.equal(economics.manual_baseline.total_cost.lower_microunits.numerator,'2000000');
   await page.getByText('Human and AI operating cost comparison',{exact:true}).waitFor();
   assert.equal(await page.getByText('Mixed-adoption economics',{exact:true}).count(),2);
@@ -114,6 +115,35 @@ const path=require('node:path');
   await page.locator('#owgCatalogProcurementResult').getByText('Showing 1–2 of 2 cost rows',{exact:true}).waitFor();
   assert.match(await page.locator('#owgCatalogProcurementResult').textContent(),/unbounded/);
   assert(!(await page.locator('#owgCatalogProcurementResult').textContent()).includes('PRIVATE_'));
+  await page.getByRole('button',{name:'Clear procurement review',exact:true}).click();
+  assert.equal(await page.locator('#owgCatalogProcurementResult').textContent(),'');
+  const routerRequest={portfolio_id:'selective',router_configuration_sha256:'a'.repeat(64),
+    policy:{minimum_distinct_cases_per_positive_category:1},
+    confirm_manual_fallback_on_known_router_failure:true,confirm_non_overlapping_router_measurements:true,confirmed:true};
+  const routerPlan=await submit('router-freeze',{discovery:economicBundle,holdout_plan:holdout,request:routerRequest});
+  await page.getByText('Frozen router rehearsal plan',{exact:true}).waitFor();
+  const holdCaptures=complete(holdout);
+  await page.getByLabel('Procurement operation',{exact:true}).selectOption('review');
+  await page.getByLabel('Procurement JSON document',{exact:true}).setInputFiles({name:'held-captures.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(holdCaptures))});
+  await page.getByLabel('Frozen trial plan JSON',{exact:true}).setInputFiles({name:'held-plan.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(holdout))});
+  const pendingHeld=page.waitForResponse(r=>new URL(r.url()).pathname==='/v1/process-catalog/procurement/review');
+  await page.getByRole('button',{name:'Inspect procurement evidence against saved revision',exact:true}).click();
+  const heldRes=await pendingHeld;assert.equal(heldRes.status(),200,await heldRes.text());
+  const heldReview=(await heldRes.json()).result;
+  await page.locator('#owgCatalogProcurementResult h5').first().waitFor();
+  const holdBundle={plan:holdout,captures:holdCaptures,request:{...economicBundle.request,
+    plan_sha256:holdout.plan_sha256,ledger_sha256:heldReview.ledger_sha256}};
+  const predictions={format:'openworkgraph.procurement-router-captures.v1',router_plan_sha256:routerPlan.router_plan_sha256,
+    router_configuration_sha256:routerRequest.router_configuration_sha256,
+    predictions:[{...routerPlan.slots[0],status:'classified',predicted_category:actualCategory,
+      direct_cost_microunits:0,human_person_ms:0,elapsed_ms:100}]};
+  const routed=await submit('router-review',{discovery:economicBundle,holdout:holdBundle,router_plan:routerPlan,captures:predictions});
+  await page.getByText('Held-out router rehearsal review',{exact:true}).waitFor();
+  assert.equal(routed.scheduled_attempts,2);assert.equal(routed.recorded_attempts,1);
+  assert.equal(routed.checks.router_capture_coverage,'unknown');
+  await page.getByLabel('Show router problems or unresolved predictions',{exact:true}).check();
+  await page.locator('#owgCatalogProcurementResult').getByText('Showing 1–1 of 1 routing rows',{exact:true}).waitFor();
+  assert.match(await page.locator('#owgCatalogProcurementResult').textContent(),/not_recorded/);
   await page.getByRole('button',{name:'Clear procurement review',exact:true}).click();
   assert.equal(await page.locator('#owgCatalogProcurementResult').textContent(),'');
   const common={discovery_plan:discovery,discovery_captures:complete(discovery),holdout_plan:holdout};
