@@ -4921,6 +4921,99 @@
     return panel;
   }
 
+  function domainPackDeadlinePanel(current,logId){
+    const panel=el('details');panel.id='owgDomainPackDeadlineSensitivity';
+    const load=button('Load installed packs','secondary');
+    const pack=select('owgDeadlinePack',[]),parameter=select('owgDeadlineParameter',[]);
+    const alternatives=input('owgDeadlineAlternatives','text','7, 14, 30');alternatives.maxLength=160;
+    const run=button('Review alternative deadlines','secondary'),status=el('div',null,'muted');
+    const out=el('div'),evidenceOut=el('div');status.setAttribute('role','status');
+    run.disabled=true;
+    let catalog=[],installs=[],turn=0,snapshot=null;
+    const live=t=>current()&&panel.isConnected&&t===turn;
+    const invalidate=()=>{turn++;snapshot=null;out.replaceChildren();evidenceOut.replaceChildren();};
+    const endpoint=()=>'/v1/event-logs/'+encodeURIComponent(logId)+'/domain-packs/'+encodeURIComponent(pack.value)+'/deadline-sensitivity';
+    const post=async body=>(await api(endpoint(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+    const updateParams=()=>{
+      invalidate();
+      const p=catalog.find(x=>x.pack_id===pack.value),saved=installs.find(x=>x.pack_id===pack.value);
+      const params=p?.parameters||[];
+      setOptions(parameter,params.map(x=>[x.name,x.label+' (installed '+saved.parameters[x.name]+')']));
+      alternatives.value='';run.disabled=!params.length;
+      status.textContent=params.length?'Enter one to eight distinct alternatives in the parameter’s declared unit.':'No installed deadline parameters available.';
+    };
+    load.onclick=async()=>{
+      invalidate();const t=turn;load.disabled=true;run.disabled=true;
+      try{
+        const base='/v1/event-logs/'+encodeURIComponent(logId)+'/domain-packs';
+        const [c,i]=await Promise.all([getJSON('/v1/event-log-domain-packs'),getJSON(base)]);
+        if(!live(t))return;
+        installs=i.installs;catalog=c.packs.filter(p=>installs.some(x=>x.pack_id===p.pack_id&&x.version===p.latest_version));
+        setOptions(pack,catalog.map(x=>[x.pack_id,x.title]));updateParams();
+        if(!catalog.length)status.textContent='Install a current-version pack before reviewing deadlines.';
+      }catch(error){if(live(t))status.textContent=error.message;}
+      finally{if(panel.isConnected)load.disabled=false;}
+    };
+    pack.onchange=updateParams;
+    parameter.onchange=()=>{invalidate();status.textContent='Parameter changed. Review new alternatives.';};
+    alternatives.oninput=()=>{invalidate();status.textContent='Alternatives changed. Run a fresh review.';};
+    run.onclick=async()=>{
+      invalidate();const t=turn;run.disabled=true;
+      try{
+        const parts=alternatives.value.split(',').map(x=>x.trim());
+        if(parts.length>8||parts.some(x=>!x||!Number.isFinite(Number(x))))throw new Error('Enter one to eight comma-separated numeric values.');
+        const request={parameter:parameter.value,values:parts.map(Number)};
+        status.textContent='Reviewing complete retained case populations…';
+        const result=await post(request);
+        if(!live(t))return;
+        if(!/^[a-f0-9]{64}$/.test(result.basis_sha256||'')||result.basis.pack_id!==pack.value||result.basis.parameter!==parameter.value)throw new Error('Unexpected deadline review.');
+        snapshot={request,result};
+        const basis=result.basis;
+        const rows=result.rules.flatMap(r=>[
+          [r.rule_index+1,r.case_type,'Installed '+basis.baseline_value,r.baseline.activated_cases,r.baseline.missing_response_cases,r.baseline.late_complete_response_cases,r.baseline.violating_cases,0,0],
+          ...r.alternatives.map(a=>[r.rule_index+1,r.case_type,a.value,a.activated_cases,a.missing_response_cases,a.late_complete_response_cases,a.violating_cases,a.newly_satisfied_cases,a.newly_violating_cases])]);
+        const evidenceRule=select('owgDeadlineEvidenceRule',result.rules.map(r=>[String(r.rule_index),(r.rule_index+1)+': '+r.rule.a+' → '+r.rule.b+' ('+r.case_type+')']));
+        const evidenceValue=select('owgDeadlineEvidenceValue',basis.alternatives.map(a=>[String(a.value),String(a.value)]));
+        const evidenceState=select('owgDeadlineEvidenceState',[
+          ['newly_satisfied','Newly satisfied'],['newly_violating','Newly violating'],
+          ['missing_response','Missing later response'],['late_complete','Late with all responses recorded']]);
+        const evidence=button('Inspect cases','secondary'),more=button('Next cases','secondary');more.hidden=true;
+        const save=button('Download sensitivity JSON','secondary');
+        save.onclick=()=>{if(live(t)&&snapshot)download('owg-domain-pack-deadline-sensitivity.json',JSON.stringify(result,null,2),'application/json');};
+        let evidenceTurn=0,cursor=null;
+        const clearEvidence=()=>{evidenceTurn++;cursor=null;more.hidden=true;evidence.disabled=false;evidenceOut.replaceChildren();};
+        evidenceRule.onchange=evidenceValue.onchange=evidenceState.onchange=clearEvidence;
+        const page=async after=>{
+          const et=++evidenceTurn;evidence.disabled=true;more.hidden=true;
+          evidenceOut.replaceChildren(el('p','Loading exact case evidence…','muted'));
+          try{
+            const r=await post({...request,expected_basis_sha256:result.basis_sha256,evidence:{
+              rule_index:Number(evidenceRule.value),value:Number(evidenceValue.value),state:evidenceState.value,after,limit:50}});
+            if(!live(t)||et!==evidenceTurn)return;
+            if(r.basis_sha256!==result.basis_sha256)throw new Error('Review basis changed.');
+            cursor=r.next_after;more.hidden=!cursor;
+            evidenceOut.replaceChildren(el('p',r.total+' matching cases; '+r.cases.length+' on this page.'),
+              table(['Case','Trigger occurrences','Missing responses','Worst observed gap (seconds)'],r.cases.map(c=>[c.case_id,c.trigger_occurrences,c.unanswered_occurrences,c.worst_observed_response_seconds??'—'])));
+          }catch(error){if(live(t)&&et===evidenceTurn)evidenceOut.textContent=error.message;}
+          finally{if(live(t)&&et===evidenceTurn)evidence.disabled=false;}
+        };
+        evidence.onclick=()=>page(null);more.onclick=()=>page(cursor);
+        out.replaceChildren(el('h4','Deadline sensitivity ('+basis.parameter_unit+')'),
+          el('p','Fixed source digest: '+basis.source_sha256,'muted'),
+          table(['Rule','Object type','Deadline','Activated','Missing response','Late complete','Violating','Newly satisfied','Newly violating'],rows),
+          ...result.rules.map(r=>el('p','Rule '+(r.rule_index+1)+': every '+r.rule.a+' followed by '+r.rule.b+' within the selected deadline.','muted')),
+          ...(basis.omitted_rules.length?[el('p','Unmapped affected rules: '+basis.omitted_rules.map(r=>(r.rule_index+1)+' needs '+r.unmapped_role).join(', '),'muted')]:[]),
+          el('p',result.interpretation,'muted'),save,el('h4','Inspect exact case evidence'),
+          field('Rule',evidenceRule),field('Alternative',evidenceValue),field('Classification',evidenceState),evidence,more);
+        status.textContent='Review complete. No configuration changed.';
+      }catch(error){if(live(t))status.textContent=error.message;}
+      finally{if(panel.isConnected)run.disabled=!parameter.value;}
+    };
+    panel.append(el('summary','Compare alternative pack deadlines'),el('p','Review how declared elapsed-time thresholds affect the same retained cases without reinstalling a pack. Missing responses are separate from slow completed responses.','muted'),
+      load,field('Installed pack',pack),field('Deadline parameter',parameter),field('Alternative values (comma-separated)',alternatives),run,status,out,evidenceOut);
+    return panel;
+  }
+
   function domainPackSection(){
     const box=section('Domain packs');box.id='owgDomainPacks';
     box.appendChild(el('div','Apply ready-made definitions for a well-known process to this log: case metrics, compliance and object rules and a reference object model. Map each role to the names your log uses; the pack states its assumptions and is not validated against your source system.','muted'));
@@ -4934,6 +5027,7 @@
     const generation=state.generation,logId=state.logId,base='/v1/event-logs/'+encodeURIComponent(logId)+'/domain-packs';
     let turn=0;const current=t=>generation===state.generation&&box.isConnected&&t===turn;
     box.append(domainPackBenchmarkPanel(()=>generation===state.generation&&box.isConnected,logId));
+    box.append(domainPackDeadlinePanel(()=>generation===state.generation&&box.isConnected,logId));
     const post=(url,body)=>api(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     setup.onclick=async()=>{
       const t=++turn;setup.disabled=true;historyTurn++;historyOut.replaceChildren();form.replaceChildren();out.replaceChildren();status.textContent='Loading…';
