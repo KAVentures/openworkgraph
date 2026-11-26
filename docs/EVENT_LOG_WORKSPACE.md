@@ -3403,8 +3403,11 @@ Each period needs at least 10 cases; a start-date case filter cannot be combined
 Both models are drafts from their own cases, and a change in how events are recorded looks the same
 as a change in the work.
 
-`GET /v1/event-logs/{log_id}/model-change?split=2024-03-01&noise=0.2` plus the other case-filter
-parameters. Agents use `get_process_model_change` (aggregates only).
+`GET /v1/event-logs/{log_id}/model-change?split=2024-03-01&noise=0.2&activities=1` plus the other case-filter
+parameters. **Activities shown** (`activities`, a share of events, most frequent activities first) keeps a
+log with more activities than a model holds comparable, as in model discovery and model quality; both the
+period and the group comparison take it. Agents use `get_process_model_change` (aggregates only), which picks
+a share that fits automatically.
 
 **Compare groups** in the same section runs the comparison between two groups of cases chosen by
 case attribute values, such as `region=EU` and `region=US`, as Celonis compares org units (a value

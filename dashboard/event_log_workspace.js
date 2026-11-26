@@ -8141,10 +8141,11 @@
     const groupB=input('owgModelChangeCohortBAttribute','text','e.g. region=US');groupB.maxLength=400;groupB.autocomplete='off';
     const split=input('owgModelChangeSplit','date');
     const noise=select('owgModelChangeNoise',[['0.2','Leave out paths under 20% (default)'],['0','Keep every path'],['0.4','Leave out paths under 40%']]);
+    const shown=select('owgModelChangeCoverage',[['1','All activities'],['0.9','90% of events'],['0.75','75% of events'],['0.5','50% of events']]);
     const run=button('Compare periods','secondary');run.id='owgModelChangeRun';
     const splitField=field('Split at (empty: median case start)',split),aField=field('Group A (attribute=value)',groupA),bField=field('Group B (attribute=value)',groupB);
     const sync=()=>{splitField.hidden=mode.value!=='periods';aField.hidden=bField.hidden=mode.value!=='groups';};sync();
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Compare',mode),splitField,aField,bField,field('Models',noise),run);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Compare',mode),splitField,aField,bField,field('Models',noise),field('Activities shown',shown),run);
     const statusLine=el('div',null,'muted');statusLine.id='owgModelChangeStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const out=el('div');out.id='owgModelChangeResults';
     box.append(row,statusLine,out);
@@ -8153,7 +8154,7 @@
     let revision=0;
     const reset=()=>{revision++;out.replaceChildren();run.disabled=false;statusLine.textContent='';};
     mode.onchange=()=>{sync();reset();};
-    split.oninput=groupA.oninput=groupB.oninput=noise.onchange=reset;
+    split.oninput=groupA.oninput=groupB.oninput=noise.onchange=shown.onchange=reset;
     function showCrossFit(report,names){
       const number=value=>value.toLocaleString();
       const ids=Object.keys(names);
@@ -8192,7 +8193,7 @@
         if(!groupA.value.includes('=')||!groupB.value.includes('=')){statusLine.textContent='Enter both groups as attribute=value.';out.replaceChildren();return;}
         run.disabled=true;statusLine.textContent='Discovering both groups…';out.replaceChildren();
         try{
-          const r=await getJSON(logPath('model-comparison',{group_a:groupA.value.trim(),group_b:groupB.value.trim(),noise:noise.value}));
+          const r=await getJSON(logPath('model-comparison',{group_a:groupA.value.trim(),group_b:groupB.value.trim(),noise:noise.value,activities:shown.value}));
           if(!current())return;
           const c=r.cross_fit,A=r.groups.a,B=r.groups.b;
           statusLine.textContent=A.filter+' ('+Number(A.cases).toLocaleString()+' cases) against '+B.filter+' ('+Number(B.cases).toLocaleString()+'): '+r.orderings.changed+' of '+r.orderings.pairs_compared+' activity orderings differ. '+B.filter+' cases fit the '+A.filter+' model '+pct(c.b_cases_on_a_model.fitness)+', against '+pct(c.a_cases_on_a_model.fitness)+' for its own cases.';
@@ -8208,7 +8209,7 @@
       }
       run.disabled=true;statusLine.textContent='Discovering both periods…';out.replaceChildren();
       try{
-        const params={noise:noise.value};if(split.value)params.split=split.value+'T00:00:00Z';
+        const params={noise:noise.value,activities:shown.value};if(split.value)params.split=split.value+'T00:00:00Z';
         const r=await getJSON(logPath('model-change',params));
         if(!current())return;
         const c=r.cross_fit,drop=r.fitness_drop_on_earlier_model;
