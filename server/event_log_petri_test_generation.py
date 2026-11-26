@@ -15,6 +15,7 @@ from .event_log_workspace import EventLogWorkspaceError
 FORMAT = "openworkgraph.petri_test_generation.v1"
 MAX_PREFIX_STATES = 2000
 MAX_WORK = 600_000
+MAX_SELECTION_WORK = 2_000_000
 MAX_DEPTH = acceptance.MAX_TRACE - 1
 
 
@@ -59,7 +60,7 @@ def generate(data: bytes, spec=None):
     coverage = {k: v for k, v in graph.items() if k not in {"edges", "final"}}
     result = {"format": FORMAT, "model": coverage,
               "settings": {"max_cases": max_cases, "max_depth": max_depth},
-              "limits": {"prefix_states": MAX_PREFIX_STATES, "work": MAX_WORK},
+              "limits": {"prefix_states": MAX_PREFIX_STATES, "work": MAX_WORK, "selection_work": MAX_SELECTION_WORK},
               "suite": None, "suite_sha256": None, "selected": [],
               "caveat": "Generated expectations characterize this reference model, not independent business policy or real execution. Review them before treating them as acceptance criteria."}
     if not graph["complete"]:
@@ -142,7 +143,14 @@ def generate(data: bytes, spec=None):
     covered = set()
     selected = []
     remaining = list(candidates)
+    selection_work = 0
+    selection_limited = False
     while remaining and len(selected) < max_cases:
+        round_work = sum(len(row["features"]) + 1 for row in remaining)
+        if selection_work + round_work > MAX_SELECTION_WORK:
+            selection_limited = True
+            break
+        selection_work += round_work
         def score(row):
             novel = row["features"] - covered
             return (-sum(k == "category" for k, _ in novel), -len(novel),
@@ -153,6 +161,7 @@ def generate(data: bytes, spec=None):
             break
         selected.append(row)
         covered.update(row["features"])
+    suite_limited = False
     suite = {"format": acceptance.SUITE_FORMAT, "cases": []}
     notes = []
     for row in selected:
@@ -162,7 +171,7 @@ def generate(data: bytes, spec=None):
             acceptance.parse_suite({**suite, "cases": suite["cases"] + [case]})
         except EventLogWorkspaceError:
             # The only expected failure here is the canonical byte limit.
-            limit = limit or "suite_byte_limit"
+            suite_limited = True
             break
         suite["cases"].append(case)
         notes.append({"id": ident, "categories": sorted(row["tags"])})
@@ -176,6 +185,8 @@ def generate(data: bytes, spec=None):
             "prefix_exploration_complete": limit is None,
             "limit": limit, "prefix_states": len(seen), "work": budget.work,
             "candidate_scenarios": len(candidates),
+            "selection_work": selection_work, "selection_limited": selection_limited,
+            "suite_byte_limited": suite_limited,
             "categories_found": sorted(all_categories),
             "categories_selected": sorted(chosen_categories),
             "categories_omitted": sorted(all_categories - chosen_categories),
