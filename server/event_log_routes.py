@@ -375,6 +375,56 @@ async def event_log_petri_soundness(request: Request):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/petri-acceptance")
+async def event_log_petri_acceptance(request: Request):
+    """Run an explicitly supplied acceptance suite on one or two models."""
+    from . import event_log_petri_acceptance as acceptance
+    from . import event_log_petri_replay as replay
+    _require_dashboard(request)
+    if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/octet-stream":
+        raise HTTPException(415, "send framed acceptance suite and PNML bytes")
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > 8 + acceptance.MAX_SUITE_BYTES + 2 * replay.MAX_BYTES:
+            raise HTTPException(413, "acceptance payload is too large")
+        data.extend(chunk)
+    if len(data) < 8:
+        raise HTTPException(422, "missing suite or model length")
+    n = int.from_bytes(data[:4], "big")
+    if n > acceptance.MAX_SUITE_BYTES:
+        raise HTTPException(413, "acceptance suite is too large")
+    if n < 1 or len(data) < 8 + n:
+        raise HTTPException(422, "invalid suite framing")
+    offset = 8 + n
+    m = int.from_bytes(data[4+n:offset], "big")
+    if m > replay.MAX_BYTES or len(data) - offset - m > replay.MAX_BYTES:
+        raise HTTPException(413, "each model must be at most 2 MB")
+    if m < 1 or len(data) < offset + m:
+        raise HTTPException(422, "invalid baseline framing")
+
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError("Repeated JSON key")
+            result[key] = value
+        return result
+
+    def constant(_):
+        raise ValueError("Non-finite JSON value")
+
+    try:
+        spec = json.loads(bytes(data[4:4+n]).decode("utf-8"), object_pairs_hook=pairs, parse_constant=constant)
+    except (ValueError, UnicodeError, RecursionError):
+        raise HTTPException(422, "suite must be strict UTF-8 JSON") from None
+    try:
+        result = await run_in_threadpool(acceptance.review, bytes(data[offset:offset+m]), spec,
+                                         bytes(data[offset+m:]) or None)
+    except (workspace.EventLogWorkspaceError, UnicodeError) as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/petri-policy-review")
 async def event_log_petri_policy_review(request: Request):
     """Check one or two PNML models against a declared untimed policy suite.
